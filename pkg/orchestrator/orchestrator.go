@@ -1192,6 +1192,10 @@ type HostSandboxes struct {
 	mu       sync.Mutex
 	live     map[string]*hostSandbox
 	building map[string]bool
+
+	// cpu turns each live run's process-tree CPU time into the rate
+	// Health reports (SandboxHealth.CPUCores).
+	cpu hostCPUSampler
 }
 
 // NewHostSandboxes returns a HostSandboxes rooted at baseDir, which must
@@ -1248,6 +1252,10 @@ func (h *HostSandboxes) IsolatesNetwork() bool { return false }
 // this daemon's own user, on this host, so only this machine's own
 // tasks are dispatched to it (checkUnisolated).
 func (h *HostSandboxes) Unisolated() bool { return true }
+
+// Shapeless reports that a host directory has no CPU, memory or disk of
+// its own to size (Acquire refuses every size; template_shape.go).
+func (h *HostSandboxes) Shapeless() bool { return true }
 
 // Acquire implements Sandboxes: a fresh directory under baseDir, named
 // for the run.

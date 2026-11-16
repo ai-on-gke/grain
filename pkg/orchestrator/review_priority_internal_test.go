@@ -23,7 +23,9 @@ import (
 
 // Every gating review -- a declared review, the security review and a
 // path-trigger review all build theirs in newReview -- runs at the
-// priority of the change it gates, and never below the floor.
+// priority of the change it gates, and never below the floor, regardless
+// of any priority declared on the review template (task-priorities.spec.md
+// #TP-10).
 func TestReviewInheritsGatedTaskPriority(t *testing.T) {
 	t.Parallel()
 	store, ctx := recreateStore(t)
@@ -32,7 +34,15 @@ func TestReviewInheritsGatedTaskPriority(t *testing.T) {
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo}); err != nil {
 		t.Fatal(err)
 	}
-	tmpl := model.Template{ID: "every-pr", Name: "Every PR", Body: "Review it."}
+	nine, three := 9, 3
+	templates := []struct {
+		name string
+		tmpl model.Template
+	}{
+		{"unset template priority", model.Template{ID: "every-pr", Name: "Every PR", Body: "Review it."}},
+		{"higher template priority", model.Template{ID: "every-pr", Name: "Every PR", Body: "Review it.", Priority: &nine}},
+		{"lower template priority", model.Template{ID: "every-pr", Name: "Every PR", Body: "Review it.", Priority: &three}},
+	}
 
 	for _, tc := range []struct {
 		name     string
@@ -46,13 +56,15 @@ func TestReviewInheritsGatedTaskPriority(t *testing.T) {
 		{"priority 3 rises to the floor", 3, model.ReviewPriorityFloor},
 	} {
 		gated := model.Task{ID: "100", Priority: tc.priority, Target: &repo, Title: "change"}
-		for _, inPlace := range []bool{false, true} {
-			review, err := newReview(ctx, store, gated, tmpl, "Review", "Review body", inPlace, now)
-			if err != nil {
-				t.Fatalf("%s: newReview: %v", tc.name, err)
-			}
-			if review.Priority != tc.want {
-				t.Errorf("%s (inPlace %v): review Priority = %d, want %d", tc.name, inPlace, review.Priority, tc.want)
+		for _, tt := range templates {
+			for _, inPlace := range []bool{false, true} {
+				review, err := newReview(ctx, store, gated, tt.tmpl, "Review", "Review body", inPlace, now)
+				if err != nil {
+					t.Fatalf("%s (%s): newReview: %v", tc.name, tt.name, err)
+				}
+				if review.Priority != tc.want {
+					t.Errorf("%s (%s, inPlace %v): review Priority = %d, want %d", tc.name, tt.name, inPlace, review.Priority, tc.want)
+				}
 			}
 		}
 	}

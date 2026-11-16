@@ -657,27 +657,11 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 			return capability, true
 		}
 	}
-	if name, ok := model.GCPKeyName(id); ok && name != "" {
-		return Capability{
-			ID:   id,
-			Name: "GCP key (" + name + ", retired spelling)",
-			Description: "Read as https://grain.dev/capabilities/gcp#gcp-key with {permission_set: " + name + "}: mint a " +
-				"short-lived GCP service-account key for this task and place it in its sandbox",
-		}, true
-	}
 	// An agent API grant (agent_api.go), a repo-limited one included:
 	// the scopes and presets are offered rows of their own, but
 	// api:<scope>@<repo> is spelled per repository and so only here.
 	if row, ok := apiCapability(id); ok {
 		return row, true
-	}
-	if name, ok := localScriptsName(id); ok {
-		return Capability{
-			ID:   id,
-			Name: "Local scripts (" + name + ", retired spelling)",
-			Description: "Read as the host-script grants (https://grain.dev/capabilities/host-script#host-script) serving the " +
-				"scripts of the " + name + " local-scripts declaration on the node host (docs/local-scripts.md); never granted to a scheduled run",
-		}, true
 	}
 	return Capability{}, false
 }
@@ -797,7 +781,20 @@ func (r redBaseLookup) forTask(t model.Task) string {
 // (Store.OrderKeyForNewTask, Client.CreateTask). Either way the list is
 // this one order.
 func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
-	tasks, err := c.Store.ListTasks(ctx)
+	return c.listTasks(ctx, c.Store.ListTasks)
+}
+
+// ListOpenTasks is ListTasks without the closed tasks, read without
+// them rather than read and dropped: what GET /api/tasks' live list
+// holds (taskListLive). Every row says the same as it would in
+// ListTasks -- the states, blockers and holds it is projected with are
+// still read for the whole store.
+func (c *Client) ListOpenTasks(ctx context.Context) ([]Task, error) {
+	return c.listTasks(ctx, c.Store.ListOpenTasks)
+}
+
+func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]model.Task, error)) ([]Task, error) {
+	tasks, err := read(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -3283,6 +3280,39 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		links = append(links, model.Link{Kind: model.LinkGoogleChat, Target: strings.TrimSpace(req.GoogleChatSpace)})
 	}
 	now := c.now()
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI {
+		if req.ChangeTarget != nil || target == nil || !target.Same(ciCall.Repo) {
+			return Task{}, forbiddenErrorf("this CI token files tasks for %s only", ciCall.Repo)
+		}
+		for _, r := range reads {
+			if !r.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s reads %s", ciCall.Repo, req.TemplateID, r)
+			}
+		}
+		for _, w := range writes {
+			if !w.Repo.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s writes %s", ciCall.Repo, req.TemplateID, w.Repo)
+			}
+		}
+		for _, gr := range grants {
+			for _, cand := range append([]string{gr.Capability}, model.CanonicalLegacyGrants(gr.Capability)...) {
+				g, ok, err := model.ParseAPIGrant(cand)
+				if !ok || err != nil {
+					continue
+				}
+				if g.Repo != "" && !model.SameRepoText(g.Repo, ciCall.Repo.String()) {
+					return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s grants %s", ciCall.Repo, req.TemplateID, gr.Capability)
+				}
+				for _, repos := range g.ScopeRepos {
+					for _, r := range repos {
+						if !model.SameRepoText(r, ciCall.Repo.String()) {
+							return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s grants %s", ciCall.Repo, req.TemplateID, gr.Capability)
+						}
+					}
+				}
+			}
+		}
+	}
 	// Decoded before NewTaskID allocates anything: a bad attachment should
 	// fail this call with nothing written at all, not leave a task behind
 	// with none of the files it was supposed to carry.
@@ -3430,6 +3460,81 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	catalogueHold := false
+	var declHoldNote string
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI && proposedBy == nil {
+		declHeld := model.DeclaredCompositionHold(model.Composition{
+			Grants:        grants,
+			Admission:     taskAdmission,
+			NetworkAccess: model.NetworkAccess(req.NetworkAccess),
+		})
+		if len(declHeld) > 0 && c.Store != nil && model.IsRepoDeclaredID(filedFrom) {
+			accepted, widened, err := c.Store.NoteDeclaredTemplateHold(ctx, filedFrom, declHeld, now)
+			if err != nil {
+				return Task{}, err
+			}
+			var remaining []string
+			for _, g := range catalogueNeedsPerson {
+				if !slices.Contains(declHeld, g) {
+					remaining = append(remaining, g)
+				}
+			}
+			catalogueNeedsPerson = remaining
+			if !accepted {
+				declHoldNote = model.DeclarationAcceptanceNote(filedFrom, declHeld, widened)
+				req.Approved = false
+			}
+		}
+		var ciPersonOnly []string
+		for _, gr := range grants {
+			if slices.Contains(declHeld, gr.Capability) {
+				continue
+			}
+			needsHold := false
+			for _, cand := range append([]string{gr.Capability}, model.CanonicalLegacyGrants(gr.Capability)...) {
+				if strings.HasPrefix(model.CapabilityGrantRef(cand), model.GrainCapabilityServerID+"#") && !model.IsGrainCIGrant(cand) {
+					needsHold = true
+					break
+				}
+				g, ok, err := model.ParseAPIGrant(cand)
+				if !ok || err != nil {
+					continue
+				}
+				if g.RequiresPerson {
+					needsHold = true
+					break
+				}
+				for _, sc := range g.Scopes {
+					if model.CIAPIScopeRefusal(sc) != "" || (g.Repo == "" && len(g.ScopeRepos[sc]) == 0) {
+						needsHold = true
+						break
+					}
+				}
+				if needsHold {
+					break
+				}
+			}
+			if needsHold {
+				ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("grants %s beyond %s's CI API bounds, which requires a person's approval", gr.Capability, ciCall.Repo))
+			}
+		}
+		if declaredPush != nil {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("template %s carries a declared push set (%s), which requires a person's approval", filedFrom, declaredPush.Path))
+		}
+		if req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake) {
+			ciPersonOnly = append(ciPersonOnly, "it sets keep_running, which only a person may give")
+		}
+		if priority > model.DefaultTaskPriority {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("it sets priority %d above the default (%d), which only a person may give", priority, model.DefaultTaskPriority))
+		}
+		if len(ciPersonOnly) > 0 {
+			why := strings.Join(ciPersonOnly, "; ")
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
+	}
 	if needsPersonWhy != "" && proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
 		catalogueHold, req.Approved = true, false
 	}
@@ -3757,7 +3862,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	switch {
 	case catalogueHold:
-		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
+		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._" + declHoldNote
+	case declHoldNote != "":
+		task.Body += declHoldNote
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
 		approval := c.requestActor(ctx)
 		task.Approval = &approval

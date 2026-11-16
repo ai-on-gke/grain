@@ -47,8 +47,25 @@ var hostModeUnitPath = "/etc/systemd/system/grain-daemon.service"
 // hostModeDocsURL is the migration's own section of the design doc.
 const hostModeDocsURL = "https://github.com/ai-on-gke/grain/blob/main/design/design/cli-run-location.design.md#migrating-a-host-mode-install"
 
-// hostModeMigrateCommand is what migrates the install.
-const hostModeMigrateCommand = "sudo ./scripts/setup.sh (or ./google/scripts/cloudtop-install.sh on a Cloudtop)"
+// defaultHostModeMigrateCommand is what migrates a core install.
+const defaultHostModeMigrateCommand = "sudo ./scripts/setup.sh"
+
+// hostModeMigrateCommand is what the notice and the Upgrade pane tell an
+// operator to run: core's installer unless an edition registered its own
+// (RegisterHostModeMigrateCommand).
+var hostModeMigrateCommand = defaultHostModeMigrateCommand
+
+// RegisterHostModeMigrateCommand replaces the command the host-mode
+// notice, its banner and the Upgrade pane's refusal tell an operator to
+// run to migrate the install. It is for an edition's init, when the
+// edition ships its own installer wrapping scripts/setup.sh; "" restores
+// core's.
+func RegisterHostModeMigrateCommand(command string) {
+	if command == "" {
+		command = defaultHostModeMigrateCommand
+	}
+	hostModeMigrateCommand = command
+}
 
 // hostModeProbe is what hostModeInstall reads, so a test can describe a
 // process without being one.

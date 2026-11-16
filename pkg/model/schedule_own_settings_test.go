@@ -207,6 +207,15 @@ func TestMigration144ClearsTemplateCopiesOffSchedules(t *testing.T) {
 	put(model.Schedule{ID: "inline", Body: "Sweep it.", Admission: model.AdmissionBypass,
 		Grants: []model.Grant{{Capability: "memory", Via: model.GrantByLabel}}})
 
+	// The commit nightlyRepo's declarations were last read at: an earlier
+	// build's firing wrote the template's grants over the ones its
+	// schedule files declare, and only a re-read puts those back (F4).
+	if _, err := db.ExecContext(ctx, "INSERT INTO `repo_declaration_sync` "+
+		"(`owner`, `name`, `commit`, `checked_at`, `synced_at`, `last_error`) VALUES (?, ?, ?, ?, ?, '')",
+		nightlyRepo.Owner, nightlyRepo.Name, "ed4928b26981", firstNight, firstNight); err != nil {
+		t.Fatalf("seeding the declaration sync: %v", err)
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -239,5 +248,56 @@ func TestMigration144ClearsTemplateCopiesOffSchedules(t *testing.T) {
 	}
 	if s := get("inline"); s.Admission != model.AdmissionBypass || !holdsGrant(s.Grants, "memory") {
 		t.Errorf("inline: admission %q, grants %+v; want it untouched", s.Admission, s.Grants)
+	}
+	// docs/test-runs/2026-11-13-schedules-templates.md, F4: migration 147
+	// has the next reconcile read every repository's declarations again.
+	sync, err := store.GetRepoDeclarationSync(ctx, nightlyRepo)
+	if err != nil || sync == nil {
+		t.Fatalf("reading the declaration sync: (%+v, %v)", sync, err)
+	}
+	if sync.Commit != "" {
+		t.Errorf("declaration sync commit = %q after migrating from 143, want it forgotten so the next reconcile re-reads", sync.Commit)
+	}
+}
+
+// A store that already ran migration 144 -- every v3.7.0 store -- still
+// has its repositories' declarations read again: migration 147 forgets
+// the commit each was last read at, so the next reconcile writes back the
+// grants a schedule file declares that a firing from before 144 wrote its
+// template's over (docs/test-runs/2026-11-13-schedules-templates.md, F4).
+func TestMigration147RereadsDeclarationsOnAStorePast144(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatalf("opening sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO `repo_declaration_sync` "+
+		"(`owner`, `name`, `commit`, `checked_at`, `synced_at`, `last_error`) VALUES (?, ?, ?, ?, ?, '')",
+		nightlyRepo.Owner, nightlyRepo.Name, "ed4928b26981", firstNight, firstNight); err != nil {
+		t.Fatalf("seeding the declaration sync: %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := model.ApplyDataMigrations(ctx, tx, 146); err != nil {
+		tx.Rollback()
+		t.Fatalf("migrating: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	sync, err := store.GetRepoDeclarationSync(ctx, nightlyRepo)
+	if err != nil || sync == nil {
+		t.Fatalf("reading the declaration sync: (%+v, %v)", sync, err)
+	}
+	if sync.Commit != "" {
+		t.Errorf("declaration sync commit = %q after migrating from 146, want it forgotten so the next reconcile re-reads", sync.Commit)
 	}
 }

@@ -137,14 +137,73 @@
   color: var(--md-sys-color-outline);
 }
 
+.ws-pcell,
+.ws-row > div {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .ws-ptext {
   display: flex;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
   margin-top: 4px;
   font-size: 12px;
   color: var(--md-sys-color-on-surface-variant);
   white-space: nowrap;
+}
+
+.ws-ptext > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-ptext > span:last-child {
+  flex-shrink: 0;
+}
+
+.ws-cfoot .mono {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-select,
+.ws-search {
+  min-height: 36px;
+  height: 36px;
+}
+
+.ws-chip-warn,
+.ws-chip-run,
+.ws-chip-err,
+.ws-chip-done,
+.ws-chip-series {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ws-goal-toggle,
+.ws-rel-more {
+  align-self: flex-start;
+  height: auto;
+  min-height: 24px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+@media (max-width: 599.95px) {
+  .ws-scroll,
+  .ws-dbody,
+  .ws-insp {
+    padding-bottom: calc(var(--grain-bottombar-height, 92px) + 16px);
+  }
 }
 
 .ws-legend {
@@ -165,7 +224,8 @@
   display: inline-flex;
   align-items: flex-end;
   gap: 3px;
-  height: 30px;
+  height: 32px;
+  overflow: hidden;
 }
 
 .ws-day {
@@ -184,7 +244,7 @@
 .ws-day i {
   display: block;
   width: 10px;
-  height: 4px;
+  height: 3px;
   border-radius: 1px;
 }
 
@@ -204,6 +264,67 @@
 .ws-rel h3 {
   margin: 0 0 8px;
   font: 600 13px/18px var(--grain-font-body);
+}
+
+.ws-rel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+
+.ws-rel-head h3 {
+  margin: 0;
+}
+
+.ws-rel-head .ws-goal-toggle {
+  margin-top: 0;
+  font-size: 12px;
+}
+
+.ws-goal-preview {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-goal-panel {
+  box-sizing: border-box;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ws-goal-panel h1,
+.ws-goal-panel h2,
+.ws-goal-panel h3,
+.ws-goal-panel h4 {
+  margin: 8px 0 4px;
+  font: 600 13px/18px var(--grain-font-body);
+}
+
+.ws-goal-panel p,
+.ws-goal-panel ul,
+.ws-goal-panel ol,
+.ws-goal-panel blockquote {
+  margin: 4px 0;
+}
+
+.ws-goal-panel ul,
+.ws-goal-panel ol {
+  padding-left: 18px;
 }
 
 .ws-rel-group {

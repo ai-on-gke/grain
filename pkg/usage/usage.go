@@ -41,6 +41,11 @@
 //   - Sustainable workers is Remaining / (tokens per worker-hour x hours
 //     until the reset), with tokens per worker-hour taken from the
 //     scope's own runs (billable tokens over run-hours).
+//   - The weekly horizon (weekly.go) is the same over WeeklyWindow: the
+//     tokens the scope's runs spent in the last week, the weekly
+//     capacity learned when a weekly limit refused it, and the weekly
+//     pause in force. A known weekly limit bounds sustainable workers
+//     as the interval's does.
 //
 // A usage-limit pause is the source of truth for "refused now": a paused
 // scope has nothing remaining and sustains no workers until its pause
@@ -65,10 +70,24 @@ const DefaultWindow = 5 * time.Hour
 // BurnWindow is how far back the burn rate looks.
 const BurnWindow = time.Hour
 
-// Lookback is how far back a caller should read runs for an Input: the
-// longest window any scope is reported over, and at least a day, so the
-// average tokens per run has something to average.
+// Lookback is how far back a caller should read runs for an Input:
+// AverageSpan, and at least WeeklyWindow, so the weekly horizon has its
+// week of runs to count.
 func Lookback(settings model.UsageSettings, capacities []model.UsageCapacity) time.Duration {
+	longest := max(AverageSpan(settings, capacities), WeeklyWindow)
+	if r := settings.Retention(); longest > r {
+		longest = r
+	}
+	return longest
+}
+
+// AverageSpan is how far back the rollup and a scope's per-run averages
+// (AvgTokensPerRun, tokens per worker-hour) look: the longest interval
+// window any scope is reported over, and at least a day, so the average
+// has something to average. The weekly horizon does not lengthen it: a
+// week of runs would shift every interval estimate, and the auto worker
+// cap with it, on a deployment that knows no weekly limit at all.
+func AverageSpan(settings model.UsageSettings, capacities []model.UsageCapacity) time.Duration {
 	longest := 24 * time.Hour
 	for _, b := range settings.Budgets {
 		if d := b.WindowDuration(); d > longest {
@@ -76,7 +95,7 @@ func Lookback(settings model.UsageSettings, capacities []model.UsageCapacity) ti
 		}
 	}
 	for _, c := range capacities {
-		if c.Window > longest {
+		if _, weekly := splitCapacityModel(norm(c.Model)); !weekly && c.Window > longest {
 			longest = c.Window
 		}
 	}
@@ -138,13 +157,41 @@ type Scope struct {
 	// RunsOutAt is when Remaining runs out at BurnPerHour; nil without
 	// a Limit or a burn.
 	RunsOutAt *time.Time `json:"runsOutAt,omitempty"`
-	// AvgTokensPerRun and AvgRunMinutes are over every run read (the
-	// lookback, not just the window).
+	// AvgTokensPerRun and AvgRunMinutes are over the runs of the last
+	// AverageSpan (not just the window).
 	AvgTokensPerRun float64 `json:"avgTokensPerRun,omitempty"`
 	AvgRunMinutes   float64 `json:"avgRunMinutes,omitempty"`
 	// SustainableWorkers is how many concurrent runs Remaining can
 	// sustain until ResetAt; nil when unbounded or unknown.
 	SustainableWorkers *float64 `json:"sustainableWorkers,omitempty"`
+	// PauseHorizon is which limit the pause in force met: HorizonWeekly
+	// or HorizonInterval; "" while the scope is not paused.
+	PauseHorizon string `json:"pauseHorizon,omitempty"`
+
+	// The weekly horizon: WeeklyRuns and WeeklyUsed are the scope's runs
+	// and billable tokens since WeeklyWindowStart (WeeklyWindow ago, or
+	// the last known weekly reset inside it).
+	WeeklyRuns        int       `json:"weeklyRuns"`
+	WeeklyUsed        int64     `json:"weeklyUsed"`
+	WeeklyWindowStart time.Time `json:"weeklyWindowStart"`
+	// WeeklyLimit is the weekly capacity learned when a weekly limit last
+	// refused the scope, 0 when unknown; WeeklyLimitSource is "learned"
+	// with one.
+	WeeklyLimit       int64  `json:"weeklyLimit,omitempty"`
+	WeeklyLimitSource string `json:"weeklyLimitSource,omitempty"`
+	// WeeklyRemaining is WeeklyLimit - WeeklyUsed, floored at 0; 0 too
+	// while a weekly pause is in force.
+	WeeklyRemaining int64 `json:"weeklyRemaining,omitempty"`
+	// WeeklyResetAt is the weekly pause's end, a learned weekly reset
+	// still ahead, or when the oldest usage in the week ages out.
+	WeeklyResetAt *time.Time `json:"weeklyResetAt,omitempty"`
+	// WeeklyPausedUntil is set while a weekly limit pauses the scope (or
+	// its whole connection): the weekly quota is spent until then,
+	// whatever the interval shows.
+	WeeklyPausedUntil *time.Time `json:"weeklyPausedUntil,omitempty"`
+	// WeeklyRunsOutAt is when WeeklyRemaining runs out at BurnPerHour;
+	// nil without a WeeklyLimit or a burn.
+	WeeklyRunsOutAt *time.Time `json:"weeklyRunsOutAt,omitempty"`
 
 	window              time.Duration
 	tokensPerWorkerHour float64
@@ -171,7 +218,7 @@ type Report struct {
 	MaxWorkers int     `json:"maxWorkers"`
 	MinWorkers int     `json:"minWorkers"`
 	Scopes     []Scope `json:"scopes"`
-	// Rollup is every run read, across every scope.
+	// Rollup is every run of the last AverageSpan, across every scope.
 	Rollup Totals `json:"rollup"`
 	// SustainableWorkers is the deployment-wide estimate; nil when some
 	// connection in use has no known budget, so nothing bounds it.
@@ -200,8 +247,12 @@ func Compute(in Input) Report {
 	rep := Report{GeneratedAt: now, Mode: settings.EffectiveMode(), MaxWorkers: in.MaxWorkers, MinWorkers: minWorkers,
 		EffectiveWorkers: in.MaxWorkers, Scopes: []Scope{}}
 
-	// The rollup: every run read.
+	// The rollup: every run over the averaging span.
+	avgSince := now.Add(-AverageSpan(settings, in.Capacities))
 	for _, r := range in.Runs {
+		if r.FinishedAt.Before(avgSince) {
+			continue
+		}
 		rep.Rollup.Runs++
 		rep.Rollup.InputTokens += r.InputTokens
 		rep.Rollup.OutputTokens += r.OutputTokens
@@ -225,10 +276,17 @@ func Compute(in Input) Report {
 		budgets[scopeKey{strings.TrimSpace(b.Connection), norm(b.Model)}] = b
 	}
 	learned := map[scopeKey]model.UsageCapacity{}
+	learnedWeekly := map[scopeKey]model.UsageCapacity{}
 	for _, c := range in.Capacities {
-		learned[scopeKey{c.Connection, norm(c.Model)}] = c
+		m, weekly := splitCapacityModel(norm(c.Model))
+		if weekly {
+			learnedWeekly[scopeKey{c.Connection, m}] = c
+		} else {
+			learned[scopeKey{c.Connection, m}] = c
+		}
 	}
 	paused := map[scopeKey]time.Time{}
+	pausedWeekly := map[scopeKey]time.Time{}
 	for _, p := range in.Pauses {
 		if p.Connection == "" || !p.Until.After(now) {
 			continue
@@ -237,7 +295,11 @@ func Compute(in Input) Report {
 		if p.Until.After(paused[k]) {
 			paused[k] = p.Until
 		}
+		if PauseHorizon(p) == HorizonWeekly && p.Until.After(pausedWeekly[k]) {
+			pausedWeekly[k] = p.Until
+		}
 	}
+	lim := limits{avgSince: avgSince, budgets: budgets, learned: learned, learnedWeekly: learnedWeekly, paused: paused, pausedWeekly: pausedWeekly}
 
 	keys := map[scopeKey]bool{}
 	for _, r := range in.Runs {
@@ -249,6 +311,9 @@ func Compute(in Input) Report {
 		keys[k] = true
 	}
 	for k := range learned {
+		keys[k] = true
+	}
+	for k := range learnedWeekly {
 		keys[k] = true
 	}
 	for k := range paused {
@@ -266,7 +331,7 @@ func Compute(in Input) Report {
 	})
 
 	for _, k := range ordered {
-		rep.Scopes = append(rep.Scopes, computeScope(in, k, budgets, learned, paused))
+		rep.Scopes = append(rep.Scopes, computeScope(in, k, lim))
 	}
 
 	// The deployment estimate: per connection, its connection-wide
@@ -339,7 +404,31 @@ func (s Scope) matches(r model.RunUsage) bool {
 	return r.Connection == s.Connection && (s.Model == "" || norm(r.Model) == s.Model)
 }
 
-func computeScope(in Input, k scopeKey, budgets map[scopeKey]model.TokenBudget, learned map[scopeKey]model.UsageCapacity, paused map[scopeKey]time.Time) Scope {
+// limits is what Compute read out of its Input for computeScope: the
+// budgets, the learned interval and weekly capacities, and the pauses in
+// force -- all of them, and the weekly ones alone.
+type limits struct {
+	// avgSince is where the per-run averages start (AverageSpan).
+	avgSince      time.Time
+	budgets       map[scopeKey]model.TokenBudget
+	learned       map[scopeKey]model.UsageCapacity
+	learnedWeekly map[scopeKey]model.UsageCapacity
+	paused        map[scopeKey]time.Time
+	pausedWeekly  map[scopeKey]time.Time
+}
+
+// pausedOn is the latest end of a pause in pauses on k or on k's whole
+// connection.
+func pausedOn(pauses map[scopeKey]time.Time, k scopeKey) (time.Time, bool) {
+	until, ok := pauses[k]
+	if whole, wok := pauses[scopeKey{k.connection, ""}]; wok && whole.After(until) {
+		until, ok = whole, true
+	}
+	return until, ok
+}
+
+func computeScope(in Input, k scopeKey, lim limits) Scope {
+	budgets, learned := lim.budgets, lim.learned
 	now := in.Now
 	s := Scope{Connection: k.connection, Model: k.model, ConnectionName: in.ConnectionNames[k.connection]}
 	s.window = DefaultWindow
@@ -366,16 +455,48 @@ func computeScope(in Input, k scopeKey, budgets map[scopeKey]model.TokenBudget, 
 		}
 	}
 	// A pause on the scope, or on its whole connection, is in force.
-	until, isPaused := paused[k]
-	if whole, ok := paused[scopeKey{k.connection, ""}]; ok && whole.After(until) {
-		until, isPaused = whole, true
-	}
+	until, isPaused := pausedOn(lim.paused, k)
+	weeklyUntil, weeklyPaused := pausedOn(lim.pausedWeekly, k)
 	if isPaused {
 		t := until
 		s.PausedUntil = &t
 		reset = &t
+		s.PauseHorizon = HorizonInterval
+		if weeklyPaused {
+			s.PauseHorizon = HorizonWeekly
+		}
 	}
 	s.WindowStart = start
+
+	// The weekly horizon's start, limit and known reset.
+	weeklyStart := now.Add(-WeeklyWindow)
+	var weeklyReset *time.Time
+	knownWeeklyReset := false
+	if c, ok := lim.learnedWeekly[k]; ok {
+		if c.Tokens > 0 {
+			s.WeeklyLimit, s.WeeklyLimitSource = c.Tokens, "learned"
+		}
+		if !c.ResetAt.IsZero() {
+			// The weekly quota resets on a fixed weekly cycle: a reset
+			// already past puts the next one a week after it (or after
+			// the latest one since), and the week began at the last.
+			next := c.ResetAt
+			for !next.After(now) {
+				next = next.Add(WeeklyWindow)
+			}
+			if last := next.Add(-WeeklyWindow); last.After(weeklyStart) {
+				weeklyStart = last
+			}
+			weeklyReset, knownWeeklyReset = &next, true
+		}
+	}
+	if weeklyPaused {
+		t := weeklyUntil
+		s.WeeklyPausedUntil = &t
+		weeklyReset, knownWeeklyReset = &t, true
+	}
+	s.WeeklyWindowStart = weeklyStart
+	var weeklyOldest time.Time
 
 	var lookTokens int64
 	var lookHours float64
@@ -385,9 +506,18 @@ func computeScope(in Input, k scopeKey, budgets map[scopeKey]model.TokenBudget, 
 		if !s.matches(r) {
 			continue
 		}
-		lookRuns++
-		lookTokens += r.Billable()
-		lookHours += r.Duration().Hours()
+		if !r.FinishedAt.Before(lim.avgSince) {
+			lookRuns++
+			lookTokens += r.Billable()
+			lookHours += r.Duration().Hours()
+		}
+		if !r.FinishedAt.Before(weeklyStart) {
+			s.WeeklyRuns++
+			s.WeeklyUsed += r.Billable()
+			if weeklyOldest.IsZero() || r.FinishedAt.Before(weeklyOldest) {
+				weeklyOldest = r.FinishedAt
+			}
+		}
 		if r.FinishedAt.Before(start) {
 			continue
 		}
@@ -417,12 +547,25 @@ func computeScope(in Input, k scopeKey, budgets map[scopeKey]model.TokenBudget, 
 		reset = &t
 	}
 	s.ResetAt = reset
+	if weeklyReset == nil && !weeklyOldest.IsZero() {
+		t := weeklyOldest.Add(WeeklyWindow)
+		weeklyReset = &t
+	}
+	s.WeeklyResetAt = weeklyReset
+
+	switch {
+	case weeklyPaused:
+		s.WeeklyRemaining = 0
+	case s.WeeklyLimit > 0:
+		s.WeeklyRemaining = max(s.WeeklyLimit-s.WeeklyUsed, 0)
+	}
 
 	switch {
 	case isPaused:
 		s.Remaining = 0
 		zero := 0.0
 		s.SustainableWorkers = &zero
+		return s
 	case s.Limit > 0:
 		s.Remaining = s.Limit - s.Used
 		if s.Remaining < 0 {
@@ -443,6 +586,28 @@ func computeScope(in Input, k scopeKey, budgets map[scopeKey]model.TokenBudget, 
 			v := float64(s.Remaining) / (s.tokensPerWorkerHour * horizon.Hours())
 			v = math.Round(v*10) / 10
 			s.SustainableWorkers = &v
+		}
+	}
+	// A known weekly limit bounds the scope too: what is left of the week
+	// spread over the hours until the week resets.
+	if s.WeeklyLimit > 0 {
+		if s.BurnPerHour > 0 {
+			t := now.Add(time.Duration(float64(s.WeeklyRemaining) / s.BurnPerHour * float64(time.Hour)))
+			s.WeeklyRunsOutAt = &t
+		}
+		if s.tokensPerWorkerHour > 0 {
+			horizon := WeeklyWindow
+			if knownWeeklyReset {
+				horizon = s.WeeklyResetAt.Sub(now)
+			}
+			if horizon < 15*time.Minute {
+				horizon = 15 * time.Minute
+			}
+			v := float64(s.WeeklyRemaining) / (s.tokensPerWorkerHour * horizon.Hours())
+			v = math.Round(v*10) / 10
+			if s.SustainableWorkers == nil || v < *s.SustainableWorkers {
+				s.SustainableWorkers = &v
+			}
 		}
 	}
 	return s
@@ -485,6 +650,10 @@ func messages(in Input, rep Report) (advisories, warnings []string) {
 			advisories = append(advisories, fmt.Sprintf("at this rate %s budget runs out in %s; sustainable ≈ %s workers",
 				s.label(), roughly(s.RunsOutAt.Sub(now)), trimFloat(*s.SustainableWorkers)))
 		}
+		if s.WeeklyRunsOutAt != nil && s.SustainableWorkers != nil {
+			advisories = append(advisories, fmt.Sprintf("at this rate %s weekly limit runs out in %s; sustainable ≈ %s workers",
+				s.label(), roughly(s.WeeklyRunsOutAt.Sub(now)), trimFloat(*s.SustainableWorkers)))
+		}
 	}
 	if rep.SustainableWorkers != nil {
 		line := fmt.Sprintf("the remaining budget sustains ≈ %d workers until the next reset (max_workers is %d)", *rep.SustainableWorkers, in.MaxWorkers)
@@ -504,16 +673,56 @@ func messages(in Input, rep Report) (advisories, warnings []string) {
 				next = in.DefaultModels[i+1]
 			}
 			switch {
+			case s.WeeklyPausedUntil != nil:
+				warnings = append(warnings, fmt.Sprintf("default model %s on %s hit its weekly limit and is paused until %s; work falls back to %s",
+					s.Model, s.connectionLabel(), untilText(now, *s.WeeklyPausedUntil), next))
 			case s.PausedUntil != nil:
-				warnings = append(warnings, fmt.Sprintf("default model %s on %s is paused until %s; work falls back to %s",
-					s.Model, s.connectionLabel(), s.PausedUntil.UTC().Format("15:04 MST"), next))
-			case s.RunsOutAt != nil && (s.ResetAt == nil || s.RunsOutAt.Before(*s.ResetAt)):
-				warnings = append(warnings, fmt.Sprintf("default model %s on %s runs out in %s, before its reset; next on the default list: %s",
-					s.Model, s.connectionLabel(), roughly(s.RunsOutAt.Sub(now)), next))
+				warnings = append(warnings, fmt.Sprintf("default model %s on %s hit its %s interval limit and is paused until %s; work falls back to %s",
+					s.Model, s.connectionLabel(), shortWindow(s.window), untilText(now, *s.PausedUntil), next))
+			// Each horizon warns when it runs out before its own reset;
+			// where both would, the one that runs out first is said.
+			case weeklyWarns(s) && (!intervalWarns(s) || s.WeeklyRunsOutAt.Before(*s.RunsOutAt)):
+				warnings = append(warnings, fmt.Sprintf("default model %s on %s runs out of its weekly limit in %s, before its weekly reset; next on the default list: %s",
+					s.Model, s.connectionLabel(), roughly(s.WeeklyRunsOutAt.Sub(now)), next))
+			case intervalWarns(s):
+				warnings = append(warnings, fmt.Sprintf("default model %s on %s runs out of its %s interval limit in %s, before its reset; next on the default list: %s",
+					s.Model, s.connectionLabel(), shortWindow(s.window), roughly(s.RunsOutAt.Sub(now)), next))
 			}
 		}
 	}
 	return advisories, warnings
+}
+
+// intervalWarns is whether s's interval runs out before its reset.
+func intervalWarns(s Scope) bool {
+	return s.RunsOutAt != nil && (s.ResetAt == nil || s.RunsOutAt.Before(*s.ResetAt))
+}
+
+// weeklyWarns is whether s's weekly limit runs out before its weekly
+// reset.
+func weeklyWarns(s Scope) bool {
+	return s.WeeklyRunsOutAt != nil && (s.WeeklyResetAt == nil || s.WeeklyRunsOutAt.Before(*s.WeeklyResetAt))
+}
+
+// untilText is t as a warning names it: "15:04 UTC" within a day of
+// now, else "Jan 2 15:04 UTC" -- a weekly pause ends days away.
+func untilText(now, t time.Time) string {
+	if t.Sub(now) < 24*time.Hour {
+		return t.UTC().Format("15:04 MST")
+	}
+	return t.UTC().Format("Jan 2 15:04 MST")
+}
+
+// shortWindow is d without its zero units: "5h", "90m", "24h".
+func shortWindow(d time.Duration) string {
+	out := d.String()
+	if strings.HasSuffix(out, "m0s") {
+		out = strings.TrimSuffix(out, "0s")
+	}
+	if strings.HasSuffix(out, "h0m") {
+		out = strings.TrimSuffix(out, "0m")
+	}
+	return out
 }
 
 func trimFloat(v float64) string {

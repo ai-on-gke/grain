@@ -69,7 +69,7 @@ func TestCreateTemplateAcceptsCapabilitiesAndReads(t *testing.T) {
 	c, _, ctx := testClient(t)
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "x", Title: "x",
-		Capabilities: []string{"github-sandbox"},
+		Capabilities: []string{model.GitHubSandboxRepoGrant},
 		Reads:        []string{"acme/shared-lib"},
 	})
 	if err != nil {

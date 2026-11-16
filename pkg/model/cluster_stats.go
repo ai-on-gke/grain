@@ -17,9 +17,9 @@ package model
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -394,12 +394,23 @@ func (s *Store) rollupDirections(ctx context.Context, byTask map[string]*taskWin
 	if len(byTask) == 0 {
 		return []DirectionWork{}, nil
 	}
-	rootCache := map[string]string{}
+	taskIDs := make([]string, 0, len(byTask))
+	for taskID := range byTask {
+		taskIDs = append(taskIDs, taskID)
+	}
+	sort.Strings(taskIDs)
+
+	rootCache, err := s.resolveDirectionRootTaskIDs(ctx, taskIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	byDir := map[string]*DirectionWork{}
-	for taskID, tw := range byTask {
-		rootID, err := s.directionRootTaskID(ctx, taskID, rootCache)
-		if err != nil {
-			return nil, err
+	for _, taskID := range taskIDs {
+		tw := byTask[taskID]
+		rootID := rootCache[taskID]
+		if rootID == "" {
+			rootID = taskID
 		}
 		d, ok := byDir[rootID]
 		if !ok {
@@ -424,25 +435,26 @@ func (s *Store) rollupDirections(ctx context.Context, byTask map[string]*taskWin
 		d.AgentTime += tw.agentTime
 	}
 
+	rootIDs := make([]string, 0, len(byDir))
+	for rootID := range byDir {
+		rootIDs = append(rootIDs, rootID)
+	}
+	sort.Strings(rootIDs)
+	metaByID, err := s.loadDirectionRootMeta(ctx, rootIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	out := make([]DirectionWork, 0, len(byDir))
 	for _, d := range byDir {
-		var title, originRef, actorKind, actorID string
-		var owner, name sql.NullString
-		err := s.db.QueryRowContext(ctx,
-			"SELECT `title`,`target_owner`,`target_name`,`origin_ref`,`origin_actor_kind`,`origin_actor_id` "+
-				"FROM `task` WHERE `id` = ?", d.TaskID,
-		).Scan(&title, &owner, &name, &originRef, &actorKind, &actorID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-		if err == nil {
-			d.Title = title
-			if owner.Valid && name.Valid && owner.String != "" && name.String != "" {
-				r := RepoRef{Owner: owner.String, Name: name.String}
+		if meta, ok := metaByID[d.TaskID]; ok {
+			d.Title = meta.title
+			if meta.repo != nil {
+				r := *meta.repo
 				d.Repo = &r
 			}
-			d.Origin = WorkOrigin(originRef)
-			d.Author = Principal{Kind: PrincipalKind(actorKind), ID: actorID}
+			d.Origin = WorkOrigin(meta.originRef)
+			d.Author = Principal{Kind: PrincipalKind(meta.actorKind), ID: meta.actorID}
 		}
 		if d.Origin == "" && d.TasksSpawned > 0 {
 			d.Origin = TaskOrigin(d.TaskID)
@@ -472,11 +484,90 @@ func (s *Store) rollupDirections(ctx context.Context, byTask map[string]*taskWin
 	return out, nil
 }
 
-// directionRootTaskID walks LinkProposedBy and task WorkOrigin pointers
-// from id up to the root task of its tree.
-func (s *Store) directionRootTaskID(ctx context.Context, id string, cache map[string]string) (string, error) {
+const clusterStatsSQLBatchSize = 200
+
+type directionLinkNode struct {
+	origin string
+	parent string
+	exists bool
+}
+
+type directionRootMeta struct {
+	title     string
+	repo      *RepoRef
+	originRef string
+	actorKind string
+	actorID   string
+}
+
+func sqlInPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("?,", n-1) + "?"
+}
+
+func (s *Store) resolveDirectionRootTaskIDs(ctx context.Context, taskIDs []string) (map[string]string, error) {
+	nodes := map[string]directionLinkNode{}
+	frontier := append([]string(nil), taskIDs...)
+	for len(frontier) > 0 {
+		deduped := make([]string, 0, len(frontier))
+		queued := make(map[string]bool, len(frontier))
+		for _, id := range frontier {
+			if id == "" || queued[id] {
+				continue
+			}
+			if _, ok := nodes[id]; ok {
+				continue
+			}
+			queued[id] = true
+			deduped = append(deduped, id)
+		}
+		frontier = nil
+		for start := 0; start < len(deduped); start += clusterStatsSQLBatchSize {
+			end := min(start+clusterStatsSQLBatchSize, len(deduped))
+			chunk := deduped[start:end]
+			args := make([]any, 0, len(chunk)+1)
+			args = append(args, string(LinkProposedBy))
+			for _, id := range chunk {
+				nodes[id] = directionLinkNode{exists: false}
+				args = append(args, id)
+			}
+			query := "SELECT `t`.`id`, `t`.`origin_ref`, " +
+				"COALESCE((SELECT MIN(`target`) FROM `task_link` WHERE `task_id` = `t`.`id` AND `kind` = ?), '') " +
+				"FROM `task` `t` WHERE `t`.`id` IN (" + sqlInPlaceholders(len(chunk)) + ")"
+			if err := each(ctx, s.db, query, args, func(rows *sql.Rows) error {
+				var id, origin, parent string
+				if err := rows.Scan(&id, &origin, &parent); err != nil {
+					return err
+				}
+				nodes[id] = directionLinkNode{origin: origin, parent: parent, exists: true}
+				next := parent
+				if next == "" || next == id {
+					next = WorkOrigin(origin).Task()
+				}
+				if next != "" && next != id {
+					if _, loaded := nodes[next]; !loaded {
+						frontier = append(frontier, next)
+					}
+				}
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	rootCache := make(map[string]string, len(taskIDs))
+	for _, id := range taskIDs {
+		resolveDirectionRootFromNodes(id, nodes, rootCache)
+	}
+	return rootCache, nil
+}
+
+func resolveDirectionRootFromNodes(id string, nodes map[string]directionLinkNode, cache map[string]string) string {
 	if root, ok := cache[id]; ok {
-		return root, nil
+		return root
 	}
 	seen := map[string]bool{}
 	var path []string
@@ -491,34 +582,61 @@ func (s *Store) directionRootTaskID(ctx context.Context, id string, cache map[st
 		}
 		seen[cur] = true
 		path = append(path, cur)
-		var origin, parent string
-		err := s.db.QueryRowContext(ctx,
-			"SELECT `t`.`origin_ref`, "+
-				"COALESCE((SELECT MIN(`target`) FROM `task_link` WHERE `task_id` = `t`.`id` AND `kind` = ?), '') "+
-				"FROM `task` `t` WHERE `t`.`id` = ?",
-			string(LinkProposedBy), cur,
-		).Scan(&origin, &parent)
-		if errors.Is(err, sql.ErrNoRows) {
+		node, ok := nodes[cur]
+		if !ok || !node.exists {
 			break
 		}
-		if err != nil {
-			return "", err
-		}
-		o := WorkOrigin(origin)
+		o := WorkOrigin(node.origin)
 		switch {
-		case parent != "" && parent != cur:
-			cur = parent
+		case node.parent != "" && node.parent != cur:
+			cur = node.parent
 		case o.Task() != "" && o.Task() != cur:
 			cur = o.Task()
 		default:
 			for _, p := range path {
 				cache[p] = cur
 			}
-			return cur, nil
+			return cur
 		}
 	}
 	for _, p := range path {
 		cache[p] = cur
 	}
-	return cur, nil
+	return cur
+}
+
+func (s *Store) loadDirectionRootMeta(ctx context.Context, rootIDs []string) (map[string]directionRootMeta, error) {
+	out := make(map[string]directionRootMeta, len(rootIDs))
+	for start := 0; start < len(rootIDs); start += clusterStatsSQLBatchSize {
+		end := min(start+clusterStatsSQLBatchSize, len(rootIDs))
+		chunk := rootIDs[start:end]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		query := "SELECT `id`,`title`,`target_owner`,`target_name`,`origin_ref`,`origin_actor_kind`,`origin_actor_id` " +
+			"FROM `task` WHERE `id` IN (" + sqlInPlaceholders(len(chunk)) + ")"
+		if err := each(ctx, s.db, query, args, func(rows *sql.Rows) error {
+			var id, title, originRef, actorKind, actorID string
+			var owner, name sql.NullString
+			if err := rows.Scan(&id, &title, &owner, &name, &originRef, &actorKind, &actorID); err != nil {
+				return err
+			}
+			meta := directionRootMeta{
+				title:     title,
+				originRef: originRef,
+				actorKind: actorKind,
+				actorID:   actorID,
+			}
+			if owner.Valid && name.Valid && owner.String != "" && name.String != "" {
+				r := RepoRef{Owner: owner.String, Name: name.String}
+				meta.repo = &r
+			}
+			out[id] = meta
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

@@ -76,6 +76,32 @@ func TestListGitHubBranchesCachesARepository(t *testing.T) {
 	}
 }
 
+func TestGitHubBranchesRefreshBypassesCache(t *testing.T) {
+	t.Parallel()
+	client, _, _ := testClient(t)
+	lister := &branchLister{names: []string{"main", "topic/one"}}
+	client.Config.GitHubBranches = lister
+	client.Config.Credentials = credentialSet(t)
+	srv := ui.NewServerWithClient(client)
+
+	rec1 := do(t, srv, http.MethodGet, "/api/repos/acme/widgets/github-branches", "")
+	if rec1.Code != http.StatusOK || !strings.Contains(rec1.Body.String(), "topic/one") {
+		t.Fatalf("first GET = %d %s", rec1.Code, rec1.Body.String())
+	}
+	lister.names = []string{"main", "topic/one", "topic/two"}
+	recCached := do(t, srv, http.MethodGet, "/api/repos/acme/widgets/github-branches", "")
+	if recCached.Code != http.StatusOK || strings.Contains(recCached.Body.String(), "topic/two") {
+		t.Fatalf("cached GET unexpectedly bypassed cache: %s", recCached.Body.String())
+	}
+	recFresh := do(t, srv, http.MethodGet, "/api/repos/acme/widgets/github-branches?refresh=1", "")
+	if recFresh.Code != http.StatusOK || !strings.Contains(recFresh.Body.String(), "topic/two") {
+		t.Fatalf("refresh=1 GET = %d %s", recFresh.Code, recFresh.Body.String())
+	}
+	if lister.calls != 2 {
+		t.Fatalf("GitHub calls = %d, want 2", lister.calls)
+	}
+}
+
 func TestGitHubBranchesWithoutARepoCredentialIsExplicit(t *testing.T) {
 	t.Parallel()
 	client, _, _ := testClient(t)

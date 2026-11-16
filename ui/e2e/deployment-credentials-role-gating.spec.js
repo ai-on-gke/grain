@@ -86,6 +86,19 @@ async function putSecret(page, path, value) {
   );
 }
 
+// openCredentials loads Capabilities at the Deployment credentials card
+// afresh. Every test here first visits /settings/capabilities to PUT a
+// secret from the page, and a goto that only adds #credentials to that
+// URL is a same-document navigation: the page re-reads /api/config but
+// never re-reads /api/secrets, so the card showed the secret only when
+// its first secrets fetch happened to land after the PUT -- a race a
+// fast runner lost. The reload is what makes it read both again.
+async function openCredentials(page) {
+  await page.goto("/settings/capabilities#credentials");
+  await page.reload();
+  return page.locator("#credentials");
+}
+
 test("a role with capabilities:admin but not settings:write or secrets:write sees the card read-only, saying why", async ({
   page,
 }) => {
@@ -98,8 +111,7 @@ test("a role with capabilities:admin but not settings:write or secrets:write see
       { width: 390, height: 844 },
     ]) {
       await page.setViewportSize(viewport);
-      await page.goto("/settings/capabilities#credentials");
-      const card = page.locator("#credentials");
+      const card = await openCredentials(page);
       // The first wait after a fresh load covers the secrets list
       // arriving on a busy CI runner, not the assertion itself.
       await expect(card.getByText("cosign-key")).toBeVisible({
@@ -150,8 +162,7 @@ test("a role with settings:write and secrets:write but not capabilities:admin ca
       { width: 390, height: 844 },
     ]) {
       await page.setViewportSize(viewport);
-      await page.goto("/settings/capabilities#credentials");
-      const card = page.locator("#credentials");
+      const card = await openCredentials(page);
       // The first wait after a fresh load covers the secrets list
       // arriving on a busy CI runner, not the assertion itself.
       await expect(card.getByText("cosign-key")).toBeVisible({
@@ -201,8 +212,7 @@ test("an operator still gets every control, and no read-only note", async ({
   await page.goto("/settings/capabilities");
   expect(await putSecret(page, "/api/secrets/cosign-key/key", "k")).toBe(200);
   try {
-    await page.goto("/settings/capabilities#credentials");
-    const card = page.locator("#credentials");
+    const card = await openCredentials(page);
     // The first wait after a fresh load covers the secrets list
     // arriving on a busy CI runner, not the assertion itself.
     await expect(card.getByText("cosign-key")).toBeVisible({ timeout: 15000 });

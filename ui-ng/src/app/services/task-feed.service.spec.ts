@@ -228,5 +228,7 @@ describe("TaskFeedStore unified open-task feed (F9)", () => {
     expect(normalizeActorKind("automation", "console-session")).toBe("grain");
     expect(normalizeActorKind(undefined, "grain")).toBe("grain");
     expect(normalizeActorKind("service", "github-webhook")).toBe("service");
+    expect(normalizeActorKind(undefined, "system:worker-01")).toBe("service");
+    expect(normalizeActorKind("human", "repo:acme/web")).toBe("service");
   });
 });

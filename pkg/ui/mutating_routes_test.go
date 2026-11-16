@@ -121,6 +121,21 @@ func taskHeldForHumanReview(t *testing.T, client *ui.Client, _ sender) string {
 	return id
 }
 
+// taskWithReviewFindings is a task whose pull request review r1 left
+// findings on: what POST /api/tasks/{id}/accept-findings acts on.
+func taskWithReviewFindings(t *testing.T, client *ui.Client, send sender) string {
+	t.Helper()
+	id := taskWithPullRequest(t, client, send)
+	if err := client.Store.UpdateTask(context.Background(), id, func(tk *model.Task) error {
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "r1",
+			Summary: "review left findings", At: baseTime})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // taskWithPullRequest is a task whose pull request the merge queue has
 // given up on: what retry-merge and force-merge act on.
 func taskWithPullRequest(t *testing.T, client *ui.Client, _ sender) string {
@@ -510,6 +525,11 @@ var attributedRoutes = map[string]attributedRoute{
 		setup:    taskWithPullRequest,
 		recorded: noted(model.TaskEventSubmitted),
 	},
+	"POST /api/tasks/{id}/accept-findings": {
+		setup:    taskWithReviewFindings,
+		body:     `{"gate":"security-review","reviewTask":"r1","reason":"out of scope; follow-up filed"}`,
+		recorded: noted(model.TaskEventReviewFindingsAccepted),
+	},
 	"POST /api/tasks/{id}/human-review/release": {
 		setup:    taskHeldForHumanReview,
 		recorded: noted(model.TaskEventHumanReviewReleased),
@@ -897,6 +917,11 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
 	"POST /api/repos/plan":                               true,
+	// Refreshing a connection's discovered models writes only grain's
+	// cache of what the provider said (model.AgentBackend.Discovered),
+	// which RunModelDiscovery rewrites on its own tick with no actor;
+	// nothing a person configured changes.
+	"POST /api/deployment/agent-backends/{backendId}/discover": true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
@@ -1306,5 +1331,23 @@ func TestABodyNeverNamesAPerson(t *testing.T) {
 				t.Errorf("%s naming mallory: %d %s, want 400", way.name, rec.Code, rec.Body)
 			}
 		}
+	}
+}
+
+func TestPutDeploymentAgentBackendMismatchID(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"id":"body-id","framework":"antigravity"}`
+	rec := do(t, srv, "PUT", "/api/deployment/agent-backends/path-id", body)
+	if rec.Code != 400 {
+		t.Errorf("mismatched id status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAddTargetRepoInvalidCloneUrl(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"repo":"acme/widgets","cloneUrl":"invalid-url"}`
+	rec := do(t, srv, "POST", "/api/repos", body)
+	if rec.Code != 400 {
+		t.Errorf("invalid cloneUrl status = %d, want 400", rec.Code)
 	}
 }

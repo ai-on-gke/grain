@@ -776,7 +776,7 @@ func TestCreateTaskProposalAcceptsGrainCICapability(t *testing.T) {
 	proposal, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:        "proposed subtask",
 		ProposedBy:   parent.ID,
-		Capabilities: &[]string{"grain-ci", model.GitHubSandboxRepoGrant},
+		Capabilities: &[]string{model.GrainCIGrant, model.GitHubSandboxRepoGrant},
 	})
 	if err != nil {
 		t.Fatalf("CreateTask proposal: %v", err)
@@ -822,7 +822,7 @@ func putDefaultCapabilities(t *testing.T, ctx context.Context, store *model.Stor
 func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gcp-key")
+	putDefaultCapabilities(t, ctx, store, model.GCPKeySandboxAgentGrant)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "needs a sandbox key", Approved: true})
 	if err != nil {
@@ -840,7 +840,7 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 	}
 	// Detachable like any other grant: a default is a starting point, not
 	// something the task is stuck with (including via the legacy alias).
-	if err := c.SetCapability(ctx, task.ID, "gcp-key", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, model.GCPKeySandboxAgentGrant, false); err != nil {
 		t.Fatalf("detaching a defaulted capability: %v", err)
 	}
 	detached, err := store.GetTask(ctx, task.ID)
@@ -860,7 +860,7 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gcp-key")
+	putDefaultCapabilities(t, ctx, store, model.GCPKeySandboxAgentGrant)
 
 	named, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "only this one", Approved: true, Capabilities: &[]string{model.GitHubSandboxRepoGrant},
@@ -933,7 +933,7 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
 	putDefaultCapabilities(t, ctx, store, model.GitHubSandboxRepoGrant)
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", model.GCPKeySandboxAgentGrant)
 
 	here, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "on the repo that adds one", Approved: true, Repo: "acme/widgets",
@@ -979,7 +979,7 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 func TestCreateTaskUsesDefaultTargetRepoDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", model.GCPKeySandboxAgentGrant)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "no repo named", Approved: true})
 	if err != nil {
@@ -997,7 +997,7 @@ func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T
 	t.Parallel()
 	c, store, ctx := testClient(t)
 	putDefaultCapabilities(t, ctx, store, model.GitHubSandboxRepoGrant)
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", model.GCPKeySandboxAgentGrant)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "nothing to check out", Approved: true, NoRepo: true,
@@ -1033,8 +1033,8 @@ func TestCreateTaskSkipsRetiredRepoDefaultCapability(t *testing.T) {
 func TestCreateTaskDeduplicatesOverlappingDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gcp-key")
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
+	putDefaultCapabilities(t, ctx, store, model.GCPKeySandboxAgentGrant)
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", model.GCPKeySandboxAgentGrant)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "one key only", Approved: true})
 	if err != nil {
@@ -1139,7 +1139,7 @@ func TestMainConfigRepoProposalsFileIntoTheDefaultTeam(t *testing.T) {
 func TestCreateTaskCapabilitiesOverrideRepoDefaults(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", model.GCPKeySandboxAgentGrant)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "not that one", Approved: true, Capabilities: &[]string{model.GitHubSandboxRepoGrant},
@@ -2160,7 +2160,7 @@ func TestGCPKeyAndGitHubSandboxCanBeGranted(t *testing.T) {
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "mint me a key", Approved: true,
-		Capabilities: &[]string{"gcp-key", model.GitHubSandboxRepoGrant},
+		Capabilities: &[]string{model.GCPKeySandboxAgentGrant, model.GitHubSandboxRepoGrant},
 	})
 	if err != nil {
 		t.Fatalf("creating a task granting gcp-key and github-sandbox: %v", err)
@@ -2172,7 +2172,7 @@ func TestGCPKeyAndGitHubSandboxCanBeGranted(t *testing.T) {
 	}
 
 	plain := create(t, c, ctx)
-	for _, id := range []string{"gcp-key", model.GitHubSandboxRepoGrant} {
+	for _, id := range []string{model.GCPKeySandboxAgentGrant, model.GitHubSandboxRepoGrant} {
 		if err := c.SetCapability(ctx, plain.ID, id, true); err != nil {
 			t.Errorf("attaching %s: %v", id, err)
 		}

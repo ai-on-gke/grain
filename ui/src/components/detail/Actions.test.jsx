@@ -93,6 +93,35 @@ describe("DetailOverlay actions", () => {
     });
   });
 
+  it("offers no Release hold when the hold is review findings alone", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "awaiting_submit",
+          pullRequest: "acme/widgets#42",
+          autoMerge: false,
+          humanReviewHold: [
+            {
+              source: "security-findings",
+              category: "security",
+              reason: "The review left findings",
+              reviewTask: "77",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    const banner = screen.getByTestId("human-review-hold");
+    expect(banner.textContent).toContain("accept them as they are");
+    expect(screen.queryByRole("button", { name: "Release hold" })).toBeNull();
+  });
+
   it("shows a Withdraw approval button for a queued task, wired to the withdraw endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();
@@ -743,6 +772,68 @@ describe("DetailOverlay actions", () => {
       expect.anything(),
     );
     window.prompt.mockRestore();
+  });
+
+  it("offers Accept findings on a findings-blocked gate, posting that gate, its review and a reason", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "completed",
+          pullRequest: "acme/widgets#42",
+          autoMerge: false,
+          ci: { commit: "abc123def4567890" },
+          mergeGates: [
+            { id: "ci", label: "CI", state: "passed" },
+            {
+              id: "security-review",
+              label: "Security review",
+              state: "findings",
+              detail: "security review left findings",
+              reviewTask: "4710",
+              acceptable: true,
+            },
+            {
+              id: "review",
+              label: "Code review",
+              state: "findings",
+              detail: "filing gating review failed: boom",
+              reviewTask: "4711",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    // Only a gate held on a review's findings it can accept offers it.
+    expect(screen.queryByTestId("accept-findings-review")).toBeNull();
+    await user.click(screen.getByTestId("accept-findings-security-review"));
+    const confirm = screen.getByTestId("confirm-accept-findings");
+    expect(confirm).toBeDisabled();
+    await user.type(
+      screen.getByTestId("accept-findings-reason"),
+      "merge as-is; follow-up filed",
+    );
+    await user.click(confirm);
+
+    expect(act).toHaveBeenCalledWith(expect.any(Function), "12");
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/accept-findings", {
+      method: "POST",
+      body: JSON.stringify({
+        gate: "security-review",
+        reviewTask: "4710",
+        reason: "merge as-is; follow-up filed",
+        head: "abc123def4567890",
+      }),
+    });
   });
 
   // Offered on a task with something to merge, and on no other: a
