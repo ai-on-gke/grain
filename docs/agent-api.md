@@ -239,6 +239,8 @@ every `DELETE`.
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
 | `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |
+| `qa:read` | read quality flow versions, experiment configurations and experiment results | |
+| `qa:admin` | publish or retire quality flow versions, manage quality experiments, import readout manifests | yes |
 
 `internal` marks grain's own plumbing, which no agent can ever reach.
 This covers the access-code login, executor bootstrap, and the endpoints

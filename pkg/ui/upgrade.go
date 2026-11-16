@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -818,6 +819,9 @@ type startUpgradeRequest struct {
 	// the upgrade outright and needs no borrowed name to do it.
 	RequestedBy     string `json:"requestedBy,omitempty"`
 	RequestedByKind string `json:"requestedByKind,omitempty"`
+	// StopExperiment stops an active QA experiment (and promotes stranded
+	// staging branches fail-open) before starting or scheduling an upgrade.
+	StopExperiment bool `json:"stopExperiment,omitempty"`
 }
 
 // deploymentChannel is the channel up's deployment follows, or "" when
@@ -854,6 +858,42 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 	if req.Rollback {
 		s.startRollback(w, r, req)
 		return
+	}
+	if s.tasks.Store != nil {
+		if runningExp, rErr := s.tasks.Store.GetRunningQAExperiment(r.Context()); rErr == nil && runningExp != nil {
+			if !req.StopExperiment {
+				writeError(w, http.StatusConflict, fmt.Errorf("cannot upgrade while QA experiment %s is running (pass stopExperiment: true or stop the experiment first)", runningExp.ID))
+				return
+			}
+			now := s.tasks.now()
+			actor := s.tasks.requestActor(r.Context())
+			if _, sErr := s.tasks.Store.UpdateQAExperiment(r.Context(), runningExp.ID, 0, func(e *model.QAExperiment) error {
+				if e.State == model.QAExpStateRunning {
+					e.State = model.QAExpStateStopped
+					e.StoppedAt = &now
+					e.Decision = &model.QAExperimentDecision{
+						Outcome:   "invalid",
+						Reason:    "stopped for deployment upgrade",
+						DecidedBy: actor.Actor.ID,
+						DecidedAt: now.Format(time.RFC3339),
+					}
+				}
+				return nil
+			}); sErr != nil {
+				writeError(w, http.StatusInternalServerError, sErr)
+				return
+			}
+			_, _ = s.tasks.Store.RecordConfigAudit(r.Context(), model.ConfigAuditEntry{
+				At:         now,
+				By:         actor.Actor,
+				OnBehalfOf: actor.OnBehalfOf,
+				Surface:    "qa-experiment:" + runningExp.ID,
+				Summary:    fmt.Sprintf("stopped QA experiment %s before deployment upgrade", runningExp.ID),
+			})
+			if hooks := resolve.GetRuntimeHooks(); hooks != nil && hooks.PromoteExperimentStages != nil {
+				hooks.PromoteExperimentStages(r.Context(), runningExp.ID, "experiment stopped for deployment upgrade")
+			}
+		}
 	}
 	if strings.TrimSpace(req.Branch) == "" {
 		// No branch means "a newer build of what this deployment already
