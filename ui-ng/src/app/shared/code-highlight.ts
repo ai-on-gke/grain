@@ -24,7 +24,9 @@ import {
 import { DomSanitizer, type SafeHtml } from "@angular/platform-browser";
 import { Router } from "@angular/router";
 import type { DiffPreviewHunk, DiffPreviewLine } from "../api/models";
+import { ThemeService } from "../services/theme.service";
 import { renderMarkdown, safeHref } from "../sessions/session-view";
+import { handleMermaidClick, hydrateMermaid } from "./mermaid";
 
 const KEYWORDS = new Set([
   "async",
@@ -547,6 +549,12 @@ const ALLOWED_MD_ATTRS = new Set([
   "start",
   "aria-hidden",
   "aria-label",
+  "aria-pressed",
+  "role",
+  "data-mermaid",
+  "data-mermaid-view",
+  "data-mermaid-pane",
+  "data-mermaid-canvas",
 ]);
 
 const SAFE_DATA_IMAGE_RE =
@@ -615,6 +623,8 @@ export class MarkdownDirective {
   private readonly sanitizer = inject(DomSanitizer);
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
+  private readonly theme = inject(ThemeService);
+  private shown: string | null = null;
 
   readonly gMarkdown = input<string>("");
 
@@ -631,7 +641,7 @@ export class MarkdownDirective {
         MarkdownDirective.cache.set(src, html);
       } else {
         html = sanitizeMarkdownHtml(
-          renderMarkdown(src),
+          renderMarkdown(src, { mermaid: true }),
           this.doc.defaultView as (Window & typeof globalThis) | null,
         );
         if (MarkdownDirective.cache.size >= MarkdownDirective.MAX_CACHE) {
@@ -644,13 +654,27 @@ export class MarkdownDirective {
       // sanitizeMarkdownHtml enforces
       // a strict tag/attribute allowlist as defense-in-depth before innerHTML.
       void (this.sanitizer.bypassSecurityTrustHtml(html) as SafeHtml);
-      this.el.nativeElement.innerHTML = html;
+      // A theme change only redraws diagrams; it keeps the DOM (and any
+      // Source / Before / After choice) that is already there.
+      const mode = this.theme.resolved();
+      if (this.shown !== src) {
+        this.el.nativeElement.innerHTML = html;
+        this.shown = src;
+      }
+      if (html.includes("data-mermaid=")) {
+        hydrateMermaid(this.el.nativeElement, mode, this.doc);
+      }
     });
   }
 
   @HostListener("click", ["$event"])
   onClick(ev: MouseEvent): void {
     const target = ev.target as HTMLElement | null;
+    if (handleMermaidClick(target)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
     const copyBtn = target?.closest<HTMLButtonElement>("[data-copy-code]");
     if (copyBtn) {
       ev.preventDefault();

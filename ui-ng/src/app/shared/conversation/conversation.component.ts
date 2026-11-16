@@ -48,6 +48,17 @@ import { isTypingTarget } from "../../services/keyboard.service";
 
 export type ConversationMode = "inline" | "expanded" | "fullscreen";
 
+// CommentTarget names a comment a `#comment=<id>` link asks to show; seq
+// changes on every request so following the same link twice reveals the
+// comment again.
+export interface CommentTarget {
+  id: number;
+  seq: number;
+}
+
+// How long a deep-linked comment keeps its highlight.
+const HIGHLIGHT_MS = 4000;
+
 // Pixels from the bottom within which the thread counts as "following" new
 // messages; further up, new messages raise the jump pill instead.
 const FOLLOW_SLACK_PX = 48;
@@ -165,7 +176,10 @@ export interface ComposerConfig {
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
             [attr.aria-busy]="c.id < 0 ? 'true' : null"
+            [class.comment-highlight]="c.id === highlightedCommentId()"
+            [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
+            [attr.tabindex]="c.id === highlightedCommentId() ? -1 : null"
           >
             <span class="msg-meta">
               <span class="msg-author">
@@ -325,6 +339,10 @@ export class ConversationComponent implements OnDestroy {
 
   readonly olderCount = input<number>(0);
   readonly loadingOlder = input<boolean>(false);
+  // targetComment is the comment a #comment=<id> link names: once it is in
+  // comments() the thread scrolls it into view (instantly, so long threads
+  // do not visibly travel), focuses it, and highlights it for a moment.
+  readonly targetComment = input<CommentTarget | null>(null);
 
   readonly mode = model<ConversationMode>("inline");
 
@@ -340,6 +358,7 @@ export class ConversationComponent implements OnDestroy {
 
   /** Messages that arrived while the reader was scrolled up. */
   protected readonly unseen = signal(0);
+  protected readonly highlightedCommentId = signal<number | null>(null);
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
@@ -358,10 +377,11 @@ export class ConversationComponent implements OnDestroy {
   });
 
   private following = true;
-  private lastCount = 0;
-  private lastFirstId: number | undefined = undefined;
-  private lastTailId: number | undefined = undefined;
+  private lastTailId: number | null = null;
   private lastTask = "";
+  private appliedTargetSeq = 0;
+  private highlightTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastFirstId: number | null = null;
   private prependAnchor: { scrollHeight: number; scrollTop: number } | null =
     null;
 
@@ -372,6 +392,7 @@ export class ConversationComponent implements OnDestroy {
         this.stagedAttachments.set([]);
         this.unseen.set(0);
         this.prependAnchor = null;
+        this.clearHighlight();
       });
     });
 
@@ -385,21 +406,22 @@ export class ConversationComponent implements OnDestroy {
         if (typeof el.showModal === "function") el.showModal();
         else el.setAttribute("open", "");
         this.composer()?.nativeElement.focus();
-        this.scrollToEnd();
+        if (this.following) this.scrollToEnd();
       } else if (m !== "fullscreen" && el.open) {
         el.close();
       }
     });
 
     // Follow new messages when the reader is at the bottom; otherwise count
-    // them for the "New messages" pill. A task switch always jumps to the end,
-    // while prepending older history preserves the reader's scroll position.
+    // the ones that arrived at the end for the "New messages" pill (older
+    // history paged in above is not news). A task switch jumps to the end;
+    // a deep-linked comment wins over both.
     afterRenderEffect(() => {
       const list = this.comments();
-      const n = list.length;
-      const firstId = list[0]?.id;
-      const tailId = n > 0 ? list[n - 1]?.id : undefined;
+      const tailId = list.length ? list[list.length - 1].id : null;
+      const firstId = list.find((c) => c.id > 0)?.id ?? null;
       const task = this.taskId();
+      const target = this.targetComment();
       this.transcript();
       this.mode();
       this.watchThread();
@@ -408,19 +430,19 @@ export class ConversationComponent implements OnDestroy {
         for (const child of Array.from(el.children)) this.resize.observe(child);
       }
       const switched = task !== this.lastTask;
+      // Older history paged in above keeps the reader where they were.
       const prepended =
         !switched &&
-        this.lastFirstId !== undefined &&
-        firstId !== undefined &&
-        firstId !== this.lastFirstId &&
-        n > this.lastCount;
-      const tailGrew =
-        !switched &&
-        n > this.lastCount &&
-        !prepended &&
-        tailId !== this.lastTailId;
-
-      if (switched) {
+        this.lastFirstId !== null &&
+        firstId !== null &&
+        firstId < this.lastFirstId;
+      if (target !== null && target.seq !== this.appliedTargetSeq) {
+        this.following = false;
+        if (this.revealTargetComment(target.id)) {
+          this.appliedTargetSeq = target.seq;
+        }
+        if (this.unseen()) this.unseen.set(0);
+      } else if (switched) {
         this.prependAnchor = null;
         this.scrollToEnd();
         this.following = true;
@@ -441,14 +463,53 @@ export class ConversationComponent implements OnDestroy {
       } else if (this.following) {
         this.scrollToEnd();
         if (this.unseen()) this.unseen.set(0);
-      } else if (tailGrew) {
-        this.unseen.update((u) => u + (n - this.lastCount));
+      } else if (
+        tailId !== null &&
+        this.lastTailId !== null &&
+        tailId > this.lastTailId
+      ) {
+        const prevTail = this.lastTailId;
+        const added = list.filter((c) => c.id > prevTail).length;
+        if (added) this.unseen.update((u) => u + added);
       }
       this.lastTask = task;
-      this.lastCount = n;
       this.lastFirstId = firstId;
       this.lastTailId = tailId;
     });
+  }
+
+  // revealTargetComment scrolls comment id into the middle of the thread,
+  // focuses it without a second scroll, and highlights it. It reports
+  // false while the comment is not rendered yet.
+  private revealTargetComment(id: number): boolean {
+    const root =
+      this.mode() === "fullscreen"
+        ? this.modal()?.nativeElement
+        : this.thread()?.nativeElement;
+    const el = root?.querySelector<HTMLElement>(
+      `article.msg[data-comment-id="${id}"]`,
+    );
+    if (!el) return false;
+    this.highlightedCommentId.set(id);
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    this.highlightTimer = setTimeout(() => {
+      this.highlightTimer = null;
+      if (this.highlightedCommentId() === id) {
+        this.highlightedCommentId.set(null);
+      }
+    }, HIGHLIGHT_MS);
+    if (typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+    el.tabIndex = -1;
+    el.focus({ preventScroll: true });
+    return true;
+  }
+
+  private clearHighlight(): void {
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    this.highlightTimer = null;
+    this.highlightedCommentId.set(null);
   }
 
   private resize?: ResizeObserver;
@@ -475,6 +536,7 @@ export class ConversationComponent implements OnDestroy {
   // inert, so it stays where Angular rendered it (no manual DOM moves).
   ngOnDestroy() {
     this.resize?.disconnect();
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
     const el = this.modal()?.nativeElement;
     if (el?.open) el.close();
   }

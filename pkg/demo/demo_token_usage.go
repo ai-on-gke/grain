@@ -87,6 +87,15 @@ func seedDemoTokenUsage(ctx context.Context, store *model.Store, now time.Time) 
 	}); err != nil {
 		return err
 	}
+	// And the weekly limit gemini-2.5-pro met last week, so the usage
+	// meters show the weekly horizon beside the 5h interval
+	// (usage.WeeklyWindow; usage_capacity keeps it as "<model>#weekly").
+	if err := store.RecordUsageCapacity(ctx, model.UsageCapacity{
+		Connection: "gemini-pro", Model: "gemini-2.5-pro#weekly", Tokens: 60000000, Window: 7 * 24 * time.Hour,
+		ObservedAt: now.Add(-4 * 24 * time.Hour), ResetAt: now.Add(-4 * 24 * time.Hour),
+	}); err != nil {
+		return err
+	}
 	return store.PutUsageSettings(ctx, model.UsageSettings{
 		Budgets: []model.TokenBudget{{Connection: "gemini-pro", Model: "gemini-2.5-pro", Tokens: 4000000, Window: "5h"}},
 	}, now)

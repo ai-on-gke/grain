@@ -21,9 +21,11 @@ import {
   type SimpleChanges,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
@@ -50,6 +52,10 @@ import {
   type UsagePauseInput,
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
+import {
+  type SandboxCommitment,
+  SandboxCommitmentNoteComponent,
+} from "./sandbox-commitment-note.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -115,6 +121,16 @@ interface BackendEntry extends ModelBackendLike {
   concurrency?: number;
   hostd?: string;
   disabled?: boolean;
+}
+
+// GET/PUT/DELETE /api/agent-backends/{id}/codex-auth: a Codex
+// connection's own ChatGPT-subscription login, reported by presence.
+// A connection never falls back to the deployment-wide login
+// (configuredCodexAuthFile), so sharedSet is not shown here.
+interface BackendCodexAuthStatus {
+  enabled?: boolean;
+  set?: boolean;
+  refreshError?: string;
 }
 
 interface TokenBudgetRow {
@@ -362,9 +378,50 @@ function formatRefreshedAt(iso?: string): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${hh}:${mm} UTC`;
 }
 
+interface OvercommitBound {
+  field: string;
+  label: string;
+  fallback: string;
+  step: string;
+  max?: number;
+}
+
+interface K8sField {
+  key: string;
+  label: string;
+  placeholder: string;
+  hint: string;
+}
+
+interface DiskFloorRow {
+  path: string;
+  totalMB: number;
+  floorMB: number;
+  reclaimMB: number;
+}
+
+interface ContractInfo {
+  contract?: number;
+  minimumContract?: number;
+  contractLabel?: string;
+  granuleContract?: number;
+  granuleContractLabel?: string;
+  guestBaseImage?: string;
+  k8sSandboxBaseImage?: string;
+}
+
+function mib(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GiB` : `${mb} MiB`;
+}
+
 @Component({
   selector: "g-settings-compute",
-  imports: [PillSelectComponent, ConfirmDialogComponent, ModelPickerComponent],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    ModelPickerComponent,
+    SandboxCommitmentNoteComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -617,7 +674,7 @@ function formatRefreshedAt(iso?: string): string {
           </div>
 
           @if (backends().length > 0) {
-            <div class="s-table-wrap">
+            <div class="s-table-wrap s-table-pinned">
               <table class="s-table" aria-label="Model connections">
                 <thead>
                   <tr>
@@ -754,73 +811,192 @@ function formatRefreshedAt(iso?: string): string {
                         [attr.data-testid]="'backend-cred-row-' + b.id"
                       >
                         <td colspan="4">
-                          <form
-                            class="s-cred-bar"
-                            autocomplete="off"
-                            (submit)="
-                              $event.preventDefault(); saveBackendCred(b.id)
-                            "
-                          >
-                            <span class="s-label"
-                              >Credential for
-                              <span class="s-mono">{{ b.id }}</span></span
+                          @if (isCodexSubscription(b)) {
+                            <div
+                              class="s-field s-subrow-pin"
+                              [attr.data-testid]="'codex-auth-' + b.id"
                             >
-                            <input
-                              class="s-input s-input-inline"
-                              type="password"
-                              [attr.name]="'grain-backend-cred-' + b.id"
-                              autocomplete="new-password"
-                              data-lpignore="true"
-                              data-1p-ignore="true"
-                              [attr.aria-label]="'Credential for ' + b.id"
-                              placeholder="Paste API key or secret…"
-                              [value]="backendCredDrafts()[b.id] || ''"
-                              [disabled]="
-                                !access.can(
-                                  'PUT /api/agent-backends/{id}/credential'
-                                )
-                              "
-                              (input)="
-                                setBackendCredDraft(
-                                  b.id,
-                                  $any($event.target).value
-                                )
-                              "
-                            />
-                            <button
-                              type="submit"
-                              class="btn-primary s-btn-sm"
-                              [disabled]="
-                                !(backendCredDrafts()[b.id] || '').trim() ||
-                                !access.can(
-                                  'PUT /api/agent-backends/{id}/credential'
-                                )
+                              <div class="s-inline">
+                                <label
+                                  class="s-label"
+                                  [attr.for]="'codex-auth-input-' + b.id"
+                                  >ChatGPT subscription login (auth.json) for
+                                  <span class="s-mono">{{ b.id }}</span></label
+                                >
+                                <span
+                                  [class]="
+                                    'status-pill ' +
+                                    (codexAuthStatus()[b.id]?.set
+                                      ? 'healthy'
+                                      : 'neutral')
+                                  "
+                                  role="status"
+                                  [attr.data-testid]="
+                                    'codex-auth-status-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthStatusLabel(b.id) }}
+                                </span>
+                              </div>
+                              @if (codexAuthStatus()[b.id]?.refreshError) {
+                                <div
+                                  class="status-pill error"
+                                  role="alert"
+                                  [attr.data-testid]="
+                                    'codex-auth-refresh-error-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthStatus()[b.id]?.refreshError }}
+                                </div>
+                              }
+                              <p class="s-hint">
+                                Paste the auth.json from a Codex ChatGPT login.
+                                Only this connection uses it, and grain keeps
+                                its tokens refreshed. API keys are ignored in
+                                this mode.
+                              </p>
+                              <textarea
+                                class="s-textarea s-mono"
+                                rows="3"
+                                autocomplete="off"
+                                spellcheck="false"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                [attr.id]="'codex-auth-input-' + b.id"
+                                [attr.data-testid]="'input-codex-auth-' + b.id"
+                                placeholder='{"tokens": {...}}'
+                                [value]="codexAuthDrafts()[b.id] || ''"
+                                [disabled]="
+                                  codexAuthStatus()[b.id]?.enabled === false ||
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/codex-auth'
+                                  )
+                                "
+                                (input)="
+                                  setCodexAuthDraft(
+                                    b.id,
+                                    $any($event.target).value
+                                  )
+                                "
+                              ></textarea>
+                              <div class="s-inline">
+                                <button
+                                  type="button"
+                                  class="btn-primary s-btn-sm"
+                                  [attr.data-testid]="'save-codex-auth-' + b.id"
+                                  [disabled]="
+                                    codexAuthBusy() ||
+                                    !(codexAuthDrafts()[b.id] || '').trim() ||
+                                    codexAuthStatus()[b.id]?.enabled ===
+                                      false ||
+                                    !access.can(
+                                      'PUT /api/agent-backends/{id}/codex-auth'
+                                    )
+                                  "
+                                  (click)="saveCodexAuth(b.id)"
+                                >
+                                  Save login
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn-tonal s-btn-sm"
+                                  [attr.data-testid]="
+                                    'clear-codex-auth-' + b.id
+                                  "
+                                  [attr.aria-label]="
+                                    'Clear subscription login for ' + b.id
+                                  "
+                                  [disabled]="
+                                    codexAuthBusy() ||
+                                    !codexAuthStatus()[b.id]?.set ||
+                                    !access.can(
+                                      'DELETE /api/agent-backends/{id}/codex-auth'
+                                    )
+                                  "
+                                  (click)="confirmClearCodexAuth(b.id)"
+                                >
+                                  Clear login
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn-text s-btn-sm"
+                                  (click)="openCredBackendId.set(null)"
+                                >
+                                  Close
+                                </button>
+                              </div>
+                            </div>
+                          } @else {
+                            <form
+                              class="s-cred-bar s-subrow-pin"
+                              autocomplete="off"
+                              (submit)="
+                                $event.preventDefault(); saveBackendCred(b.id)
                               "
                             >
-                              Save secret
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [attr.data-testid]="'clear-cred-' + b.id"
-                              [attr.aria-label]="'Clear credential for ' + b.id"
-                              [disabled]="
-                                !access.can(
-                                  'DELETE /api/agent-backends/{id}/credential'
-                                )
-                              "
-                              (click)="confirmClearBackendCred(b.id)"
-                            >
-                              Clear stored secret
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              (click)="openCredBackendId.set(null)"
-                            >
-                              Close
-                            </button>
-                          </form>
+                              <span class="s-label"
+                                >Credential for
+                                <span class="s-mono">{{ b.id }}</span></span
+                              >
+                              <input
+                                class="s-input s-input-inline"
+                                type="password"
+                                [attr.name]="'grain-backend-cred-' + b.id"
+                                autocomplete="new-password"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                [attr.aria-label]="'Credential for ' + b.id"
+                                placeholder="Paste API key or secret…"
+                                [value]="backendCredDrafts()[b.id] || ''"
+                                [disabled]="
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                                (input)="
+                                  setBackendCredDraft(
+                                    b.id,
+                                    $any($event.target).value
+                                  )
+                                "
+                              />
+                              <button
+                                type="submit"
+                                class="btn-primary s-btn-sm"
+                                [disabled]="
+                                  !(backendCredDrafts()[b.id] || '').trim() ||
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                              >
+                                Save secret
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'clear-cred-' + b.id"
+                                [attr.aria-label]="
+                                  'Clear credential for ' + b.id
+                                "
+                                [disabled]="
+                                  !access.can(
+                                    'DELETE /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                                (click)="confirmClearBackendCred(b.id)"
+                              >
+                                Clear stored secret
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                (click)="openCredBackendId.set(null)"
+                              >
+                                Close
+                              </button>
+                            </form>
+                          }
                         </td>
                       </tr>
                     }
@@ -882,7 +1058,7 @@ function formatRefreshedAt(iso?: string): string {
                   align="left"
                   [options]="frameworkOptions"
                   [value]="newBackendFw()"
-                  (valueChange)="newBackendFw.set($event)"
+                  (valueChange)="setNewBackendFw($event)"
                 />
               </div>
               <div class="s-field">
@@ -891,7 +1067,7 @@ function formatRefreshedAt(iso?: string): string {
                   testid="select-new-backend-auth"
                   ariaLabel="Backend auth mode"
                   align="left"
-                  [options]="authModeOptions"
+                  [options]="authModeOptions()"
                   [value]="newBackendAuthMode()"
                   (valueChange)="newBackendAuthMode.set($event)"
                 />
@@ -1333,26 +1509,23 @@ function formatRefreshedAt(iso?: string): string {
                 "
               />
             </div>
-            <div class="s-field">
-              <label class="s-label" for="sb-image"
-                >Custom OCI sandbox image</label
-              >
-              <input
-                id="sb-image"
-                class="s-input s-mono"
-                type="text"
-                [value]="state.val('sandboxImage', '')"
-                [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('sandboxImage', $any($event.target).value)
-                "
-              />
-            </div>
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-sandbox-overcommit">
-          <h3 class="s-card-title">Overcommit &amp; Kubernetes pod settings</h3>
+        <div
+          class="s-card"
+          id="sandbox-budget"
+          data-testid="card-sandbox-overcommit"
+        >
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Sandbox budget</h3>
+              <p class="s-card-desc">
+                How much of this host agent and CI sandboxes may be promised,
+                and the free disk kept back on every volume.
+              </p>
+            </div>
+          </div>
           <div class="s-grid">
             <div class="s-field">
               <span class="s-label">Overcommit governor</span>
@@ -1365,6 +1538,10 @@ function formatRefreshedAt(iso?: string): string {
                 [disabled]="!canWriteSettings()"
                 (valueChange)="setOvercommitMode($event)"
               />
+              <span class="s-hint"
+                >Fixed holds the ratios here; auto moves them between the bounds
+                below from host CPU and memory pressure.</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="sb-cpu-oc">CPU overcommit (x)</label>
@@ -1374,12 +1551,22 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 step="0.25"
-                [value]="state.val('sandboxCpuOvercommit', 2)"
+                [value]="state.val('sandboxCpuOvercommit', '')"
+                [placeholder]="state.defaultHint('sandboxCpuOvercommit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'sandboxCpuOvercommit',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxCpuOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2)
                   )
                 "
               />
@@ -1407,12 +1594,22 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 step="0.25"
-                [value]="state.val('sandboxMemoryOvercommit', 1)"
+                [value]="state.val('sandboxMemoryOvercommit', '')"
+                [placeholder]="state.defaultHint('sandboxMemoryOvercommit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'sandboxMemoryOvercommit',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxMemoryOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1)
                   )
                 "
               />
@@ -1430,20 +1627,281 @@ function formatRefreshedAt(iso?: string): string {
                 >
               }
             </div>
+          </div>
+
+          @if (overcommitMode() === "auto") {
+            <div class="s-subsection" data-testid="overcommit-auto-bounds">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">Auto overcommit bounds</h4>
+              </div>
+              <span class="s-hint"
+                >Blank (or 0) uses grain's default, shown greyed in each
+                box.</span
+              >
+              <div class="s-grid">
+                @for (b of overcommitBounds; track b.field) {
+                  <div class="s-field">
+                    <label class="s-label" [attr.for]="'oc-' + b.field">{{
+                      b.label
+                    }}</label>
+                    <input
+                      class="s-input s-num"
+                      type="number"
+                      min="0"
+                      [id]="'oc-' + b.field"
+                      [attr.max]="b.max ?? null"
+                      [step]="b.step"
+                      [attr.data-testid]="'input-overcommit-' + b.field"
+                      [value]="overcommitBound(b.field)"
+                      [placeholder]="b.fallback"
+                      [disabled]="!canWriteSettings()"
+                      (input)="setOvercommitBound(b, $any($event.target).value)"
+                    />
+                    @if (state.fieldErrors()[boundKey(b.field)]; as err) {
+                      <span
+                        class="s-field-error"
+                        [attr.data-testid]="'error-overcommit-' + b.field"
+                        >{{ err }}</span
+                      >
+                    }
+                  </div>
+                }
+              </div>
+            </div>
+          }
+
+          <div class="s-subsection" data-testid="sandbox-disk-floor">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Disk floor</h4>
+            </div>
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="sb-floor-share"
+                  >Disk floor (share of each volume)</label
+                >
+                <input
+                  id="sb-floor-share"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  data-testid="input-disk-floor-share"
+                  [value]="state.val('sandboxDiskFloorShare', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskFloorShare')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskFloorShare',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskFloorShare',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1)
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >Free space kept on each volume: new CI jobs are held and
+                  agent dispatch deferred below it. 0.1 is a tenth; 0 with no
+                  minimum holds nothing back.</span
+                >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="sb-floor-min"
+                  >Disk floor minimum (MiB)</label
+                >
+                <input
+                  id="sb-floor-min"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  step="1024"
+                  data-testid="input-disk-floor-min"
+                  [value]="state.val('sandboxDiskFloorMinMb', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskFloorMinMb')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskFloorMinMb',
+                      $any($event.target).value,
+                      diskFloorMinDefault(),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskFloorMinMb',
+                      $any($event.target).value,
+                      diskFloorMinDefault()
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >The least the floor is ever worth on a small volume. 0 is no
+                  minimum; blank resets to grain's default ({{
+                    diskFloorMinDefault()
+                  }}
+                  MiB).</span
+                >
+              </div>
+            </div>
+            @if (diskFloorSummary()) {
+              <span class="s-hint s-num" data-testid="disk-floor-volumes">{{
+                diskFloorSummary()
+              }}</span>
+            }
+          </div>
+
+          @if (!sandboxCommitment()?.uncapped) {
+            <g-sandbox-commitment-note [commitment]="sandboxCommitment()" />
+          }
+        </div>
+
+        <div class="s-card" id="kubernetes" data-testid="card-kubernetes">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Kubernetes</h3>
+              <p class="s-card-desc">
+                Where and how the kubernetes and kubernetes-granule backends
+                create sandbox pods, and the Deployment self-upgrade repoints.
+                Blank boxes use the default shown greyed in them.
+              </p>
+            </div>
+          </div>
+          @if (k8sImageWarning()) {
+            <div
+              class="s-banner warn"
+              role="alert"
+              data-testid="k8s-image-warning"
+            >
+              <span>{{ k8sImageWarning() }}</span>
+            </div>
+          }
+          <div class="s-grid">
+            @for (f of k8sFields(); track f.key) {
+              <div class="s-field">
+                <label class="s-label" [attr.for]="'k8s-' + f.key">{{
+                  f.label
+                }}</label>
+                <input
+                  class="s-input s-mono"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  [id]="'k8s-' + f.key"
+                  [attr.data-testid]="'input-' + f.key"
+                  [value]="state.val(f.key, '')"
+                  [placeholder]="f.placeholder"
+                  [disabled]="!canWriteSettings()"
+                  (input)="state.setField(f.key, $any($event.target).value)"
+                />
+                <span class="s-hint">{{ f.hint }}{{ restartNote(f.key) }}</span>
+                @if (f.key === "k8sGranuleImage" && k8sGranuleEffective()) {
+                  <span
+                    class="s-hint"
+                    data-testid="k8s-granule-image-effective"
+                    >{{ k8sGranuleEffective() }}</span
+                  >
+                }
+              </div>
+            }
             <div class="s-field">
-              <label class="s-label" for="k8s-ns">Kubernetes namespace</label>
+              <label class="s-label" for="k8s-node-selector"
+                >Node selector</label
+              >
               <input
-                id="k8s-ns"
+                id="k8s-node-selector"
                 class="s-input s-mono"
                 type="text"
-                [value]="state.val('k8sNamespace', '')"
-                [placeholder]="state.defaultHint('k8sNamespace', 'grain')"
+                spellcheck="false"
+                autocomplete="off"
+                data-testid="input-k8sNodeSelector"
+                placeholder="pool=sandboxes"
+                [value]="nodeSelectorText()"
                 [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('k8sNamespace', $any($event.target).value)
-                "
+                (input)="setNodeSelector($any($event.target).value)"
               />
+              @if (state.fieldErrors()["k8sNodeSelector"]; as err) {
+                <span
+                  class="s-field-error"
+                  data-testid="error-k8sNodeSelector"
+                  >{{ err }}</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >Comma-separated key=value nodeSelector entries for sandbox
+                  pods.{{ restartNote("k8sNodeSelector") }}</span
+                >
+              }
             </div>
+          </div>
+
+          <div class="s-subsection" data-testid="k8s-priority-classes">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Pod priority classes</h4>
+            </div>
+            <span class="s-hint"
+              >Empty sets no priority class on those pods. A class the cluster
+              lacks is created if it is grain's own, or else left off the pods
+              with an alert.</span
+            >
+            <div class="s-grid">
+              @for (f of k8sPriorityFields(); track f.key) {
+                <div class="s-field">
+                  <label class="s-label" [attr.for]="'k8s-' + f.key">{{
+                    f.label
+                  }}</label>
+                  <input
+                    class="s-input s-mono"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="none"
+                    [id]="'k8s-' + f.key"
+                    [attr.data-testid]="'input-' + f.key"
+                    [value]="state.val(f.key, '')"
+                    [disabled]="!canWriteSettings()"
+                    (input)="state.setField(f.key, $any($event.target).value)"
+                  />
+                  <span class="s-hint"
+                    >{{ f.hint }}{{ restartNote(f.key) }}</span
+                  >
+                </div>
+              }
+            </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name"
+                >Run Kubernetes sandbox containers privileged</span
+              >
+              <span class="s-hint"
+                >Needed by kubernetes-granule pods that boot a VM over
+                /dev/kvm.{{ restartNote("k8sPrivileged") }}</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-k8s-privileged"
+              [attr.aria-checked]="Boolean(state.val('k8sPrivileged', false))"
+              [disabled]="!canWriteSettings()"
+              aria-label="Run Kubernetes sandbox containers privileged"
+              (click)="
+                state.setField(
+                  'k8sPrivileged',
+                  !state.val('k8sPrivileged', false)
+                )
+              "
+            ></button>
           </div>
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
@@ -1451,7 +1909,9 @@ function formatRefreshedAt(iso?: string): string {
                 >Cluster CNI enforces NetworkPolicy</span
               >
               <span class="s-hint"
-                >Required for network: none isolation on Kubernetes pods.</span
+                >Required for network: none isolation on Kubernetes pods.{{
+                  restartNote("k8sNetworkPolicy")
+                }}</span
               >
             </div>
             <button
@@ -1471,6 +1931,149 @@ function formatRefreshedAt(iso?: string): string {
                 )
               "
             ></button>
+          </div>
+        </div>
+
+        <div
+          class="s-card"
+          id="custom-sandbox-image"
+          data-testid="card-custom-sandbox-image"
+        >
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Custom sandbox image</h3>
+              <p class="s-card-desc">
+                The OCI image new sandboxes are created from in place of the one
+                this build is stamped for. Running sandboxes keep theirs.
+              </p>
+            </div>
+          </div>
+          <div class="s-field">
+            <label class="s-label" for="sb-image"
+              >Custom sandbox image (OCI reference)</label
+            >
+            <div class="s-inline">
+              <input
+                id="sb-image"
+                class="s-input s-input-inline s-mono"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                data-testid="input-sandbox-image"
+                [value]="state.val('sandboxImage', '')"
+                [placeholder]="state.defaultHint('sandboxImage')"
+                [disabled]="!canWriteSettings()"
+                (input)="
+                  state.setField('sandboxImage', $any($event.target).value)
+                "
+              />
+              @if (String(state.val("sandboxImage", "")).trim()) {
+                <button
+                  type="button"
+                  class="btn-text s-btn-sm"
+                  data-testid="sandbox-image-reset"
+                  [disabled]="!canWriteSettings()"
+                  (click)="state.setField('sandboxImage', '')"
+                >
+                  Reset to default
+                </button>
+              }
+            </div>
+            <span class="s-hint"
+              >Empty uses the image this build is stamped for{{
+                state.defaultHint("sandboxImage")
+                  ? " (" + state.defaultHint("sandboxImage") + ")"
+                  : ""
+              }}.</span
+            >
+          </div>
+          @if (sandboxImageStored()) {
+            @if (state.settings()["sandboxImageWarning"]; as warn) {
+              <div
+                class="s-banner warn"
+                role="alert"
+                data-testid="sandbox-image-warning"
+              >
+                <span>{{ warn }}</span>
+              </div>
+            } @else if (sandboxImageVerified()) {
+              <div
+                class="s-banner ok"
+                role="status"
+                data-testid="sandbox-image-contract-ok"
+              >
+                <span>{{ sandboxImageVerified() }}</span>
+              </div>
+            }
+          }
+          @if (sandboxMirrorHint()) {
+            <span class="s-hint" data-testid="sandbox-image-mirror">{{
+              sandboxMirrorHint()
+            }}</span>
+          }
+          @if (granulePinSame()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="sandbox-image-k8s-granule-pin"
+            >
+              <span
+                >The Kubernetes Granule VM pod image (k8s_granule_image) holds
+                the same reference, {{ granulePin() }}. Clearing only the custom
+                image leaves that pin in place.</span
+              >
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="sandbox-image-k8s-granule-pin-clear"
+                [disabled]="!canWriteSettings()"
+                (click)="state.setField('k8sGranuleImage', '')"
+              >
+                Clear it too
+              </button>
+            </div>
+          }
+
+          <div class="s-subsection" data-testid="sandbox-image-contract">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">
+                Build it FROM grain's minimal base image
+              </h4>
+            </div>
+            <span class="s-hint" data-testid="sandbox-image-inherits">{{
+              imageInherits()
+            }}</span>
+            <pre
+              class="s-code"
+              tabindex="0"
+              role="region"
+              aria-label="Example Dockerfile"
+              data-testid="sandbox-image-dockerfile"
+              >{{ dockerfileExample() }}</pre>
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Sandbox contract</h4>
+            </div>
+            <ul
+              class="s-hint s-contract"
+              data-testid="sandbox-contract-versions"
+            >
+              @for (line of contractLines(); track line.code) {
+                <li>
+                  <code>{{ line.code }}</code> {{ line.note }}
+                </li>
+              }
+            </ul>
+            <span class="s-hint"
+              >A custom image needs rebuilding only when the contract version
+              its base stamped falls below what grain supports — when grain
+              changes what it relies on inside a sandbox. This card and the
+              daemon log warn you when it does. Check an image before saving it
+              with <code>grain sandbox-image check &lt;image&gt;</code>;
+              <a [href]="contractDoc" target="_blank" rel="noopener noreferrer"
+                >docs/sandbox-image-contract.md</a
+              >
+              lists everything the base image provides.</span
+            >
           </div>
         </div>
 
@@ -2430,6 +3033,396 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
+  protected readonly String = String;
+
+  protected readonly contractDoc =
+    "https://github.com/ai-on-gke/grain/blob/main/docs/sandbox-image-contract.md";
+
+  // The auto controller's bounds (model.OvercommitSettings). GET
+  // /api/settings reports them resolved, so a stored 0 already reads as
+  // grain's default; fallback is that default (model.DefaultOvercommit*)
+  // for the placeholder of a box somebody clears.
+  protected readonly overcommitBounds: readonly OvercommitBound[] = [
+    {
+      field: "cpuMin",
+      label: "Auto CPU minimum (x)",
+      fallback: "1",
+      step: "0.25",
+    },
+    {
+      field: "cpuMax",
+      label: "Auto CPU maximum (x)",
+      fallback: "6",
+      step: "0.25",
+    },
+    {
+      field: "memoryMin",
+      label: "Auto memory minimum (x)",
+      fallback: "1",
+      step: "0.05",
+    },
+    {
+      field: "memoryMax",
+      label: "Auto memory maximum (x)",
+      fallback: "2",
+      step: "0.05",
+    },
+    {
+      field: "cpuPressureTarget",
+      label: "CPU pressure target (%)",
+      fallback: "25",
+      step: "1",
+      max: 100,
+    },
+    {
+      field: "memoryPressureTarget",
+      label: "Memory pressure target (%)",
+      fallback: "5",
+      step: "1",
+      max: 100,
+    },
+  ];
+
+  protected boundKey(field: string): string {
+    return `sandboxOvercommit${field[0].toUpperCase()}${field.slice(1)}`;
+  }
+
+  private overcommitObject(): Record<string, unknown> {
+    const v = this.state.val<unknown>("sandboxOvercommit", null);
+    if (v && typeof v === "object") return v as Record<string, unknown>;
+    return { mode: typeof v === "string" && v ? v : "fixed" };
+  }
+
+  protected overcommitBound(field: string): string {
+    const v = Number(this.overcommitObject()[field] ?? 0);
+    return Number.isFinite(v) && v !== 0 ? String(v) : "";
+  }
+
+  // setOvercommitBound stages one bound into the sandboxOvercommit object
+  // the server saves whole. A refused bound is reported against its own
+  // box by name, and holds the Save bar, rather than reaching the server
+  // as a bad object or quietly turning into the default.
+  protected setOvercommitBound(b: OvercommitBound, raw: string): void {
+    const key = this.boundKey(b.field);
+    const t = String(raw ?? "").trim();
+    const n = t === "" ? 0 : Number(t);
+    if (!Number.isFinite(n) || n < 0) {
+      this.state.setFieldError(
+        key,
+        `${b.label} must be 0 (grain's default) or more, not ${t || "that"}.`,
+      );
+      return;
+    }
+    if (b.max !== undefined && n > b.max) {
+      this.state.setFieldError(
+        key,
+        `${b.label} is a percentage, at most ${b.max}.`,
+      );
+      return;
+    }
+    this.state.setFieldError(key, null);
+    this.state.setField("sandboxOvercommit", {
+      ...this.overcommitObject(),
+      [b.field]: n,
+    });
+  }
+
+  // reportedDefault is `<key>Default` as a number, for a box whose stored
+  // 0 is a value of its own (an unbounded overcommit, a floor share that
+  // holds nothing back): a cleared box saves that default, so the greyed
+  // placeholder it shows is what Save really stores, and 0 typed on
+  // purpose stays 0.
+  protected reportedDefault(key: string, fallback: number): number {
+    const d = Number(this.state.settings()[`${key}Default`]);
+    return Number.isFinite(d) && d > 0 ? d : fallback;
+  }
+
+  protected diskFloorMinDefault(): number {
+    return (
+      Number(this.state.settings()["sandboxDiskFloorMinMbDefault"]) || 5120
+    );
+  }
+
+  protected readonly diskFloorSummary = computed(() => {
+    const floors = this.state.settings()["sandboxDiskFloors"];
+    if (!Array.isArray(floors)) return "";
+    return (floors as DiskFloorRow[])
+      .filter((d) => Number(d.totalMB) > 0)
+      .map(
+        (d) =>
+          `${d.path} (${mib(d.totalMB)}) holds ${mib(d.floorMB)} free, sweeping back to ${mib(d.reclaimMB)}.`,
+      )
+      .join(" ");
+  });
+
+  protected readonly sandboxCommitment = computed(
+    () =>
+      (this.state.settings()["sandboxCommitment"] as
+        SandboxCommitment | undefined) ?? null,
+  );
+
+  // restartNote is said after a field's hint when the daemon reads it
+  // only at startup (settings.restartRequired), and louder once a saved
+  // value is waiting on that restart (settings.pendingRestart).
+  protected restartNote(key: string): string {
+    const s = this.state.settings();
+    const pending = s["pendingRestart"];
+    if (Array.isArray(pending) && pending.includes(key)) {
+      return " Saved; takes effect after a daemon restart.";
+    }
+    const req = s["restartRequired"];
+    if (Array.isArray(req) && req.includes(key)) {
+      return " Read at daemon startup.";
+    }
+    return "";
+  }
+
+  protected readonly k8sImageWarning = computed(() => {
+    const s = this.state.settings();
+    return [s["k8sSandboxImageWarning"], s["k8sGranuleImageWarning"]]
+      .filter((w) => typeof w === "string" && w)
+      .join(" ");
+  });
+
+  protected readonly k8sFields = computed<readonly K8sField[]>(() => {
+    const d = (k: string, fb = "") => this.state.defaultHint(k, fb);
+    const build = String(this.state.settings()["daemonBuildVersion"] || "dev");
+    return [
+      {
+        key: "k8sNamespace",
+        label: "Namespace",
+        placeholder: d("k8sNamespace", "grain"),
+        hint: "Namespace sandbox pods are created in.",
+      },
+      {
+        key: "k8sSandboxImage",
+        label: "Sandbox pod image",
+        placeholder: d("k8sSandboxImage"),
+        hint: `Container image every plain Kubernetes sandbox pod runs (matches this daemon's build ${build}).`,
+      },
+      {
+        key: "k8sGranuleImage",
+        label: "Granule VM pod image",
+        placeholder: d("k8sGranuleImage"),
+        hint: `Packed guest image every Kubernetes Granule VM pod boots (matches this daemon's build ${build}).`,
+      },
+      {
+        key: "k8sWorkspace",
+        label: "Workspace directory",
+        placeholder: d("k8sWorkspace"),
+        hint: "Working directory inside each sandbox pod or VM; an absolute path.",
+      },
+      {
+        key: "k8sGitProxyHost",
+        label: "Git & model proxy host",
+        placeholder: "$GRAIN_POD_IP",
+        hint: "Host (no port) sandbox pods reach this daemon's git and model proxies at; in-cluster it defaults to the pod IP.",
+      },
+      {
+        key: "k8sSandboxService",
+        label: "Sandbox Service",
+        placeholder: "none",
+        hint: "Optional ClusterIP Service fronting the proxies, so sandboxes survive a daemon rollout.",
+      },
+      {
+        key: "k8sServiceAccount",
+        label: "Sandbox ServiceAccount",
+        placeholder: "default",
+        hint: "Optional ServiceAccount for sandbox pods.",
+      },
+      {
+        key: "k8sDeployment",
+        label: "grain Deployment",
+        placeholder: d("k8sDeployment", "grain"),
+        hint: "The Deployment running grain itself, repointed on self-upgrade.",
+      },
+      {
+        key: "k8sContainer",
+        label: "grain container",
+        placeholder: d("k8sContainer", "grain"),
+        hint: "Container within that Deployment that self-upgrade repoints.",
+      },
+      {
+        key: "k8sKubectl",
+        label: "kubectl binary",
+        placeholder: d("k8sKubectl", "kubectl"),
+        hint: "Path to kubectl; blank finds kubectl on PATH.",
+      },
+    ];
+  });
+
+  protected readonly k8sPriorityFields = computed<readonly K8sField[]>(() => {
+    const def = (k: string) =>
+      this.state.defaultHint(k)
+        ? ` deploy/kubernetes/ defines ${this.state.defaultHint(k)}.`
+        : "";
+    return [
+      {
+        key: "k8sPriorityClassInteractive",
+        label: "Interactive sessions",
+        placeholder: "none",
+        hint: `Highest: may preempt CI pods on a full cluster.${def("k8sPriorityClassInteractive")}`,
+      },
+      {
+        key: "k8sPriorityClassAgent",
+        label: "Agent runs",
+        placeholder: "none",
+        hint: `Agent runs, base-branch repairs and persistent sandboxes.${def("k8sPriorityClassAgent")}`,
+      },
+      {
+        key: "k8sPriorityClassCi",
+        label: "CI jobs",
+        placeholder: "none",
+        hint: `Lowest: a preempted CI job is retried, not failed.${def("k8sPriorityClassCi")}`,
+      },
+    ];
+  });
+
+  protected readonly k8sGranuleEffective = computed(() => {
+    const s = this.state.settings();
+    const effective = String(s["k8sGranuleImageEffective"] || "");
+    const stored = String(s["k8sGranuleImage"] || "").trim();
+    const hint = String(s["k8sGranuleImageMirror"] || "");
+    const mirror = String(s["sandboxImageMirrorEffective"] || "");
+    const onGranule =
+      (s["sandboxBackend"] || s["sandboxImageBackend"]) ===
+      "kubernetes-granule";
+    if (!effective || (!onGranule && !hint)) return "";
+    if (hint) {
+      return `Treated as mirror repository ${hint}, not booted; sandboxes boot ${effective}. Clearing it keeps that mirror as sandbox_image_mirror.`;
+    }
+    if (effective === stored && !mirror) return "";
+    const derived = s["sandboxImageMirrorDerivedFrom"];
+    return `Sandboxes boot ${effective}${mirror ? `, mirrored into ${mirror} (${derived ? `derived from ${derived}` : "sandbox_image_mirror"})` : ""}.`;
+  });
+
+  // The node selector box is text while somebody types; it stages the
+  // list the server stores, and refuses an entry that is not key=value
+  // by name (the server's own check, k8sNodeSelector "x" must be
+  // key=value) before Save rather than after.
+  protected readonly nodeSelectorDraft = signal<string | null>(null);
+  // Save and Discard both bump discardEpoch: the box reads the stored
+  // list again rather than keep what was typed.
+  private readonly nodeSelectorReset = effect(() => {
+    this.state.discardEpoch();
+    untracked(() => this.nodeSelectorDraft.set(null));
+  });
+
+  protected nodeSelectorText(): string {
+    const d = this.nodeSelectorDraft();
+    if (d !== null) return d;
+    const v = this.state.val<unknown>("k8sNodeSelector", []);
+    return Array.isArray(v) ? v.join(", ") : "";
+  }
+
+  protected setNodeSelector(raw: string): void {
+    this.nodeSelectorDraft.set(raw);
+    const entries = raw
+      .split(",")
+      .map((e) => e.trim())
+      .filter(Boolean);
+    const bad = entries.find((e) => !/^[^=\s]+=[^=\s]*$/.test(e));
+    if (bad) {
+      this.state.setFieldError(
+        "k8sNodeSelector",
+        `Node selector entry "${bad}" must be key=value.`,
+      );
+      return;
+    }
+    this.state.setFieldError("k8sNodeSelector", null);
+    this.state.setField("k8sNodeSelector", entries);
+  }
+
+  protected readonly sandboxImageStored = computed(() =>
+    String(this.state.settings()["sandboxImage"] || "").trim(),
+  );
+
+  protected readonly sandboxImageVerified = computed(() => {
+    const s = this.state.settings();
+    const check = s["sandboxImageCheck"] as
+      | {
+          verified?: boolean;
+          contract?: { summary?: string; imageContract?: number };
+        }
+      | null
+      | undefined;
+    if (!check?.verified) return "";
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    return (
+      check.contract?.summary ||
+      `${c.contractLabel || "dev.grain.sandbox.contract"} = ${check.contract?.imageContract ?? s["sandboxContractVersion"] ?? ""} (current)`
+    );
+  });
+
+  protected readonly sandboxMirrorHint = computed(() => {
+    const s = this.state.settings();
+    const mirror = String(s["sandboxImageMirrorEffective"] || "");
+    if (!mirror) return "";
+    const from = s["sandboxImageMirrorDerivedFrom"];
+    return `Granule guest images are pulled through mirror ${mirror}${from ? ` (derived from ${from})` : " (sandbox_image_mirror)"}.`;
+  });
+
+  protected readonly granulePin = computed(() =>
+    String(this.state.settings()["k8sGranuleImage"] || "").trim(),
+  );
+
+  protected readonly granulePinSame = computed(() => {
+    const s = this.state.settings();
+    const backend = s["sandboxImageBackend"] || s["sandboxBackend"];
+    const pin = this.granulePin();
+    return (
+      backend === "kubernetes-granule" &&
+      pin !== "" &&
+      pin === this.sandboxImageStored()
+    );
+  });
+
+  private imageIsVm(): boolean {
+    const s = this.state.settings();
+    const b = String(s["sandboxImageBackend"] || s["sandboxBackend"] || "");
+    return b === "granule" || b === "kubernetes-granule";
+  }
+
+  protected readonly imageInherits = computed(() =>
+    this.imageIsVm()
+      ? "Granule VM backends boot a packed guest. sandbox-base already satisfies the whole sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps. Start FROM it and add only what your tasks need."
+      : "Container and Kubernetes pod backends run a container image. sandbox-k8s-base already satisfies the whole sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps. Start FROM it and add only what your tasks need.",
+  );
+
+  protected readonly dockerfileExample = computed(() => {
+    const s = this.state.settings();
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    const base =
+      String(s["sandboxBaseImage"] || "") ||
+      (this.imageIsVm()
+        ? c.guestBaseImage || "docker.io/grainai/sandbox-base:latest"
+        : c.k8sSandboxBaseImage || "docker.io/grainai/sandbox-k8s-base:latest");
+    return `FROM ${base}\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends <your packages> \\\n && rm -rf /var/lib/apt/lists/*`;
+  });
+
+  protected readonly contractLines = computed(() => {
+    const s = this.state.settings();
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    const current = Number(s["sandboxContractVersion"] ?? c.contract ?? 1);
+    const minimum = Number(
+      s["sandboxMinimumContractVersion"] ?? c.minimumContract ?? 1,
+    );
+    const range =
+      minimum === current ? `v${current}` : `v${minimum}–v${current}`;
+    const lines = [
+      {
+        code: `${c.contractLabel || "dev.grain.sandbox.contract"} = ${current}`,
+        note: `(this grain drives images at ${range})`,
+      },
+    ];
+    if (this.imageIsVm()) {
+      lines.push({
+        code: `${c.granuleContractLabel || "dev.granule.guest.contract"} = ${s["sandboxGranuleContractVersion"] ?? c.granuleContract ?? 1}`,
+        note: "(Granule's own guest contract, carried by sandbox-base)",
+      });
+    }
+    return lines;
+  });
   protected readonly formatLabels = formatHostdLabels;
   protected readonly formatRefreshedAt = formatRefreshedAt;
 
@@ -2444,12 +3437,17 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ];
-  protected readonly authModeOptions: readonly PillOption[] = [
+  // "subscription" (model.CodexAuthSubscription) is a Codex-only mode:
+  // the server refuses it for any other framework.
+  protected readonly authModeOptions = computed<PillOption[]>(() => [
     { value: "", label: "Provider default" },
     { value: "api_key", label: "API key / OAuth secret" },
+    ...(this.newBackendFw() === "codex"
+      ? [{ value: "subscription", label: "ChatGPT subscription (auth.json)" }]
+      : []),
     { value: "ambient", label: "Host ambient login" },
     { value: "vertex", label: "Vertex AI" },
-  ];
+  ]);
   protected readonly usageModeOptions: readonly PillOption[] = [
     { value: "advisory", label: "Advisory" },
     { value: "auto", label: "Auto throttle" },
@@ -2506,6 +3504,11 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly backends = signal<BackendEntry[]>([]);
   protected readonly backendCredDrafts = signal<Record<string, string>>({});
   protected readonly openCredBackendId = signal<string | null>(null);
+  protected readonly codexAuthDrafts = signal<Record<string, string>>({});
+  protected readonly codexAuthStatus = signal<
+    Partial<Record<string, BackendCodexAuthStatus>>
+  >({});
+  protected readonly codexAuthBusy = signal(false);
   protected readonly newBackendId = signal("");
   protected readonly newBackendName = signal("");
   protected readonly newBackendFw = signal("antigravity");
@@ -2907,6 +3910,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.editingBackendId.set("");
       await this.state.loadCore();
       this.syncBackendsFromState();
+      // An open Credential row that now holds a subscription login reads
+      // its status, as opening it would have.
+      const saved = this.backends().find((b) => b.id === backendId);
+      if (
+        this.openCredBackendId() === backendId &&
+        saved &&
+        this.isCodexSubscription(saved)
+      ) {
+        void this.loadCodexAuth(backendId);
+      }
       this.snackbar.show(`Saved model connection ${backendId}`);
     } catch (err) {
       this.state.recordError(err);
@@ -2965,6 +3978,106 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected toggleCredEditor(id: string): void {
     this.openCredBackendId.update((cur) => (cur === id ? null : id));
+    const b = this.backends().find((x) => x.id === id);
+    if (this.openCredBackendId() === id && b && this.isCodexSubscription(b)) {
+      void this.loadCodexAuth(id);
+    }
+  }
+
+  protected setNewBackendFw(fw: string): void {
+    this.newBackendFw.set(fw);
+    if (fw !== "codex" && this.newBackendAuthMode() === "subscription") {
+      this.newBackendAuthMode.set("");
+    }
+  }
+
+  protected isCodexSubscription(b: BackendEntry): boolean {
+    return (
+      (b.framework || "").trim().toLowerCase() === "codex" &&
+      b.authMode === "subscription"
+    );
+  }
+
+  protected codexAuthStatusLabel(id: string): string {
+    const status = this.codexAuthStatus()[id];
+    if (!status) return "Checking…";
+    if (status.enabled === false) return "Unavailable on this daemon";
+    return status.set ? "Configured" : "Not set";
+  }
+
+  protected setCodexAuthDraft(id: string, value: string): void {
+    this.codexAuthDrafts.update((d) => ({ ...d, [id]: value }));
+  }
+
+  private setCodexAuthStatus(id: string, res: unknown): void {
+    const r = (res ?? {}) as BackendCodexAuthStatus;
+    this.codexAuthStatus.update((m) => ({
+      ...m,
+      [id]: {
+        enabled: r.enabled,
+        set: Boolean(r.set),
+        refreshError: r.refreshError || "",
+      },
+    }));
+  }
+
+  protected async loadCodexAuth(id: string): Promise<void> {
+    try {
+      const res = await this.api.get(
+        "GET /api/agent-backends/{id}/codex-auth",
+        { id },
+      );
+      this.setCodexAuthStatus(id, res);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected async saveCodexAuth(id: string): Promise<void> {
+    const value = (this.codexAuthDrafts()[id] ?? "").trim();
+    if (!value) return;
+    this.codexAuthBusy.set(true);
+    try {
+      const res = await this.api.put(
+        "PUT /api/agent-backends/{id}/codex-auth",
+        { id },
+        { value },
+      );
+      this.setCodexAuthStatus(id, res);
+      this.setCodexAuthDraft(id, "");
+      this.snackbar.show(`Saved subscription login for ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    } finally {
+      this.codexAuthBusy.set(false);
+    }
+  }
+
+  protected confirmClearCodexAuth(id: string): void {
+    this.confirmRequest.set({
+      title: `Clear the subscription login for ${id}?`,
+      message: `The auth.json stored for ${id} is deleted. Runs on ${id} stop until a new login is uploaded: the connection never falls back to the deployment's shared login.`,
+      accept: "Clear login",
+      destructive: true,
+      run: () => this.clearCodexAuth(id),
+    });
+  }
+
+  protected async clearCodexAuth(id: string): Promise<void> {
+    this.codexAuthBusy.set(true);
+    try {
+      const res = await this.api.delete(
+        "DELETE /api/agent-backends/{id}/codex-auth",
+        { id },
+      );
+      this.setCodexAuthStatus(id, res);
+      this.setCodexAuthDraft(id, "");
+      this.snackbar.show(`Cleared subscription login for ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    } finally {
+      this.codexAuthBusy.set(false);
+    }
   }
 
   protected cancelEditBackend(): void {
@@ -3090,6 +4203,13 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   protected setOvercommitMode(mode: string): void {
+    // Fixed mode hides the auto bounds, so a refusal of one must not go
+    // on holding the Save bar out of sight.
+    if (mode !== "auto") {
+      for (const b of this.overcommitBounds) {
+        this.state.setFieldError(this.boundKey(b.field), null);
+      }
+    }
     const cur = this.state.val<unknown>("sandboxOvercommit", null);
     if (cur && typeof cur === "object") {
       this.state.setField("sandboxOvercommit", {
