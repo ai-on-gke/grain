@@ -211,7 +211,13 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
     });
     this.prompt.set("");
     this.staged.set([]);
-    const ok = await this.sessions.sendTo(DIRECTOR_ID, shaped, ev.attachments);
+    const ok = await this.sessions.sendTo(
+      DIRECTOR_ID,
+      shaped,
+      ev.attachments,
+      false,
+      false,
+    );
     if (!ok && !this.prompt() && this.staged().length === 0) {
       this.prompt.set(ev.body);
       this.staged.set(ev.attachments);

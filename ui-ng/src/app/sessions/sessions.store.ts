@@ -583,6 +583,11 @@ export class SessionsStore {
     rawBody: string,
     attachments: AttachmentUpload[] = [],
     clearSessionDraft = false,
+    // keepFailed false is for callers that put a failed message back in
+    // their own composer (the Director drawer and shaper): the failed copy
+    // is dropped rather than also left in the thread with Retry, where a
+    // retry from Sessions would post the same words a second time.
+    keepFailed = true,
   ): Promise<boolean> {
     const row = this.rows().find((r) => r.session.id === sessionId);
     const taskId = row?.session.taskId;
@@ -622,7 +627,7 @@ export class SessionsStore {
     };
     this.pendingMessages.update((list) => [...list, entry]);
 
-    return this.enqueuePendingDelivery(key, sessionId);
+    return this.enqueuePendingDelivery(key, sessionId, keepFailed);
   }
 
   async retryMessage(key: string): Promise<boolean> {
@@ -701,6 +706,7 @@ export class SessionsStore {
   private async enqueuePendingDelivery(
     key: string,
     sessionId: string,
+    keepFailed = true,
   ): Promise<boolean> {
     this.bumpSendBusy(1);
     const prev = this.sendChains.get(sessionId) ?? Promise.resolve();
@@ -739,10 +745,19 @@ export class SessionsStore {
       } catch (err) {
         const msg = errorText(err);
         this.actionError.set(msg);
-        this.sendNotice.set(
-          "Message not sent. Retry it from the conversation.",
-        );
-        this.updatePending(key, { state: "failed", error: msg });
+        if (keepFailed) {
+          this.sendNotice.set(
+            "Message not sent. Retry it from the conversation.",
+          );
+          this.updatePending(key, { state: "failed", error: msg });
+        } else {
+          this.sendNotice.set(
+            "Message not sent. It is back in the message box.",
+          );
+          this.pendingMessages.update((list) =>
+            list.filter((p) => p.key !== key),
+          );
+        }
       } finally {
         const nextCount = (this.activeSessionSends.get(sessionId) ?? 1) - 1;
         if (nextCount <= 0) {

@@ -122,4 +122,42 @@ describe("DirectorDrawerComponent", () => {
     });
     f.destroy();
   });
+  it("puts a failed message back in the drawer's box and leaves no failed copy in the thread", async () => {
+    const api = new FakeApi();
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      api.posted.push({ route, params, body });
+      return Promise.reject({ status: 500, error: { error: "sandbox down" } });
+    };
+    TestBed.configureTestingModule({
+      imports: [DirectorDrawerComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    TestBed.inject(DirectorContextService).open();
+    const f = TestBed.createComponent(DirectorDrawerComponent);
+    f.autoDetectChanges();
+    const store = TestBed.inject(SessionsStore);
+    await store.refresh();
+    await f.whenStable();
+    f.detectChanges();
+
+    const el = f.nativeElement as HTMLElement;
+    const ta = el.querySelector("textarea") as HTMLTextAreaElement;
+    ta.value = "Will not land";
+    ta.dispatchEvent(new Event("input"));
+    f.detectChanges();
+    (el.querySelector('button[type="submit"]') as HTMLButtonElement).click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r, 10));
+    f.detectChanges();
+
+    expect(api.posted).toHaveLength(1);
+    expect(ta.value).toBe("Will not land");
+    expect(store.pendingMessages()).toEqual([]);
+    expect(store.actionError()).toContain("sandbox down");
+    f.destroy();
+  });
 });

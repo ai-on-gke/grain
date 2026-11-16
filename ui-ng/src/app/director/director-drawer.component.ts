@@ -296,6 +296,8 @@ export class DirectorDrawerComponent implements OnInit, OnDestroy {
       DIRECTOR_ID,
       formatted,
       ev.attachments,
+      false,
+      false,
     );
     if (!ok && !this.draft() && this.staged().length === 0) {
       this.draft.set(ev.body);
