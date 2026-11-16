@@ -37,7 +37,7 @@ The resource-provider protocol and event occurrence protocol intentionally have 
 
 ## Compatibility and evidence
 
-Baseline inspected: `d8ff32019`. The [spec's inventory](../spec/task-triggers/task-triggers.spec.md#tts-12-current-schedules-and-migration) cites code and distinguishes current behavior from proposed requirements. In particular, current schedule task insertion and cadence advancement are separate store calls; tag-based open-task suppression is not a proof of transactional exactly-once filing. The new ledger is a deliberate stronger requirement. Current template references float; new bindings pin by default, with explicit compatibility tracking for migrated schedules.
+Baseline inspected: `d8ff32019`. The [spec's inventory](../spec/task-triggers/task-triggers.spec.md) cites code and distinguishes current behavior from proposed requirements. In particular, current schedule task insertion and cadence advancement are separate store calls; tag-based open-task suppression is not a proof of transactional exactly-once filing. The new ledger is a deliberate stronger requirement. Current template references float; new bindings pin by default, with explicit compatibility tracking for migrated schedules.
 
 Configuration belongs in the deployment's state repository (`grain/config` here), or approved repository declarations with bounded authority. Cursor, event, match, firing, lease and replay records are runtime state, backed up but never reset by a configuration PR. This PR changes neither configuration source.
 

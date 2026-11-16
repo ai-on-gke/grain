@@ -6,13 +6,13 @@
 
 MUST, MUST NOT, SHOULD, SHOULD NOT and MAY have their BCP 14 meanings. `TTS-*` IDs are stable requirements. All extension methods, action IDs, records and management tools below are hypothetical contracts for future implementation. Existing APIs and behavior are identified explicitly in §12. Documentation approval authorizes no implementation, live subscription, configuration edit, deployment or follow-up task filing.
 
-## TTS-1: Terms and invariants
+## TTS-1: Terms and invariants {#TTS-1}
 
 A source adapter collects facts. A tracked resource is observed through a resource provider. A task dependency remains the existing prerequisite relationship. A gate interprets evidence for existing work. A trigger matches an occurrence or a recorded state transition to a standing authorization to create work. Grain MUST own journal admission, matching, filing, approval, quota accounting and task lifecycle. Providers MUST NOT set task status, grant capabilities or choose placement.
 
 A source subscription is collection state, a binding is filing authority, and a firing is a durable disposition of a match. They MUST have separate identities and access controls. A tracked-resource attachment, event read permission, gate result or authenticated webhook MUST NOT imply binding-management, task-creation or automatic-approval authority. Transient occurrences MAY lack an enduring tracked resource; a PR request refers to a PR, but the request and PR are distinct identities.
 
-## TTS-2: Discovery, pins and provider protocol
+## TTS-2: Discovery, pins and provider protocol {#TTS-2}
 
 An installed capability server MAY advertise an `event_describe` MCP tool in `tools/list`. This is a proposed extension separate from existing `mint_*`, `release_*`, `configure` and proposed `gate_*` methods. Grain MUST NOT infer event support from a mint method, annotation, arbitrary tool name or provider prose. Installation and credential configuration require their existing authority; discovery has no subscription or filing side effects.
 
@@ -44,7 +44,7 @@ Shared source collection MUST enforce the stricter applicable service/read/watch
 
 Provider upgrades MUST produce a reviewed descriptor/pin migration with old/new schema, identity compatibility and cursor mapping. No new provider may interpret opaque old state silently. Incompatible migration holds the binding, retains old state and requires explicit baseline/replay selection. Removing an installation holds dependent bindings and preserves attribution, errors and history; it MUST NOT remove tasks or silently replace providers.
 
-## TTS-3: Normalized event envelope
+## TTS-3: Normalized event envelope {#TTS-3}
 
 Every ingested event MUST have the following closed record. Required nullable fields are present as null rather than silently invented. Times are UTC RFC3339; identifiers are case-preserving canonical provider identifiers, not display titles.
 
@@ -81,7 +81,7 @@ Grain MUST retain the first accepted `received_at`, receipt sequence and verific
 
 Stable identity is `(provider, source, event_id)`; redelivery cannot change its canonical normalized content. A conflicting duplicate MUST be quarantined, with no second match. A delivery ID is sufficient only if provider redelivery preserves it; where aliases exist the adapter MUST resolve them to one occurrence identity. If stable occurrence identity cannot be supplied, the adapter MUST declare weaker delivery and MUST NOT advertise exactly-once filing. Clock ordering is not resource ordering. Grain MUST retain receipt sequence separately and MUST NOT regress state on older provider revisions. Opaque Git SHAs are equality tokens, not lexically ordered revisions.
 
-## TTS-4: Binding schema and examples
+## TTS-4: Binding schema and examples {#TTS-4}
 
 [wire.schema.json](wire.schema.json) defines the closed binding and the two concrete source configurations below using JSON Schema 2020-12; `$defs.event`, `$defs.github_review_requested_extensions` and `$defs.time_occurrence_extensions` define the normalized envelope and the example event-kind extensions. Validate against the named definition as well as the cross-field/byte-limit rules here. The schema's root validates bindings. Other provider/source/state-edge contracts require registered, pinned schemas before admission; these two examples do not constitute support for every provider. These are exact proposed configuration examples, not currently accepted schedule/declaration syntax. Digests shown as `sha256:example-*` are documentation placeholders; admission MUST require actual computed digests.
 
@@ -133,7 +133,7 @@ Binding `version` is a monotonic configuration revision. Every edit MUST be audi
 
 `permissions` is an upper bound, not proof a grant exists. Grain MUST resolve an explicit standing authorization linking actor, service, binding/version or approved compatible revisions, source scope, template revision, target, capabilities, actions and policy. `approval=standing` requires `approval_authorization` referencing that valid audited record; `proposed` requires null and files unapproved. Automatic approval, auto-merge and automatic proposal approval are distinct authorities; none implies another. Effective admission MUST be at least the template and binding floors and current deployment/team constraints, using the existing admission ordering, not whichever string is lexically greater. Owner/on-call resolution and service attribution are separate.
 
-### TTS-4a: Filters, mappings and template revision
+### Filters, mappings and template revision {#TTS-16}
 
 `filter.all` is a conjunction of at most 32 terms; empty means true within the already authorized source/kind scope. Terms are `{path,op,value}` where path is an allowlisted JSON Pointer from the registered event schema and op is `eq`, `in` or `exists`; `exists` requires a boolean value and `in` a scalar array of at most 32 members. No recursion, network, dynamic code, regex, secret access, arbitrary expression languages or template evaluation is permitted. Missing/type-mismatched fields fail matching except `exists=false`; they MUST NOT become truthy strings. Scalar equality is type strict and provider canonicalization is explicit. Maximum evaluation budget is 32 terms/10 ms per binding/event; exhaustion holds with error.
 
@@ -141,7 +141,7 @@ Mappings are a closed map of at most 32 approved template parameter names to `{f
 
 New bindings MUST pin the full template content/schema/security digest. Pinned content MUST be retained or filing holds, never falls forward. A current template removal/revocation blocks even if archived content exists. A template's bound repository MUST agree with the binding target; mismatch holds rather than silently retargeting. `track_compatible` is explicit opt-in for migrated schedules: resolve current template at filing, retain its revision and require unchanged approved security envelope and compatible parameter schema. Scope/placement/grant/approval/admission changes require renewed approval; content-only compatible changes MAY affect future firings under that recorded opt-in. Existing tasks retain their creation attribution; later template synchronization MUST NOT expand a trigger-generated task's authority. Queued matches use the matched version/template; current restrictions still apply. Binding edits never silently remap queued input into a new template.
 
-## TTS-5: Occurrences versus state
+## TTS-5: Occurrences versus state {#TTS-5}
 
 `mode=occurrence` matches an authenticated event happened, not that a predicate is true during each poll. Initial observation MUST default to baseline/no task. `mode=state_edge` requires a registered state schema and ordered revisions or an authoritative Observe reconciliation. Grain MUST persist prior predicate value/resource revision atomically with transition matching. Only false-to-true creates an edge; unknown is neither false nor true. Initial true does not fire unless explicit `initial=emit_current` is previewed and authorized. Edge identity includes source/resource, predicate digest and stable transition revision. A changed predicate starts a new baseline, not an implied edge.
 
@@ -149,7 +149,7 @@ Replaying an event does not mean it happened again. Replay MUST preserve event i
 
 Out-of-order occurrences MAY still match within admitted age policy; late state evidence MUST NOT regress the baseline or generate fabricated edges. Where ordering cannot be established, hold and reconcile; do not compare occurrence timestamps or SHA strings to invent order.
 
-## TTS-6: Durable ingestion and subscriptions
+## TTS-6: Durable ingestion and subscriptions {#TTS-6}
 
 Grain MUST persist a source registration/cleanup intent with its subscription ID and generation before calling event_open/event_close, then reconcile uncertain replies with the same idempotency key. A failed registration MUST NOT authorize collection or filing. Grain MUST persist normalized events before acknowledging ingestion success or advancing its provider checkpoint. A write transaction MUST atomically append accepted page events plus source cursor/generation, or neither. Failed page retries deduplicate unchanged events. Sources with per-event delivery acknowledgment MUST acknowledge only after durable commit. Webhooks MUST verify sender signatures over raw bytes with rotating installation secrets, enforce size/rate limits before parsing, and bind tenant/installation/host/repository to expected source scope. Relays MUST authenticate their own hop, use replay bounds and TLS outside a trusted local transport. Authentication proves sender origin, not task authority or human approval.
 
@@ -157,7 +157,7 @@ Shared subscriptions MUST be keyed by provider installation, credentials/read-se
 
 Cursor loss/expiry MUST produce a durable gap record. Reconcile from the last verified watermark where history exists, with overlapping poll windows and stable-ID dedup. When only current state is readable, reconcile current state and explicitly mark historical coverage incomplete. Review request remove/re-add, short-lived labels and other transient events may be unrecoverable from current GitHub state; Grain MUST report that it cannot recover those occurrences, never promise complete webhook recovery. Use history/timeline APIs only when the installation demonstrably supports the needed identity and retention. Time ticks can be regenerated from admitted recurrence/occurrence identity.
 
-## TTS-7: Match and filing transactions
+## TTS-7: Match and filing transactions {#TTS-7}
 
 Grain MUST durably record a match with event key, binding ID/version, template/policy digests, mapped inputs/digest, provenance, repeat key, match time, status and explain trace. Unique match identity is `(binding_id, binding_version, provider, source, event_id)`; for a state edge the adapter supplies the durable edge ID described in §5. One match can have multiple explicitly bounded target slots only if authorized; slot ID is then part of filing identity. The default is one slot.
 
@@ -169,7 +169,7 @@ A worker crash before match commit is recovered by journal replay; after match/b
 
 Routine config upgrades MUST NOT replay retained events into a new version automatically. Activation watermarks exclude already processed history by default. Compatible upgrades SHOULD retain a dedup lineage across versions; explicit replay into a new version needs preview and a budget, with `skip_prior_firings` default. A deliberate `allow_new_firings` replay uses an authorized replay epoch as an additional logical identity dimension and labels every new task. It is a new authorization, never a dedup workaround.
 
-## TTS-8: Repeat, PR head, batching and concurrency
+## TTS-8: Repeat, PR head, batching and concurrency {#TTS-8}
 
 | Repeat policy | Required behavior |
 |---|---|
@@ -185,7 +185,7 @@ A PR review identity includes repository stable ID, PR number, recipient, reques
 
 Debounce delays filing for a bounded interval; batching groups eligible events up to `batch_max`. Both MUST retain per-event identities, disposition and individual receipt links. Batch overflow creates subsequent bounded batches or visible held entries, never drops silently. Debounce MUST have a maximum deadline (default 5 minutes), so a busy resource cannot postpone work forever. Coalescing/ignore/catch-up collapse MUST be distinguishable from data loss in UI and metrics.
 
-## TTS-9: Enable, replay, quotas and recovery
+## TTS-9: Enable, replay, quotas and recovery {#TTS-9}
 
 New bindings default to baseline initial observation, future-only enable, explicit held catch-up and no automatic backfill. Eligibility starts after the committed Grain receipt-sequence activation watermark; source occurrence time additionally enforces maximum age where verified. A source backlog collected after activation with pre-activation occurrence time MUST be held for catch-up selection, not mistaken for new live work. If occurrence time is unavailable, the source MUST establish a verified baseline cursor or hold ambiguous backlog. Wall-clock time alone is not a checkpoint. Enabling after an outage/pause MUST display the gap/backlog summary and establish an activation watermark. Catch-up choices are `hold`, `skip` with recorded counts/ranges, or `one` collapsed summary; historical mass dispatch requires a separately authorized finite replay job. Legacy schedules retain their one-collapsed-firing behavior under §12 rather than silently adopting this default.
 
@@ -197,7 +197,7 @@ Quota exhaustion MUST record `held_quota`, next eligible time and safe counts, n
 
 Recommended retention: event bodies 7 days, redacted match/error traces 30 days, firing identity/attribution tombstones for the binding's lifetime plus maximum authorized replay horizon. Expired tombstones permanently fence the older replay range; administrative restore MUST not re-enable that range implicitly. Runtime backups MUST include journal/checkpoints/receipts and restore them coherently; stale backups require a held source reconciliation before dispatch, especially if tasks or external effects survived the restore.
 
-## TTS-10: Security, loops and attribution
+## TTS-10: Security, loops and attribution {#TTS-10}
 
 Binding create/edit/enable/replay/delete, installation management, event read and standing approval are separate typed permissions with repository/source/template limits. Management authority MUST NOT itself permit granting capabilities or automatic approval. Creation and authority expansion require an authorized actor and reasoned audit; agents MAY propose/manage only within explicit delegated ceilings, MUST NOT approve their own expansion, and MUST NOT bypass person-only grants, declaration acceptance or existing task/template admission. Webhook actors and payload fields cannot grant any of these rights.
 
@@ -209,7 +209,7 @@ Grain actions MUST emit authenticated origin task/action IDs, chain ID, causatio
 
 Secrets MUST be installation-owned references, encrypted under existing secret policy, rotated/revocable and absent from payloads, previews, task bodies, traces and error text. Quarantine stores only safe digest/size/source metadata by default. Event body access, explain traces and replay previews MUST enforce current caller source/task/repository rights; a provider's broad installation access MUST NOT broaden a consumer. Any external mutation/subscription installation MUST use separately authorized typed action execution and audit. MCP read-only annotations are insufficient.
 
-## TTS-11: Human and agent surfaces
+## TTS-11: Human and agent surfaces {#TTS-11}
 
 The future Angular management UI MUST show bindings, effective source/template pins, scope/grants/approval, enable/pause, preview, catch-up/replay confirmation, event coverage gaps, matches, coalesced tasks, held/ignored/error/overflow dispositions, provider health, quotas and explain traces. Enable/authority expansion MUST present the concrete effective composition and recovery limitations before recording approval. Deleting/pausing MUST show queued-work semantics. Existing historical tasks remain navigable through retained binding versions. No classic UI feature is required by this proposal.
 
@@ -227,7 +227,7 @@ Proposed scoped agent tool contracts are:
 
 The same authorization/composition/matching functions MUST serve UI, tools and filing. Preview MUST not mint credentials or install webhooks. Errors MUST use stable typed codes plus safe human text; unsupported versions/configuration are blocking errors, not unmatched events. Explain MUST distinguish unmatched filter, held permission, ignored repeat, dropped catch-up, coalesced, filed and missing coverage. No management endpoint named here exists by virtue of this document.
 
-## TTS-12: Current schedules and migration
+## TTS-12: Current schedules and migration {#TTS-12}
 
 Evidence inspected at base `d8ff32019`; source links below are repository-relative. Existing `docs/schedules.md` is historical and contains superseded sections. This inventory describes current code; preceding sections prescribe future behavior.
 
@@ -251,7 +251,7 @@ Compatibility schedule CRUD MAY translate into binding edits while retaining sch
 
 Rollback MUST fence the new writer before restoring legacy ownership, map next due/last run and active reservations from committed receipts, and preserve the ledger as a dedup fence. If the old binary cannot read the epoch/fence or represent the policy, rollback MUST keep firing paused pending a compatible reader; it MUST NOT run both engines. Deploy compatible readers before writers. Restoring config alone MUST NOT rewind runtime cursors, reset sequences or reissue occurrences. Runtime field edits require a distinct audited recovery operation, never a state-repository PR. This deployment's settings are in `grain/config`, not this repository.
 
-## TTS-13: Existing extension, event and authorization evidence
+## TTS-13: Existing extension, event and authorization evidence {#TTS-13}
 
 - [Capability specification](../capabilities/capabilities.spec.md), [discovery](../../../pkg/capability/protocol/discovery.go), [schema support](../../../pkg/capability/protocol/schema.go) and [configure](../../../pkg/capability/protocol/configure.go) define current mint/release/configuration conventions. The new `event_*` contract is not implemented there.
 - [Waiting wire tests](../../../pkg/capability/protocol/waiting_test.go) exercise configure refusal with a `WaitingError`; this is credential/configuration waiting, not an existing durable trigger event subscription or permission to create a task.
@@ -261,7 +261,7 @@ Rollback MUST fence the new writer before restoring legacy ownership, map next d
 - Task #39's evaluator proposal is now [mcp-gates.design.md](../../design/mcp-gates.design.md) and [mcp-gates.spec.md](../mcp-gates/mcp-gates.spec.md), following Task #44's documentation rename merged as `befe68b54` (PR #1699). The inspected evaluator revision `1ac7e412d` retains immutable pins, typed actions, operation ledgers and durable waits (MGS-1/4/6). Documentation is merged; runtime support remains proposed. Pin/translate protocols explicitly; existing concrete task goals retain their names and desired-outcome semantics.
 - Task #45 draft at `6d2ffe338`, `origin/grain/10b43b32/task-45-design-extensible-dependency`, supplies `design/design/tracked-resources.design.md` and `design/spec/tracked-resources/tracked-resources.spec.md`. TDS-2/3/4/5 define ResourceProviderIdentity/Pin, TrackedResourceReference, `resource_*` discovery, read/watch authority, freshness and the fence protocol bridged in TTS-2. These branch-only paths are not links to nonexistent files on this base. Reading this draft does not assert it or its implementation has merged.
 
-## TTS-14: Acceptance scenarios
+## TTS-14: Acceptance scenarios {#TTS-14}
 
 These are requirements for future implementation validation, not tasks filed by this PR.
 
@@ -290,7 +290,7 @@ These are requirements for future implementation validation, not tasks filed by 
 | Rollback/old binary/config restore | Durable fence prevents dual writers and repeated occurrence; incompatible rollback stays paused. |
 | Preview/explain run by restricted agent | Same deterministic matcher, scoped redaction, no live side effect or authorization expansion. |
 
-## TTS-15: Unresolved choices and implementation dependencies
+## TTS-15: Unresolved choices and implementation dependencies {#TTS-15}
 
 Recommended defaults are normative until explicitly revised through design review. Journal package/table naming and shared collector implementation need coordination with #45; retain its pinned resource-provider method names behind a neutral Grain-owned journal and the TTS-2 adapter facade. Gates' action registry from #39/#44 may not exist when trigger implementation starts; use an equivalent typed authorization interface and ledger, not a fake dependency or a raw provider write path. Quota/cost units and retention need operator sizing before any binding is enabled; retain finite conservative defaults and report measured pressure. New DST semantics require explicit provider/calendar version and previews; retire the legacy profile only via reviewed opt-in migration. External GitHub event history completeness is installation-specific and must remain a declared limit, not an unresolved promise.
 
