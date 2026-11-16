@@ -121,7 +121,9 @@ test("removing a scope set a task holds asks first, and Cancel keeps it", async 
       data: {
         title: `E2E holds ${HELD} ${Date.now()}`,
         noRepo: true,
-        capabilities: [`api:${HELD}@acme/widgets`],
+        capabilities: [
+          `https://grain.dev/capabilities/api#${HELD}={"repo":"acme/widgets"}`,
+        ],
       },
     });
     expect(created.ok()).toBeTruthy();
@@ -133,7 +135,10 @@ test("removing a scope set a task holds asks first, and Cancel keeps it", async 
       `${baseURL}/api/tasks/${taskID}/capabilities`,
       {
         headers: accessHeaders(),
-        data: { capability: `api:${HELD}@acme/gadgets`, attach: true },
+        data: {
+          capability: `https://grain.dev/capabilities/api#${HELD}={"repo":"acme/gadgets"}`,
+          attach: true,
+        },
       },
     );
     expect(outside.status()).toBe(400);
@@ -189,7 +194,10 @@ test("removing a scope set a task holds asks first, and Cancel keeps it", async 
     if (taskID) {
       await page.request.post(`${baseURL}/api/tasks/${taskID}/capabilities`, {
         headers: accessHeaders(),
-        data: { capability: `api:${HELD}@acme/widgets`, attach: false },
+        data: {
+          capability: `https://grain.dev/capabilities/api#${HELD}={"repo":"acme/widgets"}`,
+          attach: false,
+        },
       });
     }
     await page.request.post(`${baseURL}/api/api-scope-sets/delete`, {

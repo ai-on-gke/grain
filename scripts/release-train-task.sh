@@ -83,7 +83,7 @@ read_ci() {
     say "  (nothing on stderr)"
   fi
   if grep -qiE 'forbidden|does not hold|capabilit' "$out/ci.err"; then
-    say "this task cannot read $repo's CI: it needs ci:read on $repo (api:ci-read@$repo)."
+    say "this task cannot read $repo's CI: it needs ci:read on $repo (https://grain.dev/capabilities/api#ci-read with {repo: $repo})."
     say "grain-ci alone is stripped from a task filed for a repository grain CI does not gate"
     say "(ci_mode: github); check the capabilities of .grain/templates/release-train.yml and of"
     say "the task this run is for."

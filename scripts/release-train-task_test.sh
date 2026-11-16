@@ -315,7 +315,7 @@ expect_has "rc qualifying: noop" "$out" "RELEASE_TRAIN_RESULT=noop"
 expect_has "rc qualifying: reads the rc's jobs" "$calls" "--ref v2.2.0-rc.3 --workflow nightly.yml"
 expect_not_has "rc qualifying: reads no main runs" "$calls" "--ref main --workflow"
 
-# 7. A task that cannot read CI (grain-ci stripped, no api:ci-read) fails with
+# 7. A task that cannot read CI (grain-ci stripped, no api#ci-read) fails with
 #    grain's own refusal, the command that hit it and the grant it needs.
 run_tick FAKE_CI_FORBIDDEN=1
 expect_eq "ci forbidden: exit 1" "$status" 1
@@ -323,7 +323,7 @@ expect_has "ci forbidden: result failed" "$out" "RELEASE_TRAIN_RESULT=failed"
 expect_has "ci forbidden: names the command and status" "$out" "\`grain ci list --repo ai-on-gke/grain"
 expect_has "ci forbidden: exit status" "$out" "exited 3:"
 expect_has "ci forbidden: quotes grain's stderr" "$out" "release-train-task:   grain: forbidden: grain ci:"
-expect_has "ci forbidden: names the missing grant" "$out" "api:ci-read@ai-on-gke/grain"
+expect_has "ci forbidden: names the missing grant" "$out" "api#ci-read with {repo: ai-on-gke/grain}"
 
 # 8. The same refusal when it is main's runs that cannot be read, which
 #    release-from-trunk.sh reads only once it looks for a commit to cut.
@@ -332,7 +332,7 @@ run_tick FAKE_CI_FORBIDDEN=1
 expect_eq "main runs forbidden: exit 1" "$status" 1
 expect_has "main runs forbidden: result failed" "$out" "RELEASE_TRAIN_RESULT=failed"
 expect_has "main runs forbidden: names the command" "$out" "\`grain ci list --repo ai-on-gke/grain --ref main --workflow tests.yml"
-expect_has "main runs forbidden: names the missing grant" "$out" "api:ci-read@ai-on-gke/grain"
+expect_has "main runs forbidden: names the missing grant" "$out" "api#ci-read with {repo: ai-on-gke/grain}"
 expect_eq "main runs forbidden: one result line" "$(grep -c '^RELEASE_TRAIN_RESULT=' <<<"$out")" 1
 
 echo

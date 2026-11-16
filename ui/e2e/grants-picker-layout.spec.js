@@ -270,9 +270,11 @@ for (const [label, size] of [
       await page.reload();
       const reloaded = page.getByTestId("task-1-grants");
       await expect(
-        reloaded.locator(
-          '.grant-line[data-grant="https://grain.dev/capabilities/api#tasks:read"]',
-        ),
+        reloaded
+          .locator(
+            '[data-grant="https://grain.dev/capabilities/api#tasks:read"]',
+          )
+          .first(),
       ).toBeVisible();
       await expect(
         reloaded.locator('.grant-line[data-grant="self-debug"]'),

@@ -287,7 +287,7 @@ func TestMCPDiagnosticsAndQuarantineWalkthrough(t *testing.T) {
 		Title:  "Investigate orchestrator flake",
 		Intent: model.IntentImplement,
 		Target: &qTarget,
-		Grants: []model.Grant{{Capability: "api:test-quarantine", Via: model.GrantByLabel}},
+		Grants: []model.Grant{{Capability: "https://grain.dev/capabilities/api#test-quarantine", Via: model.GrantByLabel}},
 	}); err != nil {
 		t.Fatalf("creating acting task: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestMCPDiagnosticsAndQuarantineWalkthrough(t *testing.T) {
 	}), qStore)
 	qDaemonURL := newTestServer(t, ui.NewServerWithClient(qClient))
 	httpClient := ui.NewHTTPClient(qDaemonURL)
-	apiTools := ui.AgentAPITools(httpClient, "933", []string{"api:test-quarantine"})
+	apiTools := ui.AgentAPITools(httpClient, "933", []string{"https://grain.dev/capabilities/api#test-quarantine"})
 	var quarantineTool mcp.Tool
 	for _, tool := range apiTools {
 		if tool.Name == "api_quarantine_test" {
