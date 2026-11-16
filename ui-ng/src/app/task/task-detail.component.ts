@@ -38,16 +38,28 @@ import type {
   CapabilityOption,
   Comment,
   GrainConfig,
+  Task,
 } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { summarizeDispatchStatus } from "../shared/dispatch-status";
+import {
+  effectiveDisplayTimeZone,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
+import {
+  earliestWakeDay,
+  formatWakeTime,
+  zonedDayStart,
+} from "../shared/zoned-day";
 import { isHuman } from "../sessions/session-helpers";
 
-import { ConversationComponent } from "../shared/conversation/conversation.component";
+import {
+  type CommentTarget,
+  ConversationComponent,
+} from "../shared/conversation/conversation.component";
 
 import {
   AttachmentListComponent,
@@ -67,6 +79,7 @@ import {
 } from "../shared/grants-picker.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
@@ -74,9 +87,13 @@ import {
   ForceMergeDialogComponent,
   type ForceMergeRequest,
 } from "./force-merge-dialog.component";
+import {
+  AcceptFindingsDialogComponent,
+  type AcceptFindingsRequest,
+} from "./accept-findings-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
-import { TaskStore } from "./task.store";
+import { TaskStore, parseCommentFragment } from "./task.store";
 
 export type TaskTab = "conversation" | "runs" | "changes" | "tree" | "details";
 
@@ -129,6 +146,7 @@ export function duration(from?: string, to?: string): string {
     TaskGatesBarComponent,
     TaskChangesTabComponent,
     ForceMergeDialogComponent,
+    AcceptFindingsDialogComponent,
     TaskEditPanelComponent,
     ConversationComponent,
   ],
@@ -140,6 +158,8 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/detail-panes.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:click)": "onDocClick($event)",
@@ -149,7 +169,9 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       aria-labelledby="task-title"
-      [attr.inert]="confirming() || forceMergeReq() ? '' : null"
+      [attr.inert]="
+        confirming() || forceMergeReq() || acceptFindingsReq() ? '' : null
+      "
     >
       @if (store.loadError(); as err) {
         <div class="stage-header">
@@ -303,10 +325,14 @@ export function duration(from?: string, to?: string): string {
                 Stop
               </button>
             }
+            <!-- Not while paused: Retry never lifts an operator's pause
+                 (ui.Client.Retry refuses it), so it would be a second
+                 "Resume" beside the pause's own that always fails. -->
             @if (
               (t.state === "failed" ||
                 (t.state === "awaiting_reply" && t.turnStopped) ||
                 isStopped()) &&
+              !t.paused &&
               can("POST /api/tasks/{id}/retry")
             ) {
               <button
@@ -411,10 +437,65 @@ export function duration(from?: string, to?: string): string {
                 type="button"
                 class="btn-text"
                 data-testid="act-defer"
+                gTip="Put it aside until you bring it back"
                 (click)="defer()"
               >
                 Defer
               </button>
+              @if (!deferUntilOpen()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="act-defer-until"
+                  gTip="Put it aside until a day you pick"
+                  (click)="openDeferUntil()"
+                >
+                  Defer until…
+                </button>
+              } @else {
+                <form
+                  class="defer-until"
+                  data-testid="defer-until-form"
+                  (submit)="deferUntil($event)"
+                >
+                  <label class="defer-until-label" for="defer-until-date"
+                    >Wake on</label
+                  >
+                  <input
+                    id="defer-until-date"
+                    type="date"
+                    class="defer-until-date"
+                    data-testid="defer-until-date"
+                    required
+                    [min]="earliestWake()"
+                    [value]="deferDate()"
+                    [attr.aria-describedby]="'defer-until-hint'"
+                    (input)="deferDate.set($any($event.target).value)"
+                  />
+                  <button
+                    type="submit"
+                    class="btn-tonal"
+                    data-testid="defer-until-submit"
+                    [disabled]="!deferWakeAt() || store.isBusy('defer', t.id)"
+                  >
+                    Defer until
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="defer-until-cancel"
+                    (click)="closeDeferUntil(true)"
+                  >
+                    Cancel
+                  </button>
+                  <span
+                    id="defer-until-hint"
+                    class="muted defer-until-hint"
+                    data-testid="defer-until-hint"
+                    >{{ deferHint() }}</span
+                  >
+                </form>
+              }
             }
             @if (
               (t.state === "queued" ||
@@ -610,6 +691,48 @@ export function duration(from?: string, to?: string): string {
           </p>
         }
 
+        <!-- Rollover (durable-tasks.design.md#DT-15): a closed durable
+             task's work goes on under another number, said before the
+             rest of the page so an old link leads somewhere. -->
+        @if (t.rolledOverTo; as next) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-to"
+          >
+            <strong
+              >Rolled over to
+              <a
+                [routerLink]="linkTo(next)"
+                [queryParams]="linkQuery(next)"
+                [queryParamsHandling]="pane() ? 'merge' : ''"
+                (click)="onTreeNodeClick($event, next)"
+                >#{{ next }}</a
+              >.</strong
+            >
+            This durable task passed its record limit, so its work carries on in
+            the successor, with its brief, handover, pull request and waits.
+            This record is kept as it was.
+          </p>
+        }
+        @if (t.rolledOverFrom; as prev) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-from"
+          >
+            Carries on the work of
+            <a
+              [routerLink]="linkTo(prev)"
+              [queryParams]="linkQuery(prev)"
+              [queryParamsHandling]="pane() ? 'merge' : ''"
+              (click)="onTreeNodeClick($event, prev)"
+              >#{{ prev }}</a
+            >, rolled over when it passed its record limit; its earlier
+            conversation and runs are there.
+          </p>
+        }
+
         <!-- Inline Pending Approval / Gate Panels -->
         @if (queuedPauseNotice(); as qpn) {
           <p
@@ -623,10 +746,27 @@ export function duration(from?: string, to?: string): string {
             }
           </p>
         }
+        @if (t.state === "deferred" && t.deferredUntil) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-deferred-until"
+          >
+            Picks itself back up on
+            {{ wakeTime(t.deferredUntil)
+            }}{{
+              t.approved
+                ? ", onto the queue."
+                : ", back into Needs approval for someone to approve."
+            }}
+          </p>
+        }
         <g-task-gates-bar
           [task]="t"
+          [pane]="pane()"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
+          (forceMerge)="forceMergeReq.set($event)"
         />
 
         <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
@@ -687,6 +827,7 @@ export function duration(from?: string, to?: string): string {
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
                   [preserveFragment]="!!pane()"
+                  (click)="forceConversationTab.set(false)"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -720,6 +861,7 @@ export function duration(from?: string, to?: string): string {
                     [repo]="t.repo"
                     [comments]="comments()"
                     [questionCommentId]="t.questionCommentId"
+                    [targetComment]="commentTarget()"
                     [olderCount]="t.olderComments ?? 0"
                     [loadingOlder]="store.isBusy('older-comments', t.id)"
                     (loadEarlier)="store.loadOlderComments()"
@@ -933,6 +1075,7 @@ export function duration(from?: string, to?: string): string {
                   <h2 class="sr-only">Changes and CI</h2>
                   <g-task-changes-tab
                     (forceMerge)="forceMergeReq.set($event)"
+                    (acceptFindings)="acceptFindingsReq.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
                     [prLabel]="prLabel()"
@@ -1062,72 +1205,81 @@ export function duration(from?: string, to?: string): string {
 
         <ng-template #details>
           <div class="details" data-testid="task-details">
-            <h2 class="section-title">Details</h2>
-            @if (t.description) {
-              <div
-                class="msg-body description"
-                [gMarkdown]="t.description"
-              ></div>
-            }
-            @if (t.attachments?.length) {
-              <g-attachment-list
-                [taskId]="t.id"
-                [repo]="t.repo"
-                [attachments]="t.attachments"
-              />
-            }
-            <dl class="facts">
-              <dt>Priority</dt>
-              <dd>
-                <g-priority-chip
-                  [priority]="prio(t)"
-                  [editable]="priorityEditable()"
-                  [disabled]="store.isBusy('priority', t.id)"
-                  testid="task-priority"
-                  menuTestid="task-priority-menu"
-                  (priorityChange)="setDirectPriority($event)"
-                />
-              </dd>
-              <dt>Repository</dt>
-              <dd>{{ t.repo || "None" }}</dd>
-              @if (t.base) {
-                <dt>Base</dt>
-                <dd class="mono">{{ t.base }}</dd>
-              }
-              <dt>Model</dt>
-              <dd>{{ t.model || "Deployment default" }}</dd>
-              @if (t.agentBackendId) {
-                <dt>Connection</dt>
-                <dd class="mono">{{ t.agentBackendId }}</dd>
-              }
-              @if (t.networkAccess) {
-                <dt>Network</dt>
-                <dd>{{ t.networkAccess }}</dd>
-              }
-              <dt>Filed</dt>
-              <dd>
-                {{ ago(t.createdAt) }} ago by
-                {{ t.authorLabel || t.author || "unknown" }}
-              </dd>
-              @if (t.approvedByLabel) {
-                <dt>Approved by</dt>
-                <dd>{{ t.approvedByLabel }}</dd>
-              }
-              @if (t.admission && t.admission !== "standard") {
-                <dt>Admission</dt>
-                <dd>{{ t.admission }} (starts past worker limits)</dd>
-              }
-              @if (t.goal; as g) {
-                <dt>Goal</dt>
-                <dd>{{ g.kind }}</dd>
-              }
-              <dt>Capabilities</dt>
-              <dd>{{ capCount() }}</dd>
-              @if (t.closedReason) {
-                <dt>Closed</dt>
-                <dd>{{ t.closedReason }}</dd>
-              }
-            </dl>
+            <div class="g-panes">
+              <section class="g-pane" data-testid="task-prompt-pane">
+                <h2 class="g-pane-title">Prompt</h2>
+                @if (t.description) {
+                  <div
+                    class="msg-body description g-pane-prompt"
+                    [gMarkdown]="t.description"
+                  ></div>
+                } @else {
+                  <p class="g-pane-empty">No prompt text.</p>
+                }
+                @if (t.attachments?.length) {
+                  <g-attachment-list
+                    [taskId]="t.id"
+                    [repo]="t.repo"
+                    [attachments]="t.attachments"
+                  />
+                }
+              </section>
+              <section class="g-pane" data-testid="task-attributes-pane">
+                <h2 class="g-pane-title">Attributes</h2>
+                <dl class="g-attrs">
+                  <dt>Priority</dt>
+                  <dd>
+                    <g-priority-chip
+                      [priority]="prio(t)"
+                      [editable]="priorityEditable()"
+                      [disabled]="store.isBusy('priority', t.id)"
+                      testid="task-priority"
+                      menuTestid="task-priority-menu"
+                      (priorityChange)="setDirectPriority($event)"
+                    />
+                  </dd>
+                  <dt>Repository</dt>
+                  <dd>{{ t.repo || "None" }}</dd>
+                  @if (t.base) {
+                    <dt>Base</dt>
+                    <dd class="mono">{{ t.base }}</dd>
+                  }
+                  <dt>Model</dt>
+                  <dd>{{ t.model || "Deployment default" }}</dd>
+                  @if (t.agentBackendId) {
+                    <dt>Connection</dt>
+                    <dd class="mono">{{ t.agentBackendId }}</dd>
+                  }
+                  @if (t.networkAccess) {
+                    <dt>Network</dt>
+                    <dd>{{ t.networkAccess }}</dd>
+                  }
+                  <dt>Filed</dt>
+                  <dd>
+                    {{ filedAgo(t.createdAt) }} by
+                    {{ t.authorLabel || t.author || "unknown" }}
+                  </dd>
+                  @if (t.approvedByLabel) {
+                    <dt>Approved by</dt>
+                    <dd>{{ t.approvedByLabel }}</dd>
+                  }
+                  @if (t.admission && t.admission !== "standard") {
+                    <dt>Admission</dt>
+                    <dd>{{ t.admission }} (starts past worker limits)</dd>
+                  }
+                  @if (t.goal; as g) {
+                    <dt>Goal</dt>
+                    <dd>{{ g.kind }}</dd>
+                  }
+                  <dt>Capabilities</dt>
+                  <dd>{{ capCount() }}</dd>
+                  @if (t.closedReason) {
+                    <dt>Closed</dt>
+                    <dd>{{ t.closedReason }}</dd>
+                  }
+                </dl>
+              </section>
+            </div>
 
             <!-- Capabilities & Grants Editor -->
             @if (can("POST /api/tasks/{id}/capabilities")) {
@@ -1149,7 +1301,11 @@ export function duration(from?: string, to?: string): string {
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
-                    <span class="status-pill neutral">
+                    <span
+                      class="status-pill neutral"
+                      data-testid="details-dep-chip"
+                      [attr.title]="depTitle(t, d)"
+                    >
                       <a
                         [routerLink]="linkTo(d)"
                         [queryParams]="linkQuery(d)"
@@ -1222,6 +1378,13 @@ export function duration(from?: string, to?: string): string {
       <g-force-merge-dialog [request]="f" (done)="forceMergeReq.set(null)" />
     }
 
+    @if (acceptFindingsReq(); as a) {
+      <g-accept-findings-dialog
+        [request]="a"
+        (done)="acceptFindingsReq.set(null)"
+      />
+    }
+
     <ng-template #treeNode let-n let-level="level">
       <li class="tree-item">
         <span class="tree-row" [class.is-root]="n.root">
@@ -1259,6 +1422,7 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly api = inject(GrainApi);
+  private readonly feed = inject(TaskFeedStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly create = inject(CreateTaskService);
@@ -1272,6 +1436,28 @@ export class TaskDetailComponent implements OnDestroy {
   // narrower, Details as a tab, its tab kept in ?pane=, links to other
   // tasks select them in the pane.
   readonly pane = input(false);
+
+  // "Defer until…": the day picked, in the deployment's display zone.
+  protected readonly deferUntilOpen = signal(false);
+  protected readonly deferDate = signal("");
+  protected readonly displayTz = signal(effectiveDisplayTimeZone());
+  protected readonly earliestWake = computed(() =>
+    earliestWakeDay(this.displayTz()),
+  );
+  protected readonly deferWakeAt = computed(() => {
+    const day = this.deferDate();
+    if (!day || day < this.earliestWake()) return null;
+    return zonedDayStart(day, this.displayTz());
+  });
+  protected readonly deferHint = computed(() => {
+    const at = this.deferWakeAt();
+    if (at !== null) {
+      return `Wakes ${formatWakeTime(new Date(at).toISOString(), this.displayTz())}`;
+    }
+    return this.deferDate()
+      ? "Pick a day after today"
+      : "Wakes at the start of the day you pick";
+  });
   // routePane is ?pane= as the router has it. The tab strip writes it, so
   // the pane reads it back itself: a host that does not also bind [tab]
   // (Agents, Workstreams) still switches tabs.
@@ -1287,7 +1473,26 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+
+  // depTitle is a dependency chip's hover text: the task it waits for,
+  // its title where the open-task feed knows it, its state, and whether
+  // it is what holds this task, as the classic dependency chip reads.
+  protected depTitle(t: Task, d: string): string {
+    const title = this.feed.tasks().find((x) => x.id === d)?.title;
+    const state = t.dependsOnStates?.[d];
+    let s = title ? `#${d} ${title}` : `#${d}`;
+    if (state) s += ` — ${stateLabel(state)}`;
+    if (t.blockedBy?.includes(d)) s += " (blocking this task)";
+    return s;
+  }
   protected readonly ago = ago;
+  // filedAgo reads "just now" rather than "now ago" for a task filed in
+  // the last minute (ago() says "now" there).
+  protected filedAgo(iso: string | undefined): string {
+    const a = ago(iso);
+    if (!a) return "";
+    return a === "now" ? "just now" : `${a} ago`;
+  }
   protected readonly dur = duration;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;
@@ -1297,6 +1502,9 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly closePr = signal(false);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
   protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
+  protected readonly acceptFindingsReq = signal<AcceptFindingsRequest | null>(
+    null,
+  );
   protected readonly editOpen = signal(false);
   protected readonly moreMenuOpen = signal(false);
   protected readonly compactOpen = signal(false);
@@ -1328,12 +1536,22 @@ export class TaskDetailComponent implements OnDestroy {
     }
   };
 
+  // A #comment=<id> link: the comment to reveal once it is held, the
+  // request waiting for it, and whether it switched to Conversation.
+  protected readonly commentTarget = signal<CommentTarget | null>(null);
+  protected readonly forceConversationTab = signal(false);
+  private readonly pendingCommentLink = signal<CommentTarget | null>(null);
+  private commentSeq = 0;
+  private lastFragmentKey = "";
+  private lastFragmentAt = 0;
+
   protected readonly t = computed(() => this.store.detail());
   protected readonly partOfStream = computed(() => {
     const id = this.t()?.id;
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
+    if (this.forceConversationTab()) return "conversation";
     const rp =
       this.pane() && isTab(this.routePane()) ? this.routePane() : undefined;
     const v = rp ?? this.tab();
@@ -1534,13 +1752,35 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   constructor() {
-    const paneSub = inject(ActivatedRoute).queryParamMap.subscribe((q) =>
+    const route = inject(ActivatedRoute);
+    const paneSub = route.queryParamMap.subscribe((q) =>
       this.routePane.set(q.get("pane") ?? undefined),
     );
-    inject(DestroyRef).onDestroy(() => paneSub.unsubscribe());
+    // #comment=<id> arrives with the route (a link followed into the app),
+    // or as a hash change on a page already open.
+    const fragSub = route.fragment.subscribe((frag) => {
+      if (frag) this.queueCommentFragment(frag);
+    });
+    const win = this.doc.defaultView;
+    const onHash = (): void =>
+      this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
+    win?.addEventListener("hashchange", onHash);
+    inject(DestroyRef).onDestroy(() => {
+      paneSub.unsubscribe();
+      fragSub.unsubscribe();
+      win?.removeEventListener("hashchange", onHash);
+    });
     effect(() => {
       const id = this.id();
       untracked(() => {
+        this.commentTarget.set(null);
+        this.pendingCommentLink.set(null);
+        this.forceConversationTab.set(false);
+        const raw =
+          route.snapshot.fragment || this.doc.defaultView?.location.hash || "";
+        const parsed = this.fragmentIsForTask(id)
+          ? parseCommentFragment(raw)
+          : ({ kind: "none" } as const);
         this.confirmClose.set(false);
         this.confirming.set(null);
         this.editOpen.set(false);
@@ -1549,7 +1789,53 @@ export class TaskDetailComponent implements OnDestroy {
         this.allowWordsOnParked.set(false);
         this.newDepId.set("");
         this.replyTarget.set(null);
-        this.store.open(id);
+        this.deferUntilOpen.set(false);
+        this.deferDate.set("");
+        this.store.open(id, parsed.kind === "comment" ? parsed.id : null);
+        if (raw) this.queueCommentFragment(raw, id);
+      });
+    });
+    // Reveal a linked comment once the conversation holds it, paging older
+    // comments in (500 at a time) when it is further back than shown.
+    effect(() => {
+      const pending = this.pendingCommentLink();
+      const t = this.t();
+      if (!pending || !t || t.id !== this.id()) return;
+      untracked(() => {
+        const list = t.comments ?? [];
+        if (list.some((c) => c.id === pending.id)) {
+          this.pendingCommentLink.set(null);
+          this.commentTarget.set(pending);
+          return;
+        }
+        const mayBeOlder =
+          (t.olderComments ?? 0) > 0 &&
+          (list.length === 0 || pending.id < list[0].id);
+        if (!mayBeOlder) {
+          this.pendingCommentLink.set(null);
+          this.snackbar.show(
+            `Comment ${pending.id} is not in this task's conversation.`,
+          );
+          return;
+        }
+        if (this.store.isBusy("older-comments", t.id)) return;
+        const taskId = t.id;
+        void this.store.loadOlderCommentsThrough(pending.id).then((found) => {
+          if (
+            this.id() !== taskId ||
+            this.pendingCommentLink()?.seq !== pending.seq
+          ) {
+            return;
+          }
+          this.pendingCommentLink.set(null);
+          if (found) {
+            this.commentTarget.set(pending);
+          } else {
+            this.snackbar.show(
+              `Comment ${pending.id} is not in this task's conversation.`,
+            );
+          }
+        });
       });
     });
     effect(() => {
@@ -1588,6 +1874,7 @@ export class TaskDetailComponent implements OnDestroy {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
       if (cfg?.capabilities) this.offeredCapabilities.set(cfg.capabilities);
+      this.displayTz.set(effectiveDisplayTimeZone(cfg?.timeZone));
     } catch {
       // Optional config read for capabilities list.
     }
@@ -1596,6 +1883,43 @@ export class TaskDetailComponent implements OnDestroy {
   ngOnDestroy(): void {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
     this.store.close(this.id());
+  }
+
+  // fragmentIsForTask reports whether the page's fragment belongs to task
+  // id: on /task/<n> (or /tasks/<n>) only when n is id; in a list's pane,
+  // whichever task the pane shows.
+  private fragmentIsForTask(id: string): boolean {
+    const path = this.doc.defaultView?.location.pathname ?? "";
+    const m = /\/tasks?\/([^/?#]+)\/?$/.exec(path);
+    return !m || decodeURIComponent(m[1]) === String(id);
+  }
+
+  // queueCommentFragment asks for the comment a #comment=<id> fragment
+  // names, switching to Conversation; any other fragment is left alone.
+  private queueCommentFragment(raw: string, taskId?: string): void {
+    let id = taskId;
+    if (id === undefined) {
+      try {
+        id = this.id();
+      } catch {
+        return; // The id input is not bound yet; the id effect reads it.
+      }
+    }
+    if (!id || !this.fragmentIsForTask(id)) return;
+    const parsed = parseCommentFragment(raw);
+    if (parsed.kind === "none") return;
+    // The route and the window can both report one navigation.
+    const key = `${id}:${raw.replace(/^#/, "")}`;
+    const now = Date.now();
+    if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) return;
+    this.lastFragmentKey = key;
+    this.lastFragmentAt = now;
+    if (parsed.kind === "invalid") {
+      this.snackbar.show(`This link's ${parsed.raw} does not name a comment.`);
+      return;
+    }
+    this.forceConversationTab.set(true);
+    this.pendingCommentLink.set({ id: parsed.id, seq: ++this.commentSeq });
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
@@ -1731,15 +2055,34 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
-    if (
-      await this.store.act(
-        "pause",
-        this.post("POST /api/tasks/{id}/pause", { immediate }),
-        id,
-      )
-    ) {
-      this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+    const run = async () => {
+      if (
+        await this.store.act(
+          "pause",
+          this.post("POST /api/tasks/{id}/pause", { immediate }),
+          id,
+        )
+      ) {
+        this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+      }
+    };
+    if (!immediate) {
+      await run();
+      return;
     }
+    // Asked first, as the classic Pause now is: unlike Pause, this one
+    // throws away whatever the run has not pushed, and Resume cannot
+    // bring that back.
+    this.confirming.set({
+      title: "Pause immediately",
+      message:
+        `Pause #${id} now? Its run is stopped at once, without the grace ` +
+        "period to push its work and write its handover; whatever it has " +
+        "not pushed is lost. Resume picks the task back up where it was left.",
+      accept: "Pause now",
+      destructive: true,
+      run,
+    });
   }
 
   protected async resumePaused(): Promise<void> {
@@ -1972,6 +2315,60 @@ export class TaskDetailComponent implements OnDestroy {
     ) {
       this.done(`Deferred #${id}`);
       this.snackbar.show(`Deferred #${id}`, {
+        label: "Undo",
+        run: async () => {
+          await this.store.act(
+            "undefer",
+            this.post("POST /api/tasks/{id}/undefer"),
+            id,
+          );
+        },
+      });
+    }
+  }
+
+  protected openDeferUntil(): void {
+    this.deferDate.set("");
+    this.deferUntilOpen.set(true);
+    // The picker replaces the button that opened it, so focus follows.
+    setTimeout(() => this.doc.getElementById("defer-until-date")?.focus());
+  }
+
+  protected closeDeferUntil(refocus = false): void {
+    this.deferUntilOpen.set(false);
+    this.deferDate.set("");
+    if (refocus) {
+      setTimeout(() =>
+        this.doc
+          .querySelector<HTMLElement>('[data-testid="act-defer-until"]')
+          ?.focus(),
+      );
+    }
+  }
+
+  protected wakeTime(iso: string): string {
+    return formatWakeTime(iso, this.displayTz());
+  }
+
+  // A picked day wakes at its start in the zone the wake time is printed
+  // in; a day before earliestWake() is refused here as the server would.
+  protected async deferUntil(ev: Event): Promise<void> {
+    ev.preventDefault();
+    const t = this.t();
+    const at = this.deferWakeAt();
+    if (!t || t.id !== this.id() || at === null) return;
+    const id = t.id;
+    const until = new Date(at).toISOString();
+    if (
+      await this.store.act(
+        "defer",
+        this.post("POST /api/tasks/{id}/defer", { deferredUntil: until }),
+        id,
+      )
+    ) {
+      this.closeDeferUntil();
+      this.done(`Deferred #${id} until ${this.wakeTime(until)}`);
+      this.snackbar.show(`Deferred #${id} until ${this.wakeTime(until)}`, {
         label: "Undo",
         run: async () => {
           await this.store.act(

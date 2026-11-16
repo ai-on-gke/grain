@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ApplicationRef } from "@angular/core";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { Router, provideRouter } from "@angular/router";
+import { Router, provideRouter, type Routes } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { BaseBranchGate, Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { TaskFeedStore } from "../services/task-feed.service";
+import { ViewFilter } from "../services/view-filter.service";
 import { TasksPageComponent } from "./tasks-page.component";
 import { TasksStore } from "./tasks.store";
 
@@ -57,25 +60,37 @@ class FakeApi {
   boards: Board[] = [];
   calls: Call[] = [];
 
-  // The pane's task detail (GET /api/tasks/{id}) and the list.
-  getIfChanged = (route: string, params?: { id?: string }) =>
-    Promise.resolve(
+  // The pane's task detail (GET /api/tasks/{id}), batch summaries, and the list.
+  getIfChanged = (route: string, params?: { id?: string }, query?: string) => {
+    const detailFor = (id: string) => ({
+      ...(this.live.find((t) => t.id === id) ??
+        this.closed.find((t) => t.id === id) ?? {
+          id,
+          title: "Gone",
+          state: "closed",
+        }),
+      comments: [],
+      attempts: [],
+    });
+    if (route === "GET /api/tasks/summaries") {
+      const ids =
+        new URLSearchParams(query ?? "")
+          .get("ids")
+          ?.split(",")
+          .filter(Boolean) ?? [];
+      return Promise.resolve({
+        body: {
+          tasks: Object.fromEntries(ids.map((id) => [id, detailFor(id)])),
+        },
+        changed: true,
+      });
+    }
+    return Promise.resolve(
       route === "GET /api/tasks/{id}"
-        ? {
-            body: {
-              ...(this.live.find((t) => t.id === params?.id) ??
-                this.closed.find((t) => t.id === params?.id) ?? {
-                  id: params?.id,
-                  title: "Gone",
-                  state: "closed",
-                }),
-              comments: [],
-              attempts: [],
-            },
-            changed: true,
-          }
+        ? { body: detailFor(params?.id ?? ""), changed: true }
         : { body: structuredClone(this.live), changed: true },
     );
+  };
   queries: string[] = [];
   get = (route: string, _p?: unknown, query?: string) => {
     if (route === "GET /api/base-branch-gates") {
@@ -126,11 +141,12 @@ class FakeApi {
 async function render(
   api: FakeApi,
   tab?: string,
+  routes: Routes = [{ path: "**", children: [] }],
 ): Promise<ComponentFixture<TasksPageComponent>> {
   TestBed.configureTestingModule({
     imports: [TasksPageComponent],
     providers: [
-      provideRouter([{ path: "**", children: [] }]),
+      provideRouter(routes),
       { provide: GrainApi, useValue: api },
       { provide: GrainEvents, useValue: { events: () => NEVER } },
     ],
@@ -763,19 +779,27 @@ describe("TasksPageComponent", () => {
         }),
       );
       const baseGet = api.getIfChanged;
-      api.getIfChanged = (route: string, params?: { id?: string }) =>
-        route === "GET /api/tasks/{id}" && params?.id === "40"
+      api.getIfChanged = (
+        route: string,
+        params?: { id?: string },
+        query?: string,
+      ) =>
+        route === "GET /api/tasks/summaries"
           ? Promise.resolve({
               body: {
-                ...task("40", "awaiting_submit", 5, {
-                  mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
-                }),
-                comments: [],
-                attempts: [],
+                tasks: {
+                  "40": {
+                    ...task("40", "awaiting_submit", 5, {
+                      mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
+                    }),
+                    comments: [],
+                    attempts: [],
+                  },
+                },
               },
               changed: true,
             })
-          : baseGet(route, params);
+          : baseGet(route, params, query);
       const f = await render(api, "merging");
       expect(q(f, '[data-testid="ci-40"]')!.textContent).toContain("✕ CI");
 
@@ -839,7 +863,7 @@ describe("TasksPageComponent", () => {
       q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
       await settle(f);
       expect(q(f, '[data-testid="close-confirm"]')!.textContent).toContain(
-        "Close 1?",
+        "Close 1 task?",
       );
 
       // Escape inside .confirm-inline should not close the pane.
@@ -1027,7 +1051,13 @@ describe("TasksPageComponent", () => {
       await settle(f);
       q<HTMLButtonElement>(f, '[data-testid="board-apply-b1"]')!.click();
       expect(nav).toHaveBeenCalledWith(["/tasks"], {
-        queryParams: { tab: "all", group: null, q: null, repo: null },
+        queryParams: {
+          tab: "all",
+          group: null,
+          q: null,
+          repo: null,
+          view: null,
+        },
       });
 
       q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
@@ -1104,5 +1134,349 @@ describe("TasksPageComponent", () => {
     expect(q(f, 'button[data-testid="prio-301"]')).not.toBeNull();
     expect(q(f, 'button[data-testid="prio-302"]')).toBeNull();
     expect(q(f, '[data-testid="prio-302"].static')).not.toBeNull();
+  });
+
+  it("pluralizes batch Close (1 vs 2 tasks), dismisses on Keep and Escape without closing the pane, and reports partial failures honestly", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("20", "running", 7, { title: "Running A" }),
+      task("21", "running", 6, { title: "Running B" }),
+      task("30", "queued", 5, { title: "Queued succeeds" }),
+      task("31", "queued", 5, { title: "Queued fails" }),
+    ];
+    const f = await render(api, "running");
+    f.componentRef.setInput("task", "20");
+    await settle(f);
+    const nav = vi.spyOn(TestBed.inject(Router), "navigate");
+
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-20"] input[type="checkbox"]',
+    )!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')!.textContent).toContain(
+      "Close 1 task?",
+    );
+
+    // Escape cancels confirmClose and leaves the open inspector pane intact.
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')).toBeNull();
+    expect(nav).not.toHaveBeenCalled();
+
+    // 2 running tasks -> "Close 2 tasks?" and Keep cancels cleanly.
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-21"] input[type="checkbox"]',
+    )!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')!.textContent).toContain(
+      "Close 2 tasks?",
+    );
+    q<HTMLButtonElement>(f, '[data-testid="close-keep"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')).toBeNull();
+
+    // Partial failure on Backlog batch Close: 1 succeeds, 1 fails with 500.
+    f.componentRef.setInput("tab", "backlog");
+    await settle(f);
+    const origPost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (
+        route === "POST /api/tasks/{id}/close" &&
+        (params as { id?: string })?.id === "31"
+      ) {
+        return Promise.reject(new Error("simulated 500 on #31"));
+      }
+      return origPost(route, params, body);
+    };
+
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-30"] input[type="checkbox"]',
+    )!.click();
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-31"] input[type="checkbox"]',
+    )!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+    await settle(f);
+
+    expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+      "1 of 2 tasks failed: simulated 500 on #31",
+    );
+    const snack = TestBed.inject(SnackbarService).current()!;
+    expect(snack.message).toBe("Closed #30");
+    expect(
+      q<HTMLInputElement>(f, '[data-testid="row-31"] input[type="checkbox"]')
+        ?.checked,
+    ).toBe(true);
+
+    // Undo reopens only #30 (the task that actually closed), never #31.
+    await snack.action!.run();
+    const reopens = api.calls
+      .filter((c) => c.route === "POST /api/tasks/{id}/reopen")
+      .map((c) => (c.params as { id: string }).id);
+    expect(reopens).toEqual(["30"]);
+  });
+
+  it("reports each concurrent batch's own landed tasks", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("40", "queued", 5),
+      task("41", "queued", 5),
+      task("42", "queued", 5),
+    ];
+    await render(api, "backlog");
+    const origPost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if ((params as { id?: string })?.id === "41") {
+        return Promise.reject(new Error("simulated 403 on #41"));
+      }
+      return origPost(route, params, body);
+    };
+    const store = TestBed.inject(TasksStore);
+    // Two batches in flight at once never see each other's results.
+    const [a, b] = await Promise.all([
+      store.close(["40", "41"]),
+      store.defer(["42"]),
+    ]);
+    expect(a).toEqual({ failed: 1, landed: ["40"], skipped: [] });
+    expect(b).toEqual({ failed: 0, landed: ["42"], skipped: [] });
+  });
+
+  it("fills the Filter this view box from ?q= and lets typing replace it", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("1", "queued", 5, { title: "Alpha retry" }),
+      task("2", "queued", 5, { title: "Beta charge" }),
+    ];
+    const f = await render(api, "backlog");
+    f.componentRef.setInput("q", "retry");
+    await settle(f);
+    const filter = TestBed.inject(ViewFilter);
+    // The box says what the list is narrowed by.
+    expect(filter.query()).toBe("retry");
+    expect(q(f, '[data-testid="row-1"]')).not.toBeNull();
+    expect(q(f, '[data-testid="row-2"]')).toBeNull();
+    // Typing in the box narrows the list even though ?q= said otherwise,
+    // and the URL follows so a reload keeps it.
+    filter.query.set("charge");
+    await settle(f);
+    expect(q(f, '[data-testid="row-1"]')).toBeNull();
+    expect(q(f, '[data-testid="row-2"]')).not.toBeNull();
+    expect(TestBed.inject(Router).url).toContain("q=charge");
+    filter.query.set("");
+    await settle(f);
+    expect(q(f, '[data-testid="row-1"]')).not.toBeNull();
+    expect(q(f, '[data-testid="row-2"]')).not.toBeNull();
+    expect(TestBed.inject(Router).url).not.toContain("q=");
+  });
+
+  it("applies a saved board's tab, repo and q together, with the real router", async () => {
+    // Applying a board used to set the Filter this view box first, which
+    // started the box's own ?q= write-back while the board's navigation
+    // was in flight; that superseded it and kept only q (PR #1484 review).
+    const api = new FakeApi();
+    api.boards = [
+      {
+        id: "b9",
+        name: "Web retries",
+        kind: "list",
+        query: "tab=all&q=retry&repo=acme%2Fweb",
+      },
+    ];
+    // A guard that takes a moment keeps the board's navigation in flight
+    // while change detection runs, as a lazy route or a slow resolver can.
+    const slow = () =>
+      new Promise<boolean>((r) => setTimeout(() => r(true), 30));
+    const f = await render(api, "backlog", [
+      { path: "**", children: [], canActivate: [slow] },
+    ]);
+    await TestBed.inject(TasksStore).loadBoards();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="board-apply-b9"]')!.click();
+    // Change detection can run while the board's navigation is still in
+    // flight; it must not start a second navigation that supersedes it.
+    TestBed.inject(ApplicationRef).tick();
+    await new Promise((r) => setTimeout(r, 100));
+    await settle(f);
+    const url = TestBed.inject(Router).url;
+    expect(url).toContain("/tasks");
+    expect(url).toContain("tab=all");
+    expect(url).toContain("q=retry");
+    expect(url).toContain("repo=acme");
+  });
+
+  it("says the task list could not be read when the feed failed before the page opened", async () => {
+    const api = new FakeApi();
+    const listFails = async (route: string, params?: { id?: string }) => {
+      if (route === "GET /api/tasks") {
+        throw { status: 500, error: { error: "store unavailable" } };
+      }
+      return new FakeApi().getIfChanged(route, params);
+    };
+    api.getIfChanged = listFails as FakeApi["getIfChanged"];
+    TestBed.configureTestingModule({
+      imports: [TasksPageComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    // Another consumer (the rail) read the feed first, and it failed.
+    const feed = TestBed.inject(TaskFeedStore);
+    expect(await feed.refresh()).toBe(false);
+    const f = TestBed.createComponent(TasksPageComponent);
+    f.componentRef.setInput("tab", "backlog");
+    f.autoDetectChanges();
+    await settle(f);
+    await settle(f);
+    const alert = all(f, '[role="alert"]').map((e) => e.textContent ?? "");
+    expect(alert.some((t) => t.includes("could not be read"))).toBe(true);
+    // Never "Nothing in this tab" for a list it could not read.
+    expect(q(f, '[data-testid="tasks-pane-empty"]')).toBeNull();
+  });
+
+  it("explains why saved boards could not be loaded instead of saying none exist, and returns focus from the save bar", async () => {
+    const api = new FakeApi();
+    const origGet = api.get;
+    api.get = (route: string, p?: unknown, query?: string) => {
+      if (route === "GET /api/boards") {
+        return Promise.reject({
+          status: 500,
+          error: { error: "store unavailable" },
+        });
+      }
+      return origGet(route, p, query);
+    };
+    const f = await render(api);
+    const trigger = q<HTMLButtonElement>(
+      f,
+      '[data-testid="saved-boards-btn"]',
+    )!;
+    trigger.click();
+    await settle(f);
+    const errEl = q(f, '[data-testid="boards-load-error"]');
+    expect(errEl?.textContent).toContain(
+      "The boards could not be loaded (store unavailable).",
+    );
+    expect(
+      q(f, '[data-testid="saved-boards-menu"]')?.textContent,
+    ).not.toContain("No saved boards yet.");
+
+    // Opening and cancelling the save bar returns focus to the Boards trigger.
+    q<HTMLButtonElement>(f, '[data-testid="board-save-open"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="board-save-cancel"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="board-save-form"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("loads saved boards and base-branch gates when tasks resolve before config on a cached reload", async () => {
+    const api = new FakeApi();
+    api.boards = [
+      {
+        id: "b1",
+        name: "Timeline Triage",
+        kind: "list",
+        query: "tab=all&view=timeline",
+      },
+    ];
+    api.gates = [
+      {
+        repo: "sidthe/grain",
+        branch: "main",
+        judged: false,
+        reason: "failing",
+        detail: "ci failed",
+      },
+    ];
+
+    let resolveConfig!: (cfg: Record<string, unknown>) => void;
+    const configPromise = new Promise<Record<string, unknown>>((r) => {
+      resolveConfig = r;
+    });
+    api.config = () => configPromise;
+
+    let resolveTasks!: (res: { body: Task[]; changed: boolean }) => void;
+    const tasksPromise = new Promise<{ body: Task[]; changed: boolean }>(
+      (r) => {
+        resolveTasks = r;
+      },
+    );
+    const baseGetIfChanged = api.getIfChanged;
+    api.getIfChanged = (route: string, params?: { id?: string }) =>
+      route === "GET /api/tasks"
+        ? tasksPromise
+        : baseGetIfChanged(route, params);
+
+    TestBed.configureTestingModule({
+      imports: [TasksPageComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+
+    // Simulate AppComponent starting the shared task feed while the cached
+    // TasksPageComponent chunk mounts immediately before either /api/tasks
+    // or /api/config has resolved.
+    const feed = TestBed.inject(TaskFeedStore);
+    feed.start();
+    const f = TestBed.createComponent(TasksPageComponent);
+    f.componentRef.setInput("tab", "all");
+    f.autoDetectChanges();
+
+    const store = TestBed.inject(TasksStore);
+    expect(store.boards()).toEqual([]);
+    expect(store.baseBranchGates()).toEqual([]);
+
+    // /api/tasks resolves first while /api/config is still in flight.
+    resolveTasks({ body: structuredClone(api.live), changed: true });
+    await settle(f);
+    expect(store.live().length).toBeGreaterThan(0);
+    expect(store.boards()).toEqual([]);
+    expect(store.baseBranchGates()).toEqual([]);
+
+    // Now /api/config resolves with scoped access permitting boards:read and ci:read.
+    resolveConfig({
+      access: {
+        role: "dev",
+        roles: ["dev"],
+        full: false,
+        scopes: ["tasks:read", "boards:read", "ci:read"],
+      },
+    });
+    await configPromise;
+    await settle(f);
+    await settle(f);
+
+    expect(store.boards().map((b) => b.name)).toEqual(["Timeline Triage"]);
+    expect(store.baseBranchGates().map((g) => g.repo)).toEqual([
+      "sidthe/grain",
+    ]);
+
+    q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="board-apply-b1"]')?.textContent).toContain(
+      "Timeline Triage",
+    );
   });
 });

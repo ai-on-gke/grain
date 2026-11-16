@@ -17,15 +17,20 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  ElementRef,
+  NgZone,
   type OnInit,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
   inject,
   signal,
 } from "@angular/core";
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
+import { filter } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
+import { GrainEvents } from "../api/grain-events.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskFeedStore } from "../services/task-feed.service";
@@ -33,6 +38,7 @@ import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-helpers";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
+  type UsagePauseInput,
   effectiveDisplayTimeZone,
   formatLocalReset,
 } from "../shared/dispatch-status";
@@ -46,6 +52,7 @@ import {
   type ActionsCacheState,
   type AgentPauseEntry,
   type AgentPauseResponse,
+  type CIWaitHealth,
   type DeleteRevokedHostdsResult,
   type FleetTab,
   type HostTopResponse,
@@ -68,6 +75,12 @@ import {
   formatRelativeAge,
   parseArgv,
 } from "./fleet.models";
+
+// How often GET /api/sandboxes is read again while the page is visible,
+// and on every task.state event besides: the live sandboxes, the capacity
+// strip and the CI waits all follow it, so a task closed while it waits on
+// CI drops out of the list, and one reopened comes back, without a reload.
+export const SANDBOXES_POLL_MS = 10000;
 
 const TABS: readonly { id: FleetTab; label: string }[] = [
   { id: "sandboxes", label: "Sandboxes" },
@@ -229,6 +242,37 @@ const PERSISTENT_ACTIONS: readonly {
             @if (blk.remedy) {
               <span> — Remedy: {{ blk.remedy }}</span>
             }
+          </div>
+        }
+
+        <!-- Base branches publishing nothing (pkg/model/base_branch_publishing.go):
+             a warning, as on classic System -> Health, since nothing is
+             stuck; held when a release triage task gates the branch. -->
+        @for (
+          pub of sandboxes()?.baseBranchPublishing ?? [];
+          track pub.repo + " " + pub.branch
+        ) {
+          <div
+            class="banner fleet-publishing-banner"
+            style="margin: 0"
+            role="status"
+            data-testid="fleet-publishing"
+          >
+            <g-status-icon tone="blast" kind="warning" />
+            <span class="fleet-publishing-text">
+              <strong
+                >{{ pub.gated ? "Publishing held" : "Publishing nothing" }} ·
+                <span class="tabular">{{ pub.repo }}&#64;{{ pub.branch }}</span
+                >:</strong
+              >
+              {{ pub.detail }}
+              @if (pub.gated && pub.triageTaskID) {
+                —
+                <a [routerLink]="['/task', pub.triageTaskID]"
+                  >Open triage task #{{ pub.triageTaskID }}</a
+                >
+              }
+            </span>
           </div>
         }
 
@@ -605,6 +649,102 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                 </div>
               </article>
 
+              <!-- Tasks resting on resume_later for a CI verdict an hour
+                   or more (GET /api/sandboxes ciWaits, the list grain
+                   health warns of). Follows the sandboxes poll, so a
+                   task closed or reopened leaves or rejoins it. -->
+              @if (canReadSandboxes()) {
+                <article
+                  class="ops-card"
+                  aria-labelledby="fleet-ci-waits-title"
+                  data-testid="fleet-ci-waits"
+                >
+                  <div class="ops-card-head">
+                    <div>
+                      <h2 class="ops-card-title" id="fleet-ci-waits-title">
+                        Waiting on CI
+                      </h2>
+                      <p class="ops-card-sub">
+                        Tasks resting on resume_later for a CI verdict for more
+                        than an hour. Each wakes when CI reports, or at the
+                        backstop.
+                      </p>
+                    </div>
+                    @if (ciWaits().length) {
+                      <span
+                        class="status-pill blast tabular"
+                        data-testid="ci-waits-count"
+                      >
+                        <g-status-icon tone="blast" kind="warning" />
+                        {{ ciWaits().length }} waiting
+                      </span>
+                    }
+                  </div>
+                  @if (ciWaits().length === 0) {
+                    <p
+                      class="muted"
+                      style="margin: 0"
+                      data-testid="ci-waits-empty"
+                    >
+                      No task has waited on CI for more than an hour.
+                    </p>
+                  } @else {
+                    <!-- Narrow, each row stacks into labelled lines rather
+                         than scroll sideways (the book's s-table-stack). -->
+                    <div
+                      class="ops-table-wrap fleet-ci-waits-wrap"
+                      tabindex="0"
+                      role="region"
+                      aria-label="Tasks waiting on CI"
+                    >
+                      <table class="ops-table fleet-ci-waits-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Task</th>
+                            <th scope="col">Waited</th>
+                            <th scope="col">Waiting for</th>
+                            <th scope="col">Repository</th>
+                            <th scope="col">Branch</th>
+                            <th scope="col">CI mode</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (w of ciWaits(); track w.taskId) {
+                            <tr [attr.data-testid]="'ci-wait-row-' + w.taskId">
+                              <td class="tabular">
+                                <a [routerLink]="['/task', w.taskId]"
+                                  >#{{ w.taskId }}</a
+                                >
+                              </td>
+                              <td class="tabular" data-label="Waited">
+                                <time [attr.datetime]="w.since">{{
+                                  fmtAge(w.since)
+                                }}</time>
+                              </td>
+                              <td class="tabular" data-label="Waiting for">
+                                {{ w.ci }}
+                                @if (w.recovered) {
+                                  <span class="muted"> · recovered</span>
+                                }
+                              </td>
+                              <td class="tabular" data-label="Repository">
+                                {{ w.repo || "—" }}
+                              </td>
+                              <td class="tabular" data-label="Branch">
+                                {{ w.branch || "—" }}
+                              </td>
+                              <td class="tabular" data-label="CI mode">
+                                {{ w.ciMode || "—" }}
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                  }
+                </article>
+              }
+
               <!-- Persistent / Staging Sandboxes -->
               <article
                 class="ops-card"
@@ -937,7 +1077,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                           <input
                             type="text"
                             class="ops-input tabular"
-                            aria-label="New hostd name"
+                            aria-label="New host name"
                             [attr.data-testid]="'hostd-rename-input-' + h.name"
                             [value]="renameDraft()"
                             (input)="renameDraft.set($any($event.target).value)"
@@ -1544,6 +1684,26 @@ export class FleetPageComponent implements OnInit {
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly hostEl = inject(ElementRef<HTMLElement>);
+  private readonly events = inject(GrainEvents);
+  private readonly zone = inject(NgZone);
+  // The latest GET /api/sandboxes asked for: an older answer arriving after
+  // a newer one is dropped, so a slow poll cannot put a closed task's CI
+  // wait back. pollAgain is a poll asked for while one was in flight.
+  private sandboxesSeq = 0;
+  private sandboxesPolling = false;
+  private pollAgain = false;
+
+  // On a phone the tab strip scrolls sideways, and a deep link, reload or
+  // legacy /system/logs redirect left Daemon Logs off screen. Bring the
+  // active tab into view whenever `tab` changes.
+  private readonly keepActiveTabInView = afterRenderEffect(() => {
+    const active = this.tab();
+    const btn = (this.hostEl.nativeElement as HTMLElement).querySelector(
+      `#fleet-tab-btn-${active}`,
+    ) as HTMLElement | null;
+    btn?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
 
   protected readonly Math = Math;
   protected readonly tabs = TABS;
@@ -1562,6 +1722,7 @@ export class FleetPageComponent implements OnInit {
 
   protected readonly tab = signal<FleetTab>("sandboxes");
   private readonly loadedTabs = new Set<FleetTab>();
+  private bootstrapped = false;
   protected readonly loading = signal(false);
   protected readonly loadError = signal<string | null>(null);
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
@@ -1756,6 +1917,10 @@ export class FleetPageComponent implements OnInit {
     () => this.persistentList() ?? this.sandboxes()?.persistentSandboxes ?? [],
   );
 
+  protected readonly ciWaits = computed<CIWaitHealth[]>(
+    () => this.sandboxes()?.ciWaits ?? [],
+  );
+
   protected readonly filteredSandboxes = computed<SandboxSnapshot[]>(() => {
     const q = this.viewFilter.query().trim().toLowerCase();
     const list = this.sandboxes()?.sandboxes ?? [];
@@ -1803,13 +1968,52 @@ export class FleetPageComponent implements OnInit {
           t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
         if (next === this.tab()) return;
         this.tab.set(next);
-        void this.ensureTabLoaded(next);
+        if (this.bootstrapped) {
+          void this.ensureTabLoaded(next);
+        }
       });
     void this.bootstrap();
+
+    this.zone.runOutsideAngular(() => {
+      const timer = setInterval(
+        () => this.zone.run(() => void this.pollSandboxes()),
+        SANDBOXES_POLL_MS,
+      );
+      this.destroyRef.onDestroy(() => clearInterval(timer));
+    });
+    this.events
+      .events()
+      .pipe(
+        filter((ev) => ev.type === "task.state"),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe(() => void this.pollSandboxes());
+  }
+
+  // pollSandboxes reads GET /api/sandboxes again in the background: not
+  // while the tab is hidden, never two at once, and quietly, since a
+  // failed poll keeps the last good answer rather than raising the page's
+  // error banner every ten seconds.
+  private async pollSandboxes(): Promise<void> {
+    if (!this.bootstrapped || this.doc.visibilityState === "hidden") return;
+    if (this.sandboxesPolling) {
+      this.pollAgain = true;
+      return;
+    }
+    this.sandboxesPolling = true;
+    try {
+      do {
+        this.pollAgain = false;
+        await this.loadSandboxes(true);
+      } while (this.pollAgain);
+    } finally {
+      this.sandboxesPolling = false;
+    }
   }
 
   private async bootstrap(): Promise<void> {
     await this.loadBootstrapConfig();
+    this.bootstrapped = true;
     await this.refreshAll();
   }
 
@@ -1872,14 +2076,18 @@ export class FleetPageComponent implements OnInit {
     }
   }
 
-  async loadSandboxes(): Promise<void> {
+  async loadSandboxes(quiet = false): Promise<void> {
     if (!this.canReadSandboxes()) return;
+    const seq = ++this.sandboxesSeq;
     try {
       const res =
         await this.api.get<SandboxHealthResponse>("GET /api/sandboxes");
+      if (seq !== this.sandboxesSeq) return;
       this.sandboxes.set(res);
     } catch (err) {
-      this.loadError.set(errorText(err));
+      if (!quiet && seq === this.sandboxesSeq) {
+        this.loadError.set(errorText(err));
+      }
     }
   }
 
@@ -2195,18 +2403,40 @@ export class FleetPageComponent implements OnInit {
     });
   }
 
+  private async syncGlobalDispatchStatus(refreshUsage = false): Promise<void> {
+    this.api.clearConditionalCache?.("/api/config");
+    if (refreshUsage && this.access.can("GET /api/usage")) {
+      this.api.clearConditionalCache?.("/api/usage");
+      const usage = await this.api
+        .get<UsagePauseInput>("GET /api/usage")
+        .catch(() => null);
+      if (usage && ("warnings" in usage || "scopes" in usage)) {
+        this.access.setUsage(usage);
+      }
+    }
+    this.access.tickClock();
+  }
+
   protected async pausePipeline(): Promise<void> {
     if (!this.canWriteDispatch() || this.busyDispatch()) return;
     this.busyDispatch.set(true);
+    const reason = this.pauseReasonDraft().trim();
     try {
       const res = await this.api.post<PipelinePauseResponse>(
         "POST /api/pipeline-pause",
         undefined,
-        { reason: this.pauseReasonDraft().trim() },
+        { reason },
       );
-      this.pipelinePause.set(res?.pause ?? { paused: true });
+      const next = res?.pause ?? {
+        paused: true,
+        runNowPasses: true,
+        reason,
+      };
+      this.pipelinePause.set(next);
+      this.access.patchConfig({ pipelinePause: next });
       this.pauseReasonDraft.set("");
       this.snackbar.show("Pipeline paused.");
+      void this.syncGlobalDispatchStatus(false);
     } catch (err) {
       this.snackbar.show(errorText(err));
     } finally {
@@ -2221,8 +2451,11 @@ export class FleetPageComponent implements OnInit {
       const res = await this.api.delete<PipelinePauseResponse>(
         "DELETE /api/pipeline-pause",
       );
-      this.pipelinePause.set(res?.pause ?? { paused: false });
+      const next = res?.pause ?? { paused: false };
+      this.pipelinePause.set(next);
+      this.access.patchConfig({ pipelinePause: next });
       this.snackbar.show("Pipeline resumed.");
+      void this.syncGlobalDispatchStatus(false);
     } catch (err) {
       this.snackbar.show(errorText(err));
     } finally {
@@ -2246,8 +2479,25 @@ export class FleetPageComponent implements OnInit {
         undefined,
         params.toString() || undefined,
       );
+      const next = res?.pause ?? { paused: false, pauses: [] };
       this.agentPause.set(res?.pause ?? null);
+      this.access.patchConfig({ agentPause: next });
+      const curUsage = this.access.usage();
+      if (curUsage?.scopes?.length) {
+        this.access.setUsage({
+          ...curUsage,
+          scopes: curUsage.scopes.map((s) =>
+            !next.paused ||
+            !entry ||
+            (s.connection === entry.connection &&
+              (!entry.model || s.model === entry.model))
+              ? { ...s, pausedUntil: undefined }
+              : s,
+          ),
+        });
+      }
       this.snackbar.show("Cleared usage-limit pause.");
+      void this.syncGlobalDispatchStatus(true);
     } catch (err) {
       this.snackbar.show(errorText(err));
     }

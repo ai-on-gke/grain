@@ -142,3 +142,99 @@ func TestDueMessageResumesSkipsOwnAndDeliveredPosts(t *testing.T) {
 		t.Fatalf("DueMessageResumes = %v, want only [broadcast messaged]", due)
 	}
 }
+
+// Closing a task that called resume_later stops HeldCIResumes,
+// DueMessageResumes and WakeOnMessage from reporting or waking it, while
+// preserving deferred_at so reopening restores the hold.
+func TestClosedTasksDoNotStayInHeldResumes(t *testing.T) {
+	store, ctx := open(t)
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	// 1. Suspension-backed CI + message hold.
+	t1 := model.Task{
+		ID: "ci-susp", Intent: model.IntentImplement, Title: "ci wait",
+		Target:   &target,
+		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
+	}
+	if err := store.PutTask(ctx, t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "ci-susp-1", TaskID: "ci-susp", Attempt: 1, StartedAt: now}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	defAt := now.Add(time.Minute)
+	when := model.ResumeOn{CI: "gha:acme:widgets:5001", Message: true}
+	if err := store.SetDeferred(ctx, "ci-susp", &defAt, nil, defAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HoldResumeOn(ctx, "ci-susp", when, defAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "ci-susp-1", now.Add(2*time.Minute), "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Suspend(ctx, model.Suspension{
+		RunID: "ci-susp-1", Kind: model.SuspendRequested,
+		Detail: model.RequestedDetail("wait", when), ResumeOn: when.JSON(), CreatedAt: now.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Comment-recovered CI hold (no suspension row).
+	t2 := model.Task{
+		ID: "ci-rec", Intent: model.IntentImplement, Title: "recovered ci wait",
+		Target:   &target,
+		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
+	}
+	if err := store.PutTask(ctx, t2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDeferred(ctx, "ci-rec", &defAt, nil, defAt); err != nil {
+		t.Fatal(err)
+	}
+	grainActor := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID: "ci-rec", Author: grainActor,
+		Body:      "grain: this task's run stopped with resume_later. It goes back in the queue once CI (gha:acme:widgets:5002) has a verdict.",
+		CreatedAt: defAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	held, err := store.HeldCIResumes(ctx)
+	if err != nil || len(held) != 2 {
+		t.Fatalf("HeldCIResumes while open = %+v, %v; want both tasks", held, err)
+	}
+
+	closedAt := now.Add(3 * time.Minute)
+	for _, id := range []string{"ci-susp", "ci-rec"} {
+		if err := store.ObserveField(ctx, id, closedAt, func(o *model.Observation) {
+			o.ClosedAt = &closedAt
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if held, err = store.HeldCIResumes(ctx); err != nil || len(held) != 0 {
+		t.Fatalf("HeldCIResumes after close = %+v, %v; want empty", held, err)
+	}
+	post(t, store, "ci-susp", model.Attribution{Actor: human}, now.Add(4*time.Minute))
+	if woke, err := store.WakeOnMessage(ctx, "ci-susp", now.Add(4*time.Minute)); err != nil || woke {
+		t.Fatalf("WakeOnMessage on closed task = %v, %v; want false", woke, err)
+	}
+	if due, err := store.DueMessageResumes(ctx); err != nil || len(due) != 0 {
+		t.Fatalf("DueMessageResumes on closed task = %v, %v; want empty", due, err)
+	}
+
+	// Reopening restores the hold.
+	if err := store.ObserveField(ctx, "ci-susp", now.Add(5*time.Minute), func(o *model.Observation) {
+		o.ClosedAt = nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if held, err = store.HeldCIResumes(ctx); err != nil || len(held) != 1 || held[0].TaskID != "ci-susp" {
+		t.Fatalf("HeldCIResumes after reopen = %+v, %v; want [ci-susp]", held, err)
+	}
+}

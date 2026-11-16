@@ -143,7 +143,13 @@ test.describe("Settings → Models default and fallback models", () => {
       "claude-sonnet-5",
     );
     // Move it to the top of the fallbacks, drop the retired one.
+    // Wait for each move to render before the next click: the row test ids
+    // are re-bound on change detection, so a second click fired before the
+    // first move lands can hit the button of the row that used to sit there.
     await card.getByTestId("fallback-up-2").click();
+    await expect(card.getByTestId("fallback-row-1")).toContainText(
+      "claude-sonnet-5",
+    );
     await card.getByTestId("fallback-up-1").click();
     await expect(card.getByTestId("fallback-row-0")).toContainText(
       "claude-sonnet-5",
@@ -177,7 +183,7 @@ test.describe("Settings → Models default and fallback models", () => {
   });
 });
 
-test("Settings Models - Discovered models, clear credential, and fallback models", async ({
+test("Settings Models - Discovered models, no framework keys card, and fallback models", async ({
   page,
 }) => {
   await page.goto("/next/settings/models");
@@ -191,13 +197,155 @@ test("Settings Models - Discovered models, clear credential, and fallback models
     );
   }
 
-  // Clear credential
-  const clearBtn = page.getByTestId("clear-codex-auth");
-  if (await clearBtn.isEnabled()) {
-    await clearBtn.click();
-  }
+  // The standalone framework keys card is retired: credentials live on
+  // each connection.
+  await expect(page.getByTestId("card-agent-keys")).toHaveCount(0);
 
   // Fallback models (done in existing tests, just verifying structure)
   const addFallbackBtn = page.getByTestId("picker-add-fallback");
   await expect(addFallbackBtn).toBeVisible();
+});
+
+// Refresh asks a provider now (POST .../discover, connections:write): a
+// person without that scope is offered no Refresh at all, neither on the
+// connection's row nor inside the model picker, while one who holds it
+// sees the row's Refresh (docs/test-runs/2026-11-14-settings-models.md).
+test("offers Refresh models only to a person who may ask providers", async ({
+  page,
+  request,
+}) => {
+  const put = await request.put(
+    "/api/deployment/agent-backends/claude-discover",
+    { data: { id: "claude-discover", framework: "claude" } },
+  );
+  expect(put.ok()).toBe(true);
+  const viewerConfig = (url) => url.pathname === "/api/config";
+  try {
+    await page.goto("/next/settings/models");
+    await expect(
+      page.getByTestId("refresh-backend-claude-discover"),
+    ).toBeVisible();
+
+    await page.route(viewerConfig, async (route) => {
+      const response = await route.fetch();
+      const json = {
+        ...(await response.json()),
+        access: {
+          role: "grain/viewer",
+          roles: ["grain/viewer"],
+          full: false,
+          scopes: ["settings:read", "connections:read", "deployment:read"],
+        },
+      };
+      await route.fulfill({ response, json });
+    });
+    await page.reload();
+    await expect(page.getByTestId("card-model-defaults")).toBeVisible();
+    await expect(page.getByTestId("card-model-backends")).toContainText(
+      "claude-discover",
+    );
+    await expect(
+      page.getByTestId("refresh-backend-claude-discover"),
+    ).toHaveCount(0);
+    // The picker is read-only for them, and nothing on the page offers to
+    // ask a provider.
+    await expect(page.getByTestId("picker-default-model")).toBeDisabled();
+    await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
+  } finally {
+    await page.unroute(viewerConfig);
+    await request.delete("/api/deployment/agent-backends/claude-discover");
+  }
+});
+
+// Clearing a connection's stored secret cannot be undone, so it asks
+// first, as removing the connection does: Cancel sends nothing, and only
+// Accept sends the DELETE. (`grain demo` keeps no secret store, so the
+// DELETE is counted here rather than sent.)
+test("clears a connection's stored secret only after confirming", async ({
+  page,
+  request,
+}) => {
+  const id = "claude-clear-walk";
+  expect(
+    (
+      await request.put(`/api/deployment/agent-backends/${id}`, {
+        data: { id, framework: "claude", models: ["claude-opus-5"] },
+      })
+    ).ok(),
+  ).toBe(true);
+  const deletes = [];
+  const credential = `**/api/agent-backends/${id}/credential`;
+  await page.route(credential, async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deletes.push(route.request().url());
+    await route.fulfill({ json: { set: false } });
+  });
+  try {
+    await page.goto("/next/settings/connections");
+    await page.getByTestId(`toggle-cred-${id}`).click();
+    await page.getByTestId(`clear-cred-${id}`).click();
+    const dialog = page.getByTestId("confirm-dialog");
+    await expect(dialog).toContainText(`Clear the credential for ${id}?`);
+    await page.getByTestId("confirm-cancel").click();
+    await expect(dialog).toHaveCount(0);
+    expect(deletes).toEqual([]);
+
+    await page.getByTestId(`clear-cred-${id}`).click();
+    await page.getByTestId("confirm-accept").click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => deletes.length).toBe(1);
+  } finally {
+    await page.unroute(credential);
+    await request.delete(`/api/deployment/agent-backends/${id}`);
+  }
+});
+
+// An old /settings/connections link opens Models -- where the model
+// connections are -- at a phone width too, not the bare section list.
+test("opens Models for an old settings/connections link on a phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/next/settings/connections");
+  await expect(page.getByTestId("card-model-backends")).toBeVisible();
+  await expect(page.getByTestId("settings-mobile-back")).toBeVisible();
+});
+
+// A connection whose provider has never answered carries Go's zero time
+// as refreshedAt; it is shown with its error and no refresh time, not as
+// refreshed on "Jan 1, 00:00 UTC".
+test("shows no refresh time for a provider that never answered", async ({
+  page,
+}) => {
+  const settings = (url) => url.pathname === "/api/settings";
+  await page.route(settings, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const json = await response.json();
+    json.agentBackends = [
+      ...(json.agentBackends || []),
+      {
+        id: "claude-never",
+        framework: "claude",
+        discovered: {
+          refreshedAt: "0001-01-01T00:00:00Z",
+          error: "no Claude Code OAuth token is configured for this model",
+        },
+      },
+    ];
+    await route.fulfill({ response, json });
+  });
+  try {
+    await page.goto("/next/settings/models");
+    const row = page
+      .getByTestId("card-model-backends")
+      .locator("tr", { hasText: "claude-never" });
+    await expect(row).toContainText("0 models discovered");
+    await expect(row).toContainText("no Claude Code OAuth token");
+    await expect(row.locator(".s-disc-details summary")).not.toContainText(
+      "UTC",
+    );
+  } finally {
+    await page.unroute(settings);
+  }
 });

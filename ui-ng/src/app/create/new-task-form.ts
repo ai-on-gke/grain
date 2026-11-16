@@ -316,14 +316,19 @@ export function hasHistory(tasks: readonly Task[], repo: string): boolean {
 
 // Extracts a repository template stem suitable for POST /api/tasks/from-template
 // (pkg/ui/tasks_from_template.go FromTemplateStem), or "" when the template
-// must be launched through POST /api/tasks { templateId }.
+// must be launched through POST /api/tasks { templateId }. Only a template
+// the repository declares (an id under model.RepoDeclaredPrefix,
+// "repo:template:<owner>:<name>:<stem>", or one carrying declaredIn) has a
+// stem: from-template reads the repository's own declarations, so a stored
+// template ("template-3", made in Settings or POST /api/templates) sent
+// there is answered 404 "no template repo:template:...".
 export function fromTemplateStem(repo: string, tmpl: Template): string {
   if (!repo || repo === NO_REPO || tmpl.system) return "";
   const id = tmpl.id.trim();
   if (!id) return "";
   const [owner, name] = repo.trim().toLowerCase().split("/");
   if (!owner || !name) return "";
-  const prefix = `declared:template:${owner}:${name}:`;
+  const prefix = `repo:template:${owner}:${name}:`;
   if (id.toLowerCase().startsWith(prefix)) {
     const stem = id.slice(prefix.length);
     if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
@@ -335,9 +340,6 @@ export function fromTemplateStem(repo: string, tmpl: Template): string {
     const lastColon = id.lastIndexOf(":");
     const stem = lastColon >= 0 ? id.slice(lastColon + 1) : id;
     if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
-  }
-  if (!/[:/\\]/.test(id) && !id.startsWith(".")) {
-    return id;
   }
   return "";
 }
@@ -493,7 +495,8 @@ export function buildPayload(
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField" | "foundIn" | "form";
+  field:
+    "title" | "repo" | "newBranchName" | "templateField" | "foundIn" | "form";
   message: string;
 }
 
@@ -504,6 +507,7 @@ export function validate(
   fields?: Record<FieldId, FieldConfig>,
   template?: Template | null,
   templateValues?: Record<string, string>,
+  config?: GrainConfig | null,
 ): Problem | null {
   if (template) {
     for (const tf of template.fields ?? []) {
@@ -516,6 +520,23 @@ export function validate(
     }
   } else if (!d.title.trim()) {
     return { field: "title", message: "Give the task a title." };
+  }
+  const repoShown = !fields || fields.repo.visibility !== "hidden";
+  const hasDefaultTarget = !!String(config?.["defaultTarget"] ?? "").trim();
+  if (
+    repoShown &&
+    !hasDefaultTarget &&
+    !d.repo.trim() &&
+    !template?.repo &&
+    !template?.declaredIn?.repo
+  ) {
+    return {
+      field: "repo",
+      message:
+        fields?.repo.allowNoRepo === false
+          ? "Pick a repository."
+          : "Pick a repository, or choose No repository.",
+    };
   }
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
   if (

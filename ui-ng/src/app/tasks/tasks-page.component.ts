@@ -30,6 +30,7 @@ import {
   viewChild,
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
+import type { RouteKey } from "../api/generated-routes";
 import type { Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { DirectorContextService } from "../director/director-context.service";
@@ -60,6 +61,12 @@ import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskDetailComponent } from "../task/task-detail.component";
 import {
+  BatchEditDialogComponent,
+  type BatchEditRequest,
+  type BatchEditResult,
+} from "./batch-edit-dialog.component";
+import {
+  heldForRunNow,
   isBlocked,
   jumpsQueue,
   LEVELS,
@@ -76,8 +83,9 @@ import {
   priorityOf,
   sorted,
   stateLabel,
+  timelineEndMs,
 } from "./task-view";
-import { type Undo, TasksStore } from "./tasks.store";
+import { type BatchResult, type Undo, TasksStore } from "./tasks.store";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 
 export type TasksGroupBy = "none" | "workstream" | "repo";
@@ -113,6 +121,26 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
   toneClass: priorityTone(l.value),
 }));
 
+// BATCH_VERBS words the selection bar's progress line per store action.
+const BATCH_VERBS: Record<string, string> = {
+  approve: "Approving",
+  defer: "Deferring",
+  undefer: "Bringing back",
+  close: "Closing",
+  reopen: "Reopening",
+  priority: "Setting priority on",
+  submit: "Submitting",
+  "retry-merge": "Retrying merge on",
+  "run-now": "Starting",
+  capability: "Updating",
+  edit: "Editing",
+};
+
+// needsApproval is whether Run now has to approve t before it can start.
+function needsApproval(t: Task): boolean {
+  return t.state === "proposed" || (t.state === "deferred" && !t.approved);
+}
+
 // TasksPageComponent is Tasks (spec D-6) with the Backlog (D-28): tabs
 // that follow Grain's lifecycle, Backlog first in the order Grain will
 // run it, Needs approval beside it, and every move, priority change,
@@ -126,6 +154,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
     TipDirective,
     NgTemplateOutlet,
     ConfirmDialogComponent,
+    BatchEditDialogComponent,
     TaskDetailComponent,
     PillSelectComponent,
     PriorityChipComponent,
@@ -239,7 +268,17 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                         }
                       </div>
                     } @empty {
-                      <p class="muted list-hint">No saved boards yet.</p>
+                      @if (store.boardsError(); as bErr) {
+                        <p
+                          class="list-hint boards-load-error"
+                          role="status"
+                          data-testid="boards-load-error"
+                        >
+                          The boards could not be loaded ({{ bErr }}).
+                        </p>
+                      } @else {
+                        <p class="muted list-hint">No saved boards yet.</p>
+                      }
                     }
                     @if (canWriteBoards()) {
                       <div class="boards-menu-sep" aria-hidden="true"></div>
@@ -348,7 +387,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
             type="button"
             class="btn-text"
             data-testid="board-save-cancel"
-            (click)="boardSaveOpen.set(false)"
+            (click)="closeBoardSave(true)"
           >
             Cancel
           </button>
@@ -944,9 +983,13 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                 (closed)="closePane()"
                 (expand)="openFull(id)"
               />
-            } @else {
+            } @else if (store.loaded()) {
               <div class="empty-state" data-testid="tasks-pane-empty">
                 <p>Nothing in this tab — switch tabs or create a task</p>
+              </div>
+            } @else if (store.loadError()) {
+              <div class="empty-state" data-testid="tasks-pane-unread">
+                <p>Tasks could not be read yet.</p>
               </div>
             }
           </section>
@@ -994,95 +1037,166 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
           data-testid="batch-bar"
         >
           <span class="tabular">{{ checked().size }} selected</span>
-          @if (current() === "backlog") {
+          @if (store.batch(); as b) {
+            <span class="tabular" role="status" data-testid="batch-progress"
+              >{{ batchVerb(b.key) }} {{ b.done }} of {{ b.total }}…</span
+            >
             <button
               type="button"
               class="btn-text"
-              data-testid="batch-top"
-              (click)="toEnd('top')"
+              data-testid="batch-stop"
+              gTip="Send no more; calls already sent still finish"
+              [disabled]="b.stopping"
+              (click)="store.stopBatch()"
             >
-              Move to top
+              {{ b.stopping ? "Stopping…" : "Stop" }}
             </button>
-            <button type="button" class="btn-text" (click)="toEnd('bottom')">
-              Move to bottom
-            </button>
-          }
-          @if (current() === "proposed" && canApproveSelected()) {
-            <button
-              type="button"
-              class="btn-text"
-              data-testid="batch-approve"
-              (click)="confirmApprove(selectedRows())"
-            >
-              Approve
-            </button>
-          }
-          @if (priorityEditable()) {
-            <g-pill-select
-              testid="batch-priority"
-              placeholder="Set priority"
-              ariaLabel="Set priority"
-              align="left"
-              [inverse]="true"
-              [openUp]="true"
-              [options]="batchPriorityOptions"
-              [value]="''"
-              (valueChange)="onBatchPriority($event)"
-            />
-          }
-          @if (
-            (current() === "backlog" || current() === "proposed") &&
-            canDeferSelected()
-          ) {
-            <button type="button" class="btn-text" (click)="defer(selected())">
-              Defer
-            </button>
-          }
-          @if (current() === "closed") {
-            <button type="button" class="btn-text" (click)="reopen(selected())">
-              Reopen
-            </button>
-          } @else if (canCloseSelected()) {
-            @if (confirmClose()) {
-              <span data-testid="close-confirm"
-                >Close {{ selected().length }}? Running work stops and open pull
-                requests are left behind; this cannot be undone.</span
-              >
+          } @else {
+            @if (current() === "backlog") {
               <button
                 type="button"
                 class="btn-text"
-                data-testid="close-yes"
-                (click)="close(selected(), true)"
+                data-testid="batch-top"
+                (click)="toEnd('top')"
               >
-                Close
+                Move to top
               </button>
-              <button
-                type="button"
-                class="btn-text"
-                (click)="confirmClose.set(false)"
-              >
-                Keep
-              </button>
-            } @else {
-              <button
-                type="button"
-                class="btn-text"
-                data-testid="batch-close"
-                (click)="close(selected())"
-              >
-                Close
+              <button type="button" class="btn-text" (click)="toEnd('bottom')">
+                Move to bottom
               </button>
             }
+            @if (current() === "proposed" && canApproveSelected()) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="batch-approve"
+                (click)="confirmApprove(selectedRows())"
+              >
+                Approve
+              </button>
+            }
+            @if (runNowRows().length && canRunNowSelected()) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="batch-run-now"
+                [gTip]="
+                  pipelinePaused()
+                    ? 'The deployment is paused: start just these now'
+                    : 'Start these now, ahead of the queue, approving any that need it'
+                "
+                (click)="confirmRunNow(runNowRows())"
+              >
+                Run selected now
+              </button>
+            }
+            @if (priorityEditable()) {
+              <g-pill-select
+                testid="batch-priority"
+                placeholder="Set priority"
+                ariaLabel="Set priority"
+                align="left"
+                [inverse]="true"
+                [openUp]="true"
+                [options]="batchPriorityOptions"
+                [value]="''"
+                (valueChange)="onBatchPriority($event)"
+              />
+            }
+            @if (
+              (current() === "backlog" || current() === "proposed") &&
+              canDeferSelected()
+            ) {
+              <button
+                type="button"
+                class="btn-text"
+                (click)="defer(selected())"
+              >
+                Defer
+              </button>
+            }
+            @if (current() === "deferred" && canUndeferSelected()) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="batch-undefer"
+                (click)="undefer(selected())"
+              >
+                Bring back
+              </button>
+            }
+            @if (moreOptions().length) {
+              <g-pill-select
+                testid="batch-more"
+                placeholder="More"
+                ariaLabel="More actions for the selection"
+                align="left"
+                [inverse]="true"
+                [openUp]="true"
+                [options]="moreOptions()"
+                [value]="''"
+                (valueChange)="onMore($event)"
+              />
+            }
+            @if (current() === "closed") {
+              @if (canReopenSelected()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="batch-reopen"
+                  (click)="reopen(selected())"
+                >
+                  Reopen
+                </button>
+              }
+            } @else if (canCloseSelected()) {
+              @if (confirmClose()) {
+                <span data-testid="close-confirm"
+                  >Close {{ selected().length }}
+                  {{ selected().length === 1 ? "task" : "tasks" }}? Running work
+                  stops and open pull requests are left behind; this cannot be
+                  undone.</span
+                >
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="close-yes"
+                  (click)="close(selected(), true)"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="close-keep"
+                  (click)="cancelConfirmClose()"
+                >
+                  Keep
+                </button>
+              } @else {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="batch-close"
+                  (click)="close(selected())"
+                >
+                  Close
+                </button>
+              }
+            }
+            <button type="button" class="btn-text" (click)="clearChecked()">
+              Clear
+            </button>
           }
-          <button type="button" class="btn-text" (click)="clearChecked()">
-            Clear
-          </button>
         </div>
       }
     </section>
 
     @if (confirming(); as c) {
       <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
+    }
+    @if (editing(); as e) {
+      <g-batch-edit-dialog [request]="e" (done)="onBatchEdit($event)" />
     }
 
     <ng-template #titleLink let-t>
@@ -1099,6 +1213,17 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
           class="status-pill error repair-badge"
           [attr.data-testid]="'repair-badge-' + t.id"
           >Repair</span
+        >
+      }
+      @if (t.rolledOverTo) {
+        <span
+          class="status-pill neutral"
+          [attr.data-testid]="'rolled-over-' + t.id"
+          [gTip]="
+            'Closed by rollover past its record limit; its work carries on in #' +
+            t.rolledOverTo
+          "
+          >Rolled over to #{{ t.rolledOverTo }}</span
         >
       }
     </ng-template>
@@ -1275,6 +1400,14 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
             @if (blocked(t)) {
               <span class="status-pill neutral waits"
                 >Waits on a dependency</span
+              >
+            }
+            @if (heldForRunNow(pipelinePause(), t)) {
+              <span
+                class="status-pill blast waits"
+                data-testid="waits-run-now"
+                gTip="The deployment is paused: this task starts only when somebody presses Run now on it"
+                >Paused — waits for Run now</span
               >
             }
             @if (jumps(t)) {
@@ -1474,8 +1607,11 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return isTabId(t) ? t : "backlog";
   });
 
+  // The top bar's "Filter this view" box is what narrows the list; ?q=
+  // only seeds it (see the constructor), so what the box shows is always
+  // what the list is filtered by.
   private readonly query = computed(() =>
-    (this.q() || this.filter.query()).trim().toLowerCase(),
+    this.filter.query().trim().toLowerCase(),
   );
   private matches(t: Task): boolean {
     const r = (this.repo() || "").trim().toLowerCase();
@@ -1618,6 +1754,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       )
     );
   }
+  protected canUndeferSelected(): boolean {
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/undefer",
+          r.repo ?? null,
+        ),
+      )
+    );
+  }
   protected canCloseSelected(): boolean {
     const rows = this.selectedRows();
     return (
@@ -1627,6 +1775,165 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       )
     );
   }
+  protected canReopenSelected(): boolean {
+    return this.everyRow(this.selectedRows(), "POST /api/tasks/{id}/reopen");
+  }
+
+  // everyRow is whether the caller may call route on each of rows, which
+  // is how every batch action here is offered: a role limited to some
+  // repositories gets the button only where it reaches them all.
+  private everyRow(rows: readonly Task[], route: RouteKey): boolean {
+    return (
+      rows.length > 0 &&
+      rows.every((r) => this.access.canAccessTask(route, r.repo ?? null))
+    );
+  }
+
+  // ---------- manual mode and the wider batch actions ----------
+
+  protected readonly heldForRunNow = heldForRunNow;
+  protected readonly pipelinePause = computed(
+    () => this.access.rawConfig()?.pipelinePause ?? null,
+  );
+  protected readonly pipelinePaused = computed(
+    () => !!this.pipelinePause()?.paused,
+  );
+  protected readonly editing = signal<BatchEditRequest | null>(null);
+  // editRows are the rows the open Bulk edit or capability form was
+  // opened on, fixed when it opened, so a poll cannot change its target.
+  private editRows: readonly Task[] = [];
+
+  // Each action acts only on the selected rows its state allows (Run now
+  // refuses running and closed work, Submit wants a finished run with a
+  // change, Retry merge a pull request); the rest are left as they are.
+  protected readonly runNowRows = computed(() =>
+    this.selectedRows().filter(
+      (t) => t.state !== "running" && t.state !== "closed",
+    ),
+  );
+  protected readonly submitRows = computed(() =>
+    this.selectedRows().filter((t) => t.state === "awaiting_submit"),
+  );
+  protected readonly retryMergeRows = computed(() =>
+    this.selectedRows().filter(
+      (t) =>
+        t.state !== "closed" &&
+        (!!t.pullRequest || !!t.mergeQueueBlockedAt || !!t.mergeQueueState),
+    ),
+  );
+  protected readonly openRows = computed(() =>
+    this.selectedRows().filter((t) => t.state !== "closed"),
+  );
+
+  // Run now approves (and brings back) what needs it, so an unapproved
+  // row needs Approve's scope as well as Run now's.
+  protected canRunNowSelected(): boolean {
+    const rows = this.runNowRows();
+    return (
+      this.everyRow(rows, "POST /api/tasks/{id}/run-now") &&
+      rows
+        .filter(needsApproval)
+        .every((r) =>
+          this.access.canAccessTask(
+            "POST /api/tasks/{id}/approve",
+            r.repo ?? null,
+          ),
+        )
+    );
+  }
+
+  protected readonly moreOptions = computed<PillOption[]>(() => {
+    const out: PillOption[] = [];
+    const n = (rows: readonly Task[]) =>
+      rows.length === this.selectedRows().length ? "" : ` (${rows.length})`;
+    const sub = this.submitRows();
+    if (sub.length && this.everyRow(sub, "POST /api/tasks/{id}/submit"))
+      out.push({ value: "submit", label: `Submit${n(sub)}` });
+    const rm = this.retryMergeRows();
+    if (rm.length && this.everyRow(rm, "POST /api/tasks/{id}/retry-merge"))
+      out.push({ value: "retry-merge", label: `Retry merge${n(rm)}` });
+    const open = this.openRows();
+    if (open.length && this.everyRow(open, "PATCH /api/tasks/{id}"))
+      out.push({ value: "edit", label: `Bulk edit…${n(open)}` });
+    if (open.length && this.everyRow(open, "POST /api/tasks/{id}/capabilities"))
+      out.push({ value: "capability", label: `Capability…${n(open)}` });
+    return out;
+  });
+
+  protected onMore(val: string): void {
+    if (val === "submit") this.confirmSubmit(this.submitRows());
+    else if (val === "retry-merge")
+      this.confirmRetryMerge(this.retryMergeRows());
+    else if (val === "edit") this.openEdit("edit");
+    else if (val === "capability") this.openEdit("capability");
+  }
+
+  protected batchVerb(key: string): string {
+    return BATCH_VERBS[key] ?? "Working on";
+  }
+
+  private openEdit(mode: "edit" | "capability"): void {
+    const rows = this.openRows();
+    if (!rows.length) return;
+    this.editRows = rows;
+    const agreed = (f: (t: Task) => string): string => {
+      const vals = new Set(rows.map(f));
+      return vals.size === 1 ? [...vals][0] : "";
+    };
+    const held = new Set(rows.flatMap((t) => t.capabilities ?? []));
+    const caps = (this.access.rawConfig()?.capabilities ?? [])
+      .filter((c) => c.ready !== false || held.has(c.id))
+      .map((c) => ({ value: c.id, label: c.name || c.id }));
+    this.editing.set({
+      mode,
+      count: rows.length,
+      priority: agreed((t) => String(priorityOf(t))),
+      base: agreed((t) => t.base ?? ""),
+      autoMerge: agreed((t) => (t.autoMerge ? "on" : "off")) as
+        "on" | "off" | "",
+      capabilities: caps,
+    });
+  }
+
+  protected onBatchEdit(r: BatchEditResult | null): void {
+    this.editing.set(null);
+    const rows = this.editRows;
+    this.editRows = [];
+    if (!r || !rows.length) return;
+    const ids = rows.map((t) => t.id);
+    if (r.mode === "edit") {
+      void this.batch(
+        () => this.store.bulkEdit(ids, r.patch),
+        (done) => `Edited ${done}`,
+      );
+      return;
+    }
+    const name =
+      this.access.rawConfig()?.capabilities?.find((c) => c.id === r.capability)
+        ?.name || r.capability;
+    const go = () =>
+      this.batch(
+        () => this.store.setCapability(ids, r.capability, r.attach),
+        (done) =>
+          r.attach
+            ? `Attached ${name} to ${done}`
+            : `Detached ${name} from ${done}`,
+      );
+    if (r.attach) {
+      void go();
+      return;
+    }
+    this.confirming.set({
+      title: "Detach capability",
+      message: `Take ${name} away from ${this.ids(ids)}? A running task keeps it until its run ends.`,
+      accept: "Detach",
+      destructive: true,
+      scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: "detaching a capability",
+      run: go,
+    });
+  }
+
   protected readonly canReadBoards = computed(() =>
     this.access.can("GET /api/boards"),
   );
@@ -1669,18 +1976,17 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const { minMs, maxMs, span } = this.timelineSpan();
     return this.rows().map((t) => {
       const sRaw = Date.parse(t.startedAt || t.createdAt || "");
-      const eRaw =
-        t.state === "running"
-          ? maxMs
-          : Date.parse(
-              t.endedAt || t.closedAt || t.updatedAt || t.createdAt || "",
-            );
+      const eRaw = timelineEndMs(t, maxMs);
       const s = Number.isFinite(sRaw) ? Math.max(minMs, sRaw) : minMs;
       const e = Number.isFinite(eRaw) ? Math.max(s, eRaw) : maxMs;
-      const leftPct = Math.min(94, Math.max(0, ((s - minMs) / span) * 100));
-      const widthPct = Math.max(
-        4,
-        Math.min(100 - leftPct, ((e - s) / span) * 100),
+      // A bar is at least 4% wide so a short one stays visible. Where
+      // that minimum would push it past the right-hand edge, it slides
+      // left rather than being cut, so a task filed a moment ago and
+      // still open still ends at "now".
+      const widthPct = Math.min(100, Math.max(4, ((e - s) / span) * 100));
+      const leftPct = Math.min(
+        100 - widthPct,
+        Math.max(0, ((s - minMs) / span) * 100),
       );
       return {
         task: t,
@@ -1699,6 +2005,36 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+    // ?q= (a shared link, a saved board, Back and Forward) fills the
+    // "Filter this view" box, and what is typed there goes back into ?q=,
+    // so a reload or a copied link keeps the filter and the box never
+    // shows something other than what narrows the list.
+    // While one of this page's own ?q= writes is in flight, the ?q= it
+    // passes through is an echo of what was typed, possibly already
+    // overtaken by the next keystroke, so it must not refill the box.
+    let writingQ = 0;
+    effect(() => {
+      const q = this.q() ?? "";
+      untracked(() => {
+        if (writingQ === 0 && q !== this.filter.query()) {
+          this.filter.query.set(q);
+        }
+      });
+    });
+    effect(() => {
+      const typed = this.filter.query();
+      untracked(() => {
+        if (typed === (this.q() ?? "")) return;
+        writingQ++;
+        void this.router
+          .navigate([], {
+            queryParams: { q: typed || null },
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          })
+          .finally(() => writingQ--);
+      });
+    });
     // Where the selected task sits in this tab, so j/k and Next item
     // carry on from there after it leaves.
     effect(() => {
@@ -1740,12 +2076,19 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       const tab = this.current();
       untracked(() => {
         this.checked.set(new Set());
+        this.confirmClose.set(false);
         this.openMenu.set(null);
         this.cancelPick();
         if (tab === "closed" && !this.store.closedLoaded()) {
           void this.store.loadClosed();
         }
       });
+    });
+    effect(() => {
+      const hasSelected = this.selected().length > 0;
+      if (!hasSelected && this.confirmClose()) {
+        untracked(() => this.confirmClose.set(false));
+      }
     });
   }
 
@@ -1956,7 +2299,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected async retryTask(id: string, ev: Event): Promise<void> {
     ev.stopPropagation();
-    const failed = await this.store.retry([id]);
+    const { failed } = await this.store.retry([id]);
     if (failed === 0) {
       this.snack(`Retrying #${id}`);
     }
@@ -2039,6 +2382,26 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected clearChecked(): void {
     this.checked.set(new Set());
+    this.confirmClose.set(false);
+  }
+
+  private uncheck(ids: readonly string[]): void {
+    if (!ids.length) return;
+    const done = new Set(ids);
+    const next = new Set([...this.checked()].filter((id) => !done.has(id)));
+    this.checked.set(next);
+    if (!next.size) this.confirmClose.set(false);
+  }
+
+  protected cancelConfirmClose(returnFocus = true): void {
+    this.confirmClose.set(false);
+    if (returnFocus) {
+      setTimeout(() =>
+        document
+          .querySelector<HTMLElement>('[data-testid="batch-close"]')
+          ?.focus(),
+      );
+    }
   }
 
   // ---------- menus ----------
@@ -2092,9 +2455,12 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (ev.defaultPrevented) return;
     if (document.querySelector('[aria-modal="true"]')) return;
     if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
-    if (this.boardSaveOpen()) {
+    if (this.confirmClose()) {
       ev.preventDefault();
-      this.boardSaveOpen.set(false);
+      this.cancelConfirmClose(true);
+    } else if (this.boardSaveOpen()) {
+      ev.preventDefault();
+      this.closeBoardSave(true);
     } else if (this.openMenu()) {
       ev.preventDefault();
       this.closeMenu(true);
@@ -2116,10 +2482,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const p = new URLSearchParams();
     if (this.current() !== "backlog") p.set("tab", this.current());
     if (this.groupBy() !== "none") p.set("group", this.groupBy());
-    const q = (this.q() || this.filter.query()).trim();
+    const q = this.filter.query().trim();
     if (q) p.set("q", q);
     const repo = (this.repo() || "").trim();
     if (repo) p.set("repo", repo);
+    // The Timeline view is part of what the reader is looking at, so a
+    // board saved from it opens on it again (2026-11-14 saved boards
+    // walkthrough: it used to come back as the list).
+    if (this.viewMode() !== "list") p.set("view", this.viewMode());
     return p.toString();
   }
 
@@ -2128,6 +2498,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     this.boardName.set("");
     this.boardSaveOpen.set(true);
     setTimeout(() => this.boardNameEl()?.nativeElement.focus());
+  }
+
+  protected closeBoardSave(returnFocus: boolean): void {
+    this.boardSaveOpen.set(false);
+    this.boardName.set("");
+    if (returnFocus) {
+      setTimeout(() =>
+        document
+          .querySelector<HTMLElement>('[data-testid="saved-boards-btn"]')
+          ?.focus(),
+      );
+    }
   }
 
   protected async submitBoardSave(ev: Event): Promise<void> {
@@ -2140,8 +2522,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       query: this.currentBoardQuery(),
     });
     if (b) {
-      this.boardSaveOpen.set(false);
-      this.boardName.set("");
+      this.closeBoardSave(true);
       this.snack(`Saved board "${b.name}"`);
     }
   }
@@ -2150,13 +2531,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     this.closeMenu(false);
     const p = new URLSearchParams(b.query || "");
     const nextQ = p.get("q") || "";
-    this.filter.query.set(nextQ);
+    // The navigation carries q, and ?q= then fills the "Filter this view"
+    // box (see the constructor). Setting the box here as well started the
+    // box's own ?q= write-back while this navigation was still in flight,
+    // which superseded it and dropped the board's tab, group and repo.
+    this.localViewMode.set(p.get("view") === "timeline" ? "timeline" : "list");
     void this.router.navigate(["/tasks"], {
       queryParams: {
         tab: p.get("tab") || null,
         group: p.get("group") || null,
         q: nextQ || null,
         repo: p.get("repo") || null,
+        view: p.get("view") === "timeline" ? "timeline" : null,
       },
     });
   }
@@ -2223,6 +2609,84 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  // confirmRunNow asks before starting several tasks at once; while the
+  // deployment is paused these are the only ones that start.
+  protected confirmRunNow(rows: readonly Task[]): void {
+    const ids = rows.map((t) => t.id);
+    if (!ids.length) return;
+    const go = () =>
+      this.batch(
+        () => this.store.runNow(ids),
+        (done) =>
+          this.pipelinePaused()
+            ? `Asked ${done} to run; they start as capacity allows while the deployment stays paused`
+            : `Asked ${done} to run ahead of the queue`,
+      );
+    if (ids.length === 1) {
+      void go();
+      return;
+    }
+    const approving = rows.filter(needsApproval).length;
+    this.confirming.set({
+      title: "Run selected now",
+      message:
+        `Start ${ids.length} tasks now, oldest first as capacity allows?` +
+        (approving
+          ? ` ${approving} not yet approved ${approving === 1 ? "is" : "are"} approved first.`
+          : "") +
+        (this.pipelinePaused()
+          ? " The deployment is paused: these start, nothing else does."
+          : ""),
+      accept: `Run ${ids.length}`,
+      destructive: false,
+      scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: "starting work",
+      run: go,
+    });
+  }
+
+  // Submitting merges a change on the person's behalf, so it always asks.
+  protected confirmSubmit(rows: readonly Task[]): void {
+    const ids = rows.map((t) => t.id);
+    if (!ids.length) return;
+    this.confirming.set({
+      title: "Submit",
+      message: `Submit ${this.ids(ids)}? Each pull request goes to the merge queue; review gates still apply.`,
+      accept: ids.length === 1 ? "Submit" : `Submit ${ids.length}`,
+      destructive: true,
+      scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: "submitting changes",
+      run: () =>
+        this.batch(
+          () => this.store.submit(ids),
+          (d) => `Submitted ${d}`,
+        ),
+    });
+  }
+
+  protected confirmRetryMerge(rows: readonly Task[]): void {
+    const ids = rows.map((t) => t.id);
+    if (!ids.length) return;
+    const go = () =>
+      this.batch(
+        () => this.store.retryMerge(ids),
+        (d) => `Put ${d} back on the merge queue`,
+      );
+    if (ids.length === 1) {
+      void go();
+      return;
+    }
+    this.confirming.set({
+      title: "Retry merge",
+      message: `Put ${ids.length} pull requests back on the merge queue for another try?`,
+      accept: `Retry ${ids.length}`,
+      destructive: false,
+      scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: "retrying merges",
+      run: go,
+    });
+  }
+
   protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
     this.confirming.set(null);
     if (ok) await c.run();
@@ -2246,40 +2710,52 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return list.length === 1 ? `#${list[0]}` : `${list.length} tasks`;
   }
 
+  // batch runs one of the wider bulk actions and settles the selection:
+  // what went through is unticked and named in the snackbar; what failed,
+  // or was never sent because Stop was pressed, stays ticked to retry.
+  private async batch(
+    run: () => Promise<BatchResult>,
+    said: (done: string) => string,
+  ): Promise<void> {
+    const { landed } = await run();
+    if (!landed.length) return;
+    this.uncheck(landed);
+    this.snack(said(this.ids(landed)));
+  }
+
   protected async approve(ids: readonly string[]): Promise<void> {
     this.closeMenu(true);
-    const failed = await this.store.approve(ids);
-    const done = ids.length - failed;
-    if (done) {
-      this.clearChecked();
+    const { landed } = await this.store.approve(ids);
+    if (landed.length) {
+      this.uncheck(landed);
       this.snack(
-        `Approved ${this.ids(ids)}; ${done === 1 ? "it is" : "they are"} in the Backlog`,
+        `Approved ${this.ids(landed)}; ${landed.length === 1 ? "it is" : "they are"} in the Backlog`,
       );
     }
   }
 
   protected async defer(ids: readonly string[]): Promise<void> {
     this.closeMenu(true);
-    const failed = await this.store.defer(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
-      this.snack(`Deferred ${this.ids(ids)}`, {
+    const { landed } = await this.store.defer(ids);
+    if (landed.length) {
+      this.uncheck(landed);
+      this.snack(`Deferred ${this.ids(landed)}`, {
         label: "Undo",
         run: async () => {
-          await this.store.undefer(ids);
+          await this.store.undefer(landed);
         },
       });
     }
   }
 
   protected async undefer(ids: readonly string[]): Promise<void> {
-    const failed = await this.store.undefer(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
-      this.snack(`Brought back ${this.ids(ids)}`, {
+    const { landed } = await this.store.undefer(ids);
+    if (landed.length) {
+      this.uncheck(landed);
+      this.snack(`Brought back ${this.ids(landed)}`, {
         label: "Undo",
         run: async () => {
-          await this.store.defer(ids);
+          await this.store.defer(landed);
         },
       });
     }
@@ -2297,20 +2773,25 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       .some((t) => t && !["queued", "proposed", "deferred"].includes(t.state));
     if (live && !confirmed) {
       this.confirmClose.set(true);
+      setTimeout(() =>
+        document
+          .querySelector<HTMLElement>('[data-testid="close-keep"]')
+          ?.focus(),
+      );
       return;
     }
     this.confirmClose.set(false);
-    const failed = await this.store.close(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
+    const { landed } = await this.store.close(ids);
+    if (landed.length) {
+      this.uncheck(landed);
       this.snack(
-        `Closed ${this.ids(ids)}`,
+        `Closed ${this.ids(landed)}`,
         live
           ? null
           : {
               label: "Undo",
               run: async () => {
-                await this.store.reopen(ids);
+                await this.store.reopen(landed);
               },
             },
       );
@@ -2318,10 +2799,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected async reopen(ids: readonly string[]): Promise<void> {
-    const failed = await this.store.reopen(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
-      this.snack(`Reopened ${this.ids(ids)}`);
+    const { landed } = await this.store.reopen(ids);
+    if (landed.length) {
+      this.uncheck(landed);
+      this.snack(`Reopened ${this.ids(landed)}`);
     }
   }
 
@@ -2330,10 +2811,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     p: number,
   ): Promise<void> {
     this.closeMenu(true);
-    const { failed, undo } = await this.store.setPriority(ids, p);
-    if (failed < ids.length) {
+    const { landed, undo } = await this.store.setPriority(ids, p);
+    if (landed.length) {
       this.snack(
-        `Priority of ${this.ids(ids)} set to ${levelOf(p).name} ${p}`,
+        `Priority of ${this.ids(landed)} set to ${levelOf(p).name} ${p}`,
         undo,
       );
     }

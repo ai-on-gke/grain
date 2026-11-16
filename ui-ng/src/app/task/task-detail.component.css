@@ -274,3 +274,33 @@ g-task-page {
     display: none;
   }
 }
+
+/* "Defer until…": the day picker beside Defer, wrapping as one group. */
+.defer-until {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.defer-until-label {
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.defer-until-date {
+  box-sizing: border-box;
+  height: 40px;
+  padding: 0 8px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  color-scheme: light dark;
+  font: inherit;
+  font-size: 13px;
+}
+
+.defer-until-hint {
+  font-size: 12px;
+}

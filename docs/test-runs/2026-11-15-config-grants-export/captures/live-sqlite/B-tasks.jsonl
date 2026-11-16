@@ -1,0 +1,3 @@
+{"id":"2","title":"Walk plain access","reads":["acme/docs"],"writes":[{"repo":"acme/gadgets","base":"main"}],"state":"queued","error":null}
+{"id":null,"title":null,"reads":null,"writes":null,"state":null,"error":"the deployment has no git connection on ghe.example.com, so it cannot reach ghe.example.com/acme/legacy -- add one in Settings → Git (/settings/git), then file this again."}
+{"id":"3","title":"Walk base-less write","reads":["acme/docs"],"writes":[{"repo":"acme/gadgets"}],"state":"queued","error":null}

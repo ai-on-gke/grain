@@ -14,9 +14,9 @@
 
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
-import { NEVER } from "rxjs";
+import { NEVER, type Observable, Subject } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
+import { type GrainEvent, GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { FleetPageComponent } from "./fleet-page.component";
@@ -351,7 +351,10 @@ describe("FleetPageComponent", () => {
     TestBed.resetTestingModule();
   });
 
-  async function setup(api = new FakeFleetApi()) {
+  async function setup(
+    api = new FakeFleetApi(),
+    events: Observable<GrainEvent> = NEVER,
+  ) {
     TestBed.configureTestingModule({
       imports: [FleetPageComponent],
       providers: [
@@ -360,7 +363,7 @@ describe("FleetPageComponent", () => {
           { path: "settings/hostds", children: [] },
         ]),
         { provide: GrainApi, useValue: api },
-        { provide: GrainEvents, useValue: { events: () => NEVER } },
+        { provide: GrainEvents, useValue: { events: () => events } },
       ],
     });
     TestBed.inject(AccessService).setConfig(api.configBody);
@@ -487,6 +490,201 @@ describe("FleetPageComponent", () => {
       root.querySelector('[data-testid="persistent-logs-staging-web"]')
         ?.textContent,
     ).toContain("listening on :4173");
+  });
+
+  it("warns of each base branch publishing nothing, linking the triage task only where it holds the branch", async () => {
+    const api = new FakeFleetApi();
+    api.healthBody.baseBranchPublishing = [
+      {
+        repo: "acme/web",
+        branch: "main",
+        failures: 3,
+        runInFlight: false,
+        triageTaskID: "2",
+        gated: true,
+        detail:
+          "acme/web@main has published nothing for 3 releases; release triage task 2 holds its next releases.",
+      },
+      {
+        repo: "acme/web",
+        branch: "release/v1.2",
+        failures: 4,
+        runInFlight: false,
+        triageTaskID: "9",
+        gated: false,
+        detail: "acme/web@release/v1.2 has published nothing for 4 releases.",
+      },
+    ];
+    const { root } = await setup(api);
+
+    const banners = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-testid="fleet-publishing"]'),
+    );
+    expect(banners.length).toBe(2);
+    expect(banners[0].getAttribute("role")).toBe("status");
+    expect(banners[0].textContent).toContain("Publishing held");
+    expect(banners[0].textContent).toContain(
+      "release triage task 2 holds its next releases.",
+    );
+    const link = banners[0].querySelector("a")!;
+    expect(link.textContent?.trim()).toBe("Open triage task #2");
+    expect(link.getAttribute("href")).toBe("/task/2");
+
+    expect(banners[1].textContent).toContain("Publishing nothing");
+    expect(banners[1].textContent).toContain("acme/web@release/v1.2");
+    expect(banners[1].querySelector("a")).toBeNull();
+  });
+
+  it("lists each task waiting on CI with its link, repo, branch, CI mode, target and wait", async () => {
+    const api = new FakeFleetApi();
+    const since = new Date(Date.now() - 2 * 3600_000).toISOString();
+    api.healthBody.ciWaits = [
+      {
+        taskId: "61",
+        repo: "acme/web",
+        branch: "grain/61-bump-go",
+        ciMode: "github",
+        ci: "my-branch",
+        since,
+      },
+      {
+        taskId: "62",
+        repo: "acme/api",
+        branch: "grain/62-fix-flake",
+        ciMode: "grain",
+        ci: "gha:acme:api:5001",
+        since,
+        recovered: true,
+      },
+    ];
+    const { root } = await setup(api);
+
+    const card = root.querySelector<HTMLElement>(
+      '[data-testid="fleet-ci-waits"]',
+    )!;
+    expect(card.querySelector("h2")?.textContent?.trim()).toBe("Waiting on CI");
+    expect(
+      card.querySelector('[data-testid="ci-waits-count"]')?.textContent,
+    ).toContain("2 waiting");
+    const row = card.querySelector<HTMLElement>(
+      '[data-testid="ci-wait-row-61"]',
+    )!;
+    const cells = Array.from(row.querySelectorAll("td")).map((td) =>
+      td.textContent?.trim(),
+    );
+    expect(cells).toEqual([
+      "#61",
+      "2h",
+      "my-branch",
+      "acme/web",
+      "grain/61-bump-go",
+      "github",
+    ]);
+    expect(row.querySelector("a")?.getAttribute("href")).toBe("/task/61");
+    expect(row.querySelector("time")?.getAttribute("datetime")).toBe(since);
+    const recovered = card.querySelector<HTMLElement>(
+      '[data-testid="ci-wait-row-62"]',
+    )!;
+    expect(recovered.textContent).toContain("gha:acme:api:5001");
+    expect(recovered.textContent).toContain("recovered");
+    expect(card.querySelector('[data-testid="ci-waits-empty"]')).toBeNull();
+  });
+
+  it("says so when no task has waited on CI for an hour", async () => {
+    const { root } = await setup();
+    const card = root.querySelector<HTMLElement>(
+      '[data-testid="fleet-ci-waits"]',
+    )!;
+    expect(
+      card.querySelector('[data-testid="ci-waits-empty"]')?.textContent?.trim(),
+    ).toBe("No task has waited on CI for more than an hour.");
+    expect(card.querySelector("table")).toBeNull();
+    expect(card.querySelector('[data-testid="ci-waits-count"]')).toBeNull();
+  });
+
+  it("drops a closed task's CI wait and brings a reopened one back on task.state, without a reload", async () => {
+    const api = new FakeFleetApi();
+    const wait = {
+      taskId: "61",
+      repo: "acme/web",
+      branch: "grain/61-bump-go",
+      ciMode: "github",
+      ci: "my-branch",
+      since: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    };
+    api.healthBody.ciWaits = [wait];
+    const events = new Subject<GrainEvent>();
+    const { fixture, root } = await setup(api, events);
+    const row = () => root.querySelector('[data-testid="ci-wait-row-61"]');
+    expect(row()).not.toBeNull();
+    const reads = () =>
+      api.calls.filter((c) => c.route === "GET /api/sandboxes").length;
+    const before = reads();
+
+    // Closed: the server stops listing it.
+    api.healthBody.ciWaits = [];
+    events.next({ type: "task.state", data: { id: "61", state: "closed" } });
+    await settle(fixture);
+    expect(reads()).toBe(before + 1);
+    expect(row()).toBeNull();
+    expect(root.querySelector('[data-testid="ci-waits-empty"]')).not.toBeNull();
+
+    // A comment is not a state change and reads nothing.
+    events.next({ type: "task.comment", data: { id: "61" } });
+    await settle(fixture);
+    expect(reads()).toBe(before + 1);
+
+    // Reopened: the hold is back.
+    api.healthBody.ciWaits = [wait];
+    events.next({ type: "task.state", data: { id: "61", state: "deferred" } });
+    await settle(fixture);
+    expect(row()).not.toBeNull();
+  });
+
+  it("keeps the newest answer when an older sandboxes read lands after it", async () => {
+    const api = new FakeFleetApi();
+    const wait = {
+      taskId: "61",
+      ci: "my-branch",
+      since: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    };
+    api.healthBody.ciWaits = [wait];
+    const events = new Subject<GrainEvent>();
+    const { fixture, root } = await setup(api, events);
+
+    // The poll's read still has the wait and answers late; the Refresh
+    // pressed meanwhile is told the task has closed.
+    let releaseSlow!: () => void;
+    const slowBody = structuredClone(api.healthBody);
+    const realGet = api.get;
+    let first = true;
+    api.get = (route, params, query) => {
+      if (route === "GET /api/sandboxes" && first) {
+        first = false;
+        api.calls.push({ method: "GET", route, params, query });
+        return new Promise((resolve) => {
+          releaseSlow = () => resolve(slowBody);
+        });
+      }
+      return realGet(route, params, query);
+    };
+    events.next({ type: "task.state", data: { id: "61" } });
+    await settle(fixture);
+    api.healthBody.ciWaits = [];
+    (
+      root.querySelector('[data-testid="fleet-refresh"]') as HTMLButtonElement
+    ).click();
+    await settle(fixture);
+    expect(root.querySelector('[data-testid="ci-wait-row-61"]')).toBeNull();
+
+    releaseSlow();
+    await settle(fixture);
+    expect(root.querySelector('[data-testid="ci-wait-row-61"]')).toBeNull();
+  });
+
+  it("shows no publishing warning while every base branch publishes", async () => {
+    const { root } = await setup();
+    expect(root.querySelector('[data-testid="fleet-publishing"]')).toBeNull();
   });
 
   it("disables sandbox probe when hostSandboxes=true and gates persistent Logs + Fleet tabs on RBAC scopes", async () => {
@@ -753,5 +951,71 @@ describe("FleetPageComponent", () => {
     await settle(fixture);
     expect(calledRoutes().has("GET /api/logs")).toBe(true);
     expect(calledRoutes().has("GET /api/logs/{source}")).toBe(true);
+  });
+
+  it("patches AccessService immediately when pausing, resuming, or lifting usage-limit pauses", async () => {
+    const { fixture, root, api } = await setup();
+    const access = TestBed.inject(AccessService);
+    access.setUsage({
+      scopes: [
+        {
+          connection: "gemini-pro",
+          model: "gemini-2.5-pro",
+          pausedUntil: "2026-11-15T12:00:00Z",
+        },
+      ],
+    });
+    api.agentPauseBody = {
+      pause: {
+        paused: true,
+        pauses: [
+          {
+            connection: "gemini-pro",
+            connectionName: "Gemini 2.5 Pro",
+            model: "gemini-2.5-pro",
+            until: "2026-11-15T12:00:00Z",
+            reason: "quota reached",
+            canLift: true,
+          },
+        ],
+      },
+    };
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
+      .click();
+    await settle(fixture);
+
+    // Pause pipeline -> AccessService.rawConfig().pipelinePause becomes paused immediately.
+    const reasonInput = root.querySelector<HTMLInputElement>(
+      '[data-testid="pipeline-pause-reason"]',
+    )!;
+    reasonInput.value = "deploy freeze";
+    reasonInput.dispatchEvent(new Event("input"));
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="pipeline-pause-btn"]')!
+      .click();
+    await settle(fixture);
+    expect(access.rawConfig()?.pipelinePause?.paused).toBe(true);
+    expect(access.rawConfig()?.pipelinePause?.reason).toBe("deploy freeze");
+
+    // Resume pipeline -> AccessService.rawConfig().pipelinePause clears immediately.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="pipeline-resume-btn"]')!
+      .click();
+    await settle(fixture);
+    expect(access.rawConfig()?.pipelinePause?.paused).toBe(false);
+
+    // Lift model usage-limit pause -> AccessService.rawConfig().agentPause and cached scope pausedUntil clear.
+    const liftBtn = Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="fleet-usage-pauses-card"] button',
+      ),
+    ).find((b) => b.textContent?.includes("Lift pause"))!;
+    expect(liftBtn).toBeDefined();
+    liftBtn.click();
+    await settle(fixture);
+    expect(access.rawConfig()?.agentPause?.paused).toBe(false);
+    expect(access.usage()?.scopes?.[0]?.pausedUntil).toBeUndefined();
   });
 });

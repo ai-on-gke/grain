@@ -244,6 +244,9 @@ type poolRequest struct {
 	// or waits, and never falls back down the default list.
 	pinnedModel bool
 	pinned      *model.AgentBackend
+	// timeZone is AgentChoice.TimeZone: the zone a fallback notice names
+	// a paused model's reset time in (pauseClockLocation).
+	timeZone string
 	// priority is AgentChoice.Priority: a run with priority dispatch is
 	// not held by, and takes no slot of, a connection's concurrency limit.
 	priority bool
@@ -308,7 +311,7 @@ func defaultModelFramework(backends []model.AgentBackend, team, m, fallback stri
 // resolve turns a task's choice into a poolRequest. What the task said
 // wins; the team's own defaults fill in what it did not.
 func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrator.AgentChoice) (poolRequest, error) {
-	req := poolRequest{team: model.DefaultTeamID, framework: choice.Framework, model: strings.TrimSpace(choice.Model), priority: choice.Priority}
+	req := poolRequest{team: model.DefaultTeamID, framework: choice.Framework, model: strings.TrimSpace(choice.Model), priority: choice.Priority, timeZone: strings.TrimSpace(choice.TimeZone)}
 	if req.team == "" {
 		req.team = model.DefaultTeamID
 	}
@@ -731,7 +734,7 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 
 // fallbackReasonLocked says why a run on req's default model list came
 // down to picked rather than a model earlier in the list -- "gemini-3-pro
-// is paused until 14:05 UTC" -- or "" when picked is the first. Only the
+// is paused until 10:05 AM PDT" -- or "" when picked is the first. Only the
 // models before picked are named: those are the ones it would have run
 // on. p.mu must be held.
 func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked string, now time.Time) string {
@@ -757,7 +760,7 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 		}
 		switch {
 		case !until.IsZero():
-			why = append(why, fmt.Sprintf("%s is paused until %s", m, until.UTC().Format("15:04 UTC")))
+			why = append(why, fmt.Sprintf("%s is paused until %s", m, pauseClock(until, req.pauseClockLocation())))
 		case onHost:
 			why = append(why, fmt.Sprintf("%s runs on the host, and the host agent is updating", m))
 		default:
@@ -765,6 +768,25 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 		}
 	}
 	return strings.Join(why, ", and ")
+}
+
+// pauseClockLocation is the zone a paused model's reset time is named in:
+// the task's own (the browser it was filed from), else the deployment's
+// (model.Config.TimeZone), else UTC.
+func (r poolRequest) pauseClockLocation() *time.Location {
+	if r.timeZone != "" && model.ValidTimeZone(r.timeZone) {
+		return model.LoadLocation(r.timeZone)
+	}
+	if r.settings != nil {
+		return model.LoadLocation(strings.TrimSpace(r.settings.TimeZone))
+	}
+	return time.UTC
+}
+
+// pauseClock is at on loc's wall clock with the zone named -- "10:05 AM
+// PDT" -- so a reader need not translate from UTC to their own clock.
+func pauseClock(at time.Time, loc *time.Location) string {
+	return at.In(loc).Format("3:04 PM MST")
 }
 
 // addHostdBlocked counts one connection whose hostd cannot take a run.

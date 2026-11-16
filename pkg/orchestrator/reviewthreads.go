@@ -64,19 +64,20 @@ import (
 // still unresolved: a merge waits on all of them, not on the newest batch.
 //
 // Which tasks: one whose run is over and whose change is waiting to land
-// (completed and on the merge queue, or awaiting Submit) -- never a
-// running, parked or closed one, and never a review or fix stacked on
-// somebody else's branch, whose pull request is grain merging into a task
-// branch rather than anything a reviewer reads. A change held on its own
+// (completed and on the merge queue, or awaiting Submit), or one resting on
+// its own resume_later, which the run sent takes off its wait -- never a
+// running or closed one, nor one a person deferred, and never a review or
+// fix stacked on somebody else's branch, whose pull request is grain
+// merging into a task branch rather than anything a reviewer reads. A change held on its own
 // review's questions waits for its owner first: their answer sends the
 // run, and that run will see these threads in pull_request_status too.
 func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
 	if client == nil {
 		return nil
 	}
-	links, err := store.OpenPullRequestLinks(ctx)
+	links, err := openAndResumeLaterPullRequestLinks(ctx, store)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)
+		return err
 	}
 	var errs []error
 	for _, link := range links {
@@ -104,6 +105,19 @@ func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Cl
 			errs = append(errs, fmt.Errorf("orchestrator: reading %s's state: %w", task.ID, err))
 			continue
 		}
+		if state == model.StateDeferred {
+			// Resting on its own resume_later it still owns its pull
+			// request, and sendRunForReviewThreads takes it off the wait
+			// (sendBackFromResumeLater); a person's Defer is left alone.
+			ours, err := store.RestsOnResumeLater(ctx, task.ID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: reading %s's deferral: %w", task.ID, err))
+				continue
+			}
+			if ours {
+				state = model.StateCompleted
+			}
+		}
 		if state != model.StateCompleted && state != model.StateAwaitingSubmit {
 			continue
 		}
@@ -112,6 +126,30 @@ func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Cl
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// openAndResumeLaterPullRequestLinks is OpenPullRequestLinks and, beside
+// them, the links of tasks resting on their own resume_later
+// (model.Store.ResumeLaterPullRequestLinks), each task once.
+func openAndResumeLaterPullRequestLinks(ctx context.Context, store *model.Store) ([]model.TaskPullRequestLink, error) {
+	links, err := store.OpenPullRequestLinks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: reading open pull request links: %w", err)
+	}
+	resting, err := store.ResumeLaterPullRequestLinks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: reading the pull request links of tasks resting on resume_later: %w", err)
+	}
+	have := map[model.TaskPullRequestLink]bool{}
+	for _, l := range links {
+		have[l] = true
+	}
+	for _, l := range resting {
+		if !have[l] {
+			links = append(links, l)
+		}
+	}
+	return links, nil
 }
 
 // reviewThreadLister is the thread view github.RESTClient offers beside
@@ -239,6 +277,9 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 		o.RetryRequestedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: queueing %s for its review threads: %w", task.ID, err)
+	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "new review threads", now); err != nil {
+		return err
 	}
 	log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(open), ref, task.ID)
 	return reviewComment(ctx, store, task.ID, reviewThreadsNote(ref, open, still), now)
@@ -466,6 +507,9 @@ func sendRunForChangeThreads(ctx context.Context, store *model.Store, task model
 			o.RetryRequestedAt = &now
 		}); err != nil {
 			return fmt.Errorf("orchestrator: queueing %s for its CL review threads: %w", task.ID, err)
+		}
+		if err := sendBackFromResumeLater(ctx, store, task.ID, "new CL review threads", now); err != nil {
+			return err
 		}
 		log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(fresh), change.Primary(task), task.ID)
 	}

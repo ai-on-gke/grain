@@ -100,6 +100,9 @@ export interface GrainConfig {
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
   capabilities?: CapabilityOption[];
+  // ciCapabilities is what can be granted to a repository's CI jobs
+  // (the repo page's CI capabilities card).
+  ciCapabilities?: CapabilityOption[];
   defaultCapabilities?: string[];
   repoDefaultCapabilities?: Record<string, string[]>;
   agentBackends?: AgentBackendOption[];
@@ -144,6 +147,39 @@ export interface HumanReviewView {
   at?: string;
 }
 
+// ApprovalView is one rule a change waits on a named approver's Submit
+// for (pkg/ui/approvals.go): a sensitive trigger with `human: required`,
+// or grain's own guard over the repository's triggers.
+export interface ApprovalView {
+  rule: string;
+  source?: string;
+  approvers?: string[];
+  approvedBy?: string;
+}
+
+// PolicyRequirement is one line of a change's effective merge policy
+// and the rules that caused it (model.PolicyRequirement).
+export interface PolicyRequirement {
+  Field: string;
+  Value: string;
+  From?: string[];
+}
+
+// EffectiveMergePolicy is what the repository's merge rules
+// (.grain/merge-rules.yml) require of a change's head
+// (model.EffectiveMergePolicy); its fields keep their Go names.
+export interface EffectiveMergePolicy {
+  Head?: string;
+  Rules?: string;
+  Mode?: string;
+  GrainJobs?: string[];
+  GrainFullSuite?: boolean;
+  GitHubChecks?: string[];
+  GitHubAllChecks?: boolean;
+  Matched?: string[];
+  Requirements?: PolicyRequirement[];
+}
+
 export interface TaskPaused {
   at: string;
   by: string;
@@ -177,11 +213,26 @@ export interface GoalDecl {
   max_stall?: string;
 }
 
-export interface TaskGoalView extends GoalDecl {
+// TaskGoalView is a task's goal as GET /api/tasks/{id} returns it: the
+// task_goal row (model.TaskGoal), whose fields are camelCase -- unlike
+// GoalDecl, the snake_case body PUT /api/tasks/{id}/goal takes.
+export interface TaskGoalView {
+  taskId?: string;
+  kind: string;
+  spec: GoalSpec;
+  onMet?: string;
+  onLimit?: string;
+  declaredBy?: string;
+  declaredAt?: string;
   metAt?: string;
-  limitNotifiedAt?: string;
-  resumesWithoutProgress?: number;
+  evidence?: string;
   outcome?: string;
+  progressAt?: string;
+  resumesSinceProgress?: number;
+  maxResumes?: number;
+  // A Go time.Duration: nanoseconds.
+  maxStall?: number;
+  limitNotifiedAt?: string;
   [key: string]: unknown;
 }
 
@@ -201,6 +252,16 @@ export interface Task {
   reviewFindings?: unknown[];
   humanApprovedBy?: string;
   humanReviewHold?: HumanReviewView[];
+  // Holds the repository's own rules put on the change (pkg/ui/tasks.go):
+  // the strictest `human` setting of the gating triggers holding it and
+  // the review each filed ("<trigger>=<task>"), a security hold, the
+  // approvals it still owes, and what its merge rules require.
+  pathTriggerHold?: string;
+  pathTriggerTasks?: string[];
+  securityHold?: string;
+  approvals?: ApprovalView[];
+  repoRules?: string;
+  mergePolicy?: EffectiveMergePolicy;
   autoMerge?: boolean;
   pullRequest?: PullRequestRef | string | null;
   prClosedAt?: string;
@@ -301,7 +362,13 @@ export interface Task {
     canMail?: boolean;
     [key: string]: unknown;
   };
-  clSubmit?: { canSync?: boolean; [key: string]: unknown };
+  clSubmit?: {
+    canSubmit?: boolean;
+    canSync?: boolean;
+    reasons?: string[];
+    target?: string;
+    [key: string]: unknown;
+  };
   derivedFrom?: string[];
   designs?: string[];
   // Open dependencies and the state of each (GET /api/tasks).
@@ -312,6 +379,10 @@ export interface Task {
   // Why the task is where it is (orchestrator liveness reason), e.g.
   // {reason: "awaiting_reply/stopped", class: "awaiting a person"}.
   reason?: { reason: string; class?: string; control?: string };
+  // The merge queue's own sub-case for this task's pull request, when it
+  // is on the queue; its control (Retry merge on merge_failed) stands in
+  // when the task's own sub-case names none.
+  mergeQueueReason?: { reason: string; class?: string; control?: string };
 }
 
 export type MergeGateState =
@@ -327,6 +398,9 @@ export interface MergeGate {
   reviewTask?: string;
   approvedBy?: string;
   overridable?: boolean;
+  // A findings gate whose review's findings a person may accept as they
+  // are (POST /api/tasks/{id}/accept-findings, model.MergeGate.Acceptable).
+  acceptable?: boolean;
 }
 
 export interface AccessRequestItem {
@@ -599,6 +673,10 @@ export interface TaskDetail extends Task {
   pendingConfigChange?: PendingConfigChange | null;
   ci?: TaskCIStatus | null;
   ciFaults?: { kind?: string; summary?: string; detail?: string }[];
+}
+
+export interface TaskSummariesResponse {
+  tasks: Record<string, TaskDetail>;
 }
 
 // One standing conversation (pkg/ui console_sessions.go

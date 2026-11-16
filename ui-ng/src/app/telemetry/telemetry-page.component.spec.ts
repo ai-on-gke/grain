@@ -20,7 +20,10 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { TelemetryPageComponent } from "./telemetry-page.component";
+import {
+  TelemetryPageComponent,
+  parseLegacyMetricsRepoFilter,
+} from "./telemetry-page.component";
 import type {
   ClusterStats,
   MetricsReport,
@@ -711,6 +714,68 @@ describe("TelemetryPageComponent", () => {
     expect(names).toEqual(["Alice", "Maya", "Zane"]);
   });
 
+  it("shows a spent weekly quota instead of an empty interval window", async () => {
+    const api = new FakeTelemetryApi();
+    api.usageBody = {
+      ...api.usageBody,
+      scopes: [
+        {
+          connection: "claude",
+          model: "opus",
+          runs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          used: 0,
+          window: "5h0m0s",
+          burnPerHour: 0,
+          pausedUntil: "2026-11-18T03:00:00Z",
+          pauseHorizon: "weekly",
+          weeklyRuns: 40,
+          weeklyUsed: 9_000_000,
+          weeklyLimit: 9_000_000,
+          weeklyLimitSource: "learned",
+          weeklyPausedUntil: "2026-11-18T03:00:00Z",
+        },
+        {
+          connection: "claude",
+          model: "sonnet",
+          runs: 2,
+          inputTokens: 1000,
+          outputTokens: 500,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          used: 1500,
+          window: "5h0m0s",
+          burnPerHour: 100,
+          weeklyRuns: 3,
+          weeklyUsed: 4000,
+        },
+      ],
+    };
+    const { root } = await setup(api);
+    const weekly = root.querySelector(
+      '[data-testid="usage-weekly-claude:opus"]',
+    )!;
+    expect(weekly.textContent).toContain("7d");
+    expect(weekly.textContent).toContain("(learned)");
+    const rows = root.querySelectorAll<HTMLElement>(
+      '[data-testid="usage-scopes-table"] tbody tr',
+    );
+    expect(rows[0].textContent).toContain("Weekly limit reached");
+    expect(rows[0].textContent).toContain("Paused · weekly limit");
+    expect(rows[0].textContent).toContain("5h");
+    expect(rows[0].textContent).not.toContain("5h0m0s");
+    // A scope with no weekly limit learned still shows what its week spent.
+    expect(
+      root.querySelector('[data-testid="usage-weekly-claude:sonnet"]')
+        ?.textContent,
+    ).toContain("7d");
+    expect(rows[1].textContent).not.toContain("Weekly limit reached");
+    expect(rows[1].textContent).toContain("Active");
+  });
+
   it("groups usage notices in configured TZ, progressively discloses heavy lists, filters People, caps repos, and skips full GET /api/release-notes", async () => {
     const api = new FakeTelemetryApi();
     api.configBody = {
@@ -933,5 +998,15 @@ describe("TelemetryPageComponent", () => {
     expect(peopleNames).not.toContain("system:nightly-bot");
     expect(peopleNames).not.toContain("Grain");
     expect(peopleNames).toContain("Alice");
+  });
+
+  it("parses classic System → Metrics ?f=repo:any:<owner/name> filters", () => {
+    expect(parseLegacyMetricsRepoFilter(["repo:any:acme/widgets"])).toBe(
+      "acme/widgets",
+    );
+    expect(
+      parseLegacyMetricsRepoFilter(["status:is:done;repo:is:acme/web"]),
+    ).toBe("acme/web");
+    expect(parseLegacyMetricsRepoFilter(["author:any:alice"])).toBe("");
   });
 });

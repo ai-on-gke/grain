@@ -259,6 +259,25 @@ describe("new task form", () => {
     expect(
       fromTemplateStem("sidthe/grain", { ...repoTmpl, system: true }),
     ).toBe("");
+    // The server's own declared id, with no declaredIn beside it.
+    expect(
+      fromTemplateStem("sidthe/grain", {
+        ...repoTmpl,
+        id: "repo:template:sidthe:grain:triage",
+        declaredIn: undefined,
+      }),
+    ).toBe("triage");
+    // A stored template (POST /api/templates) is not the repository's:
+    // it files through POST /api/tasks { templateId }, never from-template.
+    expect(
+      fromTemplateStem("sidthe/grain", {
+        id: "template-3",
+        name: "Urgent fix",
+        title: "Urgent: ",
+        description: "",
+        priority: 8,
+      }),
+    ).toBe("");
   });
 
   it("says what stops filing, including required template fields", () => {
@@ -300,6 +319,36 @@ describe("new task form", () => {
       },
     });
     expect(validate({ ...d, title: "t", newBranch: true }, hidden)).toBeNull();
+
+    // Missing repository when the deployment has no defaultTarget:
+    const noDefaultCfg: GrainConfig = { access: null };
+    const noRepoChosen = emptyDraft(noDefaultCfg, tasks, { title: "t" });
+    expect(validate(noRepoChosen, undefined, null, {}, noDefaultCfg)).toEqual({
+      field: "repo",
+      message: "Pick a repository, or choose No repository.",
+    });
+    const disallowNoRepo = resolveFields({
+      access: null,
+      newTaskForm: {
+        default: { fields: { repo: { allow_no_repo: false } } },
+      },
+    });
+    expect(
+      validate(noRepoChosen, disallowNoRepo, null, {}, noDefaultCfg),
+    ).toEqual({
+      field: "repo",
+      message: "Pick a repository.",
+    });
+    expect(
+      validate(
+        { ...noRepoChosen, repo: NO_REPO },
+        undefined,
+        null,
+        {},
+        noDefaultCfg,
+      ),
+    ).toBeNull();
+    expect(validate(noRepoChosen, undefined, null, {}, config)).toBeNull();
   });
 
   it("phrases the draft as a request to the Director", () => {

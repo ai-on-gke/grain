@@ -4,6 +4,7 @@
 #
 # Do not add lines. New coverage goes to the ui-ng suite at /next/
 # (ui-ng/e2e/) or Go under tests/uiapi; see README.md. Delete a line when its spec is deleted.
+accept-findings.spec.js
 access-code-walkthrough.spec.js
 access-principals-settings.spec.js
 access-request-card.spec.js
