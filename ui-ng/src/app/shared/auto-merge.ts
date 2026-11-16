@@ -112,6 +112,22 @@ export function autoMergeStatus(t: Task): AutoMergeStatus | null {
     detail,
     stopped: false,
   });
+  // A merge grain has given up on (Observation.MergeQueueBlockedAt) is a
+  // person's, whatever state and note it kept: an exhausted GitHub refusal
+  // keeps its "GitHub has refused this merge N times" note on merge_failed
+  // (queuestatus.go's refusedMerge, blockedStatus), and a blocked entry can
+  // still carry a repair state. Checked before the states, so none of them
+  // reads as grain still driving it.
+  if (t.mergeQueueBlockedAt) {
+    const refused = REFUSED.exec(note);
+    return {
+      label: AUTO_MERGE_STOPPED,
+      detail: refused
+        ? `merge refused: ${refused[1].trim()}`
+        : "handed to a person",
+      stopped: true,
+    };
+  }
   switch (state) {
     case "repair_queued":
       // Two repair_queued notes are not a run waiting for a slot: a
@@ -142,12 +158,6 @@ export function autoMergeStatus(t: Task): AutoMergeStatus | null {
       };
     }
   }
-  if (t.mergeQueueBlockedAt)
-    return {
-      label: AUTO_MERGE_STOPPED,
-      detail: "handed to a person",
-      stopped: true,
-    };
   return going(FIXED[state] ?? "");
 }
 

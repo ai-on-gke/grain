@@ -409,7 +409,8 @@ function needsApproval(t: Task): boolean {
           @for (g of store.baseBranchGates(); track g.repo + ":" + g.branch) {
             <span>
               <span class="mono">{{ g.repo }}</span
-              >{{ g.branch ? " (" + g.branch + ")" : "" }} —
+              >{{ g.branch ? " (" + g.branch + ")" : "" }}
+              —
               {{ g.detail || g.runDetail || g.reason }}
             </span>
           }
@@ -2663,7 +2664,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (!ids.length) return;
     this.confirming.set({
       title: "Submit",
-      message: `Submit ${this.ids(ids)}? Each pull request goes to the merge queue; review gates still apply.`,
+      message: `Submit ${this.ids(ids)}? Each pull request auto-merges once it is green; review gates still apply.`,
       accept: ids.length === 1 ? "Submit" : `Submit ${ids.length}`,
       destructive: true,
       scope: scopeOf(rows, this.access.viewer()),
@@ -2682,7 +2683,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const go = () =>
       this.batch(
         () => this.store.retryMerge(ids),
-        (d) => `Put ${d} back on the merge queue`,
+        (d) => `Auto-merging ${d} again`,
       );
     if (ids.length === 1) {
       void go();
@@ -2690,7 +2691,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     }
     this.confirming.set({
       title: "Retry merge",
-      message: `Put ${ids.length} pull requests back on the merge queue for another try?`,
+      message: `Try auto-merging ${ids.length} pull requests again?`,
       accept: `Retry ${ids.length}`,
       destructive: false,
       scope: scopeOf(rows, this.access.viewer()),

@@ -129,7 +129,7 @@ const STATES: readonly { state: WorkOwnershipState; text: string }[] = [
               workflow crons), its release, the base-branch check, post-merge
               jobs, automatic ports, and the triage and repair tasks grain files
               on its own. Tasks people file by hand, their pull requests' CI,
-              the merge queue for them and their repair run either way.</span
+              auto-merging them and their repair run either way.</span
             >
           </div>
           <button

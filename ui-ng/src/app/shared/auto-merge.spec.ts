@@ -119,6 +119,26 @@ describe("autoMergeStatus", () => {
     expect(text(t(state, note))).toBe(want);
   });
 
+  it.each([
+    [
+      "merge_failed",
+      "GitHub has refused this merge 5 times: Base branch was modified",
+      "Auto-merge stopped · merge refused: Base branch was modified",
+    ],
+    [
+      "repairing",
+      "an agent is repairing this branch now (it has conflicts with `main`; automatic repair 2 of 2)",
+      "Auto-merge stopped · handed to a person",
+    ],
+    ["waiting_ci", "", "Auto-merge stopped · handed to a person"],
+  ])("a blocked %s %j reads %j", (state, note, want) => {
+    const task = t(state, note, {
+      mergeQueueBlockedAt: "2026-11-15T00:00:00Z",
+    });
+    expect(text(task)).toBe(want);
+    expect(autoMergeStatus(task)?.stopped).toBe(true);
+  });
+
   it("says Auto-merging for a completed task with no entry state yet", () => {
     expect(text(t(undefined))).toBe("Auto-merging");
   });
