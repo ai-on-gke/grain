@@ -17,7 +17,7 @@ import { retiredGrant, retiredNotices } from "./capability-retired";
 import { listedSecrets, needsHostWarning } from "./settings-work.component";
 
 describe("retired in-process capabilities", () => {
-  it("names the grant each retired name moved onto", () => {
+  it("names the canonical grant each retired name moved onto", () => {
     for (const name of [
       "gcp-key",
       "gemini-key",
@@ -27,15 +27,46 @@ describe("retired in-process capabilities", () => {
       "grain-ci",
       "bootstrap-playbooks",
       "github-sandbox",
+      "git-push-any-ref",
     ]) {
       expect(retiredGrant(name), name).not.toBeNull();
     }
+    expect(retiredGrant("memory")?.grant).toBe(
+      "https://grain.dev/capabilities/api#memory",
+    );
+    expect(retiredGrant("self-debug")?.grant).toBe(
+      "https://grain.dev/capabilities/api#self-debug + https://grain.dev/capabilities/grain#source={}",
+    );
+    expect(retiredGrant("deployment-health")?.grant).toBe(
+      "https://grain.dev/capabilities/api#deployment:read + https://grain.dev/capabilities/grain#health={}",
+    );
+    expect(retiredGrant("grain-log")?.grant).toBe(
+      "https://grain.dev/capabilities/grain#journal={}",
+    );
     expect(retiredGrant("grain-ci")?.grant).toBe(
       "https://grain.dev/capabilities/grain#ci={}",
     );
-    expect(retiredGrant("gcp-key:deployer")?.grant).toBe(
-      'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deployer"}',
+    expect(retiredGrant("gcp-key")?.grant).toBe(
+      'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}',
     );
+    expect(retiredGrant("gcp-key:default")?.grant).toBe(
+      'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}',
+    );
+    expect(retiredGrant("gcp-key:deployer")?.grant).toBe(
+      'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deployer","primary":true}',
+    );
+    for (const bad of [
+      "gcp-key:",
+      "gcp-key:a b",
+      "gcp-key:a/b",
+      "gcp-key:a\\b",
+      "gcp-key:a:b",
+      "gcp-key:a*b",
+      "gcp-key:a?b",
+      "gcp-key:a[b",
+    ]) {
+      expect(retiredGrant(bad), bad).toBeNull();
+    }
     expect(retiredGrant("git-push-any-ref")?.grant).toBe(
       'https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}',
     );

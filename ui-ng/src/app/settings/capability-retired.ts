@@ -14,14 +14,15 @@
 
 // The in-process capabilities grain used to build in, granted by a bare
 // name (gcp-key, gemini-key, ...), have all been retired onto capability
-// server methods (pkg/model's retiredGrantReplacements). A
-// settings/capabilities.yml that still configures one under
-// in_process.<name> keeps working through the migration, but says
-// nothing on the new server it now means: Settings → Capabilities names
-// each such entry with the grant that replaces it, as the classic
-// CapabilityPolicyEditor's catalogue list does (catalogueSummary.js).
-// pkg/model's TestUIRetiredGrantTableNamesEveryRetiredCapability keeps
-// RETIRED_IN_PROCESS naming every name that table retires.
+// server methods (pkg/model's retiredGrantReplacements and
+// retiredGrantMultiReplacements). A settings/capabilities.yml that still
+// configures one under in_process.<name> keeps working through the
+// migration, but says nothing on the new server it now means: Settings →
+// Capabilities names each such entry with the canonical grant that
+// replaces it. pkg/model's
+// TestUIRetiredGrantTableNamesEveryRetiredCapability keeps
+// RETIRED_IN_PROCESS matching the Go tables key for key and grant for
+// grant.
 
 export interface RetiredGrant {
   // grant is what a task holds in its place.
@@ -31,6 +32,9 @@ export interface RetiredGrant {
 }
 
 const SERVER = "https://grain.dev/capabilities";
+const MODEL_PROXY = `${SERVER}/model-proxy#model-proxy`;
+const GCP_KEY_DEFAULT_SET = "sandbox-agent";
+const INVALID_GCP_KEY_CHARS = [..." \t\n\r/\\:*?["];
 
 function onServer(grant: string, method: string): RetiredGrant {
   return { grant, moveTo: `servers (${method})` };
@@ -38,14 +42,27 @@ function onServer(grant: string, method: string): RetiredGrant {
 
 function preset(name: string): RetiredGrant {
   return {
-    grant: `${SERVER}/api#grain/${name}`,
+    grant: `${SERVER}/api#${name}`,
     moveTo: `api_scopes.presets.${name}`,
   };
 }
 
-const MODEL_PROXY = `${SERVER}/model-proxy#model-proxy`;
 const RELEASE = (method: string): RetiredGrant =>
   onServer(`${SERVER}/release#${method}={}`, `${SERVER}/release#${method}`);
+
+function gcpKeyGrant(permissionSet: string): string {
+  const set =
+    permissionSet === "" || permissionSet === "default"
+      ? GCP_KEY_DEFAULT_SET
+      : permissionSet;
+  return `${SERVER}/gcp#gcp-key={"permission_set":${JSON.stringify(set)},"primary":true}`;
+}
+
+function validLegacyGCPKeyParam(name: string): boolean {
+  return (
+    name.length > 0 && !INVALID_GCP_KEY_CHARS.some((ch) => name.includes(ch))
+  );
+}
 
 export const RETIRED_IN_PROCESS: Readonly<Record<string, RetiredGrant>> = {
   "team-broadcast": preset("team-broadcast"),
@@ -56,14 +73,17 @@ export const RETIRED_IN_PROCESS: Readonly<Record<string, RetiredGrant>> = {
   "self-upgrade": preset("self-upgrade"),
   "test-quarantine": preset("test-quarantine"),
   "self-debug": {
-    grant: `${SERVER}/api#grain/self-debug + ${SERVER}/grain#source`,
+    grant: `${SERVER}/api#self-debug + ${SERVER}/grain#source={}`,
     moveTo: `api_scopes.presets.self-debug and servers (${SERVER}/grain#source)`,
   },
   "deployment-health": {
-    grant: `${SERVER}/api#deployment:read + ${SERVER}/grain#health`,
+    grant: `${SERVER}/api#deployment:read + ${SERVER}/grain#health={}`,
     moveTo: `api_scopes.raw_scopes["deployment:read"] and servers (${SERVER}/grain#health)`,
   },
-  "grain-log": onServer(`${SERVER}/grain#journal`, `${SERVER}/grain#journal`),
+  "grain-log": onServer(
+    `${SERVER}/grain#journal={}`,
+    `${SERVER}/grain#journal`,
+  ),
   "db-read": onServer(
     `${SERVER}/grain#sql={"write":false}`,
     `${SERVER}/grain#sql`,
@@ -77,7 +97,7 @@ export const RETIRED_IN_PROCESS: Readonly<Record<string, RetiredGrant>> = {
     `${SERVER}/grain#host-exec`,
   ),
   "grain-ci": onServer(`${SERVER}/grain#ci={}`, `${SERVER}/grain#ci`),
-  "gcp-key": onServer(`${SERVER}/gcp#gcp-key`, `${SERVER}/gcp#gcp-key`),
+  "gcp-key": onServer(gcpKeyGrant("default"), `${SERVER}/gcp#gcp-key`),
   "gemini-key": onServer(
     `${SERVER}/gcp#gemini-key={}`,
     `${SERVER}/gcp#gemini-key`,
@@ -112,17 +132,28 @@ export const RETIRED_IN_PROCESS: Readonly<Record<string, RetiredGrant>> = {
 
 // retiredGrant is what a bare in-process name was retired onto, or null
 // for a name grain does not know as retired. gcp-key:<set> is the old
-// per-permission-set spelling, now gcp-key with its permission_set.
+// per-permission-set spelling, now gcp-key with its permission_set and
+// primary: true (gcp-key:default maps to sandbox-agent, matching Go's
+// retiredGrantReplacement).
 export function retiredGrant(name: string): RetiredGrant | null {
   const n = String(name ?? "").trim();
   if (Object.prototype.hasOwnProperty.call(RETIRED_IN_PROCESS, n)) {
     return RETIRED_IN_PROCESS[n];
   }
   if (n.startsWith("gcp-key:")) {
-    return {
-      grant: `${SERVER}/gcp#gcp-key={"permission_set":${JSON.stringify(n.slice(8))}}`,
-      moveTo: `servers (${SERVER}/gcp#gcp-key)`,
-    };
+    const keyName = n.slice("gcp-key:".length);
+    if (keyName === "default") {
+      return {
+        grant: gcpKeyGrant("default"),
+        moveTo: `servers (${SERVER}/gcp#gcp-key)`,
+      };
+    }
+    if (validLegacyGCPKeyParam(keyName)) {
+      return {
+        grant: gcpKeyGrant(keyName),
+        moveTo: `servers (${SERVER}/gcp#gcp-key)`,
+      };
+    }
   }
   return null;
 }

@@ -30,7 +30,7 @@ async function confirmDialog(page, button) {
   await expect(dialog).toHaveCount(0);
 }
 
-test("Stored secrets lists names, masks the value, replaces and removes with a confirm", async ({
+test("Stored secrets lists names, masks the value, replaces and removes with a confirm @dark", async ({
   page,
   request,
 }) => {
@@ -41,6 +41,35 @@ test("Stored secrets lists names, masks the value, replaces and removes with a c
 
   const value = page.getByTestId("input-secret-value");
   await expect(value).toHaveAttribute("type", "password");
+  // Tabbing from the value box lands on the visually hidden file input, and
+  // its label draws the 2px primary focus ring around a full hit target.
+  await value.focus();
+  await page.keyboard.press("Tab");
+  const fileInput = page.getByTestId("input-secret-file");
+  await expect(fileInput).toBeFocused();
+  const fileLabel = page.locator("label", { has: fileInput });
+  const labelBox = await fileLabel.boundingBox();
+  expect(labelBox).not.toBeNull();
+  expect(labelBox.width).toBeGreaterThanOrEqual(24);
+  expect(labelBox.height).toBeGreaterThanOrEqual(24);
+  const focusRing = await fileLabel.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const probe = document.createElement("span");
+    probe.style.color = "var(--md-sys-color-primary)";
+    document.body.appendChild(probe);
+    const primary = getComputedStyle(probe).color;
+    probe.remove();
+    return {
+      outlineStyle: cs.outlineStyle,
+      outlineWidth: cs.outlineWidth,
+      outlineColor: cs.outlineColor,
+      primary,
+    };
+  });
+  expect(focusRing.outlineStyle).toBe("solid");
+  expect(focusRing.outlineWidth).toBe("2px");
+  expect(focusRing.outlineColor).toBe(focusRing.primary);
+
   await page.getByTestId("input-secret-name").fill("walk-parity");
   await page.getByTestId("input-secret-key").fill("token");
   await value.fill("first-value");
@@ -98,8 +127,9 @@ test("Stored secrets lists names, masks the value, replaces and removes with a c
   }
 });
 
-test("Secrets stay usable while settings are locked; the rest of the page is dimmed", async ({
+test("Secrets stay usable while settings are locked; the rest of the page is dimmed and disabled @phone @dark", async ({
   page,
+  axe,
 }) => {
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -118,14 +148,47 @@ test("Secrets stay usable while settings are locked; the rest of the page is dim
   await expect(page.getByTestId("credentials-settings")).toHaveClass(
     /s-dimmed/,
   );
-  await expect(page.getByTestId("card-capability-policy")).toHaveClass(
-    /s-dimmed/,
-  );
+  const policyCard = page.getByTestId("card-capability-policy");
+  await expect(policyCard).toHaveClass(/s-dimmed/);
+  const dimStyle = await policyCard.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const title = el.querySelector(".s-card-title");
+    const probe = document.createElement("span");
+    probe.style.color = "var(--md-sys-color-on-surface-variant)";
+    document.body.appendChild(probe);
+    const variant = getComputedStyle(probe).color;
+    probe.remove();
+    return {
+      opacity: cs.opacity,
+      color: cs.color,
+      titleColor: title ? getComputedStyle(title).color : "",
+      variant,
+    };
+  });
+  expect(dimStyle.opacity).toBe("1");
+  expect(dimStyle.color).toBe(dimStyle.variant);
+  expect(dimStyle.titleColor).toBe(dimStyle.variant);
+
+  for (const id of [
+    "input-cap-server-id",
+    "input-cap-server-url",
+    "input-policy-capability",
+    "input-policy-repos",
+    "select-policy-effect",
+    "switch-policy-allow-untrusted",
+    "add-policy-rule-btn",
+    "input-scope-set-name",
+    "input-scope-set-scopes",
+  ]) {
+    await expect(page.getByTestId(id), id).toBeDisabled();
+  }
+
   await expect(page.getByTestId("credentials-read-only")).toContainText(
     "stored secrets stay editable",
   );
   await expect(page.getByTestId("input-secret-value")).toBeEnabled();
   await expect(page.getByTestId("stored-secrets")).not.toHaveClass(/s-dimmed/);
+  expect(await axe()).toEqual([]);
 });
 
 test("Deployment credentials shows and saves the GitHub host and GCP settings", async ({
@@ -226,6 +289,12 @@ test("Retired in-process grants and away hosts say what to do", async ({
         ...body.policy?.catalogue,
         inProcess: {
           "gcp-key": { restrictions: { repos: ["acme/*"] } },
+          "gcp-key:default": {},
+          "gcp-key:deployer": {},
+          "gcp-key:bad/name": {},
+          "git-push-any-ref": {},
+          memory: {},
+          "grain-log": {},
           "github-sandbox": {},
         },
       },
@@ -248,10 +317,35 @@ test("Retired in-process grants and away hosts say what to do", async ({
     "in_process.gcp-key is deprecated (repos acme/*)",
   );
   await expect(page.getByTestId("retired-grant-gcp-key")).toContainText(
-    "https://grain.dev/capabilities/gcp#gcp-key",
+    'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}',
+  );
+  await expect(page.getByTestId("retired-grant-gcp-key:default")).toContainText(
+    'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}',
+  );
+  await expect(
+    page.getByTestId("retired-grant-gcp-key:deployer"),
+  ).toContainText(
+    'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deployer","primary":true}',
+  );
+  await expect(page.getByTestId("retired-grant-gcp-key:bad/name")).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByTestId("retired-grant-git-push-any-ref"),
+  ).toContainText(
+    'https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}',
+  );
+  await expect(page.getByTestId("retired-grant-memory")).toContainText(
+    "https://grain.dev/capabilities/api#memory",
+  );
+  await expect(page.getByTestId("retired-grant-memory")).not.toContainText(
+    "api#grain/memory",
+  );
+  await expect(page.getByTestId("retired-grant-grain-log")).toContainText(
+    "https://grain.dev/capabilities/grain#journal={}",
   );
   await expect(page.getByTestId("retired-grant-github-sandbox")).toContainText(
-    "github#sandbox-repo",
+    "github#sandbox-repo={}",
   );
   await expect(
     page.getByTestId("cap-server-needs-host-" + placedId),
@@ -313,4 +407,105 @@ test("Scope set Remove and secret rows stay inside a phone viewport @phone", asy
     await request.post("/api/api-scope-sets/delete", { data: { name } });
     await request.delete("/api/secrets/walk-phone");
   }
+});
+
+test("Replace during an in-flight PUT keeps what was typed and Store is disabled while saving", async ({
+  page,
+  request,
+}) => {
+  await request.put("/api/secrets/rv-a/token", { data: { value: "a0" } });
+  await request.put("/api/secrets/rv-b/token", { data: { value: "b0" } });
+  let releasePut;
+  const putStarted = new Promise((resolve) => {
+    page.on("request", (req) => {
+      if (
+        req.method() === "PUT" &&
+        req.url().endsWith("/api/secrets/rv-a/token")
+      ) {
+        resolve();
+      }
+    });
+  });
+  let putACount = 0;
+  await page.route("**/api/secrets/rv-a/token", async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    putACount += 1;
+    await new Promise((resolve) => {
+      releasePut = resolve;
+    });
+    await route.continue();
+  });
+
+  try {
+    await page.goto("/next/settings/capabilities#other-secrets");
+    const nameIn = page.getByTestId("input-secret-name");
+    const keyIn = page.getByTestId("input-secret-key");
+    const valIn = page.getByTestId("input-secret-value");
+    const store = page.getByTestId("store-secret-btn");
+
+    await nameIn.fill("rv-a");
+    await keyIn.fill("token");
+    await valIn.fill("A-NEW");
+    await store.click();
+    await putStarted;
+    await expect(store).toBeDisabled();
+    expect(putACount).toBe(1);
+
+    await page.getByTestId("replace-secret-rv-b-token").click();
+    await expect(nameIn).toHaveValue("rv-b");
+    await expect(keyIn).toHaveValue("token");
+    await valIn.fill("B-NEW");
+    await expect(store).toBeDisabled();
+
+    const done = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/api/secrets/rv-a/token") &&
+        r.request().method() === "PUT",
+    );
+    releasePut();
+    expect((await done).ok()).toBeTruthy();
+
+    await expect(nameIn).toHaveValue("rv-b");
+    await expect(keyIn).toHaveValue("token");
+    await expect(valIn).toHaveValue("B-NEW");
+    await expect(store).toBeEnabled();
+  } finally {
+    await request.delete("/api/secrets/rv-a");
+    await request.delete("/api/secrets/rv-b");
+  }
+});
+
+test("A role holding secrets:write without settings:write or secrets:read gets honest banners and secret form @phone @dark", async ({
+  page,
+  axe,
+}) => {
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: {
+        ...body,
+        access: {
+          role: "grain/secret-writer",
+          roles: ["grain/secret-writer"],
+          full: false,
+          scopes: ["settings:read", "secrets:write"],
+        },
+      },
+    });
+  });
+
+  await page.goto("/next/settings/capabilities#other-secrets");
+  await expect(page.getByTestId("settings-role-readonly")).toContainText(
+    "Secrets and API keys remain editable.",
+  );
+  const section = page.getByTestId("stored-secrets");
+  await expect(section.locator("h4")).toHaveText("Stored secrets");
+  await expect(page.getByTestId("secrets-read-restricted")).toContainText(
+    "Stored secret names cannot be read with your role",
+  );
+  await expect(page.getByTestId("secrets-empty")).toHaveCount(0);
+  await expect(page.getByTestId("input-secret-value")).toBeEnabled();
+  expect(await axe()).toEqual([]);
 });
