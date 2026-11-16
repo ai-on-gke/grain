@@ -157,7 +157,7 @@ UI's "Pause"/"Resume" button rather than "Delete" for that case.
   following `SecretsPanel.jsx`'s pattern exactly, opened from a new
   sidebar entry alongside Settings. A task the overlay's own
   schedule fired shows a "Scheduled" badge in the ordinary task list
-  (`Task.Scheduled`, off `Origin.Reason == ReasonSchedule` — the same
+  (`Task.Scheduled`, off `Filing.Reason == ReasonSchedule` — the same
   treatment `Task.Stacked` already gives `ReasonFix`).
 
 ## Tests present
@@ -213,7 +213,7 @@ fired."** `model.Schedule.Interval` (a bare `time.Duration`) is
 replaced by `Recurrence` (`pkg/model/schedule.go`), a small sum type: `Kind`
 is one of `RecurrenceEveryNHours`, `RecurrenceDaily`, `RecurrenceWeekly`, or
 `RecurrenceMonthly`, and the fields that apply depend on which -- the same
-"column per case, most left unset" shape `Task.Origin`/`Task.Approval`
+"column per case, most left unset" shape `Task.Filing`/`Task.Approval`
 already use for a different sum type. `Recurrence.Next(after)` is the
 whole of the new logic: the first occurrence strictly after `after`,
 wall-clock aligned for the three new kinds (a calendar month is not a

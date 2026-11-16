@@ -298,7 +298,8 @@ g-context-page {
   font-family: var(--grain-font-display);
 }
 
-.ctx-md-preview code {
+/* Inline code only: fenced blocks are code cards (code-highlight.css). */
+.ctx-md-preview :not(pre) > code {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--md-sys-color-surface-container-high);
