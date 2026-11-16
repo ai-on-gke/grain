@@ -114,8 +114,11 @@ const ciFaultTTL = 30 * time.Second
 // bad day from turning a five-second poll into a table scan.
 const ciFaultRunLimit = 60
 
-// ciFaultFixesTimeout bounds how long faultFixes waits for GitHub pull
-// request file lookups so slow GitHub responses cannot stall /api/ci/runs.
+// ciFaultFixesTimeout bounds how long one computation of the fault list
+// waits for GitHub pull request file lookups, across all of its faults,
+// so slow GitHub responses cannot stall /api/ci/runs. A read still going
+// when it fires finishes in the background and lands in the FileCache,
+// so a cold cache warms over a few passes rather than never.
 const ciFaultFixesTimeout = 2 * time.Second
 
 type ciFaultCache struct {
@@ -271,11 +274,17 @@ func (c *Client) ciSharedFaultsFromRunsWithGitHub(ctx context.Context, runs []ci
 		return raw[i].Source < raw[j].Source
 	})
 	faults := make([]CIFault, 0, len(raw))
+	// One deadline for the whole pass, not one per fault: a fault list
+	// of thirty against a cold cache would otherwise hold the request
+	// for a minute, each fault spending its own two seconds on the same
+	// unanswered reads and logging that it had.
+	fixCtx, cancel := context.WithTimeout(ctx, ciFaultFixesTimeout)
+	defer cancel()
 	for _, f := range raw {
 		if c.Store != nil {
 			f.OwnerTaskID, f.OwnerRef = cifault.ResolveOwner(ctx, c.Store, f)
 		}
-		faults = append(faults, CIFault{SharedFault: f, Fixes: c.faultFixes(ctx, f)})
+		faults = append(faults, CIFault{SharedFault: f, Fixes: c.faultFixes(fixCtx, f)})
 	}
 	c.ciFaultsMu.Lock()
 	c.ciFaults = &ciFaultCache{at: now, key: key, ghKey: ghKey, faults: faults}
@@ -340,13 +349,15 @@ func (c *Client) cachedFaultRun(runner ci.Runner, listed []ci.Run) func(string) 
 // The GitHub call behind it goes through a cifault.FileCache held on the
 // Client, since the pane asks every five seconds and what a pull request
 // touches changes only when somebody pushes to it.
+//
+// ctx carries the pass's deadline (ciFaultFixesTimeout). Once a fault
+// before this one has spent it, this one is not looked up at all:
+// cifault.Fixes has already said once that the pass stopped.
 func (c *Client) faultFixes(ctx context.Context, fault ci.SharedFault) []CIFaultFix {
-	if c.Config.GitHubPullRequestFiles == nil || c.Store == nil {
+	if c.Config.GitHubPullRequestFiles == nil || c.Store == nil || ctx.Err() != nil {
 		return nil
 	}
-	fixCtx, cancel := context.WithTimeout(ctx, ciFaultFixesTimeout)
-	defer cancel()
-	found := cifault.Fixes(fixCtx, c.Store, c.pullRequestFiles(), fault)
+	found := cifault.Fixes(ctx, c.Store, c.pullRequestFiles(), fault)
 	if len(found) == 0 {
 		return nil
 	}

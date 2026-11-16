@@ -36,6 +36,7 @@ package cifault
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -124,6 +125,9 @@ const MaxFixes = 3
 // file, and a fault whose file nobody has an open change against has no
 // fix to point at yet. Errors are logged and swallowed for the same
 // reason -- this annotates an answer that is worth giving without it.
+// They are logged once per call, however many reads failed, and a
+// deadline -- ctx's, or one the lister reports -- stops the reading
+// there: every read after it would fail the same way.
 func Fixes(ctx context.Context, store Store, files FileLister, fault ci.SharedFault) []Fix {
 	if len(fault.Paths) == 0 || store == nil || files == nil {
 		return nil
@@ -141,10 +145,16 @@ func Fixes(ctx context.Context, store Store, files FileLister, fault ci.SharedFa
 	for _, ref := range fault.Refs {
 		failing[ref] = true
 	}
-	var fixes []Fix
+	var (
+		fixes   []Fix
+		failed  int
+		first   error
+		firstPR string
+		stopped error
+	)
 	for _, link := range links {
 		if err := ctx.Err(); err != nil {
-			log.Printf("ci faults: reading open pull request files stopped: %v", err)
+			stopped = err
 			break
 		}
 		ref, err := model.ParsePullRequestRef(link.PullRequest)
@@ -160,8 +170,16 @@ func Fixes(ctx context.Context, store Store, files FileLister, fault ci.SharedFa
 		}
 		paths, err := listPullRequestFilesWithContext(ctx, files, repo.StoredOwner(), repo.Name, ref.Number)
 		if err != nil {
-			log.Printf("ci faults: reading files of %s: %v", link.PullRequest, err)
-			if ctx.Err() != nil {
+			failed++
+			if first == nil {
+				first, firstPR = err, link.PullRequest
+			}
+			// A deadline is the pass's, not this pull request's: every
+			// read after it would fail the same way, each one a log line
+			// and -- for a lister that does not notice the deadline -- a
+			// GitHub call spent on an answer nobody is waiting for.
+			if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				stopped = err
 				break
 			}
 			continue
@@ -185,11 +203,29 @@ func Fixes(ctx context.Context, store Store, files FileLister, fault ci.SharedFa
 			Files:       matched,
 		})
 	}
+	logFileFailures(failed, firstPR, first, stopped)
 	if len(fixes) > MaxFixes {
 		return nil
 	}
 	sort.SliceStable(fixes, func(i, j int) bool { return newerTask(fixes[i].Task, fixes[j].Task) })
 	return fixes
+}
+
+// logFileFailures says what one pass of Fixes could not read, in one
+// line however many reads failed: a GitHub outage or a deadline shorter
+// than a cold cache answers every candidate the same way, and a line per
+// candidate (about two hundred of them on a busy deployment) is noise
+// that says nothing the first one did not.
+func logFileFailures(failed int, firstPR string, first, stopped error) {
+	switch {
+	case failed == 0 && stopped == nil:
+	case failed == 0:
+		log.Printf("ci faults: reading open pull request files stopped: %v", stopped)
+	case stopped != nil:
+		log.Printf("ci faults: reading open pull request files stopped after %d failed (first %s: %v)", failed, firstPR, first)
+	default:
+		log.Printf("ci faults: reading files of %d open pull requests failed (first %s: %v)", failed, firstPR, first)
+	}
 }
 
 func listPullRequestFilesWithContext(ctx context.Context, files FileLister, owner, repo string, number int) ([]string, error) {
