@@ -111,6 +111,44 @@ test("CLI shows the workstation installer, token sign-in and skill lines", async
   await expect(snippet).toContainText("grain skill install");
 });
 
+test("each CLI command has its own Copy button", async ({
+  page,
+  context,
+  demoServer,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: demoServer,
+  });
+  await page.goto("/next/settings/cli");
+  await page.getByTestId("copy-cli-install").click();
+  await expect(page.getByText("Copied the install command")).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    `curl -fsSL ${demoServer}/cli/install.sh | sh`,
+  );
+  await page.getByTestId("copy-cli-login").click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
+    /^grain login \S+ --name \S+ --issue-token --scope-set grain\/external-dev --expires 30d$/,
+  );
+
+  // On a phone each Copy still sits at the top right of its own line,
+  // inside the card, and nothing scrolls sideways.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const card = await page.getByTestId("card-cli").boundingBox();
+  for (const id of ["install", "login", "skill"]) {
+    const copy = page.getByTestId(`copy-cli-${id}`);
+    const btn = await copy.boundingBox();
+    const line = await copy
+      .locator("xpath=preceding-sibling::pre")
+      .boundingBox();
+    expect(btn.x).toBeGreaterThanOrEqual(line.x + line.width - 1);
+    expect(btn.x + btn.width).toBeLessThanOrEqual(card.x + card.width + 0.5);
+    expect(Math.abs(btn.y - line.y)).toBeLessThan(2);
+  }
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+});
+
 test("Audit prints times in the display time zone", async ({ page }) => {
   await page.goto("/next/settings/audit");
   const first = page.getByTestId("audit-row").first().locator("td").first();
@@ -338,4 +376,44 @@ test("Branch name template is refused by its label before saving, and shows the 
   await expect(page.getByTestId("settings-save-btn")).toBeEnabled();
   await page.getByTestId("settings-discard-btn").click();
   await expect(page.getByTestId("settings-save-bar")).toHaveCount(0);
+});
+
+test("Lock settings in UI is off-limits without a config repository, unless it is already on", async ({
+  page,
+}) => {
+  const lock = page.getByTestId("switch-settings-locked");
+  // The demo has no config repository: locking would leave every
+  // config-managed section read-only with nowhere to change it.
+  await page.goto("/next/settings/general");
+  await expect(lock).toBeDisabled();
+  await expect(page.getByTestId("settings-lock-hint")).toHaveText(
+    "Unavailable without a config repository: settings are always edited directly here.",
+  );
+
+  // Stub: the real GET /api/config answer, naming a config repository.
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...body, configRepo: "example/walk-config" },
+    });
+  });
+  await page.reload();
+  await expect(lock).toBeEnabled();
+  await page.unroute("**/api/config");
+
+  // Stub: a lock already on with no config repository can be turned off.
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...body, settingsLocked: true },
+    });
+  });
+  await page.reload();
+  await expect(lock).toHaveAttribute("aria-checked", "true");
+  await expect(lock).toBeEnabled();
 });
