@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +106,82 @@ func TestDurableRunsNarrowTheRotationToAdoptableConnections(t *testing.T) {
 	}
 	if got := req.adoptableOnly(both[:1]); len(got) != 1 || got[0].ID != "agy" {
 		t.Errorf("durable request with no adoptable candidate kept %v, want agy rather than nothing", got)
+	}
+}
+
+// An antigravity run adopted across a restart is read with antigravity's
+// parser on a deployment that also has claude connections, names no
+// framework of its own, and lists models on both in its default -- the
+// v3.11.0 upgrade's six adopted agy runs, which the claude parser read
+// ("claude: no result event found in output") and so lost with their
+// transcripts. What the run is on comes back from its row (LiveRuns),
+// not from the rotation, which for a durable task with claude under a
+// run host would put it on claude.
+func TestAnAdoptedAntigravityRunIsReadByAntigravitysParser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	agy := model.AgentBackend{ID: "agy", Framework: model.AgentFrameworkAntigravity,
+		AuthMode: model.AntigravityAuthAmbient, CLIPath: "/bin/true", Models: []string{"gemini-x", "opus-y"}}
+	cl := model.AgentBackend{ID: "claude", Framework: model.AgentFrameworkClaude,
+		AuthMode: model.AntigravityAuthAmbient, CLIPath: "/bin/true", Models: []string{"claude-y"}}
+	pool := providerDefaultPool(t, "gemini-x, claude-y, opus-y", agy, cl)
+	pool.cfg.RunHost = &runhost.Host{}
+	store := pool.Store
+
+	task := model.Task{ID: "t", Intent: model.IntentImplement, Title: "t", Admission: model.AdmissionDurable,
+		Origin:   model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "p"}}, Reason: model.ReasonDirect},
+		Binding:  model.BindingDirective,
+		Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "p"}}}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "t-1", TaskID: "t", Sandbox: "t-1", Attempt: 1,
+		StartedAt: time.Now().UTC()}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRunModel(ctx, "t-1", "opus-y", model.AgentFrameworkAntigravity); err != nil {
+		t.Fatal(err)
+	}
+	live, err := store.LiveRuns(ctx)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("live runs = %+v (%v), want t-1", live, err)
+	}
+	if live[0].AgentFramework != model.AgentFrameworkAntigravity || live[0].Model != "opus-y" {
+		t.Fatalf("live run = %+v, want it on opus-y on antigravity", live[0])
+	}
+
+	build := func(choice orchestrator.AgentChoice) *BackendFramework {
+		t.Helper()
+		built, err := pool.Build(ctx, choice)
+		if err != nil {
+			t.Fatalf("Build(%+v): %v", choice, err)
+		}
+		fw := built.(*BackendFramework)
+		t.Cleanup(fw.Release)
+		return fw
+	}
+	// What the rotation alone would give it: the trap the run fell in.
+	if fw := build(orchestrator.ChoiceFor(task)); fw.FrameworkName != model.AgentFrameworkClaude {
+		t.Fatalf("the task's own choice built %s, want claude (adoptable under the run host) -- "+
+			"the precondition this test guards against", fw.FrameworkName)
+	}
+	fw := build(orchestrator.AdoptedChoice(orchestrator.ChoiceFor(task), live[0]))
+	if fw.FrameworkName != model.AgentFrameworkAntigravity || fw.Id != "agy" || fw.CredentialModel() != "opus-y" {
+		t.Fatalf("adopted run built %s on %s with %s, want antigravity on agy with opus-y",
+			fw.FrameworkName, fw.Id, fw.CredentialModel())
+	}
+
+	stream := strings.Join([]string{
+		`{"event":"init","init":{"cwd":"/w","tools":["mcp__grain-sandbox__run_command"],"permission_mode":"bypass"}}`,
+		`{"event":"step_update","step_update":{"step_index":0,"state":"ACTIVE","step_type":"tool","tool_name":"write_file","tool_info":{"name":"write_file","parameters":{"path":"ok.txt"}}}}`,
+		`{"event":"step_update","step_update":{"step_index":0,"state":"DONE","step_type":"tool","tool_name":"write_file","tool_info":{"name":"write_file","output":"wrote ok.txt"}}}`,
+		`{"event":"result","result":{"status":"SUCCESS","response":"done"}}`,
+	}, "\n") + "\n"
+	result, err := fw.ParseResult(stream, nil)
+	if err != nil || result == nil {
+		t.Fatalf("ParseResult = %+v, %v; want the agy stream read as the success it is", result, err)
+	}
+	if result.FinalText != "done" || len(result.ToolCalls) != 1 || !strings.Contains(result.Transcript, "write_file") {
+		t.Fatalf("result = %+v, want agy's answer, its tool call and a transcript naming it", result)
 	}
 }
