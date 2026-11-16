@@ -18,6 +18,7 @@ import { GrainApi, splitRepo } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { ConnectionService } from "../services/connection.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { errorText } from "../sessions/session-helpers";
 import { configuredInstanceRepos } from "../shared/instance-repos";
@@ -61,6 +62,12 @@ export class ProcessesStore {
   private readonly access = inject(AccessService);
   private readonly taskFeed = inject(TaskFeedStore);
   private readonly zone = inject(NgZone);
+  private readonly connection = inject(ConnectionService);
+  private readOk = false;
+  private readonly offOutage = this.connection.whileOutage(
+    () => this.loadError.set(null),
+    () => this.readOk,
+  );
 
   readonly loaded = signal(false);
   readonly loadError = signal<string | null>(null);
@@ -251,11 +258,13 @@ export class ProcessesStore {
       }
 
       this.loadError.set(null);
+      this.readOk = true;
       this.loaded.set(true);
       void this.loadDeclarationStatuses();
     } catch (err) {
       if (this.activeCount === 0) return;
       this.loaded.set(true);
+      if (this.connection.quietsReadError(err, this.readOk)) return;
       this.loadError.set(errorText(err));
     }
   }

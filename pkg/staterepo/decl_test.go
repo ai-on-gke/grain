@@ -667,3 +667,103 @@ func TestASettingsDocumentCarriesRowsWhoseOwnerIsGone(t *testing.T) {
 	}
 	sameDatabase(t, ctx, db, restored, "a database restored from a dump with orphaned settings rows")
 }
+
+// A hand-written template in grain/config's settings/templates.yml that leaves
+// out target: (along with auto-merge: and created-at:, as a repository's own
+// .grain/templates/<name>.yml may) imports with empty/zero values rather than
+// failing on NOT NULL columns that declare no DDL default in pkg/model/schema.go.
+func TestMinimalHandWrittenTemplateWithoutTargetImports(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openDB(t)
+	remote := bareRemote(t)
+	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: filepath.Join(t.TempDir(), "state"), Remote: remote})
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	bound := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "tpl-bound", Name: "bound", Title: "Bound template", Body: "initial body",
+		Target: &bound, AutoMerge: true, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("putting bound template: %v", err)
+	}
+	if err := staterepo.Load(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+
+	work := filepath.Join(t.TempDir(), "clone")
+	git(t, "", "clone", "--quiet", remote, work)
+	tplPath := filepath.Join(work, filepath.FromSlash(staterepo.DumpPath("template")))
+	if err := os.WriteFile(tplPath, []byte(`templates:
+  - id: tpl-bound
+    name: bound
+    title: Unbound by omitting target
+    body: updated body
+  - id: template-1
+    name: minimal
+    title: A minimal hand-written template
+    body: written in grain/config by hand
+  - id: template-null-target
+    name: explicit-null
+    target: null
+    title: Explicit null target
+    body: written with null target
+`), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", tplPath, err)
+	}
+
+	_, checkDB := openDB(t)
+	report, err := staterepo.Check(ctx, checkDB, work, model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("Check failed on minimal templates.yml: %v", err)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "cannot be imported") {
+			t.Errorf("Check reported false unimportable column warning: %s", w)
+		}
+	}
+
+	git(t, work, "-c", "user.email=alice@example.com", "-c", "user.name=Alice", "commit", "-am", "Add minimal templates without target")
+	git(t, work, "push", "--quiet", "origin", "main")
+
+	if applied, err := staterepo.Apply(ctx, repo, db, model.SchemaVersion); err != nil || !applied {
+		t.Fatalf("Apply: applied=%v err=%v", applied, err)
+	}
+
+	minimal, err := store.GetTemplate(ctx, "template-1")
+	if err != nil || minimal == nil {
+		t.Fatalf("GetTemplate(template-1): %v, %v", minimal, err)
+	}
+	if minimal.Name != "minimal" || minimal.Title != "A minimal hand-written template" || minimal.Body != "written in grain/config by hand" {
+		t.Errorf("minimal text = %+v", minimal)
+	}
+	if minimal.Target != nil || minimal.AutoMerge || !minimal.CreatedAt.IsZero() {
+		t.Errorf("minimal defaults = (Target=%v, AutoMerge=%v, CreatedAt=%v), want nil/false/zero",
+			minimal.Target, minimal.AutoMerge, minimal.CreatedAt)
+	}
+
+	nullTarget, err := store.GetTemplate(ctx, "template-null-target")
+	if err != nil || nullTarget == nil || nullTarget.Target != nil {
+		t.Errorf("GetTemplate(template-null-target) = (%+v, %v), want unbound", nullTarget, err)
+	}
+
+	unbound, err := store.GetTemplate(ctx, "tpl-bound")
+	if err != nil || unbound == nil {
+		t.Fatalf("GetTemplate(tpl-bound): %v, %v", unbound, err)
+	}
+	if unbound.Target != nil || unbound.AutoMerge || unbound.Title != "Unbound by omitting target" {
+		t.Errorf("tpl-bound after omitting target/auto-merge = %+v, want unbound with AutoMerge=false", unbound)
+	}
+
+	// Re-exporting and importing into a fresh store round-trips cleanly.
+	exported := t.TempDir()
+	if err := staterepo.Export(ctx, db, exported); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	_, restored := openDB(t)
+	if err := staterepo.Import(ctx, restored, exported); err != nil {
+		t.Fatalf("Import after re-export: %v", err)
+	}
+	sameDatabase(t, ctx, db, restored, "a database with an imported minimal template")
+}

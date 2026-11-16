@@ -158,7 +158,34 @@ const MAX_VERIFIER_RETRY_MS = 20_000;
 // promptly so a daemon (or proxy) that accepts connections without answering
 // aborts the hung socket and surfaces a timeout instead of wedging polls.
 export const READ_TIMEOUT_MS = 8_000;
-const SLOW_READ_TIMEOUT_MS = 30_000;
+// SLOW_READ_TIMEOUT_MS is for reads whose handler waits on something
+// outside the daemon -- a provider's model listing (30 s server bound), a
+// guest health sweep (20 s), a capability server tool (1 min), a registry
+// or release-notes read -- so it sits above the slowest of those bounds.
+export const SLOW_READ_TIMEOUT_MS = 65_000;
+const SLOW_READ_PATHS = [
+  /^\/api\/agent-models(\/|$)/,
+  /^\/api\/sandboxes(\/|$)/,
+  /^\/api\/capability-servers(\/|$)/,
+  /^\/api\/upgrade(\/|$)/,
+  /reachable-repos/,
+];
+
+// A read given up on on purpose (recovery dropping the requests it no
+// longer wants), not one the server failed to answer.
+export interface ReadCancelledError extends Error {
+  readonly cancelled: true;
+}
+
+export function isCancelledRead(err: unknown): boolean {
+  return (err as { cancelled?: unknown })?.cancelled === true;
+}
+
+function makeCancelledError(): ReadCancelledError {
+  return Object.assign(new Error("The request was cancelled."), {
+    cancelled: true as const,
+  });
+}
 
 export interface ReadTimeoutError extends Error {
   readonly timedOut: true;
@@ -188,7 +215,7 @@ function readTimeoutForUrl(url: string): number {
   if (path === "/api/restart-watch") {
     return new URLSearchParams(qs).get("quick") === "1" ? READ_TIMEOUT_MS : 0;
   }
-  if (path.includes("reachable-repos")) {
+  if (SLOW_READ_PATHS.some((re) => re.test(path))) {
     return SLOW_READ_TIMEOUT_MS;
   }
   return READ_TIMEOUT_MS;
@@ -284,9 +311,11 @@ export class GrainApi implements OnDestroy {
   } | null = null;
   private readonly observers = new Set<ApiActivityObserver>();
   private readonly activeReads = new Set<{
+    url: string;
     sentAt: number;
     deadline: number;
     abort: () => void;
+    cancel: () => void;
     dispose: () => void;
   }>();
   private readSweepTimer: ReturnType<typeof setTimeout> | null = null;
@@ -323,10 +352,19 @@ export class GrainApi implements OnDestroy {
   // Aborts reads still waiting from before a recovery so half-open sockets
   // never hold inflight entries or HTTP/1.1 connection slots once the server
   // is answering new requests again.
+  //
+  // They reject as cancelled (isCancelledRead), which is not reported to
+  // activity observers -- it is not news about the server -- and their URLs
+  // leave the in-flight maps at once, so a caller asking again in the same
+  // tick (a reconnect listener) gets a fresh request, not the dropped one.
   abortStaleReads(olderThanMs = 2_000, now = Date.now()): void {
     for (const r of [...this.activeReads]) {
       if (now - r.sentAt >= olderThanMs) {
-        r.abort();
+        r.cancel();
+        if (r.url) {
+          this.inflightGet.delete(r.url);
+          this.inflightCond.delete(r.url);
+        }
       }
     }
     this.scheduleReadSweep();
@@ -379,7 +417,7 @@ export class GrainApi implements OnDestroy {
         return res;
       },
       (err) => {
-        this.notifyError(url, err);
+        if (!isCancelledRead(err)) this.notifyError(url, err);
         throw err;
       },
     );
@@ -388,6 +426,7 @@ export class GrainApi implements OnDestroy {
   private readBounded<T>(
     obs$: Observable<T>,
     timeoutMs: number,
+    url = "",
     alwaysBound = false,
   ): Promise<T> {
     if (timeoutMs <= 0 || (!alwaysBound && this.observers.size === 0)) {
@@ -406,6 +445,7 @@ export class GrainApi implements OnDestroy {
         }
       };
       const entry = {
+        url,
         sentAt,
         deadline,
         abort: () => {
@@ -414,6 +454,13 @@ export class GrainApi implements OnDestroy {
           cleanup();
           sub?.unsubscribe();
           reject(makeTimeoutError(timeoutMs, sentAt));
+        },
+        cancel: () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          sub?.unsubscribe();
+          reject(makeCancelledError());
         },
         dispose: () => {
           if (settled) return;
@@ -465,6 +512,7 @@ export class GrainApi implements OnDestroy {
             ? this.http.head<T>(url, { headers: JSON_HEADERS })
             : this.http.get<T>(url, { headers: JSON_HEADERS }),
           timeoutMs,
+          url,
         ),
       ),
     ).finally(() => {
@@ -486,6 +534,7 @@ export class GrainApi implements OnDestroy {
         this.readBounded(
           this.http.head<void>(url, { headers: JSON_HEADERS }),
           readTimeoutForUrl(url),
+          url,
         ),
       ),
     );
@@ -503,6 +552,7 @@ export class GrainApi implements OnDestroy {
         this.readBounded(
           this.http.get(url, { responseType: "text" }),
           readTimeoutForUrl(url),
+          url,
         ),
       ),
     );
@@ -546,6 +596,7 @@ export class GrainApi implements OnDestroy {
       return this.readBounded(
         this.http.get<T>(url, { headers, observe: "response" }),
         timeoutMs,
+        url,
       ).then(
         (res) => {
           const body = res.body as T;
@@ -759,6 +810,7 @@ export class GrainApi implements OnDestroy {
     return this.readBounded(
       this.http.get<GrainConfig>("/api/config", { headers: JSON_HEADERS }),
       timeoutMs,
+      "",
       true,
     ).then((body) => {
       if (this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0) === epoch) {

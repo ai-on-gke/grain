@@ -17,6 +17,7 @@ import { Injectable, NgZone, OnDestroy, inject, signal } from "@angular/core";
 import {
   GrainApi,
   READ_TIMEOUT_MS,
+  isCancelledRead,
   isVerifierUnavailable,
 } from "../api/grain-api.service";
 import { AccessService } from "./access.service";
@@ -168,6 +169,48 @@ export class ConnectionService implements OnDestroy {
     }
   };
 
+  // quietsReadError says whether a page should keep a failed read off its
+  // own banner: a read cancelled on purpose never is news, and an
+  // unreachable read over data the page already shows is the outage the
+  // shell's one disconnected banner reports -- once it is up, or while its
+  // confirmation is in flight -- so the page says nothing of its own.
+  quietsReadError(err: unknown, hasData: boolean): boolean {
+    if (isCancelledRead(err)) return true;
+    if (!hasData || !isUnreachable(err)) return false;
+    if (this.disconnected() !== null) return true;
+    // Before the outage is confirmed, only a read that got no answer at all
+    // (timed out, connection dropped or refused) waits on the confirmation.
+    // A gateway's 502/503/504 for one route while /api/config still answers
+    // is that route's own failure, and the page says so as it always has.
+    const status = (err as { status?: unknown })?.status;
+    const noAnswer =
+      (err as { timedOut?: unknown })?.timedOut === true ||
+      err instanceof TypeError ||
+      status === 0;
+    return (
+      noAnswer &&
+      (this.firstFailure !== null || this.probing || this.confirmTimer !== null)
+    );
+  }
+
+  // whileOutage clears a page's banner when the shell's disconnected banner
+  // goes up over data the page already has, and runs onBack (a recovery
+  // refresh) when the server answers again. Root stores call it once.
+  whileOutage(
+    clear: () => void,
+    hasData: () => boolean,
+    onBack?: () => void,
+  ): () => void {
+    const offDown = this.onDisconnect(() => {
+      if (hasData()) clear();
+    });
+    const offUp = onBack ? this.onReconnect(onBack) : () => undefined;
+    return () => {
+      offDown();
+      offUp();
+    };
+  }
+
   onDisconnect(fn: () => void): () => void {
     this.disconnectListeners.add(fn);
     return () => this.disconnectListeners.delete(fn);
@@ -247,6 +290,7 @@ export class ConnectionService implements OnDestroy {
 
   private onRequestError(url: string, err: unknown): void {
     if (!this.started) return;
+    if (isCancelledRead(err)) return;
     if (!isUnreachable(err)) {
       // Any HTTP status from the daemon itself proves it is reachable.
       this.onDaemonAnswered();
@@ -407,6 +451,7 @@ export class ConnectionService implements OnDestroy {
     try {
       const cfg = await this.api.probeConfig(PROBE_TIMEOUT_MS);
       if (!this.started) return;
+      this.lastProbeOkAt = Date.now();
       if (cfg) this.access.setConfig(cfg);
       this.markRecovered();
     } catch (err) {
@@ -428,6 +473,7 @@ export class ConnectionService implements OnDestroy {
     }
     this.firstFailure = null;
     this.lastOkAt = Date.now();
+    this.lastProbeOkAt = this.lastOkAt;
     if (typeof this.api.abortStaleReads === "function") {
       this.api.abortStaleReads(1_500);
     }

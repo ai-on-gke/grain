@@ -103,6 +103,7 @@ const FOCUS_COMPOSER = "focusComposer";
     "./sessions-page.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {

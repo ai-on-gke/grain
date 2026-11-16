@@ -17,6 +17,7 @@ import type { Subscription } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { AccessService } from "../services/access.service";
+import { ConnectionService } from "../services/connection.service";
 import { errorText } from "../sessions/session-helpers";
 import { configuredInstanceRepos } from "../shared/instance-repos";
 import {
@@ -48,6 +49,12 @@ export class CIStore {
   private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
   private readonly zone = inject(NgZone);
+  private readonly connection = inject(ConnectionService);
+  private readOk = false;
+  private readonly offOutage = this.connection.whileOutage(
+    () => this.loadError.set(null),
+    () => this.readOk,
+  );
 
   readonly loaded = signal(false);
   readonly enabled = signal(true);
@@ -290,6 +297,7 @@ export class CIStore {
       }
 
       this.loadError.set(null);
+      this.readOk = true;
       this.loaded.set(true);
 
       const sel = this.selectedId();
@@ -312,6 +320,7 @@ export class CIStore {
     } catch (err) {
       if (this.activeCount === 0) return;
       this.loaded.set(true);
+      if (this.connection.quietsReadError(err, this.readOk)) return;
       this.loadError.set(errorText(err));
     }
   }

@@ -28,6 +28,7 @@ import type {
 } from "../api/models";
 import type { GrainPlanBlock } from "../director/director-draft";
 import { AccessService } from "../services/access.service";
+import { ConnectionService } from "../services/connection.service";
 import { topologicalPlanOrder } from "./session-artifacts";
 import {
   DIRECTOR_ID,
@@ -99,6 +100,19 @@ export class SessionsStore {
   private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
   private readonly zone = inject(NgZone);
+  private readonly connection = inject(ConnectionService);
+  // While the shell's disconnected banner reports an outage, a list already
+  // on screen keeps no banner of its own (ConnectionService.whileOutage).
+  private readonly offOutage = this.connection.whileOutage(
+    () => {
+      this.loadError.set(null);
+      this.detailError.set(null);
+    },
+    () => this.sessions().length > 0,
+    () => {
+      if (this.timer) void this.refresh();
+    },
+  );
 
   readonly sessions = signal<ConsoleSession[]>([]);
   readonly offered = signal<CapabilityOption[]>([]);
@@ -315,7 +329,9 @@ export class SessionsStore {
     if (list.status === "fulfilled") {
       this.applyList(list.value);
       this.loadError.set(null);
-    } else {
+    } else if (
+      !this.connection.quietsReadError(list.reason, this.sessions().length > 0)
+    ) {
       this.loadError.set(
         `Sessions could not be read: ${errorText(list.reason)}. This page tries again on its own.`,
       );
@@ -398,7 +414,10 @@ export class SessionsStore {
           await this.loadDetail(id, rowKey(tasks[id]));
           if (id === sel) this.detailError.set(null);
         } catch (err) {
-          if (id === sel) {
+          if (
+            id === sel &&
+            !this.connection.quietsReadError(err, !!this.details()[id])
+          ) {
             this.detailError.set(
               `This conversation could not be read: ${errorText(err)}`,
             );

@@ -19,7 +19,15 @@ import {
 } from "@angular/common/http/testing";
 import { TestBed } from "@angular/core/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GrainApi, READ_TIMEOUT_MS } from "../api/grain-api.service";
+import { NEVER } from "rxjs";
+import {
+  GrainApi,
+  READ_TIMEOUT_MS,
+  SLOW_READ_TIMEOUT_MS,
+  isCancelledRead,
+} from "../api/grain-api.service";
+import { GrainEvents } from "../api/grain-events.service";
+import { TaskFeedStore } from "./task-feed.service";
 import { AccessService } from "./access.service";
 import {
   CONFIRM_DELAY_MS,
@@ -146,5 +154,97 @@ describe("ConnectionService & GrainApi bounded reads", () => {
 
     expect(conn.disconnected()?.restarting).toBe(true);
     expect(conn.disconnected()?.headline).toBe("Grain is restarting");
+  });
+
+  it("cancels stale reads on recovery without reporting them, and the next ask is a fresh request", async () => {
+    let caught: unknown = null;
+    const stale = api.getIfChanged("GET /api/tasks").catch((e) => {
+      caught = e;
+    });
+    const req1 = http.expectOne("/api/tasks");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    api.abortStaleReads(1_500);
+    // Asked again in the same tick, as a reconnect listener does: a new
+    // request, not the cancelled one handed back from the in-flight map.
+    const fresh = api.getIfChanged<{ id: string }[]>("GET /api/tasks");
+    await stale;
+    expect(req1.cancelled).toBe(true);
+    expect(isCancelledRead(caught)).toBe(true);
+    http.expectOne("/api/tasks").flush([{ id: "1" }]);
+    expect((await fresh).body).toEqual([{ id: "1" }]);
+
+    // The cancellation is not news about the server: no confirmation probe.
+    await vi.advanceTimersByTimeAsync(CONFIRM_DELAY_MS + 10);
+    http.expectNone("/api/config");
+    expect(conn.disconnected()).toBeNull();
+  });
+
+  it("gives reads that wait on providers, guests or registries the slow timeout", async () => {
+    const p = api.get("GET /api/agent-models").catch((e) => e);
+    const req = http.expectOne("/api/agent-models");
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS + 1_000);
+    expect(req.cancelled).toBe(false);
+    req.flush({ models: [] });
+    expect(await p).toEqual({ models: [] });
+    expect(SLOW_READ_TIMEOUT_MS).toBeGreaterThan(60_000);
+  });
+});
+
+describe("TaskFeedStore under a confirmed outage", () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function setup() {
+    let next: () => Promise<unknown> = () =>
+      Promise.resolve({ body: [{ id: "1", state: "queued" }], changed: true });
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: GrainApi,
+          useValue: { getIfChanged: () => next(), config: () => NEVER },
+        },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const feed = TestBed.inject(TaskFeedStore);
+    const conn = TestBed.inject(ConnectionService);
+    return {
+      feed,
+      conn,
+      fail: (err: unknown) => {
+        next = () => Promise.reject(err);
+      },
+    };
+  }
+
+  it("keeps a loaded list's banner off past the sustained threshold while the shell reports the outage", async () => {
+    const { feed, conn, fail } = setup();
+    expect(await feed.refresh()).toBe(true);
+    conn.disconnected.set({
+      headline: "Server cannot be reached",
+      detail: "",
+      restarting: false,
+      since: Date.now(),
+    });
+    fail({ status: 0 });
+    for (let i = 0; i < 4; i++) await feed.refresh();
+    expect(feed.loadError()).toBeNull();
+    expect(feed.tasks().length).toBe(1);
+  });
+
+  it("still says so when one route keeps failing while the server answers", async () => {
+    const { feed, fail } = setup();
+    expect(await feed.refresh()).toBe(true);
+    fail({ status: 503, error: { error: "upstream request timed out" } });
+    for (let i = 0; i < 3; i++) await feed.refresh();
+    expect(feed.loadError()).toBe("upstream request timed out");
+  });
+
+  it("does not count a cancelled read as a failed poll", async () => {
+    const { feed, fail } = setup();
+    fail(Object.assign(new Error("cancelled"), { cancelled: true }));
+    expect(await feed.refresh()).toBe(false);
+    expect(feed.loadError()).toBeNull();
+    expect(feed.lastError()).toBeNull();
   });
 });

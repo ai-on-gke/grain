@@ -42,7 +42,7 @@ test(
   "a hung daemon holding /api/** shows an announced disconnected notice and recovers after unroute",
   { tag: ["@phone", "@dark"] },
   async ({ page, axe }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(120_000);
     await page.goto("/next/tasks");
     await expect(
       page.getByRole("heading", { level: 1, name: "Tasks" }),
@@ -60,7 +60,12 @@ test(
     await expect(banner).toHaveAttribute("role", "status");
     await expect(banner).toContainText(/Server is not responding/i);
     await expect(banner).toContainText(/sent no answer/i);
-    // Single failure notice: no duplicate task-list load-error under it.
+    // Single failure notice: the task list's own banner (load-error, which
+    // /next/tasks renders once its feed's failures are sustained -- three in
+    // a row or 30 s, request-trouble.ts) stays off under it. Wait past that
+    // threshold so this would fail if the suppression were removed.
+    await page.waitForTimeout(32_000);
+    await expect(banner).toBeVisible();
     await expect(page.getByTestId("load-error")).toHaveCount(0);
     expect(await axe()).toEqual([]);
 
@@ -85,7 +90,7 @@ test(
   "a daemon refusing connections outright shows the disconnected notice and clears on recovery",
   { tag: ["@phone", "@dark"] },
   async ({ page, axe }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(90_000);
     await page.goto("/next/tasks");
     await expect(
       page.getByRole("heading", { level: 1, name: "Tasks" }),
@@ -98,6 +103,10 @@ test(
     await expect(banner).toBeVisible({ timeout: 15_000 });
     await expect(banner).toHaveAttribute("role", "status");
     await expect(banner).toContainText(/Server cannot be reached/i);
+    // Refused reads fail at once, so the feed's backed-off polls (3, 6, 12 s)
+    // reach three failures -- sustained -- inside this wait.
+    await page.waitForTimeout(25_000);
+    await expect(banner).toBeVisible();
     await expect(page.getByTestId("load-error")).toHaveCount(0);
     expect(await axe()).toEqual([]);
 

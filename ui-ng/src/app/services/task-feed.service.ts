@@ -21,9 +21,10 @@ import {
   inject,
   signal,
 } from "@angular/core";
-import { GrainApi } from "../api/grain-api.service";
+import { GrainApi, isCancelledRead } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
+import { errorText } from "../sessions/session-helpers";
 import { ConnectionService, isUnreachable } from "./connection.service";
 import { ReadTrouble } from "./request-trouble";
 
@@ -32,15 +33,10 @@ export const IDLE_POLL_MS = 15000;
 const CLOCK_TICK_MS = 5000;
 
 function extractError(err: unknown): string {
-  const e = err as { error?: unknown; message?: string; status?: number };
-  if (e?.status === 0) return "The server could not be reached.";
-  if (e && typeof e.error === "string" && e.error) return e.error;
-  if (e && e.error && typeof e.error === "object") {
-    const nested = e.error as { error?: string; message?: string };
-    if (nested.error) return nested.error;
-    if (nested.message) return nested.message;
+  if ((err as { status?: unknown })?.status === 0) {
+    return "The server could not be reached.";
   }
-  return e?.message || "The request failed.";
+  return errorText(err);
 }
 
 export function isOpenWorkTask(t: Task): boolean {
@@ -302,13 +298,11 @@ export class TaskFeedStore implements OnDestroy {
       this.trouble.ok();
       return true;
     } catch (err) {
+      // A read recovery cancelled on purpose is not a failed poll.
+      if (isCancelledRead(err)) return false;
       this.lastError.set(err);
       if (this.trouble.fail(err) || !this.loaded()) {
-        if (
-          this.loaded() &&
-          this.connection.disconnected() &&
-          isUnreachable(err)
-        ) {
+        if (this.connection.quietsReadError(err, this.loaded())) {
           this.loadError.set(null);
         } else {
           this.loadError.set(extractError(err));
