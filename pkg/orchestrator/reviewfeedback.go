@@ -497,7 +497,8 @@ func noteFindingsOnReview(ctx context.Context, store *model.Store, task model.Ta
 // its prompt (SyncReviewQuestions), and that run fixes what was decided
 // and goes through the way the change would have after a clean review:
 // wantedAutoMerge, read before any hold was dropped, is what it gets
-// back. Submit is still "ship as is". model.AwaitsSubmit reads a
+// back. Accept findings is "ship as is"; Submit leaves the hold where it
+// is (reviewquestions.go). model.AwaitsSubmit reads a
 // completed task with a pull request and no auto-merge as
 // 'awaiting_submit', and the inbox and task pane show one carrying the
 // link as a review that needs a decision.

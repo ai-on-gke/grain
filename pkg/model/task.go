@@ -1408,9 +1408,9 @@ const (
 	// each with the reviewer's recommended answer -- and that the change
 	// waits on that owner's decision (-> ReviewQuestions.Target()). A
 	// human reply on the task, or on the review, sends the task back to
-	// the queue with the questions and the reply in its prompt; Submit
-	// ships it as is. Written and read by orchestrator's
-	// reviewquestions.go.
+	// the queue with the questions and the reply in its prompt; Accept
+	// findings ships it as is. Submit leaves it in place. Written and
+	// read by orchestrator's reviewquestions.go.
 	LinkReviewQuestions LinkKind = "review-questions"
 	// LinkDraftReview records a draft review grain posted on this task's
 	// pull request for a review task's findings (-> GitHub's review ID),

@@ -275,8 +275,8 @@ type Task struct {
 	PathTriggerTasks []string          `json:"pathTriggerTasks,omitempty"`
 	// ReviewQuestions is the review task whose open questions this change
 	// waits on its owner's decision about (model.LinkReviewQuestions):
-	// a reply sends another run to carry the decision out, and Submit
-	// ships it as is.
+	// a reply sends another run to carry the decision out, and Accept
+	// findings ships it as is (Submit leaves the hold in place).
 	ReviewQuestions string `json:"reviewQuestions,omitempty"`
 	// MergePolicy is the effective policy the repository's merge rules
 	// gave this change's head (model.LinkMergePolicy, grain/task-1659),
