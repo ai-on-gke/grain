@@ -10,7 +10,7 @@ This document specifies how Grain deployments configure and connect to Capabilit
 
 The design this specifies is [`capabilities.design.md`](../../design/capabilities.design.md). A concise guide for capability authors is in [`docs/capabilities.md`](../../../docs/capabilities.md). Where the guide ever disagrees with this specification, **this document wins**.
 
-Proposed additive protocol: [MCP goals](../mcp-goals/mcp-goals.spec.md) defines explicitly attached `goal_*` read-only tools alongside capability methods. It does not change `mint_*`/`release_*` discovery or grant authority; goal evaluation has its own bounded request/result and error contracts. This protocol is not yet implemented.
+Proposed additive protocol: [MCP gates](../mcp-gates/mcp-gates.spec.md) defines explicitly attached `gate_*` read-only tools alongside capability methods. It does not change `mint_*`/`release_*` discovery or grant authority; gate evaluation has its own bounded request/result and error contracts. This protocol is not yet implemented.
 
 ## Contents
 

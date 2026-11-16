@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://grain.dev/spec/mcp-goals/wire-v1.schema.json",
-  "title": "Proposed MCP goals wire protocol v1.0",
-  "description": "Select a named $defs schema for validation. Cross-field authorization, byte/depth, snapshot and registry constraints are normative in mcp-goals.spec.md. No runtime implementation is introduced.",
+  "$id": "https://grain.dev/spec/mcp-gates/wire-v1.schema.json",
+  "title": "Proposed MCP gates wire protocol v1.0",
+  "description": "Select a named $defs schema for validation. Cross-field authorization, byte/depth, snapshot and registry constraints are normative in mcp-gates.spec.md. No runtime implementation is introduced.",
   "$defs": {
     "reference": {
       "type": "object",
@@ -68,7 +68,7 @@
         "provider",
         "release",
         "tool",
-        "goal_version",
+        "gate_version",
         "args_schema",
         "state_version"
       ],
@@ -85,9 +85,9 @@
         },
         "tool": {
           "type": "string",
-          "pattern": "^goal_[a-z0-9][a-z0-9_-]{0,62}$"
+          "pattern": "^gate_[a-z0-9][a-z0-9_-]{0,62}$"
         },
-        "goal_version": {
+        "gate_version": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64
@@ -329,7 +329,7 @@
         "evaluation_id",
         "mode",
         "task_id",
-        "goal_id",
+        "gate_id",
         "contract_revision",
         "authority_epoch",
         "policy_revision",
@@ -337,7 +337,7 @@
         "args",
         "args_digest",
         "expected_state_revision",
-        "goal_state",
+        "gate_state",
         "deadline",
         "now",
         "limits",
@@ -366,7 +366,7 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "goal_id": {
+        "gate_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
@@ -398,7 +398,7 @@
           "type": "integer",
           "minimum": 0
         },
-        "goal_state": {
+        "gate_state": {
           "description": "Bounded opaque JSON; byte/depth limits and secret exclusion are normative in MGS-2."
         },
         "deadline": {
@@ -452,7 +452,7 @@
               "recovery_reason"
             ],
             "properties": {
-              "goal_state": {
+              "gate_state": {
                 "type": "null"
               }
             }
@@ -779,7 +779,7 @@
       "required": [
         "protocol_version",
         "evaluation_id",
-        "goal_id",
+        "gate_id",
         "snapshot_id",
         "contract_revision",
         "authority_epoch",
@@ -789,7 +789,7 @@
         "status",
         "summary",
         "evidence",
-        "goal_state",
+        "gate_state",
         "blockers",
         "work",
         "action_requests",
@@ -807,7 +807,7 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "goal_id": {
+        "gate_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
@@ -869,7 +869,7 @@
           },
           "maxItems": 128
         },
-        "goal_state": {
+        "gate_state": {
           "description": "Bounded opaque JSON; byte/depth limits and secret exclusion are normative in MGS-2."
         },
         "blockers": {
@@ -1116,7 +1116,7 @@
         "inputs",
         "reason",
         "task_id",
-        "goal_scopes",
+        "gate_scopes",
         "contract_revision",
         "snapshot_id",
         "evidence_revision",
@@ -1174,17 +1174,17 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "goal_scopes": {
+        "gate_scopes": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "goal_id",
+              "gate_id",
               "pin"
             ],
             "properties": {
-              "goal_id": {
+              "gate_id": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 256
@@ -1248,7 +1248,7 @@
       "required": [
         "id",
         "task_id",
-        "goal_id",
+        "gate_id",
         "actor",
         "reason",
         "pin",
@@ -1273,7 +1273,7 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "goal_id": {
+        "gate_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
