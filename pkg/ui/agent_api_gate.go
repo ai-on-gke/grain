@@ -2176,6 +2176,32 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			case opts.external != nil:
 				return errors.New("an external agent cannot turn on keepRunning")
 			}
+		case "goalmode", "goal_mode":
+			var gm model.GoalModeConfig
+			if json.Unmarshal(raw, &gm) != nil {
+				continue
+			}
+			switch {
+			case opts.role != nil:
+				if !set.Allows("tasks:admin", repo) {
+					return fmt.Errorf("%s cannot set %s: configuring autonomous goal mode requires tasks:admin", opts.role.label(), key)
+				}
+			case opts.external != nil:
+				return errors.New("an external agent cannot configure goalMode")
+			case opts.acting != nil:
+				if pattern == "PATCH /api/tasks/{id}" {
+					return errors.New("an agent cannot modify goalMode on an existing task")
+				}
+				if gm.Enabled {
+					actingGM, ok := model.GoalModeOf(*opts.acting)
+					if !ok || !actingGM.Enabled {
+						return errors.New("an agent cannot enable goalMode, which its own task does not have")
+					}
+					if gm.MockMissingSecrets && !actingGM.MockMissingSecrets {
+						return errors.New("an agent cannot enable mockMissingSecrets on goalMode, which its own task does not have")
+					}
+				}
+			}
 		case "priority":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil {
@@ -3936,6 +3962,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.GoogleChatSpace != nil, "googleChatSpace")
 	add(req.Designs != nil, "designs")
 	add(req.Context != nil, "context")
+	add(req.GoalMode != nil, "goalMode")
 	return keys
 }
 

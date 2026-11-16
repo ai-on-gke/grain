@@ -474,7 +474,8 @@ body {
   color: var(--md-sys-color-on-secondary-container);
 }
 
-.status-pill.blast {
+.status-pill.blast,
+.status-pill.warn {
   background: var(--md-sys-color-warning-container);
   color: var(--md-sys-color-on-warning-container);
 }
@@ -1493,14 +1494,19 @@ button:disabled {
 }
 
 /* Snackbar: bottom centre, above the bottom bar (and the phone bar). */
+g-snackbar {
+  display: contents;
+}
+
 .snackbar-region {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--grain-bottombar-height) + 16px);
+  bottom: calc(var(--grain-bottombar-height, 40px) + 16px);
   transform: translateX(-50%);
   z-index: 80;
   width: max-content;
   max-width: min(560px, calc(100vw - 32px));
+  pointer-events: none;
 }
 
 .snackbar {
@@ -1509,11 +1515,13 @@ button:disabled {
   gap: 8px;
   min-height: 48px;
   padding: 6px 8px 6px 16px;
+  box-sizing: border-box;
   border-radius: var(--md-sys-shape-corner-xs);
   background: var(--md-sys-color-inverse-surface);
   color: var(--md-sys-color-inverse-on-surface);
   box-shadow: var(--md-sys-elevation-dialog);
   font-size: 14px;
+  pointer-events: auto;
 }
 
 .snackbar-text {
@@ -1546,7 +1554,13 @@ button:disabled {
 @media (max-width: 599.95px) {
   /* Above the floating New task button, never over it. */
   .snackbar-region {
-    bottom: calc(56px + 36px + 16px + 56px + 12px);
+    bottom: calc(var(--grain-bottombar-height, 92px) + 84px);
+  }
+}
+
+@media (max-height: 480px) and (orientation: landscape) {
+  .snackbar-region {
+    bottom: calc(var(--grain-bottombar-height, 52px) + 80px);
   }
 }
 

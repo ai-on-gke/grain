@@ -1650,6 +1650,15 @@ const (
 	// read-only grant (orchestrator.SyncCLReviews). Only grain writes it,
 	// and it is what a clean finish clears (LinkCLReviewCleared).
 	LinkCLReviewOf LinkKind = "cl-review-of"
+	// LinkGoalMode stores the compact JSON GoalModeConfig for a task running
+	// in autonomous goal posture. Blocks nothing.
+	LinkGoalMode LinkKind = "goal-mode"
+	// LinkGoalAssumption stores one compact JSON GoalAssumption recorded by an
+	// autonomous goal run. Blocks nothing.
+	LinkGoalAssumption LinkKind = "goal-assumption"
+	// LinkGoalScorecard stores the compact JSON GoalScorecard summarizing
+	// multi-pass verification progress and deliverables. Blocks nothing.
+	LinkGoalScorecard LinkKind = "goal-scorecard"
 )
 
 // CLThreadsPrincipal is who tells a task about new review threads on its
