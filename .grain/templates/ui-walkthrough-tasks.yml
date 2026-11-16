@@ -4,133 +4,115 @@ base: main
 auto-merge: true
 body: |
   Thoroughly exercise the operator workflow from incoming work through
-  task disposition, in a real browser against a real server.
+  task disposition -- the Inbox, the New task sheet, the task list and
+  the task page at `/next/` -- in a real browser against a real server.
 
   ## Coverage
 
-  - Open Inbox directly and from the rail; inspect its base-branch repair,
-    proposal, parked-question, review-decision ("Ship as is" or a reply),
-    submit-for-merge, unblock-merge, approve-on-GitHub, local-script
-    approval, stalled, config-repo sync and Notifications groups, counts
-    (waiting local-script calls, open notifications and config-repo sync
-    failures included in the rail's Inbox count), group bulk actions
-    (Approve all, Defer all, Acknowledge all with confirmation), row
-    navigation, `keep_running` row markers, role-gated read-only rendering
-    when the signed-in role lacks write scopes, and empty vs task-load
-    failure states (confirming a cold `/api/tasks` failure never claims
-    nothing is waiting). Collapse and expand sections by click and
-    keyboard (`Enter`/`Space`), confirming Notifications starts collapsed
-    with its count still shown (including pending-release Approve /
-    Approve short soak with its soak badge, Reject, Acknowledge and
-    Investigate) and section state survives a reload. A stalled row shows
-    its sub-case and offers the control that sub-case names (Run now,
-    Cancel, Undefer or Retry merge); press one and confirm the row leaves
-    the group.
-  - Approve the seeded proposal from the Inbox, answer the seeded parked
-    question, and exercise inline changelist actions where seeded or
-    stubbed (Mail, Publish replies, Sync, and Submit offered inline only
-    when submittable), confirming each task leaves the appropriate group
-    and lands in the expected task state.
-  - Create tasks from the global New task form using both the queued and
-    the proposed path, from the rail's create menu, from a template
-    (confirming the template picker carries the template's priority even
-    when restoring a saved draft until edited, while a template with input
-    fields opens Use… instead), and from `/new?field.<name>=` links
-    (including the notice naming any link values left out by a
-    `settings/new-task-form.yml` configuration). Exercise repo/no-repo
-    choice (and the off-allowlist target repo warning), description,
-    attachments, base branch (and a `<fork-owner>:<branch>` fork head
-    label when Create a new branch is unticked, confirming well-formed
-    labels are explained while malformed ones are refused and hold Create
-    task disabled), Task priority (whole number ≥ 1, with `1e3`-style
-    exponents normalized and zero, negative and non-whole values refused
-    in the shared wording), Owner and Reviewers, auto-merge (including an
-    explicit off surviving holds and edits), Don't port (`noPort`), This
-    fixes a red base branch (`fixesBaseBranch`), Keep running, grants (the
-    Grain API group including canonical `https://grain.dev/capabilities/api`
-    references and capability policy verdicts, `Escape` inside Add grant…
-    closing only the menu, a ticked capability that is not ready staying
-    ticked, and the toast naming default grants dropped by policy on
-    filing), custom fields, the advanced agent/model/network/resource
-    options (the model picker offers only models the deployment's enabled
-    connections advertise, and a refused field inside Advanced options
-    opens them), cancel, and submission.
-  - Use Tasks and its state views and Blocked view from the rail, plus
-    the State, Admission (`Standard`, `Bypass queue`, `Durable`), Human
-    review, External ref and Origin (`Imported issue` and `External agent`
-    included) filters, confirming an unknown filter value on a closed
-    attribute marks itself as matching nothing and repo matching is
-    case-insensitive. Exercise search, sort (Admission rank included),
-    compound narrowing (including `owner:any:me` and clearing all filters),
-    closed-task scroll paging and server-side closed search/`owner`/`externalRef`
-    queries (`Load older closed tasks` / `Search older closed tasks`,
-    keeping closed hits in place), stale task-list notices and retry when
-    polling fails mid-session, URL persistence, browser Back/Forward, and
-    refresh. On the rows, confirm blocked shows as its own state oval, a
-    change in the merge queue reads "Merging", non-default task priority
-    shows its badge, a live task carries its sub-case chip with the reason
-    on hover, an imported GitHub issue carries its `imported` chip naming
-    the source issue (and "Imported" with Approve while unapproved), an
-    external pull request carries its outlined PR chip naming
-    `owner/repo#N`, and a proposal its agent held for approval carries the
-    "held for approval by <task>" chip until approved.
-  - Open task detail from several entry points; edit
-    title/description/repo/base/priority/owner/external ref/reviewers/keep
-    running/custom fields/auto-merge, follow the `ref` link into the
-    `externalRef`-filtered task list, approve a proposal, defer it with
-    and without a date, pick it back up, close and reopen a task
-    (confirming the timeline records the principal or grain reason that
-    closed or reopened it and wraps long reasons at phone width), stop an
-    active turn and use Retry to lift the operator stop, and inspect
-    attempts, per-run and task-total token usage on the timeline,
-    transcripts (and an attempt's capability audit), attached
-    image thumbnails in the full-screen viewer (closing via `X`, backdrop
-    or `Escape`, paging multiple images with arrows/keys and `i / N`
-    counter, and Download), Mermaid diagrams in markdown (zoom, fullscreen
-    and invalid-syntax fallback), chat and CI links as far as the seeded
-    data permits.
-  - Pause and resume an open task from its page and from its chat pane
-    (Pause, Pause now for a running one -- confirming Pause now asks first
-    before discarding unpushed work -- and Resume) and confirm it keeps
-    its state and its place; exercise Admission (`Standard`, `Bypass
-    queue`, `Durable`), Hosting (`Unattended`, `Interactive console`),
-    Keep running and `This fixes a red <base>` on open tasks; Force merge
-    a task whose run is stuck waiting on CI, and Re-run CI or Retry merge
-    where the task offers them, confirming each asks first where it should
-    and that the task page follows without a reload.
-  - On task detail, exercise the sections a task can carry: its goal
-    card (including `on_limit` hold vs notify behaviour and cleared goals
-    leaving no stale card); add and remove a dependency and confirm the
-    chips (state and title on hover), the blocked view and the Blocked
-    rail count follow; the work tree a task belongs to, nested under who
-    filed what, with its done count, links and the current task shown as
-    plain text rather than a self-link; Committed context
-    (`#committed-context`, target and read-only repo badges, `@<rev>`
-    links and manifest files); human-review (`Release hold`), security and
-    path-trigger hold callouts with their review-task links; the merge
-    policy lines its repository's merge rules require, with the rule
-    behind each; the grain CI verdict and its link into CI, plus
-    changelist chip, presubmit, review and behind badges and
-    disabled-Submit explanations on a CL task; a pending-secret request
-    box (and that its value never appears in the timeline); a pending
-    `request_access` card (per-item unticking for `Grant all` vs
-    `Grant M of N`, dangerous/person-only marks, current holds, earlier
-    answers, and `Deny` with required `Why?` reason); a suspended agent
-    session (`resume_later` park reason preserved); cross-team approvals
-    and their withdraw control; a host-script approval request with its
-    stdin preview, approved and denied; an inline config-repo change card
-    (diff, validation status, Approve & Apply and Reject against a real
-    `grain/config`, gated on `settings:write`); a parked question's
-    callout; the full prompt; the live attempt transcript; and the
-    Internal PR link into the pull request page's diff.
-  - Select several rows, exercise the batch bar's actions (Approve,
-    Submit, Retry merge, Defer, Undefer, Close, Reopen, capability
-    attach/detach, and Bulk edit including Task priority), cancel a bulk
-    operation, and verify that the selection and the persisted task data
-    both behave correctly. With the pipeline in manual mode (System →
-    Pipeline), confirm the rows that would run carry the waits-for-Run-now
-    marker, that Run selected now in the selection bar starts them, and
-    that the marker does not come back for a task already started.
+  - Inbox (`/next/inbox`, from the rail with its count, and as bare
+    `/next/`): the tabs (All, Asked, Releases & scripts, Merges,
+    Proposals, Blocked & alerts, Paused, Unread) with counts that match
+    the rail's Inbox count (acknowledged alerts left out), the queue rows
+    and the inspector beside them ("Why this needs a person", and "The
+    change" diff beside a Submit or proposal decision -- a huge diff
+    truncated with a link, no empty pane for a task with no branch),
+    questions, access-request reasons and alert bodies rendered as capped
+    Markdown with "Show full <noun>"/"Show less", the Reply/Acknowledge
+    row in the dock and a half-typed reply surviving a refresh, the
+    Inbox keys help, and a deep link's highlight showing at once and
+    fading. Confirm a row arriving over `/api/events` appears without a
+    reload, a cold `/api/tasks` failure never reads as an empty Inbox
+    ("Could not read tasks" only once reads keep failing, backing off
+    while they do), and a viewer role sees the queue read-only.
+  - Act from the Inbox: approve a proposal (and Approve all), answer a
+    parked question, Approve / Approve short soak / Reject a pending
+    release, approve or deny a local-script call, Submit a submittable
+    changelist (kept out of Submit all), confirm a base-branch repair
+    asks before it may merge without a human, and on each stuck row press
+    the control its sub-case names (Run now, Cancel, Undefer or Retry
+    merge) -- confirming each row leaves its tab and the task lands in
+    the expected state.
+  - New task sheet (`c`, the rail's New task, the Create menu's New task
+    and Task from template, the phone's New task button): repository
+    (only the deployment's configured repositories, a missing repo refused
+    by name), title, description, attachments, base branch (and a
+    `<fork-owner>:<branch>` fork head, malformed ones refused while Create
+    stays disabled), Task priority (whole number ≥ 1, `1e3` normalized),
+    Owner and Reviewers, auto-merge, Don't port, This fixes a red base
+    branch, Keep running, grants (`GrantsPicker` with canonical
+    `https://grain.dev/capabilities/api` references, capability policy
+    verdicts, and `Escape` inside Add grant… closing only the menu), custom
+    fields, and More options (Found in release `vX.Y.Z` with malformed
+    values refused under the field, the model picker offering only
+    advertised models, network and resources). File it queued and as a
+    proposal, file from a template (its priority carried; a template with
+    input fields asks for them first), confirm blocker feedback names
+    what stops Create, and that `Escape` keeps the draft. `/new?field.<name>=`
+    links have no `/next/` page yet: exercise them on the classic `/new`
+    (with the notice naming values a `settings/new-task-form.yml` left
+    out).
+  - Tasks (`/next/tasks`, `/next/tasks/<id>` redirecting to the task
+    page): the tabs (Backlog, Needs approval, Running, Asked, Submit &
+    land, Deferred, Closed with Merged / Not merged / All), `/` and `?q=`
+    search, Order (Run order, Priority, Oldest, Newest), grouping (None,
+    Workstream, Repository), the repository chip (case-insensitive repo
+    matching), the ready and blocked counts, the broken-base banner and
+    backlog dispatch notice, Backlog reordering and each row's `⋮` menu,
+    and closed-task paging and server-side search. Open a row into the
+    side pane (`?task=` surviving reload, the resizer and split toggle,
+    "moved" and next-task notices), and use Back/Forward. On the rows,
+    confirm the state, Merging, priority chip, live sub-case chip with its
+    reason on hover, `imported` and external PR `owner/repo#N` chips,
+    "held for approval by <task>" chip, `keep_running` marker and a
+    durable task's rollover banner. A failed task-list read says so before
+    and after the first load rather than showing an empty list.
+  - Selection bar on `/next/tasks`: tick rows (and Select all), then
+    Approve, Run selected now, Close (asking first, with partial failures
+    reported in the right plural), Reopen on the Closed tab, Bring back on
+    the Deferred tab, and the More menu's Submit, Retry merge, Bulk edit
+    (priority, base, auto-merge) and capability attach/detach. Confirm
+    four calls run at a time with progress and Stop, rows that failed or
+    were never sent stay ticked, offers follow the role, and with the
+    pipeline in manual mode (set on the classic System → Pipeline, which
+    has no `/next/` page yet) waiting rows carry "Paused — waits for Run
+    now" until started.
+  - Task page (`/next/task/<id>`, reached from the Inbox, the Tasks pane,
+    Agents, Workstreams and links): its header actions -- Approve, Run
+    now, Pause (confirming at once) and Pause immediately (asking before
+    discarding unpushed work), Resume, Stop and Retry, Defer and Defer
+    until… (a date picker waking at the start of the day in the display
+    zone) and Bring back, Close and Reopen (the timeline naming who or
+    why, wrapping long reasons on a phone), Re-run CI and Re-run failed
+    jobs, Retry merge, Submit and Force merge… (needing full access) --
+    and the Edit task panel (title, description, repo, base, priority,
+    owner, external ref, reviewers, keep running, custom fields,
+    auto-merge, Admission, Hosting, goal with `on_limit` kept on re-save,
+    and dependencies whose chips name task and state on hover). Confirm
+    each asks first where it should and the page follows without a
+    reload.
+  - Task page tabs: Conversation (Markdown with Mermaid diagrams --
+    including fences in lists and blockquotes, legible on a phone, and an
+    invalid one falling back -- attached images in the full-screen viewer,
+    `#comment=<id>` deep links paging into a long conversation, a pending
+    secret box, a `request_access` card with its reason as Markdown,
+    `Grant all` vs `Grant M of N` and `Deny` with its required reason, a
+    host-script approval with its stdin preview, a config-change card's
+    Approve & merge config gated on `settings:write`, and a parked
+    question); Runs (attempts, per-run and total token usage, transcripts
+    and capability audit, the live transcript, a `resume_later` park
+    reason); Changes and CI (the diff, CI verdict and links into
+    `/next/ci/runs/<id>`); Workstream (the tree it belongs to, its done
+    count, the current task as plain text); and Details (the Prompt pane
+    in Markdown above Attributes, stacking at narrow splits, and Committed
+    context).
+  - Gates and holds on the task page: the merge rules its repository
+    requires with the rule behind each, the security-review gate,
+    human-review (`Release hold`) and path-trigger holds with their review
+    links, owed approvals, a findings-blocked gate's Accept findings…
+    dialog (offered only while it can act, with its reason recorded), the
+    review-gate override, the overlap re-check where shown, a durable
+    task's rollover banner, and a changelist's presubmit, review and
+    behind badges with the reason Submit is disabled.
 
   ## Walkthrough protocol
 

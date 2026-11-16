@@ -1,160 +1,97 @@
-name: UI walkthrough - Settings, its layout, lock and save model, Preferences, Access, CLI, Audit, Models, Config repo, General, Agents, Tasks and Memory
-title: Walk through Settings -- its layout, lock and save model, Preferences, Access, CLI, Audit, General, Config repo, Models, Agents, Memory and Tasks
+name: UI walkthrough - Settings, its layout, lock and save model, Preferences, Access, CLI, Audit, General, Config repo, Models, Tasks, Agents, Memory and Context
+title: Walk through Settings -- its layout, lock and save model, Preferences, Access, CLI, Audit, General, Config repo, Models, Tasks, Agents and Memory -- and Context
 base: main
 auto-merge: true
 body: |
-  Thoroughly exercise the Settings view -- its layout, filter, save, role
-  and config-repo lock model, the browser's own Preferences, Access, CLI,
-  Audit, Models, Config repo, and the Managed in config repo sections
-  General, Agents, Tasks and Memory -- in a real browser against a real
-  server. Settings' Git, Hosts, Capabilities (including Deployment
+  Thoroughly exercise Settings at `/next/settings` -- its layout,
+  filter, save, role and config-repo lock model, and the Preferences,
+  Access, Audit, CLI, General, Config repo, Models, Tasks, Agents and
+  Memory sections -- plus the Context page, in a real browser against a
+  real server. Settings' Git, Hosts, Capabilities (including Deployment
   credentials), Hub, Engine, CI, Sandboxes and Caches sections are the
-  infrastructure walkthrough's; System, Settings → Upgrade, CI and
-  Metrics are the operations walkthrough's; Settings → Repositories is
-  the repos walkthrough's.
+  infrastructure walkthrough's; Settings → Upgrade, Fleet, CI and Agents
+  are the operations walkthrough's; Settings → Repositories is the repos
+  walkthrough's.
 
   ## Coverage
 
-  - Layout and paths: open Settings from the gear at the right of the
-    page header rail (its only entry; on a phone, from the bar). Bare
-    `/settings` opens Models on desktop and the grouped section list
-    (Models & sandboxes, Secrets & access, This browser, System /
-    Operations, Managed in config repo) on a phone; each section rides in
-    the URL (`/settings/<section>`, and `#<card>` scrolls to a card,
-    staying in view while the section loads and aligning tall cards to
-    their heading rather than scrolling past it) through reload and
-    Back/Forward. At a tablet width the section nav becomes a searchable
-    Section select (confirming that cancelling the discard prompt on a
-    dirty section keeps the select on the current section); on a phone a
-    section opens alone under a back arrow; sections with nothing to save
-    (`Upgrade`, `Audit`, `CLI`) omit the `All changes saved` header line.
-    Old links land where they should: `/admin` on General,
-    `/admin/workflow` on Tasks, `/admin/executors` and
-    `/system/executors` on Hosts (`/settings/hosts` and `/settings/hostds`),
-    `/settings/credentials`, `/settings/legacy-capabilities`,
-    `/admin/integrations` and `/system/integrations` on Capabilities'
-    Deployment credentials card (`/settings/capabilities#credentials`,
-    and `/settings/secrets` on `#other-secrets`), `/admin/upgrade` and
-    `/system/upgrade` on Settings → Upgrade, and `/memory` on Settings →
-    Memory. Press `/` to focus the Filter settings box; confirm a label
-    or helper keyword lists matches by section, choosing one pushes
-    history so Back returns cleanly, reveals and focuses the target field
-    (even inside a subpage or folded section) and outlines it, leaving an
-    open subpage returns to its section list, a miss says "No setting
-    matches", and Escape restores the groups.
-  - Save, role and lock model: a checkbox, select or radio commits on
-    change and a text or number box on blur or Enter, while multi-line and
-    composite cards wait for their own Save (with Discard). Confirm the
-    section header's state line (Saving…, Unsaved changes in <card>,
-    Couldn't save <field> with Retry, All changes saved), the dirty dot
-    in the section nav, that leaving a dirty section or Settings asks
-    first and a clean one never does, that the field reads back what the
-    server answered ("1m" as "1m0s"), that an out-of-range number is
-    refused by name before saving and the error clears once the box is
-    put back, and that a restart-pending setting shows the Restart needed
-    chip, linked to System → Power. With settings locked (`General →
-    Settings lock`) or backed by an external config repo, confirm the
-    Managed in config repo sections (plus Engine, Caches, Hub's
-    config-managed fields and Capabilities' Deployment credentials
-    settings) render disabled with a "View in config repo → <path>" link
-    into the Config Repo Browser, keep locked selects and chips off the
-    keyboard, and offer to open a held config-repo pull request when a
-    write is refused (clearing the refusal banner if a later save
-    succeeds). Confirm a section whose write scope the signed-in role
-    lacks renders read-only with an inline `RoleChip` explanation.
-  - Preferences (`/settings/preferences`): appearance (Auto/Light/Dark),
-    time zone (every printed time across tasks and Settings -- including
-    Access added-at timestamps, Models pause times and Audit entries --
-    follows it, and with none chosen they are in the browser's zone),
-    task-timeline order, and Customize pinned items (pin a Settings
-    section, a System tab, a board and a session; unpin, reorder, and
-    confirm the rail and any other open tab follow). Verify nothing
-    deployment-wide is saved from here.
-  - Access (`/settings/access`): stays usable even when settings are
-    locked or backed by an external config repo; the This browser card
-    shows `Your role` (`RoleChip`), says how this browser signed in and
-    what its changes are recorded as (`GET /api/whoami`, matching the
-    user tile at the foot of the sidebar rail and `Signed in as` in the
-    phone drawer), and Log out returns to the `Signed out` / access-code
-    prompt (or identity sign-out; confirm signing in with the access code
-    returns to the original deep link, and an unaccepted identity shows
-    `Access Denied` with the exact principal to add). Exercise the
-    Allowed users and groups card (`People & groups` and `Service
-    accounts` tables, per-row Role selector or read-only `RoleChip` when
-    lacking `access:write`, timestamps in the browser's zone, Add allowed
-    principal validating `user:`, `group:` and `serviceAccount:`
-    `*.gserviceaccount.com` entries and requiring a Reason for service
-    accounts and dangerous-scope roles, and the confirmation warning when
-    removing your own account or the last entry).
-  - CLI (`/settings/cli`) and Audit (`/settings/audit`): confirm both
-    stay usable under an external config repo. On CLI, inspect the
-    workstation `Install` (`curl -fsSL <origin>/cli/install.sh | sh`,
-    naming the running release when versioned), `Sign in` (`grain login
-    ... --issue-token --scope-set grain/external-dev --expires 30d`, plus
-    the warning and in-app link to `Settings → Agents#external-agents`
-    when `Accept external agents` is off) and `Agent skills` (`grain
-    skill install` for Jetski, Claude Code, Codex and Gemini CLI) cards
-    and their Copy buttons. On Audit, inspect the read-only
-    `Configuration changes` (actor label, surface, summary -- never
-    secret values), `Credential access` and `Secret resolutions` logs,
-    stacked block layout at phone width, and independent empty/error
-    states.
-  - General: the Deployment card (environment name, closed tasks shown
-    by default), Settings lock (`Lock settings in UI (require config repo
-    PRs)`, disabled when the deployment has no config repo), Updates
-    (upgrade check mode including `Each release (recommended)`,
-    auto-upgrade channel and time, whether an upgrade pauses the
-    pipeline, and omission when `-disable-self-upgrade` is set) and
-    About, whose version matches the build stamp at the foot of the rail.
-  - Config repo: the controller-local config repository panel, its sync
-    status, inline reset dot and notice, mirror/secrets-backup controls,
-    the read-only Config Repo Browser (`/settings/config-repo/<file>` and
-    `/config?path=<file>`, with commit stamp and JSON/Markdown file
-    preview), and the failing-sync alert and Inbox row pointing back
-    here.
-  - Models: the deployment's provider connections (New connection, Test
-    Connection, Edit, Enable/Disable, and Remove, which asks first; an
-    unfinished new connection cleans itself up without a Remove prompt;
-    stored `Custom command` connections render disabled with their reason
-    and are never offered for a new connection; with none, the section
-    says so), each connection's `Credentials` choice (`stored` key/token/
-    `auth.json` vs `ambient` CLI login on the host) and `Run on host`
-    placement (registered hosts with connection state, owner, host user
-    and reported CLI logins, the missing-login warning for ambient
-    credentials, `A host selected by label…`, and `;`-separated Fallback
-    hosts), the default model and per-model reasoning effort, the Token
-    usage and budgets card (`#usage`, per-connection/model Used,
-    configured or `~`-learned Limit, Left, Reset, Burn/h and Sustains,
-    advisories and warnings, Concurrency mode and Fewest workers with
-    Save), and the Where each agent CLI runs card (container or host, and
-    the readiness it reports). Verify the models each connection advertises (discovered
-    models included) feed the model pickers in New task, sessions,
-    schedules and templates; the warnings for a default model only
-    disabled or paused connections serve and for a model named that no
-    connection advertises; that a paused connection or model (with dated
-    pause time when not today) can be resumed from here; and that under
-    an external config repo connection fields dim while credentials stay
-    editable and testable.
-  - Agents: Agent runs (max turns), Standing instructions (Save and
-    Discard), Task branches (git-ref and uniqueness validation keeping
-    the sample deployment ID visible when refused), External agents
-    (`#external-agents`, `Accept external agents` enabling workstation
-    CLI and `/mcp` token sign-in), and the Commit identity in-app link to
-    Settings → Git (confirming it prompts before discarding dirty
-    Standing instructions).
-  - Memory (`/settings/memory`): it shows the deployment's notes and
-    each repository's (and their documents); a reversible correction to
-    a note saves and the next open reads it back; leaving with an
-    unsaved edit -- the rail, Back, a reload -- asks first. Memory is not
-    in the rail unless pinned, and does not appear on a repository's
-    page.
-  - Tasks: Task defaults (approved and auto-merge by default, and Default
-    grants via `GrantsPicker` for agent API grants and capability-server
-    methods, or `ReadOnlyGrants` when locked), Backlog & follow-up
-    limits, and Task fields (including following the "still carries a
-    value this field no longer offers" link into the
-    `custom.<name>:legacy` filtered task list); save, reload and verify a
-    new task picks them up.
+  - Layout and paths: open Settings from the rail's Settings
+    destination, the `,` shortcut and the account popover; walk its groups
+    (Models & Compute, Repositories & Code, Work & Agents, Access &
+    Security, Instance & Preferences) and confirm each section rides in
+    the URL (`/next/settings/<section>`, `#<card>` scrolling to its card,
+    old section names and old `settings/connections` links landing on
+    Models, on a phone too) through reload and Back/Forward. Confirm old
+    links land where they should: `/next/admin` and `/next/admin/<tab>`
+    on their section, `/next/system/executors` on Hosts,
+    `/next/system/integrations` on Capabilities' `#credentials`,
+    `/next/system/upgrade` and `/next/system/caches` on their sections,
+    `/next/config` and `/next/settings/config-repo/<file>` on the config
+    repo viewer (`?path=`), and `/next/memory` on Context. Press `/` and
+    confirm the filter it focuses narrows Settings, and that a miss says
+    so.
+  - Save, role and lock model: a switch or select commits on change and a
+    text or number box on blur or Enter, while multi-line and composite
+    cards wait for their own Save; confirm the saving/unsaved/failed
+    state, that leaving a dirty section asks first and a reload does not
+    silently drop an unsaved draft, that a field reads back what the
+    server answered, that an out-of-range number is refused by name
+    before it is sent, and that a restart-pending setting says so. With
+    the UI lock on (Deployment identity & UI lock) or an external config
+    repo, confirm config-managed sections render read-only with a way into
+    the config repo viewer; with a role lacking a section's write scope,
+    confirm it renders read-only, and that scope-gated cards wait for the
+    access config before loading.
+  - Preferences (Browser preferences): appearance (and the `t`
+    shortcut), time zone (every printed time across tasks and Settings
+    follows it, and with none chosen the browser's zone), and task
+    timeline order; confirm nothing deployment-wide is saved from here.
+  - Access, Audit and CLI: the RBAC allowlist and roles (per-row role,
+    read-only without `access:write`, Add validating `user:`, `group:`
+    and `serviceAccount:` entries with the role it offers one the server
+    accepts, a Reason where required, and removal -- of your own account
+    or the last entry above all -- asking first), External agent tokens
+    (`gma_`), and the account popover's identity, role and scopes
+    matching; the Audit log viewer (configuration changes without secret
+    values, credential access, secret resolutions, empty and error
+    states); and CLI (`/next/settings/cli`): the workstation installer
+    (not the host installer), sign-in and agent-skill commands and their
+    Copy buttons, usable under an external config repo.
+  - General and Config repo: Deployment identity & UI lock (environment
+    name, the lock disabled when there is no config repo), Broadcast
+    message to active tasks (against throwaway tasks), and the updates
+    mode; StateRepo synchronization (sync status and Sync), Remote
+    repository & KMS secret key, the Config repository file viewer
+    (`?path=`, file preview), and the failing-sync row in the Inbox
+    pointing back here.
+  - Models: provider connections (New connection, Test, Edit,
+    Enable/Disable, Remove asking first, clearing a stored secret asking
+    first, Refresh hidden without access and no refresh time for a
+    provider that never answered), credentials stored vs ambient and a
+    Codex connection's own ChatGPT subscription login (uploaded, its
+    status read after switching, clearing asking first), Run on host
+    placement, the default model and reasoning effort, on-demand model
+    discovery feeding the pickers in New task, sessions, schedules and
+    templates, the Token budget & usage guardrails card (weekly quota
+    beside the interval, paused reset times on the local clock with the
+    zone named), and resuming a paused connection or model.
+  - Tasks and Agents: Task approval, merge queue & gates (approved and
+    auto-merge by default, default grants via `GrantsPicker`, or read-only
+    when locked, and the unreviewed follow-up depth and per-task limits),
+    Quality control & PR rollout (off by default); Agent turn limits &
+    default grants, Standing console sessions and Accept external agents.
+    Save, reload and confirm a new task picks them up. Task fields (and
+    the "still carries a value this field no longer offers" link) and
+    Task branches have no `/next/` control yet: check them on the classic
+    Settings → Tasks and Settings → Agents.
+  - Memory and Context: the Memory section (deployment and per-repository
+    notes, a reversible correction saved and read back, leaving with an
+    unsaved edit asking first), and the Context page (`/next/context`,
+    from the rail): Standing Instructions (editor and preview modes, saved
+    by Save memory), Memory Documents (Packs) with search, scope,
+    create/edit of a throwaway document and its prompt index summary,
+    and the Namespace Browser (scheme, grep, render modes), with the
+    list/editor resizer and an unsaved-edit guard.
   - Stub the GitHub, identity, upgrade, model-provider and config-repo
     boundaries (the model provider where a connection test reaches it)
     only where the demo lacks them, retaining the real Grain server and
