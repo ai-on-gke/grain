@@ -47,8 +47,12 @@ function tipElement(doc: Document): HTMLElement {
 // owner at a time, so a hovered control never leaves a focused one's
 // aria-describedby pointing at someone else's sentence.
 let owner: TipDirective | null = null;
+let suppressHoverUntil = 0;
 
-export function dismissActiveTooltip(): void {
+export function dismissActiveTooltip(suppressHoverMs = 0): void {
+  if (suppressHoverMs > 0) {
+    suppressHoverUntil = Date.now() + suppressHoverMs;
+  }
   owner?.hide();
 }
 
@@ -103,6 +107,7 @@ export class TipDirective implements OnDestroy {
 
   hoverIn(): void {
     this.leaveTimer = clearTimer(this.leaveTimer);
+    if (Date.now() < suppressHoverUntil) return;
     if (!this.gTip() || owner === this) return;
     this.showTimer = clearTimer(this.showTimer);
     this.zone.runOutsideAngular(() => {
@@ -189,6 +194,22 @@ export class TipDirective implements OnDestroy {
       if (top + th > vh - 4) top = r.top - th - 8;
     }
     left = Math.max(4, Math.min(left, vw - tw - 4));
+    const snack = this.doc.querySelector<HTMLElement>(
+      '[data-testid="snackbar"]',
+    );
+    if (snack) {
+      const sr = snack.getBoundingClientRect();
+      if (
+        sr.width > 0 &&
+        sr.height > 0 &&
+        left < sr.right + 8 &&
+        left + tw > sr.left - 8 &&
+        top < sr.bottom + 8 &&
+        top + th > sr.top - 8
+      ) {
+        top = sr.top - th - 8;
+      }
+    }
     top = Math.max(4, top);
     el.style.left = `${Math.round(left)}px`;
     el.style.top = `${Math.round(top)}px`;

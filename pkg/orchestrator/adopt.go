@@ -186,14 +186,7 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	if deps.Framework == nil {
 		return abandon("has no agent framework to read its result with")
 	}
-	choice := deps.choiceFor(*task)
-	if run.AgentFramework != "" {
-		choice.Framework = run.AgentFramework
-	}
-	if run.Model != "" {
-		choice.Model = run.Model
-	}
-	framework, err := deps.Framework(ctx, choice)
+	framework, err := deps.Framework(ctx, AdoptedChoice(deps.choiceFor(*task), *run))
 	if err != nil {
 		return abandon("could not build its agent framework: " + err.Error())
 	}
@@ -618,6 +611,23 @@ func earlierAttempts(runID string, live, current []byte, cursor int64) string {
 	log.Printf("orchestrator: adopted run %s: its live transcript does not hold the %d bytes of its spool "+
 		"the previous daemon read, so its earlier attempts are left out of its stored transcript", runID, cursor)
 	return ""
+}
+
+// AdoptedChoice is the agent choice an adopted run's framework is built
+// for: choice, its task's own, narrowed to the framework and model the
+// run is on (model.Run.AgentFramework and Model, which Store.LiveRuns
+// reads back). The stream is that framework's, so it is read with that
+// framework's parser -- not with whatever a task that named neither
+// would be given by its default model list now, which on a deployment
+// with connections on several frameworks can be another one.
+func AdoptedChoice(choice AgentChoice, run model.Run) AgentChoice {
+	if run.AgentFramework != "" {
+		choice.Framework = run.AgentFramework
+	}
+	if run.Model != "" {
+		choice.Model = run.Model
+	}
+	return choice
 }
 
 // adoptedLiveRun returns runID's row if it is still live, or nil.

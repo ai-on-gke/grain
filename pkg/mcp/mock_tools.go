@@ -319,15 +319,17 @@ type SecretRequest struct {
 // the tools below describe that and never mention this sink. See
 // NewMockTools.
 type MockSink struct {
-	mu             sync.Mutex
-	question       string
-	comment        string
-	nothingNeeded  string
-	secretRequest  *SecretRequest
-	accessRequest  *AccessRequest
-	accessChecker  AccessRequestChecker
-	proposedTasks  []ProposedTask
-	reviewComments []ReviewComment
+	mu              sync.Mutex
+	question        string
+	comment         string
+	nothingNeeded   string
+	secretRequest   *SecretRequest
+	accessRequest   *AccessRequest
+	accessChecker   AccessRequestChecker
+	proposedTasks   []ProposedTask
+	reviewComments  []ReviewComment
+	goalAssumptions []model.GoalAssumption
+	goalCompletion  *GoalCompletion
 	// commentNudged is set once comment_on_issue has turned a note back
 	// for reading as a request to a person with no summary saying so
 	// (commentOnIssueTool). The nudge is given once: a run that sends the
@@ -467,18 +469,7 @@ func (s *MockSink) ReviewComments() []ReviewComment {
 // every caller that has no store to ask, leaves the description exactly
 // as it read before, naming the rule without the list.
 func NewMockTools(sink *MockSink, proposeRepos []string) []Tool {
-	return []Tool{
-		askQuestionTool(sink),
-		requestSecretTool(sink),
-		requestAccessTool(sink),
-		commentOnIssueTool(sink),
-		nothingNeededTool(sink),
-		writeHandoverTool(),
-		compactContextTool(),
-		updateBriefTool(),
-		proposeTaskTool(sink, proposeRepos, "", nil),
-		addReviewCommentTool(sink),
-	}
+	return NewMockToolsWithOptions(sink, proposeRepos, MockToolsOptions{})
 }
 
 func askQuestionTool(sink *MockSink) Tool {

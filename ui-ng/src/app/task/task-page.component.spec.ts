@@ -1714,6 +1714,148 @@ describe("duration", () => {
     expect(navSpy).not.toHaveBeenCalled();
     fakeModal.remove();
   });
+
+  it("keeps Details tab accessible above 1080px without redirecting to Conversation", async () => {
+    const origMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("min-width: 1080px"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    try {
+      const api = new FakeApi();
+      const f = await render(api, "details");
+      const detailsTab = q(f, '[data-testid="task-tab-details"]')!;
+      expect(detailsTab).toBeTruthy();
+      expect(detailsTab.getAttribute("aria-current")).toBe("page");
+      expect(q(f, '[data-testid="task-details"] .description')).toBeTruthy();
+      expect(q(f, ".task-aside")).toBeNull();
+    } finally {
+      window.matchMedia = origMatchMedia;
+    }
+  });
+
+  it("renders Docs tab with prompt, PR markdown diff, and report comments, and drives doc-reader-modal Prev/Next/backdrop/Escape", async () => {
+    const api = new FakeApi();
+    api.fullDiff = [
+      api.fullDiff,
+      "diff --git a/docs/plan.md b/docs/plan.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/docs/plan.md",
+      "@@ -0,0 +1,4 @@",
+      "+# Rollout Plan",
+      "+",
+      "+- Step 1: Ship Docs tab",
+      "+- Step 2: Verify E2E",
+    ].join("\n");
+    api.detail = {
+      ...api.detail,
+      comments: [
+        ...(api.detail.comments ?? []),
+        {
+          id: 9,
+          author: "agent",
+          authorKind: "agent",
+          summary: "Audit findings",
+          body: "## Audit findings\n\n- Scroll containment checked\n- Modal keyboard trap verified",
+        },
+      ],
+    };
+    const f = await render(api);
+
+    // Open Docs directly from Prompt pane button.
+    q<HTMLButtonElement>(f, '[data-testid="prompt-open-docs"]')!.click();
+    await settle(f);
+    expect(
+      q(f, '[data-testid="task-tab-docs"]')!.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(q(f, '[data-testid="task-docs-shell"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-prompt"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-pr:docs/plan.md"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-comment-9"]')).toBeTruthy();
+    // Short chat comment ("Please fix it") is excluded from Docs picker.
+    expect(q(f, '[data-testid="doc-item-comment-1"]')).toBeNull();
+
+    // Switch active doc inside Docs tab.
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="doc-item-pr:docs/plan.md"]',
+    )!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="docs-reader-title"]')!.textContent).toContain(
+      "plan.md",
+    );
+    expect(q(f, '[data-testid="docs-reader-body"]')!.textContent).toContain(
+      "Rollout Plan",
+    );
+
+    // Open full-screen modal from Docs tab.
+    q<HTMLButtonElement>(f, '[data-testid="docs-fullscreen"]')!.click();
+    await settle(f);
+    const modal = q<HTMLDialogElement>(f, '[data-testid="doc-reader-modal"]')!;
+    expect(modal.getAttribute("aria-modal")).toBe("true");
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Navigate Next -> Comment report, then Prev -> PR plan.md -> Prev -> Prompt.
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "3 / 3",
+    );
+    expect(q(f, '[data-testid="doc-modal-body"]')!.textContent).toContain(
+      "Scroll containment checked",
+    );
+    expect(
+      q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.disabled,
+    ).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Dragging from inside modal body out onto backdrop must NOT dismiss modal.
+    q(f, '[data-testid="doc-modal-body"]')!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-prev"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Backdrop click closes modal.
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
+    expect(modal.getAttribute("aria-modal")).toBeNull();
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(false);
+
+    // Open from Prompt full screen button and dismiss with Escape.
+    q<HTMLButtonElement>(f, '[data-testid="task-tab-details"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="prompt-fullscreen"]')!.click();
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "1 / 3",
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
+  });
 });
 
 describe("#comment=<id> deep links", () => {

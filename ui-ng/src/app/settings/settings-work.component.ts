@@ -865,6 +865,22 @@ export function listedSecrets(
               </button>
             </div>
           </div>
+          @if (policyError(); as e) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="cap-policy-error"
+            >
+              <span>{{ e }}</span>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="policyError.set(null)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
 
           @if (policyRules().length > 0) {
             <div class="s-table-wrap">
@@ -957,7 +973,9 @@ export function listedSecrets(
               type="text"
               aria-label="Capability pattern"
               data-testid="input-policy-capability"
-              placeholder="gh-cli"
+              placeholder="https://github.com/acme/caps/cloud#*"
+              aria-describedby="policy-capability-hint"
+              [attr.aria-invalid]="newRuleCapInvalid() ? 'true' : null"
               [value]="newRuleCap()"
               [disabled]="
                 !access.can('PUT /api/capability-policy') ||
@@ -1014,6 +1032,7 @@ export function listedSecrets(
               data-testid="add-policy-rule-btn"
               [disabled]="
                 !newRuleCap().trim() ||
+                newRuleCapInvalid() ||
                 !access.can('PUT /api/capability-policy') ||
                 state.sectionLocked('capabilities')
               "
@@ -1022,6 +1041,23 @@ export function listedSecrets(
               Add rule
             </button>
           </div>
+          <!-- The server only takes a capability reference here
+               (model.CapabilityPolicy.Validate): a bare retired name
+               such as gh-cli is refused when the policy is saved. -->
+          <span
+            class="s-hint"
+            id="policy-capability-hint"
+            data-testid="policy-capability-hint"
+            [class.s-field-error]="newRuleCapInvalid()"
+          >
+            @if (newRuleCapInvalid()) {
+              A pattern is a capability reference starting with https://, not a
+              bare name.
+            } @else {
+              &lt;capability_id&gt;#&lt;method&gt;; * matches any run of
+              characters.
+            }
+          </span>
         </div>
 
         <div
@@ -1157,9 +1193,8 @@ export function listedSecrets(
                   fragment="capability-servers"
                   data-testid="credentials-gcp-link"
                   >gcp capability server's</a
-                >
-                <code>gcp-key</code> and <code>gemini-key</code> methods, and
-                the secrets grain stores.
+                >&ngsp;<code>gcp-key</code> and <code>gemini-key</code> methods,
+                and the secrets grain stores.
               </p>
             </div>
           </div>
@@ -1642,6 +1677,15 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
+  // newRuleCapInvalid is a typed pattern the server would refuse: every
+  // policy rule names a capability reference (https://...).
+  protected readonly newRuleCapInvalid = computed(() => {
+    const v = this.newRuleCap().trim();
+    return v !== "" && !v.startsWith("https://");
+  });
+  // policyError is a refused preview or save, shown in the policy card
+  // rather than in the page banner scrolled out of sight above it.
+  protected readonly policyError = signal<string | null>(null);
   protected readonly newRuleRepos = signal("");
   protected readonly newRuleEffect = signal("admit");
   protected readonly newRuleAllowUntrusted = signal(false);
@@ -2155,6 +2199,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   }
 
   protected async previewCapPolicy(): Promise<void> {
+    this.policyError.set(null);
     try {
       const res = await this.api.post<{
         denied?: CapabilityPolicyDenial[];
@@ -2176,18 +2221,19 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         );
       }
     } catch (err) {
-      this.state.recordError(err);
+      this.policyError.set(errText(err));
     }
   }
 
   protected async saveCapPolicy(): Promise<void> {
+    this.policyError.set(null);
     try {
       await this.api.put("PUT /api/capability-policy", undefined, {
         policy: { rules: this.policyRules() },
       });
       this.snackbar.show("Capability policy saved");
     } catch (err) {
-      this.state.recordError(err);
+      this.policyError.set(errText(err));
     }
   }
 

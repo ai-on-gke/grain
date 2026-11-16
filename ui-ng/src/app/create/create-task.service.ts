@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Injectable, signal } from "@angular/core";
+import { dismissActiveTooltip } from "../shared/tip.directive";
 import type { NewTaskDraft } from "./new-task-form";
 
 // CreateTaskService opens the New task sheet from anywhere (the rail
@@ -49,6 +50,7 @@ export class CreateTaskService {
   // close puts focus back on the opener, unless the caller moves it
   // somewhere else (a navigation that replaces the opener).
   close(restoreFocus = true): void {
+    dismissActiveTooltip(250);
     this.isOpen.set(false);
     const el = this.opener;
     this.opener = null;

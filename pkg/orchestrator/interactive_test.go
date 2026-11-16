@@ -484,7 +484,7 @@ func TestInteractiveFirstTurnWithNoCommentsDispatchesForAMessageItNeverSaw(t *te
 	task := model.Task{
 		ID: "first-turn-chat", Intent: model.IntentAnalyze, Interactive: true,
 		Title: "a chat", Body: "hello session",
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding: model.BindingDirective,
 	}
 	task.Approval = &model.Attribution{Actor: human}

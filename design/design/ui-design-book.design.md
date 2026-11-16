@@ -275,6 +275,13 @@ inspector and Task Detail. Sessions shares its message styles.
   Send share one row. A "New messages ↓" pill appears when something arrives
   at the end while you are scrolled up; older history paged in above is not
   news and never raises it.
+- **Sessions on a phone:** the chat pane scrolls as a whole, the log keeps a
+  floor of `min(18rem, 45dvh)` and the composer is sticky at the pane's
+  foot, so Send stays above the bottom bar however many rows the chat head
+  wraps to (320×568 included). Only a person's own send scrolls the pane.
+- **Sending is never blocked by sending.** In Sessions a sent message shows
+  at once (dashed: `Sending…`, then `Queued` behind it) and the composer
+  clears; a refused one stays as `Not sent` with its reason, Retry and Edit.
 - **Comment links (`#comment=<id>`)** open Conversation on any tab. A cold
   load reads 500 comments and pages back 500 at a time to the comment
   before rendering, so the thread draws once (a 3,000-comment task is at most
@@ -425,6 +432,25 @@ Rules:
   key-value list. The key column is capped at 40% of the pane and the list
   stacks key over value when the pane is under 260px, so no value clips or
   overlaps its key at any split width (`ui-ng/e2e/next-prompt-panes.spec.js`).
+- **A time is shown as a date, never as the wire's string.** An instant
+  the server sends (`2026-11-17T10:24:14.543896659Z`) reaches the page
+  through `formatStamp` (`shared/dispatch-status.ts`), so a row and the
+  pane beside it say the same time the same way
+  (`ui-ng/e2e/next-processes-run-times.spec.ts`).
+- **Task detail container layout, Docs tab, and full-screen document reader.**
+  `.task-page` is an inline-size container (`container: task-page / inline-size`);
+  at `@container task-page (max-width: 1060px)` `.task-layout` collapses its
+  right-hand `.task-aside` so opening the coplanar Director drawer automatically
+  gives `.task-main` full width. The `Details` tab stays visible at every width
+  without redirecting back to `Conversation`. A dedicated `Docs` tab
+  (`g-task-docs-tab`, `task/task-docs.ts`) pairs a document picker with a clean
+  `surface` Markdown reader (`76ch` measure, independent vertical scrolling)
+  across the task prompt, PR Markdown/doc diffs, and structured report comments.
+  Prompt headers and the Docs reader offer `Open Docs` and `Full screen` (`⤢`)
+  triggers that open a native top-layer `<dialog class="doc-reader-modal">`
+  (`aria-modal="true"`, backdrop click & Escape dismissal, `Prev` / `Next`
+  document navigation, `76ch` measure, independent scroll)
+  (`ui-ng/e2e/next-task-docs-scroll.spec.ts`).
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
@@ -446,7 +472,11 @@ Rules:
   before it reaches the DOM. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
-  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`).
+  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
+  user-written Markdown through `[gMarkdown]`, never `renderMarkdown()`
+  into `[innerHTML]`, so previews draw diagrams too (the Context page's
+  previews, `ui-ng/e2e/next-context-doc-mermaid.spec.ts`); a page that
+  hosts it loads `shared/code-highlight.css` and `shared/mermaid.css`.
 - **A capability row says what the policy will do with it.** Every
   capability picker is `g-grants-picker`, never a comma-separated text box
   (a grant's own arguments hold commas). It reads
@@ -711,3 +741,46 @@ Rules:
 - [ ] This book updated if the change sets or changes a rule.
 - [ ] No internal hostnames, people's names or credentials in code, fixtures,
       screenshots or commit messages.
+
+## 13. Autonomous Goal Mode
+
+Autonomous Goal Mode lets an operator hand Grain a multi-pass outcome ("Prototype a goal") and step back until the work is verified and ready to submit or reaches a hard safety/budget boundary.
+
+### 13.1 Intake (`+ Create` menu & `NewTaskSheetComponent`)
+
+- The `+ Create` menu in the shell (`AppComponent`) offers a third rich 2-line entry after **New task** and **Start a workstream**:
+  - **Prototype a goal** (`data-testid="create-prototype-goal"`): *"Hammer through autonomously — logs assumptions, verifies deliverables, opens a PR"*.
+  - Selecting it opens `NewTaskSheetComponent` pre-filled with `goalMode: { enabled: true, maxPasses: 8, wallClockMinutes: 120, mockMissingSecrets: true }` and `autoApproveProposals: true`.
+- Inside `NewTaskSheetComponent`, **Execution posture** (`<g-pill-select testid="nt-posture">`) switches between `Supervised` and `Autonomous goal`.
+- When `Autonomous goal` is active, a compact `.nt-section-card` (`data-testid="nt-goal-config"`) reveals:
+  - A calm one-sentence explanation of Inbox silence and bounded verification passes.
+  - **Max verification passes** (`data-testid="nt-max-passes"`, `1..20`, default `8`).
+  - **Wall-clock budget (min)** (`data-testid="nt-wall-clock"`, `5..720`, default `120`).
+  - **Mock missing external secrets locally** (`data-testid="nt-mock-secrets"`, `role="switch"`).
+  - Primary submit action label updates to **Start autonomous goal** (`data-testid="new-task-submit"`).
+- `.sheet-body` carries `32px` bottom padding and `scroll-padding-bottom: 32px` (with `flex-shrink: 0` on direct children) so bottom controls scroll comfortably clear of the sticky `.sheet-foot`. Active snackbars anchor above `--grain-bottombar-height` (`+ 16px` desktop, `+ 84px` phone, `+ 80px` landscape short) and dismiss/suppress overlapping bottom-bar tooltips on open.
+
+### 13.2 Inbox Silence & Terminal Surfacing (`inbox-classifier.ts`)
+
+- While `t.goalMode?.enabled` is true, mid-flight `awaiting_reply` questions (`!t.awaitingAccess && !isStoppedTurn(t)`) and auto-approved child proposals (`t.state === "proposed" && !!t.proposedBy && !!t.autoApproveProposals`) are suppressed from `waitsOnUser` and `classifyTask`.
+- Terminal and safety states always surface in the Inbox:
+  - `awaiting_submit`: renders pill **Goal ready** (`healthy`) when `t.goalScorecard?.verified` is true, or **Goal capped** (`warn`) when `t.goalScorecard?.stoppedAtCap` is true.
+  - `awaitingAccess`, `isStoppedTurn`, `failed`, `waitingBaseRepair`, `mergeBlocked`, `mergeQueueStalled`, and `stall` surface in their standard priority groups.
+
+### 13.3 Goal Scorecard, Assumptions Ledger & Revise Loop (`<g-task-goal-card>`)
+
+- `<g-task-goal-card>` (`data-testid="task-goal-card"`) renders above `<g-conversation>` in `TaskDetailComponent` (`/next/task/:id` and split-pane inspectors) and inside `InboxPageComponent`'s inspector whenever `goalMode?.enabled`, `goalScorecard`, or `goalAssumptions` is present.
+- Header (`data-testid="goal-status-pill"`):
+  - `Goal verified · N passes` (`healthy`), `Stopped at cap · N / M passes` (`warn`), or `Autonomous goal · Pass N / M` (`setup`).
+- Operator controls:
+  - **Switch to supervised** (`data-testid="act-switch-supervised"`): sends `PATCH /api/tasks/{id}` with `{ goalMode: { enabled: false } }` so the operator can take over mid-flight.
+  - **Revise…** (`data-testid="act-revise-goal"`): opens `NewTaskSheetComponent` pre-filled as a follow-up autonomous goal targeting the task's branch (`base: t.branch || t.base`), linked via `generatedFrom: t.id`, with prior summary and assumptions pre-populated in the description.
+- Body:
+  - **Deliverables checklist** (`data-testid="goal-deliverables"` / `data-testid="goal-deliverable"`): each requirement, verification mark (`✓` / `!`), and evidence citation.
+  - **Assumptions ledger** (`data-testid="goal-assumptions"` / `data-testid="goal-assumption"`): each autonomous decision (`topic`, `decision`, `rationale`, `alternatives`).
+
+### 13.4 Cross-Surface Badges
+
+- **Tasks (`/next/tasks`)** and **Agents (`/next/agents`)**: render compact status pills (`data-testid="goal-badge-<id>"`) showing `Goal ✓` (`healthy`), `Goal capped` (`warn`), or `Goal · N/M` (`setup`).
+- **Workstreams (`/next/workstreams`)**: streams whose root or member tasks run in Autonomous Goal Mode display an `Autonomous goal` chip (`data-testid="ws-goal-chip-<key>"`).
+

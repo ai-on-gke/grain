@@ -129,7 +129,7 @@ func dispatchTask(t *testing.T, ctx context.Context, store *model.Store, id stri
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "Do the thing", Body: "details",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &model.RepoRef{Owner: "acme", Name: "widgets"},
 		Binding:  model.BindingDirective,

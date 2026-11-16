@@ -118,9 +118,10 @@ var defaultClosingTools = []string{
 }
 
 // defaultClosingCalls are the conditional tool-call rules that close a
-// background run: resume_later on success, wait_for_task when it parks,
-// and run_command when it ran git push without failing.
+// background run: complete_goal and resume_later on success, wait_for_task
+// when it parks, and run_command when it ran git push without failing.
 var defaultClosingCalls = []hookpolicy.ClosingCallRule{
+	{Tool: "complete_goal", RequireSuccess: true},
 	{Tool: "resume_later", RequireSuccess: true},
 	{Tool: "wait_for_task", ArgBoolTrue: "park"},
 	{Tool: "wait_for_task", ArgNonEmpty: "resume_at"},

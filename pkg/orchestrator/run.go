@@ -659,8 +659,12 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += nothingNeededSection(task)
-	prompt += questionSummarySection
-	prompt += personActionSection
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+		prompt += autonomousGoalSection(gm)
+	} else {
+		prompt += questionSummarySection
+		prompt += personActionSection
+	}
 	prompt += statusSection(canOpenPullRequest)
 	prompt += chatSection(task, canOpenPullRequest)
 	prompt += runtimeSection(task, maxRuntime)
@@ -837,14 +841,14 @@ func commentsSinceSuspend(comments []model.Comment, priorDelivered *int64) []mod
 // is a branch repair rather than ordinary work: a task the queue has sent
 // back to fix its own pull request branch and whose repair has not finished
 // (Observation.RepairInFlight), a task the queue filed to repair another
-// task's branch back when a repair was a separate task (model.OriginReason.Merger),
+// task's branch back when a repair was a separate task (model.FilingReason.Merger),
 // or a task repairing the base branch itself (model.FixesBaseBranch).
 //
 // A nil obs -- a task nothing has ever been observed about, which is
 // every first dispatch -- is still a repair when FixesBaseBranch(task) or
-// Origin.Reason.Merger() holds.
+// Filing.Reason.Merger() holds.
 func mergeRepairRun(task model.Task, obs *model.Observation) bool {
-	return task.Origin.Reason.Merger() || obs.RepairInFlight() || model.FixesBaseBranch(task)
+	return task.Filing.Reason.Merger() || obs.RepairInFlight() || model.FixesBaseBranch(task)
 }
 
 // redCIProcedureSection is the one way every run with grain CI is told to
@@ -1857,7 +1861,7 @@ func timezoneSectionAt(task model.Task, now time.Time) string {
 	tInLoc := now.In(loc)
 	timeFormatted := tInLoc.Format("2006-01-02 15:04 MST")
 
-	isDirect := task.Interactive || task.Origin.Reason == model.ReasonDirect || task.Origin.Reason == model.ReasonConsoleSession
+	isDirect := task.Interactive || task.Filing.Reason == model.ReasonDirect || task.Filing.Reason == model.ReasonConsoleSession
 	if isDirect {
 		return fmt.Sprintf("\n\nUser timezone: %s (current time: %s)", resolvedName, timeFormatted)
 	}
@@ -3190,6 +3194,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		}
 	}
 	task = withDeploymentTimeZone(task, cfg.TimeZone)
+	cfg = goalModeDispatch(task, cfg)
 	run := model.Run{ID: d.RunID, TaskID: d.TaskID, Sandbox: d.RunID, Attempt: d.Attempt, StartedAt: at}
 	cc := model.CapabilityContext{Task: task, Run: run, Now: at, Workdir: sandboxRoot, Credentials: cfg.Credentials,
 		Deadline: capabilityDeadline(at, cfg.maxRunRuntime())}
@@ -3947,6 +3952,14 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// moment the framework names it (earlySession).
 			OnResumableSession: early.record,
 		}
+		var initialGoalHead string
+		var goalPass1Span *GoalPerfSpan
+		gmEnabled := false
+		if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+			gmEnabled = true
+			initialGoalHead, _ = inspectGoalCheckout(hostCtx, tools)
+			goalPass1Span = NewGoalPerfProfiler(cfg.DataDir).Start(task.ID, d.RunID, 1, "verifier-pass")
+		}
 		result, runErr = framework.Run(hostCtx, runCfg)
 		if runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
 			noteFirstTurn()
@@ -3955,9 +3968,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
+		// Autonomous Goal Mode drives its own multi-pass continuation loop
+		// below without falling back to BackgroundContinueReason.
+		if !gmEnabled && !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
 			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
 		}
+		result, runErr = runGoalVerifierPasses(hostCtx, ctx, store, cfg, framework, runCfg, tools, &task, d.RunID, initialGoalHead, goalPass1Span, result, runErr)
 		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {

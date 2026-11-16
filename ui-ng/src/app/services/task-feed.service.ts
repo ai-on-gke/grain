@@ -24,22 +24,12 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
+import { errorText } from "../sessions/session-helpers";
 import { ReadTrouble } from "./request-trouble";
 
 export const FAST_POLL_MS = 3000;
 export const IDLE_POLL_MS = 15000;
 const CLOCK_TICK_MS = 5000;
-
-function extractError(err: unknown): string {
-  const e = err as { error?: unknown; message?: string };
-  if (e && typeof e.error === "string" && e.error) return e.error;
-  if (e && e.error && typeof e.error === "object") {
-    const nested = e.error as { error?: string; message?: string };
-    if (nested.error) return nested.error;
-    if (nested.message) return nested.message;
-  }
-  return e?.message || "The request failed.";
-}
 
 export function isOpenWorkTask(t: Task): boolean {
   return !t.consoleSession && !t.interactive;
@@ -278,7 +268,7 @@ export class TaskFeedStore implements OnDestroy {
     } catch (err) {
       this.lastError.set(err);
       if (this.trouble.fail(err) || !this.loaded()) {
-        this.loadError.set(extractError(err));
+        this.loadError.set(errorText(err));
       }
       this.now.set(Date.now());
       return false;
