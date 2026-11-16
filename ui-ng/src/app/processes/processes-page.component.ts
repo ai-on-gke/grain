@@ -1419,10 +1419,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <li class="proc-kv-item">
                           <div>
                             <code class="tabular"
-                              >{{
-                              "{{" + f.name + "
-
-                              }}" }}</code
+                              >{{ "{{" + f.name + "}}" }}</code
                             >
                             @if (f.label) {
                               <span> · {{ f.label }}</span>
