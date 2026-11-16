@@ -21,9 +21,11 @@ import {
   type SimpleChanges,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
@@ -50,27 +52,12 @@ import {
   type UsagePauseInput,
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
+import {
+  type SandboxCommitment,
+  SandboxCommitmentNoteComponent,
+} from "./sandbox-commitment-note.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
-import {
-  type DiskFloorDto,
-  type SandboxCommitmentDto,
-  SandboxCommitmentNoteComponent,
-  diskFloorText,
-} from "./sandbox-notes";
-import {
-  type K8sKind,
-  type NumberBox,
-  type OvercommitBound,
-  type OvercommitSettings,
-  OVERCOMMIT_BOUND_FIELDS,
-  k8sFieldError,
-  overcommitBoundKey,
-  overcommitRangeError,
-  parseNodeSelector,
-  readNumberBox,
-  resolveOvercommit,
-} from "./sandbox-settings";
 
 // SandboxBackendOptionDto is one entry of GET /api/settings
 // sandboxBackendOptions (model.SandboxBackendOption).
@@ -113,26 +100,6 @@ const SANDBOX_BACKEND_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "kubernetes-granule":
     "Each run boots a Granule microVM with its own guest kernel over /dev/kvm inside a privileged Kubernetes pod.",
 };
-
-// The custom image card's link to the contract a custom image is checked
-// against, and the backends that boot a packed guest rather than a
-// container image (classic CustomSandboxImageCard.jsx).
-const SANDBOX_CONTRACT_DOC =
-  "https://github.com/ai-on-gke/grain/blob/main/docs/sandbox-image-contract.md";
-const VM_BACKENDS: ReadonlySet<string> = new Set([
-  "granule",
-  "kubernetes-granule",
-]);
-
-/** One box of the Kubernetes card. */
-interface K8sField {
-  key: string;
-  label: string;
-  kind: K8sKind;
-  mono: boolean;
-  placeholder: string;
-  hint: string;
-}
 
 const NETWORK_ACCESS_LABELS: Readonly<Record<string, string>> = {
   open: "Open (full network)",
@@ -409,6 +376,42 @@ function formatRefreshedAt(iso?: string): string {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${hh}:${mm} UTC`;
+}
+
+interface OvercommitBound {
+  field: string;
+  label: string;
+  fallback: string;
+  step: string;
+  max?: number;
+}
+
+interface K8sField {
+  key: string;
+  label: string;
+  placeholder: string;
+  hint: string;
+}
+
+interface DiskFloorRow {
+  path: string;
+  totalMB: number;
+  floorMB: number;
+  reclaimMB: number;
+}
+
+interface ContractInfo {
+  contract?: number;
+  minimumContract?: number;
+  contractLabel?: string;
+  granuleContract?: number;
+  granuleContractLabel?: string;
+  guestBaseImage?: string;
+  k8sSandboxBaseImage?: string;
+}
+
+function mib(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GiB` : `${mb} MiB`;
 }
 
 @Component({
@@ -1521,13 +1524,19 @@ function formatRefreshedAt(iso?: string): string {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-sandbox-overcommit">
-          <div>
-            <h3 class="s-card-title">Sandbox budget</h3>
-            <p class="s-card-desc">
-              How much of this host's CPU, memory and disk sandboxes may be
-              promised at once, and how much disk is kept free.
-            </p>
+        <div
+          class="s-card"
+          id="sandbox-budget"
+          data-testid="card-sandbox-overcommit"
+        >
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Sandbox budget</h3>
+              <p class="s-card-desc">
+                How much of this host agent and CI sandboxes may be promised,
+                and the free disk kept back on every volume.
+              </p>
+            </div>
           </div>
           <div class="s-grid">
             <div class="s-field">
@@ -1542,8 +1551,8 @@ function formatRefreshedAt(iso?: string): string {
                 (valueChange)="setOvercommitMode($event)"
               />
               <span class="s-hint"
-                >Fixed holds the ratios below; auto moves them between the
-                bounds below from host CPU and memory pressure.</span
+                >Fixed holds the ratios here; auto moves them between the bounds
+                below from host CPU and memory pressure.</span
               >
             </div>
             <div class="s-field">
@@ -1554,12 +1563,22 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 step="0.25"
-                [value]="state.val('sandboxCpuOvercommit', 2)"
+                [value]="state.val('sandboxCpuOvercommit', '')"
+                [placeholder]="state.defaultHint('sandboxCpuOvercommit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'sandboxCpuOvercommit',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxCpuOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2)
                   )
                 "
               />
@@ -1587,12 +1606,22 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 step="0.25"
-                [value]="state.val('sandboxMemoryOvercommit', 1)"
+                [value]="state.val('sandboxMemoryOvercommit', '')"
+                [placeholder]="state.defaultHint('sandboxMemoryOvercommit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'sandboxMemoryOvercommit',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxMemoryOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1)
                   )
                 "
               />
@@ -1610,103 +1639,51 @@ function formatRefreshedAt(iso?: string): string {
                 >
               }
             </div>
-            @for (f of diskFields; track f.key) {
-              <div class="s-field">
-                <label class="s-label" [for]="f.id">{{ f.label }}</label>
-                <input
-                  class="s-input s-num"
-                  type="number"
-                  [id]="f.id"
-                  [attr.min]="f.min"
-                  [attr.max]="f.max ?? null"
-                  [attr.step]="f.step"
-                  [attr.data-testid]="'input-' + f.id"
-                  [value]="numberText(f.key)"
-                  [placeholder]="state.defaultHint(f.key, f.fallback)"
-                  [disabled]="!canWriteSettings()"
-                  [attr.aria-invalid]="state.fieldErrors()[f.key] ? true : null"
-                  [attr.aria-describedby]="f.id + '-hint'"
-                  (input)="setBoundedNumber(f, $any($event.target))"
-                  (change)="setBoundedNumber(f, $any($event.target), true)"
-                />
-                @if (state.fieldErrors()[f.key]; as err) {
-                  <span
-                    class="s-field-error"
-                    role="alert"
-                    [id]="f.id + '-hint'"
-                    [attr.data-testid]="'error-' + f.id"
-                    >{{ err }}</span
-                  >
-                } @else {
-                  <span class="s-hint" [id]="f.id + '-hint'"
-                    >{{ f.hint }} Blank resets to grain's default ({{
-                      state.defaultHint(f.key, f.fallback)
-                    }}).</span
-                  >
-                }
-              </div>
-            }
           </div>
-          @if (diskFloorNote(); as floorNote) {
-            <p class="s-hint s-note" data-testid="disk-floor-note">
-              {{ floorNote }}
-            </p>
-          }
 
           @if (overcommitMode() === "auto") {
             <div class="s-subsection" data-testid="overcommit-auto-bounds">
-              <div>
+              <div class="s-subhead">
                 <h4 class="s-subhead-title">Auto overcommit bounds</h4>
-                <p class="s-card-desc">
-                  The ratios auto mode may move between, and the host pressure
-                  (PSI some avg60) it backs off at.
-                </p>
               </div>
-              @if (autoEffective(); as eff) {
+              @if (autoOvercommitLive(); as live) {
                 <div
                   class="s-banner readonly"
                   role="status"
                   data-testid="auto-overcommit-effective"
                 >
-                  {{ eff }}
+                  {{ live }}
                 </div>
               }
+              <span class="s-hint"
+                >Blank (or 0) uses grain's default, shown greyed in each
+                box.</span
+              >
               <div class="s-grid">
-                @for (b of boundFields; track b.field) {
+                @for (b of overcommitBounds; track b.field) {
                   <div class="s-field">
-                    <label class="s-label" [for]="'oc-' + b.field">{{
+                    <label class="s-label" [attr.for]="'oc-' + b.field">{{
                       b.label
                     }}</label>
                     <input
                       class="s-input s-num"
                       type="number"
+                      min="0"
                       [id]="'oc-' + b.field"
-                      [attr.min]="b.min"
                       [attr.max]="b.max ?? null"
-                      [attr.step]="b.step"
-                      [attr.data-testid]="'input-oc-' + b.field"
+                      [step]="b.step"
+                      [attr.data-testid]="'input-overcommit-' + b.field"
                       [value]="overcommitBound(b.field)"
-                      [placeholder]="String(b.fallback)"
+                      [placeholder]="b.fallback"
                       [disabled]="!canWriteSettings()"
-                      [attr.aria-invalid]="boundError(b.field) ? true : null"
-                      [attr.aria-describedby]="'oc-' + b.field + '-hint'"
-                      (input)="setOvercommitBound(b.field, $any($event.target))"
-                      (change)="
-                        setOvercommitBound(b.field, $any($event.target), true)
-                      "
+                      (input)="setOvercommitBound(b, $any($event.target).value)"
                     />
-                    @if (boundError(b.field); as err) {
+                    @if (state.fieldErrors()[boundKey(b.field)]; as err) {
                       <span
                         class="s-field-error"
-                        role="alert"
-                        [id]="'oc-' + b.field + '-hint'"
-                        [attr.data-testid]="'error-oc-' + b.field"
+                        [attr.data-testid]="'error-overcommit-' + b.field"
                         >{{ err }}</span
                       >
-                    } @else {
-                      <span class="s-hint" [id]="'oc-' + b.field + '-hint'">{{
-                        b.hint
-                      }}</span>
                     }
                   </div>
                 }
@@ -1714,225 +1691,449 @@ function formatRefreshedAt(iso?: string): string {
             </div>
           }
 
-          @if (!commitment()?.uncapped) {
-            <g-sandbox-commitment-note [commitment]="commitment()" />
+          <div class="s-subsection" data-testid="sandbox-disk-floor">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Disk floor</h4>
+            </div>
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="sb-disk-oc"
+                  >Disk overcommit (x)</label
+                >
+                <input
+                  id="sb-disk-oc"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  data-testid="input-disk-overcommit"
+                  [value]="state.val('sandboxDiskOvercommit', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskOvercommit')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskOvercommit',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskOvercommit', 2),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskOvercommit',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskOvercommit', 2)
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >How many times the volume (on Kubernetes, the cluster's
+                  allocatable ephemeral storage), less the floor, sandbox disks
+                  may be promised. 0 leaves disk held by the floor alone; blank
+                  resets to grain's default ({{
+                    reportedDefault("sandboxDiskOvercommit", 2)
+                  }}).</span
+                >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="sb-floor-share"
+                  >Disk floor (share of each volume)</label
+                >
+                <input
+                  id="sb-floor-share"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  data-testid="input-disk-floor-share"
+                  [value]="state.val('sandboxDiskFloorShare', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskFloorShare')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskFloorShare',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskFloorShare',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1)
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >Free space kept on each volume: new CI jobs are held and
+                  agent dispatch deferred below it. 0.1 is a tenth; 0 with no
+                  minimum holds nothing back.</span
+                >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="sb-floor-min"
+                  >Disk floor minimum (MiB)</label
+                >
+                <input
+                  id="sb-floor-min"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  step="1024"
+                  data-testid="input-disk-floor-min"
+                  [value]="state.val('sandboxDiskFloorMinMb', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskFloorMinMb')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskFloorMinMb',
+                      $any($event.target).value,
+                      diskFloorMinDefault(),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskFloorMinMb',
+                      $any($event.target).value,
+                      diskFloorMinDefault()
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >The least the floor is ever worth on a small volume. 0 is no
+                  minimum; blank resets to grain's default ({{
+                    diskFloorMinDefault()
+                  }}
+                  MiB).</span
+                >
+              </div>
+            </div>
+            @if (diskFloorSummary()) {
+              <span class="s-hint s-num" data-testid="disk-floor-volumes">{{
+                diskFloorSummary()
+              }}</span>
+            }
+          </div>
+
+          @if (!sandboxCommitment()?.uncapped) {
+            <g-sandbox-commitment-note [commitment]="sandboxCommitment()" />
           }
         </div>
 
-        <div class="s-card" data-testid="card-kubernetes" id="kubernetes">
-          <div>
-            <h3 class="s-card-title">Kubernetes</h3>
-            <p class="s-card-desc">
-              Where and how the Kubernetes backends create sandbox pods. Blank
-              boxes use the default shown in them.
-            </p>
+        <div class="s-card" id="kubernetes" data-testid="card-kubernetes">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Kubernetes</h3>
+              <p class="s-card-desc">
+                Where and how the kubernetes and kubernetes-granule backends
+                create sandbox pods, and the Deployment self-upgrade repoints.
+                Blank boxes use the default shown greyed in them.
+              </p>
+            </div>
           </div>
           @if (k8sImageWarning()) {
             <div
               class="s-banner warn"
-              role="status"
+              role="alert"
               data-testid="k8s-image-warning"
             >
-              {{ k8sImageWarning() }}
+              <span>{{ k8sImageWarning() }}</span>
             </div>
           }
           <div class="s-grid">
             @for (f of k8sFields(); track f.key) {
               <div class="s-field">
-                <label class="s-label" [for]="'k8s-' + f.key">{{
+                <label class="s-label" [attr.for]="'k8s-' + f.key">{{
                   f.label
                 }}</label>
                 <input
-                  class="s-input"
+                  class="s-input s-mono"
                   type="text"
-                  autocomplete="off"
                   spellcheck="false"
-                  [class.s-mono]="f.mono"
+                  autocomplete="off"
                   [id]="'k8s-' + f.key"
                   [attr.data-testid]="'input-' + f.key"
-                  [value]="k8sText(f.key)"
+                  [value]="state.val(f.key, '')"
                   [placeholder]="f.placeholder"
                   [disabled]="!canWriteSettings()"
-                  [attr.aria-invalid]="state.fieldErrors()[f.key] ? true : null"
-                  [attr.aria-describedby]="'k8s-' + f.key + '-hint'"
-                  (input)="setK8sText(f, $any($event.target).value)"
-                  (change)="setK8sText(f, $any($event.target).value, true)"
+                  (input)="state.setField(f.key, $any($event.target).value)"
                 />
-                @if (state.fieldErrors()[f.key]; as err) {
+                <span class="s-hint">{{ f.hint }}{{ restartNote(f.key) }}</span>
+                @if (f.key === "k8sGranuleImage" && k8sGranuleEffective()) {
                   <span
-                    class="s-field-error"
-                    role="alert"
-                    [id]="'k8s-' + f.key + '-hint'"
-                    [attr.data-testid]="'error-k8s-' + f.key"
-                    >{{ err }}</span
+                    class="s-hint"
+                    data-testid="k8s-granule-image-effective"
+                    >{{ k8sGranuleEffective() }}</span
                   >
-                } @else {
-                  <span class="s-hint" [id]="'k8s-' + f.key + '-hint'">{{
-                    f.hint
-                  }}</span>
-                }
-                @if (f.key === "k8sGranuleImage" && granuleImageNote(); as gn) {
-                  <span class="s-hint s-wrap" [attr.data-testid]="gn.testid">{{
-                    gn.text
-                  }}</span>
                 }
               </div>
             }
-          </div>
-          @for (t of k8sSwitches; track t.key) {
-            <div class="s-toggle-row">
-              <div class="s-toggle-copy">
-                <span class="s-toggle-name">{{ t.label }}</span>
-                <span class="s-hint">{{ t.hint }}</span>
-              </div>
-              <button
-                type="button"
-                class="g-switch"
-                role="switch"
-                [attr.data-testid]="t.testid"
-                [attr.aria-checked]="Boolean(state.val(t.key, false))"
+            <div class="s-field">
+              <label class="s-label" for="k8s-node-selector"
+                >Node selector</label
+              >
+              <input
+                id="k8s-node-selector"
+                class="s-input s-mono"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                data-testid="input-k8sNodeSelector"
+                placeholder="pool=sandboxes"
+                [value]="nodeSelectorText()"
                 [disabled]="!canWriteSettings()"
-                [attr.aria-label]="t.label"
-                (click)="state.setField(t.key, !state.val(t.key, false))"
-              ></button>
+                (input)="setNodeSelector($any($event.target).value)"
+              />
+              @if (state.fieldErrors()["k8sNodeSelector"]; as err) {
+                <span
+                  class="s-field-error"
+                  data-testid="error-k8sNodeSelector"
+                  >{{ err }}</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >Comma-separated key=value nodeSelector entries for sandbox
+                  pods.{{ restartNote("k8sNodeSelector") }}</span
+                >
+              }
             </div>
-          }
+          </div>
+
+          <div class="s-subsection" data-testid="k8s-priority-classes">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Pod priority classes</h4>
+            </div>
+            <span class="s-hint"
+              >Empty sets no priority class on those pods. A class the cluster
+              lacks is created if it is grain's own, or else left off the pods
+              with an alert.</span
+            >
+            <div class="s-grid">
+              @for (f of k8sPriorityFields(); track f.key) {
+                <div class="s-field">
+                  <label class="s-label" [attr.for]="'k8s-' + f.key">{{
+                    f.label
+                  }}</label>
+                  <input
+                    class="s-input s-mono"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="none"
+                    [id]="'k8s-' + f.key"
+                    [attr.data-testid]="'input-' + f.key"
+                    [value]="state.val(f.key, '')"
+                    [disabled]="!canWriteSettings()"
+                    (input)="state.setField(f.key, $any($event.target).value)"
+                  />
+                  <span class="s-hint"
+                    >{{ f.hint }}{{ restartNote(f.key) }}</span
+                  >
+                </div>
+              }
+            </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name"
+                >Run Kubernetes sandbox containers privileged</span
+              >
+              <span class="s-hint"
+                >Needed by kubernetes-granule pods that boot a VM over
+                /dev/kvm.{{ restartNote("k8sPrivileged") }}</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-k8s-privileged"
+              [attr.aria-checked]="Boolean(state.val('k8sPrivileged', false))"
+              [disabled]="!canWriteSettings()"
+              aria-label="Run Kubernetes sandbox containers privileged"
+              (click)="
+                state.setField(
+                  'k8sPrivileged',
+                  !state.val('k8sPrivileged', false)
+                )
+              "
+            ></button>
+          </div>
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name"
+                >Cluster CNI enforces NetworkPolicy</span
+              >
+              <span class="s-hint"
+                >Required for network: none isolation on Kubernetes pods.{{
+                  restartNote("k8sNetworkPolicy")
+                }}</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-k8s-netpol"
+              [attr.aria-checked]="
+                Boolean(state.val('k8sNetworkPolicy', false))
+              "
+              [disabled]="!canWriteSettings()"
+              aria-label="Cluster CNI enforces NetworkPolicy"
+              (click)="
+                state.setField(
+                  'k8sNetworkPolicy',
+                  !state.val('k8sNetworkPolicy', false)
+                )
+              "
+            ></button>
+          </div>
         </div>
 
         <div
           class="s-card"
-          data-testid="card-custom-sandbox-image"
           id="custom-sandbox-image"
+          data-testid="card-custom-sandbox-image"
         >
-          <div>
-            <h3 class="s-card-title">Custom sandbox image</h3>
-            <p class="s-card-desc">
-              The OCI image new sandboxes are created from in place of the one
-              this build is stamped for.
-            </p>
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Custom sandbox image</h3>
+              <p class="s-card-desc">
+                The OCI image new sandboxes are created from in place of the one
+                this build is stamped for. Running sandboxes keep theirs.
+              </p>
+            </div>
           </div>
           <div class="s-field">
             <label class="s-label" for="sb-image"
               >Custom sandbox image (OCI reference)</label
             >
-            <div class="s-input-row">
+            <div class="s-inline">
               <input
                 id="sb-image"
-                class="s-input s-mono"
+                class="s-input s-input-inline s-mono"
                 type="text"
-                autocomplete="off"
                 spellcheck="false"
+                autocomplete="off"
                 data-testid="input-sandbox-image"
-                aria-describedby="sb-image-hint"
                 [value]="state.val('sandboxImage', '')"
-                [placeholder]="state.val('sandboxImageDefault', '')"
+                [placeholder]="state.defaultHint('sandboxImage')"
                 [disabled]="!canWriteSettings()"
                 (input)="
                   state.setField('sandboxImage', $any($event.target).value)
                 "
               />
-              @if (customImage()) {
+              @if (String(state.val("sandboxImage", "")).trim()) {
                 <button
                   type="button"
-                  class="btn-tonal s-btn-sm"
+                  class="btn-text s-btn-sm"
                   data-testid="sandbox-image-reset"
                   [disabled]="!canWriteSettings()"
-                  (click)="clearCustomImage()"
+                  (click)="state.setField('sandboxImage', '')"
                 >
                   Reset to default
                 </button>
               }
             </div>
-            <span class="s-hint s-wrap" id="sb-image-hint">{{
-              customImageHint()
-            }}</span>
+            <span class="s-hint"
+              >Empty uses the image this build is stamped for{{
+                state.defaultHint("sandboxImage")
+                  ? " (" + state.defaultHint("sandboxImage") + ")"
+                  : ""
+              }}.</span
+            >
           </div>
-          @if (customImage() && state.val("sandboxImageWarning", "")) {
-            <div
-              class="s-banner warn s-wrap"
-              role="status"
-              data-testid="sandbox-image-warning"
-            >
-              {{ state.val("sandboxImageWarning", "") }}
-            </div>
-          } @else if (customImageVerified()) {
-            <div
-              class="s-banner ok s-wrap"
-              role="status"
-              data-testid="sandbox-image-contract-ok"
-            >
-              {{ customImageVerified() }}
-            </div>
+          @if (sandboxImageStored()) {
+            @if (state.settings()["sandboxImageWarning"]; as warn) {
+              <div
+                class="s-banner warn"
+                role="alert"
+                data-testid="sandbox-image-warning"
+              >
+                <span>{{ warn }}</span>
+              </div>
+            } @else if (sandboxImageVerified()) {
+              <div
+                class="s-banner ok"
+                role="status"
+                data-testid="sandbox-image-contract-ok"
+              >
+                <span>{{ sandboxImageVerified() }}</span>
+              </div>
+            }
           }
-          @if (granuleSamePin(); as pin) {
+          @if (sandboxMirrorHint()) {
+            <span class="s-hint" data-testid="sandbox-image-mirror">{{
+              sandboxMirrorHint()
+            }}</span>
+          }
+          @if (granulePinSame()) {
             <div
-              class="s-banner readonly s-wrap"
+              class="s-banner readonly"
               role="status"
               data-testid="sandbox-image-k8s-granule-pin"
             >
-              <span class="s-banner-text">{{ pin.text }}</span>
+              <span
+                >The Kubernetes Granule VM pod image (k8s_granule_image) holds
+                the same reference, {{ granulePin() }}. Clearing only the custom
+                image leaves that pin in place.</span
+              >
               <button
                 type="button"
                 class="btn-text s-btn-sm"
                 data-testid="sandbox-image-k8s-granule-pin-clear"
                 [disabled]="!canWriteSettings()"
-                (click)="clearGranulePin()"
+                (click)="state.setField('k8sGranuleImage', '')"
               >
-                {{ pin.action }}
+                Clear it too
               </button>
             </div>
           }
 
-          <div class="s-subsection">
-            <h4 class="s-subhead-title">
-              Build it FROM grain's minimal base image
-            </h4>
-            <p class="s-hint s-note" data-testid="sandbox-image-inherits">
-              {{ contract().inherits }}
-            </p>
-            <p class="s-hint s-note" data-testid="sandbox-image-todo">
-              All your image has to do is start FROM it and install the packages
-              and toolchains your tasks need. Leave what the base image carries
-              in place.
-            </p>
+          <div class="s-subsection" data-testid="sandbox-image-contract">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">
+                Build it FROM grain's minimal base image
+              </h4>
+            </div>
+            <span class="s-hint" data-testid="sandbox-image-inherits">{{
+              imageInherits()
+            }}</span>
             <pre
-              class="s-code s-code-scroll"
-              data-testid="sandbox-image-dockerfile"
+              class="s-code"
               tabindex="0"
               role="region"
               aria-label="Example Dockerfile"
-              >{{ contract().dockerfile }}</pre>
-          </div>
-
-          <div class="s-subsection">
-            <h4 class="s-subhead-title">Sandbox contract</h4>
-            <ul class="s-contract-list" data-testid="sandbox-contract-versions">
-              @for (row of contract().versions; track row.code) {
+              data-testid="sandbox-image-dockerfile"
+              >{{ dockerfileExample() }}</pre>
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Sandbox contract</h4>
+            </div>
+            <ul
+              class="s-hint s-contract"
+              data-testid="sandbox-contract-versions"
+            >
+              @for (line of contractLines(); track line.code) {
                 <li>
-                  <code class="s-mono">{{ row.code }}</code>
-                  <span class="s-hint"> ({{ row.note }})</span>
+                  <code>{{ line.code }}</code> {{ line.note }}
                 </li>
               }
             </ul>
-            <p class="s-hint s-note">
-              A custom image does not need rebuilding on every grain upgrade.
-              The base image stamps the contract version it was built at, and
-              you only need to rebuild when that version falls below what grain
-              supports. That happens when grain changes what it relies on inside
-              a sandbox: the user and home layout, the boundary tools,
-              grain-connect, or Granule's guest contract. This pane and the
-              daemon log warn you when it does.
-            </p>
-            <p class="s-hint s-note" data-testid="sandbox-contract-reference">
-              <a [href]="contractDoc" target="_blank" rel="noreferrer"
+            <span class="s-hint"
+              >A custom image needs rebuilding only when the contract version
+              its base stamped falls below what grain supports — when grain
+              changes what it relies on inside a sandbox. This card and the
+              daemon log warn you when it does. Check an image before saving it
+              with <code>grain sandbox-image check &lt;image&gt;</code>;
+              <a [href]="contractDoc" target="_blank" rel="noopener noreferrer"
                 >docs/sandbox-image-contract.md</a
               >
-              lists every property the base image provides, which is what
-              <code class="s-mono">grain sandbox-image check --probe</code>
-              verifies. To check an image before you save it here, run
-              <code class="s-mono">grain sandbox-image check &lt;image&gt;</code
-              >.
-            </p>
+              lists everything the base image provides.</span
+            >
           </div>
         </div>
 
@@ -2892,6 +3093,434 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
+  protected readonly String = String;
+
+  protected readonly contractDoc =
+    "https://github.com/ai-on-gke/grain/blob/main/docs/sandbox-image-contract.md";
+
+  // The auto controller's bounds (model.OvercommitSettings). GET
+  // /api/settings reports them resolved, so a stored 0 already reads as
+  // grain's default; fallback is that default (model.DefaultOvercommit*)
+  // for the placeholder of a box somebody clears.
+  protected readonly overcommitBounds: readonly OvercommitBound[] = [
+    {
+      field: "cpuMin",
+      label: "Auto CPU minimum (x)",
+      fallback: "1",
+      step: "0.25",
+    },
+    {
+      field: "cpuMax",
+      label: "Auto CPU maximum (x)",
+      fallback: "6",
+      step: "0.25",
+    },
+    {
+      field: "memoryMin",
+      label: "Auto memory minimum (x)",
+      fallback: "1",
+      step: "0.05",
+    },
+    {
+      field: "memoryMax",
+      label: "Auto memory maximum (x)",
+      fallback: "2",
+      step: "0.05",
+    },
+    {
+      field: "cpuPressureTarget",
+      label: "CPU pressure target (%)",
+      fallback: "25",
+      step: "1",
+      max: 100,
+    },
+    {
+      field: "memoryPressureTarget",
+      label: "Memory pressure target (%)",
+      fallback: "5",
+      step: "1",
+      max: 100,
+    },
+  ];
+
+  protected boundKey(field: string): string {
+    return `sandboxOvercommit${field[0].toUpperCase()}${field.slice(1)}`;
+  }
+
+  private overcommitObject(): Record<string, unknown> {
+    const v = this.state.val<unknown>("sandboxOvercommit", null);
+    if (v && typeof v === "object") return v as Record<string, unknown>;
+    return { mode: typeof v === "string" && v ? v : "fixed" };
+  }
+
+  protected overcommitBound(field: string): string {
+    const v = Number(this.overcommitObject()[field] ?? 0);
+    return Number.isFinite(v) && v !== 0 ? String(v) : "";
+  }
+
+  // setOvercommitBound stages one bound into the sandboxOvercommit object
+  // the server saves whole. A refused bound is reported against its own
+  // box by name, and holds the Save bar, rather than reaching the server
+  // as a bad object or quietly turning into the default.
+  protected setOvercommitBound(b: OvercommitBound, raw: string): void {
+    const key = this.boundKey(b.field);
+    const t = String(raw ?? "").trim();
+    const n = t === "" ? 0 : Number(t);
+    if (!Number.isFinite(n) || n < 0) {
+      this.state.setFieldError(
+        key,
+        `${b.label} must be 0 (grain's default) or more, not ${t || "that"}.`,
+      );
+      return;
+    }
+    if (b.max !== undefined && n > b.max) {
+      this.state.setFieldError(
+        key,
+        `${b.label} is a percentage, at most ${b.max}.`,
+      );
+      return;
+    }
+    this.state.setFieldError(key, null);
+    this.state.setField("sandboxOvercommit", {
+      ...this.overcommitObject(),
+      [b.field]: n,
+    });
+  }
+
+  // reportedDefault is `<key>Default` as a number, for a box whose stored
+  // 0 is a value of its own (an unbounded overcommit, a floor share that
+  // holds nothing back): a cleared box saves that default, so the greyed
+  // placeholder it shows is what Save really stores, and 0 typed on
+  // purpose stays 0.
+  // autoOvercommitLive is what the auto overcommit controller has set the
+  // ratios to (GET /api/settings sandboxCommitment.budget.overcommit, as
+  // classic SandboxesSection shows it), or "" outside auto mode or where
+  // the server reports none.
+  protected readonly autoOvercommitLive = computed(() => {
+    if (this.overcommitMode() !== "auto") return "";
+    const budget = this.sandboxCommitment()?.budget as
+      | {
+          cpuOvercommit?: number;
+          memoryOvercommit?: number;
+          overcommit?: {
+            cpuOvercommit?: number;
+            memoryOvercommit?: number;
+            last?: {
+              cpuSome?: number;
+              cpuPressure?: number;
+              memorySome?: number;
+              memoryPressure?: number;
+            };
+          };
+        }
+      | undefined;
+    const live = budget?.overcommit;
+    const cpu = live?.cpuOvercommit ?? budget?.cpuOvercommit;
+    const mem = live?.memoryOvercommit ?? budget?.memoryOvercommit;
+    if (cpu == null && mem == null) return "";
+    const parts: string[] = [];
+    if (cpu != null) parts.push(`CPU ${Number(cpu).toFixed(2)}×`);
+    if (mem != null) parts.push(`memory ${Number(mem).toFixed(2)}×`);
+    let psi = "";
+    if (live?.last) {
+      const c = live.last.cpuSome ?? live.last.cpuPressure ?? 0;
+      const m = live.last.memorySome ?? live.last.memoryPressure ?? 0;
+      psi = ` (PSI: CPU ${Number(c).toFixed(1)}%, memory ${Number(m).toFixed(1)}%)`;
+    }
+    return `Auto overcommit is active — live effective factors: ${parts.join(", ")}${psi}.`;
+  });
+
+  protected reportedDefault(key: string, fallback: number): number {
+    const d = Number(this.state.settings()[`${key}Default`]);
+    return Number.isFinite(d) && d > 0 ? d : fallback;
+  }
+
+  protected diskFloorMinDefault(): number {
+    return (
+      Number(this.state.settings()["sandboxDiskFloorMinMbDefault"]) || 5120
+    );
+  }
+
+  protected readonly diskFloorSummary = computed(() => {
+    const floors = this.state.settings()["sandboxDiskFloors"];
+    if (!Array.isArray(floors)) return "";
+    return (floors as DiskFloorRow[])
+      .filter((d) => Number(d.totalMB) > 0)
+      .map(
+        (d) =>
+          `${d.path} (${mib(d.totalMB)}) holds ${mib(d.floorMB)} free, sweeping back to ${mib(d.reclaimMB)}.`,
+      )
+      .join(" ");
+  });
+
+  protected readonly sandboxCommitment = computed(
+    () =>
+      (this.state.settings()["sandboxCommitment"] as
+        SandboxCommitment | undefined) ?? null,
+  );
+
+  // restartNote is said after a field's hint when the daemon reads it
+  // only at startup (settings.restartRequired), and louder once a saved
+  // value is waiting on that restart (settings.pendingRestart).
+  protected restartNote(key: string): string {
+    const s = this.state.settings();
+    const pending = s["pendingRestart"];
+    if (Array.isArray(pending) && pending.includes(key)) {
+      return " Saved; takes effect after a daemon restart.";
+    }
+    const req = s["restartRequired"];
+    if (Array.isArray(req) && req.includes(key)) {
+      return " Read at daemon startup.";
+    }
+    return "";
+  }
+
+  protected readonly k8sImageWarning = computed(() => {
+    const s = this.state.settings();
+    return [s["k8sSandboxImageWarning"], s["k8sGranuleImageWarning"]]
+      .filter((w) => typeof w === "string" && w)
+      .join(" ");
+  });
+
+  protected readonly k8sFields = computed<readonly K8sField[]>(() => {
+    const d = (k: string, fb = "") => this.state.defaultHint(k, fb);
+    const build = String(this.state.settings()["daemonBuildVersion"] || "dev");
+    return [
+      {
+        key: "k8sNamespace",
+        label: "Namespace",
+        placeholder: d("k8sNamespace", "grain"),
+        hint: "Namespace sandbox pods are created in.",
+      },
+      {
+        key: "k8sSandboxImage",
+        label: "Sandbox pod image",
+        placeholder: d("k8sSandboxImage"),
+        hint: `Container image every plain Kubernetes sandbox pod runs (matches this daemon's build ${build}).`,
+      },
+      {
+        key: "k8sGranuleImage",
+        label: "Granule VM pod image",
+        placeholder: d("k8sGranuleImage"),
+        hint: `Packed guest image every Kubernetes Granule VM pod boots (matches this daemon's build ${build}).`,
+      },
+      {
+        key: "k8sWorkspace",
+        label: "Workspace directory",
+        placeholder: d("k8sWorkspace"),
+        hint: "Working directory inside each sandbox pod or VM; an absolute path.",
+      },
+      {
+        key: "k8sGitProxyHost",
+        label: "Git & model proxy host",
+        placeholder: "$GRAIN_POD_IP",
+        hint: "Host (no port) sandbox pods reach this daemon's git and model proxies at; in-cluster it defaults to the pod IP.",
+      },
+      {
+        key: "k8sSandboxService",
+        label: "Sandbox Service",
+        placeholder: "none",
+        hint: "Optional ClusterIP Service fronting the proxies, so sandboxes survive a daemon rollout.",
+      },
+      {
+        key: "k8sServiceAccount",
+        label: "Sandbox ServiceAccount",
+        placeholder: "default",
+        hint: "Optional ServiceAccount for sandbox pods.",
+      },
+      {
+        key: "k8sDeployment",
+        label: "grain Deployment",
+        placeholder: d("k8sDeployment", "grain"),
+        hint: "The Deployment running grain itself, repointed on self-upgrade.",
+      },
+      {
+        key: "k8sContainer",
+        label: "grain container",
+        placeholder: d("k8sContainer", "grain"),
+        hint: "Container within that Deployment that self-upgrade repoints.",
+      },
+      {
+        key: "k8sKubectl",
+        label: "kubectl binary",
+        placeholder: d("k8sKubectl", "kubectl"),
+        hint: "Path to kubectl; blank finds kubectl on PATH.",
+      },
+    ];
+  });
+
+  protected readonly k8sPriorityFields = computed<readonly K8sField[]>(() => {
+    const def = (k: string) =>
+      this.state.defaultHint(k)
+        ? ` deploy/kubernetes/ defines ${this.state.defaultHint(k)}.`
+        : "";
+    return [
+      {
+        key: "k8sPriorityClassInteractive",
+        label: "Interactive sessions",
+        placeholder: "none",
+        hint: `Highest: may preempt CI pods on a full cluster.${def("k8sPriorityClassInteractive")}`,
+      },
+      {
+        key: "k8sPriorityClassAgent",
+        label: "Agent runs",
+        placeholder: "none",
+        hint: `Agent runs, base-branch repairs and persistent sandboxes.${def("k8sPriorityClassAgent")}`,
+      },
+      {
+        key: "k8sPriorityClassCi",
+        label: "CI jobs",
+        placeholder: "none",
+        hint: `Lowest: a preempted CI job is retried, not failed.${def("k8sPriorityClassCi")}`,
+      },
+    ];
+  });
+
+  protected readonly k8sGranuleEffective = computed(() => {
+    const s = this.state.settings();
+    const effective = String(s["k8sGranuleImageEffective"] || "");
+    const stored = String(s["k8sGranuleImage"] || "").trim();
+    const hint = String(s["k8sGranuleImageMirror"] || "");
+    const mirror = String(s["sandboxImageMirrorEffective"] || "");
+    const onGranule =
+      (s["sandboxBackend"] || s["sandboxImageBackend"]) ===
+      "kubernetes-granule";
+    if (!effective || (!onGranule && !hint)) return "";
+    if (hint) {
+      return `Treated as mirror repository ${hint}, not booted; sandboxes boot ${effective}. Clearing it keeps that mirror as sandbox_image_mirror.`;
+    }
+    if (effective === stored && !mirror) return "";
+    const derived = s["sandboxImageMirrorDerivedFrom"];
+    return `Sandboxes boot ${effective}${mirror ? `, mirrored into ${mirror} (${derived ? `derived from ${derived}` : "sandbox_image_mirror"})` : ""}.`;
+  });
+
+  // The node selector box is text while somebody types; it stages the
+  // list the server stores, and refuses an entry that is not key=value
+  // by name (the server's own check, k8sNodeSelector "x" must be
+  // key=value) before Save rather than after.
+  protected readonly nodeSelectorDraft = signal<string | null>(null);
+  // Save and Discard both bump discardEpoch: the box reads the stored
+  // list again rather than keep what was typed.
+  private readonly nodeSelectorReset = effect(() => {
+    this.state.discardEpoch();
+    untracked(() => this.nodeSelectorDraft.set(null));
+  });
+
+  protected nodeSelectorText(): string {
+    const d = this.nodeSelectorDraft();
+    if (d !== null) return d;
+    const v = this.state.val<unknown>("k8sNodeSelector", []);
+    return Array.isArray(v) ? v.join(", ") : "";
+  }
+
+  protected setNodeSelector(raw: string): void {
+    this.nodeSelectorDraft.set(raw);
+    const entries = raw
+      .split(",")
+      .map((e) => e.trim())
+      .filter(Boolean);
+    const bad = entries.find((e) => !/^[^=\s]+=[^=\s]*$/.test(e));
+    if (bad) {
+      this.state.setFieldError(
+        "k8sNodeSelector",
+        `Node selector entry "${bad}" must be key=value.`,
+      );
+      return;
+    }
+    this.state.setFieldError("k8sNodeSelector", null);
+    this.state.setField("k8sNodeSelector", entries);
+  }
+
+  protected readonly sandboxImageStored = computed(() =>
+    String(this.state.settings()["sandboxImage"] || "").trim(),
+  );
+
+  protected readonly sandboxImageVerified = computed(() => {
+    const s = this.state.settings();
+    const check = s["sandboxImageCheck"] as
+      | {
+          verified?: boolean;
+          contract?: { summary?: string; imageContract?: number };
+        }
+      | null
+      | undefined;
+    if (!check?.verified) return "";
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    return (
+      check.contract?.summary ||
+      `${c.contractLabel || "dev.grain.sandbox.contract"} = ${check.contract?.imageContract ?? s["sandboxContractVersion"] ?? ""} (current)`
+    );
+  });
+
+  protected readonly sandboxMirrorHint = computed(() => {
+    const s = this.state.settings();
+    const mirror = String(s["sandboxImageMirrorEffective"] || "");
+    if (!mirror) return "";
+    const from = s["sandboxImageMirrorDerivedFrom"];
+    return `Granule guest images are pulled through mirror ${mirror}${from ? ` (derived from ${from})` : " (sandbox_image_mirror)"}.`;
+  });
+
+  protected readonly granulePin = computed(() =>
+    String(this.state.settings()["k8sGranuleImage"] || "").trim(),
+  );
+
+  protected readonly granulePinSame = computed(() => {
+    const s = this.state.settings();
+    const backend = s["sandboxImageBackend"] || s["sandboxBackend"];
+    const pin = this.granulePin();
+    return (
+      backend === "kubernetes-granule" &&
+      pin !== "" &&
+      pin === this.sandboxImageStored()
+    );
+  });
+
+  private imageIsVm(): boolean {
+    const s = this.state.settings();
+    const b = String(s["sandboxImageBackend"] || s["sandboxBackend"] || "");
+    return b === "granule" || b === "kubernetes-granule";
+  }
+
+  protected readonly imageInherits = computed(() =>
+    this.imageIsVm()
+      ? "Granule VM backends boot a packed guest. sandbox-base already satisfies the whole sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps. Start FROM it and add only what your tasks need."
+      : "Container and Kubernetes pod backends run a container image. sandbox-k8s-base already satisfies the whole sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps. Start FROM it and add only what your tasks need.",
+  );
+
+  protected readonly dockerfileExample = computed(() => {
+    const s = this.state.settings();
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    const base =
+      String(s["sandboxBaseImage"] || "") ||
+      (this.imageIsVm()
+        ? c.guestBaseImage || "docker.io/grainai/sandbox-base:latest"
+        : c.k8sSandboxBaseImage || "docker.io/grainai/sandbox-k8s-base:latest");
+    return `FROM ${base}\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends <your packages> \\\n && rm -rf /var/lib/apt/lists/*`;
+  });
+
+  protected readonly contractLines = computed(() => {
+    const s = this.state.settings();
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    const current = Number(s["sandboxContractVersion"] ?? c.contract ?? 1);
+    const minimum = Number(
+      s["sandboxMinimumContractVersion"] ?? c.minimumContract ?? 1,
+    );
+    const range =
+      minimum === current ? `v${current}` : `v${minimum}–v${current}`;
+    const lines = [
+      {
+        code: `${c.contractLabel || "dev.grain.sandbox.contract"} = ${current}`,
+        note: `(this grain drives images at ${range})`,
+      },
+    ];
+    if (this.imageIsVm()) {
+      lines.push({
+        code: `${c.granuleContractLabel || "dev.granule.guest.contract"} = ${s["sandboxGranuleContractVersion"] ?? c.granuleContract ?? 1}`,
+        note: "(Granule's own guest contract, carried by sandbox-base)",
+      });
+    }
+    return lines;
+  });
   protected readonly formatLabels = formatHostdLabels;
   protected readonly formatRefreshedAt = formatRefreshedAt;
 
@@ -3671,503 +4300,24 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     return typeof v === "string" && v ? v : "fixed";
   }
 
-  // sandboxOvercommit is one setting saved whole (model.OvercommitSettings),
-  // so a mode change carries the bounds in effect beside it.
   protected setOvercommitMode(mode: string): void {
-    this.state.setField("sandboxOvercommit", {
-      ...this.overcommit(),
-      mode,
-    });
-  }
-
-  protected readonly String = String;
-  protected readonly boundFields = OVERCOMMIT_BOUND_FIELDS;
-  protected readonly contractDoc = SANDBOX_CONTRACT_DOC;
-
-  protected readonly commitment = computed(
-    () =>
-      (this.state.settings()["sandboxCommitment"] as
-        SandboxCommitmentDto | null | undefined) ?? null,
-  );
-
-  protected overcommit(): OvercommitSettings {
-    return resolveOvercommit(
-      this.state.val<unknown>("sandboxOvercommit", null),
-    );
-  }
-
-  protected overcommitBound(field: OvercommitBound): string {
-    return String(this.overcommit()[field]);
-  }
-
-  protected boundError(field: OvercommitBound): string | null {
-    const errs = this.state.fieldErrors();
-    const own = errs[overcommitBoundKey(field)];
-    if (own) return own;
-    const pair = field.startsWith("cpu") ? "Cpu" : "Memory";
-    if (field.endsWith("Min") || field.endsWith("Max")) {
-      return errs[`sandboxOvercommit${pair}Range`] ?? null;
+    // Fixed mode hides the auto bounds, so a refusal of one must not go
+    // on holding the Save bar out of sight.
+    if (mode !== "auto") {
+      for (const b of this.overcommitBounds) {
+        this.state.setFieldError(this.boundKey(b.field), null);
+      }
     }
-    return null;
-  }
-
-  // setOvercommitBound stages one bound inside the whole object. A box
-  // being retyped is left alone while it is blank (`blankResets` is
-  // false on input) and goes back to grain's default once it is left
-  // blank; a refused value is not staged, and the refusal names the box.
-  protected setOvercommitBound(
-    field: OvercommitBound,
-    el: HTMLInputElement,
-    blankResets = false,
-  ): void {
-    const box = OVERCOMMIT_BOUND_FIELDS.find((b) => b.field === field);
-    if (!box) return;
-    const read = readNumberBox(el.value, box, el.validity?.badInput);
-    if (read.error) {
-      this.state.setFieldError(box.key, read.error);
-      return;
-    }
-    this.state.setFieldError(box.key, null);
-    if (read.value === null && !blankResets) return;
-    const next = { ...this.overcommit(), [field]: read.value ?? box.fallback };
-    this.state.setField("sandboxOvercommit", next);
-    this.state.setFieldError(
-      "sandboxOvercommitCpuRange",
-      overcommitRangeError(next, "cpu"),
-    );
-    this.state.setFieldError(
-      "sandboxOvercommitMemoryRange",
-      overcommitRangeError(next, "memory"),
-    );
-  }
-
-  protected readonly autoEffective = computed(() => {
-    if (this.overcommitMode() !== "auto") return "";
-    const budget = this.commitment()?.budget;
-    const live = budget?.overcommit;
-    const cpu = live?.cpuOvercommit ?? budget?.cpuOvercommit;
-    const mem = live?.memoryOvercommit ?? budget?.memoryOvercommit;
-    if (cpu == null && mem == null) return "";
-    const parts: string[] = [];
-    if (cpu != null) parts.push(`CPU ${Number(cpu).toFixed(2)}×`);
-    if (mem != null) parts.push(`memory ${Number(mem).toFixed(2)}×`);
-    let psi = "";
-    if (live?.last) {
-      const c = live.last.cpuSome ?? live.last.cpuPressure ?? 0;
-      const m = live.last.memorySome ?? live.last.memoryPressure ?? 0;
-      psi = ` (PSI: CPU ${Number(c).toFixed(1)}%, memory ${Number(m).toFixed(1)}%)`;
-    }
-    return `Auto overcommit is active — live effective factors: ${parts.join(", ")}${psi}.`;
-  });
-
-  // The disk boxes store their value as it is, 0 included (0 is "the
-  // floor alone" or "no floor", a choice of its own), so blank cannot
-  // mean 0 here: a box left blank goes back to `<key>Default`.
-  protected readonly diskFields: readonly (NumberBox & {
-    id: string;
-    step: number;
-    fallback: string;
-    hint: string;
-  })[] = [
-    {
-      key: "sandboxDiskOvercommit",
-      id: "sb-disk-oc",
-      label: "Disk overcommit (x)",
-      min: 0,
-      step: 0.5,
-      fallback: "2",
-      hint: "How many times over the sandbox volume (on Kubernetes, the cluster's allocatable ephemeral storage), less the disk floor, sandbox disks may be promised. 0 leaves disk held by the floor alone.",
-    },
-    {
-      key: "sandboxDiskFloorShare",
-      id: "sb-floor-share",
-      label: "Disk floor (share of each volume)",
-      min: 0,
-      max: 1,
-      step: 0.01,
-      fallback: "0.1",
-      hint: "How much of each volume is kept free: a new CI job is held and an agent dispatch deferred while free space is under it. 0.1 is a tenth.",
-    },
-    {
-      key: "sandboxDiskFloorMinMb",
-      id: "sb-floor-min",
-      label: "Disk floor minimum (MiB)",
-      min: 0,
-      integer: true,
-      step: 1024,
-      fallback: "5120",
-      hint: "The least the floor is ever worth, whatever the share comes to on a small volume. 0 here with a share of 0 holds nothing back.",
-    },
-  ];
-
-  protected numberText(key: string): string {
-    const v = this.state.val<unknown>(key, null);
-    return v === null || v === undefined || v === "" ? "" : String(v);
-  }
-
-  protected setBoundedNumber(
-    f: NumberBox & { fallback: string },
-    el: HTMLInputElement,
-    blankResets = false,
-  ): void {
-    const read = readNumberBox(el.value, f, el.validity?.badInput);
-    if (read.error) {
-      this.state.setFieldError(f.key, read.error);
-      return;
-    }
-    this.state.setFieldError(f.key, null);
-    if (read.value === null) {
-      if (!blankResets) return;
-      this.state.setField(
-        f.key,
-        Number(this.state.defaultHint(f.key, f.fallback)),
-      );
-      return;
-    }
-    this.state.setField(f.key, read.value);
-  }
-
-  protected readonly diskFloorNote = computed(() => {
-    const s = this.state.settings();
-    return diskFloorText(
-      s["sandboxDiskFloors"] as DiskFloorDto[] | null | undefined,
-      Number(s["sandboxDiskFloorShare"] ?? 0),
-      Number(s["sandboxDiskFloorMinMb"] ?? 0),
-      Number(s["sandboxDiskFloorMaxShare"] ?? 0),
-    );
-  });
-
-  protected readonly k8sImageWarning = computed(() => {
-    const s = this.state.settings();
-    return [s["k8sSandboxImageWarning"], s["k8sGranuleImageWarning"]]
-      .filter((w) => typeof w === "string" && w)
-      .join(" ");
-  });
-
-  // The Kubernetes boxes: blank is the setting's default, shown as the
-  // placeholder (`<key>Default` from GET /api/settings), except for the
-  // optional names and the priority classes, where blank sets none.
-  protected readonly k8sFields = computed<readonly K8sField[]>(() => {
-    const s = this.state.settings();
-    const def = (key: string, fallback: string): string => {
-      const d = s[`${key}Default`];
-      return typeof d === "string" && d ? d : fallback;
-    };
-    const build = String(s["daemonBuildVersion"] || "dev");
-    const backend = String(this.state.val("sandboxBackend", ""));
-    const priority = (key: string, label: string, hint: string): K8sField => ({
-      key,
-      label,
-      kind: "priority",
-      mono: true,
-      placeholder: "none",
-      hint: `${hint} Blank sets no priority class; deploy/kubernetes/ defines ${def(key, "the default")}.`,
-    });
-    return [
-      {
-        key: "k8sNamespace",
-        label: "Kubernetes namespace",
-        kind: "label",
-        mono: true,
-        placeholder: def("k8sNamespace", "grain"),
-        hint: "Namespace sandbox pods are created in.",
-      },
-      {
-        key: "k8sSandboxImage",
-        label: "Kubernetes sandbox pod image",
-        kind: "image",
-        mono: true,
-        placeholder: def(
-          "k8sSandboxImage",
-          "docker.io/grainai/sandbox-k8s:latest",
-        ),
-        hint: `Container image every plain Kubernetes sandbox pod runs (matches this daemon's build ${build}).`,
-      },
-      {
-        key: "k8sGranuleImage",
-        label: "Kubernetes Granule VM pod image",
-        kind: "image",
-        mono: true,
-        placeholder: def("k8sGranuleImage", "docker.io/grainai/sandbox:latest"),
-        hint: `Packed guest image every Kubernetes Granule VM pod boots (matches this daemon's build ${build}).`,
-      },
-      {
-        key: "k8sWorkspace",
-        label: "Kubernetes workspace directory",
-        kind: "path",
-        mono: true,
-        placeholder: def(
-          "k8sWorkspace",
-          backend === "kubernetes-granule" ? "/home/debian" : "/home/agent",
-        ),
-        hint: "Working directory inside each Kubernetes sandbox pod or VM.",
-      },
-      {
-        key: "k8sGitProxyHost",
-        label: "Kubernetes git & model proxy host",
-        kind: "address",
-        mono: true,
-        placeholder: "$GRAIN_POD_IP",
-        hint: "Host address (no port) sandbox pods reach this daemon's git and model proxies at. Blank uses $GRAIN_POD_IP in-cluster.",
-      },
-      {
-        key: "k8sSandboxService",
-        label: "Kubernetes sandbox Service",
-        kind: "label",
-        mono: true,
-        placeholder: "none",
-        hint: "Optional ClusterIP Service fronting the git and model proxies, so sandboxes survive a daemon rollout.",
-      },
-      {
-        key: "k8sNodeSelector",
-        label: "Kubernetes node selector",
-        kind: "selector",
-        mono: true,
-        placeholder: "pool=sandboxes",
-        hint: "Comma-separated key=value nodeSelector entries for sandbox pods. Blank schedules them anywhere.",
-      },
-      {
-        key: "k8sServiceAccount",
-        label: "Kubernetes sandbox ServiceAccount",
-        kind: "subdomain",
-        mono: true,
-        placeholder: "none",
-        hint: "Optional ServiceAccount for sandbox pods.",
-      },
-      priority(
-        "k8sPriorityClassInteractive",
-        "Priority class for interactive sessions",
-        "Highest: an interactive session's pod may preempt CI pods on a full cluster.",
-      ),
-      priority(
-        "k8sPriorityClassAgent",
-        "Priority class for agent runs",
-        "Agent runs, base-branch repairs and persistent sandboxes.",
-      ),
-      priority(
-        "k8sPriorityClassCi",
-        "Priority class for CI jobs",
-        "Lowest: a preempted CI job is retried, not failed.",
-      ),
-      {
-        key: "k8sDeployment",
-        label: "Kubernetes Deployment",
-        kind: "subdomain",
-        mono: true,
-        placeholder: def("k8sDeployment", "grain"),
-        hint: "Kubernetes Deployment running grain itself, repointed on self-upgrade.",
-      },
-      {
-        key: "k8sContainer",
-        label: "Kubernetes container",
-        kind: "label",
-        mono: true,
-        placeholder: def("k8sContainer", "grain"),
-        hint: "Container within that Deployment that self-upgrade repoints.",
-      },
-      {
-        key: "k8sKubectl",
-        label: "Kubectl binary",
-        kind: "free",
-        mono: true,
-        placeholder: def("k8sKubectl", "kubectl"),
-        hint: "Path to the kubectl binary. Blank finds kubectl on PATH.",
-      },
-    ];
-  });
-
-  protected readonly k8sSwitches = [
-    {
-      key: "k8sPrivileged",
-      testid: "switch-k8s-privileged",
-      label: "Run Kubernetes sandbox containers privileged",
-      hint: "Gives each sandbox container privileged mode on its node.",
-    },
-    {
-      key: "k8sNetworkPolicy",
-      testid: "switch-k8s-netpol",
-      label: "Cluster CNI enforces NetworkPolicy",
-      hint: "Required for network: none isolation on Kubernetes pods.",
-    },
-  ] as const;
-
-  protected k8sText(key: string): string {
-    const v = this.state.val<unknown>(key, "");
-    if (Array.isArray(v)) return v.join(", ");
-    return v === null || v === undefined ? "" : String(v);
-  }
-
-  // setK8sText stages a Kubernetes box as it is typed, refusing (by the
-  // box's own label) a name the API server would never accept. The node
-  // selector is a list: it is staged as one, and its text is only
-  // re-read when the box is left (`committed`), so the box is never
-  // rewritten under the cursor.
-  protected setK8sText(f: K8sField, raw: string, committed = false): void {
-    const err = k8sFieldError(f.kind, f.label, raw);
-    this.state.setFieldError(f.key, err);
-    if (err) return;
-    if (f.kind === "selector") {
-      if (committed) this.state.setField(f.key, parseNodeSelector(raw));
-      return;
-    }
-    this.state.setField(f.key, raw);
-  }
-
-  // granuleImageNote is what the Kubernetes Granule VM pod image's stored
-  // value comes to (classic K8sGranuleImageEffective): read as a mirror
-  // repository rather than booted, or the image sandboxes really boot.
-  protected readonly granuleImageNote = computed(() => {
-    const s = this.state.settings();
-    const effective = String(s["k8sGranuleImageEffective"] || "");
-    const stored = String(s["k8sGranuleImage"] || "").trim();
-    const hint = String(s["k8sGranuleImageMirror"] || "");
-    const mirror = String(s["sandboxImageMirrorEffective"] || "");
-    const onGranule =
-      String(s["sandboxBackend"] || s["sandboxImageBackend"] || "") ===
-      "kubernetes-granule";
-    if (!effective || (!onGranule && !hint)) return null;
-    if (hint) {
-      return {
-        testid: "k8s-granule-image-mirror",
-        text: `Treated as mirror repository ${hint}, not booted; sandboxes boot ${effective}. Clearing it keeps that mirror as sandbox_image_mirror.`,
-      };
-    }
-    if (effective === stored && !mirror) return null;
-    let text = `Sandboxes boot ${effective}`;
-    if (mirror) {
-      const from = s["sandboxImageMirrorDerivedFrom"];
-      text += `, mirrored into ${mirror}${from ? ` (derived from ${String(from)})` : " (sandbox_image_mirror)"}`;
-    }
-    return { testid: "k8s-granule-image-effective", text: `${text}.` };
-  });
-
-  // The reference Reset to default last cleared, so a k8s_granule_image
-  // holding the same one is still offered for clearing once the custom
-  // image itself is gone (classic CustomSandboxImageCard).
-  protected readonly clearedImage = signal("");
-
-  protected customImage(): string {
-    return String(this.state.val("sandboxImage", "") ?? "").trim();
-  }
-
-  protected customImageHint(): string {
-    const d = String(this.state.val("sandboxImageDefault", "") || "");
-    const tail =
-      "A change applies to the next sandbox created; running sandboxes keep theirs.";
-    return d
-      ? `Empty uses the image this build is stamped for (${d}). ${tail}`
-      : `Empty uses the image this build is stamped for. ${tail}`;
-  }
-
-  protected customImageVerified(): string {
-    const s = this.state.settings();
-    const check = s["sandboxImageCheck"] as
-      | { verified?: boolean; contract?: { summary?: string } }
-      | null
-      | undefined;
-    if (!String(s["sandboxImage"] || "") || !check?.verified) return "";
-    if (this.customImage() !== String(s["sandboxImage"]).trim()) return "";
-    const c = this.contract();
-    return check.contract?.summary || `${c.label} = ${c.current} (current)`;
-  }
-
-  protected clearCustomImage(): void {
-    this.clearedImage.set(this.customImage());
-    this.state.setField("sandboxImage", "");
-  }
-
-  private imageBackend(): string {
-    if ("sandboxBackend" in this.state.draft()) {
-      return String(this.state.draft()["sandboxBackend"] || "");
-    }
-    const s = this.state.settings();
-    return String(s["sandboxImageBackend"] || s["sandboxBackend"] || "");
-  }
-
-  protected readonly granuleSamePin = computed(() => {
-    const pin = String(this.state.val("k8sGranuleImage", "") ?? "").trim();
-    const custom = this.customImage();
-    if (
-      this.imageBackend() !== "kubernetes-granule" ||
-      !pin ||
-      (pin !== custom && pin !== this.clearedImage())
-    ) {
-      return null;
-    }
-    const both = custom === pin;
-    const mirror = String(this.state.settings()["k8sGranuleImageMirror"] || "");
-    return {
-      both,
-      action: both ? "Clear both" : "Clear it too",
-      text:
-        `The Kubernetes Granule VM pod image (k8s_granule_image) holds the same reference${both ? "" : " this card just cleared"}: ${pin}. ` +
-        (mirror
-          ? `It is read as mirror repository ${mirror}, not booted; clearing it keeps that mirror as sandbox_image_mirror.`
-          : "Clearing only the custom image leaves that pin in place, and the change takes a restart."),
-    };
-  });
-
-  protected clearGranulePin(): void {
-    const pin = this.granuleSamePin();
-    this.clearedImage.set("");
-    if (pin?.both) this.state.setField("sandboxImage", "");
-    this.state.setField("k8sGranuleImage", "");
-  }
-
-  // contract is the custom image card's account of the sandbox contract
-  // (GET /api/settings sandboxContract, pkg/sandboximage).
-  protected readonly contract = computed(() => {
-    const s = this.state.settings();
-    const c = (s["sandboxContract"] ?? {}) as Record<string, unknown>;
-    const vm = VM_BACKENDS.has(this.imageBackend());
-    const num = (v: unknown, d: number): number =>
-      typeof v === "number" ? v : d;
-    const current = num(s["sandboxContractVersion"], num(c["contract"], 1));
-    const minimum = num(
-      s["sandboxMinimumContractVersion"],
-      num(c["minimumContract"], 1),
-    );
-    const granule = num(
-      s["sandboxGranuleContractVersion"],
-      num(c["granuleContract"], 1),
-    );
-    const label = String(c["contractLabel"] || "dev.grain.sandbox.contract");
-    const granuleLabel = String(
-      c["granuleContractLabel"] || "dev.granule.guest.contract",
-    );
-    const backendDrafted = "sandboxBackend" in this.state.draft();
-    const base =
-      (!backendDrafted && String(s["sandboxBaseImage"] || "")) ||
-      (vm
-        ? String(c["guestBaseImage"] || "docker.io/grainai/sandbox-base:latest")
-        : String(
-            c["k8sSandboxBaseImage"] ||
-              "docker.io/grainai/sandbox-k8s-base:latest",
-          ));
-    const range =
-      minimum === current ? `v${current}` : `v${minimum}–v${current}`;
-    const versions = [
-      {
-        code: `${label} = ${current}`,
-        note: `this grain drives images at ${range}`,
-      },
-    ];
-    if (vm) {
-      versions.push({
-        code: `${granuleLabel} = ${granule}`,
-        note: "Granule's own guest contract, carried by sandbox-base",
+    const cur = this.state.val<unknown>("sandboxOvercommit", null);
+    if (cur && typeof cur === "object") {
+      this.state.setField("sandboxOvercommit", {
+        ...(cur as Record<string, unknown>),
+        mode,
       });
+    } else {
+      this.state.setField("sandboxOvercommit", mode);
     }
-    return {
-      label,
-      current,
-      versions,
-      inherits: vm
-        ? "Granule VM backends boot a packed guest. sandbox-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."
-        : "Container and Kubernetes pod backends run a container image. sandbox-k8s-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps.",
-      dockerfile: `FROM ${base}\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends <your packages> \\\n && rm -rf /var/lib/apt/lists/*`,
-    };
-  });
+  }
 
   /** The probe is offered only where the server can build one:
    * GET /api/settings says so in sandboxProbe (pkg/ui/sandbox_probe.go). */

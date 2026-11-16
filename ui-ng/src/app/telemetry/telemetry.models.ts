@@ -250,6 +250,18 @@ export interface UsageScope {
   burnPerHour: number;
   runsOutAt?: string;
   sustainableWorkers?: number;
+  // Which limit the pause in force met (pkg/usage PauseHorizon).
+  pauseHorizon?: "weekly" | "interval" | string;
+  // The 7-day horizon beside the interval window (pkg/usage weekly.go).
+  weeklyRuns?: number;
+  weeklyUsed?: number;
+  weeklyWindowStart?: string;
+  weeklyLimit?: number;
+  weeklyLimitSource?: "learned" | string;
+  weeklyRemaining?: number;
+  weeklyResetAt?: string;
+  weeklyPausedUntil?: string;
+  weeklyRunsOutAt?: string;
 }
 
 export interface UsageTotals {
