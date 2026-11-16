@@ -522,6 +522,7 @@ var routeBodies = map[string]any{
 // still carries any parameter a caller adds (such as a template
 // composition's field.<name>).
 var routeQueries = map[string]map[string]string{
+	"POST /api/agent-keys/{framework}/check": {"backend": "Optional saved connection ID; test its dispatch credential instead of the deployment-wide framework key. Stores nothing."},
 	"GET /api/pull-requests/status": {
 		"pr":      "The pull request: owner/name#n or its URL.",
 		"threads": "1 to include every inline review thread's file, line and body.",
