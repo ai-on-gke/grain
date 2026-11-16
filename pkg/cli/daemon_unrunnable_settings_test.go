@@ -63,11 +63,7 @@ func flagsForUnrunnable() daemon.Config {
 }
 
 func TestLoadConfigRefusesToBePacedByAStoredZero(t *testing.T) {
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatalf("openStore: %v", err)
-	}
-	defer db.Close()
+	store := testStore(t)
 	ctx := context.Background()
 	if err := store.PutConfig(ctx, storedButUnrunnable()); err != nil {
 		t.Fatalf("PutConfig: %v", err)
@@ -110,11 +106,7 @@ func TestLoadConfigRefusesToBePacedByAStoredZero(t *testing.T) {
 // not a way back in for a flag somebody changed.
 func TestLoadConfigStillPrefersAStoredIntervalItCanRunOn(t *testing.T) {
 	t.Parallel()
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatalf("openStore: %v", err)
-	}
-	defer db.Close()
+	store := testStore(t)
 	ctx := context.Background()
 	stored := storedButUnrunnable()
 	stored.PollInterval, stored.MaxWorkers, stored.MaxMergers = 5*time.Second, 2, 0

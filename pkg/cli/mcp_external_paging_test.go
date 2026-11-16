@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
-	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -43,13 +42,9 @@ const mcpToolBudget = 10 * 1024
 // answer now fits the budget, says total and truncated, and walking its
 // nextCursor reaches every row exactly once.
 func TestGrainMCPListToolsPageUnderTheToolBudget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	useConfigHome(t)
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	store := testStore(t)
 	if err := store.PutConfig(ctx, model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
 		t.Fatal(err)
 	}
@@ -57,10 +52,11 @@ func TestGrainMCPListToolsPageUnderTheToolBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 520 tasks over two repositories, every other one an unapproved
-	// proposal (which the inbox lists), with titles and bodies of the
-	// length real ones run to.
-	const tasks = 520
+	// 140 tasks over two repositories -- 3 pages of 50 summary rows, 4
+	// inbox pages of 20, 28 full-task pages of 5 -- every other one an
+	// unapproved proposal (which the inbox lists), with titles and bodies
+	// of the length real ones run to.
+	const tasks = 140
 	who := model.Principal{Kind: model.PrincipalHuman, ID: "jane"}
 	repoTasks := map[string]int{}
 	proposals := 0
@@ -239,15 +235,15 @@ func TestGrainMCPListToolsPageUnderTheToolBudget(t *testing.T) {
 		distinct(t, "list_grain_tasks {fields: full}", ids, total, tasks)
 
 		// q narrows as search does.
-		res := tool.Handler(ctx, map[string]any{"q": "result 417 fits"})
+		res := tool.Handler(ctx, map[string]any{"q": "result 117 fits"})
 		var one struct {
 			Tasks []struct {
 				ID string `json:"id"`
 			} `json:"tasks"`
 			Total int `json:"total"`
 		}
-		if err := json.Unmarshal([]byte(res.Text), &one); err != nil || one.Total != 1 || len(one.Tasks) != 1 || one.Tasks[0].ID != "task-0417" {
-			t.Errorf("list_grain_tasks {q} = %s (err %v), want task-0417 alone", res.Text, err)
+		if err := json.Unmarshal([]byte(res.Text), &one); err != nil || one.Total != 1 || len(one.Tasks) != 1 || one.Tasks[0].ID != "task-0117" {
+			t.Errorf("list_grain_tasks {q} = %s (err %v), want task-0117 alone", res.Text, err)
 		}
 		if res := tool.Handler(ctx, map[string]any{"cursor": "not-a-cursor"}); !res.IsError {
 			t.Errorf("list_grain_tasks took a cursor it never handed out: %s", res.Text)

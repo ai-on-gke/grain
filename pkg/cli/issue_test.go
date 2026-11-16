@@ -17,26 +17,14 @@ package cli
 import (
 	"context"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func issueTestServer(t *testing.T) string {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	srv := httptest.NewServer(accessCodeServer(ui.NewClient(
 		ui.Config{Actor: ui.DefaultActor("tester"), Capabilities: ui.OfferedCapabilities()}, store)))
 	t.Cleanup(srv.Close)
