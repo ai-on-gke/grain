@@ -431,7 +431,7 @@ var attributedRoutes = map[string]attributedRoute{
 			if err != nil || task == nil {
 				t.Fatalf("the filed task %q: %v, %v", created, task, err)
 			}
-			return task.Origin.Attribution.Actor
+			return task.Filing.Attribution.Actor
 		},
 	},
 	"PATCH /api/tasks/{id}": {

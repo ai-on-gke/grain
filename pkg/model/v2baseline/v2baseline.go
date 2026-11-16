@@ -208,7 +208,7 @@ func Seed(ctx context.Context, store *model.Store) error {
 	if err := store.PutTask(ctx, model.Task{
 		ID: "v2-1", Intent: model.IntentImplement, Title: "Rename the endpoint",
 		Body: "with a body\nover two lines; and a semicolon",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "owner"}},
 			Reason:      model.ReasonDirect,
 		},

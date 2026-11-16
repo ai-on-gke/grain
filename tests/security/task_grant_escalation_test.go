@@ -849,7 +849,7 @@ func TestPath1SandboxShapeCeilings(t *testing.T) {
 	if err := rig.store.PutTask(ctx, model.Task{
 		ID: "930", Intent: model.IntentImplement, Title: "stale huge", Target: &widgets,
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 64,
-		Origin: model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect},
+		Filing: model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -861,11 +861,11 @@ func TestPath1SandboxShapeCeilings(t *testing.T) {
 
 	// An agent's proposal above its proposer's sandbox waits for an
 	// unlimited role: a limited one with tasks:admin cannot approve it.
-	agentOrigin := model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect}
+	agentOrigin := model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect}
 	if err := rig.store.PutTask(ctx, model.Task{
 		ID: "920", Intent: model.IntentImplement, Title: "parent", Target: &widgets,
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 2,
-		Origin: agentOrigin, Approval: &agentOrigin.Attribution,
+		Filing: agentOrigin, Approval: &agentOrigin.Attribution,
 		Grants: []model.Grant{
 			{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
 			{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel},
@@ -877,7 +877,7 @@ func TestPath1SandboxShapeCeilings(t *testing.T) {
 		ID: "921", Intent: model.IntentImplement, Title: "bigger child", Target: &widgets,
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 6,
 		Links: []model.Link{{Kind: model.LinkProposedBy, Target: "920"}},
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "920"},
 		}, Reason: model.ReasonProposal},
@@ -964,7 +964,7 @@ func TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings(t *testing.T) {
 			Intent: model.IntentImplement,
 			Title:  title,
 			Body:   "original operator prompt",
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}},
 				Reason:      model.ReasonProposal,
 			},
@@ -1126,7 +1126,7 @@ func TestPath2ExternalTokenApprovalCeiling(t *testing.T) {
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  "proposal with gcp-key",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonProposal,
 		},
@@ -1259,7 +1259,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		Intent:               model.IntentImplement,
 		Title:                "contrib agent task",
 		AutoApproveProposals: true,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "contrib@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonDirect,
 		},
@@ -1395,7 +1395,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		ID:     "920",
 		Intent: model.IntentImplement,
 		Title:  "sandbox cli runner",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonDirect,
 		},
@@ -1528,7 +1528,7 @@ func TestPath4KnownGapAgentCrossTaskPromptSteering(t *testing.T) {
 		ID:     "930",
 		Intent: model.IntentImplement,
 		Title:  "triage helper",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "contrib@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonDirect,
 		},
@@ -1867,7 +1867,7 @@ func TestPath6NonAdminScheduleConsoleSessionAndLivePTYCeilings(t *testing.T) {
 		ID:            dirTaskID,
 		Intent:        model.IntentAnalyze,
 		Title:         dirSess.Title,
-		Origin:        model.Origin{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
+		Filing:        model.Filing{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
 		Tags:          []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Interactive:   true,
 		Approval:      &model.Attribution{Actor: model.ConsoleSessionPrincipal},

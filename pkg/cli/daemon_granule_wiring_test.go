@@ -197,14 +197,14 @@ func TestRunBuildsAGranuleVMForADispatchUsingCreateArgs(t *testing.T) {
 	task := model.Task{
 		ID:     taskID,
 		Intent: model.IntentImplement,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},
 		Binding: model.BindingDirective,
 		Target:  &model.RepoRef{Owner: "acme", Name: "widgets"},
 	}
-	task.Approval = &model.Attribution{Actor: task.Origin.Attribution.Actor}
+	task.Approval = &model.Attribution{Actor: task.Filing.Attribution.Actor}
 	if err := store.PutTask(context.Background(), task); err != nil {
 		t.Fatal(err)
 	}

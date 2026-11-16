@@ -603,7 +603,7 @@ func blockedEntry(e queueEntry) bool {
 // (bwsalmon/agents#283) describes, reusing the directive that already
 // meant "merge me once I'm clean" rather than adding a second field that
 // would mean the same thing. A fix task the queue itself filed
-// (Origin.Reason == ReasonFix) is deliberately excluded too: it merges
+// (Filing.Reason == ReasonFix) is deliberately excluded too: it merges
 // into the task it repairs, not into the repo's own base branch, so it is
 // not a queue entry in its own right -- see syncEntry's own eligibility
 // check for why it still merges unconditionally. A review task
@@ -614,7 +614,7 @@ func blockedEntry(e queueEntry) bool {
 // which is what lets the queue move on to the next task rather than
 // waiting forever on one that needs a human.
 func isQueueMember(e queueEntry) bool {
-	if !e.task.AutoMerge || e.task.Origin.Reason == model.ReasonFix || isReviewTask(e.task) || e.paused {
+	if !e.task.AutoMerge || e.task.Filing.Reason == model.ReasonFix || isReviewTask(e.task) || e.paused {
 		return false
 	}
 	// Nor one waiting on an approval GitHub requires: it waits out of
@@ -1494,7 +1494,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		}
 	}
 
-	isFixTask := task.Origin.Reason == model.ReasonFix
+	isFixTask := task.Filing.Reason == model.ReasonFix
 	// The lane this entry merges in, as this cycle read it: the slot it
 	// takes or closes is its own branch's and no other's (mergeWalk).
 	lane := laneOf(e)
