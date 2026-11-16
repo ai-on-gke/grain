@@ -1985,7 +1985,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             data-testid="sched-system-banner"
           >
             Built-in Grain schedule — target and prompt are managed by Grain;
-            cadence and overlap policy can be customized.
+            model, cadence and overlap policy can be customized.
           </p>
         } @else {
           <div class="field">
@@ -2162,34 +2162,6 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             </label>
           </div>
 
-          @if (schedTargetKind() !== "suite") {
-            <div class="field">
-              <span>Model</span>
-              <div class="proc-model-row">
-                <g-model-picker
-                  [groups]="modelGroups()"
-                  [value]="sDraftModel()"
-                  [placeholder]="schedModelPlaceholder()"
-                  ariaLabel="Model"
-                  testid="sched-model"
-                  (valueChange)="sDraftModel.set($event)"
-                />
-                @if (sDraftModel()) {
-                  <button
-                    type="button"
-                    class="btn-text"
-                    data-testid="sched-model-clear"
-                    (click)="sDraftModel.set('')"
-                  >
-                    Use default
-                  </button>
-                }
-              </div>
-              <p class="muted proc-field-help">
-                The model every task this schedule files asks for.
-              </p>
-            </div>
-          }
           @if (schedTargetKind() === "prompt") {
             <div class="switch-row" style="margin-top: 14px">
               <button
@@ -2264,6 +2236,35 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               template, and stay in sync with it.
             </p>
           }
+        }
+
+        @if (schedTargetKind() !== "suite") {
+          <div class="field">
+            <span>Model</span>
+            <div class="proc-model-row">
+              <g-model-picker
+                [groups]="modelGroups()"
+                [value]="sDraftModel()"
+                [placeholder]="schedModelPlaceholder()"
+                ariaLabel="Model"
+                testid="sched-model"
+                (valueChange)="sDraftModel.set($event)"
+              />
+              @if (sDraftModel()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="sched-model-clear"
+                  (click)="sDraftModel.set('')"
+                >
+                  Use default
+                </button>
+              }
+            </div>
+            <p class="muted proc-field-help">
+              The model every task this schedule files asks for.
+            </p>
+          </div>
         }
 
         <div class="field">
@@ -3430,7 +3431,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     (o) => ({ value: o.value, label: o.label }),
   );
   protected readonly schedModelPlaceholder = computed(() =>
-    this.schedTargetKind() === "template"
+    this.schedTargetKind() === "template" && !this.editingSchedule()?.system
       ? "The template's model"
       : "Deployment default model",
   );
@@ -4612,10 +4613,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   private buildScheduleUpdatePayload(editing: Schedule): UpdateScheduleRequest {
     if (editing.system) {
+      // One of grain's own schedules: its model is the deployment's to
+      // choose, like its cadence (ui.UpdateScheduleRequest.Model).
       return {
         recurrence: this.buildRecurrenceDraft(),
         timeZone: this.sDraftTz().trim() || undefined,
         overlap: this.sDraftOverlap(),
+        ...(this.sDraftModel() !== (editing.model || "")
+          ? { model: this.sDraftModel() }
+          : {}),
         revision: editing.revision,
       };
     }

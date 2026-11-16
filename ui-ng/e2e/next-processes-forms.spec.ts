@@ -30,20 +30,57 @@ async function pickPill(page: Page, testid: string, value: string) {
   await page.getByTestId(`${testid}-opt-${value}`).click();
 }
 
-// pickFirstModel chooses the first model the catalog offers, if any, and
-// returns it ("" on a deployment whose connections advertise none).
-async function pickFirstModel(page: Page, testid: string): Promise<string> {
+// The demo seeds no model connection, so each test adds one advertising
+// MODEL (disabled, so the rotation never dispatches to it -- a picker
+// still offers it) and puts the saved list back afterwards.
+const MODEL = "e2e-forms-model";
+
+async function seedModelConnection(page: Page): Promise<() => Promise<void>> {
+  const before = await (await page.request.get("/api/settings")).json();
+  const prev = (before.agentBackends ?? []) as unknown[];
+  const res = await page.request.post("/api/settings", {
+    data: {
+      agentBackends: [
+        ...prev,
+        {
+          id: "e2e-forms",
+          name: "E2E forms",
+          framework: "claude",
+          models: [MODEL],
+          disabled: true,
+        },
+      ],
+    },
+  });
+  expect(res.status(), await res.text()).toBeLessThan(300);
+  return async () => {
+    await page.request.post("/api/settings", {
+      data: { agentBackends: prev },
+    });
+  };
+}
+
+// pickModel chooses model from the searchable picker, typing to find it.
+async function pickModel(page: Page, testid: string, model: string) {
   await page.getByTestId(testid).click();
   await expect(page.getByTestId(`${testid}-panel`)).toBeVisible();
-  const opt = page.getByTestId(`${testid}-opt`).first();
-  if ((await opt.count()) === 0) {
-    await page.keyboard.press("Escape");
-    return "";
-  }
-  const model = (await opt.getAttribute("data-model")) ?? "";
-  await opt.click();
+  await page.getByTestId(`${testid}-search`).fill(model.slice(0, 8));
+  await page
+    .locator(`[data-testid="${testid}-opt"][data-model="${model}"]`)
+    .click();
   await expect(page.getByTestId(`${testid}-panel`)).toHaveCount(0);
-  return model;
+  await expect(page.getByTestId(testid)).toContainText(model);
+}
+
+// savedTemplate is the template as the server lists it.
+async function savedTemplate(
+  page: Page,
+  id: string,
+): Promise<Record<string, unknown>> {
+  const all = (await (await page.request.get("/api/templates")).json()) as {
+    id: string;
+  }[];
+  return (all.find((t) => t.id === id) ?? {}) as Record<string, unknown>;
 }
 
 // savedSchedule is the schedule as the server lists it.
@@ -65,6 +102,7 @@ test("a schedule's settings round-trip through create and a change-only edit", a
   page,
 }) => {
   let createdId = "";
+  const restore = await seedModelConnection(page);
   try {
     await page.goto("processes/schedules?new=1");
     const dlg = page.getByTestId("schedule-dialog");
@@ -72,7 +110,8 @@ test("a schedule's settings round-trip through create and a change-only edit", a
     await page.getByTestId("sched-title-input").fill("E2E settings schedule");
     await page.getByTestId("sched-repo-input").fill("acme/widgets");
 
-    const model = await pickFirstModel(page, "sched-model");
+    const model = MODEL;
+    await pickModel(page, "sched-model", model);
     await page.getByTestId("sched-keep-running").click();
     await pickPill(page, "sched-admission", "durable");
     await expect(page.getByTestId("sched-admission-help")).toContainText(
@@ -88,7 +127,7 @@ test("a schedule's settings round-trip through create and a change-only edit", a
     await expect(preview).toContainText("hosting");
     await expect(preview).toContainText("console");
     await expect(preview).toContainText("keepRunning");
-    if (model) await expect(preview).toContainText(model);
+    await expect(preview).toContainText(model);
 
     const [createReq, createRes] = await Promise.all([
       page.waitForRequest(
@@ -105,7 +144,7 @@ test("a schedule's settings round-trip through create and a change-only edit", a
       admission: "durable",
       hosting: "console",
       keepRunning: true,
-      ...(model ? { model } : {}),
+      model,
     });
     createdId = String((await createRes.json()).id);
     await expect(dlg).toHaveCount(0);
@@ -116,7 +155,7 @@ test("a schedule's settings round-trip through create and a change-only edit", a
       admission: "durable",
       hosting: "console",
       keepRunning: true,
-      ...(model ? { model } : {}),
+      model,
     });
 
     // Reopened, the form is seeded from the saved row; a save with no
@@ -131,6 +170,7 @@ test("a schedule's settings round-trip through create and a change-only edit", a
       "aria-checked",
       "true",
     );
+    await expect(page.getByTestId("sched-model")).toContainText(model);
     const [noop] = await Promise.all([
       page.waitForRequest((r) => r.method() === "PATCH"),
       page.getByTestId("sched-save-btn").click(),
@@ -148,18 +188,25 @@ test("a schedule's settings round-trip through create and a change-only edit", a
 
     await page.getByTestId("sched-edit-btn").click();
     await pickPill(page, "sched-admission", "bypass");
+    // "Use default" clears the schedule's own model.
+    await page.getByTestId("sched-model-clear").click();
     const [changed] = await Promise.all([
       page.waitForRequest((r) => r.method() === "PATCH"),
       page.getByTestId("sched-save-btn").click(),
     ]);
     expect(bodyOf(changed)["admission"]).toBe("bypass");
+    expect(bodyOf(changed)["model"]).toBe("");
     expect(bodyOf(changed)).not.toHaveProperty("hosting");
     await expect(page.getByTestId("schedule-dialog")).toHaveCount(0);
     await expect
-      .poll(async () => (await savedSchedule(page, createdId))["admission"])
-      .toBe("bypass");
+      .poll(async () => {
+        const row = await savedSchedule(page, createdId);
+        return [row["admission"], row["model"] ?? ""];
+      })
+      .toEqual(["bypass", ""]);
   } finally {
     if (createdId) await page.request.delete(`/api/schedules/${createdId}`);
+    await restore();
   }
 });
 
@@ -167,14 +214,23 @@ test("a template's settings round-trip through create and a change-only edit", a
   page,
 }) => {
   let createdId = "";
+  const restore = await seedModelConnection(page);
   try {
     await page.goto("processes/templates?new=template");
     const dlg = page.getByTestId("template-dialog");
     await expect(dlg).toBeVisible();
     await page.getByTestId("tmpl-name-input").fill("E2E settings template");
     await page.getByTestId("tmpl-title-input").fill("chore: e2e settings");
-    const model = await pickFirstModel(page, "tmpl-model");
+    const model = MODEL;
+    await pickModel(page, "tmpl-model", model);
     await page.getByTestId("tmpl-keep-running").click();
+    // A grant made in the picker's builder (an agent API scope set, the
+    // first the server offers) is held and saved with the template.
+    await page.getByTestId("tmpl-grants-add-open").click();
+    await page.getByTestId("tmpl-grants-mode-api").click();
+    await page.getByTestId("tmpl-grants-attach").click();
+    await expect(page.getByTestId("tmpl-grants-error")).toHaveCount(0);
+    await expect(page.getByTestId("held-grant-0")).toBeVisible();
     await pickPill(page, "tmpl-admission", "bypass");
     await pickPill(page, "tmpl-hosting", "console");
     const [createReq, createRes] = await Promise.all([
@@ -192,10 +248,15 @@ test("a template's settings round-trip through create and a change-only edit", a
       admission: "bypass",
       hosting: "console",
       keepRunning: true,
-      ...(model ? { model } : {}),
+      model,
     });
+    const grants = bodyOf(createReq)["capabilities"] as string[];
+    expect(grants).toHaveLength(1);
     createdId = String((await createRes.json()).id);
     await expect(dlg).toHaveCount(0);
+    const savedT = await savedTemplate(page, createdId);
+    expect(savedT["model"]).toBe(model);
+    expect((savedT["capabilities"] as string[]).length).toBe(1);
 
     // The saved template's composition says what every task it files gets.
     const comp = page.getByTestId("composition-preview").first();
@@ -217,6 +278,7 @@ test("a template's settings round-trip through create and a change-only edit", a
     }
   } finally {
     if (createdId) await page.request.delete(`/api/templates/${createdId}`);
+    await restore();
   }
 });
 

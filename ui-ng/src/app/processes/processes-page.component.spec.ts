@@ -1729,5 +1729,27 @@ describe("ProcessesPageComponent (D-9)", () => {
       });
       expect(created).not.toHaveProperty("hosting");
     });
+
+    it("lets a built-in schedule change its model beside its cadence", async () => {
+      settingsConfig();
+      const harness = await RouterTestingHarness.create("/processes/schedules");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "sched-row-sched-sys");
+      await flush(harness);
+      click(root, "sched-edit-btn");
+      await flush(harness);
+      expect(
+        root.querySelector('[data-testid="sched-system-banner"]')!.textContent,
+      ).toContain("model");
+      expect(root.querySelector('[data-testid="sched-admission"]')).toBeNull();
+      await pickModel(harness, "sched-model", "claude-opus-5-5");
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const body = lastBody("PATCH /api/schedules/{id}");
+      expect(body["model"]).toBe("claude-opus-5-5");
+      expect(body).not.toHaveProperty("title");
+      expect(body).not.toHaveProperty("admission");
+    });
   });
 });
