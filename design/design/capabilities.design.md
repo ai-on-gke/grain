@@ -78,6 +78,8 @@ The seam an edition used to contribute a bare provider (`capability.RegisterProv
 
 ## Where the detail is
 
+Proposed additive extension: [tracked resources and resource providers](tracked-resources.design.md) uses capability-backed Resolve/Observe/Watch integrations and separate read/watch grants. Resource providers report observations; the MCP completion extension interprets them as gates (Task #44 terminology, following Task #39/PR #1666). This proposal changes no current capability protocol or concrete task goal API.
+
 - Protocol, grant syntax, configuration, minting, materialization: [`capabilities.spec.md`](../spec/capabilities/capabilities.spec.md).
 - Keyless GCP capability access (`credential: token` vs. `credential: key`): [`gcp-access.design.md`](gcp-access.design.md) and [`docs/gcp-key-permission-sets.md`](../../docs/gcp-key-permission-sets.md).
 - Writing a server, built-ins, granting from the UI: [`docs/capabilities.md`](../../docs/capabilities.md).
