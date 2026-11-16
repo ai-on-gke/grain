@@ -1512,7 +1512,7 @@ func TestFakeCIDemoPendingReleaseApproval(t *testing.T) {
 	rejectPath := fmt.Sprintf("/api/repos/%s/%s/pending-releases/v2.4.0/reject", grain.Owner, grain.Name)
 
 	// Agent callers (even with api:releases:write attached) are refused.
-	rec = do(http.MethodPost, "/api/tasks/1/capabilities", `{"id":"api:releases:write","attach":true}`, nil)
+	rec = do(http.MethodPost, "/api/tasks/1/capabilities", `{"id":"https://grain.dev/capabilities/api#releases:write","attach":true}`, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("attaching api:releases:write to task 1: %d %s", rec.Code, rec.Body)
 	}

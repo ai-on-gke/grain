@@ -254,7 +254,7 @@ test("dispatch-control over POST /api/mcp, and the pages that show it", async ({
 }) => {
   const stamp = Date.now();
   const steward = await queued(request, `Steward ${stamp}`, {
-    capabilities: ["api:dispatch-control"],
+    capabilities: ["https://grain.dev/capabilities/api#dispatch-control"],
   });
   const target = await queued(request, `Picked by the steward ${stamp}`);
   const escalating = await ok(

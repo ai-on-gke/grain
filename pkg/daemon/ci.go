@@ -1431,6 +1431,14 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		cc.Deadline = end.Add(ciReleaseTimeout).UTC()
 	}
 	for _, id := range ids {
+		// api:<scope>[@repo] and the bare release-gate-read were read for
+		// one release after unified-grants slice 4; a job declaring one now
+		// is refused naming the reference, not served it.
+		if msg, _, retired := model.RetiredGrantRefusal(id); retired {
+			if _, api := model.RetiredAPISpelling(id); api {
+				return cc, nil, fmt.Errorf("CI capability %q is refused: %s; declare that instead", id, msg)
+			}
+		}
 		// A capability reference has no in-process provider: it is
 		// minted through its capability server by the grant admission
 		// (CiGrantReservations.Acquire). grain#ci, in either spelling,
@@ -1447,7 +1455,7 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		if !ok {
 			// A retired name no provider will ever answer to again is
 			// refused, naming what it became, rather than waited on.
-			if to := model.RetiredGrantsBecame(id); len(to) != 1 || to[0] != id {
+			if _, to, retired := model.RetiredGrantRefusal(id); retired {
 				return cc, nil, fmt.Errorf("CI capability %q is refused: it was retired, and is declared now as %s", id, strings.Join(to, ", "))
 			}
 			return cc, nil, &model.ResourceExhaustedError{

@@ -855,12 +855,40 @@ func RetiredGrantsBecame(name string) []string {
 // than "unknown capability".
 func RetiredGrantRefusal(name string) (msg string, became []string, ok bool) {
 	trimmed := strings.TrimSpace(name)
+	if to, api := RetiredAPISpelling(trimmed); api {
+		return fmt.Sprintf("%s is a retired capability spelling and grants nothing any longer: it became %s",
+			trimmed, to), []string{to}, true
+	}
 	became = RetiredGrantsBecame(trimmed)
 	if len(became) == 0 || (len(became) == 1 && became[0] == trimmed) {
 		return "", nil, false
 	}
 	return fmt.Sprintf("%s is a retired capability name and grants nothing any longer: it became %s",
 		trimmed, strings.Join(became, " and ")), became, true
+}
+
+// RetiredAPISpelling is the canonical agent API grant a retired spelling
+// of one stands for: api:<scope-or-preset>[@<owner/name>] (unified-grants
+// slice 4, schema migration 132) and release-gate-read, the CI job alias
+// of the api#release-gate-read preset. Both were accepted on input for one
+// release after the conversion and are refused now, naming the reference
+// (RetiredGrantRefusal). ok is false for anything else. Stored rows were
+// rewritten by migration 132, and a grain/config import still rewrites
+// them (CanonicalStoredGrant); the api:<x> string StoredGrantSpelling
+// compares by is an internal key, never a grant anyone writes.
+func RetiredAPISpelling(name string) (canonical string, ok bool) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == ReleaseGateReadCapability {
+		return APIRef(ReleaseGateReadCapability), true
+	}
+	if !strings.HasPrefix(trimmed, APIGrantPrefix) {
+		return "", false
+	}
+	g := CanonicalGrant(trimmed)
+	if what, isAPI := apiMethodOf(g.Capability); !isAPI || what == "" {
+		return "", false
+	}
+	return g.Key(), true
 }
 
 // RetiredTaskGrantRefusal is RetiredGrantRefusal for a grant named on

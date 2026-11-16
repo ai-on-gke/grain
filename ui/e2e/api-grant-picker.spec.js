@@ -47,7 +47,9 @@ test("lists the API presets before every scope, with what each preset grants", a
   page,
   request,
 }) => {
-  const task = await fileTask(request, ["api:ci:read"]);
+  const task = await fileTask(request, [
+    "https://grain.dev/capabilities/api#ci:read",
+  ]);
   await page.goto(`/tasks/${task.id}`);
   const { grants, menu } = await openMenu(page, task.id);
   await expect(
@@ -166,7 +168,7 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
 }) => {
   // 1. Verify api:self-debug preset resolution via HTTP gate (the retired bare
   // self-debug is no alias any longer)
-  for (const cap of ["api:self-debug"]) {
+  for (const cap of ["https://grain.dev/capabilities/api#self-debug"]) {
     const t = await fileTask(request, [cap]);
     const headers = { "X-Grain-Acting-Task": String(t.id) };
 

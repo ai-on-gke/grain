@@ -96,7 +96,7 @@ test("surfaces retired in_process and api_scopes.presets catalogue entries in Se
       data: {
         title: "Check retired in_process refusal",
         noRepo: true,
-        capabilities: ["api:memory"],
+        capabilities: ["https://grain.dev/capabilities/api#memory"],
       },
     });
     expect(refused.status()).toBe(400);

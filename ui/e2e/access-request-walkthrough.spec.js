@@ -132,7 +132,7 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
       data: {
         title: "Admin caller task",
         repo: "acme/widgets",
-        capabilities: ["api:tasks:admin"],
+        capabilities: ["https://grain.dev/capabilities/api#tasks:admin"],
       },
     });
     expect(adminTaskRes.ok()).toBeTruthy();
@@ -175,7 +175,11 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
                   requests: [
                     { kind: "read", repo: "acme/docs" },
                     { kind: "network", access: "open" },
-                    { kind: "grant", capability: "api:tasks:admin" },
+                    {
+                      kind: "grant",
+                      capability:
+                        "https://grain.dev/capabilities/api#tasks:admin",
+                    },
                   ],
                 },
               },
@@ -191,7 +195,13 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
                     "Requesting api:tasks:admin again to inspect sibling tasks",
                   reason:
                     "Checking whether sibling tasks already updated the guide.",
-                  requests: [{ kind: "grant", capability: "api:tasks:admin" }],
+                  requests: [
+                    {
+                      kind: "grant",
+                      capability:
+                        "https://grain.dev/capabilities/api#tasks:admin",
+                    },
+                  ],
                 },
               },
             ],
@@ -390,7 +400,7 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
     expect(turn2.prompt).toContain("read acme/docs");
     expect(turn2.prompt).toContain("open network");
     expect(turn2.prompt).toContain("Declined");
-    expect(turn2.prompt).toContain("api:tasks:admin");
+    expect(turn2.prompt).toMatch(/api[:#]tasks:admin/);
 
     // Open the task pane on the second request: verify earlier partial decision alert,
     // current holds, bounding boxes at desktop and phone, and Deny validation.
@@ -477,8 +487,15 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
                     "Interactive debugging session needs acme/lib to inspect shared types.",
                   requests: [
                     { kind: "read", repo: "acme/lib" },
-                    { kind: "grant", capability: "api:memory" },
-                    { kind: "grant", capability: "api:tasks:admin" },
+                    {
+                      kind: "grant",
+                      capability: "https://grain.dev/capabilities/api#memory",
+                    },
+                    {
+                      kind: "grant",
+                      capability:
+                        "https://grain.dev/capabilities/api#tasks:admin",
+                    },
                   ],
                 },
               },

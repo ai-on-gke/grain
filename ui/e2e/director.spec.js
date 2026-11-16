@@ -844,7 +844,10 @@ test("Saved Director row offers one-click Adopt shipped defaults cleanly on desk
   // Seed a pre-G1 saved director row lacking the newly shipped Tier 1 grants.
   const seedRes = await page.request.put("/api/console-sessions/director", {
     data: {
-      capabilities: ["api:self-debug", "api:deployment:read"],
+      capabilities: [
+        "https://grain.dev/capabilities/api#self-debug",
+        "https://grain.dev/capabilities/api#deployment:read",
+      ],
     },
   });
   expect(seedRes.ok()).toBeTruthy();
