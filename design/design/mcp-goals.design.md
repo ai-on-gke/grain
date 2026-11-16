@@ -8,6 +8,8 @@
 
 The normative contract is [MCP goals specification](../spec/mcp-goals/mcp-goals.spec.md), with [wire schemas](../spec/mcp-goals/wire.schema.json). This design explains the boundaries and migration. The specification governs the proposed goal protocol; existing behavior remains governed by its current contracts until a task explicitly migrates.
 
+Related proposal: [extensible tracked resources](tracked-resources.design.md) supplies resource identity, scoped observations and durable change detection to evaluator snapshots. It uses **gates** terminology in coordination with Task #44; this document retains its Task #39 wire spellings until that separate rename is applied. Resource providers report facts, while gates interpret required outcomes; existing concrete task goals remain distinct.
+
 ## Problem and verified baseline
 
 Inspected `origin/main` at `5a5189ae4a11afd30e142a467fd0ef7cd34cd4a9` (2026-11-16). The working branch started at that same commit. These are source observations, not claims that all older designs are fully implemented:
