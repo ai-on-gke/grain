@@ -20,6 +20,7 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig, Task } from "../api/models";
 import { SnackbarService } from "../services/snackbar.service";
+import { formatStamp } from "../shared/dispatch-status";
 import { ProcessesPageComponent } from "./processes-page.component";
 import type {
   Composition,
@@ -795,7 +796,7 @@ describe("ProcessesPageComponent (D-9)", () => {
         ]),
       );
     expect(config()["Overlap group"]).toBe("release-train");
-    expect(config()["Next run"]).toBe("2026-11-15T09:20:00Z");
+    expect(config()["Next run"]).toBe(formatStamp("2026-11-15T09:20:00Z"));
 
     const outcomes = Array.from(
       root.querySelectorAll('[data-testid="sched-skip-outcome"]'),
@@ -1412,5 +1413,133 @@ describe("ProcessesPageComponent (D-9)", () => {
       .click();
     await flush(harness);
     expect(root.querySelector('[data-testid^="trigger-row-"]')).not.toBeNull();
+  });
+
+  it("formats a schedule's run times, keeps an undetailed suppression to its own reason, counts in the singular, and refuses a 0-pass suite in the dialog", async () => {
+    api.schedules.unshift({
+      id: "sched-held",
+      title: "Held by an open task",
+      description: "Holds.",
+      repo: "acme/widgets",
+      autoMerge: false,
+      capabilities: [],
+      recurrence: { kind: "every_n_minutes", everyNMinutes: 30 },
+      overlap: "skip",
+      source: "deployment",
+      type: "task",
+      enabled: true,
+      nextRunAt: "2026-11-16T10:23:11.320429227Z",
+      lastRunAt: "2026-11-16T10:14:03.830464856Z",
+      createdAt: "2026-11-01T00:00:00Z",
+      suppressed: { reason: "suiteRun" },
+      revision: "rev-held",
+    });
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-held"]')!
+      .click();
+    await flush(harness);
+
+    // The Configuration pane says when, as the row does -- not the wire's
+    // nanosecond RFC 3339 string.
+    const at = (id: string) =>
+      root.querySelector(`[data-testid="${id}"]`)?.textContent?.trim();
+    expect(at("sched-next-run")).toBe(
+      formatStamp("2026-11-16T10:23:11.320429227Z"),
+    );
+    expect(at("sched-last-run")).toBe(
+      formatStamp("2026-11-16T10:14:03.830464856Z"),
+    );
+    expect(at("sched-last-run")).not.toContain("T10:14:03");
+    // With no Detail from the server the reason stands alone: an
+    // unfinished suite run is not "Previous firing is still open."
+    const banner = at("sched-suppressed-banner") ?? "";
+    expect(banner).toContain("Suppressed — suite run unfinished.");
+    expect(banner).not.toContain("Previous firing");
+
+    await harness.navigateByUrl("/processes/suites");
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="suite-row-suite-1"]')?.textContent,
+    ).toContain("1 template");
+    expect(
+      root.querySelector('[data-testid="suite-row-suite-1"]')?.textContent,
+    ).not.toContain("1 templates");
+
+    // Maximum passes 0 is refused in the dialog, not saved as 3.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const passes = root.querySelector<HTMLInputElement>(
+      '[data-testid="suite-max-passes-input"]',
+    )!;
+    passes.value = "0";
+    passes.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    expect(api.calls.some((c) => c.route === "PATCH /api/suites/{id}")).toBe(
+      false,
+    );
+    expect(
+      root.querySelector('[data-testid="suite-dialog"] [role="alert"]')
+        ?.textContent,
+    ).toContain("Maximum passes must be a whole number from 1 to 100.");
+
+    passes.value = "2.5";
+    passes.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    expect(api.calls.some((c) => c.route === "PATCH /api/suites/{id}")).toBe(
+      false,
+    );
+
+    passes.value = "4";
+    passes.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    expect(
+      api.calls.find((c) => c.route === "PATCH /api/suites/{id}")?.body,
+    ).toMatchObject({ maxPasses: 4 });
+
+    // A fraction left behind in the other mode's field is not sent.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const max = root.querySelector<HTMLInputElement>(
+      '[data-testid="suite-max-passes-input"]',
+    )!;
+    max.value = "2.5";
+    max.dispatchEvent(new Event("input"));
+    await flush(harness);
+    Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="suite-dialog"] button',
+      ),
+    )
+      .find((b) => b.textContent?.trim() === "Fixed pass count")!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    const patches = api.calls.filter(
+      (c) => c.route === "PATCH /api/suites/{id}",
+    );
+    expect(patches).toHaveLength(2);
+    expect(patches[1].body).toMatchObject({ mode: "count", maxPasses: 3 });
   });
 });
