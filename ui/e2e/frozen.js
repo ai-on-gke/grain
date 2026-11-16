@@ -22,9 +22,10 @@
 //     (ui-ng e2e) have both landed, so the classic copy no longer has to
 //     hold a pull request back.
 //
-// Both run in the `ui e2e (quarantined)` job instead, which is
-// continue-on-error: a regression in them still shows up, red, on the
-// pull request, and does not block it.
+// Both run in the `ui e2e (quarantined)` job instead, whose suite step is
+// continue-on-error: a regression in them does not block the pull
+// request, and its check still passes -- the failure shows as a warning
+// annotation and in the job's step summary.
 //
 // An entry is a spec file, or a spec file and the line its `test(` call
 // starts on -- the same `file:line` Playwright's own command line takes
