@@ -324,6 +324,9 @@ func (g *Gateway) watchSSEForever(ctx context.Context, stderr io.Writer, retry t
 	}
 }
 
+// outboundTimeout bounds each -outbound-url POST.
+var outboundTimeout = 10 * time.Second
+
 // postToChat is the HMAC adapter's Sink for -outbound-url: each message
 // is POSTed to url as JSON, signed in X-PLC-Chat-Signature when secret is
 // set. Without it the command had nowhere to deliver what it forwarded --
@@ -389,7 +392,18 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if *webhookSecret != "" || *outboundURL != "" {
 		adapter := plcseams.NewHMACChatAdapter(*webhookSecret)
 		if *outboundURL != "" {
-			adapter.Sink = postToChat(http.DefaultClient, *outboundURL, *webhookSecret)
+			post := postToChat(&http.Client{Timeout: outboundTimeout}, *outboundURL, *webhookSecret)
+			// A chat platform that is slow or down costs the message it
+			// was sent, said on stderr, and nothing more: returning the
+			// error would end WatchSSE's stream past that event (its
+			// cursor has already moved), and a POST with no deadline
+			// would hold every later event behind it.
+			adapter.Sink = func(ctx context.Context, msg plcseams.ChatMessage) error {
+				if err := post(ctx, msg); err != nil {
+					fmt.Fprintf(stderr, "plc-chat-gateway: task %s %s not delivered: %v\n", msg.TaskID, msg.EventType, err)
+				}
+				return nil
+			}
 		}
 		plcseams.RegisterChatAdapter(adapter)
 	}

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -225,4 +226,99 @@ func TestOutboundURLDeliversForwardedEvents(t *testing.T) {
 	if parked != 1 {
 		t.Errorf("%d parked-on-a-question messages, want 1: %+v", parked, msgs)
 	}
+}
+
+// TestOutboundURLOutlivesASlowOrFailingChatPlatform: a POST the chat
+// platform never answers, and one it refuses, each cost only their own
+// message; the events after them still arrive.
+func TestOutboundURLOutlivesASlowOrFailingChatPlatform(t *testing.T) {
+	defer plcseams.ResetForTest()
+	defer func(d time.Duration) { outboundTimeout = d }(outboundTimeout)
+	outboundTimeout = 200 * time.Millisecond
+
+	daemonSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for i, task := range []string{"1", "2", "3"} {
+			_, _ = fmt.Fprintf(w, "id: %d\nevent: task.question\ndata: {\"id\":\"%d\",\"type\":\"task.question\",\"taskId\":\"%s\",\"questionSummary\":\"Q%s\"}\n\n", i+1, i+1, task, task)
+		}
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer daemonSrv.Close()
+
+	got := make(chan plcseams.ChatMessage, 8)
+	release := make(chan struct{})
+	defer close(release)
+	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg plcseams.ChatMessage
+		_ = json.NewDecoder(r.Body).Decode(&msg)
+		switch msg.TaskID {
+		case "1": // slow: never answers within the timeout
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		case "2": // failing
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		got <- msg
+	}))
+	defer chatSrv.Close()
+
+	var stderr syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, []string{
+			"-listen", "127.0.0.1:0",
+			"-grain-url", daemonSrv.URL,
+			"-default-space", "spaces/ops",
+			"-outbound-url", chatSrv.URL,
+			"-watch-sse",
+		}, io.Discard, &stderr)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case m := <-got:
+		if m.TaskID != "3" {
+			t.Fatalf("delivered %+v, want task 3's message", m)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("task 3's message never arrived behind a slow and a failing POST; stderr:\n%s", stderr.String())
+	}
+	for _, want := range []string{"task 1 task.question not delivered", "task 2 task.question not delivered"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "stream ended") {
+		t.Errorf("a delivery failure ended the event stream:\n%s", stderr.String())
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

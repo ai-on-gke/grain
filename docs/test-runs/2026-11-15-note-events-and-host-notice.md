@@ -57,7 +57,7 @@ Task #9 is parked on a question: Land the widgets fix on main or a release branc
 
 **Outcome:** exactly one "parked on a question" message per real question (ask, secret, access, chat) on both stores, and **none** for the notes of tasks 2, 3, 5 or 9. Notes arrive as `Task #N event task.comment`. `cd grain-plc && go vet ./... && go test -race ./...` passes.
 
-Observation (not fixed): an outbound POST failure ends `WatchSSE` after `lastEventID` has already moved past the event. The reconnect therefore resumes *after* the event that failed to deliver, and that event is lost. This walkthrough saw it once, when the chat stub was not up yet; the script now waits for the stub.
+**F5 (raised by the gating review, fixed):** a slow or failing chat platform stalled or broke the stream. `-outbound-url` used `http.DefaultClient`, which has no timeout, so a POST the platform never answered held every later event behind it. A refused POST ended `WatchSSE` after its cursor had already moved past the event, which lost that event and reconnected. Each POST is now bounded (10 s). A delivery failure is written to stderr (`task N <type> not delivered: …`) and costs only that message; the stream carries on. Regression test: `TestOutboundURLOutlivesASlowOrFailingChatPlatform`.
 
 ## Item 3 — `/next/` Inbox and task page
 
@@ -110,5 +110,5 @@ No edition-specific installer path appears anywhere.
 | F2 | Gateway question messages repeated the summary ("X — X") | **Fixed**, same test |
 | F3 | `/next/` Inbox and task page ignored `noteSummary`: summarized notes read "Needs reply" / "Answered on the task itself." | **Fixed** in `ui-ng/`; unit + e2e spec |
 | F4 | `/next/` shows no host-mode install notice (Fleet, Upgrade, shell) | Follow-up proposed |
-| O1 | Gateway loses the event whose outbound POST failed (cursor advanced first) | Observation |
+| F5 | A slow or failing chat platform stalled the gateway's stream or ended it past the failed event | **Fixed**: 10 s POST bound, failures logged; `TestOutboundURLOutlivesASlowOrFailingChatPlatform` |
 | — | PR #1515 event types, PR #1510 notice text | **Confirmed** on live SQLite and PostgreSQL daemons |
