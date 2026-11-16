@@ -60,13 +60,15 @@ interface SecretKeyRow {
 }
 
 // claimedSecret is a secret a control elsewhere in Settings owns: a
-// model connection's credential (Settings → Models) and a repository's
-// release credentials (its Releases tab). Those are left out of this
+// model connection's credential (Settings → Models), the Hub
+// registration token (Settings → Hub) and a repository's release
+// credentials (its Releases tab). Those are left out of this
 // list rather than shown twice. Everything else stays listed, including
 // what retired in-process capabilities left behind (github-app,
 // registry-push, cosign-*), which nothing else shows.
 export function claimedSecret(name: string, backendIds: string[]): boolean {
   if (name.startsWith("repo-release-")) return true;
+  if (name === "registry-registration-token") return true;
   return backendIds.some((id) => name === `agent-backend-${id}`);
 }
 

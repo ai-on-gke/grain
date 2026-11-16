@@ -123,6 +123,7 @@ describe("claimedSecret", () => {
     expect(claimedSecret("agent-backend-claude", ["claude"])).toBe(true);
     expect(claimedSecret("agent-backend-gone", ["claude"])).toBe(false);
     expect(claimedSecret("repo-release-acme-widgets", [])).toBe(true);
+    expect(claimedSecret("registry-registration-token", [])).toBe(true);
     expect(claimedSecret("github-app", ["claude"])).toBe(false);
   });
 });

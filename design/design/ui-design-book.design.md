@@ -293,7 +293,9 @@ sideways: mark it `.s-table.s-table-stack` inside `.s-table-wrap.s-table-stack-w
 and give each cell after the first a `data-label` naming its column. Below
 880px of the wrap's own width (a container query, since the pane beside the
 drawer and rail is narrower than the viewport) each row becomes a card of
-labelled lines under its first cell (Settings → Repositories). A sub-row editor
+labelled lines under its first cell (Settings → Repositories). A new table
+outside Settings does the same with its own container query (Fleet's Waiting
+on CI, `.fleet-ci-waits-table`). A sub-row editor
 inside a table that still scrolls sideways (`.s-table-wrap.s-table-pinned`)
 carries `.s-subrow-pin`, so it stays pinned to the visible width at phone sizes
 rather than spanning the scrolled table; a Codex connection in the
@@ -332,6 +334,25 @@ there, not offered for removal here. Each half of a card that saves through
 different scopes says which half is read-only for the reader and why
 (`next-deployment-credentials.spec.js`).
 
+A setting kept in the secret store rather than in grain/config (the Hub's
+`grc_…` registration token) stays editable while a config-repo lock
+disables the fields around it, says when the daemon has no secret store
+instead of offering a box that cannot save, and is cleared only after a
+confirm. A value checked by its form (an `owner/name` repository, a
+`key=value` node selector, an auto-overcommit bound) is refused by name in
+an `.s-field-error` under its box and holds the Save bar; what only the
+server can judge (a minimum above its maximum) is left to its refusal in
+the error banner. A settings table that must fit a phone folds secondary
+columns into the first (`.s-cell-stack`: repository over path) rather
+than scrolling sideways. A blank string setting shows `<key>Default` as
+its placeholder like a number does; a blank that means "none" (a pod
+priority class) says `none` instead.
+Where a stored `0` is a value of its own rather than "grain's default"
+(CPU or memory overcommit, where 0 is unbounded; the disk floor share,
+where 0 holds nothing back), a typed `0` saves 0 and says what it means
+beside the box, and a cleared box saves the server's `<key>Default` --
+so the greyed placeholder is always what Save stores.
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`
@@ -345,6 +366,7 @@ it rather than copy it.
 | Component | File | Use |
 |---|---|---|
 | Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Toggle pills | `shared/grants-picker.component.ts` (`.grant-pill`), `repos/repo-detail.css` (`.repo-toggle-pill`) | multi-choice sets (capabilities, a qualification item's *Depends on*) and three-state settings (work ownership's *On / Off / Say nothing*): a labelled `role="group"` of buttons carrying `aria-pressed`, never a checkbox list or a multiple `<select>` |
 | Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |
 | Actor chip | `shared/actor-chip.component.ts` | who did something, shape-coded, "on behalf of" |
@@ -353,7 +375,7 @@ it rather than copy it.
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
-| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters |
+| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
@@ -390,6 +412,16 @@ Rules:
   blocked, `role="alert"`), above the content. Use the server's `detail`
   sentence rather than rewording it, and link the task that holds the
   finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
+  ```` ```mermaid ```` fences in the active theme with a Diagram / Source
+  toggle, and pairs Before / After fences (named in the info string or by
+  matching headings) into one block with Side by side / Before / After /
+  Stacked / Source (Before alone on a phone). `mermaid` is imported only
+  when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
+  before it reaches the DOM. A diagram never shrinks below 75% of its
+  natural size; on a phone a wide one scrolls inside its canvas, which
+  takes keyboard focus. A source that does not parse says why and shows
+  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`).
 - **Say a wire code in words.** A reason or state code from the API
   (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
   A code nobody has mapped yet shows as itself, which beats showing nothing.
@@ -435,6 +467,15 @@ Rules:
     not jump to another item.
   - The composer is locked to its target task.
   - Batch actions name their scope (repos, owners) in the confirmation.
+  - A batch action acts only on the selected rows its state allows (Run
+    now skips running and closed work, Submit wants `awaiting_submit`).
+    When that is fewer than the selection, the label counts them
+    (`Submit (2)`). It is offered only when the role reaches every one of
+    those rows.
+  - A bulk action shows its progress in the selection bar and offers
+    Stop: calls already sent finish, and the rest are never sent.
+    Afterwards only the rows that failed or were never sent stay ticked
+    (`ui-ng/e2e/next-tasks-batch-actions.spec.js`).
   - Undo for reversible actions.
   - An action that moves a branch, opens a pull request on someone's
     behalf or drops a record (promote, merge back, delete) asks first in

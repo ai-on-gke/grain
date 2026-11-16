@@ -141,6 +141,7 @@ const ONE_KEY = new Set(["approve"]);
     "./inbox-inspector.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   template: `
     <section

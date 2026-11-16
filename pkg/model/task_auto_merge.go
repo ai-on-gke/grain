@@ -240,7 +240,7 @@ func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent,
 			case held && !AutoMergeDeclined(*t):
 				if HasReviewFindings(*t) {
 					e.Reason = "kept off: review left findings (" + HumanReviewSummary(*t) +
-						"), and clearing findings requires a clean re-review or a merge:force gate override"
+						"), and clearing findings requires a clean re-review or a person's Accept findings"
 				} else {
 					e.Reason = "kept off: held for a person's review (" + HumanReviewSummary(*t) +
 						"), and only a person's Submit or Release ends that"

@@ -16,6 +16,7 @@ import type { Task } from "../api/models";
 import {
   LEVELS,
   type Level,
+  heldForRunNow,
   isBlocked,
   isWork,
   jumpsQueue,
@@ -27,6 +28,7 @@ import {
 export {
   LEVELS,
   type Level,
+  heldForRunNow,
   isBlocked,
   isWork,
   jumpsQueue,
