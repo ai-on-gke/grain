@@ -36,6 +36,13 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { CapabilityConfigMapsComponent } from "./capability-config-maps.component";
+import { CapabilityHostScriptsComponent } from "./capability-host-scripts.component";
+import {
+  type PlacementServer,
+  isConfigMapServer,
+  isHostScriptServer,
+} from "./capability-placements";
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
@@ -174,7 +181,13 @@ export function listedSecrets(
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent, ConfirmDialogComponent, RouterLink],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    RouterLink,
+    CapabilityConfigMapsComponent,
+    CapabilityHostScriptsComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./settings-capabilities.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -821,6 +834,21 @@ export function listedSecrets(
             </div>
           </div>
         </div>
+
+        @for (srv of configMapServers(); track srv.id) {
+          <g-cap-config-maps
+            [server]="srv"
+            [locked]="state.sectionLocked('capabilities')"
+            (saved)="loadCapabilities()"
+          />
+        }
+        @for (srv of hostScriptServers(); track srv.id) {
+          <g-cap-host-scripts
+            [server]="srv"
+            [locked]="state.sectionLocked('capabilities')"
+            (saved)="loadCapabilities()"
+          />
+        }
 
         <div
           class="s-card"
@@ -1634,6 +1662,14 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly capTestNotice = signal("");
   protected readonly capTestOk = signal(true);
   protected readonly capServerState = capServerState;
+  // The built-in servers whose placements and scripts get cards of their
+  // own below the server table.
+  protected readonly configMapServers = computed(() =>
+    (this.capServers() as PlacementServer[]).filter(isConfigMapServer),
+  );
+  protected readonly hostScriptServers = computed(() =>
+    (this.capServers() as PlacementServer[]).filter(isHostScriptServer),
+  );
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
@@ -1986,7 +2022,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
-  private async loadCapabilities(): Promise<void> {
+  protected async loadCapabilities(): Promise<void> {
     if (this.access.can("GET /api/capability-servers")) {
       try {
         const s = await this.api.get<
