@@ -126,7 +126,11 @@ describe("DirectorDrawerComponent", () => {
     const api = new FakeApi();
     api.post = (route: string, params?: unknown, body?: unknown) => {
       api.posted.push({ route, params, body });
-      return Promise.reject({ status: 500, error: { error: "sandbox down" } });
+      return new Promise<never>((_, reject) =>
+        setTimeout(() =>
+          reject({ status: 500, error: { error: "sandbox down" } }),
+        ),
+      );
     };
     TestBed.configureTestingModule({
       imports: [DirectorDrawerComponent],
