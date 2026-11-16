@@ -218,3 +218,25 @@ test("Sandboxes budget card fits and passes axe at every size @phone @dark", asy
   expect(apart).toBe(true);
   expect(await axe()).toEqual([]);
 });
+
+test("Sandboxes: clearing a box that already holds the default shows the default again", async ({
+  page,
+  request,
+}) => {
+  const s = await getSettings(request);
+  // grain demo stores grain's defaults in these, so clearing one drafts
+  // nothing: the box itself has to be put back.
+  expect(s["sandboxDiskOvercommit"]).toBe(s["sandboxDiskOvercommitDefault"]);
+  expect(s["sandboxDiskFloorShare"]).toBe(s["sandboxDiskFloorShareDefault"]);
+  await page.goto("/next/settings/sandboxes");
+  for (const [id, key] of [
+    ["input-disk-overcommit", "sandboxDiskOvercommitDefault"],
+    ["input-disk-floor-share", "sandboxDiskFloorShareDefault"],
+  ] as const) {
+    const box = page.getByTestId(id);
+    await box.fill("");
+    await box.blur();
+    await expect(box).toHaveValue(String(s[key]));
+  }
+  await expect(page.getByTestId("settings-save-btn")).toHaveCount(0);
+});

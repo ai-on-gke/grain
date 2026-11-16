@@ -1575,9 +1575,9 @@ function mib(mb: number): string {
                   )
                 "
                 (change)="
-                  state.setNumber(
+                  commitDefaulted(
+                    $any($event.target),
                     'sandboxCpuOvercommit',
-                    $any($event.target).value,
                     reportedDefault('sandboxCpuOvercommit', 2)
                   )
                 "
@@ -1618,9 +1618,9 @@ function mib(mb: number): string {
                   )
                 "
                 (change)="
-                  state.setNumber(
+                  commitDefaulted(
+                    $any($event.target),
                     'sandboxMemoryOvercommit',
-                    $any($event.target).value,
                     reportedDefault('sandboxMemoryOvercommit', 1)
                   )
                 "
@@ -1719,9 +1719,9 @@ function mib(mb: number): string {
                     )
                   "
                   (change)="
-                    state.setNumber(
+                    commitDefaulted(
+                      $any($event.target),
                       'sandboxDiskOvercommit',
-                      $any($event.target).value,
                       reportedDefault('sandboxDiskOvercommit', 2)
                     )
                   "
@@ -1759,9 +1759,9 @@ function mib(mb: number): string {
                     )
                   "
                   (change)="
-                    state.setNumber(
+                    commitDefaulted(
+                      $any($event.target),
                       'sandboxDiskFloorShare',
-                      $any($event.target).value,
                       reportedDefault('sandboxDiskFloorShare', 0.1)
                     )
                   "
@@ -1795,9 +1795,9 @@ function mib(mb: number): string {
                     )
                   "
                   (change)="
-                    state.setNumber(
+                    commitDefaulted(
+                      $any($event.target),
                       'sandboxDiskFloorMinMb',
-                      $any($event.target).value,
                       diskFloorMinDefault()
                     )
                   "
@@ -3229,6 +3229,22 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
     return `Auto overcommit is active — live effective factors: ${parts.join(", ")}${psi}.`;
   });
+
+  // commitDefaulted is a defaulted number box's (change): blank saves
+  // grain's default, and the box shows that default again. Writing it
+  // back by hand matters when the stored value already is the default:
+  // nothing is drafted then, so the [value] binding does not change and
+  // Angular would leave the cleared box blank.
+  protected commitDefaulted(
+    el: HTMLInputElement,
+    key: string,
+    fallback: number,
+  ): void {
+    this.state.setNumber(key, el.value, fallback);
+    if (String(el.value ?? "").trim() === "" && !el.validity?.badInput) {
+      el.value = String(this.state.val(key, fallback));
+    }
+  }
 
   protected reportedDefault(key: string, fallback: number): number {
     const d = Number(this.state.settings()[`${key}Default`]);
