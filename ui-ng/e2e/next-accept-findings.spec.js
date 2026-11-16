@@ -85,7 +85,10 @@ for (const viewport of [
       .getByTestId("merge-gates-list");
     await expect(row).toBeVisible();
     for (const gate of ["security-review", "review"]) {
-      const pill = row.getByTestId(`merge-gate-${gate}`);
+      // The gate's own state pill, inside its row of the list.
+      const pill = row
+        .getByTestId(`merge-gate-${gate}`)
+        .locator(".status-pill");
       const button = row.getByTestId(`gate-${gate}-accept-findings`);
       await expect(button).toBeVisible();
       // In the gates row, on screen, and clear of its own gate's pill.
