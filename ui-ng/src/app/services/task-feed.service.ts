@@ -26,8 +26,14 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
 import { ReadTrouble } from "./request-trouble";
 
-export const FAST_POLL_MS = 3000;
+// With `/api/events` SSE delivering `task.*` updates immediately, the steady
+// heartbeat only guards against silent stream stalls or unstreamed activity
+// notes (`15s` = 4 req/min). While reads are failing, `FAILURE_PROBE_MS`
+// probes recovery with exponential backoff (5s -> 10s -> 20s -> 40s -> 60s).
+export const FAST_POLL_MS = 15000;
 export const IDLE_POLL_MS = 15000;
+export const FAILURE_PROBE_MS = 5000;
+const EVENT_COALESCE_MS = 1000;
 const CLOCK_TICK_MS = 5000;
 
 function extractError(err: unknown): string {
@@ -86,6 +92,7 @@ export class TaskFeedStore implements OnDestroy {
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private clockTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastEventRefreshAt = 0;
   private refreshing: Promise<boolean> | null = null;
   private queuedRefresh: Promise<boolean> | null = null;
   private readonly trouble = new ReadTrouble();
@@ -93,6 +100,10 @@ export class TaskFeedStore implements OnDestroy {
   private readonly onVisibility = (): void => {
     if (this.consumers <= 0) return;
     if (this.doc.hidden) {
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = null;
+      }
       this.clearTimers();
     } else {
       this.now.set(Date.now());
@@ -189,22 +200,25 @@ export class TaskFeedStore implements OnDestroy {
     });
   }
 
+  private globalBackoffMs(): number {
+    return typeof this.api.backoffRemainingMs === "function"
+      ? this.api.backoffRemainingMs()
+      : 0;
+  }
+
   private schedulePoll(): void {
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
     if (this.consumers <= 0 || this.doc.hidden) return;
-    const ms = this.trouble.nextDelay(
-      this.fastConsumers > 0 || this.runningCount() > 0
-        ? FAST_POLL_MS
-        : IDLE_POLL_MS,
-    );
+    const baseMs = this.trouble.failing ? FAILURE_PROBE_MS : IDLE_POLL_MS;
+    const ms = Math.max(this.trouble.nextDelay(baseMs), this.globalBackoffMs());
     this.zone.runOutsideAngular(() => {
       this.pollTimer = setTimeout(() => {
         this.pollTimer = null;
         this.zone.run(() => {
-          void this.refresh().finally(() => this.schedulePoll());
+          void this.refresh();
         });
       }, ms);
     });
@@ -215,16 +229,31 @@ export class TaskFeedStore implements OnDestroy {
     // While reads are failing the backed-off poll is what asks next: a
     // burst of events would otherwise put the server back at full rate.
     if (this.trouble.failing) return;
-    if (this.fastConsumers > 0) {
+    const now = Date.now();
+    const backoffMs = this.globalBackoffMs();
+    const sinceLast = now - this.lastEventRefreshAt;
+    if (
+      this.fastConsumers > 0 &&
+      backoffMs === 0 &&
+      sinceLast >= EVENT_COALESCE_MS
+    ) {
+      this.lastEventRefreshAt = now;
       void this.refresh();
       return;
     }
     if (this.debounceTimer) return;
+    const waitMs = Math.max(
+      200,
+      backoffMs,
+      this.fastConsumers > 0 ? EVENT_COALESCE_MS - sinceLast : 200,
+    );
     this.zone.runOutsideAngular(() => {
       this.debounceTimer = setTimeout(() => {
         this.debounceTimer = null;
+        if (this.doc.hidden || this.trouble.failing) return;
+        this.lastEventRefreshAt = Date.now();
         this.zone.run(() => void this.refresh());
-      }, 200);
+      }, waitMs);
     });
   }
 
@@ -233,10 +262,27 @@ export class TaskFeedStore implements OnDestroy {
     return () => this.beforeChange.delete(fn);
   }
 
+  refreshIfStale(maxAgeMs = 3_000): Promise<boolean> {
+    if (this.refreshing) return this.refreshing;
+    const updatedAt = this.lastUpdatedAt();
+    if (
+      this.loaded() &&
+      !this.lastError() &&
+      updatedAt !== null &&
+      Date.now() - updatedAt < maxAgeMs
+    ) {
+      return Promise.resolve(true);
+    }
+    return this.refresh();
+  }
+
   refresh(): Promise<boolean> {
     if (!this.refreshing) {
       this.refreshing = this.load().finally(() => {
         this.refreshing = null;
+        if (this.consumers > 0 && !this.doc.hidden) {
+          this.schedulePoll();
+        }
       });
       return this.refreshing;
     }

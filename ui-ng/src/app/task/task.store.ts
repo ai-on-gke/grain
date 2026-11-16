@@ -12,21 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, inject, signal } from "@angular/core";
+import {
+  Injectable,
+  NgZone,
+  OnDestroy,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
 import type {
   Attempt,
   AttachmentUpload,
   CapabilityAuditEntry,
   Comment,
+  Task,
   TaskDetail,
   TreeNode,
   WorkTree,
 } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { errorText } from "../sessions/session-helpers";
+import {
+  LiveRefreshService,
+  type TranscriptPollerHandle,
+  eventTaskId,
+} from "../services/live-refresh.service";
 import { ReadTrouble } from "../services/request-trouble";
+import { TaskFeedStore } from "../services/task-feed.service";
 
 export type { TreeNode, WorkTree };
 
@@ -50,13 +64,19 @@ function mergeAttempts(older: Attempt[], latest: Attempt[]): Attempt[] {
   return [...byNum.values()].sort((a, b) => a.number - b.number);
 }
 
-// TaskStore is the task page's state: one task's detail (polled with
-// ETags), its work tree, paged older comments/runs, capability audits,
-// and the transcript of the attempt being read.
+function taskRevisionKey(t: Task | TaskDetail | null | undefined): string {
+  if (!t) return "";
+  return `${t.updatedAt ?? ""}:${t.state ?? ""}:${t.activityAt ?? ""}`;
+}
+
+// TaskStore is the task page's state: one task's detail (refreshed on SSE
+// events or list revision changes with ETags), its work tree, paged older
+// comments/runs, capability audits, and the transcript of the attempt being read.
 @Injectable({ providedIn: "root" })
-export class TaskStore {
+export class TaskStore implements OnDestroy {
   private readonly api = inject(GrainApi);
-  private readonly events = inject(GrainEvents);
+  private readonly liveRefresh = inject(LiveRefreshService);
+  private readonly feed = inject(TaskFeedStore);
   private readonly zone = inject(NgZone);
   private readonly inbox = inject(InboxStore);
 
@@ -82,18 +102,68 @@ export class TaskStore {
   private pagedAttempts: Attempt[] = [];
   private pagedOlderAttempts: number | null = null;
 
-  private timer: ReturnType<typeof setInterval> | null = null;
-  // trouble is the detail poll's run of failed reads: silent until it is
-  // sustained, and the poll backs off (pollAfter) while it lasts
-  // (request-trouble.ts).
+  private isOpen = false;
+  private lastFeedRevKey = "";
+  private lastVisiblePulse = 0;
+  // trouble is the detail read's run of failed reads: silent until it is
+  // sustained, and retries back off while it lasts (request-trouble.ts).
   private readonly trouble = new ReadTrouble();
-  private pollAfter = 0;
-  private transcriptTimer: ReturnType<typeof setInterval> | null = null;
-  private eventSub: { unsubscribe(): void } | null = null;
-  private eventTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private unsubEvents: (() => void) | null = null;
+
+  private readonly transcriptPoller: TranscriptPollerHandle =
+    this.liveRefresh.createTranscriptPoller({
+      fetch: async (taskId, attempt) => {
+        const r = await this.api.get<{ transcript?: string }>(
+          "GET /api/tasks/{id}/attempts/{number}/transcript",
+          { id: taskId, number: String(attempt) },
+        );
+        return r?.transcript ?? "";
+      },
+      onText: (text) => {
+        this.transcript.set(text);
+        this.transcriptError.set(null);
+      },
+      onError: (err) => {
+        this.transcriptError.set(
+          `The transcript could not be read: ${errorText(err)}`,
+        );
+      },
+      isActive: () => this.isOpen && this.transcriptFor() !== null,
+    });
+
+  constructor() {
+    effect(() => {
+      const list = this.feed.tasks();
+      const id = this.id();
+      untracked(() => {
+        if (!this.isOpen || !id || this.trouble.failing) return;
+        const row = list.find((t) => t.id === id);
+        if (!row) return;
+        const nextRev = taskRevisionKey(row);
+        if (this.lastFeedRevKey && nextRev !== this.lastFeedRevKey) {
+          this.lastFeedRevKey = nextRev;
+          void this.refresh();
+        } else if (!this.lastFeedRevKey) {
+          this.lastFeedRevKey = nextRev;
+        }
+      });
+    });
+    effect(() => {
+      const vp = this.liveRefresh.visiblePulse();
+      untracked(() => {
+        if (vp === this.lastVisiblePulse) return;
+        this.lastVisiblePulse = vp;
+        if (this.isOpen && this.id() && this.trouble.failing) {
+          void this.refresh();
+        }
+      });
+    });
+  }
 
   open(id: string): void {
-    if (this.id() !== id) {
+    const changedId = this.id() !== id;
+    if (changedId) {
       this.id.set(id);
       this.detail.set(null);
       this.tree.set(null);
@@ -109,34 +179,74 @@ export class TaskStore {
       this.resetTranscript();
       this.resetAudit();
       this.trouble.ok();
-      this.pollAfter = 0;
+      this.clearRetryTimer();
+      this.lastFeedRevKey = "";
     }
-    void this.refresh();
-    this.eventSub ??= this.events.events().subscribe(() => {
-      if (this.eventTimer || this.trouble.failing) return;
-      this.eventTimer = setTimeout(() => {
-        this.eventTimer = null;
-        void this.refresh();
-      }, 250);
-    });
-    if (!this.timer) {
-      this.zone.runOutsideAngular(() => {
-        this.timer = setInterval(() => {
-          if (Date.now() < this.pollAfter) return;
-          this.zone.run(() => void this.refresh());
-        }, POLL_MS);
-      });
+    this.isOpen = true;
+    this.lastVisiblePulse = this.liveRefresh.visiblePulse();
+    const row = this.feed.tasks().find((t) => t.id === id);
+    const feedRev = taskRevisionKey(row);
+    const cur = this.detail();
+    if (
+      changedId ||
+      !cur ||
+      cur.id !== id ||
+      (feedRev && feedRev !== this.lastFeedRevKey)
+    ) {
+      this.lastFeedRevKey = feedRev;
+      void this.refresh();
     }
+    this.unsubEvents ??= this.liveRefresh.subscribeEvents(
+      (ev) => {
+        if (this.trouble.failing) return false;
+        if (ev.type && !ev.type.startsWith("task.")) return false;
+        const evId = eventTaskId(ev);
+        return !evId || evId === this.id();
+      },
+      () => {
+        if (!this.trouble.failing) void this.refresh();
+      },
+      250,
+    );
   }
 
   close(expectedId?: string): void {
     if (expectedId !== undefined && this.id() !== expectedId) return;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-    this.eventSub?.unsubscribe();
-    this.eventSub = null;
+    this.isOpen = false;
+    this.clearRetryTimer();
+    this.unsubEvents?.();
+    this.unsubEvents = null;
     this.resetTranscript();
     this.resetAudit();
+  }
+
+  ngOnDestroy(): void {
+    this.close();
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  private scheduleRetry(): void {
+    this.clearRetryTimer();
+    if (!this.isOpen || !this.id() || this.liveRefresh.hidden()) return;
+    const backoffMs =
+      typeof this.api.backoffRemainingMs === "function"
+        ? this.api.backoffRemainingMs()
+        : 0;
+    const delay = Math.max(this.trouble.nextDelay(POLL_MS), backoffMs);
+    this.zone.runOutsideAngular(() => {
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        if (this.isOpen && !this.liveRefresh.hidden()) {
+          this.zone.run(() => void this.refresh());
+        }
+      }, delay);
+    });
   }
 
   // resetTranscript forgets which run was being read, so another task (or
@@ -196,15 +306,19 @@ export class TaskStore {
       if (r.changed || !this.detail()) {
         this.detail.set(this.applyPagedMerge(r.body));
       }
+      const feedRow = this.feed.tasks().find((t) => t.id === id);
+      this.lastFeedRevKey = taskRevisionKey(feedRow ?? r.body);
       this.loadError.set(null);
       this.trouble.ok();
-      this.pollAfter = 0;
+      this.clearRetryTimer();
     } catch (err) {
       if (this.id() !== id) return;
       const status = (err as { status?: number })?.status;
       const sustained = this.trouble.fail(err);
-      this.pollAfter = Date.now() + this.trouble.nextDelay(POLL_MS) - POLL_MS;
-      // One failed poll keeps the detail already on screen and says
+      if (status !== 404) {
+        this.scheduleRetry();
+      }
+      // One failed read keeps the detail already on screen and says
       // nothing; a missing task, a page with nothing to show yet, or
       // failure that lasts says so.
       if (status !== 404 && !sustained && this.detail()) return;
@@ -326,47 +440,21 @@ export class TaskStore {
     }
   }
 
-  // watchTranscript reads one attempt's transcript, again every few
-  // seconds while that attempt has not finished.
+  // watchTranscript reads one attempt's transcript, backing off when
+  // unchanged and pausing while hidden.
   watchTranscript(attempt: number, live: boolean): void {
-    this.stopTranscript();
-    this.transcriptFor.set(attempt);
-    this.transcript.set(null);
-    void this.loadTranscript(attempt);
-    if (live) {
-      this.zone.runOutsideAngular(() => {
-        this.transcriptTimer = setInterval(
-          () => this.zone.run(() => void this.loadTranscript(attempt)),
-          TRANSCRIPT_POLL_MS,
-        );
-      });
+    const id = this.id();
+    if (!id) return;
+    if (this.transcriptFor() !== attempt) {
+      this.transcript.set(null);
+      this.transcriptError.set(null);
     }
+    this.transcriptFor.set(attempt);
+    this.transcriptPoller.watch(id, attempt, live);
   }
 
   stopTranscript(): void {
-    if (this.transcriptTimer) clearInterval(this.transcriptTimer);
-    this.transcriptTimer = null;
-  }
-
-  private async loadTranscript(attempt: number): Promise<void> {
-    const id = this.id();
-    if (!id) return;
-    try {
-      const r = await this.api.get<{ transcript?: string }>(
-        "GET /api/tasks/{id}/attempts/{number}/transcript",
-        { id, number: String(attempt) },
-      );
-      if (this.id() === id && this.transcriptFor() === attempt) {
-        this.transcript.set(r?.transcript ?? "");
-        this.transcriptError.set(null);
-      }
-    } catch (err) {
-      if (this.id() === id && this.transcriptFor() === attempt) {
-        this.transcriptError.set(
-          `The transcript could not be read: ${errorText(err)}`,
-        );
-      }
-    }
+    this.transcriptPoller.stop();
   }
 
   isBusy(key: string, id = this.id()): boolean {

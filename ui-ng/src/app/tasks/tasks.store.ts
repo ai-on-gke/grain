@@ -173,9 +173,13 @@ export class TasksStore implements OnDestroy {
         `The task list could not be read: ${standing}. This page tries again on its own.`,
       );
     }
-    if (!wasStarted && this.feed.loaded()) {
+    const feedStale =
+      !!this.feed.lastError() ||
+      Date.now() - (this.feed.lastUpdatedAt() ?? 0) >= 3_000;
+    if (!wasStarted && this.feed.loaded() && feedStale) {
       void this.refresh();
     } else if (this.feed.loaded()) {
+      this.ownLoaded.set(true);
       void this.ensureSubmitDetails(this.live());
       void this.loadAux();
     } else {

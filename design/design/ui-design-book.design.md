@@ -515,13 +515,20 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   small; use `@defer` for overlays.
 - Each component stylesheet under 8 kB. Do not re-import shared CSS in a
   parent that a child component already loads; it duplicates the bytes.
-- Request efficiency: coalesce concurrent identical GET/conditional reads,
-  serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
-  and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
-  polling, load inactive Fleet tabs lazily, and never block primary pickers on
-  slow `reachable-repos` discovery. A poll that is failing backs off
-  (doubling, capped at 60 s, never sooner than `Retry-After`) and ignores
-  event wake-ups until a read succeeds again.
+- Request efficiency: every main `/next/` page stays within its steady-state
+  idle budget in `ui-ng/e2e/request-budgets.ts` (`<= 8–10` requests/min, `0`
+  duplicates, enforced by `ui-ng/e2e/next-request-budget.spec.ts`). Stores
+  coordinate refreshes through `TaskFeedStore` and `LiveRefreshService`
+  (`/api/events` SSE + ref-counted pulse) rather than independent timers;
+  `document.hidden` disconnects SSE and pauses all polling (`0` requests/min);
+  live attempt transcripts poll only for the selected visible running attempt
+  with exponential backoff (`3 s -> 30 s`) when output is unchanged; row lists
+  batch summaries via `GET /api/tasks/summaries` instead of per-row task reads;
+  and `GrainApi` coalesces identical in-flight reads, caches `GET /api/config`
+  and `GET /api/tasks/{id}` with ETag `If-None-Match`, and records global
+  `503`/`429` `Retry-After` backoff across all pollers. A poll that is failing
+  backs off (doubling, capped at 60 s, never sooner than `Retry-After`) and
+  ignores event wake-ups until a read succeeds again.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under

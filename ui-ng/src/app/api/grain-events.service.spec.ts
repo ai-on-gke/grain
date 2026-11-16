@@ -18,6 +18,7 @@ import { GrainEvents } from "./grain-events.service";
 class FakeEventSource {
   static last: FakeEventSource | null = null;
   readyState = 1;
+  onopen: (() => void) | null = null;
   onmessage: ((e: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   listeners = new Map<string, (e: MessageEvent) => void>();
@@ -71,6 +72,42 @@ describe("GrainEvents", () => {
     expect(count).toBe(2);
     expect(FakeEventSource.last).not.toBe(first);
     expect(FakeEventSource.last!.closed).toBe(false);
+
+    sub.unsubscribe();
+    expect(FakeEventSource.last!.closed).toBe(true);
+  });
+
+  it("disconnects EventSource while document.hidden and reconnects when visible", () => {
+    const events = TestBed.inject(GrainEvents);
+    let count = 0;
+    events.factory = (url) => {
+      count += 1;
+      return new FakeEventSource(url) as unknown as EventSource;
+    };
+    let hidden = false;
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => hidden,
+    });
+
+    const sub = events.events().subscribe();
+    const first = FakeEventSource.last!;
+    first.onopen?.();
+    expect(count).toBe(1);
+    expect(first.closed).toBe(false);
+    expect(events.connected()).toBe(true);
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.closed).toBe(true);
+    expect(events.connected()).toBe(false);
+
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(count).toBe(2);
+    expect(FakeEventSource.last!.closed).toBe(false);
+    FakeEventSource.last!.onopen?.();
+    expect(events.connected()).toBe(true);
 
     sub.unsubscribe();
     expect(FakeEventSource.last!.closed).toBe(true);

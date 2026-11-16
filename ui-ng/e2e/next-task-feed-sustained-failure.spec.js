@@ -26,6 +26,7 @@ import { test, expect } from "./fixtures.js";
 // The cold case -- a list never read at all says so at once -- is
 // next-inbox-intake-regressions.spec.js's.
 test.use({ demoArgs: ["-stalled-tasks"] });
+test.setTimeout(120_000);
 
 const TASKS = /\/api\/tasks(\?.*)?$/;
 const ROW = "Backfill the audit log retention job";

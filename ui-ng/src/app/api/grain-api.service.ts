@@ -153,6 +153,31 @@ const MAX_RETRY_AFTER_SEC = 10;
 const RETRY_JITTER_RATIO = 0.3;
 const MAX_VERIFIER_RETRIES = 3;
 const MAX_VERIFIER_RETRY_MS = 20_000;
+const CONFIG_CACHE_TTL_MS = 60_000;
+const GLOBAL_OVERLOAD_MAX_MS = 60_000;
+
+function parseUnboundedRetryAfterMs(
+  err: unknown,
+  nowMs: number,
+): number | null {
+  const raw = (
+    err as { headers?: { get?(name: string): string | null } }
+  )?.headers?.get?.("Retry-After");
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const n = Number(trimmed);
+    if (Number.isFinite(n) && n >= 0) {
+      return Math.min(n * 1000, GLOBAL_OVERLOAD_MAX_MS);
+    }
+  } else {
+    const at = Date.parse(trimmed);
+    if (Number.isFinite(at)) {
+      return Math.min(Math.max(0, at - nowMs), GLOBAL_OVERLOAD_MAX_MS);
+    }
+  }
+  return null;
+}
 
 function routeMethod(key: RouteKey): string {
   const space = key.indexOf(" ");
@@ -235,6 +260,9 @@ export class GrainApi implements OnDestroy {
   private readonly urlEpochs = new Map<string, number>();
   private condEpoch = 0;
   private configCache: { exp: number; body: GrainConfig } | null = null;
+  private globalBackoffUntil = 0;
+  private explicitRetryAfterUntil = 0;
+  private globalOverloadStreak = 0;
   // Shared in-flight backoff so concurrent reads hitting the same transient
   // verifier_unavailable blip wait on one timer instead of storming.
   private recovery: {
@@ -243,6 +271,39 @@ export class GrainApi implements OnDestroy {
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
   private destroyed = false;
+
+  // Remaining global backoff window (ms) after any 503 or 429 response,
+  // honouring Retry-After so background pollers and event-driven refreshes
+  // pause globally while the origin or proxy recovers.
+  backoffRemainingMs(now = Date.now()): number {
+    return Math.max(0, this.globalBackoffUntil - now);
+  }
+
+  noteOverload(err: unknown, now = Date.now()): number {
+    const status = (err as { status?: unknown })?.status;
+    if (status !== 503 && status !== 429) return this.backoffRemainingMs(now);
+    this.globalOverloadStreak++;
+    const retryAfter = parseUnboundedRetryAfterMs(err, now);
+    if (retryAfter !== null) {
+      this.explicitRetryAfterUntil = Math.max(
+        this.explicitRetryAfterUntil,
+        now + retryAfter,
+      );
+    }
+    const expDelay = Math.min(
+      2_000 * 2 ** (this.globalOverloadStreak - 1),
+      GLOBAL_OVERLOAD_MAX_MS,
+    );
+    const delayMs = Math.max(retryAfter ?? 0, expDelay);
+    this.globalBackoffUntil = Math.max(this.globalBackoffUntil, now + delayMs);
+    return this.backoffRemainingMs(now);
+  }
+
+  private noteSuccess(now = Date.now()): void {
+    this.globalOverloadStreak = 0;
+    this.globalBackoffUntil =
+      this.explicitRetryAfterUntil > now ? this.explicitRetryAfterUntil : 0;
+  }
 
   ngOnDestroy(): void {
     this.destroyed = true;
@@ -358,17 +419,24 @@ export class GrainApi implements OnDestroy {
     if (!isIdempotentReadMethod(method)) return attempt();
     const startedAt = Date.now();
     const run = (retries: number): Promise<T> =>
-      attempt().then(undefined, (err) => {
-        if (retries >= MAX_VERIFIER_RETRIES || !isVerifierUnavailable(err)) {
-          throw err;
-        }
-        return this.waitForVerifierRecovery(err, startedAt).then(
-          (shouldRetry) => {
-            if (!shouldRetry) throw err;
-            return run(retries + 1);
-          },
-        );
-      });
+      attempt().then(
+        (val) => {
+          this.noteSuccess();
+          return val;
+        },
+        (err) => {
+          this.noteOverload(err);
+          if (retries >= MAX_VERIFIER_RETRIES || !isVerifierUnavailable(err)) {
+            throw err;
+          }
+          return this.waitForVerifierRecovery(err, startedAt).then(
+            (shouldRetry) => {
+              if (!shouldRetry) throw err;
+              return run(retries + 1);
+            },
+          );
+        },
+      );
     return run(0);
   }
 
@@ -444,19 +512,25 @@ export class GrainApi implements OnDestroy {
     query?: string,
   ): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
-    const res = await firstValueFrom(
-      this.http.request<T>(method, url, {
-        headers: JSON_HEADERS,
-        body:
-          method === "delete"
-            ? body === undefined
-              ? undefined
-              : body
-            : (body ?? null),
-      }),
-    );
-    this.invalidateAfterMutation(url);
-    return res;
+    try {
+      const res = await firstValueFrom(
+        this.http.request<T>(method, url, {
+          headers: JSON_HEADERS,
+          body:
+            method === "delete"
+              ? body === undefined
+                ? undefined
+                : body
+              : (body ?? null),
+        }),
+      );
+      this.noteSuccess();
+      this.invalidateAfterMutation(url);
+      return res;
+    } catch (err) {
+      this.noteOverload(err);
+      throw err;
+    }
   }
 
   private invalidateAfterMutation(url: string): void {
@@ -514,14 +588,14 @@ export class GrainApi implements OnDestroy {
     return this.send<T>("delete", key, params, body, query);
   }
 
-  config(): Promise<GrainConfig> {
-    if (this.configCache && Date.now() < this.configCache.exp) {
+  config(force = false): Promise<GrainConfig> {
+    if (!force && this.configCache && Date.now() < this.configCache.exp) {
       return Promise.resolve(this.configCache.body);
     }
     const epoch = this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0);
     return this.get<GrainConfig>("GET /api/config").then((body) => {
       if (this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0) === epoch) {
-        this.configCache = { exp: Date.now() + 2_000, body };
+        this.configCache = { exp: Date.now() + CONFIG_CACHE_TTL_MS, body };
       }
       return body;
     });
@@ -532,7 +606,9 @@ export class GrainApi implements OnDestroy {
   }
 
   task(id: string): Promise<TaskDetail> {
-    return this.get<TaskDetail>("GET /api/tasks/{id}", { id });
+    return this.getIfChanged<TaskDetail>("GET /api/tasks/{id}", { id }).then(
+      (r) => r.body,
+    );
   }
 
   taskSummary(id: string): Promise<TaskDetail> {

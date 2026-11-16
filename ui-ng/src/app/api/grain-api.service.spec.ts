@@ -898,4 +898,44 @@ describe("GrainApi verifier_unavailable retry", () => {
       }
     }
   });
+
+  it("records passive global Retry-After backoff on 429 and 503 without extra timers and caches task(id) via ETag", async () => {
+    expect(api.backoffRemainingMs()).toBe(0);
+
+    const req429 = api.get("GET /api/tasks").then(
+      () => null,
+      (err) => err,
+    );
+    http.expectOne("/api/tasks").flush(
+      { error: "rate limited" },
+      {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: { "Retry-After": "12" },
+      },
+    );
+    expect(await req429).toMatchObject({ status: 429 });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(api.backoffRemainingMs()).toBeGreaterThan(11_000);
+    expect(api.backoffRemainingMs()).toBeLessThanOrEqual(12_000);
+
+    await vi.advanceTimersByTimeAsync(12_100);
+    expect(api.backoffRemainingMs()).toBe(0);
+
+    // Conditional ETag caching on api.task(id) returns cached detail on 304.
+    const p1 = api.task("55");
+    const r1 = http.expectOne("/api/tasks/55");
+    expect(r1.request.headers.get("If-None-Match")).toBeNull();
+    r1.flush(
+      { id: "55", title: "Cached detail", state: "running" },
+      { headers: { ETag: '"rev-55-a"' } },
+    );
+    expect(await p1).toMatchObject({ id: "55", title: "Cached detail" });
+
+    const p2 = api.task("55");
+    const r2 = http.expectOne("/api/tasks/55");
+    expect(r2.request.headers.get("If-None-Match")).toBe('"rev-55-a"');
+    r2.flush(null, { status: 304, statusText: "Not Modified" });
+    expect(await p2).toMatchObject({ id: "55", title: "Cached detail" });
+  });
 });

@@ -173,7 +173,6 @@ export class WorkstreamsStore implements OnDestroy {
   );
 
   private active = false;
-  private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshing: Promise<void> | null = null;
@@ -186,11 +185,8 @@ export class WorkstreamsStore implements OnDestroy {
   private readonly detailInFlight = new Set<string>();
   private readonly onVisibility = (): void => {
     if (!this.active) return;
-    if (this.doc.hidden) {
-      this.clearPoll();
-    } else {
-      void this.refresh(true);
-      this.scheduleNextPoll();
+    if (!this.doc.hidden) {
+      void this.refresh(false);
     }
   };
 
@@ -226,7 +222,7 @@ export class WorkstreamsStore implements OnDestroy {
       this.feed.start(false);
       this.feed.acquireFast();
     }
-    void this.refresh(!this.closedFetchedOnce);
+    void this.refresh(!this.closedFetchedOnce, false, true);
     if (!this.eventSub) {
       this.eventSub = this.events.events().subscribe((ev) => {
         if (ev.type && !ev.type.startsWith("task.")) {
@@ -235,7 +231,6 @@ export class WorkstreamsStore implements OnDestroy {
       });
     }
     this.doc.addEventListener("visibilitychange", this.onVisibility);
-    this.scheduleNextPoll();
   }
 
   stop(): void {
@@ -250,31 +245,11 @@ export class WorkstreamsStore implements OnDestroy {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
-    this.clearPoll();
     this.doc.removeEventListener("visibilitychange", this.onVisibility);
   }
 
   ngOnDestroy(): void {
     this.stop();
-  }
-
-  private clearPoll(): void {
-    if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-    }
-  }
-
-  private scheduleNextPoll(): void {
-    this.clearPoll();
-    if (!this.active || this.doc.hidden) return;
-    this.zone.runOutsideAngular(() => {
-      this.pollTimer = setTimeout(() => {
-        this.zone.run(() => {
-          void this.loadClosedPages().finally(() => this.scheduleNextPoll());
-        });
-      }, IDLE_POLL_MS);
-    });
   }
 
   private scheduleEventRefresh(): void {
@@ -288,13 +263,21 @@ export class WorkstreamsStore implements OnDestroy {
     });
   }
 
-  refresh(forceClosed = false, contextOnly = false): Promise<void> {
+  refresh(
+    forceClosed = false,
+    contextOnly = false,
+    shareFreshFeed = false,
+  ): Promise<void> {
     if (forceClosed) this.forceClosedPending = true;
     if (!this.refreshing) {
       const fetchClosed =
         this.forceClosedPending || (!contextOnly && !this.closedFetchedOnce);
       this.forceClosedPending = false;
-      this.refreshing = this.load(fetchClosed, contextOnly).finally(() => {
+      this.refreshing = this.load(
+        fetchClosed,
+        contextOnly,
+        shareFreshFeed,
+      ).finally(() => {
         this.refreshing = null;
       });
       return this.refreshing;
@@ -318,8 +301,14 @@ export class WorkstreamsStore implements OnDestroy {
     });
   }
 
-  private async load(fetchClosed: boolean, contextOnly = false): Promise<void> {
-    const ok = await this.feed.refresh();
+  private async load(
+    fetchClosed: boolean,
+    contextOnly = false,
+    shareFreshFeed = false,
+  ): Promise<void> {
+    const ok = shareFreshFeed
+      ? await this.feed.refreshIfStale()
+      : await this.feed.refresh();
     const rev = this.feed.revision();
     const openChanged = rev !== this.lastSeenRevision;
     const currentOpen = this.openTasks();
