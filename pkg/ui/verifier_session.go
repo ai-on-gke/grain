@@ -266,19 +266,7 @@ func verifyWithSession(r *http.Request, v IdentityVerifier, header string) (call
 		return cv, matched
 	}
 	if cv.id.SessionGrace {
-		// Admitted on the session alone: hold the verifier to the
-		// grace it was given, and never extend it.
-		if !hasSess || !sameSessionPrincipal(sess, cv.id) {
-			err := fmt.Errorf("verifier %q admitted %s on a session the request does not carry", v.Name(), cv.id.Email)
-			logRefusedVerifierHeader(v.Name(), header, err)
-			return callerVerification{
-				present:        true,
-				verifier:       v,
-				method:         AuthMethod(v.Name()),
-				accessCodeWins: verifierAccessCodeWins(v),
-				err:            err,
-			}, true
-		}
+		// verifyWithVerifier held it to the session; never extend it.
 		cv.id = sess.Identity
 		return cv, true
 	}

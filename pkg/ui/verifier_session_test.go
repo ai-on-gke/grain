@@ -285,3 +285,25 @@ func TestVerifierSessionGraceNeedsTheSession(t *testing.T) {
 		t.Fatalf("SessionGrace without a session: got %d, want 401: %s", rec.Code, rec.Body)
 	}
 }
+
+// A verifier that binds no sessions cannot admit anybody on one, even a
+// request carrying a cookie this daemon signed for that very principal.
+func TestVerifierSessionGraceRefusedWithSessionsOff(t *testing.T) {
+	srv, v, now := sessionFixture(t)
+	cookie := ui.SignVerifierSessionForTest(nil, "slow-proxy", "alice@example.com", "human", "example.com", now.Add(time.Minute))
+	v.ttl = 0
+	v.lie.Store(true)
+	rec := sessionRequest(srv, "", "ok:alice@example.com", cookie)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("SessionGrace with sessions off: got %d, want 401: %s", rec.Code, rec.Body)
+	}
+
+	// With sessions on, SessionGrace still has to name the session's
+	// principal.
+	v.ttl = time.Minute
+	*now = now.Add(2 * time.Minute) // past expiry, within grace
+	rec = sessionRequest(srv, "", "ok:bob@example.com", cookie)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("SessionGrace for another principal: got %d, want 401: %s", rec.Code, rec.Body)
+	}
+}

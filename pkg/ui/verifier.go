@@ -456,6 +456,24 @@ func verifyWithVerifier(r *http.Request, v IdentityVerifier, header string) (cal
 			err:            err,
 		}, true
 	}
+	if id.SessionGrace {
+		// Admitted on the request's session alone: only a SessionBinder
+		// may, only on a session core handed this Verify
+		// (verifyWithSession), and only for the principal it names.
+		sess, hasSess := VerifierSessionFromRequest(r)
+		named := VerifiedIdentity{Email: email, Sub: id.Sub, Kind: kind, Via: id.Via}
+		if verifierSessionTTL(v) == 0 || !hasSess || sess.Verifier != v.Name() || !sameSessionPrincipal(sess, named) {
+			err = fmt.Errorf("verifier %q admitted %s on a session the request does not carry", v.Name(), email)
+			logRefusedVerifierHeader(v.Name(), header, err)
+			return callerVerification{
+				present:        true,
+				verifier:       v,
+				method:         AuthMethod(v.Name()),
+				accessCodeWins: verifierAccessCodeWins(v),
+				err:            err,
+			}, true
+		}
+	}
 	return callerVerification{
 		present:        true,
 		verifier:       v,
