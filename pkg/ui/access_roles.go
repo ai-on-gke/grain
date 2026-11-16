@@ -80,6 +80,7 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/notifications/{id}/investigate":                      "tasks:write",
 	"GET /api/local-script-approvals":                               "capabilities:read",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": "capabilities:admin",
+	"POST /api/tasks/{id}/qa/findings/{finding}/feedback":           "tasks:write",
 	// Accepting a declaration takes the scopes its set needs, which
 	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal),
 	// as revoking what was accepted does:
@@ -108,6 +109,7 @@ var operatorOnlyRoutes = map[string]bool{
 	"POST /api/tasks/{id}/local-script-approvals":                   true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/wait":   true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/expire": true,
+	"POST /api/tasks/{id}/qa/check-runs":                            true,
 	"GET /api/hostds/enrollment-codes":                              true,
 	"POST /api/hostds/enrollment-codes":                             true,
 	"POST /api/hostds/enrollment-codes/{name}/rotate":               true,

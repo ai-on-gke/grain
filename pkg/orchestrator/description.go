@@ -112,7 +112,7 @@ func describeCommits(commits []github.Commit) string {
 func writtenCommits(commits []github.Commit) []github.Commit {
 	var written []github.Commit
 	for _, c := range commits {
-		if !c.Merge && strings.TrimSpace(c.Message) != "" {
+		if !c.Merge && strings.TrimSpace(c.Message) != "" && !strings.Contains(c.Message, "grain-qa-stage/") {
 			written = append(written, c)
 		}
 	}
@@ -167,7 +167,10 @@ func titleFromCommits(commits []github.Commit) string {
 	if len(written) == 0 {
 		return ""
 	}
-	return capTitle(commitSummary(written[leadCommit(written)].Message))
+	t := commitSummary(written[leadCommit(written)].Message)
+
+	t = strings.ReplaceAll(t, "grain-qa-stage/", "")
+	return capTitle(t)
 }
 
 // maxTitleBytes leaves room under GitHub's own 256-character limit on a
@@ -212,11 +215,13 @@ func capDescription(description string) string {
 // whatever follows it -- git's own convention, which is also what makes
 // "this message explains something" a question that can be asked at all.
 func commitSummary(message string) string {
+	message = regexp.MustCompile(`grain-qa-stage/[^\s]*`).ReplaceAllString(message, "")
 	summary, _, _ := strings.Cut(strings.TrimSpace(message), "\n")
 	return strings.TrimSpace(summary)
 }
 
 func commitBody(message string) string {
+	message = regexp.MustCompile(`grain-qa-stage/[^\s]*`).ReplaceAllString(message, "")
 	_, body, _ := strings.Cut(strings.TrimSpace(message), "\n")
 	return strings.TrimSpace(body)
 }

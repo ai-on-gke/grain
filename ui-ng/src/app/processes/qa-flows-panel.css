@@ -1,0 +1,282 @@
+.qa-flows-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--md-sys-color-surface);
+}
+
+.qa-flows-panel .qa-flows-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-bottom: calc(var(--grain-bottombar-height, 72px) + 16px);
+  overflow-y: auto;
+  background: var(--md-sys-color-surface);
+}
+
+.qa-flows-panel .qa-studio-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--md-sys-color-surface-container-low);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.qa-flows-panel .qa-toolbar-top-row,
+.qa-flows-panel .editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.qa-flows-panel .editor-header {
+  padding-top: 8px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.qa-flows-panel .qa-toolbar-identity,
+.qa-flows-panel .qa-toolbar-badges,
+.qa-flows-panel .qa-toolbar-right,
+.qa-flows-panel .qa-flow-strip,
+.qa-flows-panel .qa-draft-meta-fields,
+.qa-flows-panel .editor-actions,
+.qa-flows-panel .dialog-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.qa-flows-panel .detail-actions,
+.qa-flows-panel .qa-flows-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+  padding-bottom: 4px;
+  max-width: 100%;
+}
+
+.qa-flows-panel .detail-actions > * {
+  flex-shrink: 0;
+}
+
+.qa-flows-panel .qa-mobile-back[hidden] {
+  display: none !important;
+}
+
+@media (min-width: 900px) {
+  .qa-flows-panel .qa-mobile-back {
+    display: none !important;
+  }
+}
+
+.qa-flows-panel .qa-toolbar-title {
+  margin: 0 4px;
+  font-family: var(--grain-font-display);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.qa-flows-panel .qa-prompt-budget {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  font-size: 12px;
+}
+
+.qa-flows-panel .qa-prompt-budget.error,
+.qa-flows-panel .byte-counter.error {
+  border-color: var(--md-sys-color-error);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  font-weight: 600;
+}
+
+.qa-flows-panel .qa-budget-track {
+  width: 52px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+
+.qa-flows-panel .qa-budget-fill {
+  display: block;
+  height: 100%;
+  background: var(--md-sys-color-primary);
+}
+
+.qa-flows-panel .qa-prompt-budget.error .qa-budget-fill {
+  background: var(--md-sys-color-error);
+}
+
+.qa-flows-panel .flow-item {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.qa-flows-panel .flow-item.selected {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-color: var(--md-sys-color-primary);
+  font-weight: 600;
+}
+
+.qa-flows-panel .flow-item-rev {
+  font-size: 11px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.qa-flows-panel .qa-rollout-link {
+  color: var(--md-sys-color-primary);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.qa-flows-panel .qa-draft-meta-fields label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.qa-flows-panel .qa-draft-meta-fields label:last-child {
+  flex: 1 1 260px;
+}
+
+.qa-flows-panel .qa-draft-meta-fields input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-size: 12px;
+}
+
+.qa-flows-panel .badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.qa-flows-panel .active-badge {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.qa-flows-panel .custom-badge {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.qa-flows-panel .floor-badge {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+
+.qa-flows-panel .retired-badge,
+.qa-flows-panel .btn-retire {
+  color: var(--md-sys-color-error);
+}
+
+.qa-flows-panel .modal-backdrop-full,
+.qa-flows-panel .modal-backdrop-right {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 50%, transparent);
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px;
+}
+
+.qa-flows-panel .modal-backdrop-right {
+  justify-content: flex-end;
+  padding: 0;
+}
+
+.qa-flows-panel .modal-content-full,
+.qa-flows-panel .probe-drawer-full {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.qa-flows-panel .modal-content-full {
+  margin-top: 6vh;
+  border-radius: 12px;
+  width: min(520px, calc(100vw - 32px));
+}
+
+.qa-flows-panel .probe-drawer-full {
+  height: 100%;
+  width: min(420px, 100vw);
+  overflow-y: auto;
+}
+
+.qa-flows-panel .modal-content-full label,
+.qa-flows-panel .probe-drawer-full label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+}
+
+.qa-flows-panel .modal-content-full input,
+.qa-flows-panel .modal-content-full textarea,
+.qa-flows-panel .probe-drawer-full input,
+.qa-flows-panel .probe-drawer-full textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+}
+
+@media (max-width: 899.95px) {
+  .qa-flows-panel .qa-studio-toolbar {
+    padding: 10px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qa-flows-panel * {
+    transition-duration: 0s !important;
+  }
+}

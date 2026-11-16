@@ -218,6 +218,11 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 			Name: "sandbox", Values: []string{c.Sandbox.Describe()}, Source: string(model.LayerTemplate),
 		})
 	}
+	if c.QAFlowRef != "" {
+		fields = append(fields, ComposedField{
+			Name: "qaFlow", Values: nonEmpty(c.QAFlowRef), Source: string(c.Sources.QAFlowRef),
+		})
+	}
 	return ComposedTask{
 		TemplateID:   c.TemplateID,
 		TemplateName: c.TemplateName,

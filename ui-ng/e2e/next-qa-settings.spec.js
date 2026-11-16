@@ -15,6 +15,25 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.js";
 
+// A named actor, so no screenshot or task payload carries the host account's user name.
+test.use({ demoArgs: ["-as", "demo-operator"] });
+
+test.afterEach(async ({ demoServer, accessCode }) => {
+  await fetch(`${demoServer}/api/settings`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessCode}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      qaEnabled: false,
+      qaFlowId: "golden-v1-minimal",
+      qaRolloutPct: 0,
+      qaShadowOnControl: true,
+    }),
+  });
+});
+
 test("Settings -> Tasks ships quality control off, previews & saves PR rollout, validates boundaries, and passes WCAG contrast", async ({
   page,
   demoServer,
@@ -110,7 +129,13 @@ test("Settings -> Tasks ships quality control off, previews & saves PR rollout, 
   await saveBtn.click();
   await expect(saveBtn).toBeHidden({ timeout: 15_000 });
 
-  // Raising rollout 33% -> 50% previews server-computed qaRegimeId bump (1 -> 2).
+  const after33 = await (
+    await fetch(`${demoServer}/api/settings`, {
+      headers: { Authorization: `Bearer ${accessCode}` },
+    })
+  ).json();
+
+  // Raising rollout 33% -> 50% previews server-computed qaRegimeId bump (+1).
   await rolloutInput.fill("50");
   await page.getByTestId("settings-plan-btn").click();
   await expect(page.getByTestId("settings-plan-preview")).toContainText(
@@ -131,7 +156,7 @@ test("Settings -> Tasks ships quality control off, previews & saves PR rollout, 
   expect(saved.qaFlowId).toBe("deterministic-s3-only");
   expect(saved.qaRolloutPct).toBe(50);
   expect(saved.qaShadowOnControl).toBe(false);
-  expect(saved.qaRegimeId).toBe(2);
+  expect(saved.qaRegimeId).toBe(after33.qaRegimeId + 1);
 
   await page.reload();
   await expect(page.getByTestId("switch-qa-enabled")).toHaveAttribute(

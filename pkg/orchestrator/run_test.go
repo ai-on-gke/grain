@@ -682,7 +682,7 @@ func TestBuildPromptInstructsRelativeUILinks(t *testing.T) {
 				"[Settings → CI](/settings/ci)",
 				"http://127.0.0.1:...",
 				"http://localhost:...",
-				"UberProxy",
+				"an authenticating reverse proxy",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("prompt does not mention %q: %q", want, prompt)

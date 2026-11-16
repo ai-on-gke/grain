@@ -18,7 +18,8 @@ import type { Task } from "../api/models";
 // suites.go, composition.go, repo_workflows.go, declarations.go, and
 // declaration_acceptance.go.
 
-export type ProcessTab = "schedules" | "templates" | "suites" | "declarations";
+export type ProcessTab =
+  "schedules" | "templates" | "suites" | "declarations" | "quality";
 
 export interface WriteTarget {
   repo: string;
@@ -104,6 +105,7 @@ export interface Schedule {
   admission?: string;
   hosting?: string;
   model?: string;
+  qaFlowRef?: string;
   templateId?: string;
   templateName?: string;
   system?: boolean;
@@ -142,6 +144,7 @@ export interface CreateScheduleRequest {
   nothingNeededAction?: string;
   keepRunning?: boolean;
   model?: string;
+  qaFlowRef?: string;
   templateId?: string;
   suiteId?: string;
   recurrence: Recurrence;
@@ -159,6 +162,7 @@ export interface UpdateScheduleRequest {
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
   capabilities?: string[];
+  qaFlowRef?: string;
   templateId?: string;
   suiteId?: string;
   recurrence?: Recurrence;
@@ -197,6 +201,7 @@ export interface Template {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   admission?: string;
@@ -221,6 +226,7 @@ export interface CreateTemplateRequest {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   capabilities: string[];
@@ -240,6 +246,7 @@ export interface UpdateTemplateRequest {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   capabilities?: string[];
@@ -261,6 +268,7 @@ export interface Suite {
   requireApproval: boolean;
   autoMerge: boolean;
   autoApproveProposals: boolean;
+  qaFlowRef?: string;
   createdAt?: string;
   declaredIn?: DeclarationRef;
   revision?: string;
@@ -275,6 +283,7 @@ export interface CreateSuiteRequest {
   requireApproval: boolean;
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
+  qaFlowRef?: string;
 }
 
 export interface UpdateSuiteRequest {
@@ -286,6 +295,7 @@ export interface UpdateSuiteRequest {
   requireApproval?: boolean;
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
+  qaFlowRef?: string;
   revision?: string;
 }
 
