@@ -155,6 +155,12 @@ test("rows reorder by keyboard and by pointer, and the order is kept", async ({
     );
     await page.keyboard.press("ArrowUp");
     await expect.poll(() => rowNames(page)).toEqual(["acme/widgets", ADDED]);
+    // The row re-renders in its new place and focus follows its handle
+    // there on the next tick (onHandleKey); Space pressed before that
+    // lands on nothing, so wait for the handle to hold focus again.
+    await expect(
+      page.getByRole("button", { name: "Move acme/widgets, position 1" }),
+    ).toBeFocused();
     await page.keyboard.press("Space");
     await expect(page.getByTestId("repos-announcer")).toContainText(
       "Dropped acme/widgets at position 1",
