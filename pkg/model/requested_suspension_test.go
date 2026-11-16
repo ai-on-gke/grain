@@ -29,7 +29,7 @@ func TestAParkIsARequestedSuspension(t *testing.T) {
 	store, ctx := open(t)
 	task := model.Task{
 		ID: "parker", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 		ResumeOnDeadline: true,
 	}
@@ -124,7 +124,7 @@ func TestResumeLaterWakesOnAMessageAndOnCI(t *testing.T) {
 	for _, id := range []string{"on-message", "on-ci"} {
 		task := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "t",
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 		}
 		if err := store.PutTask(ctx, task); err != nil {
@@ -205,7 +205,7 @@ func TestTaskCIModeHonoursCanonicalGrainCIAndIgnoresRetiredBareName(t *testing.T
 		Intent: model.IntentImplement,
 		Title:  "t",
 		Target: &repo,
-		Origin: model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing: model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 	}
 
 	// Retired bare "grain-ci" is no longer read as enabling grain CI when CIMode is unset.

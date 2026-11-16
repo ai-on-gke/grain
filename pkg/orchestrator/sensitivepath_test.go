@@ -50,7 +50,7 @@ func TestASensitiveTriggerHoldsAMatchingChangeAndRunsItsTemplate(t *testing.T) {
 		t.Fatalf("want the trigger's review filed, got %v", ids)
 	}
 	gate := reloaded(t, ctx, store, ids[0])
-	if gate.Origin.Reason != model.ReasonReview || !strings.Contains(gate.Body, "`payments/charge.go`") {
+	if gate.Filing.Reason != model.ReasonReview || !strings.Contains(gate.Body, "`payments/charge.go`") {
 		t.Fatalf("the sensitive path's review is not a stacked review of the change: %+v", gate)
 	}
 	pr := strings.Join(prCommentBodies(t, client, got), "\n")

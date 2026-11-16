@@ -2282,7 +2282,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Intent: model.IntentImplement,
 			Title:  title,
 			Body:   body,
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{
 					Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 					OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID},
@@ -2328,7 +2328,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
 		var proposerBehalf *model.Principal
-		isSession := task.Origin.Reason == model.ReasonConsoleSession
+		isSession := task.Filing.Reason == model.ReasonConsoleSession
 		if isSession {
 			if sender := consoleSessionSender(ctx, store, task.ID); sender != nil {
 				if norm, nerr := model.NormalizeTaskOwner(sender.ID); nerr == nil {
@@ -4383,7 +4383,7 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 // never classifies, because it merges back into the branch it was stacked
 // on rather than into a branch of its own choosing.
 func skipsClassification(task model.Task) bool {
-	return task.Origin.Reason == model.ReasonReview || task.Origin.Reason == model.ReasonFix
+	return task.Filing.Reason == model.ReasonReview || task.Filing.Reason == model.ReasonFix
 }
 
 // noteEmptyBranch is what a task gets instead of a pull request when the

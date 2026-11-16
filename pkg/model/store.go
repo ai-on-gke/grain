@@ -648,7 +648,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		t.ExternalRef = extRef
 	}
 
-	oActor, oBehalf := t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf
+	oActor, oBehalf := t.Filing.Attribution.Actor, t.Filing.Attribution.OnBehalfOf
 	var aActorKind, aActorID, aBehalfKind, aBehalfID any
 	var aActorSource, aBehalfSource string
 	if t.Approval != nil {
@@ -680,7 +680,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
   `+"`owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, `proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, `proposer_task_id`, `proposer_run_id`, `external_ref`, `admission`, `hosting`, `skills`"+`
 ) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
-		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
+		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Filing.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
 		timeOf(t.UndeferredAt),
 		targetOwner, targetName, string(t.Binding), nullable(t.Base), folderOf(t.Folder),
@@ -807,7 +807,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if t.CreatedAt != nil {
 		eventAt = *t.CreatedAt
 	}
-	eventActor := eventActorOr(ctx, t.Origin.Attribution)
+	eventActor := eventActorOr(ctx, t.Filing.Attribution)
 	if existing > 0 {
 		eventAt = time.Now()
 		if a, ok := EventActorFromContext(ctx); ok {
@@ -1470,12 +1470,12 @@ func scanTask(scan func(...any) error) (Task, error) {
 	t.NothingNeededAction = NothingNeededAction(nothingNeeded)
 	t.ModelSource = CompositionLayer(modelSource)
 	t.WorkOrigin = WorkOrigin(workOrigin)
-	t.Origin = Origin{
+	t.Filing = Filing{
 		Attribution: Attribution{
 			Actor:      Principal{Kind: PrincipalKind(oaKind), ID: oaID, Source: AuthSource(oaSource)},
 			OnBehalfOf: principalFrom(obKind, obID, obSource),
 		},
-		Reason: OriginReason(oReason),
+		Reason: FilingReason(oReason),
 	}
 	if aaKind.Valid {
 		t.Approval = &Attribution{
@@ -4479,7 +4479,7 @@ func (s *Store) DependencyNeverSatisfiable(ctx context.Context, id string) (bool
 // on task ID.
 //
 // That is the whole rule, with no carve-out for any kind of task. A fix
-// task the merge queue filed (Origin.Reason == ReasonFix) used to sort
+// task the merge queue filed (Filing.Reason == ReasonFix) used to sort
 // ahead of everything else here regardless of where the backlog put it --
 // bwsalmon/agents#389's "a queue head's repair must not wait behind
 // unrelated new work", since the longer it waits the more likely
@@ -4675,7 +4675,7 @@ const directorTaskSQL = "(`t`.`origin_reason` = ? AND `t`.`interactive` = 1 AND 
 	"SELECT 1 FROM `task_tag` AS `dt` WHERE `dt`.`task_id` = `t`.`id` AND `dt`.`tag` LIKE ?))"
 
 // ReadyMergers is Ready narrowed to the tasks whose runs are mergers
-// (mergerTaskSQL, OriginReason.Merger) -- and so bounded by
+// (mergerTaskSQL, FilingReason.Merger) -- and so bounded by
 // Limits.Mergers on top of Limits.Workers rather than by the worker
 // ceiling alone.
 //
@@ -5046,7 +5046,7 @@ func sliceAggregate(ctx context.Context, tx querier, s queueSlice, moved map[str
 
 // MoveToFrontOfBacklog places ids at the front of the backlog: ahead of
 // every other task, and behind nothing but the merge tasks
-// (Origin.Reason == ReasonFix) already scheduled at the very head of it.
+// (Filing.Reason == ReasonFix) already scheduled at the very head of it.
 // It places them in the order in which they appear in ids, so this is a move
 // a human could have made by hand rather than a second ordering rule layered
 // on top of theirs.

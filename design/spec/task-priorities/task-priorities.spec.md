@@ -184,8 +184,8 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 3.4.3. **Gated-task priority propagation to open reviews (`Store.CarryPriorityToReviews` and `CarriedReviewPriority` in `pkg/model/review_priority.go`, `ui.Client.UpdateTask` in `pkg/ui/client.go`, `docs/declarations.md`):**
 
-- Directly changing the `Priority` of a gating review task (`Origin.Reason == ReasonReview`) through `ui.Client.UpdateTask` (`PATCH /api/tasks/{id}`, `grain update`) appends tag `model.ReviewPriorityHandSetTag` (`"priority-set-by-hand"`) to that review task.
-- Whenever a task's effective `Priority` changes through `ui.Client.UpdateTask`, `Store.CarryPriorityToReviews` updates every open gating review of that task (`Origin.Reason == ReasonReview` linked via `LinkProposedBy`; non-review follow-ups sharing `LinkProposedBy` MUST be left unwritten) to `want = max(effectivePriority(after), ReviewPriorityFloor)` (`7`), except that a review carrying `"priority-set-by-hand"` MAY be raised (`want > current`) and MUST NOT be lowered (`want < current`).
+- Directly changing the `Priority` of a gating review task (`Filing.Reason == ReasonReview`) through `ui.Client.UpdateTask` (`PATCH /api/tasks/{id}`, `grain update`) appends tag `model.ReviewPriorityHandSetTag` (`"priority-set-by-hand"`) to that review task.
+- Whenever a task's effective `Priority` changes through `ui.Client.UpdateTask`, `Store.CarryPriorityToReviews` updates every open gating review of that task (`Filing.Reason == ReasonReview` linked via `LinkProposedBy`; non-review follow-ups sharing `LinkProposedBy` MUST be left unwritten) to `want = max(effectivePriority(after), ReviewPriorityFloor)` (`7`), except that a review carrying `"priority-set-by-hand"` MAY be raised (`want > current`) and MUST NOT be lowered (`want < current`).
 
 3.4.4. **Keeping open Stage 1 and GitHub Actions default-branch repairs at repair priority (`fileOrUpdateRepair` in `pkg/orchestrator/stage1repair.go`):** When another failing run concludes while an open Stage 1 (`nightly.yml`) repair or default-branch GitHub Actions gating-workflow repair exists and its `Priority` is below `9` (`Stage1RepairPriority` / `GitHubBaseRepairPriority`), `fileOrUpdateRepair` raises `Priority` back to `9` (leaving any higher `Priority` unchanged).
 
@@ -201,7 +201,7 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 ```go
 func proposerPriorityCeiling(parent Task) int {
-    if parent.Origin.Reason == ReasonReview && parent.Priority <= ReviewPriorityFloor &&
+    if parent.Filing.Reason == ReasonReview && parent.Priority <= ReviewPriorityFloor &&
         !slices.Contains(parent.Tags, ReviewPriorityHandSetTag) {
         return DefaultTaskPriority
     }
@@ -223,7 +223,7 @@ if child.Priority > ceiling {
 
 - A default-priority parent (`Priority == 5`) may queue proposals with `1 <= child.Priority <= 5` (when the parent's `AutoSubmits` or `ConsoleSession.TasksApproved` otherwise permits queuing) without human approval.
 - A lower-priority parent (`1 <= parent.Priority < 5`) may still queue proposals up to `DefaultTaskPriority` (`5`) without human approval.
-- A floor-lifted gating review (`Origin.Reason == ReasonReview`, `Priority <= ReviewPriorityFloor` (`7`), and without tag `"priority-set-by-hand"`) has its proposal ceiling lowered back to `DefaultTaskPriority` (`5`), because `ReviewPriorityFloor` is Grain's dispatch floor rather than human authorization for follow-up proposals to jump the queue.
+- A floor-lifted gating review (`Filing.Reason == ReasonReview`, `Priority <= ReviewPriorityFloor` (`7`), and without tag `"priority-set-by-hand"`) has its proposal ceiling lowered back to `DefaultTaskPriority` (`5`), because `ReviewPriorityFloor` is Grain's dispatch floor rather than human authorization for follow-up proposals to jump the queue.
 - A gating review that inherited `Priority > ReviewPriorityFloor` (such as `8` or `9`) from the change it gates, a gating review whose priority a person set (`"priority-set-by-hand"`), or any non-review higher-priority parent (`parent.Priority > 5`, e.g. `10`) may queue proposals up to `parent.Priority` without human approval.
 - Any proposal with `child.Priority > ceiling` MUST be held unapproved (`ApprovedAt = nil`, state `proposed`) for a person to approve, with its requested `child.Priority` preserved on the filed task and `_Filed for a person to approve: it asks for priority <child>, above the <ceiling> its proposer may give it (the higher of its proposer's own priority and the default), which would dispatch it ahead of work a person queued._` appended to the task body.
 

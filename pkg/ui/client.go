@@ -1781,7 +1781,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 		}
 	}
 	detail.SuspendedSession = suspendedSessionFrom(obs)
-	if t.Origin.Reason == model.ReasonSuite {
+	if t.Filing.Reason == model.ReasonSuite {
 		origin, err := c.Store.SuiteRunOfTask(ctx, id)
 		if err != nil {
 			return TaskDetail{}, err
@@ -2311,11 +2311,11 @@ type CreateTaskRequest struct {
 	// green branch closes it (design/design/durable-tasks.design.md#DT-4). Refused
 	// for a task with no repo.
 	FixesBaseBranch bool `json:"fixesBaseBranch,omitempty"`
-	// Origin is the GitHub pull request or issue this task's work comes
+	// WorkOrigin is the GitHub pull request or issue this task's work comes
 	// from (model.ParseWorkOrigin's forms), for a task filed from a chat
 	// that names one. A proposal whose parent already has a GitHub origin
 	// keeps that one instead (model.ExplicitOrigin); empty inherits.
-	Origin string `json:"origin,omitempty"`
+	WorkOrigin string `json:"origin,omitempty"`
 	// AgentFramework sets model.Task's own field of the same name -- a
 	// per-task override of the deployment's default agent framework
 	// (Settings' own "Agent framework"). "" (the default) means no
@@ -3067,7 +3067,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 		}
 	}
-	explicitOrigin, err := model.ExplicitOrigin(req.Origin, target, proposedBy)
+	explicitOrigin, err := model.ExplicitOrigin(req.WorkOrigin, target, proposedBy)
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
@@ -3760,7 +3760,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// (grain/task-311).
 	// An owned external agent credential files on behalf of its owner
 	// (RequestActor, #XC-14).
-	origin := model.Origin{
+	origin := model.Filing{
 		Attribution: c.requestActor(ctx),
 		Reason:      model.ReasonDirect,
 	}
@@ -3778,8 +3778,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
-		Origin:               origin,
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.WorkOrigin, target, proposedBy),
+		Filing:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
 		Reviewers:            model.NormalizeReviewers(req.Reviewers),
@@ -5909,7 +5909,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// A review's priority set by hand is the person's call, and a
 			// later edit to the reviewed task's must not lower it
 			// (model.CarryPriorityToReviews).
-			if task.Origin.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
+			if task.Filing.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
 				!slices.Contains(task.Tags, model.ReviewPriorityHandSetTag) {
 				task.Tags = append(task.Tags, model.ReviewPriorityHandSetTag)
 			}

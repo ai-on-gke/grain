@@ -294,7 +294,7 @@ func reviewTaskLink(task model.Task) (string, bool) {
 // change of its own. syncEntry treats it exactly the way it treats a fix
 // task: never a queue entry in its own right, and merged into the branch
 // it was filed against the moment it reads clean.
-func isReviewTask(task model.Task) bool { return task.Origin.Reason == model.ReasonReview }
+func isReviewTask(task model.Task) bool { return task.Filing.Reason == model.ReasonReview }
 
 // reviewsInPlace reports whether task is a review working on the reviewed
 // change's own branch (model.LinkPushesReviewedBranch), and which task
@@ -345,7 +345,7 @@ func reviewsInPlace(task model.Task) (reviewedID string, ok bool) {
 // work nobody will ever see, so it is set here regardless of what the
 // template says about the tasks it files anywhere else.
 //
-// Origin.Reason is ReasonReview, which is what isReviewTask reads and
+// Filing.Reason is ReasonReview, which is what isReviewTask reads and
 // therefore what keeps the review out of its repo's merge queue as an
 // entry in its own right. It is deliberately not ReasonFix: that reason
 // draws on the capacity model.Limits.Mergers keeps back for the merge
@@ -521,7 +521,7 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		SourceTemplateID: tmpl.ID,
 		Admission:        admission,
 		Hosting:          model.NormalizeHosting(tmpl.Hosting),
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,
 		},

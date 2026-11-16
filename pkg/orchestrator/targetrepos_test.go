@@ -218,7 +218,7 @@ func TestATaskWithNoRepoIsNotParkedByTheTargetRepoList(t *testing.T) {
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	task := model.Task{
 		ID: "norepo", Intent: model.IntentImplement, Title: "think about something", Body: "no repo",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Binding:  model.BindingDirective,
 	}

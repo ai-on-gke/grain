@@ -25,7 +25,7 @@ them in its own `.grain/settings.yml`.
   when the source is another repository.
 - Its body carries the issue's URL, author, labels and description, and
   its first five comments.
-- Its origin is `<source>#N` and its origin reason is `imported`. When the
+- Its origin is `<source>#N` and its filing reason is `imported`. When the
   source is the target repository, the task's issue number is set too, so
   its pull request says `Fixes #N`. For an upstream source it is not set,
   because `#N` in the fork's pull request would name a different issue.

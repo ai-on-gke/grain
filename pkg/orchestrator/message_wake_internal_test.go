@@ -31,7 +31,7 @@ func messageHeldTask(t *testing.T, store *model.Store, id string, at time.Time) 
 	person := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "owner"}}
 	if err := store.PutTask(ctx, model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: person, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: person, Reason: model.ReasonDirect},
 		Approval: &person, Binding: model.BindingDirective,
 	}); err != nil {
 		t.Fatal(err)

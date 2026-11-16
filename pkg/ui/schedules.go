@@ -188,7 +188,7 @@ func parseOverlap(text string) (model.OverlapPolicy, error) {
 // create, edit and pause one. There is no separate "run now" or history
 // list here: NextRunAt/LastRunAt are the whole of what a UI can show
 // about a schedule's own timing, and every task it has ever filed already
-// shows up in the ordinary task list (Origin.Reason == schedule renders
+// shows up in the ordinary task list (Filing.Reason == schedule renders
 // there as Task.Scheduled).
 type Schedule struct {
 	ID                   string `json:"id"`

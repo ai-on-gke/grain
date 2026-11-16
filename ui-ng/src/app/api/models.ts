@@ -332,8 +332,13 @@ export interface Task {
   approvedByLabel?: string;
   approvedByKind?: string;
   approvedBySource?: string;
-  // The task that filed this one, and the work tree it belongs to.
+  // generatedFrom: the immediate parent proposer -- the task whose
+  // propose_task call filed this one; absent for a task nobody's run filed.
   generatedFrom?: string;
+  // origin: the root of this task's work tree ("owner/repo#N" or
+  // "task:<id>"), inherited at any depth, so it is usually not the parent.
+  // Neither field says who filed the task: that is its filing, the
+  // author* fields (docs/work-trees.md#glossary).
   origin?: string;
   stacked?: boolean;
   review?: boolean;
