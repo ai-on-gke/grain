@@ -481,14 +481,23 @@ own repository:
 
 - A `repo=` naming another repository is refused. A request naming none
   is given the job's.
-- A route whose path names another repository
-  (`/api/repos/{owner}/{name}/...`) is refused.
-- Whatever the answer holds of another repository's is dropped. An
-  object whose `repo` is another's answers 404, and list elements whose
-  `repo` is another's are removed (`GET /api/tasks`, which takes no
-  repository filter, is held to the job's repository this way).
-- `POST /api/tasks/from-template` files for the job's repository only,
-  from the templates the grant allows, and files the task approved.
+- A route naming another repository or one of its resources --
+  `/api/repos/{owner}/{name}/...`, `/api/tasks/{id}/...`,
+  `/api/ci/runs/{id}/...`, `/api/fs/task/...`, `/api/fs/ci/...` -- is
+  refused, as is any resource with no repository (`no_repo` tasks) or
+  route whose answer has no repository narrowing.
+- Whatever a collection answer holds outside the job's repository is
+  dropped: an object whose `repo` is another's answers 404, and list
+  elements belonging to another repository (or, for a `ci_api_repos`
+  repository, carrying no `repo`) are removed.
+- `POST /api/tasks/from-template` files for the job's repository only
+  (refusing a template that reads, writes, or grants API access on another
+  repository), from the templates the grant allows, and files the task
+  approved unless the template asks for unaccepted person-held grants,
+  deployment-wide or write API/daemon grants beyond the job's own repository
+  bounds, or person-only settings (`DeclarationAcceptance`, `keep_running`,
+  elevated priority, or a declared push set), in which case it lands proposed
+  for a person.
 
 A job may hold only the scopes whose answers narrow to one repository:
 `ci:read`, `tasks:read`, `tasks:from-template`, `sandboxes:read`,
@@ -885,6 +894,13 @@ auto-submit do not release it. `POST /api/tasks/{id}/human-review/release`
 (`tasks:write`) releases it as a person, recorded with who did; every
 agent is refused there, and on Submit or a `PATCH` turning auto-merge on
 while the hold stands. See [merging.design.md](../design/design/merging.design.md#gates).
+
+A review's *findings* are not a hold either of these releases. `POST
+/api/tasks/{id}/accept-findings` (`tasks:write`, body `{gate, reviewTask?,
+reason, head?}`) is a person accepting one review's findings on one gate as
+they are. It needs an unlimited role (grain/operator), is refused for every
+agent, and clears nothing else
+([declarations.md](declarations.md#gating-reviews)).
 
 ## Paging a list
 

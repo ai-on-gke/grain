@@ -1430,6 +1430,13 @@ const (
 	// for this task's change (-> "<trigger>=<task ID>"). A gated hold
 	// is released only once every gating one has finished.
 	LinkPathTriggerTask LinkKind = "path-trigger-task"
+	// LinkTargetedReviewTrigger names one gating trigger on this task's
+	// change whose review is a targeted review -- a sensitive trigger with
+	// no template of its own, reviewed with grain's security review brief
+	// (-> the trigger's name). Written and dropped with
+	// LinkPathTriggerTask, so the merge gates can show that trigger's
+	// review apart from the code review (ComputeMergeGates).
+	LinkTargetedReviewTrigger LinkKind = "targeted-review-trigger"
 	// LinkPathTriggersRead records the head commit grain last judged
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
@@ -1473,8 +1480,9 @@ const (
 	// LinkReviewFindings records that a required review of this task's pull
 	// request failed its gate -- left findings or open questions, had fixes
 	// closed without merging, or could not be filed (-> ReviewFindingsRecord
-	// JSON). Cleared only by a clean re-review after fixes or an explicit
-	// merge:force gate override, never by Submit.
+	// JSON). Cleared by a clean re-review after fixes, by a person accepting
+	// that review's findings (LinkReviewFindingsAccepted), or by an explicit
+	// merge:force gate override -- never by Submit.
 	LinkReviewFindings LinkKind = "review-findings"
 	// LinkGateOverride records an operator's explicit merge:force override
 	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).

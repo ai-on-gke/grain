@@ -271,7 +271,7 @@ export function awaitsHumanSubmit(t: Task): boolean {
     t.humanApprovedBy &&
     !t.reviewQuestions &&
     !(t.reviewFindings && t.reviewFindings.length > 0) &&
-    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+    !t.humanReviewHold?.some((r) => r.source === "security-findings")
   ) {
     return false;
   }
@@ -666,6 +666,10 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
   }
   if (awaitsHumanSubmit(t)) {
     const review = !!t.reviewQuestions;
+    // A changelist's Submit submits it through the change system there
+    // and then, not a recorded approval, so it is pressed one row at a
+    // time and never joins "Submit all" -- as the classic Inbox keeps it.
+    const cl = !!t.clSubmit;
     const blocked = submitBlock(t, listOnly);
     const e = taskEntry(
       t,
@@ -677,10 +681,15 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = review ? "blast" : red ? "error" : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
-      : blocked || "Approve the pull request; it merges once its gates pass.";
+      : blocked ||
+        (cl
+          ? "Submit this CL now: its review, presubmit and grain's reviews have all cleared."
+          : "Approve the pull request; it merges once its gates pass.");
     e.rationale = review
       ? "A fresh review clears the gate once your decision is carried out."
-      : "This repository waits for a person's approval before merging.";
+      : cl
+        ? "Submitting lands the change at once; it is not a recorded approval."
+        : "This repository waits for a person's approval before merging.";
     if (!t.humanApprovedBy) {
       e.actions.push(
         taskAction(
@@ -690,7 +699,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
           "POST /api/tasks/{id}/submit",
           review ? "tonal" : "primary",
           {
-            bulk: !review,
+            bulk: !review && !cl,
             ...(blocked ? { blocked } : {}),
           },
         ),

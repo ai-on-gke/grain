@@ -358,6 +358,20 @@ a.settings-mobile-back {
   padding: 12px 14px;
 }
 
+/* A sub-row's editor stays in view inside a table that scrolls sideways
+   (phone widths): pinned to the scrollport's left edge and no wider
+   than it, less the cell's padding. */
+.s-table-pinned {
+  container-type: inline-size;
+}
+
+.s-subrow-pin {
+  position: sticky;
+  left: 14px;
+  max-width: calc(100cqi - 28px);
+  box-sizing: border-box;
+}
+
 .s-cred-bar {
   display: flex;
   align-items: center;
@@ -409,4 +423,22 @@ a.settings-mobile-back {
   .settings-stage-scroll {
     padding: 16px 16px 168px;
   }
+}
+
+/* Settings -> Hosts: the Invite hosts block at the head of the enrollment
+   codes card, with the selected code's join command. */
+.hd-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hd-invite .s-hint {
+  margin: 0;
+}
+
+.hd-invite-secret {
+  overflow-wrap: anywhere;
+  user-select: all;
 }

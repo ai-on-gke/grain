@@ -71,8 +71,196 @@
   font-weight: 600;
 }
 
+/* Advanced tab. A refused declaration read names one file to a line
+ * (repodecl.Load joins them with newlines), so the status keeps them. */
+.repo-adv-status {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.repo-adv-warning {
+  color: var(--md-sys-color-error);
+  overflow-wrap: anywhere;
+}
+
+.repo-adv-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+/* Paths and ref patterns are single long words: let them break inside
+ * their cell rather than push the table sideways on a phone. */
+.repo-adv-table td {
+  overflow-wrap: anywhere;
+}
+
+.repo-adv-danger {
+  border-color: var(--md-sys-color-error);
+}
+
 @media (max-width: 767px) {
   .repo-page-scroll {
     padding: 16px 16px 64px;
   }
+
+  .repo-adv-table th,
+  .repo-adv-table td {
+    padding: 8px;
+  }
+
+  .repo-adv-table th {
+    letter-spacing: 0;
+  }
+}
+
+/* Three-state and multi-choice toggles (work ownership's On / Off / Say
+ * nothing, a qualification item's "Depends on"): the grants picker's pill,
+ * drawn here too since that stylesheet loads only with the picker. */
+.repo-toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.repo-toggle-pill[aria-pressed="true"] {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-color: transparent;
+}
+
+.repo-toggle-pill:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.repo-work-list,
+.repo-plan-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.repo-work-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+
+.repo-work-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.repo-work-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface);
+  overflow-wrap: anywhere;
+}
+
+.repo-work-id {
+  margin-left: 6px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.repo-work-pills,
+.repo-work-buttons,
+.repo-plan-deps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.repo-work-error {
+  flex-basis: 100%;
+}
+
+.repo-plan-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+
+.repo-plan-item-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.repo-plan-template {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.repo-plan-repeat {
+  flex: 0 0 110px;
+}
+
+.repo-plan-item-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.repo-ci-caps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* An unjudged base-branch gate (GET /api/base-branch-gates) on Overview
+   and Releases: a warning-container banner with its status icon on the
+   first line, as the design book's "A deployment finding that blocks
+   nothing" says. */
+.repo-gate-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-warning);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.repo-gate-banner g-status-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.repo-gate-text a {
+  margin-left: 4px;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
 }

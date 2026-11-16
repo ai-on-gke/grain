@@ -252,3 +252,139 @@ test("Agents: selected card and row look selected, are clickable, and every insp
   await page.screenshot({ path: path.join(dir, "agents-390-light.png") });
   await axeClean(page);
 });
+
+// Enter on the CPU reading -- focusable inside a card for its tooltip --
+// used to fall through to the page's Enter shortcut and open the task
+// already pinned in the pane full screen, not the card it sat in
+// (docs/test-runs/2026-11-14-agents-cpu.md). It selects its own card now.
+test("Agents: Enter or Space on a card's CPU reading selects that card, not the pinned task", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const tasks = await apiJson(demoServer, accessCode, "/api/tasks");
+  const list = Array.isArray(tasks) ? tasks : tasks.tasks;
+  const runningTask = list.find(
+    (t) => t.state === "running" && !t.consoleSession,
+  );
+  const other = list.find((t) => t.state !== "running");
+  expect(runningTask, "grain demo seeds a running task").toBeTruthy();
+  expect(other, "grain demo seeds a task that is not running").toBeTruthy();
+  const id = runningTask.id;
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  for (const key of ["Enter", " "]) {
+    await page.goto(`/next/agents?task=${other.id}`);
+    const card = page.getByTestId(`agent-${id}`);
+    await expect(card).toBeVisible();
+    await expect(card).not.toHaveAttribute("aria-current", /.*/);
+    const cpu = card.getByTestId("agent-cpu");
+    await cpu.focus();
+    await expect(cpu).toBeFocused();
+    await page.keyboard.press(key);
+    await expect(page).toHaveURL(
+      new RegExp(`/next/agents\\?(.*&)?task=${id}(&|$)`),
+    );
+    await expect(card).toHaveAttribute("aria-current", "true");
+    await expect(page.getByTestId("agents-pane")).toContainText(
+      `Inspecting #${id}`,
+    );
+  }
+});
+
+// With no agent in focus the inspector is closed and the cards take the
+// whole width; j opens it on the first agent, and the bar button, the
+// pane's own close, Escape and a second click on the card all close it.
+test("Agents: the inspector closes to a full-width card view with no agent selected", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  test.setTimeout(120_000);
+  const tasks = await apiJson(demoServer, accessCode, "/api/tasks");
+  const list = Array.isArray(tasks) ? tasks : tasks.tasks;
+  const runningTask = list.find(
+    (t) => t.state === "running" && !t.consoleSession,
+  );
+  expect(runningTask, "grain demo seeds a running task").toBeTruthy();
+  const id = runningTask.id;
+  const dir = shotsDir();
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.themeMode", "light"),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const split = page.locator(".agents-split");
+  const card = page.getByTestId(`agent-${id}`);
+  const pane = page.getByTestId("agents-pane");
+  const cardOnly = async () => {
+    await expect(page).not.toHaveURL(/[?&]task=/);
+    await expect(pane).toHaveCount(0);
+    await expect(page.getByTestId("agents-resizer")).toHaveCount(0);
+    await expect(split).not.toHaveClass(/has-pane/);
+    await expect(card).not.toHaveClass(/is-selected/);
+    await expect(card).not.toHaveAttribute("aria-current", /.*/);
+    const s = await split.boundingBox();
+    const g = await page.locator(".agent-grid").first().boundingBox();
+    const listPane = page.locator(".agents-list-pane");
+    const lp = await listPane.boundingBox();
+    expect(Math.abs(lp.width - s.width)).toBeLessThanOrEqual(1);
+    expect(g.width).toBeGreaterThan(s.width * 0.9);
+    expect(
+      await listPane.evaluate((e) => getComputedStyle(e).borderRightWidth),
+    ).toBe("0px");
+  };
+  const opened = async (which = id) => {
+    await expect(page).toHaveURL(new RegExp(`[?&]task=${which}(&|$)`));
+    await expect(pane).toContainText(`Inspecting #${which}`);
+    await expect(split).toHaveClass(/has-pane/);
+    await expect(page.getByTestId(`agent-${which}`)).toHaveClass(/is-selected/);
+    const s = await split.boundingBox();
+    const lp = await page.locator(".agents-list-pane").boundingBox();
+    expect(lp.width).toBeLessThan(s.width * 0.6);
+  };
+
+  await page.goto("/next/agents");
+  await expect(card).toBeVisible();
+  await cardOnly();
+  await page.screenshot({
+    path: path.join(dir, "agents-1440-light-cards.png"),
+  });
+  await axeClean(page);
+
+  // j opens the inspector on the first card drawn, which is not always
+  // the first task the API lists (quiet runs sort first).
+  const first = (
+    await page.locator(".agent-card").first().getAttribute("data-testid")
+  ).replace("agent-", "");
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press("j");
+  await opened(first);
+
+  // The split bar's Close inspector button.
+  await page.getByTestId("agents-pane-close").click();
+  await cardOnly();
+  await expect(page.getByTestId(`agent-${first}`)).toBeFocused();
+
+  // A click on the card opens it; a second click on it closes it.
+  await card.locator(".agent-activity").click();
+  await opened();
+  await card.locator(".agent-activity").click();
+  await cardOnly();
+
+  // The pane's own close button.
+  await card.locator(".agent-activity").click();
+  await opened();
+  await pane.getByTestId("pane-close").click();
+  await cardOnly();
+
+  // Escape.
+  await card.locator(".agent-activity").click();
+  await opened();
+  await page.keyboard.press("Escape");
+  await cardOnly();
+
+  await setTheme(page, "dark");
+  await page.screenshot({ path: path.join(dir, "agents-1440-dark-cards.png") });
+  await axeClean(page);
+});

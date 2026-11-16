@@ -507,10 +507,9 @@ func (s *Store) WakeOnMessage(ctx context.Context, taskID string, now time.Time)
 }
 
 // ReleaseResumeLater undefers taskID when what holds it deferred is a
-// resume_later of its own -- a suspension holding a condition
-// (heldResumes), or the comment resume_later left at the deferral's
-// instant -- and reports whether it did. A task deferred any other way,
-// by a person or with a wake time a park chose, is left alone.
+// resume_later of its own (RestsOnResumeLater), and reports whether it
+// did. A task deferred any other way, by a person or with a wake time a
+// park chose, is left alone.
 //
 // It is for grain sending the task back to an agent: the merge queue's
 // repair, a new review thread. Those stamp Observation.RetryRequestedAt
@@ -519,6 +518,24 @@ func (s *Store) WakeOnMessage(ctx context.Context, taskID string, now time.Time)
 // repair never ran, and the queue gave up on it as never finished. The
 // work it is sent back for is what its own wait was waiting to find out.
 func (s *Store) ReleaseResumeLater(ctx context.Context, taskID string, now time.Time) (bool, error) {
+	ours, err := s.RestsOnResumeLater(ctx, taskID)
+	if err != nil || !ours {
+		return false, err
+	}
+	return true, s.SetDeferred(ctx, taskID, nil, nil, now)
+}
+
+// RestsOnResumeLater reports whether taskID is deferred by a resume_later
+// of its own -- a suspension holding a condition (heldResumes), or the
+// comment resume_later left at the deferral's instant -- rather than by a
+// person or a park's wake time.
+//
+// Grain's send-backs that only look at a task waiting on its owner
+// (orchestrator.SyncReviewThreads, SyncReviewQuestions) read StateDeferred
+// as "parked on something else" and pass over it; a task resting on its
+// own resume_later is still its pull request's owner, and this is how
+// they tell the two apart before ReleaseResumeLater takes it off the wait.
+func (s *Store) RestsOnResumeLater(ctx context.Context, taskID string) (bool, error) {
 	task, err := s.GetTask(ctx, taskID)
 	if err != nil || task == nil || task.DeferredAt == nil {
 		return false, err
@@ -527,25 +544,22 @@ func (s *Store) ReleaseResumeLater(ctx context.Context, taskID string, now time.
 	if err != nil {
 		return false, err
 	}
-	ours := len(held) > 0
-	if !ours {
-		var at time.Time
-		err := s.db.QueryRowContext(ctx,
-			"SELECT `created_at` FROM `task_comment` WHERE `task_id` = ? AND `body` LIKE ? "+
-				"ORDER BY `created_at` DESC, `id` DESC LIMIT 1",
-			taskID, resumeLaterCommentPrefix+"%").Scan(&at)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return false, err
-		}
-		if err == nil {
-			d := at.Sub(*task.DeferredAt)
-			ours = d <= time.Second && d >= -time.Second
-		}
+	if len(held) > 0 {
+		return true, nil
 	}
-	if !ours {
+	var at time.Time
+	err = s.db.QueryRowContext(ctx,
+		"SELECT `created_at` FROM `task_comment` WHERE `task_id` = ? AND `body` LIKE ? "+
+			"ORDER BY `created_at` DESC, `id` DESC LIMIT 1",
+		taskID, resumeLaterCommentPrefix+"%").Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	return true, s.SetDeferred(ctx, taskID, nil, nil, now)
+	if err != nil {
+		return false, err
+	}
+	d := at.Sub(*task.DeferredAt)
+	return d <= time.Second && d >= -time.Second, nil
 }
 
 // DueMessageResumes is every task a resume_later with message: true still

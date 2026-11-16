@@ -302,3 +302,65 @@ func TestHumanReviewHoldIsReleasedExplicitlyWithAudit(t *testing.T) {
 		t.Error("releasing a task with no hold succeeded")
 	}
 }
+
+// raiseFindings holds id on review findings left by review task reviewID,
+// the way the orchestrator does when a security review leaves findings.
+func raiseFindings(t *testing.T, client *ui.Client, id, reviewID string) {
+	t.Helper()
+	if _, err := client.Store.RaiseHumanReviewHold(context.Background(), id, model.HumanReviewRequest{
+		Reason: model.HumanReviewReason{Source: model.HumanReviewSecurityFindings, Category: "security",
+			Reason: "the review left findings", ReviewTask: reviewID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Release hold on a hold of review findings alone is refused as a 409
+// naming why -- the findings need a clean re-review or a person's Accept
+// findings -- not as an opaque 500, and the findings stay.
+func TestReleaseHumanReviewHoldOfFindingsAloneIsAConflict(t *testing.T) {
+	srv, client := testServer(t)
+	seedReviewed(t, client, "560", "561", "tmpl-security-review")
+	raiseFindings(t, client, "560", "561")
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/560/human-review/release", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("release of findings alone = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	var body struct{ Error, Code string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "review_findings_hold" || !strings.Contains(body.Error, "grain accept-findings") {
+		t.Errorf("409 body = %+v, want code review_findings_hold and the reason", body)
+	}
+	got := mustTask(t, client, "560")
+	if rs := model.HumanReviewReasons(got); len(rs) != 1 || rs[0].Source != model.HumanReviewSecurityFindings {
+		t.Fatalf("reasons after a refused release = %+v, want the findings", rs)
+	}
+}
+
+// Release hold on a hold of findings and a requested review releases the
+// request, keeps the findings, and answers with the findings still held.
+func TestReleaseHumanReviewHoldOfMixedReasonsKeepsTheFindings(t *testing.T) {
+	_, client := testServer(t)
+	seedReviewed(t, client, "570", "571", "tmpl-security-review")
+	raiseFindings(t, client, "570", "571")
+	if _, err := client.RequestHumanReview(agentCtx("571"), "571", ui.HumanReviewRequestBody{Reason: "intent unclear", Category: "intent-unclear"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.ReleaseHumanReviewHold(personCtx(), "570")
+	if err != nil {
+		t.Fatalf("release of a mixed hold = %v", err)
+	}
+	if len(res.Reasons) != 1 || res.Reasons[0].Source != string(model.HumanReviewSecurityFindings) {
+		t.Fatalf("release answered reasons %+v, want the findings alone", res.Reasons)
+	}
+	if rs := model.HumanReviewReasons(mustTask(t, client, "570")); len(rs) != 1 || rs[0].Source != model.HumanReviewSecurityFindings {
+		t.Fatalf("reasons after the release = %+v, want the findings alone", rs)
+	}
+	if ev := eventsOf(t, client, "570", model.TaskEventHumanReviewReleased); len(ev) != 1 || !strings.Contains(ev[0].Detail, "intent unclear") {
+		t.Fatalf("released events = %+v, want the request released", ev)
+	}
+}
