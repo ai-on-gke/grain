@@ -89,7 +89,11 @@ advertises **every model its provider lists, by default, with nothing to
 save**. Grain asks the provider (`ui.Client.AdvertiseDiscoveredModels`, using
 the same listers as `GET /api/agent-models`) right after the connection or a
 credential is saved, and again every ten minutes (`ui.ModelDiscoveryInterval`).
-It keeps the answer on the connection as `discovered`: `models`,
+To ask at once rather than wait for the next pass, use **Refresh models**
+beside a model picker in Settings on `/next/`, or
+`POST /api/deployment/agent-backends/{backendId}/discover`
+(`connections:write`), which asks one connection and writes only its
+discovered list. It keeps the answer on the connection as `discovered`: `models`,
 `refreshedAt` and `error`. This is a cache that grain owns, not configuration.
 A settings save never writes it; the stored value is carried over whatever
 the request says. A pass whose answer hasn't changed writes nothing, except
