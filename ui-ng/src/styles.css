@@ -413,6 +413,28 @@ body {
   background: var(--md-sys-color-surface);
 }
 
+.disconnected-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--md-sys-color-warning);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  font: 500 13px/18px var(--grain-font-body);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.disconnected-banner svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.disconnected-banner-copy {
+  min-width: 0;
+}
+
 .view-panel {
   display: none;
   flex: 1;
@@ -606,6 +628,9 @@ body {
   }
   .stage-header {
     padding: 16px 16px 20px;
+  }
+  .disconnected-banner {
+    padding: 8px 16px;
   }
   .filter-strip {
     flex-wrap: wrap;
@@ -1455,9 +1480,9 @@ button:disabled {
        padding pushing it 4-8px above it. */
     box-sizing: border-box;
     max-height: calc(100dvh - 72px);
-    overflow-y: auto;
+    overflow: hidden;
     z-index: 50;
-    padding: 8px 0 16px;
+    padding: 8px 0 0;
     border-radius: var(--md-sys-shape-corner-large)
       var(--md-sys-shape-corner-large) 0 0;
     background: var(--md-sys-color-surface-container);
@@ -1465,7 +1490,10 @@ button:disabled {
   }
 
   .more-sheet-list {
-    padding: 0;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 0 4px;
   }
 
   .more-sheet-item {
@@ -1484,11 +1512,46 @@ button:disabled {
     outline: 2px solid var(--md-sys-color-primary);
     outline-offset: -2px;
   }
+
+  .more-sheet-foot {
+    flex: none;
+    padding: 8px 24px 12px;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .more-sheet-stamp {
+    display: block;
+    padding: 6px 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 12px;
+    line-height: 16px;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .more-sheet-stamp:hover,
+  .more-sheet-stamp:focus-visible {
+    color: var(--md-sys-color-primary);
+    text-decoration: underline;
+  }
+
+  .more-sheet-stamp:focus-visible {
+    outline: 2px solid var(--md-sys-color-primary);
+    outline-offset: 2px;
+    border-radius: var(--md-sys-shape-corner-xs);
+  }
 }
 
 @media (max-height: 480px) and (orientation: landscape) {
   .phone-fab {
     bottom: calc(52px + 12px);
+  }
+
+  .more-sheet {
+    bottom: 52px;
+    max-height: calc(100dvh - 68px);
   }
 }
 

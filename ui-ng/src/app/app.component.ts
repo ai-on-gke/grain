@@ -41,6 +41,7 @@ import {
 import { type RouteKey } from "./api/generated-routes";
 import { GrainApi, routeScope } from "./api/grain-api.service";
 import { GrainEvents } from "./api/grain-events.service";
+import { versionLabel } from "./api/version";
 import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
@@ -49,6 +50,7 @@ import type { SessionsStore } from "./sessions/sessions.store";
 import { DirectorContextService } from "./director/director-context.service";
 import { DirectorDrawerComponent } from "./director/director-drawer.component";
 import { AccessService } from "./services/access.service";
+import { ConnectionService } from "./services/connection.service";
 import { HelpService } from "./services/help.service";
 import { KeyboardService } from "./services/keyboard.service";
 import { NavConfigService } from "./services/nav-config.service";
@@ -662,6 +664,29 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
+          @if (connection.disconnected(); as disc) {
+            <div
+              class="disconnected-banner"
+              role="status"
+              data-testid="disconnected-banner"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  d="M12 2L1 21h22L12 2zm1 14h-2v2h2v-2zm0-6h-2v4h2v-4z"
+                  fill="currentColor"
+                />
+              </svg>
+              <span class="disconnected-banner-copy">
+                <strong>{{ disc.headline }}</strong>
+                <span> · {{ disc.detail }}</span>
+              </span>
+            </div>
+          }
           @defer (when dispatchBanner()) {
             @if (dispatchBanner(); as db) {
               <g-dispatch-banner [banner]="db" />
@@ -682,16 +707,18 @@ export class DeferErrorDirective implements OnInit {
 
       <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
         <span class="bottom-left">
-          <a
-            class="muted bottom-version"
-            routerLink="/settings/upgrade"
-            data-testid="build-stamp"
-            [attr.title]="
-              'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
-            "
-            >grain{{ version() ? " " + version() : "" }}</a
-          >
-          <span class="bottom-sep" aria-hidden="true">·</span>
+          @if (!moreOpen()) {
+            <a
+              class="muted bottom-version"
+              routerLink="/settings/upgrade"
+              data-testid="build-stamp"
+              [attr.title]="
+                'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+              "
+              >grain{{ version() ? " " + version() : "" }}</a
+            >
+            <span class="bottom-sep" aria-hidden="true">·</span>
+          }
           <a
             class="factory-telemetry tabular"
             routerLink="/agents"
@@ -854,6 +881,18 @@ export class DeferErrorDirective implements OnInit {
               </button>
             </li>
           </ul>
+          <div class="more-sheet-foot">
+            <a
+              class="more-sheet-stamp tabular"
+              routerLink="/settings/upgrade"
+              data-testid="build-stamp"
+              [attr.title]="
+                'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+              "
+              (click)="closeMenus()"
+              >grain{{ version() ? " " + version() : "" }}</a
+            >
+          </div>
         </nav>
       }
 
@@ -974,6 +1013,14 @@ export class DeferErrorDirective implements OnInit {
         }
       }
 
+      @if (modalOpen()) {
+        @if (connection.disconnected(); as disc) {
+          <div class="sr-only" role="status">
+            {{ disc.headline }} · {{ disc.detail }}
+          </div>
+        }
+      }
+
       <g-snackbar />
     </div>
   `,
@@ -981,6 +1028,7 @@ export class DeferErrorDirective implements OnInit {
 export class AppComponent implements OnInit, OnDestroy {
   protected readonly theme = inject(ThemeService);
   protected readonly access = inject(AccessService);
+  protected readonly connection = inject(ConnectionService);
   protected readonly filter = inject(ViewFilter);
   protected readonly feed = inject(TaskFeedStore);
   protected readonly navConfig = inject(NavConfigService);
@@ -1084,7 +1132,12 @@ export class AppComponent implements OnInit, OnDestroy {
   );
   protected readonly onSessions = signal(false);
   protected readonly currentPath = signal("");
-  protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
+  protected readonly version = computed(
+    () =>
+      versionLabel(this.access.rawConfig()?.version) ||
+      this.inboxRef()?.version() ||
+      "",
+  );
   protected readonly inboxCount = computed(
     () => this.inboxRef()?.decisions().length ?? 0,
   );
@@ -1166,6 +1219,7 @@ export class AppComponent implements OnInit, OnDestroy {
   private unregister: (() => void)[] = [];
   private navSub: { unsubscribe(): void } | null = null;
   private dispatchEventSub: { unsubscribe(): void } | null = null;
+  private unConnReconnect: (() => void) | null = null;
   private dispatchPollTimer: ReturnType<typeof setInterval> | null = null;
   private dispatchTickTimer: ReturnType<typeof setInterval> | null = null;
   private lastConfigAt = 0;
@@ -1193,6 +1247,10 @@ export class AppComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.help.attached.set(true);
+    this.connection.start();
+    this.unConnReconnect = this.connection.onReconnect(() => {
+      void this.refreshDispatchStatus(true);
+    });
 
     const win = this.doc.defaultView;
     if (win && typeof win.matchMedia === "function") {
@@ -1375,6 +1433,9 @@ export class AppComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroyed = true;
     this.help.attached.set(false);
+    this.unConnReconnect?.();
+    this.unConnReconnect = null;
+    this.connection.stop();
     this.feed.stop(false);
     this.inboxRef()?.stop();
     this.unregister.forEach((u) => u());

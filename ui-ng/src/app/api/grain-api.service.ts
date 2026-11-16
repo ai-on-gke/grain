@@ -18,7 +18,7 @@ import {
   HttpHeaders,
 } from "@angular/common/http";
 import { Injectable, OnDestroy, inject } from "@angular/core";
-import { firstValueFrom } from "rxjs";
+import { type Observable, firstValueFrom } from "rxjs";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
 import type {
   DiffPreview,
@@ -154,6 +154,46 @@ const RETRY_JITTER_RATIO = 0.3;
 const MAX_VERIFIER_RETRIES = 3;
 const MAX_VERIFIER_RETRY_MS = 20_000;
 
+// READ_TIMEOUT_MS bounds each idempotent read whose answer is expected
+// promptly so a daemon (or proxy) that accepts connections without answering
+// aborts the hung socket and surfaces a timeout instead of wedging polls.
+export const READ_TIMEOUT_MS = 8_000;
+const SLOW_READ_TIMEOUT_MS = 30_000;
+
+export interface ReadTimeoutError extends Error {
+  readonly timedOut: true;
+  readonly timeoutMs: number;
+  readonly sentAt: number;
+}
+
+export interface ApiActivityObserver {
+  onOk(url: string): void;
+  onError(url: string, err: unknown): void;
+}
+
+function makeTimeoutError(timeoutMs: number, sentAt: number): ReadTimeoutError {
+  const secs = Math.max(1, Math.round(timeoutMs / 1000));
+  const err = new Error(
+    `The server sent no answer within ${secs} seconds.`,
+  ) as ReadTimeoutError;
+  return Object.assign(err, {
+    timedOut: true as const,
+    timeoutMs,
+    sentAt,
+  });
+}
+
+function readTimeoutForUrl(url: string): number {
+  const [path, qs = ""] = url.split("?");
+  if (path === "/api/restart-watch") {
+    return new URLSearchParams(qs).get("quick") === "1" ? READ_TIMEOUT_MS : 0;
+  }
+  if (path.includes("reachable-repos")) {
+    return SLOW_READ_TIMEOUT_MS;
+  }
+  return READ_TIMEOUT_MS;
+}
+
 function routeMethod(key: RouteKey): string {
   const space = key.indexOf(" ");
   return space > 0 ? key.slice(0, space).toUpperCase() : "GET";
@@ -163,7 +203,7 @@ function isIdempotentReadMethod(method: string): boolean {
   return method === "GET" || method === "HEAD";
 }
 
-function isVerifierUnavailable(err: unknown): boolean {
+export function isVerifierUnavailable(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { status?: unknown; error?: unknown };
   if (e.status !== 503) return false;
@@ -242,6 +282,14 @@ export class GrainApi implements OnDestroy {
     wakeAt: number;
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
+  private readonly observers = new Set<ApiActivityObserver>();
+  private readonly activeReads = new Set<{
+    sentAt: number;
+    deadline: number;
+    abort: () => void;
+    dispose: () => void;
+  }>();
+  private readSweepTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
 
   ngOnDestroy(): void {
@@ -250,6 +298,157 @@ export class GrainApi implements OnDestroy {
       clearTimeout(this.recovery.timer);
       this.recovery = null;
     }
+    if (this.readSweepTimer) {
+      clearTimeout(this.readSweepTimer);
+      this.readSweepTimer = null;
+    }
+    for (const r of [...this.activeReads]) {
+      r.dispose();
+    }
+    this.observers.clear();
+  }
+
+  observeActivity(observer: ApiActivityObserver): () => void {
+    this.observers.add(observer);
+    this.scheduleReadSweep();
+    return () => {
+      this.observers.delete(observer);
+      if (this.observers.size === 0 && this.readSweepTimer) {
+        clearTimeout(this.readSweepTimer);
+        this.readSweepTimer = null;
+      }
+    };
+  }
+
+  // Aborts reads still waiting from before a recovery so half-open sockets
+  // never hold inflight entries or HTTP/1.1 connection slots once the server
+  // is answering new requests again.
+  abortStaleReads(olderThanMs = 2_000, now = Date.now()): void {
+    for (const r of [...this.activeReads]) {
+      if (now - r.sentAt >= olderThanMs) {
+        r.abort();
+      }
+    }
+    this.scheduleReadSweep();
+  }
+
+  private scheduleReadSweep(): void {
+    if (this.readSweepTimer) {
+      clearTimeout(this.readSweepTimer);
+      this.readSweepTimer = null;
+    }
+    if (
+      this.destroyed ||
+      this.observers.size === 0 ||
+      this.activeReads.size === 0
+    ) {
+      return;
+    }
+    let nextDeadline = Infinity;
+    for (const r of this.activeReads) {
+      if (r.deadline < nextDeadline) nextDeadline = r.deadline;
+    }
+    if (!Number.isFinite(nextDeadline)) return;
+    const delay = Math.max(0, nextDeadline - Date.now());
+    this.readSweepTimer = setTimeout(() => {
+      this.readSweepTimer = null;
+      const now = Date.now();
+      for (const r of [...this.activeReads]) {
+        if (now >= r.deadline) {
+          r.abort();
+        }
+      }
+      this.scheduleReadSweep();
+    }, delay);
+  }
+
+  private notifyOk(url: string): void {
+    if (this.destroyed) return;
+    for (const obs of this.observers) obs.onOk(url);
+  }
+
+  private notifyError(url: string, err: unknown): void {
+    if (this.destroyed) return;
+    for (const obs of this.observers) obs.onError(url, err);
+  }
+
+  private trackOutcome<T>(url: string, p: Promise<T>): Promise<T> {
+    return p.then(
+      (res) => {
+        this.notifyOk(url);
+        return res;
+      },
+      (err) => {
+        this.notifyError(url, err);
+        throw err;
+      },
+    );
+  }
+
+  private readBounded<T>(
+    obs$: Observable<T>,
+    timeoutMs: number,
+    alwaysBound = false,
+  ): Promise<T> {
+    if (timeoutMs <= 0 || (!alwaysBound && this.observers.size === 0)) {
+      return firstValueFrom(obs$);
+    }
+    const sentAt = Date.now();
+    const deadline = sentAt + timeoutMs;
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      let sub: { unsubscribe(): void } | null = null;
+      const cleanup = () => {
+        this.activeReads.delete(entry);
+        if (this.activeReads.size === 0 && this.readSweepTimer) {
+          clearTimeout(this.readSweepTimer);
+          this.readSweepTimer = null;
+        }
+      };
+      const entry = {
+        sentAt,
+        deadline,
+        abort: () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          sub?.unsubscribe();
+          reject(makeTimeoutError(timeoutMs, sentAt));
+        },
+        dispose: () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          sub?.unsubscribe();
+        },
+      };
+      this.activeReads.add(entry);
+      this.scheduleReadSweep();
+      sub = obs$.subscribe({
+        next: (val) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          sub?.unsubscribe();
+          this.scheduleReadSweep();
+          resolve(val);
+        },
+        error: (err) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          this.scheduleReadSweep();
+          reject(err);
+        },
+        complete: () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          this.scheduleReadSweep();
+          reject(new Error("Empty response stream"));
+        },
+      });
+    });
   }
 
   get<T>(key: RouteKey, params?: RouteParams, query?: string): Promise<T> {
@@ -257,11 +456,16 @@ export class GrainApi implements OnDestroy {
     const pending = this.inflightGet.get(url);
     if (pending) return pending as Promise<T>;
     const method = routeMethod(key);
-    const req = this.retryIdempotentRead(method, () =>
-      firstValueFrom(
-        method === "HEAD"
-          ? this.http.head<T>(url, { headers: JSON_HEADERS })
-          : this.http.get<T>(url, { headers: JSON_HEADERS }),
+    const timeoutMs = readTimeoutForUrl(url);
+    const req = this.trackOutcome(
+      url,
+      this.retryIdempotentRead(method, () =>
+        this.readBounded(
+          method === "HEAD"
+            ? this.http.head<T>(url, { headers: JSON_HEADERS })
+            : this.http.get<T>(url, { headers: JSON_HEADERS }),
+          timeoutMs,
+        ),
       ),
     ).finally(() => {
       if (this.inflightGet.get(url) === req) {
@@ -276,8 +480,14 @@ export class GrainApi implements OnDestroy {
     const url = routePath(key, params) + (query ? `?${query}` : "");
     const keyMethod = routeMethod(key);
     const method = isIdempotentReadMethod(keyMethod) ? "HEAD" : keyMethod;
-    return this.retryIdempotentRead(method, () =>
-      firstValueFrom(this.http.head<void>(url, { headers: JSON_HEADERS })),
+    return this.trackOutcome(
+      url,
+      this.retryIdempotentRead(method, () =>
+        this.readBounded(
+          this.http.head<void>(url, { headers: JSON_HEADERS }),
+          readTimeoutForUrl(url),
+        ),
+      ),
     );
   }
 
@@ -287,8 +497,14 @@ export class GrainApi implements OnDestroy {
     query?: string,
   ): Promise<string> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
-    return this.retryIdempotentRead(routeMethod(key), () =>
-      firstValueFrom(this.http.get(url, { responseType: "text" })),
+    return this.trackOutcome(
+      url,
+      this.retryIdempotentRead(routeMethod(key), () =>
+        this.readBounded(
+          this.http.get(url, { responseType: "text" }),
+          readTimeoutForUrl(url),
+        ),
+      ),
     );
   }
 
@@ -305,7 +521,10 @@ export class GrainApi implements OnDestroy {
     if (pending) return pending as Promise<Fresh<T>>;
     const epoch = this.condEpoch;
     const urlEpoch = this.urlEpochs.get(url) ?? 0;
-    const req = this.fetchIfChanged<T>(url, epoch, urlEpoch).finally(() => {
+    const req = this.trackOutcome(
+      url,
+      this.fetchIfChanged<T>(url, epoch, urlEpoch),
+    ).finally(() => {
       if (this.inflightCond.get(url) === req) {
         this.inflightCond.delete(url);
       }
@@ -319,12 +538,14 @@ export class GrainApi implements OnDestroy {
     epoch: number,
     urlEpoch: number,
   ): Promise<Fresh<T>> {
+    const timeoutMs = readTimeoutForUrl(url);
     return this.retryIdempotentRead("GET", () => {
       const cached = this.etags.get(url);
       let headers = JSON_HEADERS;
       if (cached) headers = headers.set("If-None-Match", cached.etag);
-      return firstValueFrom(
+      return this.readBounded(
         this.http.get<T>(url, { headers, observe: "response" }),
+        timeoutMs,
       ).then(
         (res) => {
           const body = res.body as T;
@@ -444,16 +665,19 @@ export class GrainApi implements OnDestroy {
     query?: string,
   ): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
-    const res = await firstValueFrom(
-      this.http.request<T>(method, url, {
-        headers: JSON_HEADERS,
-        body:
-          method === "delete"
-            ? body === undefined
-              ? undefined
-              : body
-            : (body ?? null),
-      }),
+    const res = await this.trackOutcome(
+      url,
+      firstValueFrom(
+        this.http.request<T>(method, url, {
+          headers: JSON_HEADERS,
+          body:
+            method === "delete"
+              ? body === undefined
+                ? undefined
+                : body
+              : (body ?? null),
+        }),
+      ),
     );
     this.invalidateAfterMutation(url);
     return res;
@@ -520,6 +744,23 @@ export class GrainApi implements OnDestroy {
     }
     const epoch = this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0);
     return this.get<GrainConfig>("GET /api/config").then((body) => {
+      if (this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0) === epoch) {
+        this.configCache = { exp: Date.now() + 2_000, body };
+      }
+      return body;
+    });
+  }
+
+  // probeConfig asks GET /api/config directly (bypassing the 2s cache and any
+  // older in-flight read) to confirm whether the daemon is answering and to
+  // detect recovery without recursive activity notifications.
+  probeConfig(timeoutMs = 5_000): Promise<GrainConfig> {
+    const epoch = this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0);
+    return this.readBounded(
+      this.http.get<GrainConfig>("/api/config", { headers: JSON_HEADERS }),
+      timeoutMs,
+      true,
+    ).then((body) => {
       if (this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0) === epoch) {
         this.configCache = { exp: Date.now() + 2_000, body };
       }

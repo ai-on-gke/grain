@@ -157,11 +157,22 @@ do not pull in an icon font.
   Sessions and More, plus a floating New task button.
 - **Build stamp:** the "grain v…" stamp at the left of the bottom bar is a
   link to Settings → Upgrade, as it is in the classic UI. It ellipsizes
-  before the live count beside it gives way, and is hidden on phones.
+  before the live count beside it gives way. On phones (where the bottom bar's
+  stamp is hidden) the same link sits at the foot of the More sheet, wrapping
+  cleanly on narrow (`320px`) screens rather than clipping.
 - **Old addresses:** a classic address that has a page here (`/system/<tab>`,
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Disconnected banner:** idempotent reads time out after 8 s (`READ_TIMEOUT_MS`
+  in `api/grain-api.service.ts`) so a hung daemon never wedges background polls.
+  When a read times out or cannot reach the server (`status 0` or gateway
+  `502`/`503`/`504`) and a confirmation check on `GET /api/config` also fails,
+  `services/connection.service.ts` mounts an eager `warning-container`
+  `role="status"` notice (`[data-testid="disconnected-banner"]`) below the top
+  bar (naming a daemon restart when `restarting` was seen), suppresses duplicate
+  per-page unreachable banners over already-loaded lists, probes every 3 s, and
+  clears without a reload as soon as the server answers again.
 - **Dispatch & quota alerts:** when dispatch is paused or model quotas are
   exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
