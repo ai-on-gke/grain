@@ -635,6 +635,9 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 			}
 		}
 	}
+	if len(rest) == 1 || rest[1] == "artifacts" {
+		run = attachStoredArtifacts(ctx, s.Artifacts, run)
+	}
 	if len(rest) == 1 {
 		entries := make([]Entry, 0, len(run.Jobs)+1)
 		seen := make(map[string]bool, len(run.Jobs))
@@ -663,7 +666,7 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 	}
 
 	if rest[1] == "artifacts" {
-		return s.resolveCIArtifacts(run, relPath, rest[2:])
+		return s.resolveCIArtifacts(ctx, run, relPath, rest[2:])
 	}
 
 	job, used, ok := matchCIJob(rest[1:], func(name string) (ci.JobRun, bool) { return findCIJob(run, name) })
@@ -812,7 +815,57 @@ func externalStep(steps []ci.StepRun, file string) int {
 	return -1
 }
 
-func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*ResolvedNode, error) {
+// runHasStoredArtifacts reports whether any job on run already carries a
+// stored artifact record (for example, in-memory runs populated before DB
+// persistence).
+func runHasStoredArtifacts(run ci.Run) bool {
+	for _, job := range run.Jobs {
+		for _, a := range job.Artifacts {
+			if a.Stored {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// attachStoredArtifacts populates run.Jobs[].Artifacts from store when the
+// run read from CIStore does not carry stored artifact records (StoredRunStore
+// does not persist JobRun.Artifacts in the database; cf. ci.Service.WithArtifacts).
+func attachStoredArtifacts(ctx context.Context, store ci.ArtifactStore, run ci.Run) ci.Run {
+	if store == nil || runHasStoredArtifacts(run) {
+		return run
+	}
+	artifacts, err := store.List(ctx, run.ID)
+	if err != nil || len(artifacts) == 0 {
+		return run
+	}
+	byJob := make(map[string][]ci.Artifact, len(artifacts))
+	for _, a := range artifacts {
+		if a.Stored {
+			byJob[a.Job] = append(byJob[a.Job], a)
+		}
+	}
+	if len(byJob) == 0 {
+		return run
+	}
+	jobs := make([]ci.JobRun, len(run.Jobs))
+	copy(jobs, run.Jobs)
+	for i := range jobs {
+		key := jobKey(jobs[i])
+		if list := byJob[jobs[i].JobID]; len(list) > 0 {
+			jobs[i].Artifacts = append(append([]ci.Artifact(nil), jobs[i].Artifacts...), list...)
+		} else if key != jobs[i].JobID {
+			if list := byJob[key]; len(list) > 0 {
+				jobs[i].Artifacts = append(append([]ci.Artifact(nil), jobs[i].Artifacts...), list...)
+			}
+		}
+	}
+	run.Jobs = jobs
+	return run
+}
+
+func (s *Server) resolveCIArtifacts(ctx context.Context, run ci.Run, relPath string, rem []string) (*ResolvedNode, error) {
 	if len(rem) == 0 {
 		seen := make(map[string]bool)
 		var entries []Entry
@@ -827,7 +880,7 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 				}
 				if jk != "" && !seen[jk] {
 					seen[jk] = true
-					entries = append(entries, Entry{Name: jk, Type: "dir"})
+					entries = append(entries, Entry{Name: escapeCIJobName(jk), Type: "dir"})
 				}
 			}
 		}
@@ -839,20 +892,48 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 			Entries: entries,
 		}, nil
 	}
-	jobName := rem[0]
-	var matching []ci.Artifact
-	for _, job := range run.Jobs {
-		jk := jobKey(job)
-		if jk != jobName && job.Name != jobName && job.JobID != jobName {
-			continue
+	job, used, ok := matchCIJob(rem, func(name string) (ci.JobRun, bool) {
+		for _, j := range run.Jobs {
+			if jobKey(j) == name || j.Name == name || j.JobID == name || sanitizeStepName(j.Name) == name {
+				return j, true
+			}
 		}
+		return ci.JobRun{}, false
+	})
+	var matching []ci.Artifact
+	var jobName string
+	var artRem []string
+	if ok {
+		jobName = jobKey(job)
+		artRem = rem[used:]
 		for _, a := range job.Artifacts {
 			if a.Stored {
 				matching = append(matching, a)
 			}
 		}
+	} else {
+		jobName = rem[0]
+		if unesc, escaped := unescapeCIJobName(rem[0]); escaped {
+			for _, j := range run.Jobs {
+				for _, a := range j.Artifacts {
+					if a.Stored && a.Job == unesc {
+						matching = append(matching, a)
+					}
+				}
+			}
+		}
+		if len(matching) == 0 {
+			for _, j := range run.Jobs {
+				for _, a := range j.Artifacts {
+					if a.Stored && a.Job == rem[0] {
+						matching = append(matching, a)
+					}
+				}
+			}
+		}
+		artRem = rem[1:]
 	}
-	if len(rem) == 1 {
+	if len(artRem) == 0 {
 		if len(matching) == 0 {
 			return nil, fmt.Errorf("%w: no artifacts for job %q", ErrNotFound, jobName)
 		}
@@ -868,7 +949,7 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 			Entries: entries,
 		}, nil
 	}
-	artName := strings.Join(rem[1:], "/")
+	artName := strings.Join(artRem, "/")
 	for _, a := range matching {
 		if a.Name == artName {
 			artJob := a.Job
@@ -895,7 +976,7 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 			}
 			if s.Artifacts != nil {
 				ref := ci.ArtifactRef{Run: run.ID, Job: artJob, Name: a.Name}
-				rc, opened, err := s.Artifacts.Open(context.Background(), ref)
+				rc, opened, err := s.Artifacts.Open(ctx, ref)
 				if err == nil {
 					rc.Close()
 					size := opened.Bytes
@@ -1104,17 +1185,25 @@ func findCIJob(run ci.Run, name string) (ci.JobRun, bool) {
 	return ci.JobRun{}, false
 }
 
-// ciJobNameEscaper writes a job name that holds a "/" as one path
+// ciJobNameEscaper writes a job name that holds a "/" (or an escape
+// sequence unescapeCIJobName would decode) as one unambiguous path
 // segment: "pkg/cli stress under load" lists as
-// "pkg%2Fcli stress under load", which unescapeCIJobName reads back.
+// "pkg%2Fcli stress under load", and "ratio 50%2F50" lists as
+// "ratio 50%252F50", both of which unescapeCIJobName reads back.
+// A plain percent sign such as "coverage 100% pass" is not a valid
+// escape sequence, so it is left unchanged.
 var ciJobNameEscaper = strings.NewReplacer("%", "%25", "/", "%2F")
 
 // escapeCIJobName is name as the one segment a run's listing shows it
-// under: unchanged unless it holds a "/", which would otherwise read as
-// a directory of its own.
+// under: unchanged unless it holds a "/" (which would otherwise read as
+// a directory of its own) or a percent-escape sequence that
+// unescapeCIJobName would decode (which would otherwise collide with the
+// unescaped name).
 func escapeCIJobName(name string) string {
 	if !strings.Contains(name, "/") {
-		return name
+		if _, escaped := unescapeCIJobName(name); !escaped {
+			return name
+		}
 	}
 	return ciJobNameEscaper.Replace(name)
 }
@@ -1133,13 +1222,20 @@ func unescapeCIJobName(segment string) (string, bool) {
 }
 
 // matchCIJob finds the job rest begins with, where find looks a job up by
-// one name: the most segments of rest that join, "/" and all, to a job's
-// exact name first (so "pkg/cli stress under load" is that job, not a
-// job "pkg" and its file "cli stress under load"), then the first
-// segment with its %2F escapes undone. used is how many segments of
-// rest named the job.
+// one name:
+//  1. the most segments of rest (2 or more) that join, "/" and all, to a
+//     job's exact name (so "pkg/cli stress under load" is that job, not
+//     a job "pkg" and its file "cli stress under load");
+//  2. the first segment with its %2F/%25 escapes undone (so every
+//     escapeCIJobName listing entry and ciJobSegment round-trips
+//     unambiguously, even when "ratio 50/50" and "ratio 50%2F50"
+//     coexist in the same run);
+//  3. the first segment literally (for plain names, "coverage 100% pass",
+//     or an unescaped "ratio 50%2F50" when no "ratio 50/50" exists).
+//
+// used is how many segments of rest named the job.
 func matchCIJob[J any](rest []string, find func(name string) (J, bool)) (job J, used int, ok bool) {
-	for n := len(rest); n >= 1; n-- {
+	for n := len(rest); n >= 2; n-- {
 		if job, ok := find(strings.Join(rest[:n], "/")); ok {
 			return job, n, true
 		}
@@ -1149,6 +1245,9 @@ func matchCIJob[J any](rest []string, find func(name string) (J, bool)) (job J, 
 			if job, ok := find(name); ok {
 				return job, 1, true
 			}
+		}
+		if job, ok := find(rest[0]); ok {
+			return job, 1, true
 		}
 	}
 	return job, 0, false

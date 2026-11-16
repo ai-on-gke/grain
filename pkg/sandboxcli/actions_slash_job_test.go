@@ -127,3 +127,117 @@ func TestSandboxCLIReadsAnActionsJobWhoseNameHasASlash(t *testing.T) {
 		}
 	}
 }
+
+// Coexisting "ratio 50/50" and "ratio 50%2F50" jobs, plain "%" jobs, combined
+// "/" + "%" jobs, and grain ci artifact on slash-named jobs all resolve
+// unambiguously through the sandbox CLI.
+func TestSandboxCLISlashPercentCollisionAndArtifacts(t *testing.T) {
+	gha := ci.Run{
+		ID: "gha:acme:widgets:91", Provider: ci.ProviderGitHubActions, Repo: "acme/widgets", Ref: "main",
+		Commit: "abcdefabcdefabcdef", Event: "push", Conclusion: ci.ConclusionSuccess,
+		Actions: &ci.ActionsRun{RunID: 91, RunAttempt: 1, Workflow: ".github/workflows/ci.yml", WorkflowName: "CI"},
+		Jobs: []ci.JobRun{
+			{JobID: "1", Name: "coverage 100% pass", Conclusion: ci.ConclusionSuccess},
+			{JobID: "2", Name: "pkg/cli 100% pass", Conclusion: ci.ConclusionSuccess},
+			{JobID: "3", Name: "ratio 50/50", Conclusion: ci.ConclusionSuccess},
+			{JobID: "4", Name: "ratio 50%2F50", Conclusion: ci.ConclusionSuccess},
+		},
+	}
+	ext := slashJobCI{
+		actionsCI: actionsCI{run: gha},
+		logs: map[string]string{
+			"1": "GHA_PLAIN_PCT\n",
+			"2": "GHA_SLASH_PCT\n",
+			"3": "GHA_RATIO_SLASH\n",
+			"4": "GHA_RATIO_ESCAPED\n",
+		},
+	}
+
+	artDir := t.TempDir()
+	artStore, err := ci.OpenDirArtifacts(artDir, ci.DirArtifactsOptions{})
+	if err != nil {
+		t.Fatalf("OpenDirArtifacts: %v", err)
+	}
+	const artPayload = "artifact-tar-bytes\n"
+	if rec, err := artStore.Save(context.Background(), ci.ArtifactRef{Run: "grain-run-1", Job: "pkg_cli_stress", Name: "report"}, []byte(artPayload)); err != nil || !rec.Stored {
+		t.Fatalf("Save: %+v, %v", rec, err)
+	}
+	ciStore := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	ciStore.Put(ci.Run{
+		ID: "grain-run-1", Repo: "acme/widgets", Ref: "main", Conclusion: ci.ConclusionFailure,
+		StartedAt: &now, FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{JobID: "pkg_cli_stress", Name: "pkg/cli stress under load", Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{{Name: "Run", Conclusion: ci.ConclusionFailure, Output: "GRAIN_STRESS\n"}}},
+			{JobID: "ratio_slash", Name: "ratio 50/50", Conclusion: ci.ConclusionSuccess,
+				Steps: []ci.StepRun{{Name: "Run", Conclusion: ci.ConclusionSuccess, Output: "GRAIN_RATIO_SLASH\n"}}},
+			{JobID: "ratio_escaped", Name: "ratio 50%2F50", Conclusion: ci.ConclusionSuccess,
+				Steps: []ci.StepRun{{Name: "Run", Conclusion: ci.ConclusionSuccess, Output: "GRAIN_RATIO_ESCAPED\n"}}},
+		},
+	})
+
+	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb": "tok"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens: tokens,
+		Namespace: &namespace.Server{
+			CIStore:     ciStore,
+			ExternalCI:  ext,
+			ArtifactDir: artDir,
+			Artifacts:   artStore,
+			Redactor:    redact.New(nil),
+		},
+		NamespaceScopes: cliTestScopes{"sb": {TaskID: "8", RunID: "r", TaskRepo: "acme/widgets", TaskBranch: "grain/task-8",
+			MayReadCI: true, AllowedRepos: map[string]bool{"acme/widgets": true}}},
+	}
+	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
+	defer srv.Close()
+	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code, handled := maybeRunSandboxCLI(args, env, &out, &errOut)
+		if !handled {
+			t.Fatalf("%q not handled in sandbox mode", args)
+		}
+		return out.String(), errOut.String(), code
+	}
+
+	out, errOut, code := run("ls", "ci://acme/widgets/gha:acme:widgets:91")
+	if code != 0 {
+		t.Fatalf("grain ls gha: %d %s", code, errOut)
+	}
+	for _, want := range []string{"coverage 100% pass/", "pkg%2Fcli 100%25 pass/", "ratio 50%2F50/", "ratio 50%252F50/"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain ls gha missing %q in:\n%s", want, out)
+		}
+	}
+
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"ci", "log", "gha:acme:widgets:91", "--job", "coverage 100% pass"}, "GHA_PLAIN_PCT\n"},
+		{[]string{"ci", "log", "gha:acme:widgets:91", "--job", "pkg/cli 100% pass"}, "GHA_SLASH_PCT\n"},
+		{[]string{"ci", "log", "gha:acme:widgets:91", "--job", "ratio 50/50"}, "GHA_RATIO_SLASH\n"},
+		{[]string{"ci", "log", "gha:acme:widgets:91", "--job", "ratio 50%252F50"}, "GHA_RATIO_ESCAPED\n"},
+		{[]string{"ci", "log", "grain-run-1", "--job", "ratio 50/50", "--step", "Run"}, "GRAIN_RATIO_SLASH\n"},
+		{[]string{"ci", "log", "grain-run-1", "--job", "ratio 50%252F50", "--step", "Run"}, "GRAIN_RATIO_ESCAPED\n"},
+		{[]string{"ci", "artifact", "pkg_cli_stress", "report", "--run", "grain-run-1"}, artPayload},
+		{[]string{"ci", "artifact", "pkg/cli stress under load", "report", "--run", "grain-run-1"}, artPayload},
+		{[]string{"ci", "artifact", "pkg%2Fcli stress under load", "report", "--run", "grain-run-1"}, artPayload},
+	}
+	for _, tc := range cases {
+		got, stderr, status := run(tc.args...)
+		if status != 0 || got != tc.want {
+			t.Errorf("grain %s = %d %q, want %q (stderr: %s)", strings.Join(tc.args, " "), status, got, tc.want, stderr)
+		}
+	}
+}
