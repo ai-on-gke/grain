@@ -42,6 +42,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { autoMergeStatus, autoMergeText } from "../shared/auto-merge";
 import { ciChip, repoShort } from "../shared/chips";
 import { isMerged, withDetailGates } from "../shared/gates";
 import {
@@ -408,7 +409,8 @@ function needsApproval(t: Task): boolean {
           @for (g of store.baseBranchGates(); track g.repo + ":" + g.branch) {
             <span>
               <span class="mono">{{ g.repo }}</span
-              >{{ g.branch ? " (" + g.branch + ")" : "" }} —
+              >{{ g.branch ? " (" + g.branch + ")" : "" }}
+              —
               {{ g.detail || g.runDetail || g.reason }}
             </span>
           }
@@ -819,7 +821,7 @@ function needsApproval(t: Task): boolean {
                   @if (current() === "merging") {
                     <p class="muted list-hint" data-testid="merging-hint">
                       Two kinds of work: changes waiting for a person to submit,
-                      and submitted changes the merge queue is landing.
+                      and submitted changes auto-merging once they are green.
                     </p>
                   }
                   @if (current() === "closed" && !store.closedLoaded()) {
@@ -1267,6 +1269,15 @@ function needsApproval(t: Task): boolean {
           </span>
           @if (t.state === "running" && t.activity) {
             <span class="row-sub activity">{{ t.activity }}</span>
+          } @else {
+            @if (autoMerge(t); as am) {
+              <span
+                class="row-sub activity"
+                [attr.data-testid]="'auto-merge-' + t.id"
+                [gTip]="t.mergeQueueNote || null"
+                >{{ autoMergeText(am) }}</span
+              >
+            }
           }
         </div>
         <ng-container
@@ -1590,6 +1601,8 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly sorts = SORTS;
   protected readonly ago = ago;
   protected readonly label = stateLabel;
+  protected readonly autoMerge = autoMergeStatus;
+  protected readonly autoMergeText = autoMergeText;
   protected readonly prio = priorityOf;
   protected readonly jumps = jumpsQueue;
 
@@ -2651,7 +2664,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (!ids.length) return;
     this.confirming.set({
       title: "Submit",
-      message: `Submit ${this.ids(ids)}? Each pull request goes to the merge queue; review gates still apply.`,
+      message: `Submit ${this.ids(ids)}? Each pull request auto-merges once it is green; review gates still apply.`,
       accept: ids.length === 1 ? "Submit" : `Submit ${ids.length}`,
       destructive: true,
       scope: scopeOf(rows, this.access.viewer()),
@@ -2670,7 +2683,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const go = () =>
       this.batch(
         () => this.store.retryMerge(ids),
-        (d) => `Put ${d} back on the merge queue`,
+        (d) => `Auto-merging ${d} again`,
       );
     if (ids.length === 1) {
       void go();
@@ -2678,7 +2691,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     }
     this.confirming.set({
       title: "Retry merge",
-      message: `Put ${ids.length} pull requests back on the merge queue for another try?`,
+      message: `Try auto-merging ${ids.length} pull requests again?`,
       accept: `Retry ${ids.length}`,
       destructive: false,
       scope: scopeOf(rows, this.access.viewer()),

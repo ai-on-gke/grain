@@ -61,9 +61,9 @@ export interface ForceMergeRequest {
       >
         <h2 id="force-merge-title">Force merge #{{ c.task.id }}</h2>
         <p class="muted">
-          Overrides everything you tick, and the merge queue's own checks, for
-          the current head commit, and records your reason permanently on the
-          task and pull request.
+          Overrides everything you tick, and auto-merge's own checks, for the
+          current head commit, and records your reason permanently on the task
+          and pull request.
         </p>
         @if (hasAcceptableFindings()) {
           <p class="muted" data-testid="force-merge-accept-findings-hint">

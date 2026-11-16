@@ -122,7 +122,7 @@ const VIEW_GUIDES: Record<string, ViewGuide> = {
   telemetry: {
     title: "Telemetry",
     summary:
-      "Delivery throughput, cycle-time quantiles, CI and merge-queue health, token concurrency budgets, and non-ranked team collaboration stats.",
+      "Delivery throughput, cycle-time quantiles, CI and auto-merge health, token concurrency budgets, and non-ranked team collaboration stats.",
     steps: [
       "Switch between 24h, 7d, and 30d windows and scope to a repository or contributor from the toolbar.",
       "Inspect throughput, p50/p90 lifecycle stage timings, run outcome shares, and top tool/CI wait causes.",
@@ -166,7 +166,7 @@ const VIEW_GUIDES: Record<string, ViewGuide> = {
       "Every repository this deployment works in, and per repository its Git connection, CI mode and workflows, merge gates, branches, issue import, and release qualification.",
     steps: [
       "On Repos, filter or sort the list, add a repository, and drag a row's handle (or press Space on it, then the arrow keys) to keep the ones you watch at the top.",
-      "Switch tabs across Overview, CI & Workflows, Merge Queue, Agents & Grants, Branches, and Releases.",
+      "Switch tabs across Overview, CI & Workflows, Auto-merge, Agents & Grants, Branches, and Releases.",
       "Cut release candidates, approve qualification checks, promote candidates, and approve or reject pending trunk releases.",
     ],
   },

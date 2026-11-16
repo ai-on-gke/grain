@@ -89,7 +89,7 @@ export const TABS: readonly TabDef[] = [
     id: "merging",
     label: "Submit & land",
     states: ["awaiting_submit", "completed"],
-    tip: "The run is done. Changes waiting for a person to submit, and submitted changes the merge queue is landing.",
+    tip: "The run is done. Changes waiting for a person to submit, and submitted changes auto-merging once they are green.",
   },
   {
     id: "deferred",

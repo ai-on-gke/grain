@@ -136,7 +136,7 @@ interface SecretMetaRow {
     @switch (section()) {
       @case ("tasks") {
         <div class="s-card" data-testid="card-tasks-defaults">
-          <h3 class="s-card-title">Task approval, merge queue &amp; gates</h3>
+          <h3 class="s-card-title">Task approval, auto-merge &amp; gates</h3>
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
               <span class="s-toggle-name"

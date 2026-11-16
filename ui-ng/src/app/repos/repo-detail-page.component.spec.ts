@@ -153,8 +153,14 @@ class FakeRepoApi {
 
   config = () => Promise.resolve(structuredClone(this.configBody));
 
+  // GET /api/tasks?repo=..., for the Auto-merge tab's list.
+  tasks: Record<string, unknown>[] = [];
+
   get = (key: string, params?: RouteParams, query?: string) => {
     this.calls.push({ method: "GET", key, params, query });
+    if (key === "GET /api/tasks") {
+      return Promise.resolve(structuredClone(this.tasks));
+    }
     if (key === "GET /api/base-branch-gates") {
       return Promise.resolve({ gates: this.gates() });
     }
@@ -668,11 +674,83 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
     ).toBe(true);
     expect(pill.textContent).toContain("Grain CI");
   });
+  // Merge ordering was removed: the tab is Auto-merge, the old
+  // /merge-queue link still lands on it, and its list says what each pull
+  // request waits for with no position in any queue -- and leaves out
+  // tasks already closed, which `grain merge-queue` listed (#4538).
+  it("renames Merge Queue to Auto-merge, redirects the old tab, and lists only open auto-merging work", async () => {
+    const api = new FakeRepoApi();
+    api.tasks = [
+      {
+        id: "11",
+        title: "Bump Go",
+        repo: "acme/platform",
+        state: "completed",
+        mergeQueueState: "waiting_ci",
+        mergeQueueNote: "waiting on checks that have not finished (`go`)",
+      },
+      {
+        id: "12",
+        title: "Fix parser",
+        repo: "acme/platform",
+        state: "completed",
+        mergeQueueState: "repairing",
+        mergeQueueNote:
+          "an agent is repairing this branch now (it has conflicts with `main`; automatic repair 1 of 2)",
+      },
+      {
+        id: "730",
+        title: "Long since closed",
+        repo: "acme/platform",
+        state: "closed",
+        mergeQueueState: "waiting_ci",
+      },
+      {
+        id: "798",
+        title: "Merged already",
+        repo: "acme/platform",
+        state: "completed",
+        mergeQueueState: "merging",
+        prMergedAt: "2026-11-14T00:00:00Z",
+      },
+      {
+        id: "13",
+        title: "Still running",
+        repo: "acme/platform",
+        state: "running",
+      },
+    ];
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/merge-queue",
+      api,
+    );
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    const router = TestBed.inject(Router);
+    expect(router.url).toBe("/repos/acme/platform/auto-merge");
+    const tab = el.querySelector('[data-testid="repo-tab-auto-merge"]');
+    expect(tab?.textContent?.trim()).toBe("Auto-merge");
+    expect(el.textContent).not.toContain("Merge Queue");
+    expect(el.textContent).not.toMatch(/merge queue/i);
+    const rows = [
+      ...el.querySelectorAll<HTMLElement>('[data-testid^="auto-merging-"]'),
+    ].filter((r) => r.tagName === "LI");
+    expect(rows.map((r) => r.dataset["testid"])).toEqual([
+      "auto-merging-11",
+      "auto-merging-12",
+    ]);
+    expect(rows[0].textContent).toContain("Auto-merging · waiting for CI");
+    expect(rows[1].textContent).toContain(
+      "Auto-merging · branch conflicted, repair 1 of 2",
+    );
+  });
+
   // 2026-11-13 repository walkthrough: one click on the switch let
   // base-branch repair PRs merge with no human; the classic page asks.
   it("asks before letting base-branch repairs bypass the human gate, and not when turning it off", async () => {
     const { el, api, harness } = await mountRepo(
-      "/repos/acme/platform/merge-queue",
+      "/repos/acme/platform/auto-merge",
     );
     const key =
       "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates";

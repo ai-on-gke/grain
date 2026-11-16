@@ -120,7 +120,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
           </div>
         </div>
         <p class="view-subtitle">
-          Delivery throughput, cycle-time stages, CI and merge-queue health,
+          Delivery throughput, cycle-time stages, CI and auto-merge health,
           token budgets, and alphabetical team activity.
         </p>
 
@@ -379,7 +379,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
 
             <article class="ops-kpi-card" data-testid="kpi-merge-queue">
               <div class="ops-kpi-top">
-                <span class="ops-kpi-label">Merge Queue Health</span>
+                <span class="ops-kpi-label">Auto-merge Health</span>
                 <span
                   [class]="
                     (report()?.merges?.baseHolds?.open ?? 0) > 0

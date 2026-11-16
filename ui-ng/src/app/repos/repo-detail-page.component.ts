@@ -31,7 +31,16 @@ import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import type { RouteKey } from "../api/generated-routes";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
-import type { BaseBranchGate, BaseBranchGatesResponse } from "../api/models";
+import type {
+  BaseBranchGate,
+  BaseBranchGatesResponse,
+  Task,
+} from "../api/models";
+import {
+  type AutoMergeStatus,
+  autoMergeStatus,
+  autoMergeText,
+} from "../shared/auto-merge";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
@@ -49,6 +58,7 @@ import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
 import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
 import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
+import { TipDirective } from "../shared/tip.directive";
 
 // CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
 // which an unjudged gate's warning links to: on a repository grain CI is
@@ -70,7 +80,7 @@ export function unjudgedGatesFor(
 export type RepoTabId =
   | "overview"
   | "ci"
-  | "merge-queue"
+  | "auto-merge"
   | "agents"
   | "branches"
   | "releases"
@@ -79,15 +89,28 @@ export type RepoTabId =
 const REPO_TABS: readonly { id: RepoTabId; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "ci", label: "CI & Workflows" },
-  { id: "merge-queue", label: "Merge Queue" },
+  { id: "auto-merge", label: "Auto-merge" },
   { id: "agents", label: "Agents & Grants" },
   { id: "branches", label: "Branches" },
   { id: "releases", label: "Releases" },
   { id: "advanced", label: "Advanced" },
 ];
 
-function isRepoTabId(val: string | null | undefined): val is RepoTabId {
+// Tabs renamed since a link to them was handed out. /merge-queue was the
+// Auto-merge tab before merge ordering was removed (each pull request now
+// merges by itself once it is green): it still opens that tab, and the
+// address bar is rewritten to the new name.
+const RENAMED_TABS: Readonly<Record<string, RepoTabId>> = {
+  "merge-queue": "auto-merge",
+};
+
+function canonicalTab(val: string | null | undefined): string {
   const clean = (val ?? "").toLowerCase();
+  return RENAMED_TABS[clean] ?? clean;
+}
+
+function isRepoTabId(val: string | null | undefined): val is RepoTabId {
+  const clean = canonicalTab(val);
   return REPO_TABS.some((t) => t.id === clean);
 }
 
@@ -342,6 +365,7 @@ interface PendingReleaseRow {
     RepoQualificationPlanComponent,
     RepoWorkOwnershipComponent,
     StatusIconComponent,
+    TipDirective,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -894,9 +918,45 @@ interface PendingReleaseRow {
                 />
               }
 
-              @case ("merge-queue") {
-                <div class="s-card" data-testid="card-repo-merge-queue">
-                  <h2 class="s-card-title">Merge queue &amp; gate policy</h2>
+              @case ("auto-merge") {
+                <div class="s-card" data-testid="card-repo-auto-merging">
+                  <h2 class="s-card-title">Auto-merging now</h2>
+                  <p class="s-hint">
+                    Each pull request merges by itself once it is green and
+                    merges cleanly; there is no order between them.
+                  </p>
+                  @if (!autoMergeLoaded()) {
+                    <p class="muted">Loading…</p>
+                  } @else if (autoMerging().length === 0) {
+                    <p class="muted" data-testid="auto-merging-empty">
+                      Nothing in {{ repoSlug() }} is auto-merging right now.
+                    </p>
+                  } @else {
+                    <ul class="am-list" data-testid="auto-merging-list">
+                      @for (row of autoMerging(); track row.task.id) {
+                        <li
+                          class="am-row"
+                          [attr.data-testid]="'auto-merging-' + row.task.id"
+                        >
+                          <a
+                            class="am-title"
+                            [routerLink]="['/task', row.task.id]"
+                            >#{{ row.task.id }} {{ row.task.title }}</a
+                          >
+                          <span
+                            class="am-status"
+                            [class.muted]="!row.status.stopped"
+                            [class.am-stopped]="row.status.stopped"
+                            [gTip]="row.task.mergeQueueNote || null"
+                            >{{ autoMergeText(row.status) }}</span
+                          >
+                        </li>
+                      }
+                    </ul>
+                  }
+                </div>
+                <div class="s-card" data-testid="card-repo-auto-merge">
+                  <h2 class="s-card-title">Auto-merge &amp; gate policy</h2>
                   <div class="s-toggle-row">
                     <div class="s-toggle-copy">
                       <span class="s-toggle-name">Merge on green</span>
@@ -2177,9 +2237,26 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   });
 
   protected readonly activeTab = computed<RepoTabId>(() => {
-    const raw = (this.normalizedRouteParts().tab ?? "overview").toLowerCase();
+    const raw = canonicalTab(this.normalizedRouteParts().tab ?? "overview");
     return isRepoTabId(raw) ? raw : "overview";
   });
+
+  // The Auto-merge tab's list: this repository's open tasks grain is
+  // landing, with what each waits for (shared/auto-merge.ts). Closed tasks
+  // and merged or closed pull requests are left out whatever merge state
+  // their last cycle left on them, so a finished change never reads as
+  // still merging.
+  private readonly repoTasks = signal<Task[]>([]);
+  protected readonly autoMergeLoaded = signal(false);
+  protected readonly autoMerging = computed(() =>
+    this.repoTasks()
+      .filter((t) => this.isThisRepo(t.repo))
+      .map((task) => ({ task, status: autoMergeStatus(task) }))
+      .filter(
+        (r): r is { task: Task; status: AutoMergeStatus } => r.status !== null,
+      ),
+  );
+  protected readonly autoMergeText = autoMergeText;
 
   protected gitConnOptions(): PillOption[] {
     const creds = this.availableGitCreds();
@@ -2221,6 +2298,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.routeOwner.set(pm.get("owner") ?? "");
         this.routeName.set(pm.get("name") ?? "");
         this.routeTab.set(pm.get("tab"));
+        this.redirectRenamedTab();
         if (this.ready()) {
           void this.loadTabData();
           // The same page shown for another repository reads that
@@ -2234,6 +2312,20 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+  }
+
+  // redirectRenamedTab rewrites an old tab name in the address
+  // (/merge-queue) to the tab's current one, replacing the history entry
+  // so Back does not land on the old address again.
+  private redirectRenamedTab(): void {
+    const raw = (this.normalizedRouteParts().tab ?? "").toLowerCase();
+    const to = RENAMED_TABS[raw];
+    if (!to) return;
+    const h = this.resolvedHost();
+    const base = h
+      ? ["/repos", h, this.resolvedOwner(), this.resolvedName()]
+      : ["/repos", this.resolvedOwner(), this.resolvedName()];
+    void this.router.navigate([...base, to], { replaceUrl: true });
   }
 
   protected can(route: RouteKey): boolean {
@@ -2313,6 +2405,32 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       void this.router.navigate([...base, tab]);
     }
     void this.loadTabData(tab);
+  }
+
+  private isThisRepo(repo: string | undefined): boolean {
+    const r = (repo ?? "").toLowerCase();
+    const short =
+      `${this.resolvedOwner()}/${this.resolvedName()}`.toLowerCase();
+    return r === this.repoSlug().toLowerCase() || r === short;
+  }
+
+  private async loadAutoMerging(): Promise<void> {
+    if (!this.can("GET /api/tasks")) {
+      this.autoMergeLoaded.set(true);
+      return;
+    }
+    try {
+      const r = await this.api.get<Task[] | { tasks?: Task[] }>(
+        "GET /api/tasks",
+        undefined,
+        `repo=${encodeURIComponent(this.repoSlug())}`,
+      );
+      this.repoTasks.set(Array.isArray(r) ? r : (r?.tasks ?? []));
+    } catch {
+      // The policy card below still works without the list.
+    } finally {
+      this.autoMergeLoaded.set(true);
+    }
   }
 
   private params(): { owner: string; name: string } {
@@ -2525,6 +2643,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           )
           .catch(() => undefined);
       }
+    } else if (t === "auto-merge") {
+      await this.loadAutoMerging();
     } else if (t === "releases") {
       await this.loadReleasesTab();
     } else if (t === "advanced") {
