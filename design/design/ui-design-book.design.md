@@ -442,10 +442,14 @@ Rules:
 - **A failed poll is not news.** A background read that fails once keeps
   the last good answer on screen and says nothing; only failure that lasts
   (three reads in a row, or 30 s, `services/request-trouble.ts`) puts up
-  one banner, over the stale list rather than in place of it. A read that
-  has never succeeded says so at once. The same sentence is never shown
-  twice: two surfaces reporting one failure show it once. A person's own
-  action that fails still says so immediately.
+  one banner, over the stale list rather than in place of it. Sign-in
+  proxy `verifier_unavailable` 503s wait the full 30 s
+  (`VERIFIER_SUSTAINED_MS`) before raising one shell-level warning banner
+  (`verifier-trouble-banner`), and a detail pane never repeats a banner
+  its parent list is already showing. A read that has never succeeded says
+  so at once. The same sentence (ignoring per-request `(ref …)` suffixes)
+  is never shown twice. A person's own action that fails still says so
+  immediately.
 
 ## 6. Motion
 
@@ -516,12 +520,17 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
 - Each component stylesheet under 8 kB. Do not re-import shared CSS in a
   parent that a child component already loads; it duplicates the bytes.
 - Request efficiency: coalesce concurrent identical GET/conditional reads,
-  serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
-  and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
-  polling, load inactive Fleet tabs lazily, and never block primary pickers on
-  slow `reachable-repos` discovery. A poll that is failing backs off
-  (doubling, capped at 60 s, never sooner than `Retry-After`) and ignores
-  event wake-ups until a read succeeds again.
+  hydrate queue and list summaries in batched `GET /api/tasks/summaries`
+  chunks (`<= 50`) with ETag `If-None-Match`, share one conditional
+  `DETAIL_QUERY` URL across task-detail readers and skip background detail
+  refetches while a task's row in `TaskFeedStore` has not moved, throttle
+  hidden-tab or unmounted-page polling, load inactive Fleet tabs lazily,
+  and never block primary pickers on slow `reachable-repos` discovery. A
+  poll that is failing backs off (doubling, capped at 60 s, never sooner
+  than `Retry-After`), ignores event wake-ups until a read succeeds again,
+  and holds secondary polls (transcripts, config, sandboxes, sessions,
+  local-script approvals) behind `ServerTrouble` while 502/503/504 or
+  network failures persist.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under

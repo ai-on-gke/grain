@@ -35,6 +35,10 @@ import type {
   TaskSummariesResponse,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
+import {
+  ServerTrouble,
+  isVerifierUnavailable,
+} from "../services/request-trouble";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { isListCiPlaceholder } from "../shared/gates";
 import { errorText } from "../sessions/session-helpers";
@@ -76,6 +80,7 @@ export class TasksStore implements OnDestroy {
   private readonly zone = inject(NgZone);
   private readonly access = inject(AccessService);
   private readonly feed = inject(TaskFeedStore);
+  private readonly serverTrouble = inject(ServerTrouble);
   // The shell's list feeds Next up and the Inbox badge; it is told to
   // read again after every action here so neither lags behind.
   private readonly inbox = inject(InboxStore);
@@ -120,6 +125,7 @@ export class TasksStore implements OnDestroy {
   private configInFlight: Promise<void> | null = null;
   private lastAccessConfig: unknown = null;
   private readonly detailInFlight = new Set<string>();
+  private lastSubmitSignature = "";
   private started = false;
 
   constructor() {
@@ -185,12 +191,12 @@ export class TasksStore implements OnDestroy {
     // only wake submit-gate detail checks on non-task events (e.g. ci.*).
     this.eventSub ??= this.events.events().subscribe((ev) => {
       if (!ev.type || ev.type.startsWith("task.")) return;
-      if (this.eventTimer) return;
+      if (this.eventTimer || this.serverTrouble.coolingDown()) return;
       this.zone.runOutsideAngular(() => {
         this.eventTimer = setTimeout(() => {
           this.eventTimer = null;
           this.zone.run(() => {
-            void this.ensureSubmitDetails(this.live());
+            void this.ensureSubmitDetails(this.live(), true);
             void this.loadBaseBranchGates();
           });
         }, 250);
@@ -204,6 +210,7 @@ export class TasksStore implements OnDestroy {
       this.feed.releaseFast();
       this.feed.stop(false);
     }
+    this.lastSubmitSignature = "";
     if (this.eventTimer) {
       clearTimeout(this.eventTimer);
       this.eventTimer = null;
@@ -314,6 +321,7 @@ export class TasksStore implements OnDestroy {
       this.boards.set(Array.isArray(list) ? list : []);
       this.boardsError.set(null);
     } catch (err) {
+      if (isVerifierUnavailable(err)) return;
       // Keep any boards already held through a transient poll error, and
       // record why the read failed so an empty menu never claims there are
       // no saved boards yet.
@@ -359,7 +367,11 @@ export class TasksStore implements OnDestroy {
     }
   }
 
-  private async ensureSubmitDetails(tasks: readonly Task[]): Promise<void> {
+  private async ensureSubmitDetails(
+    tasks: readonly Task[],
+    force = false,
+  ): Promise<void> {
+    if (!force && this.serverTrouble.coolingDown()) return;
     const liveIds = new Set(tasks.map((t) => t.id));
     const cur = this.details();
     if (Object.keys(cur).some((id) => !liveIds.has(id))) {
@@ -371,39 +383,63 @@ export class TasksStore implements OnDestroy {
         return next;
       });
     }
-    const ids = [
-      ...new Set(
-        tasks
-          .filter(
-            (t) =>
-              isWork(t) &&
-              !this.detailInFlight.has(t.id) &&
-              (t.state === "awaiting_submit" ||
-                t.reason?.reason === "base_repair" ||
-                t.reason?.reason === "awaiting_submit" ||
-                !!t.mergeGates?.some(isListCiPlaceholder)),
-          )
-          .map((t) => t.id),
-      ),
-    ];
-    await this.readSubmitDetails(ids);
+    const candidates = tasks.filter(
+      (t) =>
+        isWork(t) &&
+        !this.detailInFlight.has(t.id) &&
+        (t.state === "awaiting_submit" ||
+          t.reason?.reason === "base_repair" ||
+          t.reason?.reason === "awaiting_submit" ||
+          !!t.mergeGates?.some(isListCiPlaceholder)),
+    );
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    const sigParts: string[] = [];
+    for (const t of candidates) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      ids.push(t.id);
+      sigParts.push(`${t.id}:${t.updatedAt ?? ""}:${t.state}`);
+    }
+    const sig = sigParts.join("|");
+    if (
+      !force &&
+      sig === this.lastSubmitSignature &&
+      ids.every((id) => Boolean(cur[id]))
+    ) {
+      return;
+    }
+    await this.readSubmitDetails(ids, sig);
   }
 
-  private async readSubmitDetails(ids: readonly string[]): Promise<void> {
-    if (ids.length === 0) return;
+  private async readSubmitDetails(
+    ids: readonly string[],
+    sig: string,
+  ): Promise<void> {
+    if (ids.length === 0) {
+      this.lastSubmitSignature = "";
+      return;
+    }
     for (const id of ids) this.detailInFlight.add(id);
     try {
-      const { tasks } = await loadTaskSummaryBatches(ids, 1, 1, (query) =>
-        this.api
-          .getIfChanged<TaskSummariesResponse>(
-            "GET /api/tasks/summaries",
-            undefined,
-            query,
-          )
-          .then((r) => r?.body?.tasks),
+      const { tasks, failedIds } = await loadTaskSummaryBatches(
+        ids,
+        1,
+        1,
+        (query) =>
+          this.api
+            .getIfChanged<TaskSummariesResponse>(
+              "GET /api/tasks/summaries",
+              undefined,
+              query,
+            )
+            .then((r) => r?.body?.tasks),
       );
       if (Object.keys(tasks).length > 0) {
         this.details.update((m) => ({ ...m, ...tasks }));
+      }
+      if (failedIds.length === 0) {
+        this.lastSubmitSignature = sig;
       }
     } catch {
       // Leave cached/list gates when detail fails.

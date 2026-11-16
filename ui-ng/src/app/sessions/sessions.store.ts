@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
@@ -28,6 +29,11 @@ import type {
 } from "../api/models";
 import type { GrainPlanBlock } from "../director/director-draft";
 import { AccessService } from "../services/access.service";
+import {
+  ReadTrouble,
+  ServerTrouble,
+  isVerifierUnavailable,
+} from "../services/request-trouble";
 import { topologicalPlanOrder } from "./session-artifacts";
 import {
   DIRECTOR_ID,
@@ -98,6 +104,8 @@ export class SessionsStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
+  private readonly serverTrouble = inject(ServerTrouble);
+  private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
 
   readonly sessions = signal<ConsoleSession[]>([]);
@@ -183,8 +191,13 @@ export class SessionsStore {
   private configLoaded = false;
 
   private timer: ReturnType<typeof setInterval> | null = null;
+  private readonly trouble = new ReadTrouble();
+  private pollAfter = 0;
+  private readonly detailTrouble = new ReadTrouble();
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptKey = "";
+  private readonly transcriptTrouble = new ReadTrouble();
+  private transcriptAfter = 0;
   private readonly retainers = new Set<string>();
   private readonly directorWatchers = new Set<string>();
   private eventSub: { unsubscribe(): void } | null = null;
@@ -225,15 +238,23 @@ export class SessionsStore {
     }
     if (!this.eventSub) {
       this.eventSub = this.events.events().subscribe(() => {
+        if (this.trouble.failing || this.serverTrouble.coolingDown()) return;
         void this.refresh();
       });
     }
     if (!this.timer) {
       this.zone.runOutsideAngular(() => {
-        this.timer = setInterval(
-          () => this.zone.run(() => void this.refresh()),
-          POLL_MS,
-        );
+        this.timer = setInterval(() => {
+          const now = Date.now();
+          if (
+            this.doc.hidden ||
+            now < this.pollAfter ||
+            this.serverTrouble.coolingDown(now)
+          ) {
+            return;
+          }
+          this.zone.run(() => void this.refresh());
+        }, POLL_MS);
       });
     }
   }
@@ -273,6 +294,9 @@ export class SessionsStore {
   private stopTimers(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.trouble.ok();
+    this.pollAfter = 0;
+    this.detailTrouble.ok();
     this.stopDirectorTranscript();
     this.eventSub?.unsubscribe();
     this.eventSub = null;
@@ -315,10 +339,20 @@ export class SessionsStore {
     if (list.status === "fulfilled") {
       this.applyList(list.value);
       this.loadError.set(null);
+      this.trouble.ok();
+      this.pollAfter = 0;
     } else {
-      this.loadError.set(
-        `Sessions could not be read: ${errorText(list.reason)}. This page tries again on its own.`,
-      );
+      const now = Date.now();
+      const sustained = this.trouble.fail(list.reason, now);
+      this.pollAfter = now + this.trouble.nextDelay(POLL_MS) - POLL_MS;
+      if (
+        !isVerifierUnavailable(list.reason) &&
+        (sustained || !this.loaded())
+      ) {
+        this.loadError.set(
+          `Sessions could not be read: ${errorText(list.reason)}. This page tries again on its own.`,
+        );
+      }
     }
     if (
       tasks.status === "fulfilled" &&
@@ -396,12 +430,22 @@ export class SessionsStore {
       ids.map(async (id) => {
         try {
           await this.loadDetail(id, rowKey(tasks[id]));
-          if (id === sel) this.detailError.set(null);
+          if (id === sel) {
+            this.detailTrouble.ok();
+            this.detailError.set(null);
+          }
         } catch (err) {
           if (id === sel) {
-            this.detailError.set(
-              `This conversation could not be read: ${errorText(err)}`,
-            );
+            const sustained = this.detailTrouble.fail(err);
+            if (
+              !isVerifierUnavailable(err) &&
+              !this.loadError() &&
+              (sustained || !this.details()[id])
+            ) {
+              this.detailError.set(
+                `This conversation could not be read: ${errorText(err)}`,
+              );
+            }
           }
         }
       }),
@@ -540,6 +584,8 @@ export class SessionsStore {
       this.transcriptTimer = null;
     }
     this.transcriptKey = "";
+    this.transcriptTrouble.ok();
+    this.transcriptAfter = 0;
     this.directorTranscript.set(null);
   }
 
@@ -548,15 +594,29 @@ export class SessionsStore {
     attemptNo: number,
     key: string,
   ): Promise<void> {
+    const now = Date.now();
+    if (
+      this.doc.hidden ||
+      now < this.transcriptAfter ||
+      this.serverTrouble.coolingDown(now)
+    ) {
+      return;
+    }
     try {
       const r = await this.api.get<{ transcript?: string }>(
         "GET /api/tasks/{id}/attempts/{number}/transcript",
         { id: taskId, number: attemptNo },
       );
+      this.transcriptTrouble.ok();
+      this.transcriptAfter = 0;
       if (this.transcriptKey === key) {
         this.directorTranscript.set(r?.transcript ?? "");
       }
-    } catch {
+    } catch (err) {
+      const failedAt = Date.now();
+      this.transcriptTrouble.fail(err, failedAt);
+      this.transcriptAfter =
+        failedAt + this.transcriptTrouble.nextDelay(TRANSCRIPT_POLL_MS);
       // Transient transcript polling errors preserve existing partial output.
     }
   }

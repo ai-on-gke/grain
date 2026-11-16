@@ -12,27 +12,74 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, inject, signal } from "@angular/core";
-import { GrainApi } from "../api/grain-api.service";
+import { DOCUMENT } from "@angular/common";
+import {
+  Injectable,
+  NgZone,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
+import { GrainApi, TASK_DETAIL_QUERY } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type {
   Attempt,
   AttachmentUpload,
   CapabilityAuditEntry,
   Comment,
+  Task,
   TaskDetail,
   TreeNode,
   WorkTree,
 } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { errorText } from "../sessions/session-helpers";
-import { ReadTrouble } from "../services/request-trouble";
+import {
+  ReadTrouble,
+  ServerTrouble,
+  isVerifierUnavailable,
+} from "../services/request-trouble";
+import { TaskFeedStore } from "../services/task-feed.service";
 
 export type { TreeNode, WorkTree };
 
 export const POLL_MS = 3000;
 export const TRANSCRIPT_POLL_MS = 5000;
-export const DETAIL_QUERY = "comments_limit=100&attempts_limit=20";
+export const DETAIL_QUERY = TASK_DETAIL_QUERY;
+
+function feedRowSignature(t: Task | undefined): string {
+  if (!t) return "";
+  const gates = (t.mergeGates ?? [])
+    .map((g) => `${g.id}:${g.state}:${g.detail ?? ""}`)
+    .join(",");
+  return [
+    t.state,
+    t.updatedAt ?? "",
+    t.activityAt ?? "",
+    t.activity ?? "",
+    t.questionCommentId ?? "",
+    t.prMergedAt ?? "",
+    t.prClosedAt ?? "",
+    t.mergeQueueState ?? "",
+    t.humanApprovedBy ?? "",
+    t.approved ? "1" : "0",
+    t.deferredUntil ?? "",
+    t.priority ?? "",
+    t.title ?? "",
+    t.reason?.reason ?? "",
+    t.paused ? "1" : "0",
+    t.blocked ? "1" : "0",
+    gates,
+  ].join("|");
+}
+
+function eventTaskId(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as { taskId?: unknown; task_id?: unknown; id?: unknown };
+  const raw = d.taskId ?? d.task_id ?? d.id;
+  return typeof raw === "string" && raw ? raw : null;
+}
 
 function mergeComments(older: Comment[], latest: Comment[]): Comment[] {
   if (!older.length) return latest;
@@ -58,6 +105,9 @@ export class TaskStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly zone = inject(NgZone);
+  private readonly doc = inject(DOCUMENT);
+  private readonly feed = inject(TaskFeedStore);
+  private readonly serverTrouble = inject(ServerTrouble);
   private readonly inbox = inject(InboxStore);
 
   readonly id = signal<string | null>(null);
@@ -88,9 +138,35 @@ export class TaskStore {
   // (request-trouble.ts).
   private readonly trouble = new ReadTrouble();
   private pollAfter = 0;
+  private lastSyncedFeedSig = "";
+  private lastSyncedFeedRev = -1;
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly transcriptTrouble = new ReadTrouble();
+  private transcriptAfter = 0;
   private eventSub: { unsubscribe(): void } | null = null;
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    effect(() => {
+      const rev = this.feed.revision();
+      const id = this.id();
+      if (!id || rev === 0 || rev === this.lastSyncedFeedRev) return;
+      untracked(() => {
+        if (
+          !this.timer ||
+          !this.detail() ||
+          this.trouble.failing ||
+          this.serverTrouble.coolingDown()
+        ) {
+          return;
+        }
+        const row = this.feed.tasks().find((t) => t.id === id);
+        if (row && feedRowSignature(row) !== this.lastSyncedFeedSig) {
+          void this.refresh();
+        }
+      });
+    });
+  }
 
   open(id: string): void {
     if (this.id() !== id) {
@@ -110,10 +186,29 @@ export class TaskStore {
       this.resetAudit();
       this.trouble.ok();
       this.pollAfter = 0;
+      this.lastSyncedFeedSig = "";
+      this.lastSyncedFeedRev = -1;
     }
     void this.refresh();
-    this.eventSub ??= this.events.events().subscribe(() => {
-      if (this.eventTimer || this.trouble.failing) return;
+    this.eventSub ??= this.events.events().subscribe((ev) => {
+      if (ev.type && !ev.type.startsWith("task.")) return;
+      const curId = this.id();
+      const targetId = eventTaskId(ev.data);
+      if (
+        targetId &&
+        curId &&
+        targetId !== curId &&
+        !(this.detail()?.dependsOn ?? []).includes(targetId)
+      ) {
+        return;
+      }
+      if (
+        this.eventTimer ||
+        this.trouble.failing ||
+        this.serverTrouble.coolingDown()
+      ) {
+        return;
+      }
       this.eventTimer = setTimeout(() => {
         this.eventTimer = null;
         void this.refresh();
@@ -122,11 +217,42 @@ export class TaskStore {
     if (!this.timer) {
       this.zone.runOutsideAngular(() => {
         this.timer = setInterval(() => {
-          if (Date.now() < this.pollAfter) return;
+          const now = Date.now();
+          const curId = this.id();
+          if (
+            !curId ||
+            this.doc.hidden ||
+            now < this.pollAfter ||
+            this.serverTrouble.coolingDown(now) ||
+            this.canSkipUnchangedPoll(curId)
+          ) {
+            return;
+          }
           this.zone.run(() => void this.refresh());
         }, POLL_MS);
       });
     }
+  }
+
+  private canSkipUnchangedPoll(id: string): boolean {
+    const cur = this.detail();
+    if (
+      !cur ||
+      cur.id !== id ||
+      this.trouble.failing ||
+      !this.feed.loaded() ||
+      Boolean(this.feed.lastError())
+    ) {
+      return false;
+    }
+    const row = this.feed.tasks().find((t) => t.id === id);
+    if (row) {
+      const sig = feedRowSignature(row);
+      return Boolean(sig) && sig === this.lastSyncedFeedSig;
+    }
+    return (
+      cur.state === "closed" && this.feed.revision() === this.lastSyncedFeedRev
+    );
   }
 
   close(expectedId?: string): void {
@@ -196,6 +322,9 @@ export class TaskStore {
       if (r.changed || !this.detail()) {
         this.detail.set(this.applyPagedMerge(r.body));
       }
+      const feedRow = this.feed.tasks().find((t) => t.id === id);
+      this.lastSyncedFeedSig = feedRow ? feedRowSignature(feedRow) : "";
+      this.lastSyncedFeedRev = this.feed.revision();
       this.loadError.set(null);
       this.trouble.ok();
       this.pollAfter = 0;
@@ -204,6 +333,7 @@ export class TaskStore {
       const status = (err as { status?: number })?.status;
       const sustained = this.trouble.fail(err);
       this.pollAfter = Date.now() + this.trouble.nextDelay(POLL_MS) - POLL_MS;
+      if (isVerifierUnavailable(err)) return;
       // One failed poll keeps the detail already on screen and says
       // nothing; a missing task, a page with nothing to show yet, or
       // failure that lasts says so.
@@ -335,10 +465,17 @@ export class TaskStore {
     void this.loadTranscript(attempt);
     if (live) {
       this.zone.runOutsideAngular(() => {
-        this.transcriptTimer = setInterval(
-          () => this.zone.run(() => void this.loadTranscript(attempt)),
-          TRANSCRIPT_POLL_MS,
-        );
+        this.transcriptTimer = setInterval(() => {
+          const now = Date.now();
+          if (
+            this.doc.hidden ||
+            now < this.transcriptAfter ||
+            this.serverTrouble.coolingDown(now)
+          ) {
+            return;
+          }
+          this.zone.run(() => void this.loadTranscript(attempt));
+        }, TRANSCRIPT_POLL_MS);
       });
     }
   }
@@ -346,6 +483,8 @@ export class TaskStore {
   stopTranscript(): void {
     if (this.transcriptTimer) clearInterval(this.transcriptTimer);
     this.transcriptTimer = null;
+    this.transcriptTrouble.ok();
+    this.transcriptAfter = 0;
   }
 
   private async loadTranscript(attempt: number): Promise<void> {
@@ -356,11 +495,19 @@ export class TaskStore {
         "GET /api/tasks/{id}/attempts/{number}/transcript",
         { id, number: String(attempt) },
       );
+      this.transcriptTrouble.ok();
+      this.transcriptAfter = 0;
       if (this.id() === id && this.transcriptFor() === attempt) {
         this.transcript.set(r?.transcript ?? "");
         this.transcriptError.set(null);
       }
     } catch (err) {
+      const now = Date.now();
+      const sustained = this.transcriptTrouble.fail(err, now);
+      this.transcriptAfter =
+        now + this.transcriptTrouble.nextDelay(TRANSCRIPT_POLL_MS);
+      if (isVerifierUnavailable(err)) return;
+      if (!sustained && this.transcript() !== null) return;
       if (this.id() === id && this.transcriptFor() === attempt) {
         this.transcriptError.set(
           `The transcript could not be read: ${errorText(err)}`,

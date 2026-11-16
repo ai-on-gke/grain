@@ -17,10 +17,12 @@ import {
   NgZone,
   OnDestroy,
   computed,
+  effect,
   inject,
   signal,
+  untracked,
 } from "@angular/core";
-import { GrainApi } from "../api/grain-api.service";
+import { GrainApi, TASK_SUMMARIES_BATCH_SIZE } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { RouteKey } from "../api/generated-routes";
 import type {
@@ -32,6 +34,13 @@ import type {
 } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { BranchRefsService } from "../services/branch-refs.service";
+import {
+  ReadTrouble,
+  ServerTrouble,
+  VERIFIER_ACTION_REASON,
+  isTransientServerError,
+  isVerifierUnavailable,
+} from "../services/request-trouble";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { versionLabel } from "../api/version";
 import { ViewFilter } from "../services/view-filter.service";
@@ -97,6 +106,7 @@ function loadSeen(): Set<string> {
 }
 
 function errorText(err: unknown): string {
+  if (isVerifierUnavailable(err)) return VERIFIER_ACTION_REASON;
   const e = err as { error?: unknown; message?: string; status?: number };
   if (e && typeof e.error === "string" && e.error) return e.error;
   if (e && e.error && typeof e.error === "object") {
@@ -118,6 +128,7 @@ export class InboxStore implements OnDestroy {
   private readonly access = inject(AccessService);
   private readonly branchRefs = inject(BranchRefsService);
   private readonly feed = inject(TaskFeedStore);
+  private readonly serverTrouble = inject(ServerTrouble);
   private readonly zone = inject(NgZone);
 
   readonly tasks = this.feed.tasks;
@@ -298,6 +309,8 @@ export class InboxStore implements OnDestroy {
   readonly selectedTranscript = signal<string | null>(null);
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptKey = "";
+  private readonly transcriptTrouble = new ReadTrouble();
+  private transcriptAfter = 0;
   // selectedDiff is the selected entry's preview: undefined while it is
   // being read or when the entry is not about a change.
   readonly selectedDiff = computed<DiffPreview | null | undefined>(() => {
@@ -311,6 +324,8 @@ export class InboxStore implements OnDestroy {
   });
 
   private timer: ReturnType<typeof setInterval> | null = null;
+  private readonly pollTrouble = new ReadTrouble();
+  private pollAfter = 0;
   private refreshing: Promise<void> | null = null;
   private queuedRefresh: Promise<void> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
@@ -319,12 +334,16 @@ export class InboxStore implements OnDestroy {
   private pageWaiters = 0;
   private readonly summaryInFlight = new Set<string>();
   private readonly summaryUpdatedAt = new Map<string, string>();
+  private readonly summaryFailedAt = new Map<string, number>();
+  private readonly detailUpdatedAt = new Map<string, string>();
   private readonly fullDetailLoaded = new Set<string>();
+  private lastHydratedRevision = 0;
   private readonly onVisibility = (): void => {
     if (
       this.started &&
       typeof document !== "undefined" &&
-      document.visibilityState === "visible"
+      document.visibilityState === "visible" &&
+      !this.serverTrouble.coolingDown()
     ) {
       this.scheduleRefresh();
     }
@@ -332,6 +351,16 @@ export class InboxStore implements OnDestroy {
 
   constructor() {
     this.feed.onBeforeChange(() => this.remember());
+    effect(() => {
+      const rev = this.feed.revision();
+      if (rev === 0 || rev === this.lastHydratedRevision) return;
+      this.lastHydratedRevision = rev;
+      untracked(() => {
+        if (this.loaded() && this.isInspectorActive()) {
+          void this.hydrateActiveInspector();
+        }
+      });
+    });
   }
 
   retainPage(): void {
@@ -377,18 +406,29 @@ export class InboxStore implements OnDestroy {
         document.addEventListener("visibilitychange", this.onVisibility);
       }
     }
-    void this.refresh();
+    if (!(!this.loaded() && this.refreshing)) {
+      void this.refresh();
+    }
     if (!this.eventSub) {
-      this.eventSub = this.events
-        .events()
-        .subscribe(() => this.scheduleRefresh());
+      this.eventSub = this.events.events().subscribe((ev) => {
+        // TaskFeedStore owns task.* refreshes; InboxStore only re-reads
+        // notifications and host-script approvals on non-task events.
+        if (ev.type?.startsWith("task.")) return;
+        if (this.pollTrouble.failing || this.serverTrouble.coolingDown()) {
+          return;
+        }
+        this.scheduleRefresh();
+      });
     }
     if (!this.timer) {
       this.zone.runOutsideAngular(() => {
         this.timer = setInterval(() => {
+          const now = Date.now();
           if (
-            typeof document === "undefined" ||
-            document.visibilityState !== "hidden"
+            (typeof document === "undefined" ||
+              document.visibilityState !== "hidden") &&
+            now >= this.pollAfter &&
+            !this.serverTrouble.coolingDown(now)
           ) {
             this.zone.run(() => void this.refresh());
           }
@@ -408,8 +448,12 @@ export class InboxStore implements OnDestroy {
     this.shellBackground = false;
     this.pageWaiters = 0;
     this.fullDetailLoaded.clear();
+    this.detailUpdatedAt.clear();
     this.summaryInFlight.clear();
     this.summaryUpdatedAt.clear();
+    this.summaryFailedAt.clear();
+    this.pollTrouble.ok();
+    this.pollAfter = 0;
     this.stopSelectedTranscript();
     if (this.debounce) {
       clearTimeout(this.debounce);
@@ -485,6 +529,26 @@ export class InboxStore implements OnDestroy {
     // lastReadFailed is the strict answer the banner (loadError) is not:
     // an action must not act on a list this very read could not refresh.
     this.lastReadFailed = !(feedOk.status === "fulfilled" && feedOk.value);
+    const auxErr =
+      notifications.status === "rejected"
+        ? notifications.reason
+        : scripts.status === "rejected"
+          ? scripts.reason
+          : this.lastReadFailed
+            ? this.feed.lastError()
+            : null;
+    if (auxErr && isTransientServerError(auxErr)) {
+      const now = Date.now();
+      this.pollTrouble.fail(auxErr, now);
+      this.pollAfter = now + this.pollTrouble.nextDelay(POLL_MS) - POLL_MS;
+    } else if (
+      !this.lastReadFailed &&
+      notifications.status === "fulfilled" &&
+      scripts.status === "fulfilled"
+    ) {
+      this.pollTrouble.ok();
+      this.pollAfter = 0;
+    }
     if (notifications.status === "fulfilled") {
       this.notifications.set(notifications.value);
     }
@@ -600,6 +664,15 @@ export class InboxStore implements OnDestroy {
     for (const id of this.summaryUpdatedAt.keys()) {
       if (!keepTasks.has(id)) this.summaryUpdatedAt.delete(id);
     }
+    for (const id of this.summaryFailedAt.keys()) {
+      if (!keepTasks.has(id)) this.summaryFailedAt.delete(id);
+    }
+    for (const id of this.detailUpdatedAt.keys()) {
+      if (!keepTasks.has(id)) this.detailUpdatedAt.delete(id);
+    }
+    for (const id of this.fullDetailLoaded.keys()) {
+      if (!keepTasks.has(id)) this.fullDetailLoaded.delete(id);
+    }
   }
 
   private trackIndex(): void {
@@ -651,7 +724,8 @@ export class InboxStore implements OnDestroy {
   }
 
   private async ensureQueueDetails(): Promise<void> {
-    if (!this.isInspectorActive()) return;
+    if (!this.isInspectorActive() || this.serverTrouble.coolingDown()) return;
+    const now = Date.now();
     const cached = this.details();
     const selectedId = this.selected()?.taskId;
     const targets: { id: string; updatedAt: string }[] = [];
@@ -666,6 +740,10 @@ export class InboxStore implements OnDestroy {
       ) {
         continue;
       }
+      const failedAt = this.summaryFailedAt.get(e.taskId);
+      if (failedAt !== undefined && now - failedAt < POLL_MS) {
+        continue;
+      }
       const needSummary =
         (e.kind === "stopped" && !cached[e.taskId]) ||
         e.kind === "submit" ||
@@ -678,13 +756,14 @@ export class InboxStore implements OnDestroy {
         prev &&
         (this.summaryUpdatedAt.get(e.taskId) === entryUpdatedAt ||
           (this.fullDetailLoaded.has(e.taskId) &&
-            prev.updatedAt === entryUpdatedAt))
+            (this.detailUpdatedAt.get(e.taskId) === entryUpdatedAt ||
+              prev.updatedAt === entryUpdatedAt)))
       ) {
         continue;
       }
       seen.add(e.taskId);
       targets.push({ id: e.taskId, updatedAt: entryUpdatedAt });
-      if (targets.length >= 20) break;
+      if (targets.length >= TASK_SUMMARIES_BATCH_SIZE) break;
     }
     if (targets.length === 0) return;
     if (typeof this.api.taskSummaries === "function") {
@@ -715,22 +794,34 @@ export class InboxStore implements OnDestroy {
         1,
         1,
       );
+      const now = Date.now();
       const updated: Record<string, TaskDetail> = {};
-      for (const [id, d] of Object.entries(batch)) {
+      for (const t of allowed) {
+        const d = batch[t.id];
+        if (!d) {
+          this.summaryFailedAt.set(t.id, now);
+          continue;
+        }
+        this.summaryFailedAt.delete(t.id);
         if (
-          this.fullDetailLoaded.has(id) ||
-          this.detailInFlight.has(id) ||
-          this.selected()?.taskId === id
+          this.fullDetailLoaded.has(t.id) ||
+          this.detailInFlight.has(t.id) ||
+          this.selected()?.taskId === t.id
         ) {
           continue;
         }
-        this.summaryUpdatedAt.set(id, expected.get(id) || d.updatedAt || "");
-        updated[id] = d;
+        this.summaryUpdatedAt.set(
+          t.id,
+          expected.get(t.id) || d.updatedAt || "",
+        );
+        updated[t.id] = d;
       }
       if (Object.keys(updated).length > 0) {
         this.details.update((m) => ({ ...m, ...updated }));
       }
     } catch {
+      const now = Date.now();
+      for (const t of allowed) this.summaryFailedAt.set(t.id, now);
       // The row still shows its summary; the inspector says less.
     } finally {
       for (const t of allowed) this.summaryInFlight.delete(t.id);
@@ -743,6 +834,13 @@ export class InboxStore implements OnDestroy {
       entry?.task &&
       !this.access.canAccessTask("GET /api/tasks/{id}", entry.task.repo ?? "")
     );
+  }
+
+  private invalidateCachedTask(id: string): void {
+    this.fullDetailLoaded.delete(id);
+    this.detailUpdatedAt.delete(id);
+    this.summaryUpdatedAt.delete(id);
+    this.summaryFailedAt.delete(id);
   }
 
   private async readSummary(id: string, expectedUpdatedAt = ""): Promise<void> {
@@ -769,13 +867,16 @@ export class InboxStore implements OnDestroy {
     }
   }
 
-  private async readDetail(id: string): Promise<void> {
+  private async readDetail(id: string, expectedUpdatedAt = ""): Promise<void> {
     if (!this.canReadTask(id)) return;
+    if (this.detailInFlight.has(id)) return;
     this.detailInFlight.add(id);
     try {
       const d = await this.api.task(id);
+      const stamped = expectedUpdatedAt || d.updatedAt || "";
       this.fullDetailLoaded.add(id);
-      this.summaryUpdatedAt.set(id, d.updatedAt ?? "");
+      this.detailUpdatedAt.set(id, stamped);
+      this.summaryUpdatedAt.set(id, stamped);
       this.details.update((m) => ({ ...m, [id]: d }));
     } catch {
       // The row still shows its summary; the inspector says less.
@@ -792,15 +893,23 @@ export class InboxStore implements OnDestroy {
       this.stopSelectedTranscript();
       return;
     }
+    const entryUpdatedAt = e.task?.updatedAt ?? "";
+    const prev = this.details()[e.taskId];
     if (
       !force &&
-      this.details()[e.taskId] &&
-      this.fullDetailLoaded.has(e.taskId)
+      prev &&
+      this.fullDetailLoaded.has(e.taskId) &&
+      (this.detailUpdatedAt.get(e.taskId) === entryUpdatedAt ||
+        (prev.updatedAt ?? "") === entryUpdatedAt)
     ) {
       this.syncSelectedTranscript();
       return;
     }
-    await this.readDetail(e.taskId);
+    if (!force && this.serverTrouble.coolingDown() && prev) {
+      this.syncSelectedTranscript();
+      return;
+    }
+    await this.readDetail(e.taskId, entryUpdatedAt);
     this.syncSelectedTranscript();
   }
 
@@ -814,6 +923,8 @@ export class InboxStore implements OnDestroy {
       this.transcriptTimer = null;
     }
     this.transcriptKey = "";
+    this.transcriptTrouble.ok();
+    this.transcriptAfter = 0;
     this.selectedTranscript.set(null);
   }
 
@@ -868,10 +979,14 @@ export class InboxStore implements OnDestroy {
     attemptNo: number,
     key: string,
   ): Promise<void> {
+    const now = Date.now();
     if (
       typeof this.api.get !== "function" ||
       !this.isInspectorActive() ||
-      (typeof document !== "undefined" && document.visibilityState === "hidden")
+      (typeof document !== "undefined" &&
+        document.visibilityState === "hidden") ||
+      now < this.transcriptAfter ||
+      this.serverTrouble.coolingDown(now)
     ) {
       return;
     }
@@ -880,10 +995,16 @@ export class InboxStore implements OnDestroy {
         "GET /api/tasks/{id}/attempts/{number}/transcript",
         { id: taskId, number: String(attemptNo) },
       );
+      this.transcriptTrouble.ok();
+      this.transcriptAfter = 0;
       if (this.transcriptKey === key) {
         this.selectedTranscript.set(r?.transcript ?? "");
       }
-    } catch {
+    } catch (err) {
+      const failedAt = Date.now();
+      this.transcriptTrouble.fail(err, failedAt);
+      this.transcriptAfter =
+        failedAt + this.transcriptTrouble.nextDelay(LIVE_TRANSCRIPT_POLL_MS);
       // Transient transcript errors leave existing partial output intact.
     }
   }
@@ -891,7 +1012,9 @@ export class InboxStore implements OnDestroy {
   // select pins a row. Choosing a row holds the list's order, so nothing
   // moves under the person while they read or type.
   select(key: string): void {
-    this.stopSelectedTranscript();
+    if (this.selected()?.key !== key) {
+      this.stopSelectedTranscript();
+    }
     const entry = this.entries().find((e) => e.key === key) ?? null;
     if (entry && !entry.gone) this.picked = entry;
     this.selectedKey.set(key);
@@ -899,7 +1022,7 @@ export class InboxStore implements OnDestroy {
     this.trackIndex();
     this.sheetOpen.set(true);
     this.markSeen(key);
-    void this.ensureDetail(true);
+    void this.ensureDetail();
     void this.ensureDiff();
   }
 
@@ -1002,6 +1125,7 @@ export class InboxStore implements OnDestroy {
         return false;
       }
       await this.api.post(action.route, action.params, body ?? action.body);
+      if (entry.taskId) this.invalidateCachedTask(entry.taskId);
       this.noteAnswered(action);
       await this.refresh();
       // The person's own answer applies at once: the row they answered
@@ -1121,7 +1245,10 @@ export class InboxStore implements OnDestroy {
       const failedIds = taskIds.filter(
         (_, i) => results[i].status === "rejected",
       );
-      for (const id of taskIds) this.answered.delete(id);
+      for (const id of taskIds) {
+        this.answered.delete(id);
+        this.invalidateCachedTask(id);
+      }
       await this.refresh();
       this.applyUpdates();
       if (failedIds.length) {
@@ -1170,6 +1297,7 @@ export class InboxStore implements OnDestroy {
         { id: taskId },
         { body },
       );
+      this.invalidateCachedTask(taskId);
       this.answered.set(taskId, "reply");
       await this.refresh();
       this.applyUpdates();

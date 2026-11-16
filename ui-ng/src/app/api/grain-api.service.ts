@@ -19,6 +19,7 @@ import {
 } from "@angular/common/http";
 import { Injectable, OnDestroy, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
+import { isVerifierUnavailable } from "../services/request-trouble";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
 import type {
   DiffPreview,
@@ -74,6 +75,7 @@ export function splitRepo(repo: string): { owner: string; name: string } {
 const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 
 export const TASK_SUMMARIES_BATCH_SIZE = 50;
+export const TASK_DETAIL_QUERY = "comments_limit=100&attempts_limit=20";
 
 // Splits unique non-empty task IDs into batches of at most `size`.
 export function chunkTaskIds(
@@ -147,7 +149,6 @@ export async function loadTaskSummaryBatches(
   return { tasks, failedIds };
 }
 
-const VERIFIER_UNAVAILABLE_CODE = "verifier_unavailable";
 const DEFAULT_RETRY_AFTER_SEC = 2;
 const MAX_RETRY_AFTER_SEC = 10;
 const RETRY_JITTER_RATIO = 0.3;
@@ -161,27 +162,6 @@ function routeMethod(key: RouteKey): string {
 
 function isIdempotentReadMethod(method: string): boolean {
   return method === "GET" || method === "HEAD";
-}
-
-function isVerifierUnavailable(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const e = err as { status?: unknown; error?: unknown };
-  if (e.status !== 503) return false;
-  let body = e.error;
-  if (typeof body === "string") {
-    const trimmed = body.trim();
-    if (!trimmed.startsWith("{")) return false;
-    try {
-      body = JSON.parse(trimmed);
-    } catch {
-      return false;
-    }
-  }
-  return (
-    Boolean(body) &&
-    typeof body === "object" &&
-    (body as { code?: unknown }).code === VERIFIER_UNAVAILABLE_CODE
-  );
 }
 
 function parseRetryAfterSeconds(err: unknown, nowMs: number): number {
@@ -532,7 +512,11 @@ export class GrainApi implements OnDestroy {
   }
 
   task(id: string): Promise<TaskDetail> {
-    return this.get<TaskDetail>("GET /api/tasks/{id}", { id });
+    return this.getIfChanged<TaskDetail>(
+      "GET /api/tasks/{id}",
+      { id },
+      TASK_DETAIL_QUERY,
+    ).then((r) => r.body);
   }
 
   taskSummary(id: string): Promise<TaskDetail> {

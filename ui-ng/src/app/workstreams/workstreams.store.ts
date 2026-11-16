@@ -33,6 +33,12 @@ import type {
 } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
+import {
+  ReadTrouble,
+  ServerTrouble,
+  VERIFIER_ACTION_REASON,
+  isVerifierUnavailable,
+} from "../services/request-trouble";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { type Scope, scopeOf } from "../shared/scope";
 import {
@@ -71,6 +77,7 @@ function saveStarted(ids: ReadonlySet<string>): void {
 }
 
 function errorText(err: unknown): string {
+  if (isVerifierUnavailable(err)) return VERIFIER_ACTION_REASON;
   const e = err as { error?: unknown; message?: string };
   if (e && typeof e.error === "string" && e.error) return e.error;
   if (e && e.error && typeof e.error === "object") {
@@ -98,6 +105,8 @@ export class WorkstreamsStore implements OnDestroy {
   private readonly access = inject(AccessService);
   private readonly inbox = inject(InboxStore);
   private readonly feed = inject(TaskFeedStore);
+  private readonly serverTrouble = inject(ServerTrouble);
+  private readonly closedTrouble = new ReadTrouble();
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
 
@@ -251,6 +260,7 @@ export class WorkstreamsStore implements OnDestroy {
       this.debounceTimer = null;
     }
     this.clearPoll();
+    this.closedTrouble.ok();
     this.doc.removeEventListener("visibilitychange", this.onVisibility);
   }
 
@@ -268,17 +278,28 @@ export class WorkstreamsStore implements OnDestroy {
   private scheduleNextPoll(): void {
     this.clearPoll();
     if (!this.active || this.doc.hidden) return;
+    const ms = Math.max(
+      this.closedTrouble.nextDelay(IDLE_POLL_MS),
+      this.serverTrouble.remainingMs(),
+    );
     this.zone.runOutsideAngular(() => {
       this.pollTimer = setTimeout(() => {
         this.zone.run(() => {
           void this.loadClosedPages().finally(() => this.scheduleNextPoll());
         });
-      }, IDLE_POLL_MS);
+      }, ms);
     });
   }
 
   private scheduleEventRefresh(): void {
-    if (this.debounceTimer || this.doc.hidden) return;
+    if (
+      this.debounceTimer ||
+      this.doc.hidden ||
+      this.closedTrouble.failing ||
+      this.serverTrouble.coolingDown()
+    ) {
+      return;
+    }
     const contextOnly = !this.active;
     this.zone.runOutsideAngular(() => {
       this.debounceTimer = setTimeout(() => {
@@ -325,7 +346,10 @@ export class WorkstreamsStore implements OnDestroy {
     const currentOpen = this.openTasks();
     if (ok) {
       this.loadError.set(null);
-    } else if (!this.loaded()) {
+    } else if (
+      !this.loaded() &&
+      !isVerifierUnavailable(this.feed.lastError())
+    ) {
       this.loadError.set(
         `Could not read workstreams: ${this.feed.loadError() ?? errorText(this.feed.lastError())}`,
       );
@@ -388,7 +412,9 @@ export class WorkstreamsStore implements OnDestroy {
         this.closedTasks.set(collected);
         this.closedFetchedOnce = true;
       }
-    } catch {
+      this.closedTrouble.ok();
+    } catch (err) {
+      this.closedTrouble.fail(err);
       // Closed history failure is non-fatal when open tasks succeeded.
     } finally {
       this.closedLoading.set(false);
