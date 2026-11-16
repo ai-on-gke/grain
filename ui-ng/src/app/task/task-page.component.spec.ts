@@ -328,6 +328,14 @@ describe("TaskPageComponent", () => {
     expect(
       q(f, '[data-testid="task-details"] .description strong')!.textContent,
     ).toBe("merge");
+    // The prompt and the facts sit in separate panes.
+    expect(
+      q(f, '[data-testid="task-prompt-pane"] .description strong'),
+    ).toBeTruthy();
+    expect(q(f, '[data-testid="task-prompt-pane"] dl.g-attrs')).toBeNull();
+    expect(
+      q(f, '[data-testid="task-attributes-pane"] dl.g-attrs'),
+    ).toBeTruthy();
 
     // Zero Classic links & zero <select> elements
     expect(root.querySelectorAll("select")).toHaveLength(0);

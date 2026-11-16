@@ -74,7 +74,7 @@ class FakeProcessesApi {
     {
       id: "sched-1",
       title: "Audit deps",
-      description: "Check outdated dependencies.",
+      description: "Check **outdated** dependencies.\n\n- `go.mod`",
       repo: "acme/widgets",
       base: "",
       autoMerge: true,
@@ -165,7 +165,7 @@ class FakeProcessesApi {
       id: "tmpl-deploy-1",
       name: "Go upgrade",
       title: "chore: bump {{pkg}}",
-      description: "Bump {{pkg}} version in go.mod.",
+      description: "Bump `{{pkg}}` in **go.mod**.",
       fields: [
         {
           name: "pkg",
@@ -685,6 +685,44 @@ describe("ProcessesPageComponent (D-9)", () => {
     );
   });
 
+  it("renders schedule and template prompts as markdown in a Prompt pane apart from a Configuration pane", async () => {
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-1"]')!
+      .click();
+    await flush(harness);
+
+    const sPrompt = root.querySelector('[data-testid="sched-prompt-pane"]')!;
+    expect(sPrompt.querySelector(".g-pane-title")!.textContent).toContain(
+      "Prompt",
+    );
+    expect(sPrompt.querySelector("strong")!.textContent).toBe("outdated");
+    expect(sPrompt.querySelector("li code")!.textContent).toBe("go.mod");
+    const sConfig = root.querySelector('[data-testid="sched-config-pane"]')!;
+    expect(sConfig.contains(sPrompt)).toBe(false);
+    const sKeys = [...sConfig.querySelectorAll("dt")].map((d) =>
+      d.textContent!.trim(),
+    );
+    expect(sKeys).toEqual(
+      expect.arrayContaining(["Source", "Cadence", "Repository", "Overlap"]),
+    );
+
+    await harness.navigateByUrl("/processes/templates");
+    await flush(harness);
+    const tRoot = harness.routeNativeElement!;
+    tRoot
+      .querySelector<HTMLElement>('[data-testid="tmpl-row-tmpl-deploy-1"]')!
+      .click();
+    await flush(harness);
+    const tPrompt = tRoot.querySelector('[data-testid="tmpl-prompt-preview"]')!;
+    expect(tPrompt.querySelector("strong")!.textContent).toBe("go.mod");
+    expect(tPrompt.querySelector("code")!.textContent).toBe("{{pkg}}");
+    const tConfig = tRoot.querySelector('[data-testid="tmpl-config-pane"]')!;
+    expect(tConfig.querySelector("dt")!.textContent).toContain("Source");
+  });
+
   it("says a publishing-held suppression in words, shows the overlap group and each skip's outcome, and no Next for an event trigger", async () => {
     api.schedules.push({
       id: "sched-train",
@@ -745,8 +783,19 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(text).not.toContain("publishingHeld");
     expect(
       root.querySelector('[data-testid="sched-overlap-group"]')?.textContent,
-    ).toContain("Overlap group: release-train");
-    expect(text).toContain("Next: 2026-11-15T09:20:00Z");
+    ).toContain("release-train");
+    // The Configuration pane's keys, each with its value.
+    const config = () =>
+      Object.fromEntries(
+        Array.from(
+          root.querySelectorAll('[data-testid="sched-config-pane"] dt'),
+        ).map((dt) => [
+          dt.textContent!.trim(),
+          dt.nextElementSibling?.textContent?.trim(),
+        ]),
+      );
+    expect(config()["Overlap group"]).toBe("release-train");
+    expect(config()["Next run"]).toBe("2026-11-15T09:20:00Z");
 
     const outcomes = Array.from(
       root.querySelectorAll('[data-testid="sched-skip-outcome"]'),
@@ -765,7 +814,8 @@ describe("ProcessesPageComponent (D-9)", () => {
       .querySelector<HTMLElement>('[data-testid="sched-row-sched-gitref"]')!
       .click();
     await flush(harness);
-    expect(root.textContent).not.toContain("Next: 2026-11-13T10:00:00Z");
+    expect(config()["Next run"]).toBe("on ref move");
+    expect(root.textContent).not.toContain("2026-11-13T10:00:00Z");
   });
 
   it("preserves TemplateField metadata (label, default, options, required) across PATCH and launches via POST /api/tasks/from-template", async () => {
@@ -1263,7 +1313,10 @@ describe("ProcessesPageComponent (D-9)", () => {
     (offRow as HTMLElement).click();
     await flush(harness);
     const insp = root.querySelector('[data-testid="proc-inspector"]')!;
-    expect(insp.textContent).toContain("Next: suppressed");
+    const nextRun = Array.from(insp.querySelectorAll("dt")).find(
+      (dt) => dt.textContent?.trim() === "Next run",
+    );
+    expect(nextRun?.nextElementSibling?.textContent?.trim()).toBe("suppressed");
     expect(insp.textContent).not.toContain("2027-11-16");
 
     // Workflow schedule asks confirmation with straight-away CI wording before running
