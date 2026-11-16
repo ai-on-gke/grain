@@ -61,9 +61,17 @@ export interface ForceMergeRequest {
       >
         <h2 id="force-merge-title">Force merge #{{ c.task.id }}</h2>
         <p class="muted">
-          Overrides merge-queue checks for the current head commit and records
-          your reason permanently on the task and pull request.
+          Overrides everything you tick, and the merge queue's own checks, for
+          the current head commit, and records your reason permanently on the
+          task and pull request.
         </p>
+        @if (hasAcceptableFindings()) {
+          <p class="muted" data-testid="force-merge-accept-findings-hint">
+            Decided to merge over a review's findings as they are? Use
+            <strong>Accept findings…</strong> on that gate instead: it clears
+            that review's findings and leaves every other gate in place.
+          </p>
+        }
 
         @if (c.unsatisfiedGates.length) {
           <p style="margin: 8px 0 4px; font-size: 13px; font-weight: 500">
@@ -130,6 +138,12 @@ export class ForceMergeDialogComponent {
 
   protected readonly forceReason = signal("");
   protected readonly overrideGateIds = signal<Set<string>>(new Set());
+
+  protected readonly hasAcceptableFindings = computed(() =>
+    this.request().unsatisfiedGates.some(
+      (g) => g.state === "findings" && !!g.acceptable,
+    ),
+  );
 
   protected readonly missingRequiredGateOverrides = computed(() => {
     const needed = this.request().unsatisfiedGates;

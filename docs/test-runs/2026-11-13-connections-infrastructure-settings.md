@@ -348,6 +348,32 @@ in `gitproxy` and `pkg/ui`.
 The missing `/next/` parity listed under each section is filed as
 follow-up tasks rather than built here.
 
+## Classic parity follow-up (task 5521, 2026-11-15)
+
+Every field listed above as "not on `/next/` yet" for Hub, Sandboxes,
+Engine and CI is now on `/next/`, covered by
+`ui-ng/e2e/next-hub-sandboxes-parity.spec.js` over `grain demo`:
+
+- **Hub:** live state chip, endpoint, last heartbeat (interval, health,
+  active / awaiting-reply counts), a Heartbeat now result in the card,
+  the hub's last error and scope-conflict alerts, advertised scopes with
+  origin chips (`from repo config`, `override`, `added in settings`),
+  OIDC audience, Platform (host kind, auto-detect naming what it resolves
+  to), Purpose, Listed in hub directory, the write-only Registration
+  token (editable under a config-repo lock; disabled with a reason on a
+  daemon with no secret store, which is `grain demo`), and Scope
+  overrides (`#registry-scopes`).
+- **Sandboxes:** a Sandbox budget card (auto bounds, disk floor whose
+  blank minimum saves the default, commitment note), the full Kubernetes
+  card, and a Custom sandbox image card with the contract, the mirror
+  hints and Reset to default.
+- **Engine:** the sandbox commitment note under Max merges per repo
+  branch. `grain demo` reports no `sandboxCommitment` (it has no sandbox
+  host to read), so the e2e adds one to the real settings answer.
+- **CI:** queue age boost, step output MiB/days, output per run,
+  artifacts per run/per file/days, job cache entries/days, each blank
+  with its `<key>Default` placeholder.
+
 ## Hosts and Git parity on `/next/` (task 5519, 2026-11-15)
 
 The classic-only controls listed under Hosts and Git above are now on

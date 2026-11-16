@@ -422,7 +422,7 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		row := map[string]any{"id": id}
+		row := defaultMainRow(k, id)
 		for _, f := range k.fields {
 			if f.key == "id" {
 				continue
@@ -562,6 +562,27 @@ func (d declDocument) entryID(k declKind, i int, entry map[string]*yaml.Node) (s
 		return "", fmt.Errorf("staterepo: %s entry %d has an `id` that is not a name", d.path, i)
 	}
 	return node.Value, nil
+}
+
+// defaultMainRow initializes a declaration's main-table row with its id and,
+// for columns that are NOT NULL with no DDL default in pkg/model/schema.go,
+// their empty column values. That lets a hand-written entry in
+// settings/templates.yml omit target:, auto-merge:, created-at: (or
+// name/title/body) the way .grain/templates/<name>.yml omits target:, while
+// columns that do declare a DDL default remain absent when omitted so check.go
+// and resets.go still observe them.
+func defaultMainRow(k declKind, id string) map[string]any {
+	row := map[string]any{"id": id}
+	if k.schema.Kind == model.DeclaredTemplate {
+		row["name"] = ""
+		row["title"] = ""
+		row["body"] = ""
+		row["target_owner"] = ""
+		row["target_name"] = ""
+		row["auto_merge"] = json.Number("0")
+		row["created_at"] = "0001-01-01T00:00:00Z"
+	}
+	return row
 }
 
 // cadenceKeys is every key recurrenceNode writes a cadence under, and so
@@ -1413,6 +1434,10 @@ func nodeValue(n *yaml.Node) (any, error) {
 func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[string]any) error {
 	switch f.shape {
 	case shapeTarget:
+		if node.Kind == yaml.ScalarNode && node.Tag == "!!null" {
+			row["target_owner"], row["target_name"] = "", ""
+			return nil
+		}
 		return decodeRepoInto(path, id, node, row, "target_owner", "target_name")
 	case shapeChangeTarget:
 		return decodeChangeTargetInto(path, id, f.key, node, row)
