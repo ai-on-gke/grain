@@ -374,9 +374,6 @@ func routePatternArg(call *ast.CallExpr) bool {
 }
 
 func scanScriptSource(src string) []string {
-	// Fold backslash line continuations first, so a docker buildx ... --push
-	// or gcloud ... sign wrapped across lines matches as the one command it is.
-	src = scriptContinuationRE.ReplaceAllString(src, " ")
 	var nonCommentLines []string
 	for _, line := range strings.Split(src, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -384,7 +381,12 @@ func scanScriptSource(src string) []string {
 		}
 		nonCommentLines = append(nonCommentLines, line)
 	}
-	matches := scriptReleasePublishRE.FindAllString(strings.Join(nonCommentLines, "\n"), -1)
+	// Then fold backslash line continuations, so a docker buildx ... --push
+	// or gcloud ... sign wrapped across lines matches as the one command it
+	// is. Comments go first: the shell does not continue a comment ending in
+	// a backslash, so folding first would hide the command after it.
+	code := scriptContinuationRE.ReplaceAllString(strings.Join(nonCommentLines, "\n"), " ")
+	matches := scriptReleasePublishRE.FindAllString(code, -1)
 	seen := map[string]bool{}
 	for _, m := range matches {
 		seen[strings.TrimSpace(m)] = true
@@ -629,6 +631,7 @@ func plan(g *graph) { g.route(nodeA, nodeB) }`,
 		{name: "agentd signing", src: "#!/usr/bin/env bash\n\"$SIGN_TOOL\" manifest -signing-key \"$AGENTD_RELEASE_SIGNING_KEY\"\n", want: true},
 		{name: "buildx push wrapped across lines", src: "#!/usr/bin/env bash\ndocker buildx build \\\n  --platform linux/amd64 \\\n  --push -t \"$img\" .\n", want: true},
 		{name: "gcloud kms sign wrapped across lines", src: "#!/usr/bin/env bash\ngcloud kms \\\n  asymmetric-sign --key k --input-file f\n", want: true},
+		{name: "comment ending in a backslash does not hide the next command", src: "#!/usr/bin/env bash\n# push the image \\\ndocker push \"$img\"\n", want: true},
 		{name: "comment only", src: "#!/usr/bin/env bash\n# docker push example\n# git push --tags\necho ok\n", want: false},
 	}
 
