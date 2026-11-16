@@ -1017,6 +1017,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   });
 
   private lastCount = 0;
+  private lastQueued = 0;
   private lastSession = "";
 
   constructor() {
@@ -1060,20 +1061,35 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       });
     });
     effect(() => {
-      const n = this.comments().length + this.outbox().length;
+      const queued = this.outbox().length;
+      const n = this.comments().length + queued;
       const sid = this.store.selectedId();
       const el = this.log()?.nativeElement;
       if (!el) return;
       if (sid !== this.lastSession) {
         this.lastSession = sid;
         this.lastCount = 0;
+        this.lastQueued = queued;
       }
       const grew = n > this.lastCount;
       const first = this.lastCount === 0;
+      const sent = queued > this.lastQueued;
       this.lastCount = n;
+      this.lastQueued = queued;
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-      if (grew && (first || nearBottom)) {
-        setTimeout(() => (el.scrollTop = el.scrollHeight));
+      if (grew && (first || nearBottom || sent)) {
+        setTimeout(() => {
+          el.scrollTop = el.scrollHeight;
+          // On a phone the pane itself scrolls, under a composer pinned
+          // to its foot (sessions-page.component.css). A message the
+          // person has just sent is scrolled to sit above the composer;
+          // nothing else moves the pane, so the chat head does not slide
+          // out from under a tap when the conversation loads.
+          const pane = el.closest<HTMLElement>(".chat-pane");
+          if (sent && pane && pane.scrollHeight > pane.clientHeight) {
+            pane.scrollTop = pane.scrollHeight;
+          }
+        });
       }
     });
   }

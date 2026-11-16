@@ -128,3 +128,55 @@ for (const size of [
     ).toBeFocused();
   });
 }
+
+for (const size of [
+  { width: 320, height: 568 },
+  { width: 390, height: 667 },
+]) {
+  test(`a chat keeps room for its messages and Send on screen at ${size.width}x${size.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(size);
+    await page.goto("sessions/director");
+    const log = page.getByTestId("chat-log");
+    await expect(log).toBeVisible();
+    // The chat head and grants row above the log used to squeeze it to
+    // 40px, and at 320x568 push the composer under the bottom bar.
+    const room = await log.boundingBox();
+    expect(room?.height).toBeGreaterThanOrEqual(200);
+    const send = page.getByTestId("send");
+    const at = await page.evaluate(() => {
+      const nav = document.querySelector(
+        '[aria-label="Primary destinations (compact)"]',
+      );
+      const b = document
+        .querySelector('[data-testid="send"]')
+        .getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        b.left + b.width / 2,
+        b.top + b.height / 2,
+      );
+      return {
+        bottom: b.bottom,
+        navTop: nav ? nav.getBoundingClientRect().top : innerHeight,
+        onTop: !!hit?.closest('[data-testid="send"]'),
+      };
+    });
+    expect(at.bottom).toBeLessThanOrEqual(at.navTop);
+    expect(at.onTop).toBe(true);
+
+    const text = `room check ${size.width} ${Date.now()}`;
+    await page.getByTestId("composer").fill(text);
+    await send.click();
+    const sent = log.locator("article", { hasText: text }).last();
+    await expect(sent).toBeVisible();
+    // The newest message lands above the pinned composer, not under it.
+    await expect
+      .poll(async () => {
+        const m = await sent.boundingBox();
+        const c = await page.locator(".chat-composer").boundingBox();
+        return !!m && !!c && m.y + m.height <= c.y + 1;
+      })
+      .toBe(true);
+  });
+}
