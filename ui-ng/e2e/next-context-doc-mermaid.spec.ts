@@ -67,6 +67,20 @@ test("a design doc preview draws its Mermaid fences as diagrams @phone @dark", a
     'fmt.Println("hello")',
   );
 
+  // The diagram and the code card sit inside the preview box, and the
+  // preview's inline-code chip style does not pad the code card's block.
+  const box = (await preview.boundingBox())!;
+  for (const el of [flow, preview.locator(".code-card")]) {
+    const b = (await el.boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(box.x - 1);
+    expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 1);
+  }
+  expect(
+    await preview
+      .locator(".code-card pre code")
+      .evaluate((el) => getComputedStyle(el).paddingLeft),
+  ).toBe("0px");
+
   // Nothing overflows sideways.
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,

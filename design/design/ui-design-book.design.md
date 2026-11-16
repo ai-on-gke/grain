@@ -412,7 +412,11 @@ Rules:
   before it reaches the DOM. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
-  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`).
+  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
+  user-written Markdown through `[gMarkdown]`, never `renderMarkdown()`
+  into `[innerHTML]`, so previews draw diagrams too (the Context page's
+  previews, `ui-ng/e2e/next-context-doc-mermaid.spec.ts`); a page that
+  hosts it loads `shared/code-highlight.css` and `shared/mermaid.css`.
 - **Say a wire code in words.** A reason or state code from the API
   (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
   A code nobody has mapped yet shows as itself, which beats showing nothing.
