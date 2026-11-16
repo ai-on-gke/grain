@@ -495,7 +495,8 @@ export function buildPayload(
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField" | "foundIn" | "form";
+  field:
+    "title" | "repo" | "newBranchName" | "templateField" | "foundIn" | "form";
   message: string;
 }
 
@@ -506,6 +507,7 @@ export function validate(
   fields?: Record<FieldId, FieldConfig>,
   template?: Template | null,
   templateValues?: Record<string, string>,
+  config?: GrainConfig | null,
 ): Problem | null {
   if (template) {
     for (const tf of template.fields ?? []) {
@@ -518,6 +520,23 @@ export function validate(
     }
   } else if (!d.title.trim()) {
     return { field: "title", message: "Give the task a title." };
+  }
+  const repoShown = !fields || fields.repo.visibility !== "hidden";
+  const hasDefaultTarget = !!String(config?.["defaultTarget"] ?? "").trim();
+  if (
+    repoShown &&
+    !hasDefaultTarget &&
+    !d.repo.trim() &&
+    !template?.repo &&
+    !template?.declaredIn?.repo
+  ) {
+    return {
+      field: "repo",
+      message:
+        fields?.repo.allowNoRepo === false
+          ? "Pick a repository."
+          : "Pick a repository, or choose No repository.",
+    };
   }
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
   if (

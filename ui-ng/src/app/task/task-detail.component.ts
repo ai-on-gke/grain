@@ -87,6 +87,10 @@ import {
   ForceMergeDialogComponent,
   type ForceMergeRequest,
 } from "./force-merge-dialog.component";
+import {
+  AcceptFindingsDialogComponent,
+  type AcceptFindingsRequest,
+} from "./accept-findings-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskStore, parseCommentFragment } from "./task.store";
@@ -142,6 +146,7 @@ export function duration(from?: string, to?: string): string {
     TaskGatesBarComponent,
     TaskChangesTabComponent,
     ForceMergeDialogComponent,
+    AcceptFindingsDialogComponent,
     TaskEditPanelComponent,
     ConversationComponent,
   ],
@@ -153,6 +158,7 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:click)": "onDocClick($event)",
@@ -162,7 +168,9 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       aria-labelledby="task-title"
-      [attr.inert]="confirming() || forceMergeReq() ? '' : null"
+      [attr.inert]="
+        confirming() || forceMergeReq() || acceptFindingsReq() ? '' : null
+      "
     >
       @if (store.loadError(); as err) {
         <div class="stage-header">
@@ -1066,6 +1074,7 @@ export function duration(from?: string, to?: string): string {
                   <h2 class="sr-only">Changes and CI</h2>
                   <g-task-changes-tab
                     (forceMerge)="forceMergeReq.set($event)"
+                    (acceptFindings)="acceptFindingsReq.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
                     [prLabel]="prLabel()"
@@ -1359,6 +1368,13 @@ export function duration(from?: string, to?: string): string {
       <g-force-merge-dialog [request]="f" (done)="forceMergeReq.set(null)" />
     }
 
+    @if (acceptFindingsReq(); as a) {
+      <g-accept-findings-dialog
+        [request]="a"
+        (done)="acceptFindingsReq.set(null)"
+      />
+    }
+
     <ng-template #treeNode let-n let-level="level">
       <li class="tree-item">
         <span class="tree-row" [class.is-root]="n.root">
@@ -1476,6 +1492,9 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly closePr = signal(false);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
   protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
+  protected readonly acceptFindingsReq = signal<AcceptFindingsRequest | null>(
+    null,
+  );
   protected readonly editOpen = signal(false);
   protected readonly moreMenuOpen = signal(false);
   protected readonly compactOpen = signal(false);

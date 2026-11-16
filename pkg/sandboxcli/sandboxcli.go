@@ -857,7 +857,7 @@ func (c *sandboxCLI) ciLog(p sandboxArgs) error {
 	if job == "" {
 		return c.fs(uri, url.Values{"list": {""}})
 	}
-	uri += "/" + job
+	uri += "/" + ciJobSegment(job)
 	if strings.HasPrefix(run, "gha:") {
 		// A GitHub Actions job keeps one log, job.log, which a step's
 		// <step>.log is a slice of.
@@ -881,6 +881,17 @@ func (c *sandboxCLI) ciLog(p sandboxArgs) error {
 		step += ".log"
 	}
 	return c.read(uri+"/"+step, p, false)
+}
+
+// ciJobSegment is job as the one ci:// path segment it is: a job named
+// "pkg/cli stress under load" is "pkg%2Fcli stress under load", as
+// grain ls lists it, so its "/" does not end the job's name. A name
+// given already escaped, the way it was listed, is left as it is.
+func ciJobSegment(job string) string {
+	if !strings.Contains(job, "/") {
+		return job
+	}
+	return strings.NewReplacer("%", "%25", "/", "%2F").Replace(job)
 }
 
 func (c *sandboxCLI) ciArtifact(p sandboxArgs) error {

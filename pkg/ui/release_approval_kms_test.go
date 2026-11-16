@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -74,9 +73,23 @@ func TestAnUnreadableKMSReleaseApprovalKeyIsNamedInA502(t *testing.T) {
 	if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 		t.Fatalf("answer = %v; want code %s and an error naming -release-approval-kms-key", got, apierror.CodeUpstream)
 	}
-	if msg := kmsAnswerRef.ReplaceAllString(got["error"], "(ref)"); strings.Contains(msg, "denied") || strings.Contains(msg, "403") {
+	if carriesKMSAnswer(got) {
 		t.Fatalf("answer %q carries KMS's own answer; want it only in the log", got["error"])
 	}
+}
+
+// carriesKMSAnswer reports whether a withheld 502 answer repeats what
+// KMS said. The answer ends in a random hex log reference, "(ref
+// 403f98cf2908)", which is cut off first so a reference that happens to
+// contain "403" is not mistaken for KMS's status.
+func carriesKMSAnswer(answer map[string]string) bool {
+	msg := strings.TrimSuffix(answer["error"], " (ref "+answer["ref"]+")")
+	for _, word := range []string{"403", "denied", "Permission '", "cloudkms."} {
+		if strings.Contains(msg, word) {
+			return true
+		}
+	}
+	return false
 }
 
 type kmsTestReleaseForge struct {
@@ -158,10 +171,7 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 			t.Fatalf("POST %s answer = %v; want code %s and an error naming -release-approval-kms-key", tc.path, got, apierror.CodeUpstream)
 		}
-		// The answer's "(ref <12 hex>)" is random and can itself read "403",
-		// so look for KMS's answer only in the rest of the message.
-		msg := kmsAnswerRef.ReplaceAllString(got["error"], "(ref)")
-		if strings.Contains(msg, "denied") || strings.Contains(msg, "403") {
+		if carriesKMSAnswer(got) {
 			t.Fatalf("POST %s answer %q carries KMS's own answer; want it only in the log", tc.path, got["error"])
 		}
 	}
@@ -169,7 +179,3 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		t.Fatalf("dispatched %d workflows after KMS refused signing, want 0", forge.dispatches)
 	}
 }
-
-// kmsAnswerRef matches the "(ref 75f243dc0b29)" an upstream answer names
-// its daemon log line by.
-var kmsAnswerRef = regexp.MustCompile(`\(ref [0-9a-f]+\)`)

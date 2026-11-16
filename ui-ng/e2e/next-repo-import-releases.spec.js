@@ -107,10 +107,7 @@ test("leaving the repository page with an unsaved edit asks, and Discard puts th
   await expect(label).toHaveValue("unsaved-e2e");
 
   // The back link (a router navigation) asks too.
-  await page
-    .getByRole("link", { name: /Repositories/ })
-    .first()
-    .click();
+  await page.getByRole("link", { name: "← Repos" }).click();
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets$/);

@@ -399,8 +399,12 @@ sandbox:
   path trigger, qualification run or release-notes filing firing a template above the
   deployment's maximum files nothing, and the firing fails saying so. On a deployment whose sandboxes are host directories, which
   have no shape, the form and the API leave the template's shape off. A
-  schedule firing there files the shape anyway, and the run fails at
-  sandbox setup, so don't declare `sandbox:` for such a deployment.
+  schedule, suite or trigger firing there still files the shape on the
+  task, but dispatch drops it when every dimension matches the
+  template's (the size came from the template, not from a person) and
+  logs `not asking for template …'s sandbox size`, so the run starts on
+  the host's own directory. A dimension somebody stated on the filing
+  that differs from the template's is still refused at sandbox setup.
 - The template's shape shows on its page (opened from its row on the
   Processes page), in
   `GET /api/templates` (`sandbox: {cpus, memoryMb, diskGb}`), and in the
@@ -987,6 +991,43 @@ did change, the review of each kind is filed again for the new head:
 - A review for an older head that has not been dispatched yet is
   superseded by the new one, which keeps its incremental base; one already
   running is waited on.
+
+**Merging over findings: Accept findings.** A gating review's findings
+hold its gate (`security-review`, or `review`, which lists every gating
+trigger's `trigger:<name>` findings) until one of three things happens:
+
+- **A clean re-review.** Push fixes, and the review filed for the new head
+  passes.
+- **The owner accepts them as they are.** Use **Accept findings…** beside
+  the gate in the task's merge gates (the Changes tab in the new UI at
+  `/next/`, the merge-gates panel in the classic one), or `grain accept-findings -gate
+  <gate> [-review <task>] <id> <reason>` (`POST
+  /api/tasks/{id}/accept-findings`, `tasks:write`). A person with an
+  unlimited role (grain/operator) may do this; a limited role and an agent
+  never may (403, as with Submit), and a reason is required. It clears
+  that one review's findings and open questions on that one gate, at the
+  pull request's current head. It records who accepted, the reason, the
+  review task and the head on the task (`review-findings-accepted`), on its
+  timeline, and as a comment on the task and the pull request. It clears
+  nothing else: CI, the other gates, other reviews' findings, approvers a
+  `human: required` trigger names and security holds all still apply. A
+  later push is classified and reviewed as any push is, and findings a new
+  review leaves need a new decision. Once nothing else holds the change, it
+  merges itself as it was going to. The panel offers it only on a gate whose
+  findings a review left (the merge gate's `acceptable`). A gate held
+  because its review could not be filed has no review's findings to accept:
+  a re-review or Force merge settles that.
+- **Force merge.** This overrides *every* gate it names, under
+  `merge:force`. It is for overriding everything, not for a decision about
+  one review's findings.
+
+Submit records the owner's approval only and never clears findings. Only
+an explicit acceptance counts as the owner's decision. Answering the
+review's questions with "merge as-is", or resolving its threads, does not
+count: a reply is free text that the next run reads and carries out, and
+threads can be resolved by the change's own agent, so neither one records
+who decided, at which head, or why. An agent that thinks a finding needs
+no fix asks the owner (`ask_question`) and leaves the decision to them.
 
 **One runnable task per key.** A key is (repository, branch, trigger,
 group) for a merge and (pull request, trigger, group) for a pull request
