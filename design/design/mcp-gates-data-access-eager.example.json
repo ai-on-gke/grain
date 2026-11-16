@@ -1,0 +1,198 @@
+{
+  "status": "pending_operator_decision_not_normative",
+  "description": "Complete-input completion profile draft. Derived from the normative prefetch fixture; not valid protocol 2.0 or action profile 3.0. Fixture release identity is illustrative.",
+  "declaration": {
+    "protocol_version": "eager-draft-1",
+    "snapshot_version": "eager-draft-1",
+    "transport": "grain_complete_inputs",
+    "evidence_replay_safe": true,
+    "inputs": [
+      {
+        "domain": "context",
+        "kinds": [
+          "evaluation_context"
+        ],
+        "required": true
+      },
+      {
+        "domain": "checks",
+        "kinds": [
+          "check"
+        ],
+        "required": true
+      }
+    ],
+    "record_schemas": [
+      {
+        "kind": "check",
+        "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd"
+      },
+      {
+        "kind": "evaluation_context",
+        "schema_digest": "sha256:befef31a856926b2cf764dda8f3187bd1e419682fa54c2f35d01040306709de8"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "gate_checks",
+      "arguments": {
+        "protocol_version": "eager-draft-1",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "mode": "evaluate",
+        "task_id": "47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "pin": {
+          "provider": "capability:forge",
+          "release": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "tool": "gate_checks",
+          "gate_version": "1",
+          "args_schema": "sha256:793da71767aae3cdbf090628ee2d6dea491c0d4d6225b1f767d776ad179dfa69",
+          "state_version": "1",
+          "input_declaration": "sha256:bc627dfff390db45db6881f82e637d732d0dc038d0692ea8eeabdffd0dee8c2c"
+        },
+        "args": {
+          "repo": "ai-on-gke/grain",
+          "head": "a1"
+        },
+        "args_digest": "sha256:521c2981b9718e79c4b1cc9a89fe5944d5f2bd1dedc90ae9123c3449c60c5363",
+        "expected_state_revision": 2,
+        "gate_state": {
+          "checks_seen": 0
+        },
+        "deadline": "2026-11-16T20:13:30Z",
+        "now": "2026-11-16T20:13:00Z",
+        "limits": {
+          "elapsed_ms": 30000,
+          "metadata_bytes": 262144,
+          "snapshot_bytes": 8388608,
+          "record_bytes": 131072,
+          "records": 6500,
+          "state_bytes": 16384,
+          "args_bytes": 16384,
+          "json_depth": 16,
+          "response_bytes": 262144,
+          "request_bytes": 10485760,
+          "transport_bytes": 25165824,
+          "retries_total": 1,
+          "retention_ms": 60000
+        },
+        "snapshot": {
+          "version": "eager-draft-1",
+          "id": "snap-19",
+          "evidence_revision": 19,
+          "cursor": "journal:718",
+          "incoming_message_watermark": 6,
+          "processed_message_watermark": 6,
+          "domains": [
+            "context",
+            "checks"
+          ],
+          "unavailable": [],
+          "records": [
+            {
+              "id": "context:47",
+              "kind": "evaluation_context",
+              "version": "evidence:19",
+              "data": {
+                "task_id": "47",
+                "contract_revision": 4,
+                "authority_epoch": 1,
+                "policy_revision": 2,
+                "permission_revision": 7,
+                "head": "a1",
+                "check_count": 2,
+                "children": [],
+                "operations": [],
+                "waivers": [],
+                "required_suites": [
+                  "unit",
+                  "security"
+                ]
+              }
+            },
+            {
+              "id": "check:security",
+              "kind": "check",
+              "version": "head:a1/run:2",
+              "data": {
+                "head": "a1",
+                "suite": "security",
+                "conclusion": "success",
+                "observed_at": "2026-11-16T20:12:59Z"
+              }
+            },
+            {
+              "id": "check:unit",
+              "kind": "check",
+              "version": "head:a1/run:1",
+              "data": {
+                "head": "a1",
+                "suite": "unit",
+                "conclusion": "success",
+                "observed_at": "2026-11-16T20:12:59Z"
+              }
+            }
+          ],
+          "created_at": "2026-11-16T20:13:00Z",
+          "expires_at": "2026-11-16T20:14:00Z"
+        },
+        "request_digest": "sha256:867fcc3e4d8bf461e857a9a70c0d62c8c305184401053534eef6dd0d51451747"
+      }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "structuredContent": {
+        "protocol_version": "eager-draft-1",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "expected_state_revision": 2,
+        "request_digest": "sha256:867fcc3e4d8bf461e857a9a70c0d62c8c305184401053534eef6dd0d51451747",
+        "snapshot_id": "snap-19",
+        "evidence_revision": 19,
+        "kind": "final",
+        "status": "met",
+        "summary": "Both required checks passed on head a1.",
+        "evidence": [
+          {
+            "id": "check:unit",
+            "kind": "check",
+            "version": "head:a1/run:1"
+          },
+          {
+            "id": "check:security",
+            "kind": "check",
+            "version": "head:a1/run:2"
+          }
+        ],
+        "gate_state": {
+          "checks_seen": 2
+        },
+        "blockers": [],
+        "work": [],
+        "action_requests": [],
+        "waits": [],
+        "buttons": []
+      },
+      "isError": false
+    }
+  }
+}
