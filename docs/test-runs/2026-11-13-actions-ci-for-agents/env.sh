@@ -15,7 +15,7 @@
 
 # Shared real-daemon environment for docs/test-plans/2026-11-13.md §7.
 # Starts ghsim on 127.0.0.1:4284 and a real `grain daemon -sandbox-port-base=0`
-# with `-host-sandboxes` over SQLite on 127.0.0.1:4280.
+# with `-host-sandboxes` (or $SANDBOX_FLAGS) over SQLite on 127.0.0.1:4280.
 
 set -euo pipefail
 
@@ -129,6 +129,8 @@ start_daemon() {
 	touch "$work/daemon.log"
 	local offset
 	offset=$(wc -c <"$work/daemon.log")
+	local -a sandbox_flags
+	read -ra sandbox_flags <<<"${SANDBOX_FLAGS:--host-sandboxes}"
 	env -i \
 		PATH="/home/debian/bin:/usr/local/bin:/usr/bin:/bin" \
 		HOME="$work/home" \
@@ -137,7 +139,7 @@ start_daemon() {
 		setsid "$bin" daemon \
 		-data-dir "$work/data" \
 		-sandbox-dir "$work/sandboxes" \
-		-host-sandboxes \
+		"${sandbox_flags[@]}" \
 		-ui-addr "127.0.0.1:${DAEMON_PORT}" \
 		-sandbox-port-base=0 \
 		-as alice@example.com \
