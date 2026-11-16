@@ -348,6 +348,22 @@ working. A table cell holding a list (scopes, repositories) stays on one line,
 truncates with the full list in its `title`, and drops secondary columns
 (`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
 
+A capability server opens on a page of its own,
+`/settings/capabilities/<encoded id>` (the classic `serverPath`), reached from
+its id in the servers table and from Stored secrets' "Used by" links: the
+server's state, what it gives a task, its connection (edited, renamed after a
+confirm, tested unsaved, placed on a host), its secrets, its server settings
+and what holds a grant on it, each holder linked to its page (a task to the
+classic `/tasks/<id>` until `/next/` is the default). Server settings are drawn
+from the schema its configure tool declares, never hand-written per server:
+deprecated and grain-injected fields are left out, an enum reads through its
+`x-grain-enum-labels`, a write-only field is a password box with a set /
+missing / not set chip whose typed value goes as `configSecrets`, a refusal
+keyed by field shows under that field, and a field that does not apply given
+its siblings (gcp's `pool_max` in keyless token mode) is hidden unless it holds
+a value. Removing a server asks first and lists what holds it, linked, in the
+confirm (`ConfirmRequest.items`).
+
 A setting kept in the secret store rather than in grain/config (the Hub's
 `grc_…` registration token) stays editable while a config-repo lock
 disables the fields around it, says when the daemon has no secret store
@@ -394,6 +410,8 @@ it rather than copy it.
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
+| Info popover | `shared/info-popover.component.ts` | an `(i)` beside a field or name whose explanation is too long for a tooltip: opens on click, Enter or Space, closes on Escape (focus back on the button), an outside click or a second press, and shifts to stay inside the viewport |
+| Schema form | `settings/capability-schema-form.component.ts` | a form drawn from a JSON schema (a capability server's configure schema): never hand-written per server |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
 | Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
 | Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |

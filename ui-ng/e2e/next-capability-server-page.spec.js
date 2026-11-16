@@ -388,8 +388,8 @@ test("connection edits place a server on a host, rename it after a confirm, and 
     await onPageOf(page, renamed);
     await expect(page.getByTestId("capability-server-id")).toHaveText(renamed);
 
-    // Remove asks first and names what holds it, linked to its page.
-    await request.post("/api/tasks", {
+    // A task holding a grant under the new ID, for Remove to list.
+    const t2 = await request.post("/api/tasks", {
       data: {
         title: "Page walk holder 2",
         repo: "acme/widgets",
@@ -397,6 +397,29 @@ test("connection edits place a server on a host, rename it after a confirm, and 
         grants: [`${renamed}#config-map`],
       },
     });
+    expect(t2.ok(), await t2.text()).toBeTruthy();
+
+    // Bind a secret stores it and points an env var of the entry at it.
+    await page.getByTestId("bind-secret").locator("summary").click();
+    await page.getByTestId("bind-name").fill("WALK_TOKEN");
+    await page.getByTestId("bind-secret-name").fill("walk-page-token");
+    await page.getByTestId("bind-value").fill("walk-bound-value");
+    await page.getByTestId("bind-secret-btn").click();
+    await expect(
+      page.getByTestId("server-secret-walk-page-token"),
+    ).toContainText("set");
+    await expect(page.locator("body")).not.toContainText("walk-bound-value");
+
+    const usedBy = async (name) => {
+      const j = await (await request.get("/api/secrets")).json();
+      const sec = (Array.isArray(j) ? j : j.secrets || []).find(
+        (x) => x.name === name,
+      );
+      return sec?.capabilityServers || [];
+    };
+    expect(await usedBy("walk-page-token")).toEqual([renamed]);
+
+    // Remove asks first and names what holds it, linked to its page.
     await page.reload();
     await page.getByTestId("remove-server-btn").click();
     await expect(dialog).toContainText("Remove capability server?");
@@ -414,9 +437,18 @@ test("connection edits place a server on a host, rename it after a confirm, and 
       /\/next\/settings\/capabilities#capability-servers$/,
     );
     await expect(page.getByTestId(`cap-server-row-${renamed}`)).toHaveCount(0);
+    // A secret bound under a name of the person's own choosing outlives
+    // the server (grain removes only the ones it made for it), but the
+    // list has read secrets again: it no longer says the removed server
+    // uses it.
+    const row = page.getByTestId("secret-row-walk-page-token");
+    await expect(row).toBeVisible();
+    await expect(row).not.toContainText(renamed);
+    expect(await usedBy("walk-page-token")).toEqual([]);
   } finally {
     for (const s of [id, renamed]) {
       await request.post("/api/capability-servers/remove", { data: { id: s } });
     }
+    await request.delete("/api/secrets/walk-page-token");
   }
 });
