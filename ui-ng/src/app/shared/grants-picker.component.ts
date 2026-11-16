@@ -309,6 +309,12 @@ export class GrantsPickerComponent {
   readonly offered = input<readonly CapabilityOption[]>([]);
   readonly held = input<readonly string[]>([]);
   readonly repo = input<string | undefined>(undefined);
+  // policyRepo is the repository of the run the verdicts are judged for,
+  // where that is not the one access is checked against: the New task
+  // sheet files a task with no repository chosen to the deployment's
+  // default target, so that is the run to judge. null judges a run with
+  // no repository; left undefined it follows repo.
+  readonly policyRepo = input<string | null | undefined>(undefined);
   readonly disabled = input<boolean>(false);
   readonly testid = input<string>("");
   // runKind is the kind of run these grants are for; every verdict is the
@@ -352,9 +358,11 @@ export class GrantsPickerComponent {
     // the builder.
     effect(() => {
       const repo = this.repo();
+      const policy = this.policyRepo();
+      const judged = policy === undefined ? repo : policy || undefined;
       const kind = this.runKind();
       const judge = this.judgeRun();
-      untracked(() => void this.loadMethods(repo, kind, judge));
+      untracked(() => void this.loadMethods(repo, judged, kind, judge));
     });
   }
 
@@ -508,13 +516,14 @@ export class GrantsPickerComponent {
 
   private async loadMethods(
     repo: string | undefined,
+    judged: string | undefined,
     kind: CapabilityRunKind,
     judge: boolean,
   ): Promise<void> {
     if (!this.access.can("GET /api/capability-methods", repo)) return;
     const query = judge
-      ? repo
-        ? `kind=${kind}&repo=${encodeURIComponent(repo)}`
+      ? judged
+        ? `kind=${kind}&repo=${encodeURIComponent(judged)}`
         : `kind=${kind}`
       : undefined;
     const key = query ?? "";

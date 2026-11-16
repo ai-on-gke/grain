@@ -306,6 +306,21 @@ describe("NewTaskSheetComponent", () => {
     });
   });
 
+  it("judges capability verdicts for the deployment's default target when no repository is chosen", async () => {
+    const api = new FakeApi();
+    // A default target outside the repo list leaves the picker on
+    // "Deployment default", which submit() files to that target.
+    api.cfg["defaultTarget"] = "acme/default";
+    const f = await render(api);
+    await open(f);
+    q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();
+    await settle(f);
+    const listings = api.calls
+      .filter((c) => c.route === "GET /api/capability-methods")
+      .map((c) => c.query);
+    expect(listings.at(-1)).toBe("kind=task&repo=acme%2Fdefault");
+  });
+
   it("supports attachments, capabilities/grants, reads/writes, network, sandbox shape, backend, and custom fields", async () => {
     const api = new FakeApi();
     const f = await render(api);

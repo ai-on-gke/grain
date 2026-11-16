@@ -16,7 +16,7 @@ import { Component, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
-import type { CapabilityMethod } from "../api/models";
+import type { CapabilityMethod, CapabilityOption } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { methodVerdict } from "./capability-verdict";
 import { GrantsPickerComponent } from "./grants-picker.component";
@@ -70,6 +70,8 @@ class FakeApi {
       testid="gp"
       [held]="held()"
       [repo]="repo()"
+      [policyRepo]="policyRepo()"
+      [offered]="offered()"
       [judgeRun]="judge()"
       (heldChange)="held.set($event)"
     />
@@ -79,6 +81,8 @@ class HostComponent {
   readonly held = signal<string[]>([]);
   readonly repo = signal<string | undefined>("acme/web");
   readonly judge = signal(true);
+  readonly policyRepo = signal<string | null | undefined>(undefined);
+  readonly offered = signal<CapabilityOption[]>([]);
 }
 
 async function mount(init: (h: HostComponent) => void) {
@@ -178,6 +182,32 @@ describe("GrantsPickerComponent policy verdicts", () => {
       "kind=task&repo=acme%2Fweb",
       "kind=task&repo=acme%2Fapi",
     ]);
+  });
+
+  it("judges the run policyRepo names, and a run with no repository for null", async () => {
+    const { fixture, api } = await mount((h) => {
+      h.repo.set(undefined);
+      h.policyRepo.set("acme/default");
+    });
+    fixture.componentInstance.policyRepo.set(null);
+    await fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.queries).toEqual(["kind=task&repo=acme%2Fdefault", "kind=task"]);
+  });
+
+  it("offers the deployment's capabilities as toggles and calls an unoffered bare id retired", async () => {
+    const { el } = await mount((h) => {
+      h.offered.set([{ id: "github-sandbox", name: "GitHub sandbox" }]);
+      h.held.set(["scratch-repo"]);
+    });
+    const toggle = el.querySelector<HTMLButtonElement>(
+      '[data-testid="gp-cap-github-sandbox"]',
+    );
+    expect(toggle?.textContent).toContain("GitHub sandbox");
+    expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      el.querySelector('[data-testid="retired-grant-0"]')?.textContent,
+    ).toContain("No longer offered");
   });
 
   it("lists a denied method disabled in the builder and refuses to attach it", async () => {

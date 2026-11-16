@@ -1016,6 +1016,7 @@ interface PendingReleaseRow {
                     >
                     <g-grants-picker
                       testid="repo-default-grants"
+                      [offered]="taskCapabilityOptions()"
                       [held]="repoCaps()"
                       [repo]="repoSlug()"
                       [disabled]="
@@ -2060,6 +2061,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // the switch from a stale value.
   private releaseEnabledStored = false;
   private readonly planEditor = viewChild(RepoQualificationPlanComponent);
+  protected readonly taskCapabilityOptions = signal<
+    readonly CapabilityOption[]
+  >([]);
   protected readonly ciCapabilityOptions = signal<readonly CapabilityOption[]>(
     [],
   );
@@ -2341,6 +2345,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         const ciCaps = (rec["ciCapabilities"] ?? rec["capabilities"]) as
           CapabilityOption[] | undefined;
         this.ciCapabilityOptions.set(Array.isArray(ciCaps) ? ciCaps : []);
+        // The capabilities a task can be given, offered as toggles in the
+        // repository's default capabilities (classic's capabilityRows).
+        const taskCaps = rec["capabilities"] as CapabilityOption[] | undefined;
+        this.taskCapabilityOptions.set(Array.isArray(taskCaps) ? taskCaps : []);
       }
       await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);

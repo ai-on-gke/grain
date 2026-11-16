@@ -39,6 +39,7 @@ import {
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
+import type { CapabilityOption } from "../api/models";
 import { GrantsPickerComponent } from "../shared/grants-picker.component";
 
 interface ConsoleSessionRow {
@@ -511,6 +512,7 @@ export function listedSecrets(
                    tasks at large (judgeRun off). -->
               <g-grants-picker
                 testid="deployment-default-grants"
+                [offered]="offeredCaps()"
                 [held]="defaultCaps()"
                 [judgeRun]="false"
                 [disabled]="!canWriteSettings()"
@@ -1957,6 +1959,15 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected toggleQAShadowOnControl(): void {
     this.state.setField("qaShadowOnControl", !this.qaShadowOnControl());
+  }
+
+  // The capabilities a task can be given, offered as toggles beside the
+  // deployment's defaults (classic's capabilityRows).
+  protected offeredCaps(): readonly CapabilityOption[] {
+    const c = this.state.config() as { capabilities?: unknown } | null;
+    return Array.isArray(c?.capabilities)
+      ? (c.capabilities as CapabilityOption[])
+      : [];
   }
 
   protected defaultCaps(): string[] {
