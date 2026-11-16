@@ -544,3 +544,61 @@ test("classic System -> Metrics ?f=repo:any:... links narrow /next/telemetry to 
     )
     .toBe(true);
 });
+
+// The 2026-11-16 walkthrough (docs/test-runs/2026-11-16-deployment-operations.md):
+// a host that reported no disks showed a "/" disk at "0 MB / 0 MB", and a
+// daemon that reported no start time showed a green "Up —".
+test("Fleet says a disk and an uptime it was not told are not reported", async ({
+  page,
+}) => {
+  const now = Date.now();
+  let withFigures = false;
+  await page.route("**/api/sandboxes*", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        host: {
+          cpus: 4,
+          cpuUtilization: 0.15,
+          memoryUsedMB: 4096,
+          memoryTotalMB: 16384,
+          ...(withFigures
+            ? {
+                disks: [
+                  { path: "/var/lib/grain", usedMB: 2048, totalMB: 8192 },
+                ],
+              }
+            : {}),
+        },
+        ...(withFigures
+          ? {
+              daemon: {
+                startedAt: new Date(now - 3 * 3600_000).toISOString(),
+                starts: 1,
+              },
+            }
+          : {}),
+        sandboxes: [],
+      },
+    }),
+  );
+
+  await page.goto("fleet?tab=controls");
+  const disk = page.getByTestId("meter-disk");
+  await expect(page.getByTestId("meter-disk-none")).toHaveText("Not reported");
+  await expect(disk).not.toContainText("0 MB");
+  await expect(disk).not.toContainText("host volume");
+  const daemon = page.getByTestId("fleet-daemon-card");
+  await expect(page.getByTestId("fleet-daemon-uptime-unknown")).toHaveText(
+    "Uptime not reported",
+  );
+  await expect(daemon).not.toContainText("Up —");
+
+  withFigures = true;
+  await page.reload();
+  await expect(disk).toContainText("/var/lib/grain");
+  await expect(disk).toContainText("2.0 GB / 8.0 GB");
+  await expect(page.getByTestId("meter-disk-none")).toHaveCount(0);
+  await expect(daemon).toContainText(/Up \d/);
+  await expect(page.getByTestId("fleet-daemon-uptime-unknown")).toHaveCount(0);
+});
