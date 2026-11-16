@@ -157,15 +157,15 @@ own schema, or at an older one it migrates on import; one stamped newer
 is refused with "state repository was written by a newer build of grain:
 repository is at schema N, this build knows M", in Settings → Config
 Repo and in `grain state sync`, and nothing in it is imported. That
-holds at startup and, from the release after `v3.8.0`, on every sync of a
-running deployment as well.
+holds at startup and, from `v3.10.0`, on every sync of a running
+deployment as well.
 
 Before that, a running deployment, or `grain state sync`, imported a
 newer build's push without checking the stamp. That is how a repository
 written by a current build loses access on an old one: since `v3.8.0`
 the export writes a template's or schedule's plain `owner/name` reads
 and writes as `https://grain.dev/capabilities/repo#read` / `#write`
-entries under `grants:` (and, after `v3.8.0`, there alone), and builds
+entries under `grants:` (and, from `v3.9.0`, there alone), and builds
 before `v3.5.0` -- `release/v3.1.1` among them -- read those entries as
 opaque capabilities, not as the read and write rows they are, so every
 such row is dropped without a word
