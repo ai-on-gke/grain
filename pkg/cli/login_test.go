@@ -409,6 +409,7 @@ func TestGrainLoginWithGrainIDTokenThroughIAPIsAnIdentity(t *testing.T) {
 	}
 
 	// --issue-token=false: a context that signs in through IAP each time.
+	// (Logging the personal context out comes after it, below.)
 	_ = captureStdout(t, func() {
 		if err := runCLI([]string{"login", server, "--name", "proxied", "--issue-token=false"}); err != nil {
 			t.Error(err)
@@ -417,6 +418,21 @@ func TestGrainLoginWithGrainIDTokenThroughIAPIsAnIdentity(t *testing.T) {
 	cfg, _ = loadContexts()
 	if p := cfg.Contexts["proxied"]; p == nil || p.Auth != "google-id-token" || p.TokenID != "" || p.Credential != "" {
 		t.Fatalf("login --issue-token=false with $GRAIN_ID_TOKEN: context = %+v; want a google-id-token one holding nothing", p)
+	}
+
+	// grain logout revokes the personal token through IAP as the token
+	// itself, the ID token beside it rather than in its place.
+	*reached = nil
+	_ = captureStdout(t, func() {
+		if err := runCLI([]string{"logout", "team"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if tok, err := store.GetExternalAgentToken(context.Background(), team.TokenID); err != nil || tok.RevokedAt == nil {
+		t.Errorf("after grain logout through IAP, token = %+v (%v); want it revoked", tok, err)
+	}
+	if len(*reached) == 0 || !strings.HasPrefix((*reached)[0], "Bearer gma_") {
+		t.Errorf("the revoke reached the daemon with Authorization %q; want the context's gma_ token", *reached)
 	}
 
 	// A secret in $GRAIN_TOKEN is still an explicit token, and the

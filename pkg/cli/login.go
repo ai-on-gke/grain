@@ -468,7 +468,9 @@ func cmdLogout(ctx context.Context, base *ui.HTTPClient, out *printer, sel selec
 	if entry.TokenID != "" && !*local {
 		rc := ui.NewHTTPClient(entry.Server)
 		rc.HTTP, rc.RetryPolicy = base.HTTP, base.RetryPolicy
-		rc.ContextToken = contextToken(selectedContext{name: name, ctx: entry}, entry.Server, store)
+		// As every other call sends it: behind IAP that is the gma_ token
+		// with an ID token beside it, which IAP needs to let the revoke by.
+		useContextCredential(rc, selectedContext{name: name, ctx: entry}, tokenSource(""))
 		if err := rc.RevokeExternalAgentToken(ctx, entry.TokenID); err != nil {
 			fmt.Fprintf(os.Stderr, "grain logout: could not confirm %s revoked token %s (%v); revoke it in Settings -> Agents\n",
 				entry.Server, entry.TokenID, err)
