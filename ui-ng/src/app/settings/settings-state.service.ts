@@ -100,6 +100,13 @@ export class SettingsStateService {
   readonly deployment = signal<Record<string, unknown>>({});
   readonly draft = signal<Record<string, unknown>>({});
   readonly deployDraft = signal<Record<string, unknown>>({});
+  // memorySaved is the deployment memory document as the server last
+  // answered, and memoryDraft an unsaved edit of it (null when none). It
+  // lives here, beside the settings drafts, so moving to another section
+  // or page keeps it and the Save bar, Discard and the leave prompts see
+  // it.
+  readonly memorySaved = signal("");
+  readonly memoryDraft = signal<string | null>(null);
   readonly fieldErrors = signal<Record<string, string>>({});
   readonly discardEpoch = signal(0);
 
@@ -148,16 +155,24 @@ export class SettingsStateService {
   readonly hasFieldErrors = computed(
     () => Object.keys(this.fieldErrors()).length > 0,
   );
+  readonly hasMemoryDraft = computed(() => {
+    const d = this.memoryDraft();
+    return d !== null && d !== this.memorySaved();
+  });
   readonly isDirty = computed(
     () =>
-      this.hasSettingsDraft() || this.hasDeployDraft() || this.hasFieldErrors(),
+      this.hasSettingsDraft() ||
+      this.hasDeployDraft() ||
+      this.hasFieldErrors() ||
+      this.hasMemoryDraft(),
   );
 
   readonly dirtyCount = computed(
     () =>
       Object.keys(this.draft()).length +
       Object.keys(this.deployDraft()).length +
-      Object.keys(this.fieldErrors()).length,
+      Object.keys(this.fieldErrors()).length +
+      (this.hasMemoryDraft() ? 1 : 0),
   );
 
   sectionLocked(section: SettingsSectionId): boolean {
@@ -261,6 +276,7 @@ export class SettingsStateService {
   discard(): void {
     this.draft.set({});
     this.deployDraft.set({});
+    this.memoryDraft.set(null);
     this.fieldErrors.set({});
     this.qaRolloutRaw.set(null);
     this.discardEpoch.update((n) => n + 1);
@@ -463,6 +479,17 @@ export class SettingsStateService {
     });
   }
 
+  // saveMemory saves the drafted deployment memory document, if any.
+  async saveMemory(): Promise<void> {
+    const text = this.memoryDraft();
+    if (text === null) return;
+    if (text !== this.memorySaved()) {
+      await this.api.put("PUT /api/memory", undefined, { text });
+      this.memorySaved.set(text);
+    }
+    this.memoryDraft.set(null);
+  }
+
   async saveChanges(): Promise<void> {
     if (!this.isDirty() || this.hasFieldErrors()) return;
     this.saving.set(true);
@@ -498,6 +525,12 @@ export class SettingsStateService {
           this.deployment.set(savedDep);
         }
         this.deployDraft.set({});
+      }
+      if (this.hasMemoryDraft()) {
+        if (!this.access.can("PUT /api/memory")) {
+          throw new Error(this.access.deniedReason("PUT /api/memory"));
+        }
+        await this.saveMemory();
       }
       this.fieldErrors.set({});
       this.discardEpoch.update((n) => n + 1);

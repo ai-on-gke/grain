@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { branchTemplateError, sampleBranchName } from "./branch-template";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -350,13 +351,27 @@ export function listedSecrets(
                 placeholder="grain/task-{id}"
                 [value]="state.val('taskBranchTemplate', '')"
                 [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField(
-                    'taskBranchTemplate',
-                    $any($event.target).value
-                  )
+                [attr.aria-invalid]="
+                  state.fieldErrors()['taskBranchTemplate'] ? true : null
                 "
+                aria-describedby="t-branch-hint"
+                (input)="setBranchTemplate($any($event.target).value)"
               />
+              @if (state.fieldErrors()["taskBranchTemplate"]; as branchErr) {
+                <span
+                  id="t-branch-hint"
+                  class="s-field-error"
+                  data-testid="error-t-branch"
+                  >{{ branchErr }}</span
+                >
+              } @else {
+                <span
+                  id="t-branch-hint"
+                  class="s-hint s-mono"
+                  data-testid="t-branch-sample"
+                  >Task 42's branch: {{ branchSample() }}</span
+                >
+              }
             </div>
           </div>
         </div>
@@ -1586,11 +1601,11 @@ export function listedSecrets(
               class="s-textarea s-mono"
               rows="6"
               data-testid="input-deployment-memory"
-              [value]="memoryBody()"
+              [value]="state.memoryDraft() ?? state.memorySaved()"
               [disabled]="
                 !access.can('PUT /api/memory') || state.sectionLocked('memory')
               "
-              (input)="memoryBody.set($any($event.target).value)"
+              (input)="state.memoryDraft.set($any($event.target).value)"
             ></textarea>
           </div>
           @if (memoryDocs().length > 0) {
@@ -1687,7 +1702,6 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     );
   });
 
-  protected readonly memoryBody = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
 
   ngOnInit(): void {
@@ -1853,6 +1867,26 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   // by the field's own label before anything is sent (the server would
   // refuse it too, naming the JSON key instead), and clearing the refusal
   // once the box holds a good value again.
+  // setBranchTemplate drafts the template, or refuses it by label with
+  // the server's own rules (branch-template.ts) so Save stays off.
+  protected setBranchTemplate(raw: string): void {
+    const err = branchTemplateError(
+      raw,
+      String(this.state.val("deploymentId", "")),
+    );
+    this.state.setFieldError("taskBranchTemplate", err);
+    if (!err) this.state.setField("taskBranchTemplate", raw);
+  }
+
+  // branchSample is the branch the drafted template gives task 42, with
+  // this deployment's ID in it; grain's default is grain/task-<id>.
+  protected branchSample(): string {
+    const tpl = String(this.state.val("taskBranchTemplate", ""));
+    return tpl
+      ? sampleBranchName(tpl, String(this.state.val("deploymentId", "")))
+      : "grain/task-42";
+  }
+
   protected setCount(key: string, min: number, label: string, ev: Event): void {
     const raw = String((ev.target as HTMLInputElement | null)?.value ?? "");
     const n = Number(raw.trim());
@@ -2390,7 +2424,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       try {
         const m = await this.api.get<MemoryRow[]>("GET /api/memory");
         if (Array.isArray(m)) {
-          this.memoryBody.set(m.find((r) => !r.repo)?.text ?? "");
+          // An unsaved edit stays in the box (memoryDraft) over the
+          // re-read.
+          this.state.memorySaved.set(m.find((r) => !r.repo)?.text ?? "");
         }
       } catch {
         // Non-fatal
@@ -2419,9 +2455,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected async saveMemory(): Promise<void> {
     try {
       await this.state.saveFields(["promptExtension"]);
-      await this.api.put("PUT /api/memory", undefined, {
-        text: this.memoryBody(),
-      });
+      await this.state.saveMemory();
       this.snackbar.show("Memory updated");
     } catch (err) {
       this.state.recordError(err);

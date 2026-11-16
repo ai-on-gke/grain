@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { SECTION_FIELD_LABELS } from "./settings-field-labels";
+
 export type SettingsSectionId =
   | "models"
   | "sandboxes"
@@ -533,6 +535,7 @@ export function filterSettingsGroups(query: string): SettingsGroupDef[] {
         sec.subtitle,
         group.label,
         ...sec.keywords,
+        ...(SECTION_FIELD_LABELS[sec.id] ?? []),
       ]
         .join(" ")
         .toLowerCase();

@@ -233,3 +233,109 @@ test("Save memory saves the standing instructions too, and the next open reads t
     });
   }
 });
+
+// Regressions from the 2026-11-16 Settings walkthrough
+// (docs/test-runs/2026-11-16-user-system-settings.md).
+
+test("an unsaved memory edit survives a section change, and leaving Settings asks first", async ({
+  page,
+}) => {
+  await page.goto("/next/inbox");
+  await page.getByTestId("rail-settings").click();
+  await page.getByTestId("settings-nav-memory").click();
+  const doc = page.getByTestId("input-deployment-memory");
+  const dialog = page.getByRole("dialog");
+  await expect(doc).toBeEnabled();
+  const before = await doc.inputValue();
+  const edited = `${before}\nWalkthrough unsaved note.`;
+  await doc.fill(edited);
+  await expect(page.getByTestId("settings-save-bar")).toContainText(
+    "1 unsaved change",
+  );
+
+  // Another section keeps the edit and does not ask.
+  await page.getByTestId("settings-nav-agents").click();
+  await expect(page.getByTestId("settings-section-heading")).toHaveText(
+    "Agents",
+  );
+  await expect(dialog).toHaveCount(0);
+  await page.getByTestId("settings-nav-memory").click();
+  await expect(doc).toHaveValue(edited);
+
+  // The rail asks; Cancel stays with the edit.
+  await page.getByTestId("rail-inbox").click();
+  await expect(dialog).toContainText("Discard unsaved settings?");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(page).toHaveURL(/\/next\/settings\/memory$/);
+  await expect(doc).toHaveValue(edited);
+
+  // Back through the sections visited (Agents, Memory, the bare Settings
+  // address) never asks; Back out of Settings to the Inbox does. Discard
+  // leaves, and the next open reads the server's text, so nothing was
+  // saved.
+  for (const at of [
+    /\/settings\/agents$/,
+    /\/settings\/memory$/,
+    /\/settings$/,
+  ]) {
+    await page.goBack();
+    await expect(page).toHaveURL(at);
+    await expect(dialog).toHaveCount(0);
+  }
+  await page.goBack();
+  await expect(dialog).toContainText("Discard unsaved settings?");
+  await dialog.getByRole("button", { name: "Discard" }).click();
+  await expect(page).not.toHaveURL(/\/settings\/memory/);
+  await page.goto("/next/settings/memory");
+  await expect(doc).toHaveValue(before);
+
+  // A clean Settings never asks.
+  await page.getByTestId("rail-inbox").click();
+  await expect(page).toHaveURL(/\/next\/inbox/);
+  await expect(dialog).toHaveCount(0);
+});
+
+test("the Save bar saves a memory edit and the next open reads it back", async ({
+  page,
+}) => {
+  await page.goto("/next/settings/memory");
+  const doc = page.getByTestId("input-deployment-memory");
+  await expect(doc).toBeEnabled();
+  const before = await doc.inputValue();
+  const edited = `${before}\nWalkthrough saved note.`;
+  try {
+    await doc.fill(edited);
+    await page.getByTestId("settings-save-btn").click();
+    await expect(page.getByTestId("settings-save-bar")).toHaveCount(0);
+    await page.reload();
+    await expect(doc).toHaveValue(edited);
+  } finally {
+    await page.request.put("/api/memory", { data: { text: before } });
+  }
+});
+
+test("Branch name template is refused by its label before saving, and shows the branch it gives", async ({
+  page,
+}) => {
+  await page.goto("/next/settings/tasks");
+  const box = page.locator("#t-branch");
+  await expect(box).toBeEnabled();
+  await box.fill("grain/{deployment}/task");
+  await expect(page.getByTestId("error-t-branch")).toHaveText(
+    "Branch name template must contain {id}, so every task gets its own branch.",
+  );
+  await expect(box).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByTestId("settings-save-btn")).toBeDisabled();
+  await box.fill("bad..name/{id}");
+  await expect(page.getByTestId("error-t-branch")).toContainText(
+    "not a valid git branch name",
+  );
+  await box.fill("grain/{deployment}/task-{id}-{slug}");
+  await expect(page.getByTestId("error-t-branch")).toHaveCount(0);
+  await expect(page.getByTestId("t-branch-sample")).toHaveText(
+    /^Task 42's branch: grain\/[A-Za-z0-9._-]+\/task-42$/,
+  );
+  await expect(page.getByTestId("settings-save-btn")).toBeEnabled();
+  await page.getByTestId("settings-discard-btn").click();
+  await expect(page.getByTestId("settings-save-bar")).toHaveCount(0);
+});

@@ -28,6 +28,10 @@ import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
@@ -67,6 +71,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
 @Component({
   selector: "g-settings-page",
   imports: [
+    ConfirmDialogComponent,
     RouterLink,
     SettingsComputeComponent,
     SettingsCodeComponent,
@@ -429,6 +434,9 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
           }
         </div>
       </div>
+      @if (leaveReq(); as req) {
+        <g-confirm-dialog [request]="req" (done)="onLeaveDone($event)" />
+      }
     </section>
   `,
 })
@@ -552,14 +560,47 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   }
 
   // A reload or closing the tab drops the unsaved draft, which lives
-  // only in this tab's memory, so the browser asks first. Moving between
-  // pages inside the app keeps the draft (SettingsStateService is a root
-  // service) and the Save bar is still there on the way back.
+  // only in this tab's memory, so the browser asks first. Leaving
+  // Settings for another page inside the app asks too (canLeave); moving
+  // between sections keeps the draft (SettingsStateService is a root
+  // service) and never asks.
   @HostListener("window:beforeunload", ["$event"])
   protected onBeforeUnload(ev: BeforeUnloadEvent): void {
     if (!this.state.isDirty()) return;
     ev.preventDefault();
     ev.returnValue = "";
+  }
+
+  protected readonly leaveReq = signal<ConfirmRequest | null>(null);
+  private leaveResolve: ((ok: boolean) => void) | null = null;
+
+  // canLeave asks before leaving Settings -- the rail, Back, a link --
+  // with an unsaved draft, which the route's canDeactivate guard
+  // (app.routes.ts) calls. Moving between sections keeps the draft and
+  // never asks. Discarding empties the draft, so nothing asks twice.
+  async canLeave(): Promise<boolean> {
+    if (!this.state.isDirty()) return true;
+    if (this.leaveResolve) return false;
+    const n = this.state.dirtyCount();
+    const ok = await new Promise<boolean>((resolve) => {
+      this.leaveResolve = resolve;
+      this.leaveReq.set({
+        title: "Discard unsaved settings?",
+        message: `You have ${n} unsaved settings ${n === 1 ? "change" : "changes"}. Leave Settings and discard ${n === 1 ? "it" : "them"}?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+    if (ok) this.state.discard();
+    return ok;
+  }
+
+  protected onLeaveDone(accepted: boolean): void {
+    this.leaveReq.set(null);
+    const resolve = this.leaveResolve;
+    this.leaveResolve = null;
+    resolve?.(accepted);
   }
 
   private anchorTimer: ReturnType<typeof setInterval> | null = null;
