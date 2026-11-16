@@ -27,18 +27,50 @@ import os from "node:os";
 import path from "node:path";
 import { test, expect } from "./fixtures.js";
 
-test.use({ demoArgs: ["-github-sim", "-qualification"] });
+// A server of its own ("-as compare-next" gives this file a worker no
+// other spec shares): it pushes branches to acme/widgets, which the
+// repos and Branches-tab specs on the shared -github-sim server list.
+test.use({
+  demoArgs: ["-github-sim", "-qualification", "-as", "compare-next"],
+});
 
-async function findWorkerBareRepo(
-  demoServer: string,
-  accessCode: string,
-): Promise<string> {
+const SIM = "/api/e2e/github-sim/repos/acme/widgets";
+
+type Request = import("@playwright/test").APIRequestContext;
+
+// refreshBranches drops this server's cached GitHub branch listing
+// (githubBranchCacheTTL in pkg/ui/branches.go) and returns the fresh one,
+// so a branch the spec just pushed or deleted is what the page offers.
+async function refreshBranches(request: Request): Promise<string[]> {
+  const res = await request.get(
+    "/api/repos/acme/widgets/github-branches?refresh=1",
+  );
+  expect(res.ok()).toBe(true);
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data?.branches ?? data?.items ?? []);
+}
+
+// findWorkerBareRepo finds the bare repository behind this worker's own
+// simulated GitHub without writing to any other worker's: a probe ref is
+// created through this server's loopback sim API, and the temp
+// directories are then only read (git show-ref) to see which repository
+// holds it.
+async function findWorkerBareRepo(request: Request): Promise<string> {
+  const main = await request.get(`${SIM}/branches/main`);
+  expect(main.ok()).toBe(true);
+  const sha = (await main.json()).commit.sha as string;
+  const probe = `e2e-probe-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  const made = await request.post(`${SIM}/git/refs`, {
+    data: { ref: `refs/heads/${probe}`, sha },
+  });
+  expect(made.status(), await made.text()).toBe(201);
+
+  let found = "";
   const tmpRoot = os.tmpdir();
-  const candidates: string[] = [];
   for (const entry of fs.readdirSync(tmpRoot)) {
-    if (!entry.startsWith("grain-e2e-run-")) continue;
+    if (found || !entry.startsWith("grain-e2e-run-")) continue;
     const workerDir = path.join(tmpRoot, entry);
-    let subs: string[];
+    let subs: string[] = [];
     try {
       subs = fs.readdirSync(workerDir);
     } catch {
@@ -52,60 +84,50 @@ async function findWorkerBareRepo(
         "acme",
         "widgets.git",
       );
-      if (fs.existsSync(bare)) candidates.push(bare);
-    }
-  }
-
-  const probe = `e2e-probe-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-  for (const bare of candidates) {
-    try {
-      const mainSha = execFileSync(
-        "git",
-        ["--git-dir", bare, "rev-parse", "refs/heads/main"],
-        { encoding: "utf8" },
-      ).trim();
-      execFileSync("git", [
-        "--git-dir",
-        bare,
-        "update-ref",
-        `refs/heads/${probe}`,
-        mainSha,
-      ]);
+      if (!fs.existsSync(bare)) continue;
       try {
-        const res = await fetch(
-          `${demoServer}/api/repos/acme/widgets/github-branches?refresh=1`,
-          { headers: { Authorization: `Bearer ${accessCode}` } },
+        execFileSync(
+          "git",
+          [
+            "--git-dir",
+            bare,
+            "show-ref",
+            "--verify",
+            "-q",
+            `refs/heads/${probe}`,
+          ],
+          { stdio: "ignore" },
         );
-        if (res.ok) {
-          const data = await res.json();
-          const list: string[] = Array.isArray(data)
-            ? data
-            : (data?.branches ?? data?.items ?? []);
-          if (list.includes(probe)) return bare;
-        }
-      } finally {
-        execFileSync("git", [
-          "--git-dir",
-          bare,
-          "update-ref",
-          "-d",
-          `refs/heads/${probe}`,
-        ]);
+        found = bare;
+        break;
+      } catch {
+        // Not this worker's repository.
       }
-    } catch {
-      // Candidate belonged to a worker tearing down concurrently.
     }
   }
-  throw new Error(
-    `could not locate githubsim/acme/widgets.git for ${demoServer}`,
-  );
+  if (found) {
+    execFileSync("git", [
+      "--git-dir",
+      found,
+      "update-ref",
+      "-d",
+      `refs/heads/${probe}`,
+    ]);
+  }
+  await refreshBranches(request);
+  if (!found)
+    throw new Error(
+      "could not locate this worker's githubsim/acme/widgets.git",
+    );
+  return found;
 }
 
-function withPushedBranches<T>(
-  bareRepo: string,
+async function withPushedBranches<T>(
+  request: Request,
   branches: Record<string, Record<string, string>>,
   fn: () => Promise<T>,
 ): Promise<T> {
+  const bareRepo = await findWorkerBareRepo(request);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "grain-cmp-seed-"));
   const created = Object.keys(branches);
   try {
@@ -149,8 +171,12 @@ function withPushedBranches<T>(
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
+  const listed = await refreshBranches(request);
+  for (const branch of created) expect(listed).toContain(branch);
 
-  return fn().finally(() => {
+  try {
+    return await fn();
+  } finally {
     for (const branch of created) {
       try {
         execFileSync("git", [
@@ -161,21 +187,19 @@ function withPushedBranches<T>(
           `refs/heads/${branch}`,
         ]);
       } catch {
-        // Ignore cleanup errors if ref was already removed.
+        // Already gone.
       }
     }
-  });
+    await refreshBranches(request);
+  }
 }
 
 test("Branches tab opens Compare for slash and # branch names, and reload and Back keep the comparison", async ({
   page,
-  demoServer,
-  accessCode,
   pageErrors,
 }) => {
-  const bare = await findWorkerBareRepo(demoServer, accessCode);
   await withPushedBranches(
-    bare,
+    page.request,
     {
       "feature/walk-5865": {
         "WALK5865.md": "# Slash branch\nAdded on feature/walk-5865.\n",
@@ -195,6 +219,13 @@ test("Branches tab opens Compare for slash and # branch names, and reload and Ba
 
       await expect(baseInput).toHaveValue("main");
       await expect(compareBtn).toBeDisabled();
+      // The pushed branches are offered as suggestions (a fresh listing,
+      // not the server's cached one).
+      for (const name of ["feature/walk-5865", "fix/#5865-hash"]) {
+        await expect(
+          page.locator(`#repo-compare-branches option[value="${name}"]`),
+        ).toHaveCount(1);
+      }
 
       // Compare a branch with "/" in its name.
       await headInput.fill("feature/walk-5865");
@@ -247,13 +278,10 @@ test("Branches tab opens Compare for slash and # branch names, and reload and Ba
 
 test("Compare resolves an omitted base, shows identical-branch empty state, and renders a designed error state for unknown refs and hosted URLs", async ({
   page,
-  demoServer,
-  accessCode,
   pageErrors,
 }) => {
-  const bare = await findWorkerBareRepo(demoServer, accessCode);
   await withPushedBranches(
-    bare,
+    page.request,
     {
       "feature/omitted-base-5865": {
         "OMITTED.md": "Compared against server-resolved default branch.\n",
@@ -308,13 +336,10 @@ test("Compare resolves an omitted base, shows identical-branch empty state, and 
 
 test("Compare fits a phone screen without sideways scroll and passes axe in both themes @phone @dark", async ({
   page,
-  demoServer,
-  accessCode,
   axe,
 }) => {
-  const bare = await findWorkerBareRepo(demoServer, accessCode);
   await withPushedBranches(
-    bare,
+    page.request,
     {
       "fix/#5865-phone": {
         "src/very/long/path/widget-renderer.ts": [

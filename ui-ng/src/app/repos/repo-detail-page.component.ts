@@ -3437,17 +3437,19 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  // A branch requested from the default branch has no `from`
+  // (pkg/ui/branches.go Branch.From); its Compare link then leaves the
+  // base out so the server resolves the repository's real default branch,
+  // as classic's internalPullRequestUrl does, rather than guessing "main".
   protected canCompareBranchRow(b: BranchRow): boolean {
     const name = (b.name ?? "").trim();
     if (!name) return false;
-    const base = (b.from || this.baseBranch() || "main").trim();
-    return name !== base;
+    return (b.from ?? "").trim() !== name;
   }
 
   protected branchCompareTree(b: BranchRow): UrlTree {
-    const base = (b.from || this.baseBranch() || "main").trim();
     return this.router.parseUrl(
-      repoComparePath(this.repoSlug(), base === b.name ? "" : base, b.name),
+      repoComparePath(this.repoSlug(), (b.from ?? "").trim(), b.name),
     );
   }
 
