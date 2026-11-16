@@ -933,7 +933,7 @@ export class DeferErrorDirective implements OnInit {
       </ng-template>
 
       <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-      @defer (when createTask.isOpen(); prefetch on idle) {
+      @defer (when createTask.isOpen(); prefetch when preloadCreateSheet) {
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
@@ -1094,6 +1094,9 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly railMorePos = signal({ top: 0, left: 0 });
   protected readonly moreOpen = signal(false);
   protected readonly accountOpen = signal(false);
+  protected readonly preloadCreateSheet = !(
+    globalThis.navigator as { connection?: { saveData?: boolean } }
+  )?.connection?.saveData;
   protected readonly prefersReducedMotion = signal(false);
   protected readonly spriteFailed = signal(false);
 

@@ -29,10 +29,10 @@ import { ReadTrouble } from "./request-trouble";
 // With `/api/events` SSE delivering `task.*` updates immediately, the steady
 // heartbeat only guards against silent stream stalls or unstreamed activity
 // notes (`15s` = 4 req/min). While reads are failing, `FAILURE_PROBE_MS`
-// probes recovery with exponential backoff (5s -> 10s -> 20s -> 40s -> 60s).
+// probes recovery with exponential backoff (3s -> 6s -> 12s -> 24s -> 48s -> 60s).
 export const FAST_POLL_MS = 15000;
 export const IDLE_POLL_MS = 15000;
-export const FAILURE_PROBE_MS = 5000;
+export const FAILURE_PROBE_MS = 3000;
 const EVENT_COALESCE_MS = 1000;
 const CLOCK_TICK_MS = 5000;
 
@@ -93,6 +93,7 @@ export class TaskFeedStore implements OnDestroy {
   private clockTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastEventRefreshAt = 0;
+  private lastAttemptAt = 0;
   private refreshing: Promise<boolean> | null = null;
   private queuedRefresh: Promise<boolean> | null = null;
   private readonly trouble = new ReadTrouble();
@@ -124,7 +125,11 @@ export class TaskFeedStore implements OnDestroy {
         }
       });
     }
-    if (!this.loaded() && !this.refreshing) {
+    if (
+      !this.loaded() &&
+      !this.refreshing &&
+      Date.now() - this.lastAttemptAt >= 1_000
+    ) {
       void this.refresh();
     }
     if (!this.doc.hidden) {
@@ -264,14 +269,18 @@ export class TaskFeedStore implements OnDestroy {
 
   refreshIfStale(maxAgeMs = 3_000): Promise<boolean> {
     if (this.refreshing) return this.refreshing;
+    const now = Date.now();
     const updatedAt = this.lastUpdatedAt();
     if (
       this.loaded() &&
       !this.lastError() &&
       updatedAt !== null &&
-      Date.now() - updatedAt < maxAgeMs
+      now - updatedAt < maxAgeMs
     ) {
       return Promise.resolve(true);
+    }
+    if (this.lastError() && now - this.lastAttemptAt < 1_000) {
+      return Promise.resolve(false);
     }
     return this.refresh();
   }
@@ -314,6 +323,7 @@ export class TaskFeedStore implements OnDestroy {
         this.revision.update((r) => r + 1);
       }
       const ts = Date.now();
+      this.lastAttemptAt = ts;
       this.lastUpdatedAt.set(ts);
       this.now.set(ts);
       this.lastError.set(null);
@@ -322,11 +332,13 @@ export class TaskFeedStore implements OnDestroy {
       this.trouble.ok();
       return true;
     } catch (err) {
+      const ts = Date.now();
+      this.lastAttemptAt = ts;
       this.lastError.set(err);
       if (this.trouble.fail(err) || !this.loaded()) {
         this.loadError.set(extractError(err));
       }
-      this.now.set(Date.now());
+      this.now.set(ts);
       return false;
     }
   }
