@@ -260,10 +260,19 @@ test("a bare #comment= link in a note stays on the task", async ({ page }) => {
   await page.goto("/next/");
   const t = await longestThread(page);
   const first = t.comments![0].id;
-  const res = await page.request.post(`/api/tasks/${t.id}/comments`, {
-    data: { body: `See [the first note](#comment=${first}).` },
+  // Read-only: the note is laid over the newest comment's answer rather
+  // than posted, so the worker's shared demo store is left as it was.
+  await page.route(new RegExp(`/api/tasks/${t.id}\\?`), async (route) => {
+    const res = await route.fetch({
+      headers: { ...route.request().headers(), "if-none-match": "" },
+    });
+    const body = (await res.json()) as Detail & {
+      comments: Array<Comment & { body?: string }>;
+    };
+    body.comments[body.comments.length - 1].body =
+      `See [the first note](#comment=${first}).`;
+    await route.fulfill({ response: res, json: body });
   });
-  expect(res.ok()).toBeTruthy();
   await page.goto(`/next/task/${t.id}`);
   await page.getByRole("link", { name: "the first note" }).click();
   await expect(page).toHaveURL(
