@@ -1219,12 +1219,12 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     this.newMessage.set("");
     this.newAttachments.set([]);
     this.newOpen.set(true);
-    setTimeout(() => this.newTitle()?.nativeElement.focus());
+    this.focusWhenRendered(() => this.newTitle()?.nativeElement);
   }
 
   protected closeNew(): void {
     this.newOpen.set(false);
-    setTimeout(() => this.newBtn()?.nativeElement.focus());
+    this.focusWhenRendered(() => this.newBtn()?.nativeElement);
   }
 
   protected async create(ev: Event): Promise<void> {
@@ -1282,7 +1282,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
 
   protected cancelDelete(): void {
     this.confirmDelete.set(false);
-    setTimeout(() => this.deleteBtn()?.nativeElement.focus());
+    this.focusWhenRendered(() => this.deleteBtn()?.nativeElement);
   }
 
   protected onEscape(ev: Event): void {
@@ -1306,7 +1306,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
 
   private readonly focusDelete = effect(() => {
     if (this.confirmDelete()) {
-      setTimeout(() => this.deleteCancel()?.nativeElement.focus());
+      this.focusWhenRendered(() => this.deleteCancel()?.nativeElement);
     }
   });
 
