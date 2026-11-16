@@ -140,6 +140,42 @@ func TestEnsureRunningIsCrashSafe(t *testing.T) {
 	wantSettings(t, ctx, cfg, map[string]string{"fsync": "on", "full_page_writes": "on"})
 }
 
+// TestEnsureRunningWithoutAutovacuum pins that autovacuum stays on by
+// default, turns off when a test cluster asks for WithoutAutovacuum, and
+// returns to on for the next plain start of the same cluster.
+func TestEnsureRunningWithoutAutovacuum(t *testing.T) {
+	postgrestest.SkipUnlessBinaries(t)
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cfg, stop, err := postgres.EnsureRunning(ctx, dataDir)
+	if err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	wantSettings(t, ctx, cfg, map[string]string{"autovacuum": "on"})
+	if err := stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	cfg, stop, err = postgres.EnsureRunning(ctx, dataDir, postgres.WithoutCrashSafety(), postgres.WithoutAutovacuum())
+	if err != nil {
+		t.Fatalf("EnsureRunning WithoutAutovacuum: %v", err)
+	}
+	wantSettings(t, ctx, cfg, map[string]string{"autovacuum": "off"})
+	if err := stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	// Command-line only: a plain start of the same cluster gets autovacuum back.
+	cfg, stop, err = postgres.EnsureRunning(ctx, dataDir)
+	if err != nil {
+		t.Fatalf("EnsureRunning after WithoutAutovacuum: %v", err)
+	}
+	defer stop()
+	wantSettings(t, ctx, cfg, map[string]string{"autovacuum": "on"})
+}
+
 // TestEnsureRunningRepairsLegacyTuning covers a cluster an older grain
 // created with fsync=off and full_page_writes=off in postgresql.conf:
 // EnsureRunning rewrites that block, whether or not the server is up.
