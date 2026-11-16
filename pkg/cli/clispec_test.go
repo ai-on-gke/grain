@@ -378,9 +378,20 @@ var hostSpecHelpCache = struct {
 	errs []string
 }{m: map[string]string{}}
 
-// TestHostCLISpecHelper is the child hostSpecRunBatch runs: grain itself,
-// asked for each path's -h in turn.
+// TestHostCLISpecHelper is grain itself, run as a child of this test
+// binary: GRAIN_CLISPEC_BATCH is hostSpecRunBatch asking for each path's
+// -h in turn, and GRAIN_CLISPEC_ARGV is one whole command line
+// (runHostGrain in upgrade_postgres_test.go).
 func TestHostCLISpecHelper(t *testing.T) {
+	if raw := os.Getenv("GRAIN_CLISPEC_ARGV"); raw != "" {
+		var argv []string
+		if err := json.Unmarshal([]byte(raw), &argv); err != nil {
+			t.Fatal(err)
+		}
+		os.Args = append([]string{"grain"}, argv...)
+		Main()
+		os.Exit(0)
+	}
 	raw := os.Getenv("GRAIN_CLISPEC_BATCH")
 	if raw == "" {
 		t.Skip("only runs as TestHostCLISpecCoversEveryCommandAndFlag's child")
