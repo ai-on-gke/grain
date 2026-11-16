@@ -1,7 +1,249 @@
 {
   "name": "Due clock through proposed durable filing",
-  "binding_fixture": "time-binding.json",
+  "binding_fixture": "time-enabled-binding.json",
   "steps": [
+    {
+      "boundary": "accepted desired config -> standing scoped filing ceiling",
+      "definition": "filing_authorization",
+      "message": {
+        "authorization_id": "filing-grant-clock-1",
+        "binding_id": "daily-review",
+        "binding_version": 1,
+        "binding_digest": "sha256:322e2543b4f35aa474ded2213926c88968e5e19c23c1dbce11435cab3b7ce3fb",
+        "source_key": "sha256:92fc2442a8aa6b76b8fe5bf6aa42bec79fa0258b02a96adeafca619b30f62449",
+        "authorization_partition": "partition-daily",
+        "security_digest": "sha256:9f8fe8c7bb10bea04cee661a285acac8ebd1ec5637765aa531d765dea97c3110",
+        "template_tracking": "pinned",
+        "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+        "owner": "user:review-owner",
+        "service": "service:trigger-filer",
+        "issued_by": "verified:user:review-owner",
+        "verification_ref": "person:approval-verification-4",
+        "created_at": "2026-11-16T18:55:00Z",
+        "expires_at": "2026-12-16T18:55:00Z",
+        "revoked_at": null,
+        "authorization_epoch": 4,
+        "target_identity": {
+          "deployment_repository_id": "repo-grain-1",
+          "forge_host": "github.com",
+          "forge_repository_id": "12345",
+          "repository": "ai-on-gke/grain",
+          "base": "main"
+        }
+      },
+      "expected": "desired enabled config imported separately; approved scope permits proposed clock task creation and bounded time automation"
+    },
+    {
+      "boundary": "controller -> in-process time adapter",
+      "definition": "provider_call",
+      "message": {
+        "method": "event_open",
+        "arguments": {
+          "protocol_version": "1.0",
+          "request_id": "open-clock-1",
+          "provider_pin": {
+            "id": "builtin:time",
+            "release": "sha256:0f949819259c549404e0c9bd49fbdaf575781a6e454b766986eb6fc1212baef6",
+            "source_type": "calendar",
+            "version": "1",
+            "schema_digest": "sha256:ca3e8219701115a27d70eefea6f6d7fc845a770ff6e83988dabf00f1379d1b7e",
+            "config_revision": "1"
+          },
+          "subscription_id": "sub-clock-1",
+          "generation": 1,
+          "authorization_epoch": 4,
+          "source": {
+            "type": "calendar",
+            "recurrence": {
+              "kind": "daily",
+              "time_of_day_minutes": 540
+            },
+            "time_zone": "UTC",
+            "dst": "skip_gap_first_fold",
+            "calendar_version": "tzdb:2026b"
+          },
+          "after_cursor": null,
+          "limit": 100,
+          "deadline": "2026-11-17T08:59:30Z",
+          "expires_at": "2026-11-17T09:09:00Z"
+        }
+      },
+      "expected": "same interface, no network; persist registration intent before fixing baseline08:59"
+    },
+    {
+      "boundary": "time adapter -> controller",
+      "definition": "provider_result",
+      "message": {
+        "protocol_version": "1.0",
+        "request_id": "open-clock-1",
+        "subscription_id": "sub-clock-1",
+        "generation": 1,
+        "authorization_epoch": 4,
+        "status": "ready",
+        "expires_at": "2026-11-17T09:09:00Z",
+        "baseline_cursor": "time:source-uuid-daily:1:2026-11-17T08:59:00Z",
+        "events": [],
+        "next_cursor": "time:source-uuid-daily:1:2026-11-17T08:59:00Z",
+        "has_more": false,
+        "coverage": {
+          "mode": "complete",
+          "from": "2026-11-17T08:59:00Z",
+          "through": "2026-11-17T08:59:00Z",
+          "gap": null
+        },
+        "error": null
+      },
+      "expected": "persist fixed baseline/lease and preview metadata, no tick yet"
+    },
+    {
+      "boundary": "operator -> side-effect-free activation preview",
+      "definition": "preview_request",
+      "message": {
+        "candidate": {
+          "api_version": "grain.trigger/v1",
+          "id": "daily-review",
+          "version": 1,
+          "provider": {
+            "id": "builtin:time",
+            "release": "sha256:0f949819259c549404e0c9bd49fbdaf575781a6e454b766986eb6fc1212baef6",
+            "source_type": "calendar",
+            "version": "1",
+            "schema_digest": "sha256:ca3e8219701115a27d70eefea6f6d7fc845a770ff6e83988dabf00f1379d1b7e",
+            "config_revision": "1"
+          },
+          "source": {
+            "type": "calendar",
+            "recurrence": {
+              "kind": "daily",
+              "time_of_day_minutes": 540
+            },
+            "time_zone": "UTC",
+            "dst": "skip_gap_first_fold",
+            "calendar_version": "tzdb:2026b"
+          },
+          "event_kind": "time.occurrence",
+          "kind_version": "1",
+          "mode": "occurrence",
+          "filter": {
+            "all": []
+          },
+          "template": {
+            "id": "repo:template:ai-on-gke:grain:daily-review",
+            "revision": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+            "tracking": "pinned"
+          },
+          "parameters": {
+            "date": {
+              "from": "/extensions/local_date",
+              "type": "string",
+              "max_bytes": 10
+            }
+          },
+          "target": {
+            "repository": "ai-on-gke/grain",
+            "base": "main"
+          },
+          "identity": {
+            "owner": "user:review-owner",
+            "service": "service:trigger-filer"
+          },
+          "permissions": {
+            "read_repositories": [
+              "ai-on-gke/grain"
+            ],
+            "task_capabilities": [],
+            "actions": [
+              "task.create_from_trigger"
+            ]
+          },
+          "policy": {
+            "admission": "standard",
+            "approval": "proposed",
+            "approval_authorization": null,
+            "auto_merge": false,
+            "auto_approve_proposals": false
+          },
+          "repeat": {
+            "policy": "new",
+            "key_fields": [
+              "/source"
+            ],
+            "on_head_change": "ignore",
+            "active_limit": 1
+          },
+          "delivery": {
+            "initial": "baseline",
+            "enable": "future_only",
+            "catch_up": "hold",
+            "max_age_seconds": 86400,
+            "debounce_seconds": 0,
+            "batch_max": 1
+          },
+          "state": "enabled",
+          "quotas": {
+            "matches_per_hour": 20,
+            "tasks_per_day": 2,
+            "queue_size": 20,
+            "concurrent_tasks": 1,
+            "fanout_per_event": 1,
+            "cost_units_per_day": 100
+          },
+          "loops": {
+            "automation": "allow_bounded",
+            "max_depth": 3,
+            "max_chain_tasks": 10
+          }
+        },
+        "sample_event_ids": [],
+        "synthetic_events": [],
+        "range": null
+      },
+      "expected": "use already registered fixed baseline and current caller source rights; no new subscription, checkpoint or task writes"
+    },
+    {
+      "boundary": "preview service -> operator",
+      "definition": "preview_result",
+      "message": {
+        "candidate_digest": "sha256:322e2543b4f35aa474ded2213926c88968e5e19c23c1dbce11435cab3b7ce3fb",
+        "preview_token": "preview:clock-baseline-0859",
+        "expires_at": "2026-11-17T09:04:00Z",
+        "matching_count": 0,
+        "task_ceiling": 2,
+        "cost_ceiling": 100,
+        "composition_digest": "sha256:9c24a694fd7597e98213b5974a2bb2e4ab0f0bc8299b5b298187f337774f9126",
+        "authority_digest": "sha256:0f4c9bdd9b37e070e6987b55052bf902762e8e4c0314c57a851bec0e5ee5f9fe",
+        "coverage": {
+          "mode": "complete",
+          "from": "2026-11-17T08:59:00Z",
+          "through": "2026-11-17T08:59:00Z",
+          "gap": null
+        },
+        "samples": [],
+        "warnings": [
+          "Future-only activation at the committed upstream baseline; no historic events will file automatically"
+        ]
+      },
+      "expected": "five-minute token binds actor, desired config digest, source baseline, authority epoch and effective budgets; enable rechecks all of them"
+    },
+    {
+      "boundary": "operator -> activation transaction",
+      "definition": "mutation",
+      "message": {
+        "operation": "control",
+        "request_id": "enable-clock-1",
+        "binding_id": "daily-review",
+        "expected_version": 1,
+        "expected_control_revision": 1,
+        "candidate": null,
+        "control": "enable",
+        "job_id": null,
+        "old_queue": "hold",
+        "authorization_ref": "filing-grant-clock-1",
+        "preview_token": "preview:clock-baseline-0859",
+        "reason": "Enable accepted desired clock config before the next 09:00 occurrence"
+      },
+      "expected": "verified preview commits control enabled at revision2 and sequence watermark before09:00; paused example config alone could never file"
+    },
     {
       "boundary": "calendar transaction -> journal",
       "definition": "event",
@@ -64,7 +306,7 @@
         "disposition": "created",
         "task_id": "9002",
         "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
-        "authority_digest": "sha256:3e359f300d0cf937d4ecb1fbe254573bb40a7ebcd9c70987a5e463de47146125",
+        "authority_digest": "sha256:0f4c9bdd9b37e070e6987b55052bf902762e8e4c0314c57a851bec0e5ee5f9fe",
         "committed_at": "2026-11-17T09:03:01Z"
       },
       "expected": "task 9002, receipt, quota and outbox atomically visible; proposed approval preserved"

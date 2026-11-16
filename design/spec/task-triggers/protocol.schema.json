@@ -2318,7 +2318,8 @@
         "created_at",
         "expires_at",
         "revoked_at",
-        "authorization_epoch"
+        "authorization_epoch",
+        "target_identity"
       ],
       "properties": {
         "authorization_id": {
@@ -2414,6 +2415,9 @@
         "authorization_epoch": {
           "type": "integer",
           "minimum": 1
+        },
+        "target_identity": {
+          "$ref": "#/$defs/target_identity"
         }
       }
     },
@@ -2435,7 +2439,8 @@
         "repeat_key",
         "status",
         "worker_fence",
-        "created_at"
+        "created_at",
+        "target_identity"
       ],
       "properties": {
         "match_id": {
@@ -2513,6 +2518,9 @@
           "type": "string",
           "format": "date-time",
           "pattern": "Z$"
+        },
+        "target_identity": {
+          "$ref": "#/$defs/target_identity"
         }
       }
     },
@@ -2684,6 +2692,44 @@
           "maximum": 9007199254740991
         },
         "verification_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "target_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_repository_id",
+        "forge_host",
+        "forge_repository_id",
+        "repository",
+        "base"
+      ],
+      "properties": {
+        "deployment_repository_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "forge_host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "forge_repository_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "base": {
           "type": "string",
           "minLength": 1,
           "maxLength": 512

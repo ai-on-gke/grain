@@ -12,7 +12,7 @@
     "disposition": "created",
     "task_id": null,
     "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
-    "authority_digest": "sha256:3e359f300d0cf937d4ecb1fbe254573bb40a7ebcd9c70987a5e463de47146125",
+    "authority_digest": "sha256:64684eda321fec88de165c49343f0bc3e78cec4ebcc2901e89c5125fbc134fb1",
     "committed_at": "2026-11-16T19:00:05Z"
   }
 }

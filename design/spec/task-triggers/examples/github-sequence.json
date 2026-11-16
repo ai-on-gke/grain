@@ -1,7 +1,145 @@
 {
   "name": "GitHub PR request through proposed durable filing",
-  "binding_fixture": "github-binding.json",
+  "binding_fixture": "github-enabled-binding.json",
   "steps": [
+    {
+      "boundary": "accepted config-repo importer -> immutable desired configuration",
+      "definition": "mutation",
+      "message": {
+        "operation": "apply",
+        "request_id": "import-enabled-1",
+        "binding_id": "requested-pr-review",
+        "expected_version": 0,
+        "expected_control_revision": 0,
+        "candidate": {
+          "api_version": "grain.trigger/v1",
+          "id": "requested-pr-review",
+          "version": 1,
+          "provider": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "event_kind": "github.pull_request.review_requested",
+          "kind_version": "1",
+          "mode": "occurrence",
+          "filter": {
+            "all": [
+              {
+                "path": "/extensions/recipient_kind",
+                "op": "eq",
+                "value": "team"
+              },
+              {
+                "path": "/extensions/recipient_id",
+                "op": "eq",
+                "value": 77
+              }
+            ]
+          },
+          "template": {
+            "id": "repo:template:ai-on-gke:grain:requested-review",
+            "revision": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+            "tracking": "pinned"
+          },
+          "parameters": {
+            "pr": {
+              "from": "/extensions/number",
+              "type": "integer",
+              "max_bytes": 20
+            },
+            "head": {
+              "from": "/extensions/head",
+              "type": "string",
+              "max_bytes": 128
+            },
+            "title": {
+              "from": "/payload/title",
+              "type": "string",
+              "max_bytes": 1024
+            }
+          },
+          "target": {
+            "repository": "ai-on-gke/grain",
+            "base": "main"
+          },
+          "identity": {
+            "owner": "user:review-owner",
+            "service": "service:trigger-filer"
+          },
+          "permissions": {
+            "read_repositories": [
+              "ai-on-gke/grain"
+            ],
+            "task_capabilities": [],
+            "actions": [
+              "task.create_from_trigger",
+              "task.coalesce_trigger"
+            ]
+          },
+          "policy": {
+            "admission": "standard",
+            "approval": "proposed",
+            "approval_authorization": null,
+            "auto_merge": false,
+            "auto_approve_proposals": false
+          },
+          "repeat": {
+            "policy": "coalesce",
+            "key_fields": [
+              "/resource/id",
+              "/extensions/recipient_kind",
+              "/extensions/recipient_id"
+            ],
+            "on_head_change": "new_request_only",
+            "active_limit": 1
+          },
+          "delivery": {
+            "initial": "baseline",
+            "enable": "future_only",
+            "catch_up": "hold",
+            "max_age_seconds": 86400,
+            "debounce_seconds": 30,
+            "batch_max": 20
+          },
+          "state": "enabled",
+          "quotas": {
+            "matches_per_hour": 100,
+            "tasks_per_day": 20,
+            "queue_size": 100,
+            "concurrent_tasks": 1,
+            "fanout_per_event": 1,
+            "cost_units_per_day": 1000
+          },
+          "loops": {
+            "automation": "hold",
+            "max_depth": 3,
+            "max_chain_tasks": 10
+          }
+        },
+        "control": null,
+        "job_id": null,
+        "old_queue": "hold",
+        "authorization_ref": "filing-grant-4",
+        "preview_token": null,
+        "reason": "Import accepted config revision with desired enable; runtime remains held until activation"
+      },
+      "expected": "internal importer applies accepted config change; public config-writing API instead returns config_managed_externally; runtime is not enabled yet"
+    },
     {
       "boundary": "authorized operator -> stored standing filing ceiling",
       "definition": "filing_authorization",
@@ -9,7 +147,7 @@
         "authorization_id": "filing-grant-4",
         "binding_id": "requested-pr-review",
         "binding_version": 1,
-        "binding_digest": "sha256:736852f1cafd5a8877f048f7284002c3d77f9e9e643ba572bce6a67c55765505",
+        "binding_digest": "sha256:9ca5eb937e8747065057876f00721107f166f84af2298e550616851c16efefb1",
         "source_key": "sha256:58ad7108e778172884e13d6c5890942077a7a9d43ced7619da27e63fb0ee9eac",
         "authorization_partition": "partition-review-team77",
         "security_digest": "sha256:9f8fe8c7bb10bea04cee661a285acac8ebd1ec5637765aa531d765dea97c3110",
@@ -22,7 +160,14 @@
         "created_at": "2026-11-16T18:55:00Z",
         "expires_at": "2026-12-16T18:55:00Z",
         "revoked_at": null,
-        "authorization_epoch": 4
+        "authorization_epoch": 4,
+        "target_identity": {
+          "deployment_repository_id": "repo-grain-1",
+          "forge_host": "github.com",
+          "forge_repository_id": "12345",
+          "repository": "ai-on-gke/grain",
+          "base": "main"
+        }
       },
       "expected": "person verified independently of webhook actor; grants task creation within exact proposed-task ceiling, no automatic task approval"
     },
@@ -88,6 +233,195 @@
         "error": null
       },
       "expected": "commit baseline activation and operation receipt before live read"
+    },
+    {
+      "boundary": "operator -> side-effect-free activation preview",
+      "definition": "preview_request",
+      "message": {
+        "candidate": {
+          "api_version": "grain.trigger/v1",
+          "id": "requested-pr-review",
+          "version": 1,
+          "provider": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "event_kind": "github.pull_request.review_requested",
+          "kind_version": "1",
+          "mode": "occurrence",
+          "filter": {
+            "all": [
+              {
+                "path": "/extensions/recipient_kind",
+                "op": "eq",
+                "value": "team"
+              },
+              {
+                "path": "/extensions/recipient_id",
+                "op": "eq",
+                "value": 77
+              }
+            ]
+          },
+          "template": {
+            "id": "repo:template:ai-on-gke:grain:requested-review",
+            "revision": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+            "tracking": "pinned"
+          },
+          "parameters": {
+            "pr": {
+              "from": "/extensions/number",
+              "type": "integer",
+              "max_bytes": 20
+            },
+            "head": {
+              "from": "/extensions/head",
+              "type": "string",
+              "max_bytes": 128
+            },
+            "title": {
+              "from": "/payload/title",
+              "type": "string",
+              "max_bytes": 1024
+            }
+          },
+          "target": {
+            "repository": "ai-on-gke/grain",
+            "base": "main"
+          },
+          "identity": {
+            "owner": "user:review-owner",
+            "service": "service:trigger-filer"
+          },
+          "permissions": {
+            "read_repositories": [
+              "ai-on-gke/grain"
+            ],
+            "task_capabilities": [],
+            "actions": [
+              "task.create_from_trigger",
+              "task.coalesce_trigger"
+            ]
+          },
+          "policy": {
+            "admission": "standard",
+            "approval": "proposed",
+            "approval_authorization": null,
+            "auto_merge": false,
+            "auto_approve_proposals": false
+          },
+          "repeat": {
+            "policy": "coalesce",
+            "key_fields": [
+              "/resource/id",
+              "/extensions/recipient_kind",
+              "/extensions/recipient_id"
+            ],
+            "on_head_change": "new_request_only",
+            "active_limit": 1
+          },
+          "delivery": {
+            "initial": "baseline",
+            "enable": "future_only",
+            "catch_up": "hold",
+            "max_age_seconds": 86400,
+            "debounce_seconds": 30,
+            "batch_max": 20
+          },
+          "state": "enabled",
+          "quotas": {
+            "matches_per_hour": 100,
+            "tasks_per_day": 20,
+            "queue_size": 100,
+            "concurrent_tasks": 1,
+            "fanout_per_event": 1,
+            "cost_units_per_day": 1000
+          },
+          "loops": {
+            "automation": "hold",
+            "max_depth": 3,
+            "max_chain_tasks": 10
+          }
+        },
+        "sample_event_ids": [],
+        "synthetic_events": [],
+        "range": null
+      },
+      "expected": "use already registered fixed baseline and current caller source rights; no new subscription, checkpoint or task writes"
+    },
+    {
+      "boundary": "preview service -> operator",
+      "definition": "preview_result",
+      "message": {
+        "candidate_digest": "sha256:9ca5eb937e8747065057876f00721107f166f84af2298e550616851c16efefb1",
+        "preview_token": "preview:activation-after-cursor100",
+        "expires_at": "2026-11-16T19:05:00Z",
+        "matching_count": 0,
+        "task_ceiling": 20,
+        "cost_ceiling": 1000,
+        "composition_digest": "sha256:3f05ef38d9567c15abd2eb97f4ec467397785b79d5523f33ae25afd0b2832d3e",
+        "authority_digest": "sha256:64684eda321fec88de165c49343f0bc3e78cec4ebcc2901e89c5125fbc134fb1",
+        "coverage": {
+          "mode": "bounded",
+          "from": "2026-11-09T19:00:00Z",
+          "through": "2026-11-16T19:00:00Z",
+          "gap": null
+        },
+        "samples": [],
+        "warnings": [
+          "Future-only activation at the committed upstream baseline; no historic events will file automatically"
+        ]
+      },
+      "expected": "five-minute token binds actor, desired config digest, source baseline, authority epoch and effective budgets; enable rechecks all of them"
+    },
+    {
+      "boundary": "authorized preview -> runtime activation transaction",
+      "definition": "mutation",
+      "message": {
+        "operation": "control",
+        "request_id": "enable-review-1",
+        "binding_id": "requested-pr-review",
+        "expected_version": 1,
+        "expected_control_revision": 1,
+        "candidate": null,
+        "control": "enable",
+        "job_id": null,
+        "old_queue": "hold",
+        "authorization_ref": "filing-grant-4",
+        "preview_token": "preview:activation-after-cursor100",
+        "reason": "Enable only after verified gateway setup and fixed baseline cursor100, future events only"
+      },
+      "expected": "preview token binds actor, upstream baseline100, pins/authority/quota and candidate; commit control revision2 plus receipt-sequence watermark; later101 eligible"
+    },
+    {
+      "boundary": "activation transaction -> operator",
+      "definition": "management_result",
+      "message": {
+        "request_id": "enable-review-1",
+        "status": "controlled",
+        "binding_id": "requested-pr-review",
+        "version": 1,
+        "control_revision": 2,
+        "audit_receipt": "activation-receipt-1",
+        "job_id": null,
+        "error": null
+      },
+      "expected": "runtime enabled under exact desired config and filing authority, no task yet"
     },
     {
       "boundary": "gateway -> provider",
@@ -241,7 +575,7 @@
         "event_key": "sha256:799413bd6b6766aef7521ddff3b060c56467023fcad52ae554b5b4fdbe5eb3da",
         "binding_id": "requested-pr-review",
         "binding_version": 1,
-        "binding_digest": "sha256:736852f1cafd5a8877f048f7284002c3d77f9e9e643ba572bce6a67c55765505",
+        "binding_digest": "sha256:9ca5eb937e8747065057876f00721107f166f84af2298e550616851c16efefb1",
         "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
         "security_digest": "sha256:9f8fe8c7bb10bea04cee661a285acac8ebd1ec5637765aa531d765dea97c3110",
         "authorization_ref": "filing-grant-4",
@@ -254,7 +588,14 @@
         "repeat_key": "sha256:a842b83ee51ba81e949993bace71295bc6e3161405b0a92ce83c737327ecbab2",
         "status": "pending",
         "worker_fence": 8,
-        "created_at": "2026-11-16T19:00:03Z"
+        "created_at": "2026-11-16T19:00:03Z",
+        "target_identity": {
+          "deployment_repository_id": "repo-grain-1",
+          "forge_host": "github.com",
+          "forge_repository_id": "12345",
+          "repository": "ai-on-gke/grain",
+          "base": "main"
+        }
       },
       "expected": "immutable binding/template/authority/input pins and per-consumer checkpoint commit together before filing"
     },
@@ -305,7 +646,7 @@
         "disposition": "created",
         "task_id": "9001",
         "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
-        "authority_digest": "sha256:3e359f300d0cf937d4ecb1fbe254573bb40a7ebcd9c70987a5e463de47146125",
+        "authority_digest": "sha256:64684eda321fec88de165c49343f0bc3e78cec4ebcc2901e89c5125fbc134fb1",
         "committed_at": "2026-11-16T19:00:05Z"
       },
       "expected": "one unapproved task 9001; no runtime action in this documentation"
@@ -335,7 +676,7 @@
         "disposition": "created",
         "task_id": "9001",
         "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
-        "authority_digest": "sha256:3e359f300d0cf937d4ecb1fbe254573bb40a7ebcd9c70987a5e463de47146125",
+        "authority_digest": "sha256:64684eda321fec88de165c49343f0bc3e78cec4ebcc2901e89c5125fbc134fb1",
         "committed_at": "2026-11-16T19:00:05Z"
       },
       "expected": "same task and receipt even after completion; no duplicate"

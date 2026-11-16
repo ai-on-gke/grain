@@ -149,14 +149,15 @@ for kind in source['kinds']:
     assert kind['payload_schema_digest'] == digest(kind['payload_schema'])
 
 authority = json.loads((ROOT / 'examples/filing-authorization.json').read_text())
-assert authority['binding_digest'] == digest(binding)
+enabled_binding = json.loads((ROOT / 'examples/github-enabled-binding.json').read_text())
+assert authority['binding_digest'] == digest(enabled_binding)
 trace = json.loads((ROOT / 'examples/github-sequence.json').read_text())
 for step in trace['steps']:
     if step['definition'] == 'receipt':
         assert step['message']['authority_digest'] == digest(authority)
     if step['definition'] == 'match_record':
         assert step['message']['input_digest'] == digest(step['message']['mapped_inputs'])
-        assert step['message']['binding_digest'] == digest(binding)
+        assert step['message']['binding_digest'] == digest(enabled_binding)
 
 # Local links and anchors, including repository-relative source evidence.
 documents = [ROOT / 'task-triggers.spec.md', ROOT / 'implementation.spec.md',

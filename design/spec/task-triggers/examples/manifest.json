@@ -15,7 +15,10 @@
     "replay-apply.json": "replay_request",
     "firing-history.json": "history_result",
     "preview-result.json": "preview_result",
-    "filing-authorization.json": "filing_authorization"
+    "filing-authorization.json": "filing_authorization",
+    "github-enabled-binding.json": "binding",
+    "time-enabled-binding.json": "binding",
+    "time-filing-authorization.json": "filing_authorization"
   },
   "invalid": [
     "invalid-floating-provider.json",
