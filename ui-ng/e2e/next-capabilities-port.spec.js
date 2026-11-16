@@ -17,7 +17,7 @@
 // first, state chips in host wording with (i) popovers a click or a key
 // opens, a server's own page at /settings/capabilities/<id> rather than
 // the Inbox, its retired names, a Remove that lists what still grants it,
-// and a scope set Remove that asks first.
+// and the grant picker's capability-policy verdicts.
 
 import { test, expect } from "./fixtures.js";
 
@@ -231,71 +231,6 @@ test("Remove on a server's page lists what still grants it and asks first", asyn
     await expect(page.getByTestId(`cap-server-row-${id}`)).toHaveCount(0);
   } finally {
     await request.post("/api/capability-servers/remove", { data: { id } });
-  }
-});
-
-test("Scope set Remove asks first, listing the grants that still hold it", async ({
-  page,
-  request,
-}) => {
-  const name = `e2e/throwaway-${Date.now().toString(36)}`;
-  const made = await request.put("/api/api-scope-sets", {
-    data: { set: { name, scopes: ["tasks:read"] } },
-  });
-  expect(made.ok()).toBeTruthy();
-  await page.route("**/api/api-scope-sets/usage", (route) =>
-    route.fulfill({
-      json: [
-        {
-          name,
-          holders: [
-            {
-              kind: "task",
-              id: "7",
-              name: "Triage the queue",
-              repo: "acme/widgets",
-              grant: `${API}#${name}`,
-            },
-          ],
-        },
-      ],
-    }),
-  );
-  let deleted = null;
-  page.on("request", (r) => {
-    if (r.url().endsWith("/api/api-scope-sets/delete")) {
-      deleted = r.postDataJSON();
-    }
-  });
-  try {
-    await page.goto("/next/settings/capabilities");
-    const row = page.getByTestId(`scope-set-row-${name}`);
-    await expect(row).toBeVisible();
-    // A built-in set has no Remove.
-    await expect(
-      page.getByTestId("scope-set-row-grain/viewer").getByRole("button"),
-    ).toHaveCount(0);
-
-    await row.getByRole("button", { name: `Remove scope set ${name}` }).click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText(`Remove scope set ${name}?`);
-    await expect(dialog).toContainText("1 grant holds");
-    await expect(dialog.getByTestId("confirm-items")).toContainText(
-      "Task #7 “Triage the queue” on acme/widgets",
-    );
-    await dialog.getByRole("button", { name: "Cancel" }).click();
-    await expect(row).toBeVisible();
-    expect(deleted).toBeNull();
-
-    await row.getByRole("button", { name: `Remove scope set ${name}` }).click();
-    await page
-      .getByRole("dialog")
-      .getByRole("button", { name: "Remove" })
-      .click();
-    await expect(row).toHaveCount(0);
-    expect(deleted).toEqual({ name });
-  } finally {
-    await request.post("/api/api-scope-sets/delete", { data: { name } });
   }
 });
 

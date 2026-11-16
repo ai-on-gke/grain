@@ -48,6 +48,7 @@ import {
   type MetricsWindow,
   type TokenBudget,
   type UsageResponse,
+  type UsageScope,
   buildAlphabeticalContributors,
   buildThroughputGeometry,
   bucketRangeLabel,
@@ -1188,7 +1189,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                         <th scope="col">Runs</th>
                         <th scope="col">Input / Output</th>
                         <th scope="col">Cached (R/W)</th>
-                        <th scope="col">Window Usage &amp; Cap</th>
+                        <th scope="col">Interval &amp; Weekly Usage</th>
                         <th scope="col">Burn / hr</th>
                         <th scope="col">Status</th>
                       </tr>
@@ -1218,13 +1219,14 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                             {{ fmtNum(s.cacheReadTokens) }} /
                             {{ fmtNum(s.cacheWriteTokens) }}
                           </td>
-                          <td style="min-width: 170px">
+                          <td style="min-width: 190px">
                             <div class="tabular" style="font-size: 12px">
+                              <span class="muted">{{
+                                shortWindow(s.window)
+                              }}</span>
                               {{ fmtNum(s.used) }}
                               @if (s.limit) {
                                 / {{ fmtNum(s.limit) }} ({{ s.limitSource }})
-                              } @else {
-                                ({{ s.window }})
                               }
                             </div>
                             @if (s.limit) {
@@ -1243,13 +1245,80 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                                 ></div>
                               </div>
                             }
+                            <!-- The week's line only where it says what the interval does not:
+                              a weekly limit, a weekly pause, or more spent this
+                              week than in the interval. -->
+                            @if (showWeekly(s)) {
+                              <div
+                                class="tabular tel-weekly-usage"
+                                style="font-size: 12px; margin-top: 6px"
+                                [attr.data-testid]="
+                                  'usage-weekly-' +
+                                  s.connection +
+                                  ':' +
+                                  (s.model || '*')
+                                "
+                              >
+                                <span class="muted">7d</span>
+                                {{ fmtNum(s.weeklyUsed ?? 0) }}
+                                @if (s.weeklyLimit) {
+                                  / {{ fmtNum(s.weeklyLimit) }} (learned)
+                                }
+                              </div>
+                              @if (s.weeklyPausedUntil) {
+                                <div
+                                  class="meter-track"
+                                  style="margin-top: 4px"
+                                >
+                                  <div
+                                    class="meter-fill is-error"
+                                    style="width: 100%"
+                                  ></div>
+                                </div>
+                                <div
+                                  class="tel-weekly-spent"
+                                  role="status"
+                                  style="font-size: 12px; margin-top: 4px"
+                                >
+                                  <strong>Weekly limit reached</strong>
+                                  · resets {{ fmtReset(s.weeklyPausedUntil) }}
+                                </div>
+                              } @else if (s.weeklyLimit) {
+                                <div
+                                  class="meter-track"
+                                  style="margin-top: 4px"
+                                >
+                                  <div
+                                    [class]="
+                                      (s.weeklyUsed ?? 0) / s.weeklyLimit >= 0.9
+                                        ? 'meter-fill is-error'
+                                        : (s.weeklyUsed ?? 0) / s.weeklyLimit >=
+                                            0.75
+                                          ? 'meter-fill is-warn'
+                                          : 'meter-fill is-healthy'
+                                    "
+                                    [style.width.%]="
+                                      Math.min(
+                                        100,
+                                        ((s.weeklyUsed ?? 0) / s.weeklyLimit) *
+                                          100
+                                      )
+                                    "
+                                  ></div>
+                                </div>
+                              }
+                            }
                           </td>
                           <td class="tabular">{{ fmtNum(s.burnPerHour) }}</td>
                           <td>
                             @if (s.pausedUntil) {
                               <span class="status-pill error">
                                 <g-status-icon tone="error" kind="blocked" />
-                                Paused
+                                {{
+                                  s.pauseHorizon === "weekly"
+                                    ? "Paused · weekly limit"
+                                    : "Paused · interval limit"
+                                }}
                               </span>
                               @if (fmtReset(s.pausedUntil); as reset) {
                                 <span
@@ -1526,6 +1595,21 @@ export class TelemetryPageComponent implements OnInit {
   protected readonly budgetWindows = BUDGET_WINDOWS;
   protected readonly fmtDur = formatDurationSec;
   protected readonly fmtNum = formatCompactNum;
+
+  // Whether a scope's usage cell shows its weekly line (pkg/usage
+  // weekly.go): a row whose week is no more than its interval keeps one
+  // line, so the table stays as compact as it was.
+  protected showWeekly(s: UsageScope): boolean {
+    return (
+      !!s.weeklyLimit || !!s.weeklyPausedUntil || (s.weeklyUsed ?? 0) > s.used
+    );
+  }
+
+  // A Go duration ("5h0m0s") as the interval meter labels it ("5h").
+  protected shortWindow(window?: string): string {
+    if (!window) return "";
+    return window.replace(/([hm])0s$/, "$1").replace(/h0m$/, "h");
+  }
   protected readonly fmtPct = formatPct;
 
   protected readonly window = signal<MetricsWindow>("7d");

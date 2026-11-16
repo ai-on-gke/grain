@@ -1,4 +1,5 @@
-/* Copyright 2026 Google LLC
+/*
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,6 +13,101 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/* Stored secrets: one row per secret, its keys as chips each with its
+   own Replace / Remove, the secret's own Remove on the right. */
+.s-secret-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s-secret-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.s-secret-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.s-secret-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.s-secret-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 10px;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container-high);
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.s-secret-key > .s-mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.s-file-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.s-file-btn:has(input:focus-visible) {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.s-file-btn.disabled {
+  color: var(--md-sys-color-on-surface-variant);
+  pointer-events: none;
+}
+
+.s-retired code {
+  font-size: 12px;
+}
+
+/* A scope set's scopes stay on one line and truncate, the full list in
+   the cell's title (and the name's); at phone width the Scopes and
+   Source columns go, so Remove stays in view without scrolling. */
+.s-scope-list {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 599px) {
+  .s-hide-phone {
+    display: none;
+  }
+
+  /* A secret's name takes its own line, so its key chips get the row. */
+  .s-secret-name {
+    flex-basis: 100%;
+  }
+}
 
 /* Settings -> Capabilities: the server list's name cell and a server's
    own page (capability-server-detail.component.ts). */
@@ -129,43 +225,4 @@
 
 .cap-danger {
   color: var(--md-sys-color-error);
-}
-
-.cap-scope-sets {
-  list-style: none;
-  margin: 0 0 12px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.cap-scope-set {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.cap-scope-set > .s-hint {
-  grid-column: 1;
-}
-
-.cap-scope-set > .s-row-actions {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.cap-scope-set-main {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.cap-scope-set-name {
-  font-weight: 600;
 }

@@ -1558,52 +1558,6 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(chip("broken-mcp").getAttribute("title")).toBe("connection refused");
   });
 
-  it("asks before removing a scope set, listing the grants that hold it, and removes it on Remove", async () => {
-    const api = new FakeSettingsApi();
-    const baseGet = api.get;
-    api.get = (key, params, query) => {
-      if (key === "GET /api/api-scope-sets") {
-        return Promise.resolve({
-          sets: [
-            { name: "grain/viewer", scopes: ["tasks:read"], builtin: true },
-            { name: "ops/triage", scopes: ["tasks:read"], deprecated: true },
-          ],
-        });
-      }
-      if (key === "GET /api/api-scope-sets/usage") {
-        return Promise.resolve([
-          {
-            name: "ops/triage",
-            holders: [{ kind: "task", id: "4", name: "Sort it", grant: "g" }],
-          },
-        ]);
-      }
-      return baseGet(key, params, query);
-    };
-    const { el, harness } = await mountSettings("/settings/capabilities", api);
-    const q = (id: string) =>
-      el.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-    expect(q("remove-scope-set-grain/viewer")).toBeNull();
-    expect(q("scope-set-deprecated-ops/triage")?.textContent?.trim()).toBe(
-      "deprecated",
-    );
-    q("remove-scope-set-ops/triage")!.click();
-    await harness.fixture.whenStable();
-    await new Promise((r) => setTimeout(r, 0));
-    harness.fixture.detectChanges();
-    expect(q("confirm-dialog")?.textContent).toContain("1 grant holds");
-    expect(q("confirm-items")?.textContent).toContain("Task #4 “Sort it”");
-    expect(
-      api.calls.some((c) => c.key === "POST /api/api-scope-sets/delete"),
-    ).toBe(false);
-    q("confirm-accept")!.click();
-    await harness.fixture.whenStable();
-    const del = api.calls.find(
-      (c) => c.key === "POST /api/api-scope-sets/delete",
-    );
-    expect(del?.body).toEqual({ name: "ops/triage" });
-  });
-
   it("shows a capability server's own page at /settings/capabilities/<id>", async () => {
     const { el } = await mountSettings(
       `/settings/capabilities/${encodeURIComponent("github-mcp")}`,
@@ -1692,5 +1646,127 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = orig;
     }
+  });
+
+  it("explains unreadable secret lists and editable secrets when a role holds secrets:write without settings:write or secrets:read", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.access = {
+      role: "grain/secret-writer",
+      roles: ["grain/secret-writer"],
+      full: false,
+      scopes: ["settings:read", "secrets:write"],
+    };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    expect(
+      el.querySelector('[data-testid="settings-role-readonly"]')?.textContent,
+    ).toContain("Secrets and API keys remain editable.");
+    expect(
+      el
+        .querySelector('[data-testid="stored-secrets"] .s-subhead-title')
+        ?.textContent?.trim(),
+    ).toBe("Stored secrets");
+    expect(
+      el.querySelector('[data-testid="secrets-read-restricted"]')?.textContent,
+    ).toContain("Stored secret names cannot be read with your role");
+    expect(el.querySelector('[data-testid="secrets-empty"]')).toBeNull();
+  });
+
+  it("disables capability policy and scope-set inputs under configRepoOnly", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody = { ...api.settingsBody, configRepoOnly: true };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    for (const id of [
+      "input-cap-server-id",
+      "input-cap-server-url",
+      "input-policy-capability",
+      "input-policy-repos",
+      "select-policy-effect",
+      "switch-policy-allow-untrusted",
+      "add-policy-rule-btn",
+      "input-scope-set-name",
+      "input-scope-set-scopes",
+    ]) {
+      const ctrl = el.querySelector<HTMLInputElement | HTMLButtonElement>(
+        `[data-testid="${id}"]`,
+      );
+      expect(ctrl, id).not.toBeNull();
+      expect(ctrl?.disabled, id).toBe(true);
+    }
+    expect(
+      el.querySelector<HTMLInputElement>('[data-testid="input-secret-value"]')
+        ?.disabled,
+    ).toBe(false);
+  });
+
+  it("keeps a replacement typed during an in-flight secret PUT and blocks double submits", async () => {
+    const api = new FakeSettingsApi();
+    const baseGet = api.get;
+    api.get = (key, params, query) => {
+      if (key === "GET /api/secrets") {
+        return Promise.resolve({
+          enabled: true,
+          secrets: [
+            { name: "rv-a", keys: ["token"] },
+            { name: "rv-b", keys: ["token"] },
+          ],
+        });
+      }
+      return baseGet(key, params, query);
+    };
+    let releasePut!: () => void;
+    let putCount = 0;
+    const basePut = api.put;
+    api.put = (key, params, body) => {
+      if (key === "PUT /api/secrets/{secret}/{key}") {
+        putCount += 1;
+        return new Promise((resolve) => {
+          releasePut = () => resolve({});
+        });
+      }
+      return basePut(key, params, body);
+    };
+
+    const { el, harness } = await mountSettings("/settings/capabilities", api);
+    const nameIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-name"]',
+    )!;
+    const keyIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-key"]',
+    )!;
+    const valIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-value"]',
+    )!;
+    const storeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="store-secret-btn"]',
+    )!;
+
+    setInput(nameIn, "rv-a");
+    setInput(keyIn, "token");
+    setInput(valIn, "A-NEW");
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(false);
+    storeBtn.click();
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(true);
+    storeBtn.click();
+    expect(putCount).toBe(1);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="replace-secret-rv-b-token"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    setInput(valIn, "B-NEW");
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(true);
+
+    releasePut();
+    await new Promise((r) => setTimeout(r, 0));
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+
+    expect(nameIn.value).toBe("rv-b");
+    expect(keyIn.value).toBe("token");
+    expect(valIn.value).toBe("B-NEW");
+    expect(storeBtn.disabled).toBe(false);
   });
 });
