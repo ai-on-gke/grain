@@ -689,21 +689,23 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                       No task has waited on CI for more than an hour.
                     </p>
                   } @else {
+                    <!-- Narrow, each row stacks into labelled lines rather
+                         than scroll sideways (the book's s-table-stack). -->
                     <div
-                      class="ops-table-wrap"
+                      class="ops-table-wrap fleet-ci-waits-wrap"
                       tabindex="0"
                       role="region"
                       aria-label="Tasks waiting on CI"
                     >
-                      <table class="ops-table">
+                      <table class="ops-table fleet-ci-waits-table">
                         <thead>
                           <tr>
                             <th scope="col">Task</th>
+                            <th scope="col">Waited</th>
+                            <th scope="col">Waiting for</th>
                             <th scope="col">Repository</th>
                             <th scope="col">Branch</th>
                             <th scope="col">CI mode</th>
-                            <th scope="col">Waiting for</th>
-                            <th scope="col">Waited</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -714,24 +716,25 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                                   >#{{ w.taskId }}</a
                                 >
                               </td>
-                              <td class="tabular">{{ w.repo || "—" }}</td>
-                              <td class="tabular">{{ w.branch || "—" }}</td>
-                              <td class="tabular">{{ w.ciMode || "—" }}</td>
-                              <td class="tabular">
-                                {{ w.ci }}
-                                @if (w.recovered) {
-                                  <span
-                                    class="muted"
-                                    gTip="Read back from resume_later's own comment"
-                                  >
-                                    · recovered</span
-                                  >
-                                }
-                              </td>
-                              <td class="tabular">
+                              <td class="tabular" data-label="Waited">
                                 <time [attr.datetime]="w.since">{{
                                   fmtAge(w.since)
                                 }}</time>
+                              </td>
+                              <td class="tabular" data-label="Waiting for">
+                                {{ w.ci }}
+                                @if (w.recovered) {
+                                  <span class="muted"> · recovered</span>
+                                }
+                              </td>
+                              <td class="tabular" data-label="Repository">
+                                {{ w.repo || "—" }}
+                              </td>
+                              <td class="tabular" data-label="Branch">
+                                {{ w.branch || "—" }}
+                              </td>
+                              <td class="tabular" data-label="CI mode">
+                                {{ w.ciMode || "—" }}
                               </td>
                             </tr>
                           }

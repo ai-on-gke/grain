@@ -293,7 +293,9 @@ sideways: mark it `.s-table.s-table-stack` inside `.s-table-wrap.s-table-stack-w
 and give each cell after the first a `data-label` naming its column. Below
 880px of the wrap's own width (a container query, since the pane beside the
 drawer and rail is narrower than the viewport) each row becomes a card of
-labelled lines under its first cell (Settings → Repositories). A sub-row editor
+labelled lines under its first cell (Settings → Repositories). A new table
+outside Settings does the same with its own container query (Fleet's Waiting
+on CI, `.fleet-ci-waits-table`). A sub-row editor
 inside a table that still scrolls sideways (`.s-table-wrap.s-table-pinned`)
 carries `.s-subrow-pin`, so it stays pinned to the visible width at phone sizes
 rather than spanning the scrolled table; a Codex connection in the

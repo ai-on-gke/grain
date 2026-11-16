@@ -574,11 +574,11 @@ describe("FleetPageComponent", () => {
     );
     expect(cells).toEqual([
       "#61",
+      "2h",
+      "my-branch",
       "acme/web",
       "grain/61-bump-go",
       "github",
-      "my-branch",
-      "2h",
     ]);
     expect(row.querySelector("a")?.getAttribute("href")).toBe("/task/61");
     expect(row.querySelector("time")?.getAttribute("datetime")).toBe(since);
