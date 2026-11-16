@@ -77,7 +77,8 @@ func (e *Endpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // matched against upstream's own route table, and the token must hold
 // that route's scope.
 func Route(r *http.Request, grant Grant, upstream Upstream) (forward *http.Request, reason string, status int) {
-	path := strings.TrimRight(r.URL.Path, "/")
+	rawPath := r.URL.Path
+	path := strings.TrimRight(rawPath, "/")
 	if to, ok := legacyPaths[path]; ok {
 		path = to
 	}
@@ -117,7 +118,11 @@ func Route(r *http.Request, grant Grant, upstream Upstream) (forward *http.Reque
 		if reason := narrowRepo(query, grant.Repo); reason != "" {
 			return nil, reason, http.StatusForbidden
 		}
-		return newForward(callCtx, http.MethodGet, path, query, nil), "", 0
+		forwardPath := path
+		if strings.HasSuffix(pattern, "...}") && strings.HasSuffix(rawPath, "/") {
+			forwardPath = path + "/"
+		}
+		return newForward(callCtx, http.MethodGet, forwardPath, query, nil), "", 0
 	case scope == "tasks:from-template":
 		body, reason := fromTemplateBody(r, grant)
 		if reason != "" {
@@ -156,28 +161,40 @@ func narrowRepo(query url.Values, repo model.RepoRef) string {
 }
 
 // narrowPath refuses a route whose path names a repository --
-// /api/repos/{owner}/{name}/... -- other than repo.
+// /api/repos/{owner}/{name}/... -- other than repo. A {name} segment without a
+// matching {owner} names another resource (such as an artifact in
+// /api/ci/runs/{id}/artifacts/{job}/{name}) and is left to upstream's gate.
 func narrowPath(pattern, path string, repo model.RepoRef) string {
 	_, patternPath, _ := strings.Cut(pattern, " ")
 	want := strings.Split(strings.Trim(patternPath, "/"), "/")
 	got := strings.Split(strings.Trim(path, "/"), "/")
-	var owner, name string
+	var owner, name, repoSeg string
+	hasOwner := false
 	for i, seg := range want {
 		if i >= len(got) {
 			break
 		}
 		switch strings.Trim(seg, "{}.") {
 		case "owner":
+			hasOwner = true
 			owner = got[i]
-		case "name", "repo":
+		case "name":
 			name = got[i]
+		case "repo":
+			repoSeg = got[i]
 		}
 	}
-	if owner == "" && name == "" {
+	if hasOwner {
+		if name == "" && repoSeg != "" {
+			name = repoSeg
+		}
+		if !strings.EqualFold(owner, repo.Owner) || !strings.EqualFold(name, repo.Name) {
+			return fmt.Sprintf("this token reaches %s only, not %s/%s", repo, owner, name)
+		}
 		return ""
 	}
-	if !strings.EqualFold(owner, repo.Owner) || !strings.EqualFold(name, repo.Name) {
-		return fmt.Sprintf("this token reaches %s only, not %s/%s", repo, owner, name)
+	if repoSeg != "" && !strings.EqualFold(repoSeg, repo.String()) {
+		return fmt.Sprintf("this token reaches %s only, not %s", repo, repoSeg)
 	}
 	return ""
 }

@@ -88,10 +88,50 @@ func (s *Server) handleListPersistentSandboxes(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	list = s.readablePersistentSandboxes(r, list)
 	list = filterList(list, func(st model.PersistentSandboxStatus) bool {
 		return page.matches(st.Name, st.Repo, st.State)
 	})
 	writeListBy(w, list, page, func(st model.PersistentSandboxStatus) string { return st.Name })
+}
+
+// readablePersistentSandboxes narrows persistent sandboxes to the repositories
+// r's caller may read under sandboxes:read before search matching and
+// cursor-based pagination run, preventing foreign sandbox names in nextCursor
+// and cross-repo count/search oracles.
+func (s *Server) readablePersistentSandboxes(r *http.Request, in []model.PersistentSandboxStatus) []model.PersistentSandboxStatus {
+	ctx := r.Context()
+	call, isAgent := agentCallFromContext(ctx)
+	ciCall, isCIAPI := model.CIAPICallFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	if role != nil && role.Full {
+		role = nil
+	}
+	if !isAgent && role == nil && !isCIAPI {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			return nil
+		}
+		return in
+	}
+	if !isCIAPI && (!isAgent || call.grants.Allows("sandboxes:read", "")) && (role == nil || role.allows("sandboxes:read", "")) {
+		return in
+	}
+	return filterList(in, func(st model.PersistentSandboxStatus) bool {
+		repo := strings.TrimSpace(st.Repo)
+		if repo == "" {
+			return false
+		}
+		if isCIAPI && !model.SameRepoText(repo, ciCall.Repo.String()) {
+			return false
+		}
+		if isAgent && !call.grants.Allows("sandboxes:read", repo) {
+			return false
+		}
+		if role != nil && !role.allows("sandboxes:read", repo) {
+			return false
+		}
+		return true
+	})
 }
 
 // handlePersistentSandboxLogs is GET /api/persistent-sandboxes/{name}/logs:

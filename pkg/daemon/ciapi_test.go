@@ -16,8 +16,13 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1031,5 +1036,296 @@ func TestAListedRepositorysCIAPITokenIsIsolatedEndToEnd(t *testing.T) {
 	}
 	if !acceptedTask.Approved || acceptedTask.State != model.StateQueued {
 		t.Errorf("accepted admin-op landed approved=%v state=%s, want approved queued", acceptedTask.Approved, acceptedTask.State)
+	}
+}
+
+type stubCIAPIRunner struct {
+	ci.NopRunner
+	runs      map[string]ci.Run
+	artifacts map[ci.ArtifactRef]string
+}
+
+func (r *stubCIAPIRunner) Get(id string) (ci.Run, bool) {
+	run, ok := r.runs[id]
+	return run, ok
+}
+
+func (r *stubCIAPIRunner) List() []ci.Run {
+	out := make([]ci.Run, 0, len(r.runs))
+	for _, run := range r.runs {
+		out = append(out, run)
+	}
+	return out
+}
+
+func (r *stubCIAPIRunner) RunArtifacts(_ context.Context, runID string) ([]ci.Artifact, bool, error) {
+	var out []ci.Artifact
+	for ref, body := range r.artifacts {
+		if ref.Run == runID {
+			out = append(out, ci.Artifact{Run: ref.Run, Job: ref.Job, Name: ref.Name, Stored: true, Bytes: int64(len(body))})
+		}
+	}
+	return out, true, nil
+}
+
+func (r *stubCIAPIRunner) OpenArtifact(_ context.Context, ref ci.ArtifactRef) (io.ReadCloser, ci.Artifact, error) {
+	body, ok := r.artifacts[ref]
+	if !ok {
+		return nil, ci.Artifact{}, fs.ErrNotExist
+	}
+	return io.NopCloser(strings.NewReader(body)), ci.Artifact{Run: ref.Run, Job: ref.Job, Name: ref.Name, Stored: true, Bytes: int64(len(body))}, nil
+}
+
+type stubCIAPIPersistentSandboxes struct {
+	list []model.PersistentSandboxStatus
+}
+
+func (s *stubCIAPIPersistentSandboxes) List(context.Context) ([]model.PersistentSandboxStatus, error) {
+	return append([]model.PersistentSandboxStatus(nil), s.list...), nil
+}
+func (*stubCIAPIPersistentSandboxes) Logs(string) (string, bool)                   { return "", false }
+func (*stubCIAPIPersistentSandboxes) Control(context.Context, string, string) error { return errors.New("unused") }
+func (*stubCIAPIPersistentSandboxes) Dial(context.Context, string) (net.Conn, error) {
+	return nil, errors.New("unused")
+}
+func (*stubCIAPIPersistentSandboxes) StripPrefix(string) (bool, bool) { return false, false }
+
+// Regression tests for the narrowed CI API token leaks and routing bugs found
+// during the 2026-11-16 walkthrough:
+//   - GET /api/schedules?limit=1&q=... and ?f=repo:any:... must not leak other
+//     repos' schedules via total/search/filter oracles;
+//   - GET /api/persistent-sandboxes?limit=1 must not leak another repo's sandbox
+//     name in nextCursor or total, and ?q=... must not act as an oracle;
+//   - GET /api/templates must hide templates targeting own repo that also reach
+//     another repo via reads, writes, or API grants;
+//   - GET /api/ci/runs/{id}/artifacts/{job}/{name} must allow own repo's artifact
+//     while refusing another repo's;
+//   - GET /api/fs/ci/ and GET /api/fs/task/ must not 307-redirect loop.
+func TestAListedRepositorysCIAPITokenNarrowsPagedListsTemplatesAndFS(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	other := model.RepoRef{Owner: "acme", Name: "secret-other"}
+	now := time.Now().UTC()
+
+	runner := &stubCIAPIRunner{
+		runs: map[string]ci.Run{
+			"run-widgets": {ID: "run-widgets", Repo: widgets.String(), Conclusion: ci.ConclusionSuccess, StartedAt: &now},
+			"run-other":   {ID: "run-other", Repo: other.String(), Conclusion: ci.ConclusionSuccess, StartedAt: &now},
+		},
+		artifacts: map[ci.ArtifactRef]string{
+			{Run: "run-widgets", Job: "build", Name: "widgets-report"}: "widgets artifact payload",
+			{Run: "run-other", Job: "build", Name: "secret-report"}:    "secret other artifact payload",
+		},
+	}
+	sandboxes := &stubCIAPIPersistentSandboxes{
+		list: []model.PersistentSandboxStatus{
+			// Sorted alphabetically before widgets-svc so limit=1 would pick it
+			// first if narrowing happened after pagination.
+			{Name: "alpha-other-secret-svc", Repo: other.String(), State: "running"},
+			{Name: "widgets-svc", Repo: widgets.String(), State: "running"},
+		},
+	}
+
+	ciStore := ci.NewRunStore(16)
+	for _, run := range runner.runs {
+		ciStore.Put(run)
+	}
+
+	api := &inProcessAPI{}
+	ns := &namespace.Server{
+		CIStore:     ciStore,
+		NewRedactor: func() *redact.Redactor { return BuildNamespaceRedactor(dataDir) },
+	}
+	WireSandboxNamespace(ns, SandboxNamespaceConfig{
+		DataDir:      dataDir,
+		Store:        store,
+		InsecureHTTP: true,
+		API:          api,
+	})
+	client := ui.NewClient(ui.Config{
+		DataDir:             dataDir,
+		Actor:               ui.DefaultActor("operator"),
+		Capabilities:        ui.OfferedCapabilities(),
+		PullRequests:        PullRequestGate{},
+		CI:                  runner,
+		PersistentSandboxes: sandboxes,
+	}, store)
+	uiSrv := ui.NewServerWithClient(client)
+	uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	api.Set(uiSrv)
+
+	// Seed schedules in both repos.
+	if _, err := client.CreateSchedule(ctx, ui.CreateScheduleRequest{
+		Title:       "Widgets own cadence",
+		Description: "own schedule",
+		Repo:        widgets.String(),
+		Base:        "main",
+		Recurrence:  ui.Recurrence{Kind: "daily", TimeOfDay: "09:00"},
+	}); err != nil {
+		t.Fatalf("creating widgets schedule: %v", err)
+	}
+	if _, err := client.CreateSchedule(ctx, ui.CreateScheduleRequest{
+		Title:       "Cobalt zebra secret cadence",
+		Description: "foreign schedule",
+		Repo:        other.String(),
+		Base:        "main",
+		Recurrence:  ui.Recurrence{Kind: "daily", TimeOfDay: "09:00"},
+	}); err != nil {
+		t.Fatalf("creating foreign schedule: %v", err)
+	}
+
+	// Seed templates: own clean template, foreign template, and a template
+	// targeting acme/widgets that also reads acme/secret-other.
+	if _, err := client.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:        "widgets-clean",
+		Title:       "Widgets clean",
+		Description: "safe template",
+		Repo:        widgets.String(),
+	}); err != nil {
+		t.Fatalf("creating clean template: %v", err)
+	}
+	if _, err := client.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:        "other-secret-tmpl",
+		Title:       "Cobalt zebra foreign template",
+		Description: "foreign template",
+		Repo:        other.String(),
+	}); err != nil {
+		t.Fatalf("creating foreign template: %v", err)
+	}
+	if _, err := client.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:        "widgets-cross-read-ui",
+		Title:       "Cobalt zebra cross-read",
+		Description: "targets widgets but reads secret-other",
+		Repo:        widgets.String(),
+		Reads:       []string{other.String()},
+	}); err != nil {
+		t.Fatalf("creating cross-read template: %v", err)
+	}
+
+	gate := ciapi.NewEndpoint()
+	gate.Log = func(string, ...any) {}
+	gate.SetURL("http://192.0.2.1:9000")
+	gate.SetUpstream(uiSrv)
+	_, token, err := gate.Tokens.Mint(ciapi.Grant{
+		Repo:    widgets,
+		RunID:   "ci-widgets-narrow",
+		Expires: now.Add(time.Hour),
+		Scopes: []model.APIScope{
+			"ci:read", "tasks:read", "schedules:read",
+			"sandboxes:read", "templates:read",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	do := func(target string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.RemoteAddr = "10.0.0.5:4242"
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		gate.ServeHTTP(w, req)
+		return w
+	}
+
+	// 1. Paged & filtered /api/schedules must not expose foreign totals or match oracles.
+	for _, path := range []string{
+		"/api/schedules?limit=1&q=cobalt-zebra",
+		"/api/schedules?limit=1&f=repo:any:acme/secret-other",
+	} {
+		w := do(path)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s", path, w.Code, w.Body)
+		}
+		var resp struct {
+			Items []ui.Schedule `json:"items"`
+			Total int           `json:"total"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding %s: %v (%s)", path, err, w.Body)
+		}
+		if resp.Total != 0 || len(resp.Items) != 0 {
+			t.Errorf("GET %s leaked cross-repo schedule info: total=%d items=%d body=%s", path, resp.Total, len(resp.Items), w.Body)
+		}
+	}
+
+	// 2. Paged /api/persistent-sandboxes must filter before pagination (no foreign name in nextCursor or total).
+	{
+		w := do("/api/persistent-sandboxes?limit=1")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /api/persistent-sandboxes?limit=1 = %d %s", w.Code, w.Body)
+		}
+		var resp struct {
+			Items      []model.PersistentSandboxStatus `json:"items"`
+			Total      int                             `json:"total"`
+			NextCursor string                          `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding persistent-sandboxes: %v (%s)", err, w.Body)
+		}
+		if resp.Total != 1 || len(resp.Items) != 1 || resp.Items[0].Name != "widgets-svc" {
+			t.Errorf("GET /api/persistent-sandboxes?limit=1 = total=%d items=%+v, want only widgets-svc", resp.Total, resp.Items)
+		}
+		if resp.NextCursor != "" {
+			raw, _ := base64.RawURLEncoding.DecodeString(resp.NextCursor)
+			t.Errorf("GET /api/persistent-sandboxes?limit=1 returned nextCursor=%q (%q), want empty", resp.NextCursor, string(raw))
+		}
+	}
+	{
+		w := do("/api/persistent-sandboxes?limit=1&q=alpha-other-secret-svc")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /api/persistent-sandboxes?q=foreign = %d %s", w.Code, w.Body)
+		}
+		var resp struct {
+			Items []model.PersistentSandboxStatus `json:"items"`
+			Total int                             `json:"total"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Total != 0 || len(resp.Items) != 0 {
+			t.Errorf("GET /api/persistent-sandboxes?q=foreign leaked total=%d items=%d", resp.Total, len(resp.Items))
+		}
+	}
+
+	// 3. GET /api/templates must hide templates targeting widgets that also read secret-other.
+	{
+		w := do("/api/templates")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /api/templates = %d %s", w.Code, w.Body)
+		}
+		if strings.Contains(w.Body.String(), "secret-other") || strings.Contains(w.Body.String(), "Cobalt zebra") {
+			t.Errorf("GET /api/templates leaked foreign-referencing template: %s", w.Body)
+		}
+		if !strings.Contains(w.Body.String(), "widgets-clean") {
+			t.Errorf("GET /api/templates dropped clean own template: %s", w.Body)
+		}
+	}
+
+	// 4. Own artifact succeeds (200); foreign artifact is refused (403).
+	if w := do("/api/ci/runs/run-widgets/artifacts/build/widgets-report"); w.Code != http.StatusOK || w.Body.String() != "widgets artifact payload" {
+		t.Errorf("GET own artifact = %d %q, want 200 widgets artifact payload", w.Code, w.Body.String())
+	}
+	if w := do("/api/ci/runs/run-other/artifacts/build/secret-report"); w.Code != http.StatusForbidden {
+		t.Errorf("GET foreign artifact = %d %q, want 403", w.Code, w.Body.String())
+	}
+
+	// 5. Wildcard namespace root routes must not 307-redirect loop.
+	if w := do("/api/fs/ci/"); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "secret-other") || !strings.Contains(w.Body.String(), "acme/widgets") {
+		t.Errorf("GET /api/fs/ci/ = %d %q, want 200 listing acme/widgets only", w.Code, w.Body.String())
+	}
+	if w := do("/api/fs/task/"); w.Code != http.StatusForbidden {
+		t.Errorf("GET /api/fs/task/ = %d %q, want 403 (not 307)", w.Code, w.Body.String())
 	}
 }

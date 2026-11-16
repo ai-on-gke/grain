@@ -2581,6 +2581,7 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	list = s.readableSchedules(r, list)
 	if !filter.Empty() {
 		// A day named in "is after 2026-10-24" starts at midnight in the
 		// zone every timestamp on the page is printed in (GET
@@ -2598,6 +2599,55 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeList(w, list, page)
+}
+
+// readableSchedules narrows schedules to the repositories r's caller may read
+// under schedules:read before query filters and pagination run, so a
+// repository-scoped caller (a CI API token, a limited RBAC role, or an agent)
+// cannot observe other repositories' or deployment-wide schedules in totals,
+// cursors, or search/filter oracles.
+func (s *Server) readableSchedules(r *http.Request, in []Schedule) []Schedule {
+	ctx := r.Context()
+	call, isAgent := agentCallFromContext(ctx)
+	ciCall, isCIAPI := model.CIAPICallFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	if role != nil && role.Full {
+		role = nil
+	}
+	if !isAgent && role == nil && !isCIAPI {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			return nil
+		}
+		return in
+	}
+	if !isCIAPI && (!isAgent || call.grants.Allows("schedules:read", "")) && (role == nil || role.allows("schedules:read", "")) {
+		return in
+	}
+	allows := func(repo string) bool {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			return false
+		}
+		if isCIAPI && !model.SameRepoText(repo, ciCall.Repo.String()) {
+			return false
+		}
+		if isAgent && !call.grants.Allows("schedules:read", repo) {
+			return false
+		}
+		if role != nil && !role.allows("schedules:read", repo) {
+			return false
+		}
+		return true
+	}
+	return filterList(in, func(sc Schedule) bool {
+		if !allows(sc.Repo) {
+			return false
+		}
+		if sc.DeclaredIn != nil && strings.TrimSpace(sc.DeclaredIn.Repo) != "" && !allows(sc.DeclaredIn.Repo) {
+			return false
+		}
+		return true
+	})
 }
 
 func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
