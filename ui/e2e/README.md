@@ -37,9 +37,12 @@ inbox.spec.js:72                 # one test; failed 3 of 40 runs 11-07..11-11
   `grepInvert` pattern (`frozen.js`), so those tests don't run at all.
 - **`ui e2e (quarantined)`** (`make test-e2e-quarantined`, or
   `node e2e/run-frozen.mjs` from `ui/`) runs exactly the listed entries,
-  with `continue-on-error`. A regression in them shows up red on the
-  pull request but doesn't block it. With both lists empty it says so
-  and passes.
+  with `continue-on-error` on that step. A regression in them doesn't
+  block the pull request and the job's check still passes: the failure
+  shows as a `ui e2e (quarantined)` warning annotation and in the job's
+  step summary, with the Playwright report uploaded as
+  `playwright-quarantined-test-results`. With both lists empty it says
+  so and passes.
 - To run everything, quarantined tests included, set
   `GRAIN_E2E_LANE=all`. Any value other than `gating` turns the
   `grepInvert` off.
