@@ -275,6 +275,13 @@ inspector and Task Detail. Sessions shares its message styles.
   Send share one row. A "New messages ↓" pill appears when something arrives
   at the end while you are scrolled up; older history paged in above is not
   news and never raises it.
+- **Sessions on a phone:** the chat pane scrolls as a whole, the log keeps a
+  floor of `min(18rem, 45dvh)` and the composer is sticky at the pane's
+  foot, so Send stays above the bottom bar however many rows the chat head
+  wraps to (320×568 included). Only a person's own send scrolls the pane.
+- **Sending is never blocked by sending.** In Sessions a sent message shows
+  at once (dashed: `Sending…`, then `Queued` behind it) and the composer
+  clears; a refused one stays as `Not sent` with its reason, Retry and Edit.
 - **Comment links (`#comment=<id>`)** open Conversation on any tab. A cold
   load reads 500 comments and pages back 500 at a time to the comment
   before rendering, so the thread draws once (a 3,000-comment task is at most
