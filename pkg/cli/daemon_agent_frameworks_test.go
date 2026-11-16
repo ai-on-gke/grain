@@ -36,7 +36,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
@@ -48,15 +48,7 @@ func testSecrets(t *testing.T) *secrets.Store {
 
 func testStore(t *testing.T) *model.Store {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatalf("opening the store: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store, _ := sqlitetest.Open(t)
 	return store
 }
 
