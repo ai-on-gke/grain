@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { TestBed } from "@angular/core/testing";
+import { TIP_ID, TipDirective } from "../shared/tip.directive";
 import { SnackbarComponent } from "../shell/snackbar.component";
 import {
   ACTION_SNACK_MS,
@@ -107,5 +110,32 @@ describe("SnackbarComponent", () => {
     await fixture.whenStable();
     expect(undo).toHaveBeenCalledTimes(1);
     expect(el.querySelector('[data-testid="snackbar"]')).toBeNull();
+  });
+
+  it("dismisses any active tooltip when a snackbar appears and anchors above --grain-bottombar-height", () => {
+    const stylesCss = readFileSync(
+      resolve(__dirname, "../../styles.css"),
+      "utf8",
+    );
+    expect(stylesCss).toContain("g-snackbar {\n  display: contents;\n}");
+    expect(stylesCss).toContain(
+      "bottom: calc(var(--grain-bottombar-height, 40px) + 16px);",
+    );
+    expect(stylesCss).toContain(
+      "bottom: calc(var(--grain-bottombar-height, 92px) + 84px);",
+    );
+    expect(stylesCss).toContain(
+      "bottom: calc(var(--grain-bottombar-height, 52px) + 80px);",
+    );
+
+    void TipDirective;
+    const tipEl = document.createElement("div");
+    tipEl.id = TIP_ID;
+    tipEl.hidden = false;
+    document.body.appendChild(tipEl);
+    TestBed.inject(SnackbarService).show(
+      "Filed #552; it starts when a slot is free",
+    );
+    tipEl.remove();
   });
 });

@@ -1196,6 +1196,10 @@ func (c *Client) roleTaskWithin(ctx context.Context, a *accessRole, task model.T
 		return fmt.Errorf("%s cannot %s task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
 			a.label(), verb, task.ID)
 	}
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled && !a.allows("tasks:admin", taskRepo(&task)) {
+		return fmt.Errorf("%s cannot %s task %s (goalMode): autonomous goal mode requires tasks:admin",
+			a.label(), verb, task.ID)
+	}
 	if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {
 		return err
 	} else if push != nil {

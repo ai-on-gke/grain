@@ -236,6 +236,40 @@ export interface TaskGoalView {
   [key: string]: unknown;
 }
 
+export interface GoalModeConfig {
+  enabled: boolean;
+  maxPasses?: number;
+  wallClockMinutes?: number;
+  mockMissingSecrets?: boolean;
+}
+
+export interface GoalAssumption {
+  id: string;
+  topic: string;
+  decision: string;
+  rationale?: string;
+  alternatives?: string;
+  pass?: number;
+  createdAt?: string;
+}
+
+export interface GoalDeliverable {
+  requirement: string;
+  evidence: string;
+  verified: boolean;
+}
+
+export interface GoalScorecard {
+  passesUsed: number;
+  maxPasses: number;
+  verified: boolean;
+  stoppedAtCap?: boolean;
+  stopReason?: string;
+  summary?: string;
+  deliverables?: GoalDeliverable[];
+  updatedAt?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -302,6 +336,9 @@ export interface Task {
   runNowAt?: string;
   runNowStale?: boolean;
   goal?: TaskGoalView | null;
+  goalMode?: GoalModeConfig | null;
+  goalAssumptions?: GoalAssumption[];
+  goalScorecard?: GoalScorecard | null;
   consoleSession?: unknown;
   interactive?: boolean;
   // What the current run is doing, in a sentence, and when it said so;

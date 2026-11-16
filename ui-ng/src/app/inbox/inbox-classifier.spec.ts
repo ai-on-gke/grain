@@ -369,4 +369,139 @@ describe("inbox classifier", () => {
       ),
     ).toBe(false);
   });
+
+  it("enforces Inbox silence for mid-flight autonomous goal questions and auto-approved child proposals while surfacing terminal and safety states", () => {
+    const midFlightQuestion = task({
+      id: "501",
+      state: "awaiting_reply",
+      goalMode: { enabled: true, maxPasses: 8, wallClockMinutes: 120 },
+      questionSummary: "Which port should the server bind?",
+    });
+    expect(waitsOnUser(midFlightQuestion)).toBe(false);
+    expect(classifyTask(midFlightQuestion)).toBeNull();
+
+    const childProposal = task({
+      id: "502",
+      state: "proposed",
+      goalMode: { enabled: true },
+      proposedBy: "agent:501",
+      autoApproveProposals: true,
+    });
+    expect(waitsOnUser(childProposal)).toBe(false);
+    expect(classifyTask(childProposal)).toBeNull();
+
+    // Root goal proposal or non-auto-approved proposal still surfaces.
+    const manualProposal = task({
+      id: "503",
+      state: "proposed",
+      goalMode: { enabled: true },
+    });
+    expect(waitsOnUser(manualProposal)).toBe(true);
+    expect(classifyTask(manualProposal)?.kind).toBe("proposal");
+
+    // Access request during Goal Mode still surfaces.
+    const accessReq = task({
+      id: "504",
+      state: "awaiting_reply",
+      goalMode: { enabled: true },
+      awaitingAccess: { summary: "Grant write to acme/api" },
+    });
+    expect(waitsOnUser(accessReq)).toBe(true);
+    expect(classifyTask(accessReq)?.kind).toBe("access");
+
+    // Stopped turn during Goal Mode still surfaces in paused.
+    const stoppedGoal = task({
+      id: "505",
+      state: "awaiting_reply",
+      goalMode: { enabled: true },
+      turnStopped: true,
+    });
+    expect(waitsOnUser(stoppedGoal)).toBe(true);
+    expect(classifyTask(stoppedGoal)?.kind).toBe("stopped");
+
+    // Terminal verified awaiting_submit surfaces as "Goal ready" (healthy).
+    const verifiedGoal = task({
+      id: "506",
+      state: "awaiting_submit",
+      goalMode: { enabled: true, maxPasses: 8 },
+      goalScorecard: {
+        passesUsed: 2,
+        maxPasses: 8,
+        verified: true,
+        summary: "All deliverables verified.",
+      },
+    });
+    const readyEntry = classifyTask(verifiedGoal);
+    expect(readyEntry?.kind).toBe("submit");
+    expect(readyEntry?.pillLabel).toBe("Goal ready");
+    expect(readyEntry?.pillTone).toBe("healthy");
+
+    // Terminal capped awaiting_submit surfaces as "Goal capped" (warn).
+    const cappedGoal = task({
+      id: "507",
+      state: "awaiting_submit",
+      goalMode: { enabled: true, maxPasses: 4 },
+      goalScorecard: {
+        passesUsed: 4,
+        maxPasses: 4,
+        verified: false,
+        stoppedAtCap: true,
+        stopReason: "Reached maxPasses (4/4).",
+      },
+    });
+    const cappedEntry = classifyTask(cappedGoal);
+    expect(cappedEntry?.kind).toBe("submit");
+    expect(cappedEntry?.pillLabel).toBe("Goal capped");
+    expect(cappedEntry?.pillTone).toBe("warn");
+
+    // Failed, base-repair, merge-blocked, merge-stalled, and stalled still surface.
+    expect(
+      classifyTask(
+        task({ id: "508", state: "failed", goalMode: { enabled: true } }),
+      )?.kind,
+    ).toBe("failed");
+    expect(
+      classifyTask(
+        task({
+          id: "509",
+          state: "awaiting_submit",
+          goalMode: { enabled: true },
+          redBaseBranch: true,
+          pullRequest: "https://github.com/sidthe/grain/pull/9",
+        }),
+      )?.kind,
+    ).toBe("base-repair");
+    expect(
+      classifyTask(
+        task({
+          id: "510",
+          state: "completed",
+          goalMode: { enabled: true },
+          pullRequest: "https://github.com/sidthe/grain/pull/10",
+          mergeQueueBlockedAt: "2026-11-15T00:00:00Z",
+        }),
+      )?.kind,
+    ).toBe("merge-blocked");
+    expect(
+      classifyTask(
+        task({
+          id: "511",
+          state: "completed",
+          goalMode: { enabled: true },
+          mergeQueueState: "rebasing",
+          mergeQueueStalledAt: "2026-11-15T00:00:00Z",
+        }),
+      )?.kind,
+    ).toBe("merge-stalled");
+    expect(
+      classifyTask(
+        task({
+          id: "512",
+          state: "running",
+          goalMode: { enabled: true },
+          stall: "Heartbeat lost for 20m.",
+        }),
+      )?.kind,
+    ).toBe("stalled");
+  });
 });
