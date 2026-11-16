@@ -43,6 +43,26 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
+// datePrefix is what formatLocalReset puts before the time when the reset
+// falls on another day on ZONE's clock than now -- "Nov 16, " -- and "" on
+// the same day, so the spec holds when it runs within 2h15m of midnight
+// Pacific (from 05:45 UTC in winter).
+function datePrefix(now, ms) {
+  const day = new Intl.DateTimeFormat("en-US", {
+    timeZone: ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  if (day.format(new Date(now)) === day.format(new Date(ms))) return "";
+  const md = new Intl.DateTimeFormat("en-US", {
+    timeZone: ZONE,
+    month: "short",
+    day: "numeric",
+  }).format(new Date(ms));
+  return `${md}, `;
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
@@ -84,9 +104,10 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
+      const prefix = datePrefix(Date.now(), until);
       await expect(reset).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
