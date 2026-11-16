@@ -753,4 +753,22 @@ func TestCatalogueHasNoSayOverGrainCI(t *testing.T) {
 	if err := enabled.Validate(); err == nil || !strings.Contains(err.Error(), "has no effect") {
 		t.Errorf("Validate(in_process.grain-ci with restrictions) = %v, want the no-effect refusal", err)
 	}
+	serverMethod := &model.CapabilityCatalogue{Servers: []model.CatalogueServer{{
+		ID: model.GrainCapabilityServerID,
+		Methods: []model.CatalogueMethod{{
+			Name:         model.GrainCIMethod,
+			Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/lib"}, RequiresPerson: true},
+		}},
+	}}}
+	if err := serverMethod.Validate(); err == nil || !strings.Contains(err.Error(), model.ServerGrainCIMethodRefusal) {
+		t.Errorf("Validate(grain server ci method) = %v, want %q", err, model.ServerGrainCIMethodRefusal)
+	}
+	aliasServerMethod := &model.CapabilityCatalogue{Servers: []model.CatalogueServer{{
+		ID:      "https://capabilities.example/grain-mirror",
+		Aliases: []string{model.GrainCapabilityServerID},
+		Methods: []model.CatalogueMethod{{Name: model.GrainCIMethod}},
+	}}}
+	if err := aliasServerMethod.Validate(); err == nil || !strings.Contains(err.Error(), model.ServerGrainCIMethodRefusal) {
+		t.Errorf("Validate(aliased grain server ci method) = %v, want %q", err, model.ServerGrainCIMethodRefusal)
+	}
 }

@@ -271,6 +271,13 @@ const InProcessGrainCIRefusal = "in_process." + GrainCICapability + " has no eff
 	"and no task elsewhere does. Remove the entry; to take grain CI off a repository, set its CI mode " +
 	"(ci_mode in tables/repo_config.json, or CI mode on the repository's CI & Workflows tab)"
 
+// ServerGrainCIMethodRefusal is what Validate says of a ci method entry on the
+// in-process grain server: it binds nothing (CatalogueJudges).
+const ServerGrainCIMethodRefusal = "method " + GrainCIMethod + " on " + GrainCapabilityServerID + " has no effect: grain#ci (" + GrainCIGrant + ") " +
+	"is granted by a repository's CI Mode, not by settings/capabilities.yml -- every task on a repository whose ci_mode is grain holds it, " +
+	"and no task elsewhere does. Remove the method entry; to take grain CI off a repository, set its CI mode " +
+	"(ci_mode in tables/repo_config.json, or CI mode on the repository's CI & Workflows tab)"
+
 // CatalogueJudges reports whether settings/capabilities.yml has any say
 // over grant. It has none over grain#ci (task 6142): a repository's CI
 // Mode decides who holds it. grain attaches grain#ci to every task on a
@@ -282,8 +289,9 @@ const InProcessGrainCIRefusal = "in_process." + GrainCICapability + " has no eff
 // or let its branches merge past the CI the repository asked for, so
 // neither in_process.grain-ci (the retired name it replaced) nor a grain
 // server entry binds it, and CapabilityCatalogue.Validate refuses
-// in_process.grain-ci as an entry that cannot do what it says. To take
-// grain CI off a repository, set its CI Mode.
+// in_process.grain-ci and a ci method on https://grain.dev/capabilities/grain
+// as entries that cannot do what they say. To take grain CI off a
+// repository, set its CI Mode.
 func CatalogueJudges(grant string) bool {
 	return !IsGrainCIGrant(StoredGrantSpelling(strings.TrimSpace(grant)))
 }
@@ -983,6 +991,9 @@ func (c *CapabilityCatalogue) Validate() error {
 				add("%s: method %s is listed twice", mw, m.Name)
 			}
 			methods[m.Name] = true
+			if (strings.TrimSpace(s.ID) == GrainCapabilityServerID || containsString(s.Aliases, GrainCapabilityServerID)) && strings.TrimSpace(m.Name) == GrainCIMethod {
+				add("%s: %s", mw, ServerGrainCIMethodRefusal)
+			}
 			if strings.TrimSpace(s.ID) == GCPCapabilityServerID && m.Name == GCPKeyMethod {
 				for _, removed := range []string{"account", "activate"} {
 					if _, has := m.Args[removed]; has {

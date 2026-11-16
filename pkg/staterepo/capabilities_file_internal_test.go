@@ -138,8 +138,9 @@ func TestCapabilitiesFileRefusals(t *testing.T) {
 		"duplicate server":    {"servers:\n  - id: https://x.example/s\n    url: https://x.example/s\n  - id: https://x.example/s\n    url: https://x.example/s\n", "listed twice"},
 		"bad scope in preset": {"api_scopes:\n  presets:\n    mine:\n      scopes: [nope:never]\n", "api_scopes.presets"},
 		// grain#ci is a repository's CI Mode's to give (task 6142).
-		"grain-ci disabled":   {"in_process:\n  grain-ci:\n    enabled: false\n", "in_process.grain-ci has no effect"},
-		"grain-ci restricted": {"in_process:\n  grain-ci:\n    restrictions:\n      repos: [acme/lib]\n", "CI Mode"},
+		"grain-ci disabled":      {"in_process:\n  grain-ci:\n    enabled: false\n", "in_process.grain-ci has no effect"},
+		"grain-ci restricted":    {"in_process:\n  grain-ci:\n    restrictions:\n      repos: [acme/lib]\n", "CI Mode"},
+		"grain#ci server method": {"servers:\n  - id: https://grain.dev/capabilities/grain\n    builtin: true\n    methods:\n      - name: ci\n        restrictions:\n          repos: [acme/lib]\n", "method ci on https://grain.dev/capabilities/grain has no effect"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ValidateCapabilitiesFile([]byte(tc.text))
