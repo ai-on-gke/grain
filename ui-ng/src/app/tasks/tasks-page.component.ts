@@ -1881,9 +1881,16 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       return vals.size === 1 ? [...vals][0] : "";
     };
     const held = new Set(rows.flatMap((t) => t.capabilities ?? []));
+    // An api row's id (api:<x>) is the server's comparison key, not a
+    // grant anyone may write any longer: attach and detach send the
+    // canonical reference a task holds it under.
+    const grantOf = (id: string) =>
+      id.startsWith("api:")
+        ? `https://grain.dev/capabilities/api#${id.slice("api:".length)}`
+        : id;
     const caps = (this.access.rawConfig()?.capabilities ?? [])
-      .filter((c) => c.ready !== false || held.has(c.id))
-      .map((c) => ({ value: c.id, label: c.name || c.id }));
+      .filter((c) => c.ready !== false || held.has(grantOf(c.id)))
+      .map((c) => ({ value: grantOf(c.id), label: c.name || c.id }));
     this.editing.set({
       mode,
       count: rows.length,
