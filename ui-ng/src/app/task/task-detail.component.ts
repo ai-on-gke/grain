@@ -92,6 +92,7 @@ import {
   type AcceptFindingsRequest,
 } from "./accept-findings-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
+import { MergeRecheckPanelComponent } from "../repos/merge-recheck-panel.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskStore, parseCommentFragment } from "./task.store";
 
@@ -144,6 +145,7 @@ export function duration(from?: string, to?: string): string {
     AttachmentListComponent,
     GrantsPickerComponent,
     TaskGatesBarComponent,
+    MergeRecheckPanelComponent,
     TaskChangesTabComponent,
     ForceMergeDialogComponent,
     AcceptFindingsDialogComponent,
@@ -760,6 +762,13 @@ export function duration(from?: string, to?: string): string {
                 : ", back into Needs approval for someone to approve."
             }}
           </p>
+        }
+        @if (t.state !== "closed" && t.repo) {
+          <g-merge-recheck-panel
+            class="task-merge-recheck"
+            [repo]="t.repo"
+            [task]="t.id"
+          />
         }
         <g-task-gates-bar
           [task]="t"

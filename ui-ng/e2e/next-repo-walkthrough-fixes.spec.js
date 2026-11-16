@@ -23,7 +23,10 @@
 // - the repo page had no New task, so filing into a repository meant
 //   choosing it again in the sheet;
 // - the Tasks page's tab counts ignored ?repo=, counting the whole
-//   deployment over a narrowed list.
+//   deployment over a narrowed list;
+// - the merge queue's overlap re-checks showed nowhere, and the repo
+//   page counted no tasks, so a removed repository's page did not say
+//   what was left there.
 
 import { test, expect } from "./fixtures.js";
 
@@ -168,4 +171,82 @@ test("the Tasks tabs count what ?repo= narrows the list to", async ({
   const widgets = await backlog.innerText();
   await page.goto("/next/tasks?repo=ACME/Widgets");
   await expect(backlog).toHaveText(widgets);
+});
+
+// Merge re-checks: the demo seeds one for task 5 on acme/widgets
+// (GET /api/merge-batches). /next/ showed it nowhere.
+test("the overlap re-check shows on Merge Queue and on its task, with run and task links @phone @dark", async ({
+  page,
+  axe,
+}) => {
+  const fits = async (loc) => {
+    const vw = page.viewportSize().width;
+    const box = await loc.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(vw + 0.5);
+  };
+  await page.goto(`${R}/merge-queue`);
+  const panel = page.getByTestId("merge-recheck-panel");
+  const batch = panel.getByTestId("merge-recheck-batch");
+  await expect(batch).toHaveCount(1);
+  await expect(batch.getByTestId("merge-recheck-standing")).toHaveText(
+    "Testing",
+  );
+  await expect(batch.getByTestId("merge-recheck-age")).toHaveText(
+    /^\d+m of 90m$/,
+  );
+  await expect(batch).toContainText("#5");
+  await fits(panel);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(page.viewportSize().width);
+  expect(await axe()).toEqual([]);
+
+  // The seeded re-check names its run only on some demo setups; when
+  // it does, the link opens that run.
+  const seeded = await (await page.request.get("/api/merge-batches")).json();
+  const runId = seeded.batches?.[0]?.runId;
+  if (runId) {
+    await batch.getByTestId("merge-recheck-run").click();
+    await expect(page).toHaveURL(new RegExp(`/next/ci/runs/${runId}$`));
+    await page.goBack();
+  } else {
+    await expect(batch.getByTestId("merge-recheck-run")).toHaveCount(0);
+  }
+  await batch.getByRole("link", { name: "#5" }).click();
+  await expect(page).toHaveURL(/\/next\/task\/5$/);
+  const onTask = page.getByTestId("merge-recheck-panel");
+  await expect(onTask).toContainText("Merge re-check");
+  await expect(onTask.getByTestId("merge-recheck-standing")).toHaveText(
+    "Testing",
+  );
+  await fits(onTask);
+
+  // A task in no re-check carries no panel.
+  await page.goto("/next/task/2");
+  await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+  await expect(page.getByTestId("merge-recheck-panel")).toHaveCount(0);
+});
+
+test("a removed repository's page still counts the tasks left there, closed ones included", async ({
+  page,
+}) => {
+  const REPO = "acme/removed-e2e";
+  const res = await page.request.post("/api/repos", { data: { repo: REPO } });
+  expect(res.ok()).toBe(true);
+  const filed = await page.request.post("/api/tasks", {
+    data: { title: "Left behind in a removed repo", repo: REPO },
+  });
+  expect(filed.ok()).toBe(true);
+  const total = page.getByTestId("repo-task-total");
+  await page.goto(`/next/repos/${REPO}`);
+  await expect(total).toHaveText("1 task filed here, closed ones included.");
+
+  await page.request.delete(`/api/repos/${REPO}`);
+  await page.goto(`/next/repos/${REPO}`);
+  await expect(total).toHaveText(
+    "1 task still targets this repo, which is no longer on the target list.",
+  );
+  await total.getByRole("link").click();
+  await expect(page).toHaveURL(/\/next\/tasks\?repo=acme%2Fremoved-e2e$/);
 });

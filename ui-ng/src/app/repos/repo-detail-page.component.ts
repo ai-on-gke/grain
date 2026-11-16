@@ -49,6 +49,7 @@ import type { CapabilityOption } from "../api/models";
 import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
 import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
 import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
+import { MergeRecheckPanelComponent } from "./merge-recheck-panel.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
 
 // CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
@@ -342,6 +343,7 @@ interface PendingReleaseRow {
     RepoCICapabilitiesComponent,
     RepoQualificationPlanComponent,
     RepoWorkOwnershipComponent,
+    MergeRecheckPanelComponent,
     StatusIconComponent,
   ],
   encapsulation: ViewEncapsulation.None,
@@ -397,6 +399,21 @@ interface PendingReleaseRow {
               branches, release qualification, and what the repository declares
               for itself.
             </p>
+            @if (taskTotal(); as n) {
+              <p class="repo-task-total" data-testid="repo-task-total">
+                <a
+                  [routerLink]="['/tasks']"
+                  [queryParams]="{ repo: repoSlug() }"
+                  >{{ n }} task{{ n === 1 ? "" : "s" }}</a
+                >
+                @if (offTargetList()) {
+                  still target{{ n === 1 ? "s" : "" }} this repo, which is no
+                  longer on the target list.
+                } @else {
+                  filed here, closed ones included.
+                }
+              </p>
+            }
           </div>
 
           <nav class="repo-tabs" aria-label="Repository sections">
@@ -976,6 +993,9 @@ interface PendingReleaseRow {
                       (click)="toggleBypassHumanGates()"
                     ></button>
                   </div>
+                </div>
+                <div class="s-card" data-testid="card-repo-merge-rechecks">
+                  <g-merge-recheck-panel [repo]="repoSlug()" />
                 </div>
               }
 
@@ -2117,6 +2137,14 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly savingDecl = signal(false);
   protected readonly removing = signal(false);
   private readonly targetRepos = signal<string[]>([]);
+  // taskTotal is every task filed against this repository, closed ones
+  // included, as the classic page counts them: a removed repository's
+  // page still says what is left there (2026-11-16 repository
+  // walkthrough: /next/ showed no count at all).
+  protected readonly taskTotal = signal<number | null>(null);
+  protected readonly offTargetList = computed(
+    () => this.targetRepos().length > 0 && this.removeState() === "untargeted",
+  );
   private readonly configRepo = signal("");
 
   protected readonly triggerFiles = computed(
@@ -2401,6 +2429,24 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     const p = this.params();
     if (!p.owner || !p.name) return;
     const jobs: Promise<void>[] = [];
+    if (this.can("GET /api/tasks")) {
+      this.taskTotal.set(null);
+      jobs.push(
+        this.api
+          .get<{ total?: number }>(
+            "GET /api/tasks",
+            undefined,
+            `repo=${encodeURIComponent(this.repoSlug())}&limit=1&cursor=&fields=summary`,
+          )
+          .then((r) => {
+            if (typeof r?.total === "number") this.taskTotal.set(r.total);
+          })
+          .catch(() => {
+            // The count is a pointer to the task list, not something the
+            // page needs: leave it out rather than raise the banner.
+          }),
+      );
+    }
     if (this.can("GET /api/deployment/repos/{owner}/{name}/config")) {
       jobs.push(
         this.api
