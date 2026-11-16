@@ -43,6 +43,27 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
+// dayPrefix is what the reset says before its time: nothing when it falls
+// on today in ZONE, and "Nov 17, " when it falls on another day -- a run
+// started after 21:45 there sees the reset 2h15m later land past
+// midnight.
+function dayPrefix(nowMs, ms) {
+  const day = (t) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: ZONE,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }).format(new Date(t));
+  if (day(nowMs) === day(ms)) return "";
+  const md = new Intl.DateTimeFormat("en-US", {
+    timeZone: ZONE,
+    month: "short",
+    day: "numeric",
+  }).format(new Date(ms));
+  return `${md}, `;
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
@@ -86,7 +107,7 @@ for (const size of SIZES) {
       const abbrev = zoneAbbrev(until);
       await expect(reset).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${dayPrefix(Date.now(), until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -116,7 +137,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${dayPrefix(Date.now(), until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });

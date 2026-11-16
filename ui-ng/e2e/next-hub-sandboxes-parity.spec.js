@@ -77,7 +77,7 @@ test("Hub shows heartbeat health, advertised scopes and a visible heartbeat resu
   await expect(row).toHaveCount(1);
   await expect(row).toContainText("acme/widgets");
   await expect(row).toContainText("/ (whole repo)");
-  await expect(row).toContainText("primary");
+  await expect(row).toContainText("Primary");
   await expect(row.getByTestId("registry-origin-chip")).toHaveText(
     "from repo config",
   );
@@ -175,7 +175,7 @@ test("Hub catalog fields and Scope overrides save and read back", async ({
       "pkg/api/",
     );
     await expect(page.getByTestId("registry-scope-rule").nth(1)).toContainText(
-      "excluded",
+      "Excluded",
     );
 
     const res = await saveBar(page);
@@ -281,10 +281,10 @@ test("Hub registration token is write-only and stays editable under a config-rep
   await expect(token).toBeEnabled();
   await expect(token).toHaveAttribute("type", "password");
   await expect(token).toHaveAttribute("autocomplete", "new-password");
-  await expect(page.getByTestId("registry-token-state")).toHaveText("not set");
+  await expect(page.getByTestId("registry-token-state")).toHaveText("Not set");
   await token.fill("grc_parity_walk_token");
   await page.getByTestId("save-hub-token").click();
-  await expect(page.getByTestId("registry-token-state")).toHaveText("set");
+  await expect(page.getByTestId("registry-token-state")).toHaveText("Stored");
   await expect(token).toHaveValue("");
   expect(sent).toEqual([
     { method: "PUT", body: { value: "grc_parity_walk_token" } },
@@ -296,7 +296,7 @@ test("Hub registration token is write-only and stays editable under a config-rep
   expect(sent).toHaveLength(1);
   await page.getByTestId("clear-hub-token").click();
   await page.getByRole("button", { name: "Clear token" }).click();
-  await expect(page.getByTestId("registry-token-state")).toHaveText("not set");
+  await expect(page.getByTestId("registry-token-state")).toHaveText("Not set");
   expect(sent.map((x) => x.method)).toEqual(["PUT", "DELETE"]);
 });
 
