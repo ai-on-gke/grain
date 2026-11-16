@@ -468,7 +468,7 @@ describe("SessionsPageComponent", () => {
     ).toContain("api:tasks-read");
   });
 
-  it("keeps the draft and shows the error when the message does not go through", async () => {
+  it("marks a message that does not go through, then retries it or takes it back", async () => {
     const api = new FakeApi();
     api.fail["POST /api/tasks/{id}/comments"] = {
       status: 500,
@@ -477,12 +477,38 @@ describe("SessionsPageComponent", () => {
     const f = await render(api);
     const store = TestBed.inject(SessionsStore);
     store.setDraft("director", "hello");
-    expect(await store.send()).toBe(false);
-    await f.whenStable();
-    expect(store.draftFor("director")).toBe("hello");
-    expect(text(f, '[data-testid="action-error"]')).toContain(
+    expect(store.send()).toBe(true);
+    await settle(f);
+    expect(store.draftFor("director")).toBe("");
+    expect(text(f, '[data-testid="pending-0"]')).toContain("hello");
+    expect(text(f, '[data-testid="pending-state"]')).toBe("Not sent");
+    expect(text(f, '[data-testid="pending-0"]')).toContain(
       "sandbox unavailable",
     );
+
+    // Edit takes it back into the composer, ahead of what is typed there.
+    store.setDraft("director", "and more");
+    (q(f, '[data-testid="pending-edit"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(store.draftFor("director")).toBe("hello\n\nand more");
+
+    // Retry sends it once the server takes it (a failure is answered once).
+    api.fail["POST /api/tasks/{id}/comments"] = {
+      status: 503,
+      error: { error: "still starting" },
+    };
+    expect(store.send()).toBe(true);
+    await settle(f);
+    expect(text(f, '[data-testid="pending-0"]')).toContain("still starting");
+    (q(f, '[data-testid="pending-retry"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(
+      api.calls
+        .filter((c) => c.route === "POST /api/tasks/{id}/comments")
+        .at(-1)?.body,
+    ).toMatchObject({ body: "hello\n\nand more" });
   });
 
   it("shows Stop and the activity line while a run is going", async () => {
@@ -630,30 +656,43 @@ describe("SessionsPageComponent", () => {
     );
   });
 
-  it("sends once however fast Enter is pressed, and keeps text typed meanwhile", async () => {
+  it("queues messages sent while one is in flight, sends each once and in order", async () => {
     const api = new FakeApi();
-    let release!: () => void;
+    const releases: (() => void)[] = [];
     const post = api.post;
     api.post = (route: string, params?: unknown, body?: unknown) => {
       if (route !== "POST /api/tasks/{id}/comments") {
         return post(route, params, body);
       }
       api.calls.push({ method: "POST", route, params, body });
-      return new Promise((r) => (release = () => r({})));
+      return new Promise((r) => releases.push(() => r({})));
     };
     const f = await render(api);
     const store = TestBed.inject(SessionsStore);
+    const posts = () =>
+      api.calls.filter((c) => c.route === "POST /api/tasks/{id}/comments");
     store.setDraft("director", "once");
-    const first = store.send();
-    expect(await store.send()).toBe(false);
-    store.setDraft("director", "once and more");
-    release();
-    expect(await first).toBe(true);
-    await f.whenStable();
-    expect(
-      api.calls.filter((c) => c.route === "POST /api/tasks/{id}/comments"),
-    ).toHaveLength(1);
-    expect(store.draftFor("director")).toBe("once and more");
+    expect(store.send()).toBe(true);
+    // A second Enter on the emptied composer sends nothing again.
+    expect(store.send()).toBe(false);
+    store.setDraft("director", "and again");
+    expect(store.send()).toBe(true);
+    await settle(f);
+    expect(store.draftFor("director")).toBe("");
+    expect(text(f, '[data-testid="pending-0"]')).toContain("Sending…");
+    expect(text(f, '[data-testid="pending-1"]')).toContain("Queued");
+    expect(posts()).toHaveLength(1);
+    releases.shift()!();
+    await settle(f);
+    expect(posts()).toHaveLength(2);
+    expect(posts()[1]?.body).toMatchObject({ body: "and again" });
+    releases.shift()!();
+    await settle(f);
+    expect(posts().map((c) => (c.body as { body: string }).body)).toEqual([
+      "once",
+      "and again",
+    ]);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
   });
 
   it("will not start a session with nothing in it, and shows a refusal inside the dialog", async () => {

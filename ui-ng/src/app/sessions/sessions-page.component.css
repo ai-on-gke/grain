@@ -312,3 +312,23 @@ g-sessions-page {
     margin-left: 0;
   }
 }
+
+/* A message the server has not taken yet (sending, queued, not sent). */
+.msg.is-pending {
+  border-style: dashed;
+}
+
+.msg.is-failed {
+  border-color: var(--md-sys-color-error);
+}
+
+.msg-send-error {
+  margin: 6px 0 0;
+  color: var(--md-sys-color-error);
+}
+
+.msg-send-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
