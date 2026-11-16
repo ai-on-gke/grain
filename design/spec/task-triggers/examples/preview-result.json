@@ -44,5 +44,7 @@
   ],
   "warnings": [
     "Example is synthetic; no live subscription or task was created"
-  ]
+  ],
+  "recovery": null,
+  "gap_id": "gap:history-lost-7"
 }

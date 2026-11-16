@@ -856,7 +856,8 @@
         "old_queue",
         "authorization_ref",
         "preview_token",
-        "reason"
+        "reason",
+        "recovery"
       ],
       "properties": {
         "operation": {
@@ -956,6 +957,16 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 2048
+        },
+        "recovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/recovery_selection"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "allOf": [
@@ -1031,6 +1042,29 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 512
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "control": {
+                "const": "enable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "recovery": {
+                "$ref": "#/$defs/recovery_selection"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "recovery": {
+                "type": "null"
               }
             }
           }
@@ -1266,7 +1300,8 @@
         "candidate",
         "sample_event_ids",
         "synthetic_events",
-        "range"
+        "range",
+        "recovery"
       ],
       "properties": {
         "candidate": {
@@ -1294,6 +1329,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/range"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/recovery_selection"
             },
             {
               "type": "null"
@@ -1725,7 +1770,8 @@
         "binding_id",
         "entries",
         "next_page_cursor",
-        "coverage"
+        "coverage",
+        "gap_id"
       ],
       "properties": {
         "binding_id": {
@@ -1751,6 +1797,14 @@
         },
         "coverage": {
           "$ref": "#/$defs/coverage"
+        },
+        "gap_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 512
         }
       }
     },
@@ -1768,7 +1822,9 @@
         "authority_digest",
         "coverage",
         "samples",
-        "warnings"
+        "warnings",
+        "recovery",
+        "gap_id"
       ],
       "properties": {
         "candidate_digest": {
@@ -1828,6 +1884,24 @@
           },
           "minItems": 0,
           "maxItems": 32
+        },
+        "recovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/recovery_selection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gap_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 512
         }
       }
     },
@@ -2735,6 +2809,90 @@
           "maxLength": 512
         }
       }
+    },
+    "recovery_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "range",
+        "gap_id",
+        "acknowledge_loss"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "future_only",
+            "hold",
+            "skip",
+            "one"
+          ]
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/range"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gap_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledge_loss": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "skip",
+                  "one"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "range": {
+                "$ref": "#/$defs/range"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "acknowledge_loss": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "gap_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

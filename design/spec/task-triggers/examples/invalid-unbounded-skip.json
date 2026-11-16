@@ -1,0 +1,23 @@
+{
+  "definition": "mutation",
+  "message": {
+    "operation": "control",
+    "request_id": "skip-bounded-range-1",
+    "binding_id": "requested-pr-review",
+    "expected_version": 1,
+    "expected_control_revision": 3,
+    "candidate": null,
+    "control": "enable",
+    "job_id": null,
+    "old_queue": "hold",
+    "authorization_ref": "filing-grant-4",
+    "preview_token": "preview:skip-cursor100-120",
+    "reason": "Skip exactly the reviewed retained range without creating historical work",
+    "recovery": {
+      "mode": "skip",
+      "range": null,
+      "gap_id": null,
+      "acknowledge_loss": false
+    }
+  }
+}

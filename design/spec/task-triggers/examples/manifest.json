@@ -18,7 +18,8 @@
     "filing-authorization.json": "filing_authorization",
     "github-enabled-binding.json": "binding",
     "time-enabled-binding.json": "binding",
-    "time-filing-authorization.json": "filing_authorization"
+    "time-filing-authorization.json": "filing_authorization",
+    "control-skip-range.json": "mutation"
   },
   "invalid": [
     "invalid-floating-provider.json",
@@ -35,6 +36,7 @@
     "invalid-replay-flood.json",
     "invalid-orphan-created-receipt.json",
     "invalid-executable-filter.json",
-    "invalid-enable-without-preview.json"
+    "invalid-enable-without-preview.json",
+    "invalid-unbounded-skip.json"
   ]
 }

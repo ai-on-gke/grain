@@ -196,7 +196,13 @@
         },
         "sample_event_ids": [],
         "synthetic_events": [],
-        "range": null
+        "range": null,
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        }
       },
       "expected": "use already registered fixed baseline and current caller source rights; no new subscription, checkpoint or task writes"
     },
@@ -221,7 +227,14 @@
         "samples": [],
         "warnings": [
           "Future-only activation at the committed upstream baseline; no historic events will file automatically"
-        ]
+        ],
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        },
+        "gap_id": null
       },
       "expected": "five-minute token binds actor, desired config digest, source baseline, authority epoch and effective budgets; enable rechecks all of them"
     },
@@ -240,7 +253,13 @@
         "old_queue": "hold",
         "authorization_ref": "filing-grant-clock-1",
         "preview_token": "preview:clock-baseline-0859",
-        "reason": "Enable accepted desired clock config before the next 09:00 occurrence"
+        "reason": "Enable accepted desired clock config before the next 09:00 occurrence",
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        }
       },
       "expected": "verified preview commits control enabled at revision2 and sequence watermark before09:00; paused example config alone could never file"
     },

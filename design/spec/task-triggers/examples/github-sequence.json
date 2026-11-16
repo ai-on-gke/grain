@@ -136,7 +136,8 @@
         "old_queue": "hold",
         "authorization_ref": "filing-grant-4",
         "preview_token": null,
-        "reason": "Import accepted config revision with desired enable; runtime remains held until activation"
+        "reason": "Import accepted config revision with desired enable; runtime remains held until activation",
+        "recovery": null
       },
       "expected": "internal importer applies accepted config change; public config-writing API instead returns config_managed_externally; runtime is not enabled yet"
     },
@@ -360,7 +361,13 @@
         },
         "sample_event_ids": [],
         "synthetic_events": [],
-        "range": null
+        "range": null,
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        }
       },
       "expected": "use already registered fixed baseline and current caller source rights; no new subscription, checkpoint or task writes"
     },
@@ -385,7 +392,14 @@
         "samples": [],
         "warnings": [
           "Future-only activation at the committed upstream baseline; no historic events will file automatically"
-        ]
+        ],
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        },
+        "gap_id": null
       },
       "expected": "five-minute token binds actor, desired config digest, source baseline, authority epoch and effective budgets; enable rechecks all of them"
     },
@@ -404,7 +418,13 @@
         "old_queue": "hold",
         "authorization_ref": "filing-grant-4",
         "preview_token": "preview:activation-after-cursor100",
-        "reason": "Enable only after verified gateway setup and fixed baseline cursor100, future events only"
+        "reason": "Enable only after verified gateway setup and fixed baseline cursor100, future events only",
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        }
       },
       "expected": "preview token binds actor, upstream baseline100, pins/authority/quota and candidate; commit control revision2 plus receipt-sequence watermark; later101 eligible"
     },

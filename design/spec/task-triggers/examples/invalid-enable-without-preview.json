@@ -12,6 +12,12 @@
     "old_queue": "hold",
     "authorization_ref": "filing-grant-4",
     "preview_token": null,
-    "reason": "Create paused review binding under approved repository/template ceiling"
+    "reason": "Create paused review binding under approved repository/template ceiling",
+    "recovery": {
+      "mode": "future_only",
+      "range": null,
+      "gap_id": null,
+      "acknowledge_loss": false
+    }
   }
 }
