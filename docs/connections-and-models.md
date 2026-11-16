@@ -284,6 +284,39 @@ model), the report shows:
   to the reset, or the window when no reset is known). Tokens per worker-hour
   comes from the scope's own recent runs. A paused scope sustains 0.
 
+**The weekly limit.** Providers hold a credential to two quotas at once: the
+short session (interval) window above and an account-wide weekly one
+(Claude's "You've hit your weekly limit · resets Nov 15, 3am (UTC)"). So
+every scope is also reported over the last 7 days, beside its interval:
+
+- **Week used** (`weeklyUsed`, `weeklyRuns`): billable tokens of the runs
+  that finished in the last 7 days, or since the last known weekly reset.
+- **Weekly limit** (`weeklyLimit`, marked `~`): learned when a pause opens
+  on a refusal the provider calls weekly ("weekly limit", "7-day"). It is
+  kept apart from the interval's learned capacity (`usage_capacity` stores
+  it under the model with a `#weekly` suffix), so neither overwrites the
+  other.
+- **Weekly pause** (`weeklyPausedUntil`, and `pauseHorizon: "weekly"` on the
+  scope): while it is in force the week is spent, and the meters say *Weekly
+  limit reached* with its reset rather than an empty interval. A pause on
+  any other refusal has `pauseHorizon: "interval"`.
+- **Weekly reset and run-out** (`weeklyResetAt`, `weeklyRunsOutAt`). The
+  weekly quota resets on a fixed weekly cycle, so once a learned weekly reset
+  has passed the next is taken as a week after it. A known weekly limit also
+  bounds *Sustains*: the scope sustains the smaller of what its interval and
+  its week have left, over the hours to each one's reset.
+
+Runs are read back over at least a week for these figures, but the per-run
+averages behind *Sustains* (tokens per worker-hour, average tokens per run)
+and the deployment rollup still look back only a day (or the longest
+interval window), so week-old runs do not move the interval's estimate.
+
+Warnings say which limit they are about, and where both would run out
+before their resets, the one that runs out first: "default model opus on claude hit
+its weekly limit and is paused until Nov 16 03:00 UTC", "... hit its 5h
+interval limit and is paused until 14:00 UTC", "... runs out of its weekly
+limit in ~11h, before its weekly reset".
+
 The deployment estimate adds up each connection's figure: its
 connection-wide scope where that has a limit, else the sum of its models. If
 any connection in use has no known limit, nothing bounds the estimate and it
@@ -315,7 +348,9 @@ estimate never stops a run the provider would accept, unless `auto` is on,
 and even then it only lowers the number of concurrent runs.
 
 **Where to see it.** Settings → Models → *Token usage and budgets* shows the
-per-connection/model table (used, limit, left, reset, burn rate, sustains),
+per-connection/model table (used, limit, left, reset, the week's usage and
+reset, burn rate, sustains), Telemetry shows an interval and a weekly meter
+per scope,
 the deployment rollup, the advisory and the warnings, and sets the mode.
 `grain usage` prints the same, and `GET /api/usage` returns it as JSON
 (`deployment:read`).

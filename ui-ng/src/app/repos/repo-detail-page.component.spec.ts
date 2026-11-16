@@ -22,16 +22,30 @@ import {
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
-import { routes as appRoutes } from "../app.routes";
+import {
+  routes as appRoutes,
+  repoDetailMatcher,
+  repoRouteChanged,
+} from "../app.routes";
 import {
   RepoDetailPageComponent,
   declaredPushRef,
+  importIntervalSeconds,
+  importIntervalText,
   importOutcomeText,
   releaseActionReasons,
   removeRepoMessage,
   unjudgedGatesFor,
   unknownReleaseText,
 } from "./repo-detail-page.component";
+import {
+  planFormOf,
+  planPayload,
+  qualifiableTemplates,
+  repeatError,
+  withoutDanglingDependencies,
+} from "./repo-qualification-plan.component";
+import { saidLabel } from "./repo-work-ownership.component";
 
 interface RepoCall {
   method: string;
@@ -53,6 +67,38 @@ class FakeRepoApi {
   releasesList: { name: string; status: string; prodBranch: string }[] = [
     { name: "v1.2", status: "active", prodBranch: "v1.2" },
   ];
+  refuseMessage = 'ciMode: must be "grain", "github", or "none"';
+  issueImport: Record<string, unknown> = {
+    enabled: true,
+    label: "grain-ready",
+    repo: "",
+    approved: false,
+    intervalSeconds: 600,
+    effectiveIntervalSeconds: 600,
+  };
+  ciCapabilities: string[] = ["github-token"];
+  plan: Record<string, unknown> = {
+    configured: true,
+    requireApproval: false,
+    autoPromote: true,
+    items: [{ templateId: "smoke", repeat: 1, dependsOn: [] }],
+  };
+  work: Record<string, unknown> = {
+    repo: "acme/platform",
+    default: "",
+    defaultRuns: true,
+    items: [
+      { item: "release", kind: "release", override: "", runs: true },
+      {
+        item: "nightly",
+        kind: "schedule",
+        title: "Nightly sweep",
+        override: "off",
+        runs: false,
+        declaration: { path: ".grain/schedules/nightly.yml" },
+      },
+    ],
+  };
   // gates answers GET /api/base-branch-gates from the stored CI mode, as
   // the server does for a watched branch it has never enrolled.
   gates = (): unknown[] =>
@@ -82,7 +128,11 @@ class FakeRepoApi {
       full: true,
       scopes: [],
     },
-  };
+    ciCapabilities: [
+      { id: "github-token", name: "GitHub token", ready: true },
+      { id: "docker-hub", name: "Docker Hub push", ready: true },
+    ],
+  } as GrainConfig;
 
   declarationsBody: Record<string, unknown> = {
     declarations: true,
@@ -132,7 +182,25 @@ class FakeRepoApi {
         ciMode: this.ciMode,
         mergeOnGreen: true,
         requireBranchUpToDate: false,
+        issueImport: this.issueImport,
       });
+    }
+    if (key === "GET /api/repos/{owner}/{name}/ci-capabilities") {
+      return Promise.resolve({ ciCapabilities: this.ciCapabilities });
+    }
+    if (key === "GET /api/repos/{owner}/{name}/qualification-plan") {
+      return Promise.resolve(structuredClone(this.plan));
+    }
+    if (key === "GET /api/repos/{owner}/{name}/work-ownership") {
+      return Promise.resolve(structuredClone(this.work));
+    }
+    if (key === "GET /api/templates") {
+      return Promise.resolve([
+        { id: "smoke", name: "Smoke test" },
+        { id: "soak", name: "Soak" },
+        { id: "other-bound", name: "Bound elsewhere", repo: "acme/other" },
+        { id: "builtin", name: "Built-in", system: true },
+      ]);
     }
     if (key === "GET /api/deployment/git-connections") {
       return Promise.resolve([
@@ -145,6 +213,8 @@ class FakeRepoApi {
     }
     if (key === "GET /api/repos/{owner}/{name}/release") {
       return Promise.resolve({
+        enabled: false,
+        baseBranchJobs: ["unit"],
         pendingReleases: [
           { version: "v1.3.0", summary: "Trunk release candidate" },
         ],
@@ -174,9 +244,7 @@ class FakeRepoApi {
       // is already rejected when the component awaits it is reported
       // by zone.js as unhandled before the await attaches.
       return new Promise((_, reject) =>
-        setTimeout(() =>
-          reject(new Error('ciMode: must be "grain", "github", or "none"')),
-        ),
+        setTimeout(() => reject(new Error(this.refuseMessage))),
       );
     }
     if (key === "PUT /api/repos/{owner}/{name}/ci-mode") {
@@ -187,6 +255,11 @@ class FakeRepoApi {
 
   post = (key: string, params?: RouteParams, body?: unknown) => {
     this.calls.push({ method: "POST", key, params, body });
+    if (key === "POST /api/repos/{owner}/{name}/releases") {
+      const name = String((body as { name?: string })?.name);
+      this.releasesList.unshift({ name, status: "active", prodBranch: name });
+      return Promise.resolve({ name });
+    }
     if (key === "POST /api/repos/plan") {
       return Promise.resolve({
         targetReposStranded: [
@@ -203,6 +276,11 @@ class FakeRepoApi {
 
   delete = (key: string, params?: RouteParams) => {
     this.calls.push({ method: "DELETE", key, params });
+    if (key === "DELETE /api/repos/{owner}/{name}/releases/{release}") {
+      this.releasesList = this.releasesList.filter(
+        (r) => r.name !== params?.["release"],
+      );
+    }
     return Promise.resolve({ ok: true });
   };
 }
@@ -214,28 +292,10 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
       provideRouter(
         [
           {
-            path: "repos/:owner/:name",
+            matcher: repoDetailMatcher,
             component: RepoDetailPageComponent,
-          },
-          {
-            path: "repos/:owner/:name/releases/:release",
-            component: RepoDetailPageComponent,
-          },
-          {
-            path: "repos/:owner/:name/:tab",
-            component: RepoDetailPageComponent,
-          },
-          {
-            path: "repos/:host/:owner/:name",
-            component: RepoDetailPageComponent,
-          },
-          {
-            path: "repos/:host/:owner/:name/releases/:release",
-            component: RepoDetailPageComponent,
-          },
-          {
-            path: "repos/:host/:owner/:name/:tab",
-            component: RepoDetailPageComponent,
+            canDeactivate: [(page: RepoDetailPageComponent) => page.canLeave()],
+            runGuardsAndResolvers: repoRouteChanged,
           },
           { path: "settings/repositories", children: [] },
           { path: "repos", children: [] },
@@ -673,6 +733,491 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       { baseRepairBypassesHumanGates: false },
     ]);
   });
+  // 2026-11-14 repository walkthrough parity gaps: the issue-import
+  // interval, the CI capabilities card, work ownership and the
+  // qualification plan were on the classic page only.
+  it("reads, validates and saves the issue-import interval, and guards it", async () => {
+    const { el, api, harness } = await mountRepo("/repos/acme/platform");
+    const box = () =>
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-import-interval"]',
+      )!;
+    expect(box().value).toBe("10");
+    expect(box().placeholder).toBe("10");
+
+    box().value = "0";
+    box().dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(box().getAttribute("aria-invalid")).toBe("true");
+    expect(box().getAttribute("aria-describedby")).toBe("imp-interval-err");
+    expect(
+      el.querySelector('[data-testid="import-interval-error"]')?.textContent,
+    ).toContain("at least 1");
+    expect(
+      api.calls.some((c) => c.key === "PUT /api/repos/{owner}/{name}/settings"),
+    ).toBe(false);
+
+    // The next edit clears the refusal.
+    box().value = "15";
+    box().dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(box().getAttribute("aria-invalid")).toBeNull();
+
+    // An unsaved interval is an unsaved edit: switching tab asks.
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("issue import");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    const put = api.calls.find(
+      (c) => c.key === "PUT /api/repos/{owner}/{name}/settings",
+    );
+    expect(put?.body).toMatchObject({ issueImportIntervalSeconds: 900 });
+  });
+
+  // Review of task 5868 (task 6153): saving the importer rounded a
+  // stored interval that is not whole minutes even when untouched.
+  it("leaves an untouched interval out of the issue-import save", async () => {
+    const api = new FakeRepoApi();
+    api.issueImport = { ...api.issueImport, intervalSeconds: 90 };
+    const { el, harness } = await mountRepo("/repos/acme/platform", api);
+    expect(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-import-interval"]',
+      )!.value,
+    ).toBe("2");
+    const label = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-import-label"]',
+    )!;
+    label.value = "triage";
+    label.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    const body = api.calls.find(
+      (c) => c.key === "PUT /api/repos/{owner}/{name}/settings",
+    )?.body as Record<string, unknown>;
+    expect(body).toMatchObject({ issueImportLabel: "triage" });
+    expect(body).not.toHaveProperty("issueImportIntervalSeconds");
+  });
+
+  // Review of task 5868 (task 6153): a work-ownership save re-read the
+  // whole release card over its unsaved edits.
+  it("keeps unsaved release-card edits when work ownership is saved", async () => {
+    const { el, harness } = await mountRepo("/repos/acme/platform/releases");
+    const jobs = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-release-base-jobs"]',
+    )!;
+    jobs.value = "unit, e2e";
+    jobs.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      'button[aria-label="Nightly sweep: on"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-release-base-jobs"]',
+      )!.value,
+    ).toBe("unit, e2e");
+  });
+
+  // Review of task 5868 (task 6153): an edit made while the plan's Save
+  // was in flight was replaced by the snapshot that was sent.
+  it("keeps a qualification-plan edit made while Save is in flight", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    let release: (v: unknown) => void = () => undefined;
+    const realPut = api.put;
+    api.put = (key: string, params?: RouteParams, body?: unknown) => {
+      if (key === "PUT /api/repos/{owner}/{name}/qualification-plan") {
+        api.calls.push({ method: "PUT", key, params, body });
+        return new Promise((r) => (release = r));
+      }
+      return realPut(key, params, body);
+    };
+    const card = el.querySelector(
+      '[data-testid="card-repo-qualification-plan"]',
+    )!;
+    const sw = (id: string) =>
+      card.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
+    sw("switch-qualification-require-approval").click();
+    harness.detectChanges();
+    sw("save-qualification-plan").click();
+    await new Promise((r) => setTimeout(r, 5));
+    sw("switch-qualification-auto-promote").click();
+    harness.detectChanges();
+    release({ ok: true });
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      sw("switch-qualification-auto-promote").getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      card.querySelector('[data-testid="qualification-plan-unsaved"]'),
+    ).not.toBeNull();
+    expect(
+      api.calls.find(
+        (c) => c.key === "PUT /api/repos/{owner}/{name}/qualification-plan",
+      )?.body as { requireApproval?: boolean; autoPromote?: boolean },
+    ).toMatchObject({ requireApproval: true, autoPromote: true });
+  });
+
+  it("says a server-refused interval beside its box, not in the banner", async () => {
+    const api = new FakeRepoApi();
+    api.refusePut = "PUT /api/repos/{owner}/{name}/settings";
+    api.refuseMessage =
+      "issueImportIntervalSeconds: must be 0 for the default or at least 60";
+    const { el, harness } = await mountRepo("/repos/acme/platform", api);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="import-interval-error"]')?.textContent,
+    ).toContain("at least 60");
+    expect(el.querySelector('[data-testid="repo-error-banner"]')).toBeNull();
+  });
+
+  it("toggles a CI capability, and puts it back with the reason when refused", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const card = el.querySelector('[data-testid="card-repo-ci-capabilities"]')!;
+    expect(card).not.toBeNull();
+    expect(el.querySelectorAll("select").length).toBe(0);
+    const pill = (id: string) =>
+      card.querySelector<HTMLButtonElement>(
+        `[data-testid="repo-ci-caps-cap-${id}"]`,
+      )!;
+    expect(pill("github-token").getAttribute("aria-pressed")).toBe("true");
+    expect(pill("docker-hub").getAttribute("aria-pressed")).toBe("false");
+
+    pill("docker-hub").click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      api.calls.filter(
+        (c) => c.key === "PUT /api/repos/{owner}/{name}/ci-capabilities",
+      )[0]?.body,
+    ).toEqual({ ciCapabilities: ["github-token", "docker-hub"] });
+
+    api.refusePut = "PUT /api/repos/{owner}/{name}/ci-capabilities";
+    api.refuseMessage = "capability github-token is not offered to CI";
+    pill("github-token").click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      card.querySelector('[data-testid="ci-capabilities-error"]')?.textContent,
+    ).toContain("not offered to CI");
+    expect(
+      card
+        .querySelector('[role="group"][aria-label="CI capabilities"]')!
+        .getAttribute("aria-invalid"),
+    ).toBe("true");
+    expect(pill("github-token").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("draws work ownership's three states and saves one item at a time", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const card = el.querySelector('[data-testid="card-repo-work-ownership"]')!;
+    expect(card).not.toBeNull();
+    expect(
+      card.querySelector('[data-testid="work-item-said-nightly"]')?.textContent,
+    ).toContain("Off, set here");
+    expect(
+      card.querySelector('[data-testid="work-item-runs-nightly"]')?.textContent,
+    ).toContain("Not run");
+    expect(
+      card.querySelector('[data-testid="work-item-said-release"]')?.textContent,
+    ).toContain("Nobody has said");
+    const off = card.querySelector<HTMLButtonElement>(
+      'button[aria-label="Nightly sweep: off"]',
+    )!;
+    expect(off.getAttribute("aria-pressed")).toBe("true");
+
+    card
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Nightly sweep: say nothing"]',
+      )!
+      .click();
+    await new Promise((r) => setTimeout(r, 10));
+    card
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="switch-work-ownership-default"]',
+      )!
+      .click();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      api.calls
+        .filter((c) => c.key === "PUT /api/repos/{owner}/{name}/work-ownership")
+        .map((c) => c.body),
+    ).toEqual([{ item: "nightly", state: "" }, { default: "off" }]);
+
+    api.refusePut = "PUT /api/repos/{owner}/{name}/work-ownership";
+    api.refuseMessage = "work ownership: unknown state";
+    card
+      .querySelector<HTMLButtonElement>('button[aria-label="release: on"]')!
+      .click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    const group = card.querySelector('[role="group"][aria-label="release"]')!;
+    expect(group.getAttribute("aria-invalid")).toBe("true");
+    expect(
+      card.querySelector(`#${group.getAttribute("aria-describedby")}`)
+        ?.textContent,
+    ).toContain("unknown state");
+  });
+
+  it("edits, validates, guards and saves the qualification plan", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const card = () =>
+      el.querySelector('[data-testid="card-repo-qualification-plan"]')!;
+    const save = () =>
+      card().querySelector<HTMLButtonElement>(
+        '[data-testid="save-qualification-plan"]',
+      )!;
+    expect(
+      card().querySelector('[data-testid="qualification-item-template-0"]')
+        ?.textContent,
+    ).toContain("Smoke test");
+    expect(save().disabled).toBe(true);
+    expect(el.querySelectorAll("select").length).toBe(0);
+
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-add-item"]',
+      )!
+      .click();
+    harness.detectChanges();
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-item-template-1"]',
+      )!
+      .click();
+    harness.detectChanges();
+    const opts = [
+      ...card().querySelectorAll<HTMLElement>(
+        '[data-testid^="qualification-item-template-1-opt-"]',
+      ),
+    ].map((o) => o.dataset["testid"]!.replace(/.*-opt-/, ""));
+    // Neither a built-in template nor one bound to another repo.
+    expect(opts).toEqual(["", "smoke", "soak"]);
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-item-template-1-opt-soak"]',
+      )!
+      .click();
+    harness.detectChanges();
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-item-dep-1-smoke"]',
+      )!
+      .click();
+    harness.detectChanges();
+
+    const repeat = card().querySelector<HTMLInputElement>(
+      '[data-testid="qualification-item-repeat-1"]',
+    )!;
+    repeat.value = "0";
+    repeat.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(repeat.getAttribute("aria-invalid")).toBe("true");
+    expect(save().disabled).toBe(true);
+    repeat.value = "3";
+    repeat.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(repeat.getAttribute("aria-invalid")).toBeNull();
+
+    // An unsaved plan is an unsaved edit; Discard puts the saved plan back.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-branches"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("qualification plan");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+
+    save().click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      api.calls.find(
+        (c) => c.key === "PUT /api/repos/{owner}/{name}/qualification-plan",
+      )?.body,
+    ).toEqual({
+      requireApproval: false,
+      autoPromote: true,
+      items: [
+        { templateId: "smoke", repeat: 1, dependsOn: [] },
+        { templateId: "soak", repeat: 3, dependsOn: ["smoke"] },
+      ],
+    });
+    expect(save().disabled).toBe(true);
+
+    // A refusal is said under the form and the edit stays on screen.
+    api.refusePut = "PUT /api/repos/{owner}/{name}/qualification-plan";
+    api.refuseMessage = "qualification plan has a dependency cycle";
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="switch-qualification-require-approval"]',
+      )!
+      .click();
+    harness.detectChanges();
+    save().click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      card().querySelector('[data-testid="qualification-plan-error"]')
+        ?.textContent,
+    ).toContain("dependency cycle");
+    expect(
+      card()
+        .querySelector('[data-testid="switch-qualification-require-approval"]')!
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("shows the new cards read-only, with the reason, to a role that cannot write them", async () => {
+    const api = new FakeRepoApi();
+    api.configBody = {
+      ...api.configBody,
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: [
+          "repos:read",
+          "releases:read",
+          "capabilities:read",
+          "templates:read",
+          "settings:read",
+        ],
+      },
+    } as GrainConfig;
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const work = el.querySelector('[data-testid="card-repo-work-ownership"]')!;
+    expect(
+      [...work.querySelectorAll<HTMLButtonElement>("button")].every(
+        (b) => b.disabled,
+      ),
+    ).toBe(true);
+    expect(
+      work.querySelector('[data-testid="work-ownership-denied"]')?.textContent,
+    ).toContain("repos:write");
+    const plan = el.querySelector(
+      '[data-testid="card-repo-qualification-plan"]',
+    )!;
+    expect(
+      plan.querySelector<HTMLButtonElement>(
+        '[data-testid="save-qualification-plan"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(
+      plan.querySelector('[data-testid="qualification-plan-denied"]')
+        ?.textContent,
+    ).toContain("releases:write");
+
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    const ci = el.querySelector('[data-testid="card-repo-ci-capabilities"]')!;
+    expect(
+      ci.querySelector<HTMLButtonElement>(
+        '[data-testid="repo-ci-caps-cap-docker-hub"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(
+      ci.querySelector('[data-testid="ci-capabilities-denied"]')?.textContent,
+    ).toContain("capabilities:admin");
+    expect(api.calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("keeps the plan, interval and ownership helpers to the classic rules", () => {
+    expect(importIntervalText(0)).toBe("");
+    expect(importIntervalText(900)).toBe("15");
+    expect(importIntervalSeconds("")).toEqual({ seconds: 0, error: null });
+    expect(importIntervalSeconds("5")).toEqual({ seconds: 300, error: null });
+    expect(importIntervalSeconds("0.5").error).toContain("at least 1");
+    expect(importIntervalSeconds("abc").error).toContain("at least 1");
+
+    expect(saidLabel("on")).toBe("On, set here");
+    expect(saidLabel("off")).toBe("Off, set here");
+    expect(saidLabel("")).toBe("Nobody has said");
+
+    expect(repeatError("1")).toBe("");
+    expect(repeatError("0")).not.toBe("");
+    expect(repeatError("1.5")).not.toBe("");
+
+    expect(
+      withoutDanglingDependencies([
+        { templateId: "a", repeat: "1", dependsOn: ["b", "gone"] },
+        { templateId: "b", repeat: "1", dependsOn: [] },
+      ])[0].dependsOn,
+    ).toEqual(["b"]);
+
+    const form = planFormOf({
+      requireApproval: true,
+      items: [{ templateId: "a", repeat: 2, dependsOn: null }],
+    });
+    form.items.push({ templateId: "", repeat: "1", dependsOn: [] });
+    expect(planPayload(form)).toEqual({
+      requireApproval: true,
+      autoPromote: false,
+      items: [{ templateId: "a", repeat: 2, dependsOn: [] }],
+    });
+
+    expect(
+      qualifiableTemplates(
+        [
+          { id: "x", name: "x", title: "", description: "" },
+          { id: "y", name: "y", title: "", description: "", repo: "Acme/P" },
+          { id: "z", name: "z", title: "", description: "", repo: "o/q" },
+          { id: "s", name: "s", title: "", description: "", system: true },
+        ],
+        "acme/p",
+      ).map((t) => t.id),
+    ).toEqual(["x", "y"]);
+  });
 
   it("shows what acme/platform declares on the Advanced tab and switches declarations off", async () => {
     const { el, api, harness } = await mountRepo("/repos/acme/platform");
@@ -804,7 +1349,7 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
     ).toContain("cannot switch declarations on or off");
   });
 
-  it("deep-links to a release, scrolls its row into view, puts selected releases in the URL, and guards leaving via app.routes", async () => {
+  it("deep-links to a release, scrolls its row into view, and puts selected releases in the URL via app.routes", async () => {
     const api = new FakeRepoApi();
     api.releasesList = [
       { name: "v2.0", status: "active", prodBranch: "v2.0" },
@@ -873,8 +1418,7 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
           ?.getAttribute("aria-current"),
       ).toBe("true");
 
-      // Hosted per-release route resolves host/owner/name and release, and
-      // keeps repoLeaveGuard active.
+      // The hosted per-release address resolves host/owner/name and release.
       await harness.navigateByUrl(
         "/repos/git.example.com/acme/platform/releases/v1.2",
       );
@@ -893,6 +1437,133 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = origScroll;
     }
+  });
+
+  async function mountApp(url: string, api: FakeRepoApi) {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(appRoutes, withComponentInputBinding()),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create(url);
+    harness.fixture.autoDetectChanges(true);
+    await settleHarness(harness);
+    return harness;
+  }
+
+  async function settleHarness(harness: RouterTestingHarness) {
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 25));
+    await harness.fixture.whenStable();
+  }
+
+  for (const base of [
+    "/repos/acme/platform",
+    "/repos/git.example.com/acme/platform",
+  ]) {
+    it(`keeps one page and its edits across release picks, and asks before leaving ${base}/releases/<release> with an unsaved edit`, async () => {
+      const api = new FakeRepoApi();
+      api.releasesList = [
+        { name: "v2.0", status: "active", prodBranch: "v2.0" },
+        { name: "v1.2", status: "active", prodBranch: "v1.2" },
+      ];
+      const harness = await mountApp(`${base}/releases/v1.2`, api);
+      const router = TestBed.inject(Router);
+      const page = harness.routeDebugElement?.componentInstance;
+      const el = harness.fixture.nativeElement as HTMLElement;
+      const jobs = el.querySelector<HTMLInputElement>(
+        '[data-testid="input-release-base-jobs"]',
+      )!;
+      jobs.value = "unsaved-e2e";
+      jobs.dispatchEvent(new Event("input", { bubbles: true }));
+
+      // Picking another release reuses the page: no question, the edit stays.
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="inspect-rc-v2.0"]',
+      )!.click();
+      await settleHarness(harness);
+      expect(router.url).toBe(`${base}/releases/v2.0`);
+      expect(harness.routeDebugElement?.componentInstance).toBe(page);
+      expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+      expect(
+        el.querySelector<HTMLInputElement>(
+          '[data-testid="input-release-base-jobs"]',
+        )!.value,
+      ).toBe("unsaved-e2e");
+
+      // Leaving the page asks (repoLeaveGuard on the route); Cancel stays.
+      const leaving = router.navigateByUrl("/repos");
+      // The guard's question is pending, so the zone is not stable yet.
+      await new Promise((r) => setTimeout(r, 30));
+      harness.detectChanges();
+      const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+      expect(dialog?.textContent).toContain("Discard unsaved changes?");
+      expect(dialog?.textContent).toContain("release jobs");
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="confirm-cancel"]',
+      )!.click();
+      expect(await leaving).toBe(false);
+      expect(router.url).toBe(`${base}/releases/v2.0`);
+    });
+  }
+
+  it("goes to a created release's address, and back to the list without a stale-link notice when the open release is deleted", async () => {
+    const api = new FakeRepoApi();
+    api.releasesList = [
+      { name: "v2.0", status: "active", prodBranch: "v2.0" },
+      { name: "v1.2", status: "active", prodBranch: "v1.2" },
+    ];
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases/v1.2",
+      api,
+    );
+    const router = TestBed.inject(Router);
+    const name = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-new-release-name"]',
+    )!;
+    name.value = "v3.0";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="create-release-btn"]',
+    )!.click();
+    await settleHarness(harness);
+    expect(router.url).toBe("/repos/acme/platform/releases/v3.0");
+    expect(
+      el
+        .querySelector('[data-testid="release-row-v3.0"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      el.querySelector('[data-testid="unknown-release-banner"]'),
+    ).toBeNull();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="delete-release-v3.0"]',
+    )!.click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await settleHarness(harness);
+    expect(router.url).toBe("/repos/acme/platform/releases");
+    expect(
+      el
+        .querySelector('[data-testid="repo-tab-releases"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      el.querySelector('[data-testid="unknown-release-banner"]'),
+    ).toBeNull();
+    expect(el.querySelector('[data-testid="release-row-v3.0"]')).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="release-row-v2.0"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
   });
 
   it("shows the classic notice and links back to Releases when the URL names an unknown release", async () => {
