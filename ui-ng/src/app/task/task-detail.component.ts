@@ -1766,9 +1766,24 @@ export class TaskDetailComponent implements OnDestroy {
       fragSub.unsubscribe();
       if (this.linkTimer) clearTimeout(this.linkTimer);
     });
+    // A #comment= belongs to the task it arrived with. When the task
+    // changes under an unchanged fragment -- a pane stepping to another
+    // task, a workstream node click that keeps the address's fragment --
+    // it is not followed again on the new task.
+    let lastFragment: string | null | undefined;
+    let followed = false;
     effect(() => {
-      const link = linkedComment(this.fragment(), this.id());
-      untracked(() => this.linked.set(link));
+      const frag = this.fragment();
+      const id = this.id();
+      untracked(() => {
+        if (followed && frag === lastFragment) {
+          if (this.linked()?.task !== id) this.linked.set(null);
+          return;
+        }
+        followed = true;
+        lastFragment = frag;
+        this.linked.set(linkedComment(frag, id));
+      });
     });
     effect(() => this.followCommentLink());
     effect(() => {
@@ -1843,9 +1858,13 @@ export class TaskDetailComponent implements OnDestroy {
         if ((t.olderComments ?? 0) > 0 && first !== undefined && id < first) {
           if (this.linkLoading === key) return;
           this.linkLoading = key;
-          void this.store.loadCommentsThrough(id).then((found) => {
+          void this.store.loadCommentsThrough(id).then((outcome) => {
             if (this.linkLoading === key) this.linkLoading = "";
-            if (!found && this.linked() === link) this.notInConversation(id);
+            if (this.linked() !== link) return;
+            // A failed read is reported by the store's own error banner;
+            // it says nothing about whether the comment exists.
+            if (outcome === "missing") this.notInConversation(id);
+            else if (outcome === "aborted") this.linked.set(null);
           });
           return;
         }

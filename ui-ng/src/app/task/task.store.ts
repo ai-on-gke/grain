@@ -216,6 +216,12 @@ export class TaskStore {
     }
   }
 
+  // Both page-back readers (Load earlier, a #comment= link's walk) share
+  // one in-flight slot, so a second one waits for the first rather than
+  // being turned away and read as "that comment is not here".
+  private olderCommentsInFlight: { id: string; promise: Promise<void> } | null =
+    null;
+
   async loadOlderComments(): Promise<void> {
     const id = this.id();
     const cur = this.detail();
@@ -223,74 +229,106 @@ export class TaskStore {
     if (!id || !cur || !first || this.isBusy("older-comments", id)) return;
     const busyKey = `${id}:older-comments`;
     this.mark(busyKey, true);
-    try {
-      const page = await this.api.get<TaskDetail>(
-        "GET /api/tasks/{id}",
-        { id },
-        `comments_limit=50&comments_before=${encodeURIComponent(String(first.id))}&attempts_limit=1`,
-      );
-      if (this.id() !== id) return;
-      this.pagedComments = mergeComments(
-        page.comments ?? [],
-        this.pagedComments,
-      );
-      this.pagedOlderComments = page.olderComments ?? 0;
-      const latest = this.detail();
-      if (latest) {
-        this.detail.set(this.applyPagedMerge(latest));
+    const slot = { id, promise: Promise.resolve() };
+    this.olderCommentsInFlight = slot;
+    slot.promise = (async () => {
+      try {
+        const page = await this.api.get<TaskDetail>(
+          "GET /api/tasks/{id}",
+          { id },
+          `comments_limit=50&comments_before=${encodeURIComponent(String(first.id))}&attempts_limit=1`,
+        );
+        if (this.id() !== id) return;
+        this.keepPage(page.comments ?? [], page.olderComments ?? 0);
+      } catch (err) {
+        if (this.id() === id) this.actionError.set(errorText(err));
+      } finally {
+        if (this.olderCommentsInFlight === slot) {
+          this.olderCommentsInFlight = null;
+        }
+        this.mark(busyKey, false);
       }
-    } catch (err) {
-      if (this.id() === id) this.actionError.set(errorText(err));
-    } finally {
-      this.mark(busyKey, false);
-    }
+    })();
+    await slot.promise;
+  }
+
+  // keepPage folds a page of earlier comments into the paged history
+  // together with every comment drawn now. The poll only ever returns the
+  // newest page, so without the drawn ones a poll after new comments
+  // arrive slides that page forward and the comments at the seam between
+  // it and the paged history drop out of the thread.
+  private keepPage(page: Comment[], older: number): void {
+    const latest = this.detail();
+    this.pagedComments = mergeComments(
+      page,
+      mergeComments(this.pagedComments, latest?.comments ?? []),
+    );
+    this.pagedOlderComments = older;
+    if (latest) this.detail.set(this.applyPagedMerge(latest));
   }
 
   // loadCommentsThrough pages back through the conversation, up to 500
   // comments a request, until it holds comment `through` or reaches the
   // first comment, and merges every page at once, so a #comment= link to
   // an early comment of a long thread draws once rather than per page.
-  // It answers whether the comment is now loaded.
-  async loadCommentsThrough(through: number): Promise<boolean> {
+  // It answers "found", "missing" (the conversation has no such comment)
+  // or "aborted" (the task changed or a read failed, so nothing is known).
+  async loadCommentsThrough(
+    through: number,
+  ): Promise<"found" | "missing" | "aborted"> {
     const id = this.id();
     const has = () =>
       (this.detail()?.comments ?? []).some((c) => c.id === through);
-    if (!id || !this.detail() || has()) return has();
-    const busyKey = `${id}:older-comments`;
-    if (this.busy().has(busyKey)) return false;
-    this.mark(busyKey, true);
-    let pages: Comment[] = [];
-    let older: number | null = null;
-    let first = this.detail()?.comments?.[0]?.id;
-    try {
-      while (first !== undefined && first > through) {
-        const page = await this.api.get<TaskDetail>(
-          "GET /api/tasks/{id}",
-          { id },
-          `comments_limit=500&comments_before=${encodeURIComponent(String(first))}&attempts_limit=1`,
-        );
-        if (this.id() !== id) return false;
-        const got = page.comments ?? [];
-        // A page that does not reach further back ends the walk.
-        if (!got.length || got[0].id >= first) break;
-        pages = mergeComments(got, pages);
-        older = page.olderComments ?? 0;
-        first = got[0].id;
-        if (!older) break;
-      }
-      if (pages.length) {
-        this.pagedComments = mergeComments(pages, this.pagedComments);
-        this.pagedOlderComments = older ?? 0;
-        const latest = this.detail();
-        if (latest) this.detail.set(this.applyPagedMerge(latest));
-      }
-      return has();
-    } catch (err) {
-      if (this.id() === id) this.actionError.set(errorText(err));
-      return false;
-    } finally {
-      this.mark(busyKey, false);
+    if (!id || !this.detail()) return "aborted";
+    if (has()) return "found";
+    while (this.olderCommentsInFlight?.id === id) {
+      await this.olderCommentsInFlight.promise;
+      if (this.id() !== id || !this.detail()) return "aborted";
+      if (has()) return "found";
     }
+    if ((this.detail()?.olderComments ?? 0) <= 0) return "missing";
+    const busyKey = `${id}:older-comments`;
+    this.mark(busyKey, true);
+    let outcome: "found" | "missing" | "aborted" = "missing";
+    const slot = { id, promise: Promise.resolve() };
+    this.olderCommentsInFlight = slot;
+    slot.promise = (async () => {
+      let pages: Comment[] = [];
+      let older: number | null = null;
+      let first = this.detail()?.comments?.[0]?.id;
+      try {
+        while (first !== undefined && first > through) {
+          const page = await this.api.get<TaskDetail>(
+            "GET /api/tasks/{id}",
+            { id },
+            `comments_limit=500&comments_before=${encodeURIComponent(String(first))}&attempts_limit=1`,
+          );
+          if (this.id() !== id) {
+            outcome = "aborted";
+            return;
+          }
+          const got = page.comments ?? [];
+          // A page that does not reach further back ends the walk.
+          if (!got.length || got[0].id >= first) break;
+          pages = mergeComments(got, pages);
+          older = page.olderComments ?? 0;
+          first = got[0].id;
+          if (!older) break;
+        }
+        if (pages.length) this.keepPage(pages, older ?? 0);
+        outcome = has() ? "found" : "missing";
+      } catch (err) {
+        if (this.id() === id) this.actionError.set(errorText(err));
+        outcome = "aborted";
+      } finally {
+        if (this.olderCommentsInFlight === slot) {
+          this.olderCommentsInFlight = null;
+        }
+        this.mark(busyKey, false);
+      }
+    })();
+    await slot.promise;
+    return outcome;
   }
 
   async loadOlderAttempts(): Promise<void> {

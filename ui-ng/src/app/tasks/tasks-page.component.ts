@@ -2115,18 +2115,22 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     // A phone has no pane, so a #comment= link into one
     // (/tasks?task=<id>#comment=<n>, as a wide screen shares it) opens
     // the task's own page on that comment instead.
-    const frag = this.route.snapshot.fragment;
-    const linked = this.task();
-    if (linked && frag?.startsWith("comment=") && this.isPhone()) {
-      void this.router.navigate(["/task", linked], {
-        queryParams: { from: this.fromParam() },
-        fragment: frag,
-        replaceUrl: true,
-      });
-    }
+    // It follows every fragment the page is given, not only the first:
+    // a link followed while Tasks is already open lands here too.
+    const fragSub = this.route.fragment.subscribe((frag) => {
+      const linked = this.route.snapshot.queryParamMap.get("task");
+      if (linked && frag?.startsWith("comment=") && this.isPhone()) {
+        void this.router.navigate(["/task", linked], {
+          queryParams: { from: this.fromParam() },
+          fragment: frag,
+          replaceUrl: true,
+        });
+      }
+    });
     this.store.start();
     this.wsStore.ensureLoaded();
     this.unregister = [
+      () => fragSub.unsubscribe(),
       this.keyboard.register({
         key: "j",
         description: "Next task",

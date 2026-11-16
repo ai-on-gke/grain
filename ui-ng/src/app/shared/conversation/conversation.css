@@ -291,6 +291,11 @@
   outline-offset: -2px;
 }
 
+/* Focus outlasts the highlight, and focus is always visible (book §8). */
+.convo-thread .msg:focus-visible {
+  outline-color: var(--md-sys-color-primary);
+}
+
 .convo-thread .msg.is-linked {
   outline-color: var(--md-sys-color-primary);
   background: var(--md-sys-color-primary-container);

@@ -55,7 +55,13 @@ const FOLLOW_SLACK_PX = 48;
 // How long a comment a #comment= link led to stays highlighted
 // (.msg.is-linked in conversation.css fades over the same).
 const LINKED_HIGHLIGHT_MS = 2500;
-const SETTLE_STOPPERS = ["wheel", "touchstart", "keydown"] as const;
+// pointerdown covers grabbing the scrollbar, which sends no wheel event.
+const SETTLE_STOPPERS = [
+  "wheel",
+  "touchstart",
+  "keydown",
+  "pointerdown",
+] as const;
 
 export interface ComposerConfig {
   placeholder?: string;
@@ -169,7 +175,7 @@ export interface ComposerConfig {
             [class.is-human]="human(c)"
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
-            [id]="'comment-' + c.id"
+            [attr.id]="anchorIds() ? 'comment-' + c.id : null"
             [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
           >
@@ -326,6 +332,11 @@ export class ConversationComponent implements OnDestroy {
   readonly transcript = input<string | null>(null);
   readonly config = input<ComposerConfig>();
   readonly questionCommentId = input<number | undefined>(undefined);
+
+  // anchorIds gives each message its id="comment-<id>" anchor. Only the
+  // task's own conversation does: the Director drawer and shaper show the
+  // same comments beside it, and an id may appear once per document.
+  readonly anchorIds = input<boolean>(true);
 
   readonly olderCount = input<number>(0);
   readonly loadingOlder = input<boolean>(false);
