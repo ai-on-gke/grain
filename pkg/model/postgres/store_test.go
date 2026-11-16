@@ -41,7 +41,7 @@ func openStore(t *testing.T) (*model.Store, *sql.DB, context.Context) {
 func task(id string, approved bool) model.Task {
 	t := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "Rename the endpoint",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},

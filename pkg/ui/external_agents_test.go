@@ -1064,7 +1064,7 @@ func TestExternalAgentTokenOwnerAttributionOnJournalAuditAndTaskAuthor(t *testin
 	if stored.Creator != "jane@example.com" {
 		t.Errorf("task creator = %q, want the owner jane@example.com", stored.Creator)
 	}
-	if a := stored.Origin.Attribution; a.Actor.ID != "external:jane-laptop" || a.OnBehalfOf == nil ||
+	if a := stored.Filing.Attribution; a.Actor.ID != "external:jane-laptop" || a.OnBehalfOf == nil ||
 		a.OnBehalfOf.Kind != model.PrincipalHuman || a.OnBehalfOf.ID != "jane@example.com" {
 		t.Errorf("task origin = %+v (on behalf of %+v), want external:jane-laptop on behalf of jane@example.com", a, a.OnBehalfOf)
 	}

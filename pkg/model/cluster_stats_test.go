@@ -51,7 +51,7 @@ func TestClusterStatsCountsTheWeeksWorkAcrossEveryRepo(t *testing.T) {
 	} {
 		task := model.Task{
 			ID: c.id, Title: "task " + c.id, Target: c.repo, CreatedAt: &filed,
-			Origin: model.Origin{Attribution: model.Attribution{
+			Filing: model.Filing{Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
 			Binding: model.BindingDirective,
 		}
@@ -110,7 +110,7 @@ func TestClusterStatsCountsRunsAndTheTimeTheyTook(t *testing.T) {
 
 	task := model.Task{
 		ID: "1", Title: "a task", Target: &repo, CreatedAt: &since,
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
 		Binding: model.BindingDirective,
 	}
@@ -188,7 +188,7 @@ func TestClusterStatsSumsTheLinesMergedPullRequestsChanged(t *testing.T) {
 	} {
 		task := model.Task{
 			ID: c.id, Title: "task " + c.id, Target: c.repo, CreatedAt: &since,
-			Origin: model.Origin{Attribution: model.Attribution{
+			Filing: model.Filing{Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
 			Binding: model.BindingDirective,
 		}
@@ -256,7 +256,7 @@ func TestClusterStatsRollsUpWorkByRootDirection(t *testing.T) {
 	before := since.Add(-12 * time.Hour)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "1", Title: "Audit fork workflow", CreatedAt: &before,
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
 		Binding: model.BindingDirective,
 	}); err != nil {
@@ -274,7 +274,7 @@ func TestClusterStatsRollsUpWorkByRootDirection(t *testing.T) {
 		merged := filed.Add(3 * time.Hour)
 		if err := store.PutTask(ctx, model.Task{
 			ID: child.id, Title: "follow-up " + child.id, Target: &grain, CreatedAt: &filed,
-			Origin: model.Origin{Attribution: model.Attribution{
+			Filing: model.Filing{Attribution: model.Attribution{
 				Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 				OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: child.parent}}},
 			Links:   []model.Link{{Kind: model.LinkProposedBy, Target: child.parent}},
@@ -303,7 +303,7 @@ func TestClusterStatsRollsUpWorkByRootDirection(t *testing.T) {
 	merged4 := filed4.Add(time.Hour)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "4", Title: "Standalone fix", Target: &grain, CreatedAt: &filed4,
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
 		Binding: model.BindingDirective,
 	}); err != nil {
@@ -367,14 +367,14 @@ func TestClusterStatsBatchesMoreThanOneChunkOfDirectionsAndTasks(t *testing.T) {
 		childID := fmt.Sprintf("c-%03d", i)
 		if err := store.PutTask(ctx, model.Task{
 			ID: rootID, Title: "root " + rootID, Target: &grain, CreatedAt: &since,
-			Origin:  model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
 			Binding: model.BindingDirective,
 		}); err != nil {
 			t.Fatalf("PutTask %s: %v", rootID, err)
 		}
 		if err := store.PutTask(ctx, model.Task{
 			ID: childID, Title: "child " + childID, Target: &grain, CreatedAt: &since,
-			Origin:  model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}},
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}},
 			Links:   []model.Link{{Kind: model.LinkProposedBy, Target: rootID}},
 			Binding: model.BindingDirective,
 		}); err != nil {

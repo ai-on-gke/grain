@@ -139,7 +139,7 @@ func (c *limitedMaterializeCapability) Materialize(ctx context.Context, cc Capab
 func capTask(grants ...string) Task {
 	t := Task{
 		ID: "cap-task", Intent: IntentImplement, Title: "t",
-		Origin: Origin{
+		Filing: Filing{
 			Attribution: Attribution{Actor: Principal{Kind: PrincipalHuman, ID: "someone"}},
 			Reason:      ReasonDirect,
 		},

@@ -589,14 +589,14 @@ func TestRunLiveDispatchesAndOpensAPullRequest(t *testing.T) {
 			"echo 'graind live test' >> NOTES.md && " +
 			"git add NOTES.md && git commit -q -m 'graind live test' && " +
 			"git push origin " + branch,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},
 		Binding: model.BindingDirective,
 		Target:  &model.RepoRef{Owner: owner, Name: repoName},
 	}
-	task.Approval = &model.Attribution{Actor: task.Origin.Attribution.Actor}
+	task.Approval = &model.Attribution{Actor: task.Filing.Attribution.Actor}
 	if err := store.PutTask(context.Background(), task); err != nil {
 		db.Close()
 		t.Fatalf("seeding the task: %v", err)

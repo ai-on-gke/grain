@@ -37,7 +37,7 @@ func TestADumpFromBeforePrincipalSourcesImportsWithEmptySources(t *testing.T) {
 	store, db := openRealDB(t)
 	operator := model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}
 	tk := task("sourced-1")
-	tk.Origin.Attribution = model.Attribution{Actor: operator}
+	tk.Filing.Attribution = model.Attribution{Actor: operator}
 	if err := store.PutTask(ctx, tk); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestADumpFromBeforePrincipalSourcesImportsWithEmptySources(t *testing.T) {
 	if err := staterepo.Import(ctx, sameDB, dir); err != nil {
 		t.Fatalf("importing: %v", err)
 	}
-	if got, err := same.GetTask(ctx, "sourced-1"); err != nil || got == nil || got.Origin.Attribution.Actor != operator {
+	if got, err := same.GetTask(ctx, "sourced-1"); err != nil || got == nil || got.Filing.Attribution.Actor != operator {
 		t.Fatalf("round trip: task %+v, %v; want its origin actor %+v", got, err, operator)
 	}
 
@@ -99,8 +99,8 @@ func TestADumpFromBeforePrincipalSourcesImportsWithEmptySources(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("the task in the aged dump did not arrive: (%+v, %v)", got, err)
 	}
-	if got.Origin.Attribution.Actor != legacy {
-		t.Errorf("origin actor = %+v, want %+v with no source", got.Origin.Attribution.Actor, legacy)
+	if got.Filing.Attribution.Actor != legacy {
+		t.Errorf("origin actor = %+v, want %+v with no source", got.Filing.Attribution.Actor, legacy)
 	}
 	comments, err := fresh.Comments(ctx, "sourced-1")
 	if err != nil || len(comments) != 1 {

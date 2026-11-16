@@ -63,7 +63,7 @@ func sessionTasks(t *testing.T, store *model.Store) []model.Task {
 	}
 	var out []model.Task
 	for _, task := range all {
-		if task.Origin.Reason == model.ReasonConsoleSession {
+		if task.Filing.Reason == model.ReasonConsoleSession {
 			out = append(out, task)
 		}
 	}
