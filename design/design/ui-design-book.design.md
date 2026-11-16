@@ -437,6 +437,20 @@ Rules:
   through `formatStamp` (`shared/dispatch-status.ts`), so a row and the
   pane beside it say the same time the same way
   (`ui-ng/e2e/next-processes-run-times.spec.ts`).
+- **Task detail container layout, Docs tab, and full-screen document reader.**
+  `.task-page` is an inline-size container (`container: task-page / inline-size`);
+  at `@container task-page (max-width: 1060px)` `.task-layout` collapses its
+  right-hand `.task-aside` so opening the coplanar Director drawer automatically
+  gives `.task-main` full width. The `Details` tab stays visible at every width
+  without redirecting back to `Conversation`. A dedicated `Docs` tab
+  (`g-task-docs-tab`, `task/task-docs.ts`) pairs a document picker with a clean
+  `surface` Markdown reader (`76ch` measure, independent vertical scrolling)
+  across the task prompt, PR Markdown/doc diffs, and structured report comments.
+  Prompt headers and the Docs reader offer `Open Docs` and `Full screen` (`⤢`)
+  triggers that open a native top-layer `<dialog class="doc-reader-modal">`
+  (`aria-modal="true"`, backdrop click & Escape dismissal, `Prev` / `Next`
+  document navigation, `76ch` measure, independent scroll)
+  (`ui-ng/e2e/next-task-docs-scroll.spec.ts`).
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).

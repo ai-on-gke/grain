@@ -134,6 +134,16 @@ test.describe("Autonomous Goal Mode (/next/)", () => {
     // so we can verify the full Goal Scorecard, Revise loop, and Switch to supervised.
     let switchedToSupervised = false;
     await page.route(`**/api/tasks/${taskId}*`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        const patchBody = route.request().postDataJSON() as {
+          goalMode?: { enabled?: boolean };
+        } | null;
+        if (patchBody?.goalMode?.enabled === false) {
+          switchedToSupervised = true;
+        }
+        await route.continue();
+        return;
+      }
       if (route.request().method() !== "GET") {
         await route.continue();
         return;
@@ -218,7 +228,6 @@ test.describe("Autonomous Goal Mode (/next/)", () => {
         req.method() === "PATCH" &&
         new URL(req.url()).pathname === `/api/tasks/${taskId}`,
     );
-    switchedToSupervised = true;
     await page.getByTestId("act-switch-supervised").click();
     const patchReq = await patchReqPromise;
     expect(patchReq.postDataJSON()).toEqual({ goalMode: { enabled: false } });

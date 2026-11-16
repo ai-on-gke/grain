@@ -722,7 +722,13 @@ const ONE_KEY = new Set(["approve"]);
                 }
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
-                    <p class="resolution-question">{{ pa.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="pa.summary"
+                    />
                     @if (pa.reason) {
                       <g-capped-markdown
                         class="dock-note"
@@ -820,13 +826,25 @@ const ONE_KEY = new Set(["approve"]);
                       </div>
                     </div>
                   } @else {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="sel.summary"
+                    />
                     <p class="muted dock-note">Reading the request…</p>
                   }
                 }
                 @case ("release") {
                   @if (sel.release; as r) {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="release-summary"
+                      noun="summary"
+                      label="Release summary"
+                      [text]="sel.summary"
+                    />
                     @if (r.dispatchFailure; as df) {
                       <div
                         class="banner banner-error"
@@ -836,7 +854,12 @@ const ONE_KEY = new Set(["approve"]);
                         <strong>The last promotion did not start:</strong>
                         {{ df.message }}
                         @if (df.remedy) {
-                          <div>{{ df.remedy }}</div>
+                          <g-capped-markdown
+                            testid="release-remedy"
+                            noun="remedy"
+                            label="Remedy"
+                            [text]="df.remedy"
+                          />
                         }
                         @if (df.runUrl) {
                           <a
