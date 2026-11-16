@@ -1,0 +1,3 @@
+NOTICE:  database "grain_repro" does not exist, skipping
+state sync failed: state repository holds changes grain could not apply (unapplied commits d709ccd9..e41a1298: e41a129 ("add a minimal template")): staterepo: inserting template row 0: ERROR: null value in column "target_owner" of relation "template" violates not-null constraint (SQLSTATE 23502)
+template rows: 0

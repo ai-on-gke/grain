@@ -68,7 +68,7 @@ func TestTasksWaitEndpointWakesOnConditionsEarnsNoWaitCreditAndExits5OnTimeout(t
 	}
 
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		parkOnQuestion(t, client, open, "")
 	}()
 	start := time.Now()
@@ -80,7 +80,7 @@ func TestTasksWaitEndpointWakesOnConditionsEarnsNoWaitCreditAndExits5OnTimeout(t
 	}
 
 	captureStdout(t, func() {
-		err = cmdWait(withWaitLimit(ctx, 1500*time.Millisecond), c, &printer{}, []string{open, "--until=closed"})
+		err = cmdWait(withWaitLimit(ctx, 300*time.Millisecond), c, &printer{}, []string{open, "--until=closed"})
 	})
 	exit, code, fix := classifyError(err)
 	if exit != exitWaitTimedOut || code != "wait_timeout" || !strings.Contains(fix, "grain wait "+open+" --until=closed --timeout=") {

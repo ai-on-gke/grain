@@ -94,7 +94,7 @@ func fileTreeTask(t *testing.T, ctx context.Context, store *model.Store, id, par
 	t.Helper()
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: title,
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
 		Binding:    model.BindingDirective,
 		Target:     &widgets,
 		WorkOrigin: origin,
@@ -303,7 +303,7 @@ func TestTheOriginCommentListsAGoogle3TasksCLs(t *testing.T) {
 	fileTreeTask(t, ctx, store, "10", "", "Plan the design doc", origin)
 	task := model.Task{
 		ID: "14", Intent: model.IntentImplement, Title: "Port it to the depot",
-		Origin:       model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
+		Filing:       model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
 		Binding:      model.BindingDirective,
 		ChangeTarget: &model.ChangeTarget{Kind: "changelist"},
 		Links: []model.Link{{Kind: model.LinkProposedBy, Target: "10"},

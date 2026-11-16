@@ -648,7 +648,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		t.ExternalRef = extRef
 	}
 
-	oActor, oBehalf := t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf
+	oActor, oBehalf := t.Filing.Attribution.Actor, t.Filing.Attribution.OnBehalfOf
 	var aActorKind, aActorID, aBehalfKind, aBehalfID any
 	var aActorSource, aBehalfSource string
 	if t.Approval != nil {
@@ -680,7 +680,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
   `+"`owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, `proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, `proposer_task_id`, `proposer_run_id`, `external_ref`, `admission`, `hosting`, `skills`"+`
 ) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
-		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
+		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Filing.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
 		timeOf(t.UndeferredAt),
 		targetOwner, targetName, string(t.Binding), nullable(t.Base), folderOf(t.Folder),
@@ -807,7 +807,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if t.CreatedAt != nil {
 		eventAt = *t.CreatedAt
 	}
-	eventActor := eventActorOr(ctx, t.Origin.Attribution)
+	eventActor := eventActorOr(ctx, t.Filing.Attribution)
 	if existing > 0 {
 		eventAt = time.Now()
 		if a, ok := EventActorFromContext(ctx); ok {
@@ -1470,12 +1470,12 @@ func scanTask(scan func(...any) error) (Task, error) {
 	t.NothingNeededAction = NothingNeededAction(nothingNeeded)
 	t.ModelSource = CompositionLayer(modelSource)
 	t.WorkOrigin = WorkOrigin(workOrigin)
-	t.Origin = Origin{
+	t.Filing = Filing{
 		Attribution: Attribution{
 			Actor:      Principal{Kind: PrincipalKind(oaKind), ID: oaID, Source: AuthSource(oaSource)},
 			OnBehalfOf: principalFrom(obKind, obID, obSource),
 		},
-		Reason: OriginReason(oReason),
+		Reason: FilingReason(oReason),
 	}
 	if aaKind.Valid {
 		t.Approval = &Attribution{
@@ -1536,8 +1536,22 @@ const fixesBaseBranchOrderSQL = "CASE WHEN EXISTS (SELECT 1 FROM `task_tag` AS `
 const taskQueueOrderSQL = "`t`.`priority` DESC, " + fixesBaseBranchOrderSQL + ", `t`.`order_key`, COALESCE(`t`.`approved_at`, `t`.`created_at`), `t`.`created_at`, `t`.`id`"
 
 func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
+	return s.listTasks(ctx, "")
+}
+
+// ListOpenTasks is ListTasks without the closed tasks: those whose
+// observation has a closed_at, which is task_state's own test for
+// 'closed'. Closed tasks are nearly all of a deployment that has run for
+// a while -- 5,700 of 5,800 on the one grain task 5812 measured -- and
+// the live list every open tab polls leaves them out anyway, so it has
+// no business reading and hydrating them.
+func (s *Store) ListOpenTasks(ctx context.Context) ([]Task, error) {
+	return s.listTasks(ctx, " WHERE NOT EXISTS (SELECT 1 FROM `task_observation` AS `co` WHERE `co`.`task_id` = `t`.`id` AND `co`.`closed_at` IS NOT NULL)")
+}
+
+func (s *Store) listTasks(ctx context.Context, where string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+taskColumns+" FROM `task` AS `t` ORDER BY "+taskQueueOrderSQL)
+		"SELECT "+taskColumns+" FROM `task` AS `t`"+where+" ORDER BY "+taskQueueOrderSQL)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
@@ -1556,10 +1570,12 @@ func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
 	}
 	rows.Close()
 
+	ptrs := make([]*Task, len(out))
 	for i := range out {
-		if err := hydrate(ctx, s.db, &out[i]); err != nil {
-			return nil, err
-		}
+		ptrs[i] = &out[i]
+	}
+	if err := hydrateTasks(ctx, s.db, ptrs, where); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -2063,75 +2079,146 @@ func (s *Store) MergeQueueRepairing(ctx context.Context) (map[string]bool, error
 }
 
 func hydrate(ctx context.Context, q querier, t *Task) error {
+	return hydrateTasks(ctx, q, []*Task{t}, "")
+}
+
+// hydrateTasks fills in what hangs off each of tasks -- its reads,
+// writes, templates, grants, links, tags and custom fields -- with one
+// query per child table whatever the number of tasks. One task asks for
+// its own rows; more than one reads each table whole and hands the rows
+// out by task id, which is what ListTasks needs: hydrating six thousand
+// tasks one at a time was eight round trips each, 48,000 queries and
+// six seconds on Postgres for every rebuild of GET /api/tasks (grain
+// task 5812). Each query keeps its ORDER BY, so a task's own rows come
+// back in the order they always did.
+//
+// where is the filter listTasks chose tasks with, over `task` AS `t`,
+// or "" for every task. A filtered list bounds each child query by it
+// too, so ListOpenTasks reads the rows of the sixty open tasks it
+// returns rather than those of the 5,700 closed ones beside them
+// (review 5882). The filter is evaluated again by each child query, so
+// a task that closes between the list query and its children's comes
+// back without them; it is gone from the open list on the next read.
+func hydrateTasks(ctx context.Context, q querier, tasks []*Task, where string) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+	byID := make(map[string]*Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	args := any(nil)
+	switch {
+	case len(tasks) == 1:
+		where, args = " WHERE `task_id` = ?", tasks[0].ID
+	case where != "":
+		where = " WHERE `task_id` IN (SELECT `t`.`id` FROM `task` AS `t`" + where + ")"
+	}
 	if err := each(ctx, q,
-		"SELECT `owner`,`name` FROM `task_read` WHERE `task_id` = ? ORDER BY `owner`,`name`",
-		t.ID, func(rows *sql.Rows) error {
-			var owner, name string
-			if err := rows.Scan(&owner, &name); err != nil {
+		"SELECT `task_id`,`owner`,`name` FROM `task_read`"+where+" ORDER BY `owner`,`name`",
+		args, func(rows *sql.Rows) error {
+			var id, owner, name string
+			if err := rows.Scan(&id, &owner, &name); err != nil {
 				return err
 			}
-			r := RepoFromStored(owner, name)
-			t.Reads = append(t.Reads, r)
+			if t := byID[id]; t != nil {
+				t.Reads = append(t.Reads, RepoFromStored(owner, name))
+			}
 			return nil
 		}); err != nil {
 		return err
 	}
 	if err := each(ctx, q,
-		"SELECT `owner`,`name`,`base` FROM `task_write` WHERE `task_id` = ? ORDER BY `owner`,`name`,`base`",
-		t.ID, func(rows *sql.Rows) error {
+		"SELECT `task_id`,`owner`,`name`,`base` FROM `task_write`"+where+" ORDER BY `owner`,`name`,`base`",
+		args, func(rows *sql.Rows) error {
 			var w WriteTarget
-			var owner, name string
-			if err := rows.Scan(&owner, &name, &w.Base); err != nil {
+			var id, owner, name string
+			if err := rows.Scan(&id, &owner, &name, &w.Base); err != nil {
 				return err
 			}
-			w.Repo = RepoFromStored(owner, name)
-			t.Writes = append(t.Writes, w)
+			if t := byID[id]; t != nil {
+				w.Repo = RepoFromStored(owner, name)
+				t.Writes = append(t.Writes, w)
+			}
 			return nil
 		}); err != nil {
 		return err
 	}
 	if err := each(ctx, q,
-		"SELECT `template_id` FROM `task_filed_template` WHERE `task_id` = ?",
-		t.ID, func(rows *sql.Rows) error {
-			return rows.Scan(&t.TemplateID)
+		"SELECT `task_id`,`template_id` FROM `task_filed_template`"+where,
+		args, func(rows *sql.Rows) error {
+			var id, template string
+			if err := rows.Scan(&id, &template); err != nil {
+				return err
+			}
+			if t := byID[id]; t != nil {
+				t.TemplateID = template
+			}
+			return nil
 		}); err != nil {
 		return err
 	}
 	if err := each(ctx, q,
-		"SELECT `template_id` FROM `task_source_template` WHERE `task_id` = ?",
-		t.ID, func(rows *sql.Rows) error {
-			return rows.Scan(&t.SourceTemplateID)
+		"SELECT `task_id`,`template_id` FROM `task_source_template`"+where,
+		args, func(rows *sql.Rows) error {
+			var id, template string
+			if err := rows.Scan(&id, &template); err != nil {
+				return err
+			}
+			if t := byID[id]; t != nil {
+				t.SourceTemplateID = template
+			}
+			return nil
 		}); err != nil {
 		return err
 	}
-	t.SourceTemplateID = cmp.Or(t.SourceTemplateID, t.TemplateID)
-	grants, err := grantsOf(ctx, q, t.ID)
-	if err != nil {
+	for _, t := range tasks {
+		t.SourceTemplateID = cmp.Or(t.SourceTemplateID, t.TemplateID)
+	}
+	// grantsOf's query and scan, for every task at once.
+	if err := each(ctx, q,
+		"SELECT `task_id`,`capability`,`via`,`folder` FROM `task_grant`"+where+" ORDER BY `capability`",
+		args, func(rows *sql.Rows) error {
+			var g Grant
+			var id, via string
+			var folder sql.NullString
+			if err := rows.Scan(&id, &g.Capability, &via, &folder); err != nil {
+				return err
+			}
+			if t := byID[id]; t != nil {
+				g.Via, g.Folder = GrantSource(via), ParseFolder(folder.String)
+				t.Grants = append(t.Grants, g)
+			}
+			return nil
+		}); err != nil {
 		return err
 	}
-	t.Grants = grants
 	if err := each(ctx, q,
-		"SELECT `kind`,`target` FROM `task_link` WHERE `task_id` = ? ORDER BY `kind`,`target`",
-		t.ID, func(rows *sql.Rows) error {
+		"SELECT `task_id`,`kind`,`target` FROM `task_link`"+where+" ORDER BY `kind`,`target`",
+		args, func(rows *sql.Rows) error {
 			var l Link
-			var kind string
-			if err := rows.Scan(&kind, &l.Target); err != nil {
+			var id, kind string
+			if err := rows.Scan(&id, &kind, &l.Target); err != nil {
 				return err
 			}
-			l.Kind = LinkKind(kind)
-			t.Links = append(t.Links, l)
+			if t := byID[id]; t != nil {
+				l.Kind = LinkKind(kind)
+				t.Links = append(t.Links, l)
+			}
 			return nil
 		}); err != nil {
 		return err
 	}
 	if err := each(ctx, q,
-		"SELECT `tag` FROM `task_tag` WHERE `task_id` = ? ORDER BY `tag`",
-		t.ID, func(rows *sql.Rows) error {
-			var tag string
-			if err := rows.Scan(&tag); err != nil {
+		"SELECT `task_id`,`tag` FROM `task_tag`"+where+" ORDER BY `tag`",
+		args, func(rows *sql.Rows) error {
+			var id, tag string
+			if err := rows.Scan(&id, &tag); err != nil {
 				return err
 			}
-			t.Tags = append(t.Tags, tag)
+			if t := byID[id]; t != nil {
+				t.Tags = append(t.Tags, tag)
+			}
 			return nil
 		}); err != nil {
 		return err
@@ -2142,11 +2229,15 @@ func hydrate(ctx context.Context, q querier, t *Task) error {
 	// back shuffled would give the state repository a diff on every
 	// export of a task nobody touched.
 	return each(ctx, q,
-		"SELECT `name`,`value` FROM `task_custom_field` WHERE `task_id` = ? ORDER BY `name`,`value`",
-		t.ID, func(rows *sql.Rows) error {
-			var name, value string
-			if err := rows.Scan(&name, &value); err != nil {
+		"SELECT `task_id`,`name`,`value` FROM `task_custom_field`"+where+" ORDER BY `name`,`value`",
+		args, func(rows *sql.Rows) error {
+			var id, name, value string
+			if err := rows.Scan(&id, &name, &value); err != nil {
 				return err
+			}
+			t := byID[id]
+			if t == nil {
+				return nil
 			}
 			// Left nil for a task with no values at all, rather than an
 			// empty map: "says nothing about any field" is the ordinary
@@ -4388,7 +4479,7 @@ func (s *Store) DependencyNeverSatisfiable(ctx context.Context, id string) (bool
 // on task ID.
 //
 // That is the whole rule, with no carve-out for any kind of task. A fix
-// task the merge queue filed (Origin.Reason == ReasonFix) used to sort
+// task the merge queue filed (Filing.Reason == ReasonFix) used to sort
 // ahead of everything else here regardless of where the backlog put it --
 // bwsalmon/agents#389's "a queue head's repair must not wait behind
 // unrelated new work", since the longer it waits the more likely
@@ -4584,7 +4675,7 @@ const directorTaskSQL = "(`t`.`origin_reason` = ? AND `t`.`interactive` = 1 AND 
 	"SELECT 1 FROM `task_tag` AS `dt` WHERE `dt`.`task_id` = `t`.`id` AND `dt`.`tag` LIKE ?))"
 
 // ReadyMergers is Ready narrowed to the tasks whose runs are mergers
-// (mergerTaskSQL, OriginReason.Merger) -- and so bounded by
+// (mergerTaskSQL, FilingReason.Merger) -- and so bounded by
 // Limits.Mergers on top of Limits.Workers rather than by the worker
 // ceiling alone.
 //
@@ -4955,7 +5046,7 @@ func sliceAggregate(ctx context.Context, tx querier, s queueSlice, moved map[str
 
 // MoveToFrontOfBacklog places ids at the front of the backlog: ahead of
 // every other task, and behind nothing but the merge tasks
-// (Origin.Reason == ReasonFix) already scheduled at the very head of it.
+// (Filing.Reason == ReasonFix) already scheduled at the very head of it.
 // It places them in the order in which they appear in ids, so this is a move
 // a human could have made by hand rather than a second ordering rule layered
 // on top of theirs.
@@ -5295,19 +5386,27 @@ func liveRunCounts(ctx context.Context, q querier) (RunCounts, error) {
 // AgentStartedAt is read as well, because it is where a run's own clock
 // started (orchestrator.RunDispatch): a daemon adopting the run carries
 // its deadline from there rather than from StartedAt, which would charge
-// the run its setup a second time (orchestrator.ResumeAdoptedRun).
+// the run its setup a second time (orchestrator.ResumeAdoptedRun). So
+// are Model and AgentFramework (Store.SetRunModel): the adopting daemon
+// reads the run's stream with the framework the run is on, and a task
+// that names none would otherwise get whatever its default model list
+// rotates to -- a claude parser reading an antigravity stream, which
+// finds no result event and loses the run and its transcript.
 func (s *Store) LiveRuns(ctx context.Context) ([]Run, error) {
 	var out []Run
 	err := each(ctx, s.db,
-		"SELECT `id`,`task_id`,`sandbox`,`attempt`,`started_at`,`agent_started_at` "+
+		"SELECT `id`,`task_id`,`sandbox`,`attempt`,`started_at`,`agent_started_at`,`model`,`agent_framework` "+
 			"FROM `task_run` WHERE `finished_at` IS NULL ORDER BY `id`", nil,
 		func(rows *sql.Rows) error {
 			var r Run
 			var agentStarted sql.NullTime
-			if err := rows.Scan(&r.ID, &r.TaskID, &r.Sandbox, &r.Attempt, &r.StartedAt, &agentStarted); err != nil {
+			var runModel, runFramework sql.NullString
+			if err := rows.Scan(&r.ID, &r.TaskID, &r.Sandbox, &r.Attempt, &r.StartedAt, &agentStarted,
+				&runModel, &runFramework); err != nil {
 				return err
 			}
 			r.AgentStartedAt = timePtr(agentStarted)
+			r.Model, r.AgentFramework = runModel.String, runFramework.String
 			out = append(out, r)
 			return nil
 		})
@@ -6226,6 +6325,36 @@ func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullR
 			"`o`.`merge_queue_repair_at` IS NOT NULL AND `o`.`completed_at` IS NULL "+
 			"AND `o`.`closed_at` IS NULL))",
 		string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit))
+}
+
+// ResumeLaterPullRequestLinks returns the fixes-links of every task
+// resting on a resume_later of its own (Store.RestsOnResumeLater), which
+// OpenPullRequestLinks leaves out unless the merge queue is repairing it:
+// a deferred task is neither completed nor awaiting Submit. Its pull
+// request is still open and still its own, and a new review thread on it,
+// or its owner's answer to its review's questions, is what grain sends it
+// back for (orchestrator.SyncReviewThreads, SyncReviewQuestions). A task a
+// person deferred is not returned.
+func (s *Store) ResumeLaterPullRequestLinks(ctx context.Context) ([]TaskPullRequestLink, error) {
+	kept, _, err := s.pullRequestLinksWhere(ctx,
+		"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `st`.`state` = ?",
+		string(LinkFixes), string(StateDeferred))
+	if err != nil {
+		return nil, err
+	}
+	var out []TaskPullRequestLink
+	for _, l := range kept {
+		ours, err := s.RestsOnResumeLater(ctx, l.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if ours {
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }
 
 // ClosedUnsettledPullRequestLinks returns the fixes-links of every task

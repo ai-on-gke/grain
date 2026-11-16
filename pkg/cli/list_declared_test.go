@@ -17,12 +17,10 @@ package cli
 import (
 	"context"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -42,16 +40,8 @@ import (
 // repository and no endpoint writes one (model.CustomField).
 func declaredFieldsServer(t *testing.T) string {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	for _, f := range []model.CustomField{
 		{Name: "priority", Label: "Priority", Type: model.CustomFieldEnum,
 			Options: []string{"low", "high", "critical"}},

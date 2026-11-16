@@ -395,6 +395,7 @@ func refreshPullRequest(ctx context.Context, store *model.Store, client github.C
 		return
 	}
 	body := withLineage(pullRequestBody(description, task.ID, task.Issue), taskLineage(ctx, store, task))
+	body = withGoalSummary(body, goalMarkdownSection(ctx, store, task))
 	// Commit messages cannot say what images a run published, so the
 	// section publishImages wrote is carried over rather than rebuilt.
 	body = withImages(body, imagesSection(detail.Body))

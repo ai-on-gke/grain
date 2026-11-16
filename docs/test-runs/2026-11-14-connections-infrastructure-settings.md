@@ -159,3 +159,18 @@ While this change waited, `main` landed a parallel walkthrough (task 5389, #1487
 - These parts of this branch are unchanged: F4 (masked secret value, no-store notice), F6 (Integrations redirects) and F7 ("host" wording).
 
 After the merge, `ui-ng/e2e/next-settings-connections.spec.js` passes 6/6 in Chromium (desktop and phone). `vitest` passes 479/479. ESLint, the production build and `prettier --check` are clean.
+
+## G2 closed (2026-11-15, task 6167)
+
+When task 6167 picked up G2, every Hosts item was already in `/next/settings/hosts`. Commits `bc913b493` (Invite hosts) and `9a9b171fc` (task 5389) added them, and task 5767 hid Rotate and Revoke on revoked codes. The items are:
+
+- the `--join` snippet
+- enrollment code options
+- an editable host name and capacity on pending requests
+- rekey requests
+- each connected host's address, principal and build, shown under its status rather than as columns
+- Edit, where a blank capacity clears it and its error banner can be dismissed
+- Rename
+- a Delete report that names the cleared pauses
+
+Each item has a scenario in `ui-ng/e2e/next-hosts-{invite,git-parity,confirm}.spec.js`. Only the cleared-pauses line had no scenario, and `next-hosts-confirm.spec.js` now checks it and its Dismiss.

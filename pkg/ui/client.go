@@ -781,7 +781,20 @@ func (r redBaseLookup) forTask(t model.Task) string {
 // (Store.OrderKeyForNewTask, Client.CreateTask). Either way the list is
 // this one order.
 func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
-	tasks, err := c.Store.ListTasks(ctx)
+	return c.listTasks(ctx, c.Store.ListTasks)
+}
+
+// ListOpenTasks is ListTasks without the closed tasks, read without
+// them rather than read and dropped: what GET /api/tasks' live list
+// holds (taskListLive). Every row says the same as it would in
+// ListTasks -- the states, blockers and holds it is projected with are
+// still read for the whole store.
+func (c *Client) ListOpenTasks(ctx context.Context) ([]Task, error) {
+	return c.listTasks(ctx, c.Store.ListOpenTasks)
+}
+
+func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]model.Task, error)) ([]Task, error) {
+	tasks, err := read(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1768,7 +1781,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 		}
 	}
 	detail.SuspendedSession = suspendedSessionFrom(obs)
-	if t.Origin.Reason == model.ReasonSuite {
+	if t.Filing.Reason == model.ReasonSuite {
 		origin, err := c.Store.SuiteRunOfTask(ctx, id)
 		if err != nil {
 			return TaskDetail{}, err
@@ -2298,11 +2311,11 @@ type CreateTaskRequest struct {
 	// green branch closes it (design/design/durable-tasks.design.md#DT-4). Refused
 	// for a task with no repo.
 	FixesBaseBranch bool `json:"fixesBaseBranch,omitempty"`
-	// Origin is the GitHub pull request or issue this task's work comes
+	// WorkOrigin is the GitHub pull request or issue this task's work comes
 	// from (model.ParseWorkOrigin's forms), for a task filed from a chat
 	// that names one. A proposal whose parent already has a GitHub origin
 	// keeps that one instead (model.ExplicitOrigin); empty inherits.
-	Origin string `json:"origin,omitempty"`
+	WorkOrigin string `json:"origin,omitempty"`
 	// AgentFramework sets model.Task's own field of the same name -- a
 	// per-task override of the deployment's default agent framework
 	// (Settings' own "Agent framework"). "" (the default) means no
@@ -2532,6 +2545,9 @@ type CreateTaskRequest struct {
 	// task filed approved and deferred wakes onto the queue, and one
 	// filed for a human wakes back into proposed.
 	DeferredUntil *time.Time `json:"deferredUntil,omitempty"`
+
+	// GoalMode configures autonomous multi-pass Goal Mode posture on the task.
+	GoalMode *model.GoalModeConfig `json:"goalMode,omitempty"`
 
 	// modelFromTemplate is the model fromTemplate filled Model in with,
 	// "" when it filled in none. Never read off the wire: CreateTask
@@ -3054,7 +3070,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 		}
 	}
-	explicitOrigin, err := model.ExplicitOrigin(req.Origin, target, proposedBy)
+	explicitOrigin, err := model.ExplicitOrigin(req.WorkOrigin, target, proposedBy)
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
@@ -3747,7 +3763,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// (grain/task-311).
 	// An owned external agent credential files on behalf of its owner
 	// (RequestActor, #XC-14).
-	origin := model.Origin{
+	origin := model.Filing{
 		Attribution: c.requestActor(ctx),
 		Reason:      model.ReasonDirect,
 	}
@@ -3761,12 +3777,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	if req.GoalMode != nil && req.GoalMode.Enabled && strings.TrimSpace(req.ProposedBy) == "" {
+		req.Interactive = false
+	}
 	task := model.Task{
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
-		Origin:               origin,
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.WorkOrigin, target, proposedBy),
+		Filing:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
 		Reviewers:            model.NormalizeReviewers(req.Reviewers),
@@ -3824,6 +3843,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	model.SetFoundIn(&task, foundIn)
 	model.ApplyDerivedFoundIn(&task)
+	if req.GoalMode != nil {
+		if err := model.SetGoalMode(&task, req.GoalMode); err != nil {
+			return Task{}, err
+		}
+	} else if proposedBy != nil {
+		if gm, ok := model.GoalModeOf(*proposedBy); ok && gm.Enabled {
+			_ = model.SetGoalMode(&task, &gm)
+		}
+	}
 	if req.DeclineAutoMerge && !req.AutoMerge {
 		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
 	}
@@ -5282,6 +5310,8 @@ type UpdateTaskRequest struct {
 	// PriorityDispatch is a deprecated one-release alias that maps true to
 	// bypass admission and false back to standard admission.
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
+	// GoalMode updates or disables autonomous Goal Mode posture on the task.
+	GoalMode *model.GoalModeConfig `json:"goalMode,omitempty"`
 }
 
 // UnmarshalJSON accepts both camelCase and snake_case spellings for common
@@ -5896,7 +5926,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// A review's priority set by hand is the person's call, and a
 			// later edit to the reviewed task's must not lower it
 			// (model.CarryPriorityToReviews).
-			if task.Origin.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
+			if task.Filing.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
 				!slices.Contains(task.Tags, model.ReviewPriorityHandSetTag) {
 				task.Tags = append(task.Tags, model.ReviewPriorityHandSetTag)
 			}
@@ -6142,6 +6172,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				newLinks = append(newLinks, model.Link{Kind: model.LinkGoogleChat, Target: space})
 			}
 			task.Links = newLinks
+		}
+		if req.GoalMode != nil {
+			if err := model.SetGoalMode(task, req.GoalMode); err != nil {
+				return err
+			}
 		}
 		if req.Designs != nil || req.Context != nil {
 			var newLinks []model.Link

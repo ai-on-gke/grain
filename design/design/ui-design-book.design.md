@@ -144,7 +144,7 @@ do not pull in an icon font.
   72px rail
 ```
 
-- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI,
+- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI, Repos,
   Telemetry, Context, Fleet; Settings pinned at the bottom. People can hide
   destinations (Customize navigation); Inbox cannot be hidden.
 - **New task button:** filled primary, 60×60 (52 on short screens), with a
@@ -207,7 +207,19 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
-- The detail pane is always there on desktop; it is not a modal.
+- The detail pane is always there on desktop; it is not a modal. The
+  exception is Agents, whose cards are a dashboard in their own right:
+  its inspector opens only on the agent `?task=` names. With none (on
+  arrival, or after the person closes it) the split drops to one
+  full-width column of cards, nothing looks selected, and j/k or a click
+  opens the inspector on an agent. It closes from "Close inspector" in
+  the split bar, the pane's ×, Escape, or a second click on the selected
+  card, and focus goes back to that card.
+- **Never open the sheet unasked.** Below 1080px (and on a short landscape
+  screen) the pane becomes a fixed sheet over the list and the top bar, so
+  a surface may pre-select its first item only where the pane sits beside
+  the list; on a tablet the list shows first and a tap opens the sheet
+  (`next-responsive-sessions.spec.js` checks Agents at 820px and 1024px).
 - **The selected item looks selected.** Whatever the list is drawn as —
   queue rows, table rows, cards — the item the pane shows carries
   `surface-container` with a 3px `primary` leading bar (`inset 3px 0 0`),
@@ -261,7 +273,23 @@ inspector and Task Detail. Sessions shares its message styles.
   chat bubbles.
 - The composer is `box-sizing: border-box; width: 100%`; attach, hint and
   Send share one row. A "New messages ↓" pill appears when something arrives
-  while you are scrolled up.
+  at the end while you are scrolled up; older history paged in above is not
+  news and never raises it.
+- **Sessions on a phone:** the chat pane scrolls as a whole, the log keeps a
+  floor of `min(18rem, 45dvh)` and the composer is sticky at the pane's
+  foot, so Send stays above the bottom bar however many rows the chat head
+  wraps to (320×568 included). Only a person's own send scrolls the pane.
+- **Sending is never blocked by sending.** In Sessions a sent message shows
+  at once (dashed: `Sending…`, then `Queued` behind it) and the composer
+  clears; a refused one stays as `Not sent` with its reason, Retry and Edit.
+- **Comment links (`#comment=<id>`)** open Conversation on any tab. A cold
+  load reads 500 comments and pages back 500 at a time to the comment
+  before rendering, so the thread draws once (a 3,000-comment task is at most
+  six reads); a link followed on an open page pages the same way. The comment
+  is scrolled to the middle instantly (no long smooth travel), takes focus,
+  and wears `primary-container` with a `primary` border for four seconds:
+  on at once, fading out over 600 ms (no fade under reduced motion). A malformed or missing comment says
+  so in a snackbar rather than silently landing at the end.
 
 ### Settings
 
@@ -272,8 +300,23 @@ controls use the proportional 14/20 body stack (`.s-num` aligns numeric figures
 without switching prose or human names to monospace; `.s-mono` is reserved for
 technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
 line (`.s-row-actions`), separate any below-table creation/edit form with a
-`.s-subsection` divider, and collapse per-connection password inputs behind an
-on-demand `Credential` row. Search filters live inside `<form role="search"
+`.s-subsection` divider, let long paths and ref patterns break inside their
+cells (`overflow-wrap: anywhere`) rather than scroll the table on a phone, give a
+`.s-table-wrap` that can still scroll sideways `role="region"`, `tabindex="0"`
+and a label (axe's `scrollable-region-focusable`), and collapse per-connection password inputs behind an
+on-demand `Credential` row. A table too wide for a phone never scrolls
+sideways: mark it `.s-table.s-table-stack` inside `.s-table-wrap.s-table-stack-wrap`
+and give each cell after the first a `data-label` naming its column. Below
+880px of the wrap's own width (a container query, since the pane beside the
+drawer and rail is narrower than the viewport) each row becomes a card of
+labelled lines under its first cell (Settings → Repositories). A new table
+outside Settings does the same with its own container query (Fleet's Waiting
+on CI, `.fleet-ci-waits-table`). A sub-row editor
+inside a table that still scrolls sideways (`.s-table-wrap.s-table-pinned`)
+carries `.s-subrow-pin`, so it stays pinned to the visible width at phone sizes
+rather than spanning the scrolled table; a Codex connection in the
+`subscription` auth mode shows its own auth.json login there in place of the
+key field. Search filters live inside `<form role="search"
 autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
 `<form autocomplete="off">` so browser password managers never autofill emails
 into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
@@ -295,8 +338,41 @@ hand-written list: a choice the daemon cannot use stays listed as a `disabled`
 `PillOption` with the server's reason as its `hint`. A number whose stored `0`
 means grain's default shows blank with the server's `<key>Default` as its
 placeholder, and a cleared box saves that default again. A card a link points
-at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+at carries an `id` (`#capability-policy`, `#credentials`, `#other-secrets`), and the page
 scrolls to the URL's fragment once the section has rendered.
+
+A card follows the scope of the routes it writes through, not its section's:
+Settings → Capabilities' Deployment credentials holds its fields to
+`settings:write` and its stored secrets to `secrets:write`, whatever
+`capabilities:admin` says. A config-repo lock disables and dims (`.s-dimmed`,
+with the `on-surface-variant` colour rather than opacity) the settings it
+covers but never the secrets beside them, which the API keeps writable. A
+secret is listed by name and key only, never its value. Its value
+box is `type="password"`, with "From file…" for multi-line values such as
+PEMs, never a textarea masked by CSS. Every removal of a secret, key, scope
+set or server asks first through `<g-confirm-dialog>`, saying what stops
+working. A table cell holding a list (scopes, repositories) stays on one line,
+truncates with the full list in its `title`, and drops secondary columns
+(`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
+
+A setting kept in the secret store rather than in grain/config (the Hub's
+`grc_…` registration token) stays editable while a config-repo lock
+disables the fields around it, says when the daemon has no secret store
+instead of offering a box that cannot save, and is cleared only after a
+confirm. A value checked by its form (an `owner/name` repository, a
+`key=value` node selector, an auto-overcommit bound) is refused by name in
+an `.s-field-error` under its box and holds the Save bar; what only the
+server can judge (a minimum above its maximum) is left to its refusal in
+the error banner. A settings table that must fit a phone folds secondary
+columns into the first (`.s-cell-stack`: repository over path) rather
+than scrolling sideways. A blank string setting shows `<key>Default` as
+its placeholder like a number does; a blank that means "none" (a pod
+priority class) says `none` instead.
+Where a stored `0` is a value of its own rather than "grain's default"
+(CPU or memory overcommit, where 0 is unbounded; the disk floor share,
+where 0 holds nothing back), a typed `0` saves 0 and says what it means
+beside the box, and a cleared box saves the server's `<key>Default` --
+so the greyed placeholder is always what Save stores.
 
 ### Breakpoints
 
@@ -311,6 +387,7 @@ it rather than copy it.
 | Component | File | Use |
 |---|---|---|
 | Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Toggle pills | `shared/grants-picker.component.ts` (`.grant-pill`), `repos/repo-detail.css` (`.repo-toggle-pill`) | multi-choice sets (capabilities, a qualification item's *Depends on*) and three-state settings (work ownership's *On / Off / Say nothing*): a labelled `role="group"` of buttons carrying `aria-pressed`, never a checkbox list or a multiple `<select>` |
 | Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |
 | Actor chip | `shared/actor-chip.component.ts` | who did something, shape-coded, "on behalf of" |
@@ -319,7 +396,9 @@ it rather than copy it.
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
-| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
+| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
+| Prompt and attributes panes | `shared/detail-panes.css` (`.g-panes`, `.g-pane`, `.g-attrs`) | what an agent is told beside the facts about it: task detail, Processes schedule and template inspectors |
+| Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
@@ -328,11 +407,50 @@ it rather than copy it.
 
 Rules:
 
+- **Every message is Markdown.** A question, reason or alert body a person
+  reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
+  above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
+  code blocks into one paragraph. A one-line `summary` stays the row title.
+- **A decision's actions never leave the screen.** In the Inbox inspector
+  only the message in the resolution dock gives way (it shrinks and
+  scrolls); the dock's actions keep their height and the inspector body
+  keeps a floor of `min(240px, 25cqh)`, so the task's details are never a
+  sliver. `next-inbox-long-question.spec.js` holds this at 1280×800 and
+  2269×1079.
 - **Class names are global.** Most pages use `ViewEncapsulation.None`, so a
   class defined in one page's stylesheet applies wherever that stylesheet is
   loaded. Prefix page-specific classes, and search for a name before you use
   it. Example: Task Detail's `.gate-card` restyled the Backlog's approval
   card until it was renamed `.intake-card`.
+- **A prompt has its own pane.** Wherever a page shows the prompt an agent
+  is (or will be) given -- task detail on the full page and in every
+  inspector pane, and the Processes schedule and template inspectors -- it
+  sits in a `.g-pane` headed "Prompt", rendered with `[gMarkdown]`, never
+  as a raw monospace text well. The facts about it (priority, repository,
+  cadence, overlap, ...) go in a second `.g-pane` below, headed
+  "Attributes" for tasks and "Configuration" for processes, as a `.g-attrs`
+  key-value list. The key column is capped at 40% of the pane and the list
+  stacks key over value when the pane is under 260px, so no value clips or
+  overlaps its key at any split width (`ui-ng/e2e/next-prompt-panes.spec.js`).
+- **A time is shown as a date, never as the wire's string.** An instant
+  the server sends (`2026-11-17T10:24:14.543896659Z`) reaches the page
+  through `formatStamp` (`shared/dispatch-status.ts`), so a row and the
+  pane beside it say the same time the same way
+  (`ui-ng/e2e/next-processes-run-times.spec.ts`).
+- **Task detail container layout, Docs tab, and full-screen document reader.**
+  `.task-page` is an inline-size container (`container: task-page / inline-size`);
+  at `@container task-page (max-width: 1060px)` `.task-layout` collapses its
+  right-hand `.task-aside` so opening the coplanar Director drawer automatically
+  gives `.task-main` full width. The `Details` tab stays visible at every width
+  without redirecting back to `Conversation`. A dedicated `Docs` tab
+  (`g-task-docs-tab`, `task/task-docs.ts`) pairs a document picker with a clean
+  `surface` Markdown reader (`76ch` measure, independent vertical scrolling)
+  across the task prompt, PR Markdown/doc diffs, and structured report comments.
+  Prompt headers and the Docs reader offer `Open Docs` and `Full screen` (`⤢`)
+  triggers that open a native top-layer `<dialog class="doc-reader-modal">`
+  (`aria-modal="true"`, backdrop click & Escape dismissal, `Prev` / `Next`
+  document navigation, `76ch` measure, independent scroll)
+  (`ui-ng/e2e/next-task-docs-scroll.spec.ts`).
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
@@ -345,6 +463,20 @@ Rules:
   blocked, `role="alert"`), above the content. Use the server's `detail`
   sentence rather than rewording it, and link the task that holds the
   finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
+  ```` ```mermaid ```` fences in the active theme with a Diagram / Source
+  toggle, and pairs Before / After fences (named in the info string or by
+  matching headings) into one block with Side by side / Before / After /
+  Stacked / Source (Before alone on a phone). `mermaid` is imported only
+  when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
+  before it reaches the DOM. A diagram never shrinks below 75% of its
+  natural size; on a phone a wide one scrolls inside its canvas, which
+  takes keyboard focus. A source that does not parse says why and shows
+  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
+  user-written Markdown through `[gMarkdown]`, never `renderMarkdown()`
+  into `[innerHTML]`, so previews draw diagrams too (the Context page's
+  previews, `ui-ng/e2e/next-context-doc-mermaid.spec.ts`); a page that
+  hosts it loads `shared/code-highlight.css` and `shared/mermaid.css`.
 - **Say a wire code in words.** A reason or state code from the API
   (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
   A code nobody has mapped yet shows as itself, which beats showing nothing.
@@ -363,6 +495,18 @@ Rules:
   (`isTypingTarget`).
 - **URLs.** Every view, tab and selection that a person might share has a
   URL (`?tab=`, `?task=`, `?pane=`). Back works.
+  A list's narrowing and order are URL state too: the "Filter this view"
+  box is `?q=` (written back as it is typed, with `replaceUrl`) and a
+  sort is `?sort=`, so a reload and Back/Forward keep them. Tabs carry
+  both (`queryParamsHandling="merge"`). See
+  `ui-ng/e2e/next-processes-narrowing.spec.ts`.
+- **A custom order moves by pointer and by keyboard.** Where a list keeps
+  a person's own order (a "Custom order" sort), a row is dragged, or moved
+  one place with `Alt+ArrowUp` / `Alt+ArrowDown` (named in
+  `aria-keyshortcuts`). Each move is announced in a polite live region,
+  and focus stays on the row that moved. That order is browser state, kept
+  under the classic UI's own `grain.list-order.<list>` key and row keys,
+  so both UIs show it.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
 - **State-aware.** The same goes for an action the item's state refuses.
@@ -378,6 +522,15 @@ Rules:
     not jump to another item.
   - The composer is locked to its target task.
   - Batch actions name their scope (repos, owners) in the confirmation.
+  - A batch action acts only on the selected rows its state allows (Run
+    now skips running and closed work, Submit wants `awaiting_submit`).
+    When that is fewer than the selection, the label counts them
+    (`Submit (2)`). It is offered only when the role reaches every one of
+    those rows.
+  - A bulk action shows its progress in the selection bar and offers
+    Stop: calls already sent finish, and the rest are never sent.
+    Afterwards only the rows that failed or were never sent stay ticked
+    (`ui-ng/e2e/next-tasks-batch-actions.spec.js`).
   - Undo for reversible actions.
   - An action that moves a branch, opens a pull request on someone's
     behalf or drops a record (promote, merge back, delete) asks first in
@@ -391,6 +544,13 @@ Rules:
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.
+- **A failed poll is not news.** A background read that fails once keeps
+  the last good answer on screen and says nothing; only failure that lasts
+  (three reads in a row, or 30 s, `services/request-trouble.ts`) puts up
+  one banner, over the stale list rather than in place of it. A read that
+  has never succeeded says so at once. The same sentence is never shown
+  twice: two surfaces reporting one failure show it once. A person's own
+  action that fails still says so immediately.
 
 ## 6. Motion
 
@@ -464,7 +624,9 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
   and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
   polling, load inactive Fleet tabs lazily, and never block primary pickers on
-  slow `reachable-repos` discovery.
+  slow `reachable-repos` discovery. A poll that is failing backs off
+  (doubling, capped at 60 s, never sooner than `Retry-After`) and ignores
+  event wake-ups until a read succeeds again.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
@@ -565,3 +727,46 @@ Rules:
 - [ ] This book updated if the change sets or changes a rule.
 - [ ] No internal hostnames, people's names or credentials in code, fixtures,
       screenshots or commit messages.
+
+## 13. Autonomous Goal Mode
+
+Autonomous Goal Mode lets an operator hand Grain a multi-pass outcome ("Prototype a goal") and step back until the work is verified and ready to submit or reaches a hard safety/budget boundary.
+
+### 13.1 Intake (`+ Create` menu & `NewTaskSheetComponent`)
+
+- The `+ Create` menu in the shell (`AppComponent`) offers a third rich 2-line entry after **New task** and **Start a workstream**:
+  - **Prototype a goal** (`data-testid="create-prototype-goal"`): *"Hammer through autonomously — logs assumptions, verifies deliverables, opens a PR"*.
+  - Selecting it opens `NewTaskSheetComponent` pre-filled with `goalMode: { enabled: true, maxPasses: 8, wallClockMinutes: 120, mockMissingSecrets: true }` and `autoApproveProposals: true`.
+- Inside `NewTaskSheetComponent`, **Execution posture** (`<g-pill-select testid="nt-posture">`) switches between `Supervised` and `Autonomous goal`.
+- When `Autonomous goal` is active, a compact `.nt-section-card` (`data-testid="nt-goal-config"`) reveals:
+  - A calm one-sentence explanation of Inbox silence and bounded verification passes.
+  - **Max verification passes** (`data-testid="nt-max-passes"`, `1..20`, default `8`).
+  - **Wall-clock budget (min)** (`data-testid="nt-wall-clock"`, `5..720`, default `120`).
+  - **Mock missing external secrets locally** (`data-testid="nt-mock-secrets"`, `role="switch"`).
+  - Primary submit action label updates to **Start autonomous goal** (`data-testid="new-task-submit"`).
+- `.sheet-body` carries `32px` bottom padding and `scroll-padding-bottom: 32px` (with `flex-shrink: 0` on direct children) so bottom controls scroll comfortably clear of the sticky `.sheet-foot`. Active snackbars anchor above `--grain-bottombar-height` (`+ 16px` desktop, `+ 84px` phone, `+ 80px` landscape short) and dismiss/suppress overlapping bottom-bar tooltips on open.
+
+### 13.2 Inbox Silence & Terminal Surfacing (`inbox-classifier.ts`)
+
+- While `t.goalMode?.enabled` is true, mid-flight `awaiting_reply` questions (`!t.awaitingAccess && !isStoppedTurn(t)`) and auto-approved child proposals (`t.state === "proposed" && !!t.proposedBy && !!t.autoApproveProposals`) are suppressed from `waitsOnUser` and `classifyTask`.
+- Terminal and safety states always surface in the Inbox:
+  - `awaiting_submit`: renders pill **Goal ready** (`healthy`) when `t.goalScorecard?.verified` is true, or **Goal capped** (`warn`) when `t.goalScorecard?.stoppedAtCap` is true.
+  - `awaitingAccess`, `isStoppedTurn`, `failed`, `waitingBaseRepair`, `mergeBlocked`, `mergeQueueStalled`, and `stall` surface in their standard priority groups.
+
+### 13.3 Goal Scorecard, Assumptions Ledger & Revise Loop (`<g-task-goal-card>`)
+
+- `<g-task-goal-card>` (`data-testid="task-goal-card"`) renders above `<g-conversation>` in `TaskDetailComponent` (`/next/task/:id` and split-pane inspectors) and inside `InboxPageComponent`'s inspector whenever `goalMode?.enabled`, `goalScorecard`, or `goalAssumptions` is present.
+- Header (`data-testid="goal-status-pill"`):
+  - `Goal verified · N passes` (`healthy`), `Stopped at cap · N / M passes` (`warn`), or `Autonomous goal · Pass N / M` (`setup`).
+- Operator controls:
+  - **Switch to supervised** (`data-testid="act-switch-supervised"`): sends `PATCH /api/tasks/{id}` with `{ goalMode: { enabled: false } }` so the operator can take over mid-flight.
+  - **Revise…** (`data-testid="act-revise-goal"`): opens `NewTaskSheetComponent` pre-filled as a follow-up autonomous goal targeting the task's branch (`base: t.branch || t.base`), linked via `generatedFrom: t.id`, with prior summary and assumptions pre-populated in the description.
+- Body:
+  - **Deliverables checklist** (`data-testid="goal-deliverables"` / `data-testid="goal-deliverable"`): each requirement, verification mark (`✓` / `!`), and evidence citation.
+  - **Assumptions ledger** (`data-testid="goal-assumptions"` / `data-testid="goal-assumption"`): each autonomous decision (`topic`, `decision`, `rationale`, `alternatives`).
+
+### 13.4 Cross-Surface Badges
+
+- **Tasks (`/next/tasks`)** and **Agents (`/next/agents`)**: render compact status pills (`data-testid="goal-badge-<id>"`) showing `Goal ✓` (`healthy`), `Goal capped` (`warn`), or `Goal · N/M` (`setup`).
+- **Workstreams (`/next/workstreams`)**: streams whose root or member tasks run in Autonomous Goal Mode display an `Autonomous goal` chip (`data-testid="ws-goal-chip-<key>"`).
+

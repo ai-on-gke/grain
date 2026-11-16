@@ -1802,5 +1802,103 @@ describe("inbox page helpers", () => {
       f.destroy();
       expect(store.selectedTranscript()).toBeNull();
     });
+
+    it("renders access and release summaries and remedies via g-capped-markdown while keeping queue rows plain", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "21",
+          title: "Needs write grant",
+          state: "awaiting_reply",
+          awaitingAccess: true,
+          questionSummary:
+            "## **Grant** `write` to [sidthe/grain](https://example.com)",
+        },
+        {
+          id: "22",
+          title: "Fallback access",
+          state: "awaiting_reply",
+          awaitingAccess: true,
+          questionSummary: "- Need *read* on `acme/lib`",
+        },
+      ];
+      api.details["21"] = {
+        id: "21",
+        title: "Needs write grant",
+        state: "awaiting_reply",
+        pendingAccess: {
+          summary:
+            "**Approve** `repo#write` for [sidthe/grain](https://example.com)",
+          reason: "to push the branch",
+          createdAt: "",
+          items: [{ kind: "write", repo: "sidthe/grain" }],
+        },
+      };
+      api.details["22"] = {
+        id: "22",
+        title: "Fallback access",
+        state: "awaiting_reply",
+      };
+      api.notes = [
+        {
+          id: 501,
+          subject: "release.pending:v2.5.0",
+          actions: ["approve-release"],
+          repo: "sidthe/grain",
+          body: [
+            "DISPATCH FAILED (401): token missing",
+            "Remedy: Set **GRAIN_RELEASE_APPROVAL_KEY** in `Settings`",
+            "Run URL: https://ci.example/runs/401",
+            "**v2.5.0-rc.1** passed its `soak`.",
+          ].join("\n"),
+        },
+      ];
+
+      const f = await render(api);
+      const rowSummaries = [
+        ...(f.nativeElement as HTMLElement).querySelectorAll(".row-summary"),
+      ].map((el) => el.textContent?.trim());
+      expect(rowSummaries).toEqual([
+        "v2.5.0-rc.1 passed its soak.",
+        "Grant write to sidthe/grain",
+        "Need read on acme/lib",
+      ]);
+
+      // Release entry is first (by group order).
+      const relSummary = q(f, '[data-testid="release-summary"]')!;
+      expect(relSummary.classList.contains("capped-md")).toBe(true);
+      expect(relSummary.textContent?.trim()).toBe(
+        "v2.5.0-rc.1 passed its soak.",
+      );
+      const relRemedy = q(f, '[data-testid="release-remedy"]')!;
+      expect(relRemedy.classList.contains("capped-md")).toBe(true);
+      expect(relRemedy.querySelector("strong")?.textContent).toBe(
+        "GRAIN_RELEASE_APPROVAL_KEY",
+      );
+      expect(relRemedy.querySelector("code")?.textContent).toBe("Settings");
+
+      const store = TestBed.inject(InboxStore);
+      store.select("task:21:access");
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+      const accessSummary = q(f, '[data-testid="access-summary"]')!;
+      expect(accessSummary.classList.contains("capped-md")).toBe(true);
+      expect(accessSummary.querySelector("strong")?.textContent).toBe(
+        "Approve",
+      );
+      expect(accessSummary.querySelector("code")?.textContent).toBe(
+        "repo#write",
+      );
+      expect(accessSummary.querySelector("a")?.textContent).toBe(
+        "sidthe/grain",
+      );
+
+      store.select("task:22:access");
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+      const fallbackSummary = q(f, '[data-testid="access-summary"]')!;
+      expect(fallbackSummary.classList.contains("capped-md")).toBe(true);
+      expect(fallbackSummary.textContent?.trim()).toBe("Need read on acme/lib");
+    });
   });
 });
