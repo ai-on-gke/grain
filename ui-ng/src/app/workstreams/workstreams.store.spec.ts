@@ -72,6 +72,24 @@ class FakeApi {
           }
         );
       }
+      if (route === "GET /api/tasks/summaries") {
+        const ids =
+          new URLSearchParams(query ?? "")
+            .get("ids")
+            ?.split(",")
+            .filter(Boolean) ?? [];
+        return {
+          tasks: Object.fromEntries(
+            ids.map((id) => [
+              id,
+              this.details[id] ?? {
+                ...mkTask(id),
+                description: "Loaded goal",
+              },
+            ]),
+          ),
+        };
+      }
       return {};
     },
   );
@@ -170,7 +188,7 @@ describe("WorkstreamsStore", () => {
       "Full goal text loaded lazily",
     );
     const detailCalls = api.calls.filter(
-      (c) => c.route === "GET /api/tasks/{id}",
+      (c) => c.route === "GET /api/tasks/summaries",
     );
     expect(detailCalls.length).toBe(1);
   });
@@ -404,9 +422,92 @@ describe("WorkstreamsStore", () => {
     await store.ensureRootDetail("71");
     await store.ensureRootDetail("72");
 
-    const fetchedIds = api.calls
-      .filter((c) => c.route === "GET /api/tasks/{id}")
-      .map((c) => (c.params as { id: string }).id);
+    const summaryCalls = api.calls.filter(
+      (c) => c.route === "GET /api/tasks/summaries",
+    );
+    expect(summaryCalls.length).toBe(1);
+    const fetchedIds =
+      new URLSearchParams(summaryCalls[0].query ?? "")
+        .get("ids")
+        ?.split(",")
+        .filter(Boolean) ?? [];
     expect(fetchedIds).toEqual(["72"]);
+  });
+
+  it("batches 20 root details into 1 request, chunks >50 by 50, and preserves cached data on failure", async () => {
+    const withChild = (r: Task) => [
+      r,
+      mkTask(`${r.id}-child`, {
+        state: "running",
+        origin: `task:${r.id}`,
+        generatedFrom: r.id,
+      }),
+    ];
+    const roots = Array.from({ length: 20 }, (_, i) =>
+      mkTask(`${100 + i}`, { state: "queued", title: `Root ${100 + i}` }),
+    );
+    api.open = roots.flatMap(withChild);
+    for (const r of roots) {
+      api.details[r.id] = { ...r, description: `Goal for ${r.id}` };
+    }
+    await store.refresh(true);
+    api.calls = [];
+
+    // 20 concurrent ensureRootDetail calls coalesce into 1 batch request.
+    await Promise.all(roots.map((r) => store.ensureRootDetail(r.id)));
+    const batchCalls = api.calls.filter(
+      (c) => c.route === "GET /api/tasks/summaries",
+    );
+    const singleCalls = api.calls.filter(
+      (c) => c.route === "GET /api/tasks/{id}",
+    );
+    expect(singleCalls.length).toBe(0);
+    expect(batchCalls.length).toBe(1);
+    const q = new URLSearchParams(batchCalls[0].query ?? "");
+    expect(q.get("ids")!.split(",").length).toBe(20);
+    expect(q.get("comments_limit")).toBe("1");
+    expect(q.get("attempts_limit")).toBe("1");
+    expect(store.byKey().get("task:100")?.goal).toBe("Goal for 100");
+    expect(store.byKey().get("task:119")?.goal).toBe("Goal for 119");
+
+    // 75 new root IDs chunk cleanly into 50 and 25.
+    const more = Array.from({ length: 75 }, (_, i) =>
+      mkTask(`${200 + i}`, { state: "queued", title: `Root ${200 + i}` }),
+    );
+    api.open = [...roots, ...more].flatMap(withChild);
+    for (const r of more) {
+      api.details[r.id] = { ...r, description: `Goal for ${r.id}` };
+    }
+    await store.refresh(true);
+    api.calls = [];
+
+    await store.ensureRootDetails(more.map((r) => r.id));
+    const chunkCalls = api.calls.filter(
+      (c) => c.route === "GET /api/tasks/summaries",
+    );
+    expect(chunkCalls.length).toBe(2);
+    expect(
+      new URLSearchParams(chunkCalls[0].query ?? "").get("ids")!.split(",")
+        .length,
+    ).toBe(50);
+    expect(
+      new URLSearchParams(chunkCalls[1].query ?? "").get("ids")!.split(",")
+        .length,
+    ).toBe(25);
+    expect(store.byKey().get("task:274")?.goal).toBe("Goal for 274");
+
+    // Failure on uncached ID leaves previously cached root details intact.
+    const baseGet = api.get;
+    api.get = vi.fn(
+      async (route: string, params?: { id?: string }, query?: string) => {
+        if (route === "GET /api/tasks/summaries") {
+          throw new Error("503");
+        }
+        return baseGet(route, params, query);
+      },
+    );
+    await store.ensureRootDetail("999");
+    expect(store.byKey().get("task:100")?.goal).toBe("Goal for 100");
+    expect(store.byKey().get("task:274")?.goal).toBe("Goal for 274");
   });
 });

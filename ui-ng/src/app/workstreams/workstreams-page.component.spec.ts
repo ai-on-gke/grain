@@ -86,6 +86,17 @@ class FakeApi {
         const isFirst = !query || !query.includes("cursor=");
         return { tasks: isFirst ? this.closed : [] };
       }
+      if (route === "GET /api/tasks/summaries") {
+        const ids =
+          new URLSearchParams(query ?? "")
+            .get("ids")
+            ?.split(",")
+            .filter(Boolean) ?? [];
+        const entries = await Promise.all(
+          ids.map(async (id) => [id, await this.task(id)] as const),
+        );
+        return { tasks: Object.fromEntries(entries) };
+      }
       if (route === "GET /api/tasks/{id}" && params?.id) {
         return this.task(params.id);
       }

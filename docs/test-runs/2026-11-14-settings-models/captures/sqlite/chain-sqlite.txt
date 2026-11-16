@@ -1,0 +1,7 @@
+next before: ["walk-a"]
+PUT saved defaultModels: ["walk-a","walk-b","walk-c"]
+next after reload: ["walk-a","walk-b","walk-c"]
+classic Remove-button order: ["walk-b","walk-c"]
+next after reload: ["walk-a","walk-b","walk-c"]
+classic Remove-button order: ["walk-b","walk-c"]
+classic select values in page order: ["walk-a (disabled connections only)","walk-a","walk-b","walk-b","walk-c","walk-c"]
