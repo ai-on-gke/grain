@@ -84,9 +84,20 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
+      // A reset on another day in ZONE (a run late in its evening) is
+      // printed with its date -- "resets Nov 16, 12:08 AM PST" -- and one
+      // later today without it.
+      const day = (ms) =>
+        new Intl.DateTimeFormat("en-US", {
+          timeZone: ZONE,
+          month: "short",
+          day: "numeric",
+        }).format(new Date(ms));
+      const datePrefix =
+        day(until) === day(Date.now()) ? "" : `${day(until)}, `;
       await expect(reset).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${datePrefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -116,7 +127,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${datePrefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });

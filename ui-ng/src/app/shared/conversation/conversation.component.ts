@@ -460,6 +460,14 @@ export class ConversationComponent implements OnDestroy {
           );
           el.style.scrollBehavior = prev;
         }
+      } else if (tailId !== null && tailId < 0 && tailId !== this.lastTailId) {
+        // The reader's own message, just sent (optimistic ids are
+        // negative): always show it, even if a late scroll event from a
+        // wheel or relayout cleared following after submit() set it.
+        this.prependAnchor = null;
+        this.scrollToEnd();
+        this.following = true;
+        if (this.unseen()) this.unseen.set(0);
       } else if (this.following) {
         this.scrollToEnd();
         if (this.unseen()) this.unseen.set(0);

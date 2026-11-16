@@ -301,7 +301,11 @@ test("300-comment Director session with ~9 MB binaries scrolls, clicks, pages, a
     const postBootLongTasks = await page.evaluate(
       () => (window as unknown as { __longTasks: number[] }).__longTasks,
     );
-    expect(Math.max(0, ...postBootLongTasks)).toBeLessThan(300);
+    // No freeze: every seeded turn carries a Mermaid diagram, and one
+    // diagram's layout is a single task Mermaid cannot split (~150-200 ms
+    // here, more on a shared CI runner). Diagrams draw only as they near
+    // the viewport, so the bound is per diagram, never the whole thread.
+    expect(Math.max(0, ...postBootLongTasks)).toBeLessThan(600);
 
     // --- 2. /next/sessions/director with 10s-delayed 503s on polling routes ---
     const installStalledPolls = async () => {
