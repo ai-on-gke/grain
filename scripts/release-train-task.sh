@@ -32,7 +32,13 @@
 #      workflow, most of a tick's reading, and a tick whose rc is still
 #      qualifying or whose rc-hold is still holding never needs them
 #      (grain/task-4393);
-#   3. scripts/release-from-trunk.sh in train mode under the train's own
+#   3. whether main's publishing is held by an open release triage task
+#      (`grain api GET /api/repos/<repo>/release?branch=main`, needing
+#      api#releases:read): while held, the tick runs only Phase 1
+#      (RELEASE_TRAIN_PHASES=judge,release, RELEASE_TRAIN_HOLD=publishing) so
+#      an rc already in qualification can still be judged, promoted or dropped
+#      while cutting a new rc is skipped (`held=publishing (cut skipped)`);
+#   4. scripts/release-from-trunk.sh in train mode under the train's own
 #      tag grant (RELEASE_PUSH_GRANT=train), publishers off: images and the
 #      GitHub Release are CI's, on the tags this pushes.
 #
@@ -43,7 +49,8 @@
 #   RELEASE_TRAIN_RESULT=failed  it stopped with an error; report it
 #
 # Settings (environment): RELEASE_TASK_CHECKOUT (~/work), RELEASE_TASK_DIR
-# (~/train), RELEASE_TASK_REPO (ai-on-gke/grain), GRAIN (grain), and
+# (~/train), RELEASE_TASK_REPO (ai-on-gke/grain), GRAIN (grain),
+# RELEASE_TRAIN_PHASES, RELEASE_TRAIN_HOLD, RELEASE_TRAIN_HOLD_DETAIL, and
 # anything scripts/release-from-trunk.sh reads, DRY_RUN among them.
 set -uo pipefail
 
@@ -165,6 +172,50 @@ while read -r t; do
   dropped="$t"
 done < <(git tag -l 'v*-rc.*-discarded' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+-discarded$' | sed 's/-discarded$//' | sort -V)
 
+# Detect whether main's publishing is currently held by an open release triage
+# task. While held, run Phase 1 (judge / release / drop) for any rc in
+# qualification and skip Phase 2 (cut), emitting `held=publishing (cut skipped)`.
+# Explicit RELEASE_TRAIN_PHASES or RELEASE_TRAIN_HOLD overrides skip the API
+# probe.
+train_phases="${RELEASE_TRAIN_PHASES:-}"
+train_hold="${RELEASE_TRAIN_HOLD:-}"
+train_hold_detail="${RELEASE_TRAIN_HOLD_DETAIL:-}"
+if [ -z "$train_phases" ] && [ -z "$train_hold" ]; then
+  api_repo="$repo"
+  if [ "$(printf '%s' "$repo" | awk -F/ '{print NF}')" -ge 3 ]; then
+    owner_part="${repo%/*}"
+    name_part="${repo##*/}"
+    api_repo="${owner_part//\//%2F}/$name_part"
+  fi
+  api_status=0
+  "$grain" api GET "/api/repos/$api_repo/release?branch=main" >"$out/release.json" 2>"$out/release.err" || api_status=$?
+  if [ "$api_status" = 0 ] && [ -s "$out/release.json" ]; then
+    pub_gated="$(jq -r '.baseBranchPublishing.gated // false' "$out/release.json" 2>/dev/null || echo false)"
+    pub_triage="$(jq -r '.baseBranchPublishing.triageTaskID // empty' "$out/release.json" 2>/dev/null || true)"
+    pub_branch="$(jq -r '.baseBranchPublishing.branch // empty' "$out/release.json" 2>/dev/null || true)"
+    if [ "$pub_gated" = true ] && [ -n "$pub_triage" ] && { [ -z "$pub_branch" ] || [ "$pub_branch" = main ]; }; then
+      train_phases="judge,release"
+      train_hold="publishing"
+      train_hold_detail="triage task $pub_triage"
+      say "main publishing is held by triage task $pub_triage; running RELEASE_TRAIN_PHASES=$train_phases (held=publishing (cut skipped))"
+    fi
+  elif [ "$api_status" != 0 ] && [ -s "$out/release.err" ]; then
+    say "WARNING: could not check publishing hold via \`grain api GET /api/repos/$api_repo/release\` (exit $api_status): $(head -n 1 "$out/release.err")"
+  fi
+elif [ "$train_hold" = publishing ] && [ -z "$train_phases" ]; then
+  train_phases="judge,release"
+fi
+cut_enabled=true
+if [ -n "$train_phases" ]; then
+  cut_enabled=false
+  IFS=',' read -r -a _task_phase_list <<< "$train_phases"
+  for _p in "${_task_phase_list[@]}"; do
+    [ "$(printf '%s' "$_p" | tr -d '[:space:]')" != cut ] || cut_enabled=true
+  done
+elif [ -n "$train_hold" ]; then
+  cut_enabled=false
+fi
+
 app=""
 env_args=()
 if [ -n "$rc" ]; then
@@ -179,9 +230,10 @@ if [ -n "$rc" ]; then
 fi
 # If $rc fails qualification in Phase 1 of this same tick, Phase 2 checks
 # grain/rc-hold on $rc's commit rather than an earlier dropped rc's; when
-# nothing is currently qualifying, Phase 2 checks $dropped's commit.
+# nothing is currently qualifying, Phase 2 checks $dropped's commit. Skip the
+# lookup when cut is skipped (for example under a publishing hold).
 hold_rc="${rc:-$dropped}"
-if [ -n "$hold_rc" ]; then
+if [ "$cut_enabled" = true ] && [ -n "$hold_rc" ]; then
   hold_sha="$(git rev-parse "$hold_rc^{commit}")"
   read_ci "$out/hold-checks.json" "grain ci checks could not read grain/rc-hold on $hold_rc" \
     checks "$hold_sha" --repo "$repo" --name grain/rc-hold --format github
@@ -203,6 +255,7 @@ self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 env RELEASE_PUSH_GRANT=train RELEASE_CI_SOURCE=grain GITHUB_TOKEN= GH_TOKEN= \
   RELEASE_RUNS_JSON= RELEASE_RUNS_CMD="bash $(printf '%q' "$self") main-runs" RELEASE_QUALIFICATION_APP="$app" \
   RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off \
+  RELEASE_TRAIN_PHASES="$train_phases" RELEASE_TRAIN_HOLD="$train_hold" RELEASE_TRAIN_HOLD_DETAIL="$train_hold_detail" \
   RELEASE_TRAIN_OUTPUT="$out/train.out" ${env_args[@]+"${env_args[@]}"} \
   bash scripts/release-from-trunk.sh || status=$?
 [ "$status" = 0 ] || fail "scripts/release-from-trunk.sh exited $status"
