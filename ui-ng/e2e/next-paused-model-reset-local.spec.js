@@ -43,6 +43,13 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
+  const day = (ms) =>
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
@@ -84,9 +91,14 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
       await expect(reset).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
