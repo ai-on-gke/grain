@@ -227,6 +227,11 @@ describe("host scripts", () => {
       "approval per call",
       "env TOKEN, A",
     ]);
+    // A field the form does not edit survives an edit.
+    const future = { ...s, stdin_policy: "deny" } as typeof s;
+    expect(
+      scriptFromDraft({ ...scriptDraft(future), description: "New" }, future),
+    ).toMatchObject({ description: "New", stdin_policy: "deny" });
     const body = scriptsPayload(hostScriptServer(), [s]);
     expect(body.config["serverUrl"]).toBe("http://127.0.0.1:2/mcp");
     expect(body.config["config"]).toEqual({ scripts: [s] });
@@ -310,7 +315,16 @@ async function mount<T>(
     input.dispatchEvent(new Event("input"));
     await settle();
   };
-  return { el, api, button, click, type, settle, saved: () => saved };
+  return {
+    el,
+    api,
+    fixture,
+    button,
+    click,
+    type,
+    settle,
+    saved: () => saved,
+  };
 }
 
 describe("Config maps card", () => {
@@ -462,6 +476,50 @@ describe("Host scripts card", () => {
       },
     });
     expect(m.saved()).toBe(1);
+  });
+
+  it("edits the script by name, not by where it sat in the list", async () => {
+    const srv = hostScriptServer();
+    const m = await mount(CapabilityHostScriptsComponent, srv);
+    await m.click("Edit ops");
+    await m.type("Description", "Edited");
+    // Meanwhile a reload brings another script in ahead of it.
+    const reloaded: PlacementServer = structuredClone(srv);
+    const cfg = reloaded.config!.config!;
+    cfg["scripts"] = [
+      { name: "aaa", description: "First", script: "true", timeout: 1 },
+      ...(cfg["scripts"] as object[]),
+    ];
+    m.fixture.componentRef.setInput("server", reloaded);
+    await m.settle();
+    await m.click("Save script");
+    await m.settle();
+    const body = m.api.calls[0]!.body as {
+      config: { config: { scripts: { name: string; description: string }[] } };
+    };
+    expect(
+      body.config.config.scripts.map((x) => [x.name, x.description]),
+    ).toEqual([
+      ["aaa", "First"],
+      ["ops", "Edited"],
+    ]);
+  });
+
+  it("keeps the form of a script removed while it was edited", async () => {
+    const srv = hostScriptServer();
+    const m = await mount(CapabilityHostScriptsComponent, srv);
+    await m.click("Edit ops");
+    const reloaded: PlacementServer = structuredClone(srv);
+    reloaded.config!.config!["scripts"] = [];
+    m.fixture.componentRef.setInput("server", reloaded);
+    await m.settle();
+    expect(m.el.textContent).toContain("ops was removed while you were");
+    await m.click("Save script");
+    await m.settle();
+    const body = m.api.calls[0]!.body as {
+      config: { config: { scripts: { name: string }[] } };
+    };
+    expect(body.config.config.scripts.map((x) => x.name)).toEqual(["ops"]);
   });
 
   it("adds a script, refusing a name already taken", async () => {

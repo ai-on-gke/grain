@@ -440,8 +440,29 @@ export function scriptDraftErrors(
   return errs;
 }
 
-export function scriptFromDraft(d: ScriptDraft): HostScriptRow {
+// DRAFT_FIELDS are the script fields the form edits; scriptFromDraft
+// keeps any other field the stored script holds.
+const DRAFT_FIELDS = new Set<string>([
+  "name",
+  "description",
+  "usage",
+  "script",
+  "timeout",
+  "cwd",
+  "approve",
+  "env",
+  ...SCRIPT_LIMIT_FIELDS,
+]);
+
+export function scriptFromDraft(
+  d: ScriptDraft,
+  base?: HostScriptRow,
+): HostScriptRow {
+  const kept = Object.fromEntries(
+    Object.entries(base ?? {}).filter(([k]) => !DRAFT_FIELDS.has(k)),
+  );
   const s: HostScriptRow = {
+    ...kept,
     name: d.name.trim(),
     description: d.description.trim(),
     script: d.script,

@@ -147,9 +147,10 @@
   flex: 0 0 96px;
 }
 
-/* The remove button sits level with the inputs, below their labels. */
+/* The remove button sits centred on the 40px inputs beside it, below
+   their 18px labels and 6px gap: 24px plus half of 40 - 36. */
 .cm-remove {
-  margin-top: 24px;
+  margin-top: 26px;
   flex: 0 0 auto;
 }
 

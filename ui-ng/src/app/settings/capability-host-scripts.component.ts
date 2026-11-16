@@ -80,24 +80,24 @@ const LIMIT_LABELS: Record<(typeof SCRIPT_LIMIT_FIELDS)[number], string> = {
             caller's arguments exactly and nothing else.
           </p>
         </div>
-        @if (editingIndex() === null) {
+        @if (editing() === null) {
           <button
             type="button"
             class="btn-tonal"
             data-testid="add-host-script"
             [disabled]="!canWrite()"
-            (click)="startEdit(-1)"
+            (click)="startEdit('')"
           >
             Add script
           </button>
         }
       </div>
 
-      @if (editingIndex() === -1) {
+      @if (editing() === "" || orphaned()) {
         <ng-container *ngTemplateOutlet="editor" />
       }
 
-      @if (scripts().length === 0 && editingIndex() !== -1) {
+      @if (scripts().length === 0 && editing() !== "") {
         <p class="s-hint" data-testid="host-scripts-empty">
           No scripts yet. Add script saves one; a task then holds it as a
           <code>host-script</code> grant naming the script.
@@ -105,13 +105,13 @@ const LIMIT_LABELS: Record<(typeof SCRIPT_LIMIT_FIELDS)[number], string> = {
       }
 
       <ul class="hs-list" aria-label="Host scripts">
-        @for (s of scripts(); track s.name; let i = $index) {
+        @for (s of scripts(); track s.name) {
           <li
             class="hs-item"
             [attr.data-testid]="'host-script-' + s.name"
             [attr.aria-label]="'Script ' + s.name"
           >
-            @if (editingIndex() === i) {
+            @if (editing() === s.name) {
               <ng-container *ngTemplateOutlet="editor" />
             } @else {
               <div class="hs-head">
@@ -134,8 +134,8 @@ const LIMIT_LABELS: Record<(typeof SCRIPT_LIMIT_FIELDS)[number], string> = {
                     type="button"
                     class="btn-tonal s-btn-sm"
                     [attr.aria-label]="'Edit ' + s.name"
-                    [disabled]="!canWrite() || editingIndex() !== null"
-                    (click)="startEdit(i)"
+                    [disabled]="!canWrite() || editing() !== null"
+                    (click)="startEdit(s.name)"
                   >
                     Edit
                   </button>
@@ -143,8 +143,8 @@ const LIMIT_LABELS: Record<(typeof SCRIPT_LIMIT_FIELDS)[number], string> = {
                     type="button"
                     class="btn-text s-btn-sm s-btn-danger"
                     [attr.aria-label]="'Remove ' + s.name"
-                    [disabled]="!canWrite() || editingIndex() !== null"
-                    (click)="confirmRemove(i)"
+                    [disabled]="!canWrite() || editing() !== null"
+                    (click)="confirmRemove(s.name)"
                   >
                     Remove
                   </button>
@@ -269,11 +269,15 @@ const LIMIT_LABELS: Record<(typeof SCRIPT_LIMIT_FIELDS)[number], string> = {
         class="hs-editor"
         autocomplete="off"
         data-testid="host-script-editor"
-        [attr.aria-label]="
-          editingIndex() === -1 ? 'New script' : 'Edit ' + d.name
-        "
+        [attr.aria-label]="editing() ? 'Edit ' + editing() : 'New script'"
         (submit)="$event.preventDefault(); save()"
       >
+        @if (orphaned()) {
+          <div class="s-banner warn" role="alert">
+            {{ editing() }} was removed while you were editing it. Save adds it
+            back; Cancel leaves it removed.
+          </div>
+        }
         <div class="s-grid">
           <div class="s-field">
             <label class="s-label" for="hs-name">Name</label>
@@ -461,21 +465,29 @@ export class CapabilityHostScriptsComponent {
 
   protected readonly scripts = computed(() => hostScripts(this.server()));
 
-  // null: no form open; -1: a new script; otherwise the index edited.
-  protected readonly editingIndex = signal<number | null>(null);
+  // null: no form open; "": a new script; otherwise the saved name of
+  // the script edited -- by name, so a reload that reorders the list
+  // cannot point Save at another script.
+  protected readonly editing = signal<string | null>(null);
   protected readonly draft = signal<ScriptDraft>(scriptDraft());
   protected readonly saving = signal(false);
   protected readonly saveError = signal("");
   protected readonly errors = computed(() => {
-    const at = this.editingIndex();
+    const at = this.editing();
     const others = this.scripts()
-      .filter((_, i) => i !== at)
-      .map((s) => s.name);
+      .map((s) => s.name)
+      .filter((n) => n !== at);
     return scriptDraftErrors(this.draft(), others);
   });
   protected readonly hasErrors = computed(
     () => Object.keys(this.errors()).length > 0,
   );
+  // A script removed (elsewhere) while it was being edited keeps its
+  // form, at the top of the card, and Save adds it back.
+  protected readonly orphaned = computed(() => {
+    const at = this.editing();
+    return Boolean(at) && !this.scripts().some((s) => s.name === at);
+  });
 
   protected readonly testing = signal<string | null>(null);
   protected readonly argv = signal<string[]>([]);
@@ -496,15 +508,16 @@ export class CapabilityHostScriptsComponent {
     return (e.target as HTMLInputElement).value;
   }
 
-  protected startEdit(i: number): void {
-    this.draft.set(scriptDraft(i >= 0 ? this.scripts()[i] : undefined));
+  protected startEdit(name: string): void {
+    const s = name ? this.scripts().find((x) => x.name === name) : undefined;
+    this.draft.set(scriptDraft(s));
     this.saveError.set("");
-    this.editingIndex.set(i);
-    if (i >= 0) this.testing.set(null);
+    this.editing.set(name);
+    if (name) this.testing.set(null);
   }
 
   protected cancelEdit(): void {
-    this.editingIndex.set(null);
+    this.editing.set(null);
     this.saveError.set("");
   }
 
@@ -520,17 +533,18 @@ export class CapabilityHostScriptsComponent {
   }
 
   protected async save(): Promise<void> {
-    const at = this.editingIndex();
+    const at = this.editing();
     if (at === null || this.hasErrors()) return;
-    const script = scriptFromDraft(this.draft());
     const list = this.scripts().slice();
-    if (at < 0) list.push(script);
-    else list[at] = script;
+    const i = at ? list.findIndex((x) => x.name === at) : -1;
+    const script = scriptFromDraft(this.draft(), i >= 0 ? list[i] : undefined);
+    if (i < 0) list.push(script);
+    else list[i] = script;
     this.saving.set(true);
     this.saveError.set("");
     try {
       await this.store(list);
-      this.editingIndex.set(null);
+      this.editing.set(null);
       this.snackbar.show(`Saved script ${script.name}`);
     } catch (err) {
       this.saveError.set(errText(err));
@@ -539,8 +553,8 @@ export class CapabilityHostScriptsComponent {
     }
   }
 
-  protected confirmRemove(i: number): void {
-    const s = this.scripts()[i];
+  protected confirmRemove(name: string): void {
+    const s = this.scripts().find((x) => x.name === name);
     if (!s) return;
     this.confirmReq.set({
       title: "Remove script?",
