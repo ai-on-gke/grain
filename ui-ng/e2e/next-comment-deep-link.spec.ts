@@ -323,3 +323,19 @@ test("the Director drawer beside its own task does not repeat comment ids", asyn
   });
   expect(dups).toEqual([]);
 });
+
+test("a #comment= is not followed again on the next task a workstream pane shows", async ({
+  page,
+}) => {
+  await page.goto("/next/workstreams/director:director:8#comment=99999");
+  const missing = page.getByText(
+    "Comment 99999 is not in this task's conversation.",
+  );
+  await expect(missing).toBeVisible();
+  await page.locator("g-snackbar button").first().click();
+  await expect(missing).toHaveCount(0);
+  await page.getByRole("treeitem").nth(1).click();
+  await expect(page).toHaveURL(/node=.*#comment=99999$/);
+  await page.waitForTimeout(800);
+  await expect(missing).toHaveCount(0);
+});

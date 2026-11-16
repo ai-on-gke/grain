@@ -279,9 +279,15 @@ inspector and Task Detail. Sessions shares its message styles.
   `/next/tasks?task=<id>#comment=<n>` land on it, on load and on every
   fragment change: Conversation tab, paged back to it if it is older than
   the loaded page, scrolled into the thread and the viewport, focused, and
-  ringed in `primary` on `primary-container` for 2.5s. A link to no comment
-  of the task says so in a snackbar and leaves the page alone. Phones have
-  no pane, so the pane form opens the task page there.
+  ringed in `primary` on `primary-container` for 2.5s. The fill then fades
+  but the ring stays while the comment keeps visible focus (section 8). A
+  link to no comment of the task says so in a snackbar and leaves the page
+  alone; a page that failed to load says that instead, never "no such
+  comment". A fragment belongs to the task it arrived with: a pane that
+  moves to another task does not follow it again. Phones have no pane, so
+  the pane form opens the task page there. Only the task's own thread
+  carries the `id`s; the Director drawer and shaper (`[anchorIds]="false"`)
+  show the same comments beside it, and an id appears once per document.
 
 ### Settings
 
