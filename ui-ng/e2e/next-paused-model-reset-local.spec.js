@@ -43,6 +43,27 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
+// resetPattern is what the reset at ms reads as: the clock alone when it
+// falls on today's date in ZONE, and the date before the clock ("Nov 16,
+// 12:50 AM PST") when it falls on another day -- which a reset 2h15m out
+// does whenever the spec runs in ZONE's last hours before midnight
+// (formatLocalReset in shared/dispatch-status.ts).
+function resetPattern(ms) {
+  const day = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const date =
+    day.format(new Date(ms)) === day.format(new Date())
+      ? ""
+      : "[A-Z][a-z]{2} \\d{1,2}, ";
+  return new RegExp(
+    `resets ${date}\\d{1,2}:\\d{2}\\s[AP]M ${zoneAbbrev(ms)} \\(in 2h 1[45]m\\)`,
+  );
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
@@ -83,12 +104,7 @@ for (const size of SIZES) {
       await page.goto("/next/telemetry");
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
-      const abbrev = zoneAbbrev(until);
-      await expect(reset).toContainText(
-        new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
-        ),
-      );
+      await expect(reset).toContainText(resetPattern(until));
       await expect(reset).not.toContainText("UTC");
       // Beside its Paused pill, on the pill's own line, so a table of
       // paused scopes grows no taller (prod-heavy-polish's height budget).
@@ -115,9 +131,7 @@ for (const size of SIZES) {
 
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
-        new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
-        ),
+        resetPattern(until),
       );
     });
   }
