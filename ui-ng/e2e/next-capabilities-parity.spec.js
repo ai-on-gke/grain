@@ -392,12 +392,18 @@ test("Scope set Remove and secret rows stay inside a phone viewport @phone", asy
       .getByTestId("remove-secret-walk-phone")
       .boundingBox();
     expect(del.x + del.width).toBeLessThanOrEqual(sb.x + sb.width);
-    // A key chip keeps its name and actions on one line.
-    const replace = await page
+    // A key chip keeps its name and actions on one line. Both are read
+    // in one pass in the page: two boundingBox() round trips can fall
+    // either side of the in-app scroll to #api-scope-sets.
+    const keyEl = await row.getByText("token", { exact: true }).elementHandle();
+    const { dy, height } = await page
       .getByTestId("replace-secret-walk-phone-token")
-      .boundingBox();
-    const key = await row.getByText("token", { exact: true }).boundingBox();
-    expect(Math.abs(replace.y - key.y)).toBeLessThan(key.height);
+      .evaluate((replace, key) => {
+        const r = replace.getBoundingClientRect();
+        const k = key.getBoundingClientRect();
+        return { dy: Math.abs(r.top - k.top), height: k.height };
+      }, keyEl);
+    expect(dy).toBeLessThan(height);
     // ... and is not cut short when the secret holds two keys.
     const user = row.getByText("username", { exact: true });
     expect(
