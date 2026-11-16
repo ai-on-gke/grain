@@ -499,7 +499,9 @@ guarded the way `.grain/workflows` is (see "Sensitive paths" below for the
 recommended trigger).
 
 What only a person may grant is different. That is a GCP key, a host
-script, a GitHub credential, a dangerous or person-only `api:<scope>`
+script, a GitHub credential (`…/repo#credential`), a `…/repo#write` that
+names anything beyond its `repo` (`refs` or `force`, which widen what the
+git proxy lets the run push), a dangerous or person-only `api:<scope>`
 (`model.DeclaredGrantNeedsPerson`), an `admission:` above `standard`, or
 `network_access: open`. A repository's declaration only asks for these.
 A firing of a declared schedule, or of a declared template, whose
