@@ -1,0 +1,8 @@
+8|local_script.pending|agent|2|internal
+9|local_script.answered|human|alice@example.com|access-code
+11|local_script.pending|agent|2|internal
+12|local_script.answered|human|alice@example.com|access-code
+14|local_script.pending|agent|2|internal
+15|local_script.answered|agent|2|internal
+16|local_script.pending|agent|2|internal
+17|local_script.answered|automation|grain|

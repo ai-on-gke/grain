@@ -19,7 +19,12 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents, type GrainEvent } from "../api/grain-events.service";
 import type { Task, TaskDetail } from "../api/models";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { DETAIL_QUERY, POLL_MS, TaskStore } from "./task.store";
+import {
+  DETAIL_QUERY,
+  MAX_DETAIL_SKIP_MS,
+  POLL_MS,
+  TaskStore,
+} from "./task.store";
 
 describe("TaskStore", () => {
   afterEach(() => {
@@ -27,13 +32,12 @@ describe("TaskStore", () => {
     TestBed.resetTestingModule();
   });
 
-  it("skips 3s detail refetches while the task row in TaskFeedStore is unchanged and refetches when updatedAt moves", async () => {
+  it("skips 3s detail refetches while the task row in TaskFeedStore is unchanged and refetches when the row moves or the skip ceiling passes", async () => {
     vi.useFakeTimers();
     let row: Task = {
       id: "5594",
       title: "Fix poll fan-out",
       state: "awaiting_submit",
-      updatedAt: "2026-11-16T00:00:00Z",
     };
     const detailQueries: string[] = [];
     let transcriptCalls = 0;
@@ -100,12 +104,18 @@ describe("TaskStore", () => {
     await vi.advanceTimersByTimeAsync(POLL_MS * 5 + 300);
     expect(detailQueries).toEqual([DETAIL_QUERY]);
 
-    // When task 5594's updatedAt advances in the feed, TaskStore refetches once.
-    row = { ...row, updatedAt: "2026-11-16T00:01:00Z" };
+    // GET /api/tasks rows carry no updatedAt (pkg/ui Task), so a change the
+    // row does show -- here the run's activity -- is what triggers a refetch.
+    row = { ...row, activityAt: "2026-11-16T00:01:00Z", activity: "pushing" };
     await feed.refresh();
     TestBed.flushEffects();
     await vi.advanceTimersByTimeAsync(50);
     expect(detailQueries.length).toBe(2);
+
+    // Even with the row unchanged, the poll asks again (conditionally) once
+    // MAX_DETAIL_SKIP_MS has passed, so an invisible change is never stale long.
+    await vi.advanceTimersByTimeAsync(MAX_DETAIL_SKIP_MS + POLL_MS);
+    expect(detailQueries.length).toBe(3);
 
     // Live transcript poll backs off on 503s (honouring Retry-After: 15).
     store.watchTranscript(1, true);

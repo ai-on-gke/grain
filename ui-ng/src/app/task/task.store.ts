@@ -28,7 +28,6 @@ import type {
   AttachmentUpload,
   CapabilityAuditEntry,
   Comment,
-  Task,
   TaskDetail,
   TreeNode,
   WorkTree,
@@ -41,44 +40,51 @@ import {
   isVerifierUnavailable,
 } from "../services/request-trouble";
 import { TaskFeedStore } from "../services/task-feed.service";
+import { taskRowKey } from "../shared/task-row-key";
 
 export type { TreeNode, WorkTree };
 
 export const POLL_MS = 3000;
 export const TRANSCRIPT_POLL_MS = 5000;
 export const DETAIL_QUERY = TASK_DETAIL_QUERY;
-
-function feedRowSignature(t: Task | undefined): string {
-  if (!t) return "";
-  const gates = (t.mergeGates ?? [])
-    .map((g) => `${g.id}:${g.state}:${g.detail ?? ""}`)
-    .join(",");
-  return [
-    t.state,
-    t.updatedAt ?? "",
-    t.activityAt ?? "",
-    t.activity ?? "",
-    t.questionCommentId ?? "",
-    t.prMergedAt ?? "",
-    t.prClosedAt ?? "",
-    t.mergeQueueState ?? "",
-    t.humanApprovedBy ?? "",
-    t.approved ? "1" : "0",
-    t.deferredUntil ?? "",
-    t.priority ?? "",
-    t.title ?? "",
-    t.reason?.reason ?? "",
-    t.paused ? "1" : "0",
-    t.blocked ? "1" : "0",
-    gates,
-  ].join("|");
-}
+// MAX_DETAIL_SKIP_MS bounds how long the detail poll trusts an unchanged
+// list row: past it the poll asks again (a conditional read, usually a
+// 304), so a change the row cannot show is never stale for long.
+export const MAX_DETAIL_SKIP_MS = 30_000;
 
 function eventTaskId(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   const d = data as { taskId?: unknown; task_id?: unknown; id?: unknown };
   const raw = d.taskId ?? d.task_id ?? d.id;
   return typeof raw === "string" && raw ? raw : null;
+}
+
+// TASK_DETAIL_MAX_PAGE is the most comments GET /api/tasks/{id} returns in
+// one page; a #comment=<id> link pages back this many at a time, so a
+// 3,000-comment thread needs at most six reads.
+export const TASK_DETAIL_MAX_PAGE = 500;
+export const DEEP_LINK_HEAD_QUERY = `comments_limit=${TASK_DETAIL_MAX_PAGE}&attempts_limit=20`;
+
+export type ParsedCommentFragment =
+  | { kind: "none" }
+  | { kind: "invalid"; raw: string }
+  | { kind: "comment"; id: number };
+
+// parseCommentFragment reads a `#comment=<id>` fragment (as the classic
+// UI's commentLinks.js does), leaving every other fragment alone.
+export function parseCommentFragment(
+  raw: string | null | undefined,
+): ParsedCommentFragment {
+  const frag = String(raw ?? "")
+    .trim()
+    .replace(/^#/, "");
+  if (!frag.startsWith("comment=")) return { kind: "none" };
+  const idPart = frag.slice("comment=".length);
+  const id = Number(idPart);
+  if (!/^\d+$/.test(idPart) || !Number.isSafeInteger(id)) {
+    return { kind: "invalid", raw: `#${frag.slice(0, 40)}` };
+  }
+  return { kind: "comment", id };
 }
 
 function mergeComments(older: Comment[], latest: Comment[]): Comment[] {
@@ -131,6 +137,11 @@ export class TaskStore {
   private pagedOlderComments: number | null = null;
   private pagedAttempts: Attempt[] = [];
   private pagedOlderAttempts: number | null = null;
+  // coldTarget is the comment a #comment=<id> link named before this
+  // task's first read: that read takes a full page and pages back to the
+  // comment before showing anything, so the thread renders once.
+  private coldTarget: number | null = null;
+  private coldJob: { id: string; job: Promise<void> } | null = null;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   // trouble is the detail poll's run of failed reads: silent until it is
@@ -140,6 +151,7 @@ export class TaskStore {
   private pollAfter = 0;
   private lastSyncedFeedSig = "";
   private lastSyncedFeedRev = -1;
+  private lastDetailReadAt = 0;
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
   private readonly transcriptTrouble = new ReadTrouble();
   private transcriptAfter = 0;
@@ -161,14 +173,14 @@ export class TaskStore {
           return;
         }
         const row = this.feed.tasks().find((t) => t.id === id);
-        if (row && feedRowSignature(row) !== this.lastSyncedFeedSig) {
+        if (row && taskRowKey(row) !== this.lastSyncedFeedSig) {
           void this.refresh();
         }
       });
     });
   }
 
-  open(id: string): void {
+  open(id: string, targetCommentId: number | null = null): void {
     if (this.id() !== id) {
       this.id.set(id);
       this.detail.set(null);
@@ -182,6 +194,7 @@ export class TaskStore {
       this.pagedOlderComments = null;
       this.pagedAttempts = [];
       this.pagedOlderAttempts = null;
+      this.coldJob = null;
       this.resetTranscript();
       this.resetAudit();
       this.trouble.ok();
@@ -189,6 +202,7 @@ export class TaskStore {
       this.lastSyncedFeedSig = "";
       this.lastSyncedFeedRev = -1;
     }
+    this.coldTarget = this.detail() ? null : targetCommentId;
     void this.refresh();
     this.eventSub ??= this.events.events().subscribe((ev) => {
       if (ev.type && !ev.type.startsWith("task.")) return;
@@ -241,13 +255,14 @@ export class TaskStore {
       cur.id !== id ||
       this.trouble.failing ||
       !this.feed.loaded() ||
-      Boolean(this.feed.lastError())
+      Boolean(this.feed.lastError()) ||
+      Date.now() - this.lastDetailReadAt >= MAX_DETAIL_SKIP_MS
     ) {
       return false;
     }
     const row = this.feed.tasks().find((t) => t.id === id);
     if (row) {
-      const sig = feedRowSignature(row);
+      const sig = taskRowKey(row);
       return Boolean(sig) && sig === this.lastSyncedFeedSig;
     }
     return (
@@ -261,6 +276,7 @@ export class TaskStore {
     this.timer = null;
     this.eventSub?.unsubscribe();
     this.eventSub = null;
+    this.coldJob = null;
     this.resetTranscript();
     this.resetAudit();
   }
@@ -307,6 +323,16 @@ export class TaskStore {
   async refresh(): Promise<void> {
     const id = this.id();
     if (!id) return;
+    if (this.coldJob?.id === id) return this.coldJob.job;
+    if (this.coldTarget !== null && !this.detail()) {
+      const target = this.coldTarget;
+      this.coldTarget = null;
+      const job = this.coldLoadThrough(id, target).finally(() => {
+        if (this.coldJob?.job === job) this.coldJob = null;
+      });
+      this.coldJob = { id, job };
+      return job;
+    }
     // Reads can overlap (the poll and an event); an older answer must not
     // overwrite a newer one.
     const mine = ++this.seq;
@@ -323,8 +349,9 @@ export class TaskStore {
         this.detail.set(this.applyPagedMerge(r.body));
       }
       const feedRow = this.feed.tasks().find((t) => t.id === id);
-      this.lastSyncedFeedSig = feedRow ? feedRowSignature(feedRow) : "";
+      this.lastSyncedFeedSig = feedRow ? taskRowKey(feedRow) : "";
       this.lastSyncedFeedRev = this.feed.revision();
+      this.lastDetailReadAt = Date.now();
       this.loadError.set(null);
       this.trouble.ok();
       this.pollAfter = 0;
@@ -344,6 +371,122 @@ export class TaskStore {
           : `Task #${id} could not be read: ${errorText(err)}. This page tries again on its own.`,
       );
     }
+  }
+
+  // coldLoadThrough is a deep link's first read: the newest page of 500,
+  // then 500 at a time back to targetCommentId, committed to detail() once.
+  private async coldLoadThrough(
+    id: string,
+    targetCommentId: number,
+  ): Promise<void> {
+    const mine = ++this.seq;
+    try {
+      const r = await this.api.getIfChanged<TaskDetail>(
+        "GET /api/tasks/{id}",
+        { id },
+        DEEP_LINK_HEAD_QUERY,
+      );
+      if (this.id() !== id) return;
+      const head = r.body;
+      const older = await this.pageBackThrough(
+        id,
+        head.comments ?? [],
+        head.olderComments ?? 0,
+        targetCommentId,
+      );
+      if (this.id() !== id || mine < this.applied) return;
+      this.applied = mine;
+      if (older) {
+        this.pagedComments = older.comments;
+        this.pagedOlderComments = older.olderComments;
+      } else if ((head.comments ?? []).length) {
+        // Keep the whole first page so the next 100-comment poll does not
+        // leave a hole between it and what is shown.
+        this.pagedComments = head.comments ?? [];
+        this.pagedOlderComments = head.olderComments ?? 0;
+      }
+      this.detail.set(this.applyPagedMerge(head));
+      this.loadError.set(null);
+    } catch (err) {
+      if (this.id() !== id) return;
+      const status = (err as { status?: number })?.status;
+      this.loadError.set(
+        status === 404
+          ? `There is no task #${id}.`
+          : `Task #${id} could not be read: ${errorText(err)}. This page tries again on its own.`,
+      );
+    }
+  }
+
+  // pageBackThrough reads TASK_DETAIL_MAX_PAGE comments at a time before
+  // the oldest of shown until targetCommentId (or the start of the thread)
+  // is reached, without touching detail(). It answers every comment held
+  // (shown included) and how many older remain, or null when nothing had
+  // to be read.
+  private async pageBackThrough(
+    id: string,
+    shown: readonly Comment[],
+    olderLeft: number,
+    targetCommentId: number,
+  ): Promise<{ comments: Comment[]; olderComments: number } | null> {
+    let cursor = shown[0]?.id;
+    if (cursor === undefined || olderLeft <= 0 || cursor <= targetCommentId) {
+      return null;
+    }
+    const busyKey = `${id}:older-comments`;
+    this.mark(busyKey, true);
+    try {
+      let held: Comment[] = [...shown];
+      let left = olderLeft;
+      while (left > 0 && cursor > targetCommentId) {
+        const page = await this.api.get<TaskDetail>(
+          "GET /api/tasks/{id}",
+          { id },
+          `comments_limit=${TASK_DETAIL_MAX_PAGE}&comments_before=${encodeURIComponent(String(cursor))}&attempts_limit=1`,
+        );
+        if (this.id() !== id) return null;
+        const got = page.comments ?? [];
+        left = page.olderComments ?? 0;
+        if (!got.length) break;
+        held = mergeComments(got, held);
+        cursor = got[0].id;
+      }
+      return { comments: held, olderComments: left };
+    } finally {
+      this.mark(busyKey, false);
+    }
+  }
+
+  // loadOlderCommentsThrough pages back (500 at a time) until comment
+  // targetCommentId is held, for a #comment=<id> link followed on a task
+  // already shown, and commits once. It answers whether the comment is now
+  // in detail().
+  async loadOlderCommentsThrough(targetCommentId: number): Promise<boolean> {
+    const id = this.id();
+    const cur = this.detail();
+    if (!id || !cur) return false;
+    const has = () =>
+      (this.detail()?.comments ?? []).some((c) => c.id === targetCommentId);
+    if (has()) return true;
+    try {
+      const older = await this.pageBackThrough(
+        id,
+        cur.comments ?? [],
+        cur.olderComments ?? 0,
+        targetCommentId,
+      );
+      if (this.id() !== id) return false;
+      if (older) {
+        this.pagedComments = mergeComments(older.comments, this.pagedComments);
+        this.pagedOlderComments = older.olderComments;
+        const latest = this.detail();
+        if (latest) this.detail.set(this.applyPagedMerge(latest));
+      }
+    } catch (err) {
+      if (this.id() === id) this.actionError.set(errorText(err));
+      return false;
+    }
+    return has();
   }
 
   async loadOlderComments(): Promise<void> {

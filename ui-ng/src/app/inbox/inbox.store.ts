@@ -42,6 +42,7 @@ import {
   isVerifierUnavailable,
 } from "../services/request-trouble";
 import { TaskFeedStore } from "../services/task-feed.service";
+import { taskRowKey } from "../shared/task-row-key";
 import { versionLabel } from "../api/version";
 import { ViewFilter } from "../services/view-filter.service";
 import {
@@ -571,7 +572,7 @@ export class InboxStore implements OnDestroy {
     const id = e!.taskId as string;
     const inflight = this.diffInFlight.get(id);
     if (inflight) return inflight;
-    const versionKey = `${id}:${e?.task?.updatedAt ?? ""}`;
+    const versionKey = `${id}:${taskRowKey(e?.task)}`;
     const at = this.diffAt.get(id);
     if (
       at !== undefined &&
@@ -751,13 +752,12 @@ export class InboxStore implements OnDestroy {
         e.kind === "base-repair";
       if (!needSummary) continue;
       const prev = cached[e.taskId];
-      const entryUpdatedAt = e.task?.updatedAt ?? "";
+      const entryUpdatedAt = taskRowKey(e.task);
       if (
         prev &&
         (this.summaryUpdatedAt.get(e.taskId) === entryUpdatedAt ||
           (this.fullDetailLoaded.has(e.taskId) &&
-            (this.detailUpdatedAt.get(e.taskId) === entryUpdatedAt ||
-              prev.updatedAt === entryUpdatedAt)))
+            this.detailUpdatedAt.get(e.taskId) === entryUpdatedAt))
       ) {
         continue;
       }
@@ -810,10 +810,7 @@ export class InboxStore implements OnDestroy {
         ) {
           continue;
         }
-        this.summaryUpdatedAt.set(
-          t.id,
-          expected.get(t.id) || d.updatedAt || "",
-        );
+        this.summaryUpdatedAt.set(t.id, expected.get(t.id) ?? taskRowKey(d));
         updated[t.id] = d;
       }
       if (Object.keys(updated).length > 0) {
@@ -858,7 +855,7 @@ export class InboxStore implements OnDestroy {
       ) {
         return;
       }
-      this.summaryUpdatedAt.set(id, expectedUpdatedAt || d.updatedAt || "");
+      this.summaryUpdatedAt.set(id, expectedUpdatedAt || taskRowKey(d));
       this.details.update((m) => ({ ...m, [id]: d }));
     } catch {
       // The row still shows its summary; the inspector says less.
@@ -873,7 +870,7 @@ export class InboxStore implements OnDestroy {
     this.detailInFlight.add(id);
     try {
       const d = await this.api.task(id);
-      const stamped = expectedUpdatedAt || d.updatedAt || "";
+      const stamped = expectedUpdatedAt || taskRowKey(d);
       this.fullDetailLoaded.add(id);
       this.detailUpdatedAt.set(id, stamped);
       this.summaryUpdatedAt.set(id, stamped);
@@ -893,14 +890,13 @@ export class InboxStore implements OnDestroy {
       this.stopSelectedTranscript();
       return;
     }
-    const entryUpdatedAt = e.task?.updatedAt ?? "";
+    const entryUpdatedAt = taskRowKey(e.task);
     const prev = this.details()[e.taskId];
     if (
       !force &&
       prev &&
       this.fullDetailLoaded.has(e.taskId) &&
-      (this.detailUpdatedAt.get(e.taskId) === entryUpdatedAt ||
-        (prev.updatedAt ?? "") === entryUpdatedAt)
+      this.detailUpdatedAt.get(e.taskId) === entryUpdatedAt
     ) {
       this.syncSelectedTranscript();
       return;

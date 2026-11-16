@@ -130,7 +130,9 @@ test("schedule dialog surfaces validation errors inside the modal, enforces 10-m
       page.getByText("· next: suppressed", { exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByText("Next: suppressed", { exact: true }),
+      page.getByTestId("sched-config-pane").getByText("suppressed", {
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(page.getByText("2027-")).toHaveCount(0);
 
