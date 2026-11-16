@@ -74,6 +74,28 @@ describe("parseLiveTranscript", () => {
     expect(steps.map((s) => s.output)).toEqual(["result a", "result b"]);
   });
 
+  it("reads an empty result as empty, not as the agent's next words", () => {
+    // fmt.Fprintf(&p.transcript, "%s\n\n", "") after the call line.
+    const items = parseLiveTranscript(
+      '> edit_file({"file_path":"a.go"})\n\n\nEdited. Building next.\n\n> run_command({"command":"go build"})\nok\n\n',
+    );
+    expect(items.map((i) => i.kind)).toEqual(["step", "text", "step"]);
+    const [edit, build] = liveSteps(items);
+    expect(edit).toMatchObject({ done: true, output: "" });
+    expect(build).toMatchObject({ done: true, output: "ok" });
+    expect(items[1]).toEqual({ kind: "text", text: "Edited. Building next." });
+  });
+
+  it("reads empty results among calls made together", () => {
+    const steps = liveSteps(
+      parseLiveTranscript("> a({})\n> b({})\n\n\nresult b\n\nafter"),
+    );
+    expect(steps.map((s) => [s.done, s.output])).toEqual([
+      [true, ""],
+      [true, "result b"],
+    ]);
+  });
+
   it("decodes escapes in arguments that are not JSON", () => {
     const [s] = liveSteps(parseLiveTranscript("> x(a \\u0026 b)"));
     expect(s.label).toBe("x: a & b");

@@ -70,6 +70,11 @@ export function parseLiveTranscript(
   // Calls whose results have not been read yet, oldest first: a model that
   // calls several tools at once writes every call line before any result.
   const pending: LiveStep[] = [];
+  // Where the next result starts: the line after the last call line, or
+  // after the blank line that ends the previous result. Every result is
+  // written as "<text>\n\n", so an empty one is a blank line at exactly
+  // this spot, and must not let the agent's next paragraph pass for it.
+  let resultAt = -1;
   let i = 0;
 
   const pushText = (para: string[]) => {
@@ -84,9 +89,18 @@ export function parseLiveTranscript(
       items.push({ kind: "step", step });
       pending.push(step);
       i++;
+      resultAt = i;
       continue;
     }
     if (!lines[i].trim()) {
+      // Two blank lines: one is all a still-running last call ends in.
+      if (i === resultAt && pending.length && lines[i + 1]?.trim() === "") {
+        const step = pending.shift()!;
+        step.done = true;
+        i += 2;
+        resultAt = i;
+        continue;
+      }
       i++;
       continue;
     }
@@ -123,6 +137,7 @@ export function parseLiveTranscript(
     }
     step.output = out.replace(/\s+$/, "");
     step.done = true;
+    resultAt = i + 1;
   }
   return items;
 }
