@@ -1502,8 +1502,8 @@ jobs:
         run: |
           set +e
           want=TestInterceptionServesASandboxFromStandInArchives
-          go test -c -o /var/tmp/grain-intercept.test ./pkg/daemon
-          sudo setcap cap_net_bind_service=+ep /var/tmp/grain-intercept.test
+          go test -c -o /var/tmp/grain-intercept.test ./pkg/daemon || exit $?
+          sudo setcap cap_net_bind_service=+ep /var/tmp/grain-intercept.test || exit $?
           GRAIN_GOTEST_LOG=/tmp/intercept.log ./scripts/run-go-tests.sh \
             /var/tmp/grain-intercept.test -test.v -test.count=1 -test.timeout 15m \
             -test.run "$want"
