@@ -432,6 +432,11 @@ Rules:
   key-value list. The key column is capped at 40% of the pane and the list
   stacks key over value when the pane is under 260px, so no value clips or
   overlaps its key at any split width (`ui-ng/e2e/next-prompt-panes.spec.js`).
+- **A time is shown as a date, never as the wire's string.** An instant
+  the server sends (`2026-11-17T10:24:14.543896659Z`) reaches the page
+  through `formatStamp` (`shared/dispatch-status.ts`), so a row and the
+  pane beside it say the same time the same way
+  (`ui-ng/e2e/next-processes-run-times.spec.ts`).
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).

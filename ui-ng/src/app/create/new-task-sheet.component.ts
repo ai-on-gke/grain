@@ -25,6 +25,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
+import { type ForkHead, forkHeadHelp, parseForkHead } from "./fork-head";
 import { Router } from "@angular/router";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
@@ -492,7 +493,7 @@ const FRAMEWORKS: readonly PillOption[] = [
                   type="submit"
                   class="btn-primary"
                   data-testid="new-task-submit"
-                  [disabled]="busy() || !canFile()"
+                  [disabled]="busy() || !canFile() || !!forkHead()?.error"
                 >
                   {{
                     draft().workstream
@@ -643,8 +644,28 @@ const FRAMEWORKS: readonly PillOption[] = [
                 data-testid="nt-base"
                 placeholder="The repository's default branch"
                 [value]="draft().base"
+                [attr.aria-invalid]="forkHead()?.error ? 'true' : null"
+                [attr.aria-describedby]="forkHead() ? 'nt-fork-head' : null"
                 (input)="set('base', val($event))"
               />
+              @if (forkHead(); as fh) {
+                @if (fh.error) {
+                  <small
+                    id="nt-fork-head"
+                    class="nt-field-error"
+                    role="alert"
+                    data-testid="nt-fork-head-error"
+                    >{{ fh.error }}</small
+                  >
+                } @else {
+                  <small
+                    id="nt-fork-head"
+                    class="muted"
+                    data-testid="nt-fork-head-help"
+                    >{{ forkHeadText(fh) }}</small
+                  >
+                }
+              }
             </label>
             @if (repoBranches().length) {
               <div class="nt-inline-row" aria-label="Known branches">
@@ -1309,6 +1330,19 @@ export class NewTaskSheetComponent {
     return r && r !== NO_REPO ? r : undefined;
   });
 
+  // forkHead is the Base branch read as a GitHub fork head label
+  // ("<fork-owner>:<branch>"), which the server takes only for a task
+  // that creates no branch of its own: null when the box holds none.
+  protected readonly forkHead = computed(() => {
+    const d = this.draft();
+    if (d.repo === NO_REPO || d.newBranch) return null;
+    return parseForkHead(d.base);
+  });
+
+  protected forkHeadText(h: ForkHead): string {
+    return "owner" in h ? forkHeadHelp(h, this.draft().repo) : h.error;
+  }
+
   protected readonly canFile = computed(() => {
     const repo = this.repoForAccess();
     const tmpl = this.selectedTemplate();
@@ -1758,7 +1792,7 @@ export class NewTaskSheetComponent {
   }
 
   private async file(): Promise<void> {
-    if (this.busy() || !this.canFile()) return;
+    if (this.busy() || !this.canFile() || this.forkHead()?.error) return;
     const d = this.draft();
     const tmpl = this.selectedTemplate();
     const tvals = this.templateValues();
