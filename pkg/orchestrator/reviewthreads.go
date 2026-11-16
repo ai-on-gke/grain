@@ -90,7 +90,7 @@ func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Cl
 			errs = append(errs, fmt.Errorf("orchestrator: reading task %s: %w", link.TaskID, err))
 			continue
 		}
-		if task == nil || isReviewTask(*task) || task.Origin.Reason == model.ReasonFix {
+		if task == nil || isReviewTask(*task) || task.Filing.Reason == model.ReasonFix {
 			continue
 		}
 		if _, held := model.ReviewQuestionsOf(*task); held {

@@ -297,7 +297,7 @@ func ConsoleSessionIDOf(t Task) (string, bool) {
 // (directorTaskSQL): filed as ReasonConsoleSession, Interactive, and
 // tagged with a ConsoleSessionTag.
 func (t Task) IsConsoleSession() bool {
-	if t.Origin.Reason != ReasonConsoleSession || !t.Interactive {
+	if t.Filing.Reason != ReasonConsoleSession || !t.Interactive {
 		return false
 	}
 	_, ok := ConsoleSessionIDOf(t)
@@ -1231,7 +1231,7 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		Intent: IntentAnalyze,
 		Title:  ConsoleSessionTitle(session),
 		Body:   DirectorSessionBody(stateRepo, session),
-		Origin: Origin{
+		Filing: Filing{
 			Attribution: Attribution{Actor: ConsoleSessionPrincipal},
 			Reason:      ReasonConsoleSession,
 		},

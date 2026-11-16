@@ -245,7 +245,7 @@ func AwaitsSubmit(task Task) bool {
 // over and it has nothing to land, so it reads 'closed', which is what it
 // is.
 //
-// Origin.Reason, and only that -- a task that merely declares
+// Filing.Reason, and only that -- a task that merely declares
 // IntentReview is not one of these, however it describes itself. Grain's
 // own reviews are filed as implement tasks (a review that finds something
 // worth fixing pushes the fix) and are recognisable by nothing but the
@@ -261,7 +261,7 @@ func AwaitsSubmit(task Task) bool {
 // pull request and no queue: the very reading this state and
 // StateAwaitingSubmit were each split out to correct.
 func AwaitsAck(task Task) bool {
-	if task.Origin.Reason == ReasonReview {
+	if task.Filing.Reason == ReasonReview {
 		return false
 	}
 	for _, l := range task.Links {

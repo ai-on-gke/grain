@@ -192,7 +192,7 @@ func matrixSeed(t *testing.T, f *routeFixture) (map[string]string, error) {
 	} {
 		task.Intent = model.IntentImplement
 		task.Binding = model.BindingDirective
-		task.Origin = model.Origin{
+		task.Filing = model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}},
 			Reason:      model.ReasonDirect,
 		}

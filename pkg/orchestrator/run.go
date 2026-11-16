@@ -841,14 +841,14 @@ func commentsSinceSuspend(comments []model.Comment, priorDelivered *int64) []mod
 // is a branch repair rather than ordinary work: a task the queue has sent
 // back to fix its own pull request branch and whose repair has not finished
 // (Observation.RepairInFlight), a task the queue filed to repair another
-// task's branch back when a repair was a separate task (model.OriginReason.Merger),
+// task's branch back when a repair was a separate task (model.FilingReason.Merger),
 // or a task repairing the base branch itself (model.FixesBaseBranch).
 //
 // A nil obs -- a task nothing has ever been observed about, which is
 // every first dispatch -- is still a repair when FixesBaseBranch(task) or
-// Origin.Reason.Merger() holds.
+// Filing.Reason.Merger() holds.
 func mergeRepairRun(task model.Task, obs *model.Observation) bool {
-	return task.Origin.Reason.Merger() || obs.RepairInFlight() || model.FixesBaseBranch(task)
+	return task.Filing.Reason.Merger() || obs.RepairInFlight() || model.FixesBaseBranch(task)
 }
 
 // redCIProcedureSection is the one way every run with grain CI is told to
@@ -1861,7 +1861,7 @@ func timezoneSectionAt(task model.Task, now time.Time) string {
 	tInLoc := now.In(loc)
 	timeFormatted := tInLoc.Format("2006-01-02 15:04 MST")
 
-	isDirect := task.Interactive || task.Origin.Reason == model.ReasonDirect || task.Origin.Reason == model.ReasonConsoleSession
+	isDirect := task.Interactive || task.Filing.Reason == model.ReasonDirect || task.Filing.Reason == model.ReasonConsoleSession
 	if isDirect {
 		return fmt.Sprintf("\n\nUser timezone: %s (current time: %s)", resolvedName, timeFormatted)
 	}

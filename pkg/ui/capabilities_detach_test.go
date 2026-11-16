@@ -65,7 +65,7 @@ func seedSessionTask(t *testing.T, client *ui.Client, id, session string, grants
 	task := model.Task{
 		ID: id, Title: "session " + session, Intent: model.IntentImplement,
 		Interactive: true, Tags: []string{model.ConsoleSessionTag(session)},
-		Origin:     model.Origin{Reason: model.ReasonConsoleSession},
+		Filing:     model.Filing{Reason: model.ReasonConsoleSession},
 		ApprovedAt: &now, CreatedAt: &now,
 	}
 	for _, g := range grants {

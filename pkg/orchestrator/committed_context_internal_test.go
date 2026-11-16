@@ -292,7 +292,7 @@ func TestCommittedContextInheritsAcrossChildTasks(t *testing.T) {
 		Intent:     model.IntentImplement,
 		Title:      "[PLC] parent implementation",
 		Body:       "Implement billing v2",
-		Origin:     model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: human, Reason: model.ReasonDirect},
 		Approval:   &human,
 		ApprovedAt: &now,
 		Target:     &codeRepo,

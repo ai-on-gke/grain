@@ -317,13 +317,13 @@ type Composition struct {
 // standing human approval that let it land queued -- a schedule somebody
 // created, a suite somebody started -- and Task.Approval names an actor,
 // not a moment of judgement (LandsQueued's own reading of it).
-func (c Composition) Task(id string, actor Principal, reason OriginReason, now time.Time) Task {
+func (c Composition) Task(id string, actor Principal, reason FilingReason, now time.Time) Task {
 	task := Task{
 		ID:     id,
 		Intent: IntentImplement,
 		Title:  c.Title,
 		Body:   c.Body,
-		Origin: Origin{
+		Filing: Filing{
 			Attribution: Attribution{Actor: actor},
 			Reason:      reason,
 		},

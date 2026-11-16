@@ -35,7 +35,7 @@ func TestExternalModeRefusalDoesNotStopTheConsoleSessionsTask(t *testing.T) {
 		ID:     "77",
 		Intent: model.IntentAnalyze,
 		Title:  "Director",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "console-session"}},
 			Reason:      model.ReasonConsoleSession,
 		},
