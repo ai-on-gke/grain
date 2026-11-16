@@ -468,21 +468,85 @@ describe("SessionsPageComponent", () => {
     ).toContain("api:tasks-read");
   });
 
-  it("keeps the draft and shows the error when the message does not go through", async () => {
+  it("leaves a failed send in the thread marked Not sent with Retry and Discard, without losing the text", async () => {
     const api = new FakeApi();
     api.fail["POST /api/tasks/{id}/comments"] = {
       status: 500,
       error: { error: "sandbox unavailable" },
     };
     const f = await render(api);
+    const box = q(f, '[data-testid="composer"]') as HTMLTextAreaElement;
+    box.value = "hello retryable";
+    box.dispatchEvent(new Event("input"));
+    box.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+    );
+    await settle(f);
+
     const store = TestBed.inject(SessionsStore);
-    store.setDraft("director", "hello");
-    expect(await store.send()).toBe(false);
-    await f.whenStable();
-    expect(store.draftFor("director")).toBe("hello");
+    expect(store.draftFor("director")).toBe("");
     expect(text(f, '[data-testid="action-error"]')).toContain(
       "sandbox unavailable",
     );
+    const failed = q(f, '[data-pending-state="failed"]');
+    expect(failed).toBeTruthy();
+    expect(failed?.textContent).toContain("hello retryable");
+    expect(failed?.textContent).toContain("Not sent");
+
+    // Clicking Retry re-posts the failed message and clears the failed state.
+    const retryBtn = failed?.querySelector(
+      '[data-testid^="retry-"]',
+    ) as HTMLButtonElement;
+    expect(retryBtn).toBeTruthy();
+    api.details["1"] = {
+      ...api.details["1"],
+      comments: [
+        ...api.details["1"].comments!,
+        {
+          id: 3,
+          author: "ana",
+          authorKind: "human",
+          body: "hello retryable",
+        },
+      ],
+    };
+    retryBtn.click();
+    await settle(f);
+
+    const posts = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/comments",
+    );
+    expect(posts).toHaveLength(2);
+    expect(posts[1].body).toEqual({
+      body: "hello retryable",
+      attachments: [],
+    });
+    expect(q(f, '[data-pending-state="failed"]')).toBeNull();
+    expect(q(f, '[data-testid="msg-3"]')?.textContent).toContain(
+      "hello retryable",
+    );
+  });
+
+  it("discards a failed send bubble when Discard is clicked", async () => {
+    const api = new FakeApi();
+    api.fail["POST /api/tasks/{id}/comments"] = {
+      status: 500,
+      error: { error: "network down" },
+    };
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+    store.setDraft("director", "discard me");
+    expect(await store.send()).toBe(false);
+    await settle(f);
+
+    const failed = q(f, '[data-pending-state="failed"]');
+    expect(failed?.textContent).toContain("discard me");
+    (
+      failed?.querySelector('[data-testid^="discard-"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q(f, '[data-pending-state="failed"]')).toBeNull();
   });
 
   it("shows Stop and the activity line while a run is going", async () => {
@@ -630,30 +694,214 @@ describe("SessionsPageComponent", () => {
     );
   });
 
-  it("sends once however fast Enter is pressed, and keeps text typed meanwhile", async () => {
+  it("shows optimistic sending and queued bubbles, ignores double-Enter on empty text, delivers queued sends in order, and keeps unsent draft", async () => {
     const api = new FakeApi();
-    let release!: () => void;
+    const gates: (() => void)[] = [];
     const post = api.post;
     api.post = (route: string, params?: unknown, body?: unknown) => {
       if (route !== "POST /api/tasks/{id}/comments") {
         return post(route, params, body);
       }
       api.calls.push({ method: "POST", route, params, body });
-      return new Promise((r) => (release = () => r({})));
+      return new Promise((r) => gates.push(() => r({})));
     };
     const f = await render(api);
     const store = TestBed.inject(SessionsStore);
-    store.setDraft("director", "once");
-    const first = store.send();
-    expect(await store.send()).toBe(false);
-    store.setDraft("director", "once and more");
-    release();
-    expect(await first).toBe(true);
-    await f.whenStable();
+    const box = q(f, '[data-testid="composer"]') as HTMLTextAreaElement;
+
+    // Press Enter twice rapidly on the same text: composer clears immediately,
+    // first bubble is marked Sending…, and the second Enter does not post twice.
+    box.value = "first in flight";
+    box.dispatchEvent(new Event("input"));
+    box.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+    );
+    box.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+    );
+    f.detectChanges();
+    expect(store.draftFor("director")).toBe("");
+    expect(box.value).toBe("");
+    expect(text(f, '[data-pending-state="sending"]')).toContain(
+      "first in flight",
+    );
+    expect(text(f, '[data-testid="msg-state-sending"]')).toContain("Sending…");
+
+    // Type a second message while the first POST is still in flight and press Enter:
+    // it queues immediately behind the first without waiting or dropping.
+    box.value = "second queued";
+    box.dispatchEvent(new Event("input"));
+    box.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+    );
+    f.detectChanges();
+    expect(store.draftFor("director")).toBe("");
+    expect(text(f, '[data-pending-state="queued"]')).toContain("second queued");
+    expect(text(f, '[data-testid="msg-state-queued"]')).toContain("Queued");
+
+    // Type a third thought without pressing Enter yet: it stays in the composer.
+    box.value = "third still typing";
+    box.dispatchEvent(new Event("input"));
+    f.detectChanges();
+
+    // Only POST #1 has gone out while held.
     expect(
       api.calls.filter((c) => c.route === "POST /api/tasks/{id}/comments"),
     ).toHaveLength(1);
-    expect(store.draftFor("director")).toBe("once and more");
+
+    // Release POST #1: POST #2 fires next in order and transitions to Sending….
+    expect(gates).toHaveLength(1);
+    gates.shift()!();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r, 10));
+    f.detectChanges();
+
+    const postsAfterFirst = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/comments",
+    );
+    expect(postsAfterFirst).toHaveLength(2);
+    expect((postsAfterFirst[0].body as { body: string }).body).toBe(
+      "first in flight",
+    );
+    expect((postsAfterFirst[1].body as { body: string }).body).toBe(
+      "second queued",
+    );
+    expect(text(f, '[data-pending-state="sending"]')).toContain(
+      "second queued",
+    );
+
+    // Server catches up with both persisted comments on release of POST #2:
+    // no duplicate bubbles remain, and the unsent third draft is untouched.
+    api.details["1"] = {
+      ...api.details["1"],
+      comments: [
+        ...api.details["1"].comments!,
+        { id: 10, author: "ana", authorKind: "human", body: "first in flight" },
+        { id: 11, author: "ana", authorKind: "human", body: "second queued" },
+      ],
+    };
+    gates.shift()!();
+    await settle(f);
+
+    expect(q(f, ".msg.is-pending")).toBeNull();
+    expect(q(f, '[data-testid="msg-10"]')?.textContent).toContain(
+      "first in flight",
+    );
+    expect(q(f, '[data-testid="msg-11"]')?.textContent).toContain(
+      "second queued",
+    );
+    expect(store.draftFor("director")).toBe("third still typing");
+  });
+
+  it("carries queued messages and unsent drafts from New session dialog into the opened session, and restores on create failure", async () => {
+    const api = new FakeApi();
+    let releaseCreate!: (v: ConsoleSessionList) => void;
+    let rejectCreate!: (e: unknown) => void;
+    let createAttempt = 0;
+    const basePost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route === "POST /api/console-sessions") {
+        api.calls.push({ method: "POST", route, params, body });
+        createAttempt += 1;
+        return new Promise<ConsoleSessionList>((res, rej) => {
+          releaseCreate = res;
+          rejectCreate = rej;
+        });
+      }
+      return basePost(route, params, body);
+    };
+
+    const f = await render(api);
+    (q(f, '[data-testid="new-session"]') as HTMLButtonElement).click();
+    await f.whenStable();
+
+    const name = q(f, '[data-testid="new-session-name"]') as HTMLInputElement;
+    const msg = q(
+      f,
+      '[data-testid="new-session-message"]',
+    ) as HTMLTextAreaElement;
+    name.value = "Queued handoff";
+    name.dispatchEvent(new Event("input"));
+    msg.value = "First create message";
+    msg.dispatchEvent(new Event("input"));
+    f.detectChanges();
+
+    (q(f, '[data-testid="new-session-create"]') as HTMLButtonElement).click();
+    f.detectChanges();
+
+    // While create #1 is in flight: first message shows Sending… and box clears.
+    expect(msg.value).toBe("");
+    expect(text(f, '[data-testid="new-session-in-flight"]')).toContain(
+      "First create message",
+    );
+
+    // Queue a second message via Enter while create #1 is in flight.
+    msg.value = "Second queued during create";
+    msg.dispatchEvent(new Event("input"));
+    msg.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+    );
+    f.detectChanges();
+    expect(msg.value).toBe("");
+    expect(text(f, '[data-testid="new-session-queued-0"]')).toContain(
+      "Second queued during create",
+    );
+
+    // Fail create #1: first message goes back to box, queued message does NOT
+    // start a session out of order.
+    rejectCreate({ status: 409, error: { error: "name taken" } });
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r, 10));
+    f.detectChanges();
+    expect(createAttempt).toBe(1);
+    expect(msg.value).toBe("First create message");
+    expect(text(f, '[data-testid="new-session-queued-0"]')).toContain(
+      "Second queued during create",
+    );
+
+    // Fix name and start again; also type a third unsent draft before create #2 resolves.
+    name.value = "Available name";
+    name.dispatchEvent(new Event("input"));
+    (q(f, '[data-testid="new-session-create"]') as HTMLButtonElement).click();
+    f.detectChanges();
+
+    msg.value = "Third unsent draft";
+    msg.dispatchEvent(new Event("input"));
+    f.detectChanges();
+
+    api.sessions = [
+      ...api.sessions,
+      { id: "new1", title: "Available name", taskId: "12" },
+    ];
+    api.details["12"] = {
+      id: "12",
+      title: "Available name",
+      comments: [
+        {
+          id: 1,
+          author: "ana",
+          authorKind: "human",
+          body: "First create message",
+        },
+      ],
+    };
+    releaseCreate({
+      sessions: structuredClone(api.sessions),
+      created: "new1",
+    });
+    await settle(f);
+
+    // Queued follow-up was posted to task 12, and unsent draft carried to new1.
+    const store = TestBed.inject(SessionsStore);
+    expect(store.draftFor("new1")).toBe("Third unsent draft");
+    const commentPosts = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/comments",
+    );
+    expect(commentPosts).toHaveLength(1);
+    expect(commentPosts[0]).toMatchObject({
+      params: { id: "12" },
+      body: { body: "Second queued during create", attachments: [] },
+    });
   });
 
   it("will not start a session with nothing in it, and shows a refusal inside the dialog", async () => {

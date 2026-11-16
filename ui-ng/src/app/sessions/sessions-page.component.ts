@@ -63,7 +63,7 @@ import {
   type CanvasTab,
   SessionCanvasComponent,
 } from "./session-canvas.component";
-import { SessionsStore } from "./sessions.store";
+import { type PendingSessionMessage, SessionsStore } from "./sessions.store";
 
 // clock is a message's time: the time of day today, the date otherwise.
 export function clock(iso: string | undefined, now = new Date()): string {
@@ -586,12 +586,14 @@ const FOCUS_COMPOSER = "focusComposer";
                   }
                 </article>
               } @empty {
-                @if (store.detailError(); as err) {
-                  <p class="banner banner-error" role="alert">{{ err }}</p>
-                } @else if (store.selectedDetail()) {
-                  <p class="empty-state">No messages yet. Say hello.</p>
-                } @else {
-                  <p class="empty-state">Loading the conversation…</p>
+                @if (pendingMessages().length === 0) {
+                  @if (store.detailError(); as err) {
+                    <p class="banner banner-error" role="alert">{{ err }}</p>
+                  } @else if (store.selectedDetail()) {
+                    <p class="empty-state">No messages yet. Say hello.</p>
+                  } @else {
+                    <p class="empty-state">Loading the conversation…</p>
+                  }
                 }
               }
               @if (
@@ -612,7 +614,99 @@ const FOCUS_COMPOSER = "focusComposer";
                   </article>
                 }
               }
+              @for (p of pendingMessages(); track p.key) {
+                <article
+                  class="msg is-human is-pending"
+                  [class.is-sending]="p.state === 'sending'"
+                  [class.is-queued]="p.state === 'queued'"
+                  [class.is-failed]="p.state === 'failed'"
+                  [attr.aria-busy]="
+                    p.state === 'sending' || p.state === 'queued'
+                      ? 'true'
+                      : null
+                  "
+                  [attr.data-pending-state]="p.state"
+                  [attr.data-testid]="'pending-' + p.key"
+                >
+                  <span class="msg-meta">
+                    <span class="msg-author"
+                      ><g-actor-chip [label]="p.authorLabel" kind="human"
+                    /></span>
+                    @if (p.state === "sending") {
+                      <span
+                        class="status-pill setup"
+                        data-testid="msg-state-sending"
+                        ><g-status-icon
+                          tone="setup"
+                          kind="progress"
+                        />Sending…</span
+                      >
+                    } @else if (p.state === "queued") {
+                      <span
+                        class="status-pill neutral"
+                        data-testid="msg-state-queued"
+                        ><g-status-icon
+                          tone="neutral"
+                          kind="neutral"
+                        />Queued</span
+                      >
+                    } @else if (p.state === "failed") {
+                      <span
+                        class="status-pill error"
+                        data-testid="msg-state-failed"
+                        ><g-status-icon tone="error" kind="failed" />Not
+                        sent</span
+                      >
+                    } @else {
+                      <time class="mono" [attr.datetime]="p.createdAt">{{
+                        time(p.createdAt)
+                      }}</time>
+                    }
+                  </span>
+                  @if (p.body) {
+                    <div class="msg-body" [gMarkdown]="p.body"></div>
+                  }
+                  @if (p.attachments.length) {
+                    <div
+                      class="session-staged-files"
+                      data-testid="pending-attachments"
+                    >
+                      @for (att of p.attachments; track $index) {
+                        <span class="session-staged-file">{{
+                          att.filename
+                        }}</span>
+                      }
+                    </div>
+                  }
+                  @if (p.state === "failed") {
+                    @if (p.error) {
+                      <p class="session-msg-error">{{ p.error }}</p>
+                    }
+                    <div class="session-msg-actions">
+                      <button
+                        type="button"
+                        class="btn-outlined"
+                        [attr.data-testid]="'retry-' + p.key"
+                        (click)="retryPending(p.key)"
+                      >
+                        Retry
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-text"
+                        [attr.data-testid]="'discard-' + p.key"
+                        (click)="discardPending(p.key)"
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  }
+                </article>
+              }
             </div>
+            <span class="sr-only" role="status" aria-live="polite">{{
+              sendAnnouncement()
+            }}</span>
 
             @if (canWrite() && row.session.taskId) {
               <form
@@ -636,7 +730,6 @@ const FOCUS_COMPOSER = "focusComposer";
                 <g-attachment-picker
                   testid="session-attach"
                   [staged]="stagedAttachments()"
-                  [disabled]="store.isBusy('send')"
                   (stagedChange)="onStagedChange($event)"
                 />
                 <div class="composer-actions">
@@ -650,8 +743,7 @@ const FOCUS_COMPOSER = "focusComposer";
                     data-testid="send"
                     gTip="Send; each message starts a run with this session's grants"
                     [disabled]="
-                      (!draft().trim() && stagedAttachments().length === 0) ||
-                      store.isBusy('send')
+                      !draft().trim() && stagedAttachments().length === 0
                     "
                   >
                     Send
@@ -705,6 +797,7 @@ const FOCUS_COMPOSER = "focusComposer";
               type="text"
               data-testid="new-session-name"
               [value]="newName()"
+              [disabled]="store.isBusy('create')"
               (input)="newName.set(inputValue($event))"
               placeholder="For example: Release help"
             />
@@ -717,22 +810,102 @@ const FOCUS_COMPOSER = "focusComposer";
               ariaLabel="New session model"
               align="left"
               testid="new-session-model"
+              [disabled]="store.isBusy('create')"
               (valueChange)="newModel.set($event)"
             />
           </div>
+          @if (newInFlight() || newQueued().length > 0) {
+            <div
+              class="new-session-pending-list"
+              role="log"
+              aria-label="Queued messages"
+              tabindex="0"
+              data-testid="new-session-pending-list"
+            >
+              @if (newInFlight(); as first) {
+                <article
+                  class="msg is-human is-pending is-sending"
+                  aria-busy="true"
+                  data-pending-state="sending"
+                  data-testid="new-session-in-flight"
+                >
+                  <span class="msg-meta">
+                    <span class="msg-author"
+                      ><g-actor-chip
+                        [label]="access.identityLabel()"
+                        kind="human"
+                    /></span>
+                    <span class="status-pill setup"
+                      ><g-status-icon
+                        tone="setup"
+                        kind="progress"
+                      />Sending…</span
+                    >
+                  </span>
+                  @if (first.body.trim()) {
+                    <div class="msg-body" [gMarkdown]="first.body"></div>
+                  }
+                  @if (first.attachments.length) {
+                    <div class="session-staged-files">
+                      @for (att of first.attachments; track $index) {
+                        <span class="session-staged-file">{{
+                          att.filename
+                        }}</span>
+                      }
+                    </div>
+                  }
+                </article>
+              }
+              @for (q of newQueued(); track $index) {
+                <article
+                  class="msg is-human is-pending is-queued"
+                  aria-busy="true"
+                  data-pending-state="queued"
+                  [attr.data-testid]="'new-session-queued-' + $index"
+                >
+                  <span class="msg-meta">
+                    <span class="msg-author"
+                      ><g-actor-chip
+                        [label]="access.identityLabel()"
+                        kind="human"
+                    /></span>
+                    <span class="status-pill neutral"
+                      ><g-status-icon
+                        tone="neutral"
+                        kind="neutral"
+                      />Queued</span
+                    >
+                  </span>
+                  @if (q.body.trim()) {
+                    <div class="msg-body" [gMarkdown]="q.body"></div>
+                  }
+                  @if (q.attachments.length) {
+                    <div class="session-staged-files">
+                      @for (att of q.attachments; track $index) {
+                        <span class="session-staged-file">{{
+                          att.filename
+                        }}</span>
+                      }
+                    </div>
+                  }
+                </article>
+              }
+            </div>
+          }
           <label class="field">
             <span>First message (optional)</span>
             <textarea
+              #newMsg
               rows="4"
               data-testid="new-session-message"
               [value]="newMessage()"
               (input)="newMessage.set(inputValue($event))"
+              (keydown.enter)="onNewMessageEnter($event)"
             ></textarea>
           </label>
           <g-attachment-picker
             testid="new-session-attach"
             [staged]="newAttachments()"
-            [disabled]="store.isBusy('create')"
             (stagedChange)="newAttachments.set($event)"
           />
           @if (store.actionError(); as err) {
@@ -745,7 +918,12 @@ const FOCUS_COMPOSER = "focusComposer";
             </p>
           }
           <div class="dialog-actions">
-            <button type="button" class="btn-text" (click)="closeNew()">
+            <button
+              type="button"
+              class="btn-text"
+              [disabled]="store.isBusy('create')"
+              (click)="closeNew()"
+            >
               Cancel
             </button>
             <button
@@ -753,13 +931,14 @@ const FOCUS_COMPOSER = "focusComposer";
               class="btn-primary"
               data-testid="new-session-create"
               [disabled]="
-                store.isBusy('create') ||
-                (!newName().trim() &&
-                  !newMessage().trim() &&
-                  newAttachments().length === 0)
+                store.isBusy('create')
+                  ? !newMessage().trim() && newAttachments().length === 0
+                  : !newName().trim() &&
+                    !newMessage().trim() &&
+                    newAttachments().length === 0
               "
             >
-              Start session
+              {{ store.isBusy("create") ? "Queue message" : "Start session" }}
             </button>
           </div>
         </form>
@@ -824,6 +1003,13 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly newModel = signal("");
   protected readonly newMessage = signal("");
   protected readonly newAttachments = signal<AttachmentUpload[]>([]);
+  protected readonly newInFlight = signal<{
+    body: string;
+    attachments: AttachmentUpload[];
+  } | null>(null);
+  protected readonly newQueued = signal<
+    { body: string; attachments: AttachmentUpload[] }[]
+  >([]);
   protected readonly confirmDelete = signal(false);
   protected readonly canvasOpen = signal(false);
   protected readonly canvasTab = signal<CanvasTab | null>(null);
@@ -832,6 +1018,8 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private readonly log = viewChild<ElementRef<HTMLElement>>("log");
   private readonly newTitle =
     viewChild<ElementRef<HTMLInputElement>>("newTitle");
+  private readonly newMsg =
+    viewChild<ElementRef<HTMLTextAreaElement>>("newMsg");
   private readonly newBtn = viewChild<ElementRef<HTMLButtonElement>>("newBtn");
   private readonly deleteCancel =
     viewChild<ElementRef<HTMLButtonElement>>("deleteCancel");
@@ -865,6 +1053,19 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly comments = computed<Comment[]>(
     () => this.store.selectedDetail()?.comments ?? [],
   );
+  protected readonly pendingMessages = computed<PendingSessionMessage[]>(() =>
+    this.store.selectedPending(),
+  );
+  protected readonly sendAnnouncement = computed(() => {
+    const list = this.pendingMessages();
+    const active = list.filter(
+      (p) => p.state === "sending" || p.state === "queued",
+    ).length;
+    if (active > 0) {
+      return `Sending ${active} message${active === 1 ? "" : "s"}…`;
+    }
+    return this.store.sendNotice();
+  });
   protected readonly draft = computed(() =>
     this.store.draftFor(this.store.selectedId()),
   );
@@ -984,7 +1185,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       });
     });
     effect(() => {
-      const n = this.comments().length;
+      const n = this.comments().length + this.pendingMessages().length;
       const sid = this.store.selectedId();
       const el = this.log()?.nativeElement;
       if (!el) return;
@@ -1106,12 +1307,35 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const k = ev as KeyboardEvent;
     if (k.shiftKey || k.isComposing) return;
     ev.preventDefault();
-    void this.store.send();
+    this.triggerSend();
   }
 
   protected send(ev: Event): void {
     ev.preventDefault();
+    this.triggerSend();
+  }
+
+  private triggerSend(): void {
     void this.store.send();
+    const box = this.composer()?.nativeElement;
+    if (box && !this.draft()) box.value = "";
+    this.scrollLogToBottom();
+  }
+
+  protected retryPending(key: string): void {
+    void this.store.retryMessage(key);
+    this.scrollLogToBottom();
+  }
+
+  protected discardPending(key: string): void {
+    this.store.discardMessage(key);
+  }
+
+  private scrollLogToBottom(): void {
+    setTimeout(() => {
+      const el = this.log()?.nativeElement;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
   }
 
   protected async restart(carry: boolean): Promise<void> {
@@ -1130,24 +1354,82 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     this.newModel.set("");
     this.newMessage.set("");
     this.newAttachments.set([]);
+    this.newInFlight.set(null);
+    this.newQueued.set([]);
     this.newOpen.set(true);
     setTimeout(() => this.newTitle()?.nativeElement.focus());
   }
 
   protected closeNew(): void {
+    if (this.store.isBusy("create")) return;
+    this.newInFlight.set(null);
+    this.newQueued.set([]);
     this.newOpen.set(false);
     setTimeout(() => this.newBtn()?.nativeElement.focus());
   }
 
+  protected onNewMessageEnter(ev: Event): void {
+    const k = ev as KeyboardEvent;
+    if (k.shiftKey || k.isComposing) return;
+    ev.preventDefault();
+    void this.create(ev);
+  }
+
   protected async create(ev: Event): Promise<void> {
     ev.preventDefault();
+    if (this.store.isBusy("create")) {
+      const followBody = this.newMessage();
+      const followAtts = this.newAttachments();
+      if (!followBody.trim() && followAtts.length === 0) return;
+      this.newQueued.update((q) => [
+        ...q,
+        { body: followBody, attachments: followAtts },
+      ]);
+      this.newMessage.set("");
+      this.newAttachments.set([]);
+      const msgEl = this.newMsg()?.nativeElement;
+      if (msgEl) msgEl.value = "";
+      return;
+    }
+
+    const title = this.newName();
+    const model = this.newModel();
+    const firstBody = this.newMessage();
+    const firstAtts = this.newAttachments();
+    if (!title.trim() && !firstBody.trim() && firstAtts.length === 0) {
+      return;
+    }
+
+    this.newInFlight.set(
+      firstBody.trim() || firstAtts.length > 0
+        ? { body: firstBody, attachments: firstAtts }
+        : null,
+    );
+    this.newMessage.set("");
+    this.newAttachments.set([]);
+    const msgEl = this.newMsg()?.nativeElement;
+    if (msgEl) msgEl.value = "";
+    setTimeout(() => this.newMsg()?.nativeElement.focus());
+
     const id = await this.store.create({
-      title: this.newName(),
-      message: this.newMessage(),
-      model: this.newModel(),
-      attachments: this.newAttachments(),
+      title,
+      message: firstBody,
+      model,
+      attachments: firstAtts,
     });
     if (id) {
+      const queued = this.newQueued();
+      const unsentDraft = this.newMessage();
+      const unsentAtts = this.newAttachments();
+      this.newInFlight.set(null);
+      this.newQueued.set([]);
+      this.newMessage.set("");
+      this.newAttachments.set([]);
+      if (unsentDraft) this.store.setDraft(id, unsentDraft);
+      if (unsentAtts.length > 0) this.store.setAttachments(id, unsentAtts);
+      for (const item of queued) {
+        void this.store.sendTo(id, item.body, item.attachments);
+      }
       this.newOpen.set(false);
       await this.router.navigate(["/sessions", id], {
         state: { [FOCUS_COMPOSER]: true },
@@ -1156,6 +1438,16 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       this.focusWhenRendered(
         () => (this.composer() ?? this.chatTitle())?.nativeElement,
       );
+    } else {
+      this.newInFlight.set(null);
+      const curDraft = this.newMessage();
+      const curAtts = this.newAttachments();
+      this.newMessage.set(
+        [firstBody, curDraft].filter((s) => s.trim()).join("\n\n") ||
+          firstBody ||
+          curDraft,
+      );
+      this.newAttachments.set([...firstAtts, ...curAtts]);
     }
   }
 
@@ -1199,7 +1491,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     if (outer && !outer.closest("g-sessions-page")) return;
     if (this.newOpen()) {
       ev.preventDefault();
-      this.closeNew();
+      if (!this.store.isBusy("create")) this.closeNew();
     } else if (this.confirmDelete()) {
       ev.preventDefault();
       this.cancelDelete();
@@ -1225,7 +1517,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     if (!dialog) return;
     const items = Array.from(
       dialog.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input, textarea, a[href], [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
       ),
     );
     if (items.length === 0) return;

@@ -283,6 +283,16 @@ inspector and Task Detail. Sessions shares its message styles.
   and wears `primary-container` with a `primary` border for four seconds:
   on at once, fading out over 600 ms (no fade under reduced motion). A malformed or missing comment says
   so in a snackbar rather than silently landing at the end.
+- **Optimistic, queued and retryable session sends.** In Sessions, pressing
+  Enter clears the composer immediately and shows an optimistic human message
+  marked `Sending…` (dashed hairline, progress status icon, `aria-busy="true"`).
+  Messages sent while one is in flight appear as `Queued` and deliver in order;
+  double-pressing Enter on an empty composer never posts twice. A failed send
+  stays in the thread marked `Not sent` (`error` border and status pill) with
+  `Retry` and `Discard`, keeping its text and attachments without overwriting
+  anything typed since. The New session dialog carries follow-up messages queued
+  and drafts typed while `POST /api/console-sessions` is in flight into the
+  opened session.
 
 ### Settings
 

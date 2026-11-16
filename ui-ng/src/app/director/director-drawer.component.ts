@@ -199,7 +199,7 @@ import { extractGrainDrafts } from "./director-draft";
                   ? 'Ask Director about this view…'
                   : 'Message Director…',
               submitLabel: 'Send',
-              disabled: !canWrite() || sessions.isBusy('send'),
+              disabled: !canWrite(),
             }"
             (send)="onSend($event)"
           />
@@ -290,14 +290,18 @@ export class DirectorDrawerComponent implements OnInit, OnDestroy {
   }): Promise<void> {
     const formatted = this.directorCtx.formatMessageWithContext(ev.body);
     if (!formatted && ev.attachments.length === 0) return;
+    this.draft.set("");
+    this.staged.set([]);
     const ok = await this.sessions.sendTo(
       DIRECTOR_ID,
       formatted,
       ev.attachments,
+      false,
+      false,
     );
-    if (ok) {
-      this.draft.set("");
-      this.staged.set([]);
+    if (!ok && !this.draft() && this.staged().length === 0) {
+      this.draft.set(ev.body);
+      this.staged.set(ev.attachments);
     }
   }
 
