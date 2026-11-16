@@ -26,7 +26,12 @@ import {
   input,
   signal,
 } from "@angular/core";
-import { ActivatedRoute, Router, RouterLink } from "@angular/router";
+import {
+  ActivatedRoute,
+  Router,
+  RouterLink,
+  type UrlTree,
+} from "@angular/router";
 import type { Subscription } from "rxjs";
 import type { RouteKey } from "../api/generated-routes";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
@@ -44,6 +49,7 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
+import { repoComparePath } from "./repo-compare";
 
 // CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
 // which an unjudged gate's warning links to: on a repository grain CI is
@@ -177,6 +183,8 @@ interface AgentFields {
 
 interface BranchRow {
   name: string;
+  from?: string;
+  status?: string;
   sha?: string;
   head?: string;
   protected?: boolean;
@@ -963,14 +971,38 @@ interface PendingReleaseRow {
                           <tr>
                             <th>Branch</th>
                             <th>HEAD</th>
+                            <th class="repo-branch-actions-col">Compare</th>
                           </tr>
                         </thead>
                         <tbody>
                           @for (b of branches(); track b.name) {
                             <tr [attr.data-testid]="'branch-row-' + b.name">
-                              <td class="tabular">{{ b.name }}</td>
+                              <td class="tabular repo-branch-name-cell">
+                                {{ b.name }}
+                              </td>
                               <td class="tabular">
-                                {{ (b.sha || b.head || "—").slice(0, 10) }}
+                                {{
+                                  (b.sha || b.head || b.status || "—").slice(
+                                    0,
+                                    10
+                                  )
+                                }}
+                              </td>
+                              <td class="repo-branch-actions-cell">
+                                @if (canCompareBranchRow(b)) {
+                                  <a
+                                    class="btn-text s-btn-sm"
+                                    style="text-decoration: none"
+                                    [routerLink]="branchCompareTree(b)"
+                                    [attr.data-testid]="
+                                      'compare-branch-link-' + b.name
+                                    "
+                                    [attr.aria-label]="'Compare ' + b.name"
+                                    >Compare</a
+                                  >
+                                } @else {
+                                  <span class="s-hint">—</span>
+                                }
                               </td>
                             </tr>
                           }
@@ -1002,6 +1034,7 @@ interface PendingReleaseRow {
                         id="br-from"
                         class="s-input tabular"
                         type="text"
+                        list="repo-compare-branches"
                         data-testid="input-new-branch-from"
                         placeholder="main"
                         [value]="newBranchFrom()"
@@ -1026,6 +1059,73 @@ interface PendingReleaseRow {
                       Create branch
                     </button>
                   </div>
+                </div>
+
+                <div class="s-card" data-testid="card-repo-compare">
+                  <div>
+                    <h2 class="s-card-title">Compare branches</h2>
+                    <p class="s-card-desc">
+                      Open the diff one branch brings to another in
+                      {{ repoSlug() }}. Leave Base branch empty to compare
+                      against {{ repoSlug() }}'s default branch.
+                    </p>
+                  </div>
+                  <form
+                    class="repo-compare-form"
+                    autocomplete="off"
+                    (submit)="compareBranches($event)"
+                  >
+                    <div class="s-grid">
+                      <div class="s-field">
+                        <label class="s-label" for="cmp-base"
+                          >Base branch</label
+                        >
+                        <input
+                          id="cmp-base"
+                          name="compareBase"
+                          class="s-input tabular"
+                          type="text"
+                          list="repo-compare-branches"
+                          data-testid="input-compare-base"
+                          placeholder="main"
+                          [value]="compareBase()"
+                          (input)="compareBase.set($any($event.target).value)"
+                        />
+                      </div>
+                      <div class="s-field">
+                        <label class="s-label" for="cmp-head"
+                          >Head branch</label
+                        >
+                        <input
+                          id="cmp-head"
+                          name="compareHead"
+                          class="s-input tabular"
+                          type="text"
+                          list="repo-compare-branches"
+                          data-testid="input-compare-head"
+                          placeholder="feature/my-branch"
+                          required
+                          [value]="compareHead()"
+                          (input)="compareHead.set($any($event.target).value)"
+                        />
+                      </div>
+                    </div>
+                    <datalist id="repo-compare-branches">
+                      @for (name of knownBranchNames(); track name) {
+                        <option [value]="name"></option>
+                      }
+                    </datalist>
+                    <div class="s-inline">
+                      <button
+                        type="submit"
+                        class="btn-primary"
+                        data-testid="compare-branches-btn"
+                        [disabled]="!compareHead().trim()"
+                      >
+                        Compare
+                      </button>
+                    </div>
+                  </form>
                 </div>
               }
 
@@ -1936,8 +2036,31 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly repoCaps = signal("");
 
   protected readonly branches = signal<BranchRow[]>([]);
+  protected readonly githubBranches = signal<string[]>([]);
   protected readonly newBranchName = signal("");
   protected readonly newBranchFrom = signal("main");
+  protected readonly compareBase = signal("main");
+  protected readonly compareHead = signal("");
+
+  protected readonly knownBranchNames = computed(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const name of this.githubBranches()) {
+      const clean = name.trim();
+      if (clean && !seen.has(clean)) {
+        seen.add(clean);
+        out.push(clean);
+      }
+    }
+    for (const b of this.branches()) {
+      const clean = (b.name ?? "").trim();
+      if (clean && !seen.has(clean)) {
+        seen.add(clean);
+        out.push(clean);
+      }
+    }
+    return out;
+  });
 
   protected readonly releaseEnabled = signal(false);
   protected readonly baseBranchJobsText = signal("");
@@ -2386,6 +2509,28 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           .then((b) =>
             this.branches.set(Array.isArray(b) ? b : (b?.branches ?? [])),
           )
+          .catch(() => undefined);
+      }
+      if (this.can("GET /api/repos/{owner}/{name}/github-branches")) {
+        void this.api
+          .get<
+            | string[]
+            | {
+                branches?: (string | { name?: string })[];
+                items?: (string | { name?: string })[];
+              }
+          >("GET /api/repos/{owner}/{name}/github-branches", p)
+          .then((res) => {
+            const raw = Array.isArray(res)
+              ? res
+              : (res?.branches ?? res?.items ?? []);
+            const names: string[] = [];
+            for (const entry of raw) {
+              const n = typeof entry === "string" ? entry : entry?.name;
+              if (typeof n === "string" && n.trim()) names.push(n.trim());
+            }
+            this.githubBranches.set(names);
+          })
           .catch(() => undefined);
       }
     } else if (t === "releases") {
@@ -3103,6 +3248,29 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     } catch (err) {
       this.error.set(errText(err));
     }
+  }
+
+  protected canCompareBranchRow(b: BranchRow): boolean {
+    const name = (b.name ?? "").trim();
+    if (!name) return false;
+    const base = (b.from || this.baseBranch() || "main").trim();
+    return name !== base;
+  }
+
+  protected branchCompareTree(b: BranchRow): UrlTree {
+    const base = (b.from || this.baseBranch() || "main").trim();
+    return this.router.parseUrl(
+      repoComparePath(this.repoSlug(), base === b.name ? "" : base, b.name),
+    );
+  }
+
+  protected compareBranches(ev: Event): void {
+    ev.preventDefault();
+    const head = this.compareHead().trim();
+    if (!head) return;
+    void this.router.navigateByUrl(
+      repoComparePath(this.repoSlug(), this.compareBase(), head),
+    );
   }
 
   protected async createRelease(): Promise<void> {

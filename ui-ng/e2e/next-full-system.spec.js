@@ -91,7 +91,12 @@ for (const size of SIZES) {
       if (list[0]?.id) routes.push(`tasks/${list[0].id}`);
       const cfg = await api(demoServer, accessCode, "/api/config");
       const repo = (cfg.targetRepos ?? [])[0];
-      if (repo && repo.split("/").length === 2) routes.push(`repos/${repo}`);
+      if (repo && repo.split("/").length === 2) {
+        routes.push(`repos/${repo}`);
+        const branchTask = list.find((t) => t.repo === repo && t.branch);
+        const head = branchTask?.branch || "grain/task-1";
+        routes.push(`repos/${repo}/compare/main...${head}`);
+      }
 
       const failures = [];
       for (const r of routes) {
