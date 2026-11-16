@@ -63,9 +63,14 @@ async function queued(demoServer, code, title, extra = {}) {
 // accept confirms the shared dialog, ticking its "someone else's work"
 // box when the scope it names asks for one.
 async function accept(dialog, name) {
+  // The box renders with the button, so wait for the button before asking
+  // whether there is a box: counting first races the dialog opening, finds
+  // no box, and then waits on a button the unticked box keeps disabled.
+  const button = dialog.getByRole("button", { name, exact: true });
+  await expect(button).toBeVisible();
   const tick = dialog.getByTestId("confirm-multi-repo");
   if (await tick.count()) await tick.check();
-  await dialog.getByRole("button", { name, exact: true }).click();
+  await button.click();
 }
 
 const row = (page, id) =>
