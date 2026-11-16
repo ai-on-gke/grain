@@ -46,7 +46,7 @@ class ServerApi {
     } as TaskDetail;
   }
 
-  async getIfChanged(_r: string, _p: unknown, _q: string) {
+  async getIfChanged() {
     return { changed: true, body: this.page(this.total + 1, 100) };
   }
 
