@@ -71,7 +71,7 @@ export interface CapabilityServerInProcess {
 
 export interface CapabilityServer {
   id: string;
-  config: CapabilityServerConfig;
+  config?: CapabilityServerConfig;
   status?: CapabilityServerStatus;
   secrets?: CapabilityServerSecret[];
   managed?: CapabilityServerManagedField[];

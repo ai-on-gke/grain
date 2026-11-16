@@ -60,6 +60,7 @@ let nextInfoPopoverId = 0;
           (focus)="onFocus()"
           (click)="onClick($event)"
           (keydown)="onKeyDown($event)"
+          (keyup)="onKeyUp($event)"
         >
           <svg
             width="16"
@@ -131,6 +132,7 @@ export class InfoPopoverComponent implements OnDestroy {
   });
 
   private leaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private repositionTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly onCaptureEscape = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.open()) {
@@ -150,7 +152,7 @@ export class InfoPopoverComponent implements OnDestroy {
   };
 
   ngOnDestroy(): void {
-    this.clearLeaveTimer();
+    this.clearTimers();
     this.detachListeners();
   }
 
@@ -178,15 +180,7 @@ export class InfoPopoverComponent implements OnDestroy {
   protected onClick(ev: MouseEvent): void {
     ev.stopPropagation();
     ev.preventDefault();
-    this.clearLeaveTimer();
-    if (this.pinned()) {
-      this.close();
-    } else {
-      const wasOpen = this.open();
-      this.pinned.set(true);
-      if (!wasOpen) this.onOpened();
-      else this.position();
-    }
+    this.togglePinned();
   }
 
   protected onKeyDown(ev: KeyboardEvent): void {
@@ -195,7 +189,28 @@ export class InfoPopoverComponent implements OnDestroy {
       ev.stopPropagation();
       this.close();
     } else if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
       ev.stopPropagation();
+      if (!ev.repeat) this.togglePinned();
+    }
+  }
+
+  protected onKeyUp(ev: KeyboardEvent): void {
+    if (ev.key === " ") {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+  }
+
+  private togglePinned(): void {
+    this.clearLeaveTimer();
+    if (this.pinned()) {
+      this.close();
+    } else {
+      const wasOpen = this.open();
+      this.pinned.set(true);
+      if (!wasOpen) this.onOpened();
+      else this.position();
     }
   }
 
@@ -217,13 +232,15 @@ export class InfoPopoverComponent implements OnDestroy {
   private onOpened(): void {
     this.attachListeners();
     this.position();
-    setTimeout(() => {
+    this.clearRepositionTimer();
+    this.repositionTimer = setTimeout(() => {
+      this.repositionTimer = null;
       if (this.open()) this.position();
     }, 0);
   }
 
   private close(): void {
-    this.clearLeaveTimer();
+    this.clearTimers();
     this.pinned.set(false);
     this.hoverOpen.set(false);
     this.focusOpen.set(false);
@@ -257,6 +274,18 @@ export class InfoPopoverComponent implements OnDestroy {
       clearTimeout(this.leaveTimer);
       this.leaveTimer = null;
     }
+  }
+
+  private clearRepositionTimer(): void {
+    if (this.repositionTimer) {
+      clearTimeout(this.repositionTimer);
+      this.repositionTimer = null;
+    }
+  }
+
+  private clearTimers(): void {
+    this.clearLeaveTimer();
+    this.clearRepositionTimer();
   }
 
   private attachListeners(): void {

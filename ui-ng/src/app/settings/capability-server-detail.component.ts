@@ -16,6 +16,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   HostListener,
+  NgZone,
   OnDestroy,
   OnInit,
   ViewEncapsulation,
@@ -193,7 +194,7 @@ function formatHolderLine(h: CapabilityGrantHolder): string {
         @let sum = summaryParts();
         @let isBuiltin = !!srv.builtin;
         @let isInProcess = !!srv.inProcess;
-        @let isStdio = !!srv.config.command;
+        @let isStdio = !!srv.config?.command;
 
         <div
           class="s-card"
@@ -269,13 +270,13 @@ function formatHolderLine(h: CapabilityGrantHolder): string {
           </div>
 
           @if (!isInProcess) {
-            @if (srv.config.notice) {
+            @if (srv.config?.notice) {
               <div
                 class="s-banner readonly s-wrap"
                 role="status"
                 data-testid="capability-server-notice"
               >
-                <span>{{ srv.config.notice }}</span>
+                <span>{{ srv.config?.notice }}</span>
                 <button
                   type="button"
                   class="btn-text s-btn-sm"
@@ -311,7 +312,7 @@ function formatHolderLine(h: CapabilityGrantHolder): string {
               </div>
             }
 
-            @if (srv.config.run === "host" && !srv.config.hostd) {
+            @if (srv.config?.run === "host" && !srv.config?.hostd) {
               <g-hostd-missing-note [problem]="hostdProblem()" />
             }
 
@@ -406,7 +407,7 @@ function formatHolderLine(h: CapabilityGrantHolder): string {
                   @if (isStdio) {
                     {{ commandLine(srv) }}
                   } @else {
-                    {{ srv.config.serverUrl }}
+                    {{ srv.config?.serverUrl }}
                   }
                 </dd>
                 <dt>Runs</dt>
@@ -1042,11 +1043,11 @@ function formatHolderLine(h: CapabilityGrantHolder): string {
                     data-testid="capability-server-toggle-btn"
                     (click)="toggleEnabled(srv)"
                   >
-                    {{ srv.config.disabled ? "Enable" : "Disable" }}
+                    {{ srv.config?.disabled ? "Enable" : "Disable" }}
                   </button>
                 </div>
                 <p class="s-card-desc" data-testid="capability-action-help">
-                  @if (srv.config.disabled) {
+                  @if (srv.config?.disabled) {
                     Turns the server back on: grain connects to it again and
                     admits grants of its methods.
                   } @else {
@@ -1084,7 +1085,7 @@ function formatHolderLine(h: CapabilityGrantHolder): string {
       }
 
       @if (confirmReq(); as req) {
-        <g-confirm-dialog [request]="req" (closed)="confirmReq.set(null)" />
+        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
       }
     </div>
   `,
@@ -1094,6 +1095,7 @@ export class CapabilityServerDetailComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
+  private readonly zone = inject(NgZone);
 
   readonly serverId = input.required<string>();
 
@@ -1355,10 +1357,12 @@ export class CapabilityServerDetailComponent implements OnInit, OnDestroy {
     void this.refresh();
     void this.refreshUsage();
     void this.refreshHostEntries();
-    this.hostEntriesTimer = setInterval(
-      () => void this.refreshHostEntries(),
-      30_000,
-    );
+    this.zone.runOutsideAngular(() => {
+      this.hostEntriesTimer = setInterval(
+        () => this.zone.run(() => void this.refreshHostEntries()),
+        30_000,
+      );
+    });
   }
 
   ngOnDestroy(): void {
@@ -1388,10 +1392,14 @@ export class CapabilityServerDetailComponent implements OnInit, OnDestroy {
     const unreported = live.some((s) => !s.status);
     const settling = unreported && this.unreportedReads < UNREPORTED_READ_LIMIT;
     if (!pending && !settling) return;
-    this.pollTimer = setTimeout(() => {
-      if (!pending) this.unreportedReads += 1;
-      void this.refresh();
-    }, 2000);
+    this.zone.runOutsideAngular(() => {
+      this.pollTimer = setTimeout(() => {
+        this.zone.run(() => {
+          if (!pending) this.unreportedReads += 1;
+          void this.refresh();
+        });
+      }, 2000);
+    });
   }
 
   private async refresh(): Promise<void> {
@@ -1762,6 +1770,14 @@ export class CapabilityServerDetailComponent implements OnInit, OnDestroy {
       `${lead} These still grant its capabilities, and will be refused them until they are changed: ` +
       holders.map(formatHolderLine).join("; ")
     );
+  }
+
+  protected onConfirmDone(accepted: boolean): void {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (accepted && req) {
+      void req.run();
+    }
   }
 
   protected askRemove(srv: CapabilityServer): void {

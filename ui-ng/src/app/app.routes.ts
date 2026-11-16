@@ -178,11 +178,18 @@ export function capabilityServerRouteMatcher(
   ) {
     return null;
   }
-  const raw = segments
+  let raw = segments
     .slice(2)
     .map((s) => s.path)
-    .join("/")
-    .replace(/^(https?):\/(?!\/)/, "$1://");
+    .join("/");
+  if (/%[0-9a-fA-F]{2}/.test(raw)) {
+    try {
+      raw = decodeURIComponent(raw);
+    } catch {
+      // Keep raw when percent-encoding is malformed.
+    }
+  }
+  raw = raw.replace(/^(https?):\/(?!\/)/, "$1://");
   if (!raw) return null;
   return {
     consumed: segments,
