@@ -2,23 +2,23 @@
 
 This run walks [docs/test-plans/2026-11-13.md §7](../test-plans/2026-11-13.md), items 1–5 of
 "What is NOT proved". It audits PRs #1302, #1291, #1262, #1319, #1261, #1230, #1348 and #1214
-against a real `grain daemon -sandbox-port-base=0` over SQLite.
+against real `grain daemon -sandbox-port-base=0` processes, over both SQLite and PostgreSQL 15.
 
 [Task #5359](/tasks/5359) did the work in two attempts:
 - Attempt 1 built the harness and walked items 1–4. It found and fixed F1.
-- Attempt 2 walked item 5, merged `main` and wrote this report.
+- Attempt 2 walked item 5, repeated items 1–5 on PostgreSQL, merged `main` and wrote this report.
 
-Everything is under [`2026-11-13-actions-ci-for-agents/`](2026-11-13-actions-ci-for-agents/): the scripts, and each run's capture in `out/`.
+Everything is under [`2026-11-13-actions-ci-for-agents/`](2026-11-13-actions-ci-for-agents/): the scripts, the SQLite captures in `out/`, and the PostgreSQL captures in `out/postgres/`.
 
 ## Results
 
-| § | Item | Outcome | Capture |
-|---|------|---------|---------|
-| 7.1 | In-sandbox `grain ci retrigger`, `--all`, `run-job`, `--jobs` refusals, another task's PR | pass | `out/items1_2.txt` |
-| 7.2 | Host `grain ci retrigger gha:…` prints a `grain ci wait <id>` line that waits | pass | `out/items1_2.txt` |
-| 7.3 | One repair per red `tests.yml` on `main`, no duplicate, green closes it, idle poll costs only 304s | pass | `out/item3.txt` |
-| 7.4 | A runner DNS outage files no PR repair; the failed jobs are re-run and the PR merges | **fixed** (F1), pass | `out/item4-before-fix.txt`, `out/item4.txt` |
-| 7.5 | Sandboxes cannot write the shared Go build cache; a trusted Grain CI job can, and a later sandbox reads the hit | pass on a sandbox image that has Go (F2) | `out/item5.txt`, `out/item5-host-sandboxes.txt` |
+| § | Item | SQLite | PostgreSQL | Capture |
+|---|------|--------|------------|---------|
+| 7.1 | In-sandbox `grain ci retrigger`, `--all`, `run-job`, `--jobs` refusals, another task's PR | pass | pass | `items1_2.txt` |
+| 7.2 | Host `grain ci retrigger gha:…` prints a `grain ci wait <id>` line that waits | pass | pass | `items1_2.txt` |
+| 7.3 | One repair per red `tests.yml` on `main`, no duplicate, green closes it, idle poll costs only 304s | pass | pass | `item3.txt` |
+| 7.4 | A runner DNS outage files no PR repair; the failed jobs are re-run and the PR merges | **fixed** (F1), pass | pass | `item4-before-fix.txt`, `item4.txt` |
+| 7.5 | Sandboxes cannot write the shared Go build cache; a trusted Grain CI job can, and a later sandbox reads the hit | pass on an image with Go (F2) | pass on an image with Go (F2) | `item5.txt`, `item5-host-sandboxes.txt` |
 
 ## Fixes and findings
 
@@ -104,7 +104,7 @@ The sandbox half still holds on host sandboxes. Writes from a host sandbox that 
   - `requests`: status counts per path, for the 304 check.
 
   Everything else is real: the daemon, the dispatcher, the merge queue, the base-branch watchers, grain CI, the package cache, the git proxy, the sandboxes and the in-sandbox `grain` CLI. `fake-agy.py` stands in for the model only. It replays the MCP tool calls each item scripts (`run_command`, `resume_later`, `comment_on_issue`) through grain's real MCP server.
-- **PostgreSQL:** not walked. §7's behaviour is in the orchestrator and the forge layer, not in store queries, so every item ran on SQLite only.
+- **PostgreSQL:** PostgreSQL 15.20 from Debian's `postgresql` package, with one fresh database per script. Passing `-postgres-url postgres://…/walkN` through `SANDBOX_FLAGS` gets the same scripts onto PostgreSQL. The daemon log confirms the store (`acquired PostgreSQL single-writer advisory lock`). The PostgreSQL walks ran at `ae7bd6b0a`.
 - **Host:** the Debian sandbox VM with Go at `/usr/local/bin/go` and Docker. Item 5 pulled two images, `docker.io/grainai/sandbox-k8s:latest` and `docker.io/library/golang:1.25`, and built `walk/sandbox-go:local` from them.
 
 ## Steps and evidence
@@ -193,5 +193,7 @@ SANDBOX_FLAGS="-container-sandboxes -container-sandbox-image walk/sandbox-go:loc
   -container-git-proxy-host <docker bridge gateway> -container-sandbox-network bridge" \
   WORK_DIR=/tmp/walk-item5c bash item5.sh   # item 5
 ```
+
+To walk on PostgreSQL, add `-postgres-url postgres://<user>:<pw>@127.0.0.1:5432/<fresh db>` to `SANDBOX_FLAGS`. Items 1–4 need `-host-sandboxes` given explicitly there too.
 
 Each script starts its own simulator on 4284 and its own daemon on 4280 under `$WORK_DIR` (default `/tmp/walk-actions`), and stops both when it is done.
