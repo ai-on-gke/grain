@@ -1243,7 +1243,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                             ? 'Resume dispatching queued tasks'
                             : access.deniedReason('DELETE /api/pipeline-pause')
                         "
-                        (click)="resumePipeline()"
+                        (click)="confirmResumePipeline()"
                       >
                         Resume pipeline
                       </button>
@@ -1272,7 +1272,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                             ? 'Pause new task dispatch'
                             : access.deniedReason('POST /api/pipeline-pause')
                         "
-                        (click)="pausePipeline()"
+                        (click)="confirmPausePipeline()"
                       >
                         Pause pipeline
                       </button>
@@ -2442,6 +2442,50 @@ export class FleetPageComponent implements OnInit {
       }
     }
     this.access.tickClock();
+  }
+
+  // Pausing and resuming the pipeline ask first, as classic System ->
+  // Pipeline does (PipelineControl.jsx). A pause held for a scheduled
+  // upgrade says that resuming cancels it: the reconciler would take the
+  // hold back within seconds otherwise, so the server drops the schedule
+  // (ui/src/alerts.js resumeCancelsUpgrade).
+  protected confirmPausePipeline(): void {
+    if (!this.canWriteDispatch() || this.busyDispatch()) return;
+    this.confirmReq.set({
+      title: "Pause the pipeline?",
+      message:
+        "Grain will stop starting new agent and CI runs. Runs already in flight will continue.",
+      accept: "Pause pipeline",
+      destructive: false,
+      run: () => this.pausePipeline(),
+    });
+  }
+
+  protected confirmResumePipeline(): void {
+    if (!this.canWriteDispatch() || this.busyDispatch()) return;
+    const pause = this.pipelinePause();
+    const upgradeHold =
+      pause?.byKind === "automation" && pause?.byId === "upgrade-schedule";
+    this.confirmReq.set(
+      upgradeHold
+        ? {
+            title: "Resume and cancel the scheduled upgrade?",
+            message:
+              `This deployment is paused because it is waiting to upgrade${pause?.reason ? ` — ${pause.reason}` : ""}. ` +
+              "Resuming cancels that upgrade: tasks start again and the upgrade will not be applied. Schedule it again from Settings → Upgrade.",
+            accept: "Resume and cancel upgrade",
+            destructive: true,
+            run: () => this.resumePipeline(),
+          }
+        : {
+            title: "Resume the pipeline?",
+            message:
+              "Grain will start dispatching queued agent and CI runs again.",
+            accept: "Resume pipeline",
+            destructive: false,
+            run: () => this.resumePipeline(),
+          },
+    );
   }
 
   protected async pausePipeline(): Promise<void> {

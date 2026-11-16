@@ -275,6 +275,10 @@ test("pausing, resuming, and lifting quota pauses on Fleet update the global dis
       .getByLabel("Pipeline pause reason")
       .fill("walkthrough sync check");
     await page.getByRole("button", { name: "Pause pipeline" }).click();
+    await page
+      .getByTestId("confirm-dialog")
+      .getByRole("button", { name: "Pause pipeline" })
+      .click();
 
     const banner = page.getByTestId("global-dispatch-banner");
     await expect(banner).toBeVisible();
@@ -284,6 +288,10 @@ test("pausing, resuming, and lifting quota pauses on Fleet update the global dis
     );
 
     await page.getByRole("button", { name: "Resume pipeline" }).click();
+    await page
+      .getByTestId("confirm-dialog")
+      .getByRole("button", { name: "Resume pipeline" })
+      .click();
     await expect(banner).toHaveCount(0);
   } finally {
     await page.request.delete("/api/pipeline-pause").catch(() => {});
@@ -601,4 +609,61 @@ test("Fleet says a disk and an uptime it was not told are not reported", async (
   await expect(page.getByTestId("meter-disk-none")).toHaveCount(0);
   await expect(daemon).toContainText(/Up \d/);
   await expect(page.getByTestId("fleet-daemon-uptime-unknown")).toHaveCount(0);
+});
+
+// Classic System -> Pipeline asks before pausing and resuming, and warns
+// that resuming a pause held for a scheduled upgrade cancels the upgrade;
+// /next/fleet did neither (2026-11-16 walkthrough).
+test("Fleet asks before pausing or resuming the pipeline, and says resuming cancels a scheduled upgrade", async ({
+  page,
+}) => {
+  const writes = [];
+  let held = null;
+  await page.route("**/api/pipeline-pause", async (route) => {
+    const method = route.request().method();
+    if (method === "GET" && held) {
+      return route.fulfill({ json: { pause: held } });
+    }
+    if (method !== "GET") writes.push(method);
+    return route.fallback();
+  });
+  try {
+    await page.goto("fleet?tab=controls");
+    const dialog = page.getByTestId("confirm-dialog");
+    await page.getByTestId("pipeline-pause-btn").click();
+    await expect(dialog).toContainText("Pause the pipeline?");
+    await dialog.getByTestId("confirm-cancel").click();
+    await expect(dialog).toBeHidden();
+    await page.getByTestId("pipeline-pause-btn").click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    expect(writes).toEqual([]);
+    await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+      "Dispatching",
+    );
+
+    held = {
+      paused: true,
+      runNowPasses: true,
+      reason: "upgrading to v9.9.9 at 02:00 UTC",
+      byKind: "automation",
+      byId: "upgrade-schedule",
+    };
+    await page.reload();
+    await page.getByTestId("pipeline-resume-btn").click();
+    await expect(dialog).toContainText(
+      "Resume and cancel the scheduled upgrade?",
+    );
+    await expect(dialog).toContainText("upgrading to v9.9.9 at 02:00 UTC");
+    await expect(dialog).toContainText("Resuming cancels that upgrade");
+    await dialog.getByTestId("confirm-cancel").click();
+    expect(writes).toEqual([]);
+    await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+      "Paused",
+    );
+  } finally {
+    await page.unroute("**/api/pipeline-pause");
+    await page.request.delete("/api/pipeline-pause").catch(() => {});
+  }
 });
