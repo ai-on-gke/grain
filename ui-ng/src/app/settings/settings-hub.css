@@ -53,8 +53,21 @@
   color: inherit;
 }
 
-/* Purpose is the longest field: it takes whatever columns are left on
-   its row rather than leaving them empty. */
+/* Purpose is the longest field and the last of seven: it takes the
+   columns its row leaves empty rather than sit beside a gap. The grid is
+   auto-fit columns of at least 240px with 20px gaps (.s-grid), so at
+   four columns (1020px and wider) its row has two to spare; at three or
+   fewer it is alone on its row and takes all of it. */
+#registry-config {
+  container-type: inline-size;
+}
+
 .s-field.hub-field-wide {
-  grid-column: auto / -1;
+  grid-column: 1 / -1;
+}
+
+@container (min-width: 1020px) {
+  .s-field.hub-field-wide {
+    grid-column: span 2;
+  }
 }
