@@ -2319,6 +2319,31 @@
           ]
         }
       }
+    },
+    "list_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "cursor"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     }
   }
 }

@@ -228,5 +228,10 @@
     "file": "invalid-shared-count.json",
     "definition": "resource_projection",
     "valid": false
+  },
+  {
+    "file": "list-request.json",
+    "definition": "list_request",
+    "valid": true
   }
 ]
