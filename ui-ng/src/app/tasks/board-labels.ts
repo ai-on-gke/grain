@@ -49,3 +49,42 @@ export function boardLabels(
   }
   return out;
 }
+
+// The narrowing keys the /next/ tasks page reads from a saved board's
+// query (TasksPageComponent.applyBoard). A board saved here writes only
+// these; one asked for through the classic UI writes paths.js's own
+// grammar (f=state:any:queued, sort=...), which this page cannot read.
+const NEXT_QUERY_KEYS = new Set(["tab", "group", "q", "repo", "view"]);
+
+// opensHere says whether the /next/ tasks page can draw a saved board
+// itself: a list whose query is in this page's own grammar. Every other
+// board -- a Kanban board, a timeline, a report, a tree, a dashboard,
+// or a list narrowed in the classic grammar -- opens on its classic
+// /boards/<id> page instead. Applying one here used to drop its kind and
+// its narrowing alike and land on the bare, unnarrowed task list with
+// nothing said, so the four boards every deployment is seeded with did
+// nothing at all when chosen (2026-11-16 saved boards walkthrough).
+export function opensHere(b: Board): boolean {
+  if ((b.kind || "list") !== "list") return false;
+  let here = true;
+  new URLSearchParams(b.query || "").forEach((_, k) => {
+    if (!NEXT_QUERY_KEYS.has(k)) here = false;
+  });
+  return here;
+}
+
+// BOARD_KIND_NAMES are the classic UI's names for each kind of board
+// (ui/src/boards.js's BOARD_KINDS), so the menu calls a board what its
+// own page does.
+const BOARD_KIND_NAMES: Readonly<Record<string, string>> = {
+  list: "List",
+  kanban: "Kanban",
+  gantt: "Timeline",
+  panels: "Panels",
+  report: "Report",
+  tree: "Tree",
+};
+
+export function boardKindName(kind: string | undefined): string {
+  return BOARD_KIND_NAMES[kind || "list"] ?? "List";
+}

@@ -402,3 +402,78 @@ test("the Backlog row More actions menu sits in the right-hand slot and opens on
       .toEqual(orderBefore);
   }
 });
+
+// Choosing a Kanban board, a timeline, a report, a tree, a dashboard,
+// or a list narrowed in the classic grammar from the Boards menu landed
+// on the bare, unnarrowed task list and named no board: applyBoard read
+// only tab, group, q, repo and view, so the four boards every deployment
+// is seeded with did nothing when chosen (2026-11-16 saved boards
+// walkthrough). A board this page cannot draw now opens its classic
+// page, and says so before it is chosen.
+test("a board this page cannot draw opens on its classic page", async ({
+  page,
+}) => {
+  const made = [];
+  const mk = async (data) => {
+    const res = await page.request.post("/api/boards", { data });
+    expect(res.ok(), `POST /api/boards: ${res.status()}`).toBe(true);
+    const b = await res.json();
+    made.push(b.id);
+    return b;
+  };
+  try {
+    const kanban = await mk({ name: "E2E Kanban", kind: "kanban" });
+    const classic = await mk({
+      name: "E2E Classic list",
+      kind: "list",
+      query: "f=state:any:queued",
+    });
+    const native = await mk({
+      name: "E2E Native list",
+      kind: "list",
+      query: "tab=asked",
+    });
+
+    await page.goto("tasks");
+    const trigger = page.getByTestId("saved-boards-btn");
+    await trigger.click();
+    const menu = page.getByTestId("saved-boards-menu");
+    const k = menu.getByRole("link", {
+      name: "E2E Kanban, Kanban, opens in the classic UI",
+    });
+    await expect(k).toHaveAttribute("href", `/boards/${kanban.id}`);
+    await expect(k).toContainText("Kanban");
+    await expect(
+      menu.getByRole("link", {
+        name: "E2E Classic list, List, opens in the classic UI",
+      }),
+    ).toBeVisible();
+    // A list in this page's own grammar still applies here.
+    await expect(
+      menu.getByRole("button", { name: "E2E Native list", exact: true }),
+    ).toBeVisible();
+    await expectMenuLaidOut(page, kanban.id);
+
+    await k.click();
+    await expect(page).toHaveURL(new RegExp(`/boards/${kanban.id}$`));
+    await expect(page.locator(".board-page-actions")).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/next\/tasks$/);
+    await page.getByTestId("saved-boards-btn").click();
+    await page.getByTestId(`board-apply-${classic.id}`).click();
+    // The classic page reads the board's own narrowing.
+    await expect(page).toHaveURL(
+      new RegExp(`/boards/${classic.id}\\?f=state:any:queued`),
+    );
+
+    await page.goto("tasks");
+    await page.getByTestId("saved-boards-btn").click();
+    await page.getByTestId(`board-apply-${native.id}`).click();
+    await expect(page).toHaveURL(/\/next\/tasks\?tab=asked$/);
+  } finally {
+    for (const id of made) {
+      await page.request.delete(`/api/boards/${id}`).catch(() => {});
+    }
+  }
+});

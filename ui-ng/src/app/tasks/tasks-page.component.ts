@@ -54,7 +54,7 @@ import {
 } from "../shared/priority-chip.component";
 import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
-import { boardLabels } from "./board-labels";
+import { boardKindName, boardLabels, opensHere } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -237,24 +237,53 @@ function needsApproval(t: Task): boolean {
                   >
                     @for (b of store.boards(); track b.id) {
                       <div class="boards-menu-row">
-                        <button
-                          type="button"
-                          class="board-apply-btn"
-                          [attr.data-testid]="'board-apply-' + b.id"
-                          [attr.aria-label]="
-                            boardLabel(b) === b.name ? null : boardLabel(b)
-                          "
-                          (click)="applyBoard(b)"
-                        >
-                          {{ b.name }}
-                          @if (b.folder) {
-                            <span
-                              class="board-folder muted"
-                              aria-hidden="true"
-                              >{{ b.folder }}</span
+                        @if (opensHere(b)) {
+                          <button
+                            type="button"
+                            class="board-apply-btn"
+                            [attr.data-testid]="'board-apply-' + b.id"
+                            [attr.aria-label]="
+                              boardLabel(b) === b.name ? null : boardLabel(b)
+                            "
+                            (click)="applyBoard(b)"
+                          >
+                            {{ b.name }}
+                            @if (b.folder) {
+                              <span
+                                class="board-folder muted"
+                                aria-hidden="true"
+                                >{{ b.folder }}</span
+                              >
+                            }
+                          </button>
+                        } @else {
+                          <!-- A board this page cannot draw opens on its
+                               classic page (board-labels.ts's opensHere). -->
+                          <a
+                            class="board-apply-btn board-classic-link"
+                            [href]="'/boards/' + b.id"
+                            [attr.data-testid]="'board-apply-' + b.id"
+                            [attr.aria-label]="
+                              boardLabel(b) +
+                              ', ' +
+                              boardKindName(b.kind) +
+                              ', opens in the classic UI'
+                            "
+                            title="Opens in the classic UI"
+                          >
+                            {{ b.name }}
+                            @if (b.folder) {
+                              <span
+                                class="board-folder muted"
+                                aria-hidden="true"
+                                >{{ b.folder }}</span
+                              >
+                            }
+                            <span class="board-kind muted" aria-hidden="true"
+                              >{{ boardKindName(b.kind) }} ↗</span
                             >
-                          }
-                        </button>
+                          </a>
+                        }
                         @if (canWriteBoards()) {
                           <button
                             type="button"
@@ -2550,6 +2579,9 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   // boardLabel is the name a board's buttons are announced by: its own
   // name, or, where another board shares it, the name and its folder
   // (board-labels.ts).
+  protected readonly opensHere = opensHere;
+  protected readonly boardKindName = boardKindName;
+
   protected boardLabel(b: Board): string {
     return this.boardLabelById().get(b.id) ?? b.name;
   }

@@ -211,6 +211,30 @@
   white-space: nowrap;
 }
 
+/* A board this page cannot draw is a link to its classic page
+   (board-labels.ts's opensHere), drawn like the buttons beside it,
+   with its kind and an arrow saying where it goes. */
+.boards-menu.pop-menu .boards-menu-row .board-classic-link {
+  display: block;
+  color: var(--md-sys-color-on-surface);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.boards-menu.pop-menu .boards-menu-row .board-classic-link:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.boards-menu.pop-menu .boards-menu-row .board-classic-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.boards-menu.pop-menu .boards-menu-row .board-kind {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
 /* A board's folder, after its name: what tells two same-named boards
    apart by eye (their buttons' accessible names say it too). */
 .boards-menu.pop-menu .boards-menu-row .board-folder {

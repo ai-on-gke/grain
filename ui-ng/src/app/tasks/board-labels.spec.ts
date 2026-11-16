@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { Board } from "../api/models";
-import { boardLabels } from "./board-labels";
+import { boardKindName, boardLabels, opensHere } from "./board-labels";
 
 const b = (id: string, name: string, folder?: string): Board => ({
   id,
@@ -46,5 +46,32 @@ describe("boardLabels", () => {
     const got = boardLabels([b("7", "Triage", "Ops"), b("9", "Triage", "Ops")]);
     expect(got.get("7")).toBe("Triage (7), in Ops");
     expect(got.get("9")).toBe("Triage (9), in Ops");
+  });
+});
+
+describe("opensHere", () => {
+  const q = (kind: string, query?: string): Board => ({
+    id: "1",
+    name: "B",
+    kind,
+    ...(query ? { query } : {}),
+  });
+  it("keeps a list in this page's own grammar here", () => {
+    expect(opensHere(q("list"))).toBe(true);
+    expect(opensHere(q("list", "tab=asked&q=retry&view=timeline"))).toBe(true);
+  });
+  it("sends every other kind to its classic page", () => {
+    for (const k of ["kanban", "gantt", "report", "tree", "panels"]) {
+      expect(opensHere(q(k))).toBe(false);
+    }
+  });
+  it("sends a list narrowed in the classic grammar to its classic page", () => {
+    expect(opensHere(q("list", "f=state:any:queued"))).toBe(false);
+    expect(opensHere(q("list", "tab=asked&sort=priority"))).toBe(false);
+  });
+  it("names kinds as the classic UI does", () => {
+    expect(boardKindName("gantt")).toBe("Timeline");
+    expect(boardKindName("panels")).toBe("Panels");
+    expect(boardKindName(undefined)).toBe("List");
   });
 });

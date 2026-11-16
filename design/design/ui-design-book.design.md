@@ -162,6 +162,12 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Things this app cannot draw yet:** a saved board this app has no page
+  for (a Kanban board, a timeline, a report, a tree, a dashboard, or a list
+  narrowed in the classic `f=` grammar) is a plain link to its classic
+  `/boards/<id>` page, showing its kind and an `↗`, and its accessible name
+  ends "opens in the classic UI". It is never applied as something it is not
+  (`tasks/board-labels.ts`'s `opensHere`).
 - **Dispatch & quota alerts:** when dispatch is paused or model quotas are
   exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
