@@ -176,6 +176,7 @@ export function listedSecrets(
   selector: "g-settings-work",
   imports: [PillSelectComponent, ConfirmDialogComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
+  styleUrl: "./settings-capabilities.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @switch (section()) {
@@ -759,7 +760,10 @@ export function listedSecrets(
             </div>
           }
 
-          <div class="s-subsection">
+          <div
+            class="s-subsection"
+            [class.s-dimmed]="state.sectionLocked('capabilities')"
+          >
             <div class="s-subhead">
               <h4 class="s-subhead-title">Add capability server</h4>
             </div>
@@ -773,6 +777,10 @@ export function listedSecrets(
                   data-testid="input-cap-server-id"
                   placeholder="jira-mcp"
                   [value]="newServerId()"
+                  [disabled]="
+                    !access.can('PUT /api/capability-servers') ||
+                    state.sectionLocked('capabilities')
+                  "
                   (input)="newServerId.set($any($event.target).value)"
                 />
               </div>
@@ -787,6 +795,10 @@ export function listedSecrets(
                   data-testid="input-cap-server-url"
                   placeholder="https://mcp.internal/sse"
                   [value]="newServerUrl()"
+                  [disabled]="
+                    !access.can('PUT /api/capability-servers') ||
+                    state.sectionLocked('capabilities')
+                  "
                   (input)="newServerUrl.set($any($event.target).value)"
                 />
               </div>
@@ -942,6 +954,10 @@ export function listedSecrets(
               data-testid="input-policy-capability"
               placeholder="gh-cli"
               [value]="newRuleCap()"
+              [disabled]="
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newRuleCap.set($any($event.target).value)"
             />
             <input
@@ -951,6 +967,10 @@ export function listedSecrets(
               data-testid="input-policy-repos"
               placeholder="acme/* (empty = *)"
               [value]="newRuleRepos()"
+              [disabled]="
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newRuleRepos.set($any($event.target).value)"
             />
             <g-pill-select
@@ -959,6 +979,10 @@ export function listedSecrets(
               align="left"
               [options]="policyEffectOptions"
               [value]="newRuleEffect()"
+              [disabled]="
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (valueChange)="newRuleEffect.set($event)"
             />
             @if (newRuleEffect() !== "deny") {
@@ -969,6 +993,10 @@ export function listedSecrets(
                   role="switch"
                   data-testid="switch-policy-allow-untrusted"
                   [attr.aria-checked]="newRuleAllowUntrusted()"
+                  [disabled]="
+                    !access.can('PUT /api/capability-policy') ||
+                    state.sectionLocked('capabilities')
+                  "
                   aria-label="Allow untrusted triggers"
                   (click)="newRuleAllowUntrusted.set(!newRuleAllowUntrusted())"
                 ></button>
@@ -979,7 +1007,11 @@ export function listedSecrets(
               type="button"
               class="btn-tonal s-btn-sm"
               data-testid="add-policy-rule-btn"
-              [disabled]="!newRuleCap().trim()"
+              [disabled]="
+                !newRuleCap().trim() ||
+                !access.can('PUT /api/capability-policy') ||
+                state.sectionLocked('capabilities')
+              "
               (click)="addPolicyRule()"
             >
               Add rule
@@ -1068,6 +1100,10 @@ export function listedSecrets(
               data-testid="input-scope-set-name"
               placeholder="ci-readonly"
               [value]="newScopeSetName()"
+              [disabled]="
+                !access.can('PUT /api/api-scope-sets') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newScopeSetName.set($any($event.target).value)"
             />
             <input
@@ -1077,6 +1113,10 @@ export function listedSecrets(
               data-testid="input-scope-set-scopes"
               placeholder="tasks:read,ci:read"
               [value]="newScopeSetScopes()"
+              [disabled]="
+                !access.can('PUT /api/api-scope-sets') ||
+                state.sectionLocked('capabilities')
+              "
               (input)="newScopeSetScopes.set($any($event.target).value)"
             />
             <button
@@ -1269,7 +1309,11 @@ export function listedSecrets(
           >
             <div class="s-subhead">
               <h4 class="s-subhead-title">
-                Stored secrets ({{ listedSecrets().length }})
+                Stored secrets{{
+                  access.can("GET /api/secrets")
+                    ? " (" + listedSecrets().length + ")"
+                    : ""
+                }}
               </h4>
             </div>
             <span class="s-hint"
@@ -1284,108 +1328,125 @@ export function listedSecrets(
                 stored here yet.</span
               >
             } @else {
-              @if (serverSecrets().length > 0) {
-                <span class="s-label">Used by capability servers</span>
-                <ul
-                  class="s-secret-list"
-                  aria-label="Secrets used by capability servers"
-                >
-                  @for (sec of serverSecrets(); track sec.name) {
-                    <li
-                      class="s-secret-row"
-                      [attr.data-testid]="'secret-row-' + sec.name"
-                    >
-                      <span class="s-mono s-secret-name">{{ sec.name }}</span>
-                      <span class="s-secret-keys">
-                        @for (k of sec.keys || []; track k) {
-                          <span class="status-pill neutral s-mono">{{
-                            k
-                          }}</span>
-                        }
-                      </span>
-                      <span class="s-hint s-wrap"
-                        >Used by
-                        @for (
-                          id of sec.capabilityServers || [];
-                          track id;
-                          let last = $last
-                        ) {
-                          <a
-                            class="s-mono"
-                            [routerLink]="[]"
-                            fragment="capability-servers"
-                            >{{ id }}</a
-                          >{{ last ? "" : ", " }}
-                        }
-                      </span>
-                    </li>
-                  }
-                </ul>
-              }
-              @if (otherSecrets().length > 0) {
-                <ul class="s-secret-list" aria-label="Other secrets">
-                  @for (sec of otherSecrets(); track sec.name) {
-                    <li
-                      class="s-secret-row"
-                      [attr.data-testid]="'secret-row-' + sec.name"
-                    >
-                      <span class="s-mono s-secret-name">{{ sec.name }}</span>
-                      @if (sec.orphaned) {
-                        <span
-                          class="status-pill blast"
-                          title="Grain made this for a capability server that no configured server uses any more"
-                          >orphaned</span
-                        >
-                      }
-                      <span class="s-secret-keys">
-                        @for (k of sec.keys || []; track k) {
-                          <span class="s-secret-key">
-                            <span class="s-mono" [attr.title]="k">{{ k }}</span>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [attr.data-testid]="
-                                'replace-secret-' + sec.name + '-' + k
-                              "
-                              [attr.aria-label]="
-                                'Replace ' + sec.name + '/' + k
-                              "
-                              [disabled]="!canWriteSecrets()"
-                              (click)="replaceSecret(sec.name, k)"
-                            >
-                              Replace
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [attr.data-testid]="
-                                'remove-secret-key-' + sec.name + '-' + k
-                              "
-                              [attr.aria-label]="'Remove ' + sec.name + '/' + k"
-                              [disabled]="!canWriteSecrets()"
-                              (click)="confirmRemoveSecretKey(sec.name, k)"
-                            >
-                              Remove
-                            </button>
-                          </span>
-                        }
-                      </span>
-                      <button
-                        type="button"
-                        class="btn-text s-btn-sm"
-                        [attr.data-testid]="'remove-secret-' + sec.name"
-                        [disabled]="!canWriteSecrets()"
-                        (click)="confirmRemoveSecret(sec.name)"
-                      >
-                        Remove secret
-                      </button>
-                    </li>
-                  }
-                </ul>
+              @if (!access.can("GET /api/secrets")) {
+                <span class="s-hint" data-testid="secrets-read-restricted">
+                  Stored secret names cannot be read with your role (<code
+                    >secrets:read</code
+                  >
+                  required){{
+                    canWriteSecrets()
+                      ? "; storing a secret overwrites any existing key of that name."
+                      : "."
+                  }}
+                </span>
               } @else {
-                <span class="s-hint" data-testid="secrets-empty"
-                  >No other secrets set.</span
-                >
+                @if (serverSecrets().length > 0) {
+                  <span class="s-label">Used by capability servers</span>
+                  <ul
+                    class="s-secret-list"
+                    aria-label="Secrets used by capability servers"
+                  >
+                    @for (sec of serverSecrets(); track sec.name) {
+                      <li
+                        class="s-secret-row"
+                        [attr.data-testid]="'secret-row-' + sec.name"
+                      >
+                        <span class="s-mono s-secret-name">{{ sec.name }}</span>
+                        <span class="s-secret-keys">
+                          @for (k of sec.keys || []; track k) {
+                            <span class="status-pill neutral s-mono">{{
+                              k
+                            }}</span>
+                          }
+                        </span>
+                        <span class="s-hint s-wrap"
+                          >Used by
+                          @for (
+                            id of sec.capabilityServers || [];
+                            track id;
+                            let last = $last
+                          ) {
+                            <a
+                              class="s-mono"
+                              [routerLink]="[]"
+                              fragment="capability-servers"
+                              >{{ id }}</a
+                            >{{ last ? "" : ", " }}
+                          }
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                }
+                @if (otherSecrets().length > 0) {
+                  <ul class="s-secret-list" aria-label="Other secrets">
+                    @for (sec of otherSecrets(); track sec.name) {
+                      <li
+                        class="s-secret-row"
+                        [attr.data-testid]="'secret-row-' + sec.name"
+                      >
+                        <span class="s-mono s-secret-name">{{ sec.name }}</span>
+                        @if (sec.orphaned) {
+                          <span
+                            class="status-pill blast"
+                            title="Grain made this for a capability server that no configured server uses any more"
+                            >orphaned</span
+                          >
+                        }
+                        <span class="s-secret-keys">
+                          @for (k of sec.keys || []; track k) {
+                            <span class="s-secret-key">
+                              <span class="s-mono" [attr.title]="k">{{
+                                k
+                              }}</span>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [attr.data-testid]="
+                                  'replace-secret-' + sec.name + '-' + k
+                                "
+                                [attr.aria-label]="
+                                  'Replace ' + sec.name + '/' + k
+                                "
+                                [disabled]="!canWriteSecrets()"
+                                (click)="replaceSecret(sec.name, k)"
+                              >
+                                Replace
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [attr.data-testid]="
+                                  'remove-secret-key-' + sec.name + '-' + k
+                                "
+                                [attr.aria-label]="
+                                  'Remove ' + sec.name + '/' + k
+                                "
+                                [disabled]="!canWriteSecrets()"
+                                (click)="confirmRemoveSecretKey(sec.name, k)"
+                              >
+                                Remove
+                              </button>
+                            </span>
+                          }
+                        </span>
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          [attr.data-testid]="'remove-secret-' + sec.name"
+                          [disabled]="!canWriteSecrets()"
+                          (click)="confirmRemoveSecret(sec.name)"
+                        >
+                          Remove secret
+                        </button>
+                      </li>
+                    }
+                  </ul>
+                } @else {
+                  <span class="s-hint" data-testid="secrets-empty"
+                    >No other secrets set.</span
+                  >
+                }
               }
               <form
                 class="s-inline"
@@ -1456,6 +1517,7 @@ export function listedSecrets(
                   class="btn-tonal s-btn-sm"
                   data-testid="store-secret-btn"
                   [disabled]="
+                    secretSaving() ||
                     !secretName().trim() ||
                     !secretKey().trim() ||
                     secretVal().length === 0 ||
@@ -1591,6 +1653,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");
   protected readonly secretFileName = signal("");
+  protected readonly secretSaving = signal(false);
 
   protected readonly catalogue = signal<CapabilityCatalogue | null>(null);
   protected readonly retiredEntries = computed(() =>
@@ -2279,6 +2342,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   // it stores only what the button would.
   protected submitSecret(): void {
     if (
+      this.secretSaving() ||
       !this.secretName().trim() ||
       !this.secretKey().trim() ||
       this.secretVal().length === 0 ||
@@ -2292,20 +2356,32 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected async putSecret(): Promise<void> {
     const name = this.secretName().trim();
     const key = this.secretKey().trim();
+    const value = this.secretVal();
+    const fileName = this.secretFileName();
     const replacing = this.secretExists();
+    this.secretSaving.set(true);
     try {
       await this.api.put(
         "PUT /api/secrets/{secret}/{key}",
         { secret: name, key },
-        { value: this.secretVal() },
+        { value },
       );
-      this.setSecretValue("");
+      if (
+        this.secretName().trim() === name &&
+        this.secretKey().trim() === key &&
+        this.secretVal() === value &&
+        this.secretFileName() === fileName
+      ) {
+        this.setSecretValue("");
+      }
       await this.loadSecrets();
       this.snackbar.show(
         replacing ? `Replaced ${name}/${key}` : `Stored ${name}/${key}`,
       );
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.secretSaving.set(false);
     }
   }
 
