@@ -112,6 +112,15 @@ This was seen live on both stores (`output/deny-sq.txt`, `output/deny-pg.txt`).
 
 **Regression test:** `TestARepairDeniedCIReadSaysWhy` (denied, permitted and grain-CI). It fails without the fix.
 
+**Follow-up from security review [Task #6183](/tasks/6183):** as first written, the note was decided from the repository's defaults alone. The update path's `AdjustRepoCIGrants` never strips an `api:ci-read` the repair already holds. So an open repair that still held one would have been told on every appended run that `grain ci log` answers forbidden and not to ask for the grant, which was untrue. That covers two cases:
+
+- the default it was filed with before a deny rule was added;
+- one a person granted it.
+
+Nobody answered the review's question, so I took its conservative option. The note is now decided from the grants the repair ends up with: the new `model.GrantsReadCI` matches `SandboxNamespaceScope` (`grain#ci`, `grain#source`, or an api grant whose `ci:read` reaches the repo). No grant is stripped.
+
+**Regression test:** `TestAnAppendedRunDoesNotDenyACIReadTheRepairStillHolds` covers filed-before-the-deny and granted-by-a-person. Both cases fail without the check.
+
 ### `ci_mode: grain`
 
 `walk-repairs.sh … grain`, on SQLite and PostgreSQL:
@@ -177,4 +186,4 @@ What remains is checking the git proxy's `GitScope` push set on a dispatched tas
 ## Tests run
 
 - `go test ./pkg/orchestrator -run 'TestRepairsHoldTheirRepositorysDefaultCIGrant|TestAnOpenRepairWithoutTheCIGrantGainsItOnTheNextRedRun|TestARepairDeniedCIReadSaysWhy'`: pass, and the two new tests fail without the fix.
-- `GRAIN_REQUIRE_POSTGRES=1 go test ./pkg/orchestrator`: see the closing note of [Task #5727](/tasks/5727) for the result.
+- `GRAIN_REQUIRE_POSTGRES=1 go test ./pkg/orchestrator` passed. After the review fix it was re-run, together with `./pkg/model -run CIRead|CIGrant`, also with `GRAIN_REQUIRE_POSTGRES=1`.
