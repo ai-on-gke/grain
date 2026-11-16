@@ -269,4 +269,67 @@ describe("TasksStore", () => {
     expect(Object.keys(tasks.details()).length).toBe(75);
     tasks.stop();
   });
+
+  // A fake API whose task POSTs wait until released, so a test can stop
+  // or overlap batches while calls are in flight.
+  function heldApi() {
+    const sent: string[] = [];
+    const release: (() => void)[] = [];
+    const fakeApi = {
+      config: () => Promise.resolve({ access: null }),
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: () => Promise.resolve({}),
+      getIfChanged: () => Promise.resolve({ body: {}, changed: true }),
+      post: (_route: string, params: { id: string }) => {
+        sent.push(params.id);
+        return new Promise<void>((r) => release.push(r));
+      },
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+    return { sent, release };
+  }
+
+  // Stop sends no more of a bulk action: the calls already in flight
+  // finish, the rest are reported as skipped and left unchanged.
+  it("stops a bulk action part-way and reports what it never sent", async () => {
+    const { sent, release } = heldApi();
+    const tasks = TestBed.inject(TasksStore);
+    const ids = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+    const run = tasks.runNow(ids);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toEqual(["1", "2", "3", "4"]);
+    expect(tasks.batch()).toMatchObject({ key: "run-now", total: 10 });
+    tasks.stopBatch();
+    expect(tasks.batch()?.stopping).toBe(true);
+    release.forEach((r) => r());
+    expect(await run).toEqual({
+      failed: 0,
+      landed: ["1", "2", "3", "4"],
+      skipped: ["5", "6", "7", "8", "9", "10"],
+    });
+    expect(sent).toHaveLength(4);
+    expect(tasks.batch()).toBeNull();
+    expect(tasks.actionError()).toContain("Stopped after 4 of 10");
+  });
+
+  // Two batches in flight at once each report only their own tasks.
+  it("keeps each overlapping batch's outcome to itself", async () => {
+    const { release } = heldApi();
+    const tasks = TestBed.inject(TasksStore);
+    const a = tasks.submit(["1", "2"]);
+    const b = tasks.retryMerge(["3"]);
+    await new Promise((r) => setTimeout(r, 0));
+    release.forEach((r) => r());
+    expect(await a).toEqual({ failed: 0, landed: ["1", "2"], skipped: [] });
+    expect(await b).toEqual({ failed: 0, landed: ["3"], skipped: [] });
+  });
 });

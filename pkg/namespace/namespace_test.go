@@ -24,6 +24,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1168,5 +1170,61 @@ func TestCIArtifactsServedFromObjectStoreReadThroughCache(t *testing.T) {
 	}
 	if mem.GetCount() != 1 {
 		t.Fatalf("MemoryStore.GetCount = %d, want 1 (read-through cached after first miss)", mem.GetCount())
+	}
+}
+
+// A grain CI job whose name holds a "/" lists as one %2F-escaped
+// segment and is read back by that segment or by its name, "/" and all,
+// ahead of a job named for the name's first segment.
+func TestCIJobWhoseNameHasASlash(t *testing.T) {
+	t.Parallel()
+
+	const job = "pkg/cli stress under load"
+	store := ci.NewRunStore(10)
+	store.Put(ci.Run{
+		ID: "run-slash", Repo: "bwsalmon/grain", Conclusion: ci.ConclusionFailure,
+		Jobs: []ci.JobRun{
+			{Name: "pkg", Conclusion: ci.ConclusionSuccess,
+				Steps: []ci.StepRun{{Name: "Test", Conclusion: ci.ConclusionSuccess, Output: "the wrong job\n"}}},
+			{Name: job, Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{{Name: "Test", Conclusion: ci.ConclusionFailure, Output: "--- FAIL: TestStress\n"}}},
+		},
+	})
+	srv := newTestServer(t, store, "", nil)
+	scope := Scope{TaskRepo: "bwsalmon/grain", MayReadCI: true}
+	ctx := context.Background()
+
+	node, err := srv.Resolve(ctx, scope, "ci", "bwsalmon/grain/run-slash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range node.Entries {
+		names = append(names, e.Name)
+	}
+	sort.Strings(names)
+	if want := []string{"pkg", "pkg%2Fcli stress under load"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("the run lists %q, want %q", names, want)
+	}
+	for _, p := range []string{
+		"bwsalmon/grain/run-slash/" + job + "/Test.log",
+		"bwsalmon/grain/run-slash/pkg%2Fcli stress under load/Test.log",
+		"bwsalmon/grain/run-slash/" + job + "/attempts/1/Test.log",
+	} {
+		node, err := srv.Resolve(ctx, scope, "ci", p)
+		if err != nil {
+			t.Errorf("ci://%s: %v", p, err)
+			continue
+		}
+		if got := readNode(t, node); got != "--- FAIL: TestStress\n" {
+			t.Errorf("ci://%s = %q, want the stress job's log", p, got)
+		}
+	}
+	node, err = srv.Resolve(ctx, scope, "ci", "bwsalmon/grain/run-slash/pkg/Test.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readNode(t, node); got != "the wrong job\n" {
+		t.Errorf("ci://.../pkg/Test.log = %q, want job pkg's own log", got)
 	}
 }
