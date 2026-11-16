@@ -43,25 +43,11 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
-// dayPrefix is what the reset says ahead of the time when it falls on a
-// later day in ZONE than now -- "Nov 16, " -- and "" when it is today. A
-// reset 2h15m out crosses local midnight for runs after 21:45 in ZONE,
-// and the page then names the date, so the spec must too.
-function dayPrefix(ms) {
-  const day = (t) =>
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: ZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date(t));
-  if (day(ms) === day(Date.now())) return "";
-  const md = new Intl.DateTimeFormat("en-US", {
-    timeZone: ZONE,
-    month: "short",
-    day: "numeric",
-  }).format(new Date(ms));
-  return `${md}, `;
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
+  const day = (ms) =>
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
 }
 
 for (const size of SIZES) {
@@ -105,10 +91,14 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
-      const prefix = dayPrefix(until);
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
       await expect(reset).toContainText(
         new RegExp(
-          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -138,7 +128,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });
