@@ -165,8 +165,8 @@
 #
 # CI verdicts come from wherever the gate runs (RELEASE_CI_SOURCE). With
 # "grain" they are grain CI's runs, GET /api/ci/runs, read through the
-# release-gate-read capability (the api:release-gate-read preset:
-# GRAIN_API_URL and GRAIN_API_TOKEN, sourced from ~/.grain-api/env when
+# https://grain.dev/capabilities/api#release-gate-read preset
+# (GRAIN_API_URL and GRAIN_API_TOKEN, sourced from ~/.grain-api/env when
 # unset). With "github" they are GitHub's workflow runs, GET
 # /repos/{RELEASE_GITHUB_REPO}/actions/workflows/<suite>.yml/runs (and, for
 # an rc, the jobs of each nightly.yml run on it), read with GITHUB_TOKEN
@@ -641,9 +641,10 @@ images() { # images <release-images.sh args...>
 
 remote_branch() { git ls-remote --exit-code -q --heads "$remote" "refs/heads/$1" >/dev/null 2>&1; } # remote_branch <name>
 
-# Grain's CI API address and token (the job's api grants, release-gate-read
-# among them), from the env file the token is placed in when the
-# environment does not have them. A daemon from before the release gate
+# Grain's CI API address and token (the job's api grants,
+# https://grain.dev/capabilities/api#release-gate-read among them), from
+# the env file the token is placed in when the environment does not have
+# them. A daemon from before the release gate
 # became an api preset placed them in ~/.release-gate/env, under the
 # GRAIN_RELEASE_GATE_* names, and still reads the same.
 if [ -z "${GRAIN_API_URL:-}" ] && [ -r "${HOME:-/home/debian}/.grain-api/env" ]; then
@@ -667,7 +668,7 @@ gate_json() { # gate_json <override-var> <path> <out>
     return 0
   fi
   if [ -z "${GRAIN_API_URL:-}" ] || [ -z "${GRAIN_API_TOKEN:-}" ]; then
-    die "no release gate to read $2 from: grant the job release-gate-read (GRAIN_API_URL, GRAIN_API_TOKEN) or set $1"
+    die "no release gate to read $2 from: grant the job https://grain.dev/capabilities/api#release-gate-read (GRAIN_API_URL, GRAIN_API_TOKEN) or set $1"
   fi
   curl -fsS --max-time 60 -H "Authorization: Bearer $GRAIN_API_TOKEN" \
     "${GRAIN_API_URL%/}$2" -o "$3" || die "could not read $2 from the release gate"
