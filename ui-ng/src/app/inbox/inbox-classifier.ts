@@ -29,7 +29,7 @@ import {
 // is unit-tested on its own and shared by every view of the queue.
 
 export type Tone =
-  "reply" | "proposal" | "blast" | "error" | "healthy" | "neutral";
+  "reply" | "proposal" | "blast" | "warn" | "error" | "healthy" | "neutral";
 export type FilterId =
   | "all"
   | "asked"
@@ -325,12 +325,34 @@ const INBOX_STATES = [
   "proposed",
 ];
 
+function isSilentGoalQuestion(t: Task): boolean {
+  return (
+    !!t.goalMode?.enabled &&
+    t.state === "awaiting_reply" &&
+    !t.awaitingAccess &&
+    !isStoppedTurn(t)
+  );
+}
+
+function isSilentGoalProposal(t: Task): boolean {
+  return (
+    t.state === "proposed" &&
+    !!t.goalMode?.enabled &&
+    !!t.proposedBy &&
+    !!t.autoApproveProposals
+  );
+}
+
 export function waitsOnUser(t: Task): boolean {
   if (t.consoleSession) return false;
+  const stateWait =
+    INBOX_STATES.includes(t.state) &&
+    !isSilentGoalQuestion(t) &&
+    !isSilentGoalProposal(t);
   return (
     waitingBaseRepair(t) ||
     awaitsHumanSubmit(t) ||
-    INBOX_STATES.includes(t.state) ||
+    stateWait ||
     awaitsGitHubApproval(t) ||
     mergeQueueStalled(t) ||
     !!t.stall ||
@@ -610,7 +632,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     }
     return e;
   }
-  if (t.state === "awaiting_reply") {
+  if (t.state === "awaiting_reply" && !isSilentGoalQuestion(t)) {
     if (t.awaitingAccess) {
       const e = taskEntry(t, "access", "access");
       e.pillLabel = "Access request";
@@ -677,8 +699,24 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       review ? "review" : "submit",
     );
     const red = gateSummary(t, listOnly).state === "failing";
-    e.pillLabel = review ? "Review questions" : red ? "CI failing" : "Submit";
-    e.pillTone = review ? "blast" : red ? "error" : "healthy";
+    e.pillLabel = review
+      ? "Review questions"
+      : red
+        ? "CI failing"
+        : t.goalScorecard?.verified
+          ? "Goal ready"
+          : t.goalScorecard?.stoppedAtCap
+            ? "Goal capped"
+            : "Submit";
+    e.pillTone = review
+      ? "blast"
+      : red
+        ? "error"
+        : t.goalScorecard?.verified
+          ? "healthy"
+          : t.goalScorecard?.stoppedAtCap
+            ? "warn"
+            : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
       : blocked ||
@@ -780,7 +818,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     if (control) e.actions.push(control);
     return e;
   }
-  if (t.state === "proposed") {
+  if (t.state === "proposed" && !isSilentGoalProposal(t)) {
     const e = taskEntry(t, "proposal", "proposal");
     e.pillLabel = "Proposal";
     e.pillTone = "proposal";

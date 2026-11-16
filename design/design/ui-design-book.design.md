@@ -702,3 +702,46 @@ Rules:
 - [ ] This book updated if the change sets or changes a rule.
 - [ ] No internal hostnames, people's names or credentials in code, fixtures,
       screenshots or commit messages.
+
+## 13. Autonomous Goal Mode
+
+Autonomous Goal Mode lets an operator hand Grain a multi-pass outcome ("Prototype a goal") and step back until the work is verified and ready to submit or reaches a hard safety/budget boundary.
+
+### 13.1 Intake (`+ Create` menu & `NewTaskSheetComponent`)
+
+- The `+ Create` menu in the shell (`AppComponent`) offers a third rich 2-line entry after **New task** and **Start a workstream**:
+  - **Prototype a goal** (`data-testid="create-prototype-goal"`): *"Hammer through autonomously — logs assumptions, verifies deliverables, opens a PR"*.
+  - Selecting it opens `NewTaskSheetComponent` pre-filled with `goalMode: { enabled: true, maxPasses: 8, wallClockMinutes: 120, mockMissingSecrets: true }` and `autoApproveProposals: true`.
+- Inside `NewTaskSheetComponent`, **Execution posture** (`<g-pill-select testid="nt-posture">`) switches between `Supervised` and `Autonomous goal`.
+- When `Autonomous goal` is active, a compact `.nt-section-card` (`data-testid="nt-goal-config"`) reveals:
+  - A calm one-sentence explanation of Inbox silence and bounded verification passes.
+  - **Max verification passes** (`data-testid="nt-max-passes"`, `1..20`, default `8`).
+  - **Wall-clock budget (min)** (`data-testid="nt-wall-clock"`, `5..720`, default `120`).
+  - **Mock missing external secrets locally** (`data-testid="nt-mock-secrets"`, `role="switch"`).
+  - Primary submit action label updates to **Start autonomous goal** (`data-testid="new-task-submit"`).
+- `.sheet-body` carries `32px` bottom padding and `scroll-padding-bottom: 32px` (with `flex-shrink: 0` on direct children) so bottom controls scroll comfortably clear of the sticky `.sheet-foot`. Active snackbars anchor above `--grain-bottombar-height` (`+ 16px` desktop, `+ 84px` phone, `+ 80px` landscape short) and dismiss/suppress overlapping bottom-bar tooltips on open.
+
+### 13.2 Inbox Silence & Terminal Surfacing (`inbox-classifier.ts`)
+
+- While `t.goalMode?.enabled` is true, mid-flight `awaiting_reply` questions (`!t.awaitingAccess && !isStoppedTurn(t)`) and auto-approved child proposals (`t.state === "proposed" && !!t.proposedBy && !!t.autoApproveProposals`) are suppressed from `waitsOnUser` and `classifyTask`.
+- Terminal and safety states always surface in the Inbox:
+  - `awaiting_submit`: renders pill **Goal ready** (`healthy`) when `t.goalScorecard?.verified` is true, or **Goal capped** (`warn`) when `t.goalScorecard?.stoppedAtCap` is true.
+  - `awaitingAccess`, `isStoppedTurn`, `failed`, `waitingBaseRepair`, `mergeBlocked`, `mergeQueueStalled`, and `stall` surface in their standard priority groups.
+
+### 13.3 Goal Scorecard, Assumptions Ledger & Revise Loop (`<g-task-goal-card>`)
+
+- `<g-task-goal-card>` (`data-testid="task-goal-card"`) renders above `<g-conversation>` in `TaskDetailComponent` (`/next/task/:id` and split-pane inspectors) and inside `InboxPageComponent`'s inspector whenever `goalMode?.enabled`, `goalScorecard`, or `goalAssumptions` is present.
+- Header (`data-testid="goal-status-pill"`):
+  - `Goal verified · N passes` (`healthy`), `Stopped at cap · N / M passes` (`warn`), or `Autonomous goal · Pass N / M` (`setup`).
+- Operator controls:
+  - **Switch to supervised** (`data-testid="act-switch-supervised"`): sends `PATCH /api/tasks/{id}` with `{ goalMode: { enabled: false } }` so the operator can take over mid-flight.
+  - **Revise…** (`data-testid="act-revise-goal"`): opens `NewTaskSheetComponent` pre-filled as a follow-up autonomous goal targeting the task's branch (`base: t.branch || t.base`), linked via `generatedFrom: t.id`, with prior summary and assumptions pre-populated in the description.
+- Body:
+  - **Deliverables checklist** (`data-testid="goal-deliverables"` / `data-testid="goal-deliverable"`): each requirement, verification mark (`✓` / `!`), and evidence citation.
+  - **Assumptions ledger** (`data-testid="goal-assumptions"` / `data-testid="goal-assumption"`): each autonomous decision (`topic`, `decision`, `rationale`, `alternatives`).
+
+### 13.4 Cross-Surface Badges
+
+- **Tasks (`/next/tasks`)** and **Agents (`/next/agents`)**: render compact status pills (`data-testid="goal-badge-<id>"`) showing `Goal ✓` (`healthy`), `Goal capped` (`warn`), or `Goal · N/M` (`setup`).
+- **Workstreams (`/next/workstreams`)**: streams whose root or member tasks run in Autonomous Goal Mode display an `Autonomous goal` chip (`data-testid="ws-goal-chip-<key>"`).
+

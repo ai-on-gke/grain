@@ -436,6 +436,12 @@ export class InboxStore implements OnDestroy {
     });
   }
 
+  // reloadSelectedDetail forces a fresh task detail fetch for the active selection.
+  async reloadSelectedDetail(): Promise<void> {
+    await this.refresh();
+    await this.ensureDetail(true);
+  }
+
   // refresh reads everything again. Concurrent calls wait on a fresh read
   // started after the active one finishes so callers never observe stale
   // pre-mutation state.

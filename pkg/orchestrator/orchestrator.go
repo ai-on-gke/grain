@@ -726,6 +726,9 @@ type Config struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller-local synchronized state repository used by deployment-health.
 	GrainStateDir string
+	// DataDir is the deployment data directory used for local telemetry such as
+	// Goal Mode performance JSONL profiling (<DataDir>/perf/goal-mode.jsonl).
+	DataDir string
 	// SandboxGuestImage is the reference this deployment's sandboxes are
 	// really created from -- cmd/grain's chooseSandboxImage, the same
 	// value ui.SandboxImage.Image reports.

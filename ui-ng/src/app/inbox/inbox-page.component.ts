@@ -59,6 +59,7 @@ import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import { TaskGoalCardComponent } from "../task/task-goal-card.component";
 
 import {
   type FilterId,
@@ -981,6 +982,16 @@ const ONE_KEY = new Set(["approve"]);
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
               </div>
 
+              @if (store.selectedDetail() ?? sel.task; as inspTask) {
+                <g-task-goal-card
+                  [task]="inspTask"
+                  [attemptsCount]="
+                    store.selectedDetail()?.attempts?.length ?? 0
+                  "
+                  (acted)="store.reloadSelectedDetail()"
+                />
+              }
+
               @if (sel.taskId) {
                 <g-conversation
                   data-testid="inspector-conversation"
@@ -1238,6 +1249,7 @@ const ONE_KEY = new Set(["approve"]);
     StatusIconComponent,
     ConversationComponent,
     CappedMarkdownComponent,
+    TaskGoalCardComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {

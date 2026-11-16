@@ -659,8 +659,12 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += nothingNeededSection(task)
-	prompt += questionSummarySection
-	prompt += personActionSection
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+		prompt += autonomousGoalSection(gm)
+	} else {
+		prompt += questionSummarySection
+		prompt += personActionSection
+	}
 	prompt += statusSection(canOpenPullRequest)
 	prompt += chatSection(task, canOpenPullRequest)
 	prompt += runtimeSection(task, maxRuntime)
@@ -3190,6 +3194,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		}
 	}
 	task = withDeploymentTimeZone(task, cfg.TimeZone)
+	cfg = goalModeDispatch(task, cfg)
 	run := model.Run{ID: d.RunID, TaskID: d.TaskID, Sandbox: d.RunID, Attempt: d.Attempt, StartedAt: at}
 	cc := model.CapabilityContext{Task: task, Run: run, Now: at, Workdir: sandboxRoot, Credentials: cfg.Credentials,
 		Deadline: capabilityDeadline(at, cfg.maxRunRuntime())}
@@ -3947,6 +3952,14 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// moment the framework names it (earlySession).
 			OnResumableSession: early.record,
 		}
+		var initialGoalHead string
+		var goalPass1Span *GoalPerfSpan
+		gmEnabled := false
+		if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+			gmEnabled = true
+			initialGoalHead, _ = inspectGoalCheckout(hostCtx, tools)
+			goalPass1Span = NewGoalPerfProfiler(cfg.DataDir).Start(task.ID, d.RunID, 1, "verifier-pass")
+		}
 		result, runErr = framework.Run(hostCtx, runCfg)
 		if runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
 			noteFirstTurn()
@@ -3955,9 +3968,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
+		// Autonomous Goal Mode drives its own multi-pass continuation loop
+		// below without falling back to BackgroundContinueReason.
+		if !gmEnabled && !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
 			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
 		}
+		result, runErr = runGoalVerifierPasses(hostCtx, ctx, store, cfg, framework, runCfg, tools, &task, d.RunID, initialGoalHead, goalPass1Span, result, runErr)
 		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
