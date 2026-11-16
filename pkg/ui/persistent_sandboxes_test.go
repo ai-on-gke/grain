@@ -86,6 +86,8 @@ func stagingUpstream(t *testing.T) *httptest.Server {
 			// clear grain's site data and loosen the sandbox policy.
 			w.Header().Add("Set-Cookie", "grain_access=evil; Path=/")
 			w.Header().Add("Set-Cookie", "grain_csrf=evil")
+			w.Header().Add("Set-Cookie", ui.VerifierSessionCookieName+"=evil; Path=/; Secure")
+			w.Header().Add("Set-Cookie", "__host-grain_verified=evil; Path=/; Secure")
 			w.Header().Add("Set-Cookie", "app=1; Path=/; Domain=example.com; HttpOnly")
 			w.Header().Add("Set-Cookie", "deep=2; Path=/app/")
 			w.Header().Add("Set-Cookie", "bare=3")
@@ -146,6 +148,7 @@ func TestStagingProxyHTTP(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/staging/web/app/page", nil)
 		req.Header.Set("Authorization", "Bearer "+testAccessCode)
 		req.AddCookie(&http.Cookie{Name: ui.AccessCookieName, Value: "secret"})
+		req.AddCookie(&http.Cookie{Name: ui.VerifierSessionCookieName, Value: "secret"})
 		req.AddCookie(&http.Cookie{Name: "app_session", Value: "keep"})
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
