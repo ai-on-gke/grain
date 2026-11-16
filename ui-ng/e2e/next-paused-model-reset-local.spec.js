@@ -43,6 +43,22 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
+// localDay is ms's calendar day on ZONE's clock.
+function localDay(ms) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: ZONE }).format(
+    new Date(ms),
+  );
+}
+
+// localMonthDay is how the page names a later day: "Nov 16".
+function localMonthDay(ms) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: ZONE,
+    month: "short",
+    day: "numeric",
+  }).format(new Date(ms));
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
@@ -84,9 +100,17 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
+      // A reset on a later local day names that day first ("Nov 16,
+      // 12:26 AM PST"); one later today is the time alone. Which one
+      // depends on the hour this runs, so the expectation is worked out
+      // the same way rather than assuming today.
+      const prefix =
+        localDay(until) === localDay(Date.now())
+          ? ""
+          : `${localMonthDay(until)}, `;
       await expect(reset).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -116,7 +140,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });
