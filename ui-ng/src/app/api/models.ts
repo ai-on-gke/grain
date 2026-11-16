@@ -100,6 +100,9 @@ export interface GrainConfig {
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
   capabilities?: CapabilityOption[];
+  // ciCapabilities is what can be granted to a repository's CI jobs
+  // (the repo page's CI capabilities card).
+  ciCapabilities?: CapabilityOption[];
   defaultCapabilities?: string[];
   repoDefaultCapabilities?: Record<string, string[]>;
   agentBackends?: AgentBackendOption[];
