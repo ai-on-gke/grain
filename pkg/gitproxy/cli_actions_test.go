@@ -427,8 +427,12 @@ func TestCLIActionsRefuseAndRoute(t *testing.T) {
 	if rec := send(h, http.MethodPost, "tok-ci", "/cli/pr/review-comment", `{"body":"x","path":"a.go"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("review comment with a path and no line: %d", rec.Code)
 	}
-	if rec := send(h, http.MethodPost, "tok-ci", "/cli/pr/review-comment", `{"body":"nil deref","path":"a.go","line":3}`); rec.Code != http.StatusOK {
+	if rec := send(h, http.MethodPost, "tok-ci", "/cli/pr/review-comment", `{"body":"nil deref","path":"a.go","line":3,"category":"Correctness"}`); rec.Code != http.StatusOK {
 		t.Errorf("review comment: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodPost, "tok-ci", "/cli/pr/review-comment", `{"body":"x","category":"style"}`); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "correctness, tests, security, compatibility, other") {
+		t.Errorf("review comment with an unknown category: %d %s", rec.Code, rec.Body)
 	}
 
 	rec = send(h, http.MethodGet, "tok-ci", "/cli/tasks/42/revert-info", "")
@@ -441,7 +445,8 @@ func TestCLIActionsRefuseAndRoute(t *testing.T) {
 
 	act.mu.Lock()
 	defer act.mu.Unlock()
-	if len(act.calls) != 1 || act.calls[0]["path"] != "a.go" || act.calls[0]["line"] != 3 {
+	if len(act.calls) != 1 || act.calls[0]["path"] != "a.go" || act.calls[0]["line"] != 3 ||
+		act.calls[0]["category"] != "correctness" {
 		t.Errorf("review calls = %+v", act.calls)
 	}
 	counted := map[string]int{}

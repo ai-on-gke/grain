@@ -55,12 +55,6 @@ const (
 	// add_review_comment findings its run(s) produced, before GitHub draft
 	// creation can fail or lose line anchors. Provenance only; blocks nothing.
 	linkReviewPostedFindings model.LinkKind = "review-posted-findings"
-
-	// linkReviewedHeadCompat matches LinkReviewedHead if present on a task.
-	linkReviewedHeadCompat model.LinkKind = "reviewed-head"
-
-	// linkReviewVerdictCompat matches LinkReviewVerdict if present on a task.
-	linkReviewVerdictCompat model.LinkKind = "review-verdict"
 )
 
 type storedReviewFinding struct {
@@ -201,10 +195,7 @@ func parseFindingsFromReviewComment(body string) []storedReviewFinding {
 
 // filedReviewHead returns the commit SHA review t was filed to read, or "".
 func filedReviewHead(t model.Task) string {
-	if sha := strings.ToLower(strings.TrimSpace(linkTarget(t, linkReviewedHeadCompat))); sha != "" {
-		return sha
-	}
-	if sha := strings.ToLower(strings.TrimSpace(reviewHead(t.Tags))); sha != "" {
+	if sha := strings.ToLower(strings.TrimSpace(model.ReviewedHead(t))); sha != "" {
 		return sha
 	}
 	if ev := linkTarget(t, model.LinkGitHubEvent); strings.HasPrefix(ev, "takeover-") {
@@ -606,17 +597,15 @@ func earlierReviewsSection(ctx context.Context, store *model.Store, client githu
 func earlierReviewVerdict(r model.Task, obs *model.Observation, state model.State,
 	findings []storedReviewFinding, commits []string, beingSuperseded bool) string {
 
-	if raw := linkTarget(r, linkReviewVerdictCompat); raw != "" {
-		var rec struct {
-			Verdict     string `json:"verdict"`
-			FixesPushed bool   `json:"fixesPushed"`
+	// The verdict the review recorded (model.LinkReviewVerdict). A run
+	// whose only "findings" were fixes it pushed itself left nothing open:
+	// that reads as clean with fixes pushed.
+	if rec, ok := model.ReviewVerdictOf(r); ok && rec.Verdict != "" {
+		pushedOnly := rec.Verdict == model.VerdictFindings && rec.FindingCount == 0 && rec.FixesPushed
+		if pushedOnly || (rec.Verdict == model.VerdictClean && (rec.FixesPushed || len(commits) > 0)) {
+			return "clean (pushed fixes)"
 		}
-		if err := json.Unmarshal([]byte(raw), &rec); err == nil && rec.Verdict != "" {
-			if rec.Verdict == "clean" && (rec.FixesPushed || len(commits) > 0) {
-				return "clean (pushed fixes)"
-			}
-			return rec.Verdict
-		}
+		return string(rec.Verdict)
 	}
 	if len(findings) > 0 {
 		return "findings"

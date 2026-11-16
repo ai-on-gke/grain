@@ -37,6 +37,9 @@ type reviewFinding struct {
 	Path    string
 	Line    int
 	Located bool
+	// Category is the call's category, as model.
+	// NormalizeReviewFindingCategory spells it.
+	Category string
 }
 
 // reviewFindings recovers every non-error add_review_comment call from a
@@ -59,7 +62,8 @@ func reviewFindings(result *agent.Result) []reviewFinding {
 		if strings.TrimSpace(body) == "" {
 			continue
 		}
-		finding := reviewFinding{Body: body}
+		category, _ := c.Arguments["category"].(string)
+		finding := reviewFinding{Body: body, Category: model.NormalizeReviewFindingCategory(category)}
 		path, _ := c.Arguments["path"].(string)
 		path = strings.TrimSpace(path)
 		line, hasLine := argInt(c.Arguments["line"])

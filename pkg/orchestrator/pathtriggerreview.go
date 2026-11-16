@@ -129,11 +129,11 @@ func reviewKindTag(ref model.PullRequestRef, kind string) string {
 }
 
 // reviewHeadTag is the head a review was filed to read.
-func reviewHeadTag(sha string) string { return "path-trigger-head:" + strings.ToLower(sha) }
+func reviewHeadTag(sha string) string { return model.PathTriggerHeadTagPrefix + strings.ToLower(sha) }
 
 func reviewHead(tags []string) string {
 	for _, tag := range tags {
-		if sha, ok := strings.CutPrefix(tag, "path-trigger-head:"); ok {
+		if sha, ok := strings.CutPrefix(tag, model.PathTriggerHeadTagPrefix); ok {
 			return sha
 		}
 	}
@@ -239,6 +239,7 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 		review.Tags = []string{model.PathTriggerMarkerTag, tag}
 		if headSHA != "" {
 			review.Tags = append(review.Tags, reviewHeadTag(headSHA))
+			model.SetReviewedHead(&review, headSHA)
 		}
 		if since != "" {
 			review.Tags = append(review.Tags, reviewSinceTag(since))

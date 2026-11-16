@@ -922,6 +922,23 @@ a "The change under review" section to the template's body:
   happens on a deployment that leaves a newly required environment variable,
   repository variable or setting unset (or when a default changes).
 
+**What a review read and what it found** (grain/task-5272). Every review
+task -- a gating trigger's, grain's security review, a declared stacked
+review and an external pull request's -- carries `reviewedHead` on
+`/api/tasks` and `/api/tasks/{id}`: the head it was filed to read, or for a
+declared review the reviewed branch's head when its first run started. A
+security review that pushed fixes also carries `reviewerHead`, the head it
+left. When a run of the review finishes, the task records `reviewVerdict`:
+`clean`, `findings` (it left findings, or pushed fixes of its own) or
+`questions` (it ended on `ask_question` or held the change with
+`request_human_review`), with `findingCount` and one
+category per finding -- `correctness`, `tests`, `security`,
+`compatibility` or `other` -- from each `add_review_comment` call's
+`category` (`grain pr review-comment --category`; none is `other`). A run
+that suspends or parks for a secret or access records none. Reviews filed
+before this record no verdict, and of those only a gating trigger's carries
+a head (its `path-trigger-head` tag).
+
 **Priority.** A gating review runs at the priority of the change it gates,
 and never below 7 (`model.ReviewPriorityFloor`). That applies to grain's
 security review, every `.grain/triggers` review and each re-review after a

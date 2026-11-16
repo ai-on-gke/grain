@@ -106,7 +106,8 @@ func securityReviewBody() string {
 	b.WriteString("Use an `add_review_comment` call only for what you cannot or should not fix " +
 		"yourself, since that is what sends the change to a human: a design " +
 		"decision, a trade-off, or a behaviour change the brief does not settle. Write each as a " +
-		"question with the answer you recommend, on the line it is about. Any such call holds the " +
+		"question with the answer you recommend, on the line it is about, and give it a `category` " +
+		"(correctness, tests, security, compatibility or other). Any such call holds the " +
 		"change for the owner's decision, and their reply sends another run to carry it out; a " +
 		"concern recorded any other way -- a comment, your closing note -- holds nothing. If there " +
 		"was nothing to fix or ask, finish with a comment_on_issue saying what you checked.\n\n")

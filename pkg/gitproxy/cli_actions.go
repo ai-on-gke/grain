@@ -1272,6 +1272,9 @@ type cliReviewCommentRequest struct {
 	Body string `json:"body"`
 	Path string `json:"path,omitempty"`
 	Line int    `json:"line,omitempty"`
+	// Category is the finding's category (model.ReviewFindingCategories),
+	// recorded in the review's verdict.
+	Category string `json:"category,omitempty"`
 }
 
 // errNoCallRecorder is a review comment with nowhere to be kept.
@@ -1303,6 +1306,13 @@ func (p *GitProxy) serveReviewComment(w http.ResponseWriter, r *http.Request, sc
 	if path != "" {
 		args["path"] = path
 		args["line"] = req.Line
+	}
+	if c := strings.TrimSpace(req.Category); c != "" {
+		if !slices.Contains(model.ReviewFindingCategories, strings.ToLower(c)) {
+			http.Error(w, "--category must be one of "+strings.Join(model.ReviewFindingCategories, ", "), http.StatusBadRequest)
+			return
+		}
+		args["category"] = strings.ToLower(c)
 	}
 	if err := rec.RecordProxyToolCallArgs(r.Context(), scope.RunID, "add_review_comment", args); err != nil {
 		cliError(w, err)
