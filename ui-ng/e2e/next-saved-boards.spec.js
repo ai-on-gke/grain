@@ -471,6 +471,12 @@ test("a board this page cannot draw opens on its classic page", async ({
     await page.getByTestId("saved-boards-btn").click();
     await page.getByTestId(`board-apply-${native.id}`).click();
     await expect(page).toHaveURL(/\/next\/tasks\?tab=asked$/);
+
+    // The other way round: the classic page read a board saved here
+    // without its tab, and opened it on every task (boards.js's
+    // classicBoardQuery).
+    await page.goto(`/boards/${native.id}`);
+    await expect(page).toHaveURL(/f=state:any:awaiting_reply\|failed/);
   } finally {
     for (const id of made) {
       await page.request.delete(`/api/boards/${id}`).catch(() => {});
