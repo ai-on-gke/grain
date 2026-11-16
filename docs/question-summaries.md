@@ -60,9 +60,13 @@ The API returns it in three places:
   the summary of the question it is parked on, derived from the body for
   a question stored without one. Absent for a stopped turn.
 - `noteSummary` on the task itself, in both `GET /api/tasks` and
-  `GET /api/tasks/{id}`: the `summary` the agent gave the newest
-  non-handover comment (`Store.NoteSummary`), never derived from the
-  comment's body.
+  `GET /api/tasks/{id}`, while the task is `awaiting_reply` resting on a
+  closing note: the `summary` the agent gave the newest non-handover
+  comment (`Store.NoteSummary`), never derived from the comment's body.
+  Absent once the task is closed or in any other state, when the note
+  has no summary, and whenever `questionSummary`, a stopped turn, an
+  access request or a person's unanswered comment already says what the
+  task is waiting on.
 
 ## In the UI
 

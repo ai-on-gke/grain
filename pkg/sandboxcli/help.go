@@ -133,7 +133,8 @@ SURFACE & APPROVAL:
     regardless. A proposal that sets keep_running, a sandbox dimension above
     your task's own, or a priority above both your task's own and the default
     (5) always waits for a person: only a person may give a task any of those
-    (and a sandbox dimension above the deployment's maximum is held or refused).
+    (and a sandbox dimension above the deployment's maximum is refused when filed
+    live, or clamped to that maximum when relayed at the end of a run).
     Read what the call returns to see whether it queued or held.
 
 ARGUMENTS & FLAGS:
