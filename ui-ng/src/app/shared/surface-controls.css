@@ -163,10 +163,12 @@
   color: var(--md-sys-color-inverse-primary);
 }
 
+/* 5%, not more: inverse-primary text keeps 4.5:1 on the tint in both
+   themes (12% left dark mode's #0b57d0 on #ccced4 at 4.05:1). */
 .batch-bar .btn-text:hover:not(:disabled) {
   background: color-mix(
     in srgb,
-    var(--md-sys-color-inverse-on-surface) 12%,
+    var(--md-sys-color-inverse-on-surface) 5%,
     var(--md-sys-color-inverse-surface)
   );
 }

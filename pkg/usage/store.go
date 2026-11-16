@@ -76,8 +76,10 @@ func Load(ctx context.Context, store *model.Store, now time.Time, maxWorkers int
 // connection, the usage the window consumed before it as an estimate of
 // that window's capacity (model.UsageCapacity). The window is the
 // operator's configured one for the scope, else the one learned last
-// time, else DefaultWindow. A pause on no connection, or one whose window
-// held no recorded usage, teaches nothing.
+// time, else DefaultWindow. A weekly limit's pause (PauseHorizon) teaches
+// the scope's weekly capacity instead, over WeeklyWindow, kept apart from
+// the interval's. A pause on no connection, or one whose window held no
+// recorded usage, teaches nothing.
 func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLimitPause, now time.Time) error {
 	if pause.Connection == "" {
 		return nil
@@ -91,16 +93,24 @@ func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLi
 		return err
 	}
 	m := norm(pause.Model)
+	horizon := PauseHorizon(pause)
+	key := capacityModel(m, horizon)
 	window := DefaultWindow
 	found := false
+	if horizon == HorizonWeekly {
+		window, found = WeeklyWindow, true
+	}
 	for _, b := range settings.Budgets {
+		if horizon == HorizonWeekly {
+			break
+		}
 		if strings.TrimSpace(b.Connection) == pause.Connection && norm(b.Model) == m && b.WindowDuration() > 0 {
 			window, found = b.WindowDuration(), true
 		}
 	}
 	start := now.Add(-window)
 	for _, c := range capacities {
-		if c.Connection != pause.Connection || norm(c.Model) != m {
+		if c.Connection != pause.Connection || norm(c.Model) != key {
 			continue
 		}
 		if !found && c.Window > 0 {
@@ -125,7 +135,7 @@ func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLi
 		return nil
 	}
 	return store.RecordUsageCapacity(ctx, model.UsageCapacity{
-		Connection: pause.Connection, Model: m, Tokens: used, Window: window, ObservedAt: now, ResetAt: pause.Until,
+		Connection: pause.Connection, Model: key, Tokens: used, Window: window, ObservedAt: now, ResetAt: pause.Until,
 	})
 }
 

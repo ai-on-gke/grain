@@ -73,7 +73,15 @@ interface GitConnectionRow {
     error?: string;
     ambientPending?: boolean;
     ambientWarning?: string;
+    defaultKnownHosts?: string;
   } | null;
+}
+
+// generatedCredential is whether cred is a name grain minted for a
+// connection saved without one (model.DeploymentOwnsGitCredential:
+// "grain-git-c-<hex>", or the older "grain-team-<team>-c-<hex>").
+function generatedCredential(cred: string): boolean {
+  return /^grain-(git|team)-/.test(cred);
 }
 
 // GitCheckResult is POST /api/deployment/git-connections/check's answer
@@ -460,10 +468,22 @@ interface StateRepoEntryDto {
                 placeholder="github.com"
                 [value]="state.val('githubHost', 'github.com')"
                 [disabled]="!canWriteSettings()"
+                aria-describedby="git-host-hint"
                 (input)="
                   state.setField('githubHost', $any($event.target).value)
                 "
               />
+              <span
+                class="s-hint"
+                id="git-host-hint"
+                data-testid="git-host-credentials-pointer"
+              >
+                The host grain's GitHub API calls go to. The deployment's shared
+                credentials live under
+                <a routerLink="/settings/capabilities" fragment="credentials"
+                  >Settings → Capabilities</a
+                >.
+              </span>
             </div>
           </div>
           <div class="s-toggle-row">
@@ -812,18 +832,51 @@ interface StateRepoEntryDto {
                     ></textarea>
                   </div>
                   <div class="s-field">
-                    <label class="s-label" for="gc-known-hosts"
-                      >Known hosts (optional)</label
-                    >
+                    <label class="s-label" for="gc-known-hosts">{{
+                      sshOnGitHub() ? "Known hosts (optional)" : "Known hosts"
+                    }}</label>
                     <textarea
                       id="gc-known-hosts"
                       class="s-textarea s-mono"
                       rows="2"
                       data-testid="input-git-conn-known-hosts"
-                      placeholder="git.example.com ssh-ed25519 AAAA..."
+                      aria-describedby="gc-known-hosts-hint"
+                      [placeholder]="
+                        sshOnGitHub()
+                          ? 'github.com ssh-ed25519 AAAA...'
+                          : 'git.example.com ssh-ed25519 AAAA...'
+                      "
                       [value]="newGitKnownHosts()"
                       (input)="newGitKnownHosts.set($any($event.target).value)"
                     ></textarea>
+                    <span
+                      class="s-hint"
+                      id="gc-known-hosts-hint"
+                      data-testid="git-known-hosts-hint"
+                    >
+                      @if (sshOnGitHub()) {
+                        Left blank, github.com is pinned to GitHub's published
+                        host keys.
+                      } @else {
+                        Needed: grain never trusts a host key on first use, so
+                        give this host's key lines.
+                      }
+                    </span>
+                    @if (sshOnGitHub() && defaultKnownHosts()) {
+                      <div class="s-inline">
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          data-testid="fill-git-known-hosts"
+                          [disabled]="
+                            newGitKnownHosts().trim() === defaultKnownHosts()
+                          "
+                          (click)="newGitKnownHosts.set(defaultKnownHosts())"
+                        >
+                          Use GitHub's published keys
+                        </button>
+                      </div>
+                    }
                   </div>
                 } @else if (newGitType() === "app") {
                   <div class="s-field">
@@ -1041,7 +1094,58 @@ interface StateRepoEntryDto {
                 "
               />
             </div>
+            <div class="s-field">
+              <label class="s-label" for="ci-age-boost"
+                >CI queue age boost</label
+              >
+              <input
+                id="ci-age-boost"
+                class="s-input s-num"
+                type="text"
+                data-testid="input-ciAgeBoost"
+                [placeholder]="state.defaultHint('ciAgeBoost')"
+                [value]="state.val('ciAgeBoost', '')"
+                [disabled]="!canWriteSettings()"
+                (input)="
+                  state.setField('ciAgeBoost', $any($event.target).value)
+                "
+              />
+              <span class="s-hint"
+                >How long a waiting job queues to gain one step of rank, so
+                higher-priority work cannot starve the rest.</span
+              >
+            </div>
           </div>
+          @for (group of ciRetentionGroups; track group.title) {
+            <div class="s-subsection">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">{{ group.title }}</h4>
+              </div>
+              <div class="s-grid">
+                @for (f of group.fields; track f.key) {
+                  <div class="s-field">
+                    <label class="s-label" [attr.for]="'ci-' + f.key">{{
+                      f.label
+                    }}</label>
+                    <input
+                      class="s-input s-num"
+                      type="number"
+                      [id]="'ci-' + f.key"
+                      [attr.min]="f.min"
+                      [attr.data-testid]="'input-' + f.key"
+                      [value]="state.defaultedNumber(f.key)"
+                      [placeholder]="state.defaultHint(f.key)"
+                      [disabled]="!canWriteSettings()"
+                      (input)="
+                        state.setNumber(f.key, $any($event.target).value)
+                      "
+                    />
+                    <span class="s-hint">{{ f.hint }}</span>
+                  </div>
+                }
+              </div>
+            </div>
+          }
           @if (ciFaultCount() > 0) {
             <p class="s-hint s-num">
               {{ ciFaultCount() }} shared CI fault classification rule(s)
@@ -1300,6 +1404,83 @@ interface StateRepoEntryDto {
   `,
 })
 export class SettingsCodeComponent implements OnInit, OnChanges {
+  // The CI history, output, artifact and job-cache limits: each stores 0
+  // for grain's default and reports it as <key>Default, which the blank
+  // box shows as its placeholder (the Settings rule in the design book).
+  protected readonly ciRetentionGroups: readonly {
+    title: string;
+    fields: readonly {
+      key: string;
+      label: string;
+      hint: string;
+      min: number;
+    }[];
+  }[] = [
+    {
+      title: "Step output",
+      fields: [
+        {
+          key: "ciStepOutputMb",
+          label: "Step output kept (MiB)",
+          min: -1,
+          hint: "Ceiling on step output across the whole history; the oldest runs' logs go first. -1 keeps every byte.",
+        },
+        {
+          key: "ciStepOutputDays",
+          label: "Step output age (days)",
+          min: -1,
+          hint: "How long a run's step output lives whatever room is left. -1 bounds it by size alone.",
+        },
+        {
+          key: "ciRunOutputKb",
+          label: "Output per run (KiB)",
+          min: 0,
+          hint: "Most step output one run may store, spent on the steps a reader opens first.",
+        },
+      ],
+    },
+    {
+      title: "Artifacts",
+      fields: [
+        {
+          key: "ciArtifactRunMb",
+          label: "Artifacts per run (MiB)",
+          min: 0,
+          hint: "Ceiling on what one run's artifacts may come to.",
+        },
+        {
+          key: "ciArtifactFileMb",
+          label: "Largest artifact (MiB)",
+          min: 0,
+          hint: "Largest single artifact kept; a job's sandbox refuses one past it before sending.",
+        },
+        {
+          key: "ciArtifactDays",
+          label: "Artifacts age (days)",
+          min: 0,
+          hint: "How long a run's artifacts are kept.",
+        },
+      ],
+    },
+    {
+      title: "Job cache",
+      fields: [
+        {
+          key: "ciCacheEntries",
+          label: "Job cache entries",
+          min: 0,
+          hint: "Ceiling on how many entries the cache holds, alongside its size.",
+        },
+        {
+          key: "ciCacheDays",
+          label: "Job cache age (days)",
+          min: 0,
+          hint: "How long a result nobody asks for again is kept.",
+        },
+      ],
+    },
+  ];
+
   protected readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
@@ -1372,24 +1553,53 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   // page's banner alone left the next, fixed save under the old error.
   protected readonly gitRefusal = signal<string | null>(null);
   // reuseOptions are the stored credentials an existing connection can
-  // name, each told apart by the hosts and scopes it already serves, so
-  // two connections on one host are not both "github.com".
+  // name, each told apart by the host, kind and scope of every
+  // connection it already serves, so two connections on one host are
+  // not both "github.com". A connection saved with no name is stored
+  // under a generated grain-git-c-<hex>, which says nothing to a
+  // person: its row leads with where it points and keeps the name as
+  // the hint.
   protected readonly reuseOptions = computed<PillOption[]>(() => {
-    const byCred = new Map<string, string[]>();
+    const byCred = new Map<string, { where: string[]; type: string }>();
     for (const c of this.gitConnections()) {
       const cred = (c.credential || c.id || "").trim();
       if (!cred || cred === "anonymous") continue;
-      const where = `${c.host || "github.com"}${c.scope ? ` (${c.scope})` : ""}`;
-      byCred.set(cred, [...(byCred.get(cred) ?? []), where]);
+      const where = [
+        c.host || "github.com",
+        c.kind === "git" ? "git host" : "GitHub",
+        c.scope || "all repos",
+      ].join(" · ");
+      const e = byCred.get(cred) ?? {
+        where: [],
+        type: c.authType || c.type || "pat",
+      };
+      if (!e.where.includes(where)) e.where.push(where);
+      byCred.set(cred, e);
     }
     return [
       { value: "", label: "Choose a stored credential…" },
-      ...[...byCred.entries()].map(([cred, where]) => ({
+      ...[...byCred.entries()].map(([cred, e]) => ({
         value: cred,
-        label: `Reuse authentication from ${cred} — ${where.join(", ")}`,
+        label: `${e.where.join("; ")} (${e.type})`,
+        hint: generatedCredential(cred) ? `stored as ${cred}` : cred,
       })),
     ];
   });
+  // defaultKnownHosts is GitHub's published host keys, which every
+  // connection's status carries (ui.GitCredentialStatus): what a blank
+  // known_hosts on github.com is pinned to.
+  protected readonly defaultKnownHosts = computed(
+    () =>
+      this.gitConnections()
+        .map((c) => c.status?.defaultKnownHosts?.trim() ?? "")
+        .find(Boolean) ?? "",
+  );
+  // sshOnGitHub is whether a blank known_hosts would be filled in with
+  // GitHub's keys: only for github.com itself (gitproxy.SetSSHKey).
+  protected readonly sshOnGitHub = computed(
+    () =>
+      (this.newGitHost().trim().toLowerCase() || "github.com") === "github.com",
+  );
   // deploymentForNotice is the deployment the no-git-connection notice
   // reads: undefined until it has loaded, so the notice does not flash.
   protected readonly deploymentForNotice = computed(() => {
@@ -1543,8 +1753,16 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       return Boolean(this.newGitCred().trim());
     }
     const t = this.newGitType();
-    if (t === "pat" || t === "ssh") {
+    if (t === "pat") {
       return Boolean(this.newGitSecret().trim());
+    }
+    if (t === "ssh") {
+      // Off github.com a blank known_hosts pins nothing, and the server
+      // refuses it (gitproxy.ParseKnownHostsFor).
+      return Boolean(
+        this.newGitSecret().trim() &&
+        (this.sshOnGitHub() || this.newGitKnownHosts().trim()),
+      );
     }
     if (t === "app") {
       return Boolean(

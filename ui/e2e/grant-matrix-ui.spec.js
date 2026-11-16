@@ -568,7 +568,16 @@ async function walkCell(
         const expectedCheck = await recordedFor(request, ref, args);
         if ((await draft.count()) > 0) {
           await expect(draft).toBeVisible();
-          await fillVariantArgs(page, draft, method, variant, args);
+          // Fill the section, not the draft: once its required arguments
+          // pass, the draft saves itself SAVE_DELAY_MS later and the same
+          // element becomes the held grant (data-grant, no data-grant-draft),
+          // so a draft locator finds nothing for the optional fields still
+          // to be read -- cloud-key's ttl_minutes after account and project
+          // timed out in inputValue that way on a slow runner.
+          const section = currentGrants
+            .locator(`[data-method="${ref}"] [data-grant-kind="method"]`)
+            .first();
+          await fillVariantArgs(page, section, method, variant, args);
         }
 
         // On repo-ci, release#* and github#sandbox-repo move into the CI

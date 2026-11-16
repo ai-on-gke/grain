@@ -411,6 +411,7 @@ var matrixNotDecidedByScope = map[string]string{
 	"GET /api/tasks/{id}/messages":                                  "an agent reads only its own task's conversation (agentRails, ownMessagesReadRoute)",
 	"POST /api/tasks/{id}/human-review":                             "a run asks for human review only as its own task",
 	"POST /api/tasks/{id}/human-review/release":                     "only a person releases a human-review hold",
+	"POST /api/tasks/{id}/accept-findings":                          "only a person accepts a review's findings",
 	"POST /api/tasks/{id}/change-mail":                              "an agent never mails, publishes or syncs a change",
 	"POST /api/tasks/{id}/change-publish":                           "an agent never mails, publishes or syncs a change",
 	"POST /api/tasks/{id}/change-sync":                              "an agent never mails, publishes or syncs a change",
