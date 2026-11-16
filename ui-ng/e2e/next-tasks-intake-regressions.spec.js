@@ -114,3 +114,43 @@ test("Bulk edit reads 1e3 as priority 1000 and refuses what is not a whole numbe
         });
   }
 });
+
+test("New task explains a fork head label and refuses a malformed one before filing", async ({
+  page,
+}) => {
+  const posts = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && r.url().endsWith("/api/tasks"))
+      posts.push(r.postDataJSON());
+  });
+  await page.goto("/next/tasks");
+  await page.getByRole("button", { name: /^New/ }).first().click();
+  const sheet = page.getByTestId("new-task-sheet");
+  await sheet.getByTestId("nt-title").fill("Fork head probe");
+  await sheet.getByTestId("nt-new-branch").uncheck();
+  const base = sheet.getByTestId("nt-base");
+  const submit = sheet.getByTestId("new-task-submit");
+
+  await base.fill("octo-fork:feature-x");
+  await expect(sheet.getByTestId("nt-fork-head-help")).toContainText(
+    "branch feature-x on octo-fork's fork",
+  );
+  await expect(submit).toBeEnabled();
+
+  await base.fill("bad::label");
+  await expect(sheet.getByTestId("nt-fork-head-error")).toContainText(
+    "has more than one ':'",
+  );
+  await expect(base).toHaveAttribute("aria-invalid", "true");
+  await expect(submit).toBeDisabled();
+
+  // An ordinary branch name is not a fork head, and ticking Create a new
+  // branch makes the box the branch to start from, where no label is read.
+  await base.fill("main");
+  await expect(sheet.getByTestId("nt-fork-head-error")).toHaveCount(0);
+  await base.fill("bad::label");
+  await sheet.getByTestId("nt-new-branch").check();
+  await expect(sheet.getByTestId("nt-fork-head-error")).toHaveCount(0);
+  expect(posts).toEqual([]);
+  await page.keyboard.press("Escape");
+});
