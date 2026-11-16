@@ -175,6 +175,8 @@ var secretStoreMethodArity = map[string]int{
 	"ImportKey":   1,
 }
 
+var scriptContinuationRE = regexp.MustCompile(`\\\r?\n`)
+
 var scriptReleasePublishRE = regexp.MustCompile(
 	`(?m)` +
 		`(?:\bdocker\s+(?:push|login|manifest\s+push|buildx\s+build[^\n]*--push)\b)` +
@@ -256,7 +258,7 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 		case *ast.CallExpr:
 			switch fn := x.Fun.(type) {
 			case *ast.Ident:
-				if hasNetHTTP && fn.Name == "route" {
+				if fn.Name == "route" && (hasNetHTTP || routePatternArg(x)) {
 					add("registers HTTP route via route(...)")
 				}
 				if grantPredicateFuncs[fn.Name] {
@@ -270,7 +272,11 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 				}
 			case *ast.SelectorExpr:
 				sel := fn.Sel.Name
-				if hasNetHTTP && (sel == "route" || sel == "HandleFunc" || sel == "Handle") {
+				// A registration split out of the server file into one that
+				// never names net/http (s.route("GET /api/x", s.handleX), the
+				// handlers living in a sibling file) is still caught by its
+				// pattern argument.
+				if (sel == "route" || sel == "HandleFunc" || sel == "Handle") && (hasNetHTTP || routePatternArg(x)) {
 					add("registers HTTP route via ." + sel + "(...)")
 				}
 				if sel == "Allows" && len(x.Args) > 0 {
@@ -353,7 +359,24 @@ func mentionsSecret(e ast.Expr) bool {
 	return found
 }
 
+// routePatternRE matches the first argument of a ServeMux-style
+// registration: an optional method, then a path.
+var routePatternRE = regexp.MustCompile(`^"(?:(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|CONNECT|TRACE) +)?/`)
+
+// routePatternArg reports whether call's first argument is a string literal
+// that reads as an HTTP route pattern ("GET /api/x", "/healthz").
+func routePatternArg(call *ast.CallExpr) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	lit, ok := call.Args[0].(*ast.BasicLit)
+	return ok && lit.Kind == token.STRING && routePatternRE.MatchString(lit.Value)
+}
+
 func scanScriptSource(src string) []string {
+	// Fold backslash line continuations first, so a docker buildx ... --push
+	// or gcloud ... sign wrapped across lines matches as the one command it is.
+	src = scriptContinuationRE.ReplaceAllString(src, " ")
 	var nonCommentLines []string
 	for _, line := range strings.Split(src, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -566,6 +589,18 @@ func plain(h http.Header, o overlap, _ *secrets.Store) bool {
 }`,
 			want: "",
 		},
+		{
+			name: "route registration split out with no net/http import",
+			src: `package ui
+func (s *Server) registerWidgetRoutes() { s.route("GET /api/widgets", s.handleListWidgets) }`,
+			want: "registers HTTP route via .route(...)",
+		},
+		{
+			name: "unrelated route method with no pattern and no net/http import",
+			src: `package planner
+func plan(g *graph) { g.route(nodeA, nodeB) }`,
+			want: "",
+		},
 	}
 
 	for _, tc := range goCases {
@@ -592,6 +627,8 @@ func plain(h http.Header, o overlap, _ *secrets.Store) bool {
 		{name: "git push tag", src: "#!/usr/bin/env bash\ngit push -q \"$remote\" \"refs/tags/$version\"\n", want: true},
 		{name: "release binary stamp", src: "#!/usr/bin/env bash\ngo build -ldflags \"-X github.com/ai-on-gke/grain/pkg/version.Release=$v\" ./cmd/grain\n", want: true},
 		{name: "agentd signing", src: "#!/usr/bin/env bash\n\"$SIGN_TOOL\" manifest -signing-key \"$AGENTD_RELEASE_SIGNING_KEY\"\n", want: true},
+		{name: "buildx push wrapped across lines", src: "#!/usr/bin/env bash\ndocker buildx build \\\n  --platform linux/amd64 \\\n  --push -t \"$img\" .\n", want: true},
+		{name: "gcloud kms sign wrapped across lines", src: "#!/usr/bin/env bash\ngcloud kms \\\n  asymmetric-sign --key k --input-file f\n", want: true},
 		{name: "comment only", src: "#!/usr/bin/env bash\n# docker push example\n# git push --tags\necho ok\n", want: false},
 	}
 
