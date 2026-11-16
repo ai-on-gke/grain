@@ -1512,5 +1512,34 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(
       api.calls.find((c) => c.route === "PATCH /api/suites/{id}")?.body,
     ).toMatchObject({ maxPasses: 4 });
+
+    // A fraction left behind in the other mode's field is not sent.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const max = root.querySelector<HTMLInputElement>(
+      '[data-testid="suite-max-passes-input"]',
+    )!;
+    max.value = "2.5";
+    max.dispatchEvent(new Event("input"));
+    await flush(harness);
+    Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="suite-dialog"] button',
+      ),
+    )
+      .find((b) => b.textContent?.trim() === "Fixed pass count")!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    const patches = api.calls.filter(
+      (c) => c.route === "PATCH /api/suites/{id}",
+    );
+    expect(patches).toHaveLength(2);
+    expect(patches[1].body).toMatchObject({ mode: "count", maxPasses: 3 });
   });
 });

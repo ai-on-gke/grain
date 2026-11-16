@@ -4673,12 +4673,20 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   private buildSuiteCreatePayload(): CreateSuiteRequest {
+    // suitePassesProblem checks the mode's own number; the other one is
+    // sent too but read by nobody, so a stale 0 or 2.5 left in it goes as
+    // its default rather than failing the request's decoding.
+    const untilClean = this.stDraftMode() === "until_clean";
+    const whole = (n: number, dflt: number) =>
+      Number.isInteger(n) && n >= 1 ? n : dflt;
     return {
       name: this.stDraftName().trim(),
       templateIds: this.stDraftTemplateIds(),
       mode: this.stDraftMode(),
-      count: this.stDraftCount(),
-      maxPasses: this.stDraftMaxPasses(),
+      count: untilClean ? whole(this.stDraftCount(), 1) : this.stDraftCount(),
+      maxPasses: untilClean
+        ? this.stDraftMaxPasses()
+        : whole(this.stDraftMaxPasses(), 3),
       requireApproval: this.stDraftRequireApproval(),
       autoMerge: this.stDraftAutoMerge(),
     };
