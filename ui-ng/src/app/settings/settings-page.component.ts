@@ -52,8 +52,6 @@ import { SettingsWorkComponent } from "./settings-work.component";
 const CARD_ANCHORS: Readonly<Record<string, string>> = {
   usage: "card-token-budget",
   "external-agents": "card-external-agent-tokens",
-  credentials: "card-scope-sets-secrets",
-  "other-secrets": "card-scope-sets-secrets",
 };
 
 // LEGACY_SECTION_FRAGMENTS are the cards an old section address meant:

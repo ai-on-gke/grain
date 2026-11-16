@@ -73,9 +73,23 @@ func TestAnUnreadableKMSReleaseApprovalKeyIsNamedInA502(t *testing.T) {
 	if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 		t.Fatalf("answer = %v; want code %s and an error naming -release-approval-kms-key", got, apierror.CodeUpstream)
 	}
-	if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "403") {
+	if carriesKMSAnswer(got) {
 		t.Fatalf("answer %q carries KMS's own answer; want it only in the log", got["error"])
 	}
+}
+
+// carriesKMSAnswer reports whether a withheld 502 answer repeats what
+// KMS said. The answer ends in a random hex log reference, "(ref
+// 403f98cf2908)", which is cut off first so a reference that happens to
+// contain "403" is not mistaken for KMS's status.
+func carriesKMSAnswer(answer map[string]string) bool {
+	msg := strings.TrimSuffix(answer["error"], " (ref "+answer["ref"]+")")
+	for _, word := range []string{"403", "denied", "Permission '", "cloudkms."} {
+		if strings.Contains(msg, word) {
+			return true
+		}
+	}
+	return false
 }
 
 type kmsTestReleaseForge struct {
@@ -157,7 +171,7 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 			t.Fatalf("POST %s answer = %v; want code %s and an error naming -release-approval-kms-key", tc.path, got, apierror.CodeUpstream)
 		}
-		if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "403") {
+		if carriesKMSAnswer(got) {
 			t.Fatalf("POST %s answer %q carries KMS's own answer; want it only in the log", tc.path, got["error"])
 		}
 	}
