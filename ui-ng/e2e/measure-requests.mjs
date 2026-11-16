@@ -546,13 +546,11 @@ export function buildPageSpecs(seed) {
           "Health",
         ]) {
           await safeClick(
-            page
-              .getByRole("tab", { name: new RegExp(label, "i") })
-              .or(
-                page.getByRole("button", {
-                  name: new RegExp(`^${label}$`, "i"),
-                }),
-              ),
+            page.getByRole("tab", { name: new RegExp(label, "i") }).or(
+              page.getByRole("button", {
+                name: new RegExp(`^${label}$`, "i"),
+              }),
+            ),
           );
           await stepsWait();
         }

@@ -933,7 +933,7 @@ export class DeferErrorDirective implements OnInit {
       </ng-template>
 
       <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-      @defer (when createTask.isOpen()) {
+      @defer (when createTask.isOpen(); prefetch on idle) {
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
