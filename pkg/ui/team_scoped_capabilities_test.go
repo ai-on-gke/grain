@@ -53,7 +53,7 @@ func TestANonAdminTeamAdminGrantsTheTeamScopedCapabilities(t *testing.T) {
 
 	task, err := c.CreateTask(carol, ui.CreateTaskRequest{
 		Title: "debug our queue", Approved: true, Repo: "acme/widgets", Creator: "carol",
-		Capabilities: &[]string{"api:self-debug", model.GrainSourceGrant},
+		Capabilities: &[]string{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant},
 	})
 	if err != nil {
 		t.Fatalf("a payments admin granting self-debug: %v", err)

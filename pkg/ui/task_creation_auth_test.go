@@ -51,7 +51,7 @@ func TestTaskCreationCapabilityPermissions(t *testing.T) {
 	}
 
 	// 2. Allowed capability creates task successfully
-	allowedCaps := []string{"api:self-debug"}
+	allowedCaps := []string{"https://grain.dev/capabilities/api#self-debug"}
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:        "valid cap task",
 		Creator:      "alice",

@@ -15,7 +15,6 @@
 package ci
 
 import (
-
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/workflows"
 )

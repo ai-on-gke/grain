@@ -41,7 +41,7 @@ func TestDeploymentDefaultCapabilitiesTakeMethodAndAPIGrants(t *testing.T) {
 	var out map[string]any
 	code := postJSON(t, ts, http.MethodPut, "/api/settings", map[string]any{
 		"githubHost":          "github.com",
-		"defaultCapabilities": []string{defaultGrantIn, "api:tasks:read", defaultGrantRecorded},
+		"defaultCapabilities": []string{defaultGrantIn, "https://grain.dev/capabilities/api#tasks:read", defaultGrantRecorded},
 	}, &out)
 	if code != http.StatusOK {
 		t.Fatalf("PUT /api/settings: %d %v", code, out)
@@ -84,7 +84,7 @@ func TestRepoDefaultAndCICapabilitiesTakeMethodGrants(t *testing.T) {
 	}
 	var out map[string]any
 	code := postJSON(t, ts, http.MethodPut, "/api/repos/acme/widgets/capabilities", map[string]any{
-		"defaultCapabilities": []string{defaultGrantIn, "api:tasks:read"},
+		"defaultCapabilities": []string{defaultGrantIn, "https://grain.dev/capabilities/api#tasks:read"},
 	}, &out)
 	if code != http.StatusOK {
 		t.Fatalf("PUT capabilities: %d %v", code, out)
@@ -129,7 +129,7 @@ func TestConsoleSessionCapabilitiesTakeMethodGrants(t *testing.T) {
 	}
 	var updated map[string]any
 	code = postJSON(t, ts, http.MethodPut, "/api/console-sessions/grants", map[string]any{
-		"capabilities": []string{"api:tasks:read", defaultGrantIn, defaultGrantRecorded},
+		"capabilities": []string{"https://grain.dev/capabilities/api#tasks:read", defaultGrantIn, defaultGrantRecorded},
 	}, &updated)
 	if code != http.StatusOK {
 		t.Fatalf("PUT /api/console-sessions/grants: %d %v", code, updated)
@@ -174,13 +174,13 @@ func TestConfigRouteExpandsRegisteredAliasesAndCanonicalizesDefaultCapabilities(
 	if cfg != nil {
 		next = *cfg
 	}
-	next.DefaultCapabilities = []string{"custom-alias", "self-debug", "api:tasks:read@acme/widgets"}
+	next.DefaultCapabilities = []string{"custom-alias", "self-debug", `https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}`}
 	if err := c.Store.PutConfig(ctx, next); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                model.RepoRef{Owner: "acme", Name: "widgets"},
-		DefaultCapabilities: []string{"custom-alias", "self-debug", "api:ci:read"},
+		DefaultCapabilities: []string{"custom-alias", "self-debug", "https://grain.dev/capabilities/api#ci:read"},
 	}); err != nil {
 		t.Fatal(err)
 	}

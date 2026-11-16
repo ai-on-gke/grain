@@ -163,7 +163,7 @@ func TestHostingSettingAndLegacyConsoleAlias(t *testing.T) {
 	// 5. No person-only rule: an agent holding api:tasks:write can file a task
 	// with hosting: "console" or legacy capabilities: ["console"], and PATCH hosting,
 	// without holding any console grant of its own.
-	agentGrants := []string{"api:tasks:write"}
+	agentGrants := []string{"https://grain.dev/capabilities/api#tasks:write"}
 	agentTask, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "agent", Capabilities: &agentGrants, Approved: true,
 	})

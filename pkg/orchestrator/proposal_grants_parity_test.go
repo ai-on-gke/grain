@@ -49,7 +49,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 		{
 			name: "self-debug covered by canonical parent",
 			parentGrants: []model.Grant{
-				{Capability: "api:self-debug", Via: model.GrantByLabel},
+				{Capability: "https://grain.dev/capabilities/api#self-debug", Via: model.GrantByLabel},
 				{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
 			},
 			proposalPayload: map[string]any{
@@ -58,7 +58,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"api:self-debug", model.GrainSourceGrant},
+				"capabilities": []any{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
@@ -76,7 +76,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"api:self-debug", model.GrainSourceGrant},
+				"capabilities": []any{"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
@@ -107,7 +107,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 		{
 			name: "self-upgrade non-ref person-only alias expands and holds for person",
 			parentGrants: []model.Grant{
-				{Capability: "api:self-upgrade", Via: model.GrantByLabel},
+				{Capability: "https://grain.dev/capabilities/api#self-upgrade", Via: model.GrantByLabel},
 			},
 			proposalPayload: map[string]any{
 				"title":        "Upgrade follow-up",
@@ -115,7 +115,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"api:self-upgrade"},
+				"capabilities": []any{"https://grain.dev/capabilities/api#self-upgrade"},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.APIRef("self-upgrade"), Via: model.GrantByLabel},
@@ -126,13 +126,13 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 		{
 			name: "defaults and unified grants with api# reference and bare alias",
 			defaultCaps: []string{
-				"api:self-debug", model.GrainSourceGrant,
+				"https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant,
 			},
 			parentGrants: []model.Grant{
-				{Capability: "api:self-debug", Via: model.GrantByDefault},
+				{Capability: "https://grain.dev/capabilities/api#self-debug", Via: model.GrantByDefault},
 				{Capability: model.GrainSourceGrant, Via: model.GrantByDefault},
-				{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
-				{Capability: "api:memory", Via: model.GrantByLabel},
+				{Capability: `https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}`, Via: model.GrantByLabel},
+				{Capability: "https://grain.dev/capabilities/api#memory", Via: model.GrantByLabel},
 			},
 			proposalPayload: map[string]any{
 				"title":      "Unified grants proposal",
@@ -141,7 +141,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"grants": []any{
 					map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/widgets", "base": "main"}},
 					map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read", "with": map[string]any{"repo": "acme/widgets"}},
-					"api:memory",
+					"https://grain.dev/capabilities/api#memory",
 				},
 			},
 			wantGrants: []model.Grant{

@@ -2489,7 +2489,7 @@ func TestActiveConsoleSessionPermissionChangesApplyImmediatelyToProposals(t *tes
 		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 			// Mid-run, the operator grants the capability, writes scope, and tasksApproved
 			// directly on the active session via PUT /api/console-sessions/director.
-			caps := []string{"api:tasks:admin", hostScriptCap}
+			caps := []string{"https://grain.dev/capabilities/api#tasks:admin", hostScriptCap}
 			writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
 			approved := true
 			if _, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
@@ -2989,7 +2989,7 @@ func TestShippedDirectorTasksApprovedStickyOverridesAcrossReconciles(t *testing.
 
 		// Editing another active-session field (with TasksApproved nil) and running reconciles
 		// must keep ConsoleSessionTasksUnapprovedTag, Body, and proposal gating sticky.
-		caps := []string{model.GrainSourceGrant, "api:self-debug"}
+		caps := []string{model.GrainSourceGrant, "https://grain.dev/capabilities/api#self-debug"}
 		if _, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
 			Capabilities: &caps,
 		}); err != nil {
@@ -3168,11 +3168,11 @@ func TestUpgradingSessionSnapshotAcrossAPISpellingsDoesNotRegrantRemovedCapabili
 	runSessions(t, store, baseTime)
 	director := sessionTasks(t, store)[0]
 
-	// Simulate pre-slice-3 state: task holds only legacy "api:capabilities:detach"
-	// (operator removed "api:task-admin" and "api:ci-read"), while the stored
+	// Simulate pre-slice-3 state: task holds only legacy "https://grain.dev/capabilities/api#capabilities:detach"
+	// (operator removed "https://grain.dev/capabilities/api#task-admin" and "https://grain.dev/capabilities/api#ci-read"), while the stored
 	// console_session_sync snapshot still lists legacy "api:..." strings.
 	if err := store.UpdateTask(ctx, director.ID, func(tk *model.Task) error {
-		tk.Grants = []model.Grant{{Capability: "api:capabilities:detach", Via: model.GrantByGrain}}
+		tk.Grants = []model.Grant{{Capability: "https://grain.dev/capabilities/api#capabilities:detach", Via: model.GrantByGrain}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -3187,7 +3187,7 @@ func TestUpgradingSessionSnapshotAcrossAPISpellingsDoesNotRegrantRemovedCapabili
 		TasksApproved:   true,
 		KeepRunning:     true,
 		Capabilities:    legacyCaps,
-		OfferedDefaults: []string{"api:ci-read"},
+		OfferedDefaults: []string{"https://grain.dev/capabilities/api#ci-read"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -3213,13 +3213,13 @@ func TestUpgradingSessionSnapshotAcrossAPISpellingsDoesNotRegrantRemovedCapabili
 		t.Errorf("capabilities:detach count = %d in %+v, want 1", detachCount, after.Grants)
 	}
 
-	// Also verify legacy DeclinedDefaults: ["api:ci-read"] keeps ci-read off a newly filed session.
+	// Also verify legacy DeclinedDefaults: ["https://grain.dev/capabilities/api#ci-read"] keeps ci-read off a newly filed session.
 	settings(t, store, func(cfg *model.Config) {
 		cfg.ConsoleSessions = append(model.DefaultConsoleSessions(), model.ConsoleSession{
 			ID:               "ops",
 			Title:            "Ops",
 			Capabilities:     []string{},
-			DeclinedDefaults: []string{"api:ci-read"},
+			DeclinedDefaults: []string{"https://grain.dev/capabilities/api#ci-read"},
 		})
 	})
 	runSessions(t, store, baseTime.Add(2*time.Minute))

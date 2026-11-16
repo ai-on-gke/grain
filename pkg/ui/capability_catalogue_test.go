@@ -99,7 +99,7 @@ func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
 	client, store, ctx := testClient(t)
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "the whole job", Approved: true,
-		Capabilities: &[]string{model.GitHubSandboxRepoGrant, "api:tasks:admin"},
+		Capabilities: &[]string{model.GitHubSandboxRepoGrant, "https://grain.dev/capabilities/api#tasks:admin"},
 	})
 	if err != nil {
 		t.Fatal(err)
