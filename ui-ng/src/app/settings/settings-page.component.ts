@@ -261,6 +261,11 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     {{
                       access.deniedReason("POST /api/settings") ||
                         "Read-only: settings:write scope is required to modify deployment settings."
+                    }}{{
+                      activeSection() === "capabilities" &&
+                      access.can("PUT /api/secrets/{secret}/{key}")
+                        ? " Secrets and API keys remain editable."
+                        : ""
                     }}
                   </span>
                 </div>

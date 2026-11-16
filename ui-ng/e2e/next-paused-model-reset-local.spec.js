@@ -32,26 +32,6 @@ const SIZES = [
 ];
 const THEMES = ["light", "dark"];
 
-// resetPattern is what the reset reads as: the time alone when it falls
-// on today in ZONE, and the date before it when it falls on another day
-// (shared/dispatch-status.ts formatLocalReset) -- which a reset 2h15m
-// away does whenever the spec runs in ZONE's last 2h15m before midnight.
-function resetPattern(until) {
-  const day = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const date =
-    day.format(new Date(until)) === day.format(new Date())
-      ? ""
-      : "[A-Z][a-z]{2} \\d{1,2}, ";
-  return new RegExp(
-    `resets ${date}\\d{1,2}:\\d{2}\\s[AP]M ${zoneAbbrev(until)} \\(in 2h 1[45]m\\)`,
-  );
-}
-
 // zoneAbbrev is the short name the browser gives ZONE at ms -- "PST" or
 // "PDT" -- so the spec holds on either side of a daylight-saving change.
 function zoneAbbrev(ms) {
@@ -61,6 +41,13 @@ function zoneAbbrev(ms) {
   })
     .formatToParts(new Date(ms))
     .find((p) => p.type === "timeZoneName").value;
+}
+
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
+  const day = (ms) =>
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
 }
 
 for (const size of SIZES) {
@@ -103,7 +90,17 @@ for (const size of SIZES) {
       await page.goto("/next/telemetry");
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
-      await expect(reset).toContainText(resetPattern(until));
+      const abbrev = zoneAbbrev(until);
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
+      await expect(reset).toContainText(
+        new RegExp(
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+        ),
+      );
       await expect(reset).not.toContainText("UTC");
       // Beside its Paused pill, on the pill's own line, so a table of
       // paused scopes grows no taller (prod-heavy-polish's height budget).
@@ -130,7 +127,9 @@ for (const size of SIZES) {
 
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
-        resetPattern(until),
+        new RegExp(
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+        ),
       );
     });
   }
