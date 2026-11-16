@@ -6,7 +6,7 @@
 
 **The core rule:** A tracked resource is an explicitly referenced observable entity. Grain persists its identity, observations and durable subscriptions; capability extensions integrate with the resource. Gates interpret evidence against a task's desired outcome. A reference grants no access and adds no completion requirement.
 
-The [companion normative specification](../spec/tracked-resources/tracked-resources.spec.md) defines the proposed v1 contract. All extension and API names below are proposals, not existing endpoints or promises of provider availability.
+The [companion normative specification](../spec/tracked-resources/tracked-resources.spec.md) defines the proposed v1 contract, completed by [implementation contracts](../spec/tracked-resources/implementation.spec.md), [wire schemas and fixtures](../spec/tracked-resources/examples/README.md) and a [readiness matrix](../spec/tracked-resources/readiness.md). All extension and API names below are proposals, not existing endpoints or promises of provider availability.
 
 ## Terminology and coordination
 
@@ -68,9 +68,9 @@ For CITC, distinguish persistent workspace identity, mutable workspace contents,
 
 ## Providers and authority {#TDD-3}
 
-Use capability server configuration, schema validation, encrypted secrets and policy admission. Discover a versioned Resolve/Observe/Watch tool trio alongside `mint_*`/`release_*` and `gate_*`, with explicit registration metadata and immutable pins. The spec recommends exact names. Discovery never grants credentials, attaches a reference or adds gates. Providers are read-only with respect to resources; Watch may maintain delivery infrastructure within a separately granted watch scope. Commenting, submitting, merging and closing are typed actions in the gates action registry, with independent permissions and precondition checks.
+Use capability server configuration, schema validation, encrypted secrets and policy admission. Discover a versioned Resolve/Observe/Watch tool trio alongside `mint_*`/`release_*` and `gate_*`, with explicit registration metadata and immutable pins. The spec defines exact names. Discovery never grants credentials, attaches a reference or adds gates. Providers are read-only with respect to resources; Watch may maintain delivery infrastructure within a separately granted watch scope. Commenting, submitting, merging and closing are typed actions in the gates action registry, with independent permissions and precondition checks.
 
-Current capability leases are attempt-scoped. Durable observation outlives an agent run, so later implementation needs a distinct, revocable controller read/watch lease attached to the task/grant and bounded by expiry. Do not keep a run's credential after release or mint an immortal controller credential. Configuration changes in this deployment belong to grain/config, not this repository; this proposal changes neither.
+Current capability leases are attempt-scoped. Durable observation outlives an agent run, so the completed contract defines a distinct revocable controller grant/lease attached to the task, exact registration pin, source scope and field projection. A lease defaults to 15 minutes, expires within one hour and renews under current authority. Do not keep a run's credential after release or mint an immortal controller credential. Configuration changes in this deployment belong to grain/config, not this repository; this proposal changes neither.
 
 The provider and its remote service are outside Grain's lifecycle trust boundary. Even an authenticated provider can return stale, incomplete or malicious data. Grain validates envelopes, identities, bounds and provenance; a pinned gate understands the declared fact semantics. A provider cannot assert human approval, invent a Grain action receipt or direct arbitrary remote fetches. Grain records how evidence was collected; immutable stored evidence means reproducible decision input, not proof that the provider is infallible.
 
@@ -78,11 +78,11 @@ Scoped deduplication uses resource/scope + provider pin + effective visibility/f
 
 ## Observation, waiting and closure {#TDD-4}
 
-Resolve validates and canonicalizes an authorized reference. Observe returns an opaque equality token, lifecycle facts and bounded details, evidence handles, human summary/link, collection time, validity and explicit failure state. It never returns `met`. A PR can be open, merged or closed unmerged; a task can be failed; an issue “closed” does not universally mean resolved. Unknown facts stay unknown. Gates use exact normalized fact versions or declared provider-specific semantics.
+Resolve validates and canonicalizes an authorized reference. Observe returns an opaque equality token, lifecycle facts and bounded details, registered inline immutable evidence, human summary/link, collection time, validity and explicit failure state. It never returns `met`. A PR can be open, merged or closed unmerged; a task can be failed; an issue “closed” does not universally mean resolved. Unknown facts stay unknown. Gates use exact normalized fact versions or declared provider-specific semantics.
 
 Grain serializes observation commits using a lease generation and compare-and-swap baseline. Revision tokens cannot be lexically or numerically ordered. External events are hints: duplicate/out-of-order delivery requests a current Observe, rather than overwriting current truth with an old payload. A refresh with the same token may renew freshness without falsely recording resource progress. A changed token, access state or meaningful evidence invalidates relevant evaluator snapshots.
 
-Watch supports authenticated events, incremental cursors, bounded polling or combinations. Persist intent before registration, subscribe before the baseline read, replay from the accepted fence and reconcile after registration. A provider that cannot give gap-free replay must declare the gap and use a second Observe plus periodic polling. Persist subscriptions, receipt deduplication, cursors and fan-out transactionally. Crash recovery reuses idempotency keys and reconciles remote registration; it does not assume the last received event was processed.
+Watch v1 returns authenticated change hints in bounded replies to Grain-initiated cursor reads, with poll fallback. No reverse MCP call, delivery handle, Grain resource webhook or agent callback exists. Optional upstream webhooks terminate at the separately configured provider, whose queue is pulled by Grain. Persist intent before registration, subscribe before the baseline read, replay from the accepted fence and reconcile after registration. A provider that cannot give gap-free replay must declare the gap and use a second Observe plus periodic polling. Persist subscriptions, receipt deduplication, cursors and fan-out transactionally. Dirty hints and accepted observations invalidate every affected task evidence vector in that same transaction; asynchronous fan-out only schedules evaluation. Inline evidence is copied into Grain before Task #47 publishes its materialized observation cut. Crash recovery reuses idempotency keys and reconciles remote registration; it does not assume the last received event was processed.
 
 Each wait names a resource, driver, freshness/reconciliation timer and escalation. A timeout, expired cursor, deleted resource, access denial or provider outage never satisfies a required condition. Errors wake evaluators only as needed to change blockers; repeated errors back off and escalate without running an agent to poll. Freshness expiration wakes the evaluator even without an event. A deadline rechecks or escalates, never auto-passes.
 
@@ -155,16 +155,14 @@ Import records the source predicate and authority epoch. In particular, importin
 
 Rollback stops new writers, fences leases and preserves records/evidence. Older daemons must refuse unsupported resource/gate versions. Only a validated reverse handoff can restore legacy authority, and only when the contract is representable; otherwise hold for a compatible daemon. Disable/uninstall leaves references visible and required gates unknown, never silently deletes gates. Retain compatible legacy projections through the rollback window. No infrastructure/config change is included in this PR.
 
-## Remaining decisions and recommendations
+## Completed contracts and implementation boundaries
 
-| Decision | Recommendation |
-|---|---|
-| Default privacy partition | Per task grant; opt into sharing only after equivalence checks, never by canonical URL alone. |
-| First external adapter | GitHub PR/issue shadow reads after built-in Grain task; reuse existing trusted collectors where possible. |
-| Revision provenance | Provider tokens are equality-only. Grain owns ordered journal sequence and collection generations; never compare remote opaque strings for ordering. |
-| Completion freshness | Default 5-minute evidence budget, configurable narrower by gate; mandatory on-demand refresh before integration-sensitive closure if outside budget. No grace that converts stale into met. |
-| Pins and schema changes | Immutable artifact + protocol/fact/identifier schema digests; explicit migration and replay before switching. |
-| External consistency | Record bounded observation cutoff; use explicit regression notification/reopen policy instead of claiming cross-system atomicity. |
-| Nonimplemented providers | Show unavailable with prerequisites; do not add catalogue entries or grants until separately reviewed implementation/configuration exists. |
+The [readiness matrix](../spec/tracked-resources/readiness.md) records the resolved transport, registry, authorization, storage, migration and API gaps with concrete implementation entry points. The defaults are decisions in the normative contract: per-task grant partitions, explicit equivalent-authority sharing, controller leases, equality-only source tokens, pull Watch, five-minute evidence budgets and bounded regression handling. They are not delegated to a later implementer.
 
-The [acceptance matrix](../spec/tracked-resources/tracked-resources.spec.md) is the exit contract for future implementation, including restart, races and failures.
+Task #47 exclusively owns gate snapshot/page/continuation, predicate/action/waiver and lifecycle protocols. Resource collection commits immutable evidence and atomic invalidation into those contracts. Task #46 exclusively owns normalized source events and trigger filing; this design pins its inspected draft and makes any export conditional on a registered versioned adapter. No trigger event envelope is duplicated and no hint becomes an occurrence. Resource observation and gates can be implemented without waiting for trigger deployment.
+
+No runtime support is implied by documentation approval. Core work still includes new registry metadata parsing, explicit controller grant storage/admission, bounded provider execution, additive SQLite/PostgreSQL migrations and transactions, the built-in task provider, gate collector integration and Angular/API surfaces. These are specified implementation prerequisites, not unresolved transport or transaction choices.
+
+External adapter prerequisites remain explicit: CITC/Buganizer examples are hypothetical until separately approved credentials, documented stable identities/facts, network/service access and tested implementations exist. Use the built-in Grain task provider first; external GitHub shadow observation can follow under separately authorized configuration. This PR neither adds integrations/configuration nor files implementation tasks.
+
+The [acceptance matrices](../spec/tracked-resources/tracked-resources.spec.md#TDS-10) and [transaction fault cases](../spec/tracked-resources/implementation.spec.md#TDS-16) are the exit contracts for future implementation.
