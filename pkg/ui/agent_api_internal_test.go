@@ -1232,6 +1232,7 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/state-repo":                                            true,
 	"GET /api/suite-runs/{id}":                                       true,
 	"GET /api/suites/{id}/composition":                               true,
+	"GET /api/tasks/summaries":                                       true,
 	"GET /api/tasks/wait":                                            true,
 	"GET /api/tasks/{id}":                                            true,
 	"GET /api/tasks/{id}/attachments/{attachmentId}":                 true,

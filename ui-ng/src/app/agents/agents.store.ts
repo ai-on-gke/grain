@@ -23,8 +23,8 @@ import {
   signal,
   untracked,
 } from "@angular/core";
-import { GrainApi } from "../api/grain-api.service";
-import type { Task, TaskDetail } from "../api/models";
+import { GrainApi, loadTaskSummaryBatches } from "../api/grain-api.service";
+import type { Task, TaskDetail, TaskSummariesResponse } from "../api/models";
 import { TaskFeedStore } from "../services/task-feed.service";
 import {
   type Agent,
@@ -195,9 +195,11 @@ export class AgentsStore implements OnDestroy {
       this.record(this.tasks());
       this.loadError.set(null);
       this.ownLoaded.set(true);
-    } else {
+    } else if (this.feed.loadError()) {
+      // Only the feed's banner-worthy failures: one failed poll keeps
+      // the last good list and says nothing (request-trouble.ts).
       this.loadError.set(
-        `Running tasks could not be read: ${this.feed.loadError() ?? "The request failed."}. This page tries again on its own.`,
+        `Running tasks could not be read: ${this.feed.loadError()}. This page tries again on its own.`,
       );
     }
     this.now.set(Date.now());
@@ -225,33 +227,36 @@ export class AgentsStore implements OnDestroy {
   }
 
   private async loadDetails(list: readonly Task[]): Promise<void> {
-    const todo = list.filter((t) => !this.detailInFlight.has(t.id));
-    for (const t of todo) this.detailInFlight.add(t.id);
-    const got: Record<string, TaskDetail> = {};
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      while (next < todo.length) {
-        const t = todo[next++];
-        try {
-          const r = await this.api.getIfChanged<TaskDetail>(
-            "GET /api/tasks/{id}",
-            { id: t.id },
-            "comments_limit=1&attempts_limit=3",
-          );
-          if (r?.body) got[t.id] = r.body;
-          this.detailFailedAt.delete(t.id);
-        } catch {
-          this.detailFailedAt.set(t.id, Date.now());
-        } finally {
-          this.detailInFlight.delete(t.id);
+    const todo = [
+      ...new Set(
+        list.filter((t) => !this.detailInFlight.has(t.id)).map((t) => t.id),
+      ),
+    ];
+    for (const id of todo) this.detailInFlight.add(id);
+    let got: Record<string, TaskDetail> = {};
+    try {
+      if (todo.length > 0) {
+        const res = await loadTaskSummaryBatches(todo, 1, 3, (query) =>
+          this.api
+            .getIfChanged<TaskSummariesResponse>(
+              "GET /api/tasks/summaries",
+              undefined,
+              query,
+            )
+            .then((r) => r?.body?.tasks),
+        );
+        got = res.tasks;
+        for (const id of Object.keys(got)) {
+          this.detailFailedAt.delete(id);
+        }
+        const now = Date.now();
+        for (const id of res.failedIds) {
+          this.detailFailedAt.set(id, now);
         }
       }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(DETAIL_CONCURRENCY, todo.length) }, () =>
-        Promise.resolve().then(worker),
-      ),
-    );
+    } finally {
+      for (const id of todo) this.detailInFlight.delete(id);
+    }
     const live = new Set(running(this.tasks()).map((t) => t.id));
     const merged: Record<string, TaskDetail> = {};
     for (const [id, d] of Object.entries({ ...this.details(), ...got })) {

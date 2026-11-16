@@ -54,6 +54,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { NoGitConnectionNoticeComponent } from "../shared/no-git-connection-notice.component";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { CreateTaskService } from "./create-task.service";
 import {
@@ -110,6 +111,7 @@ const FRAMEWORKS: readonly PillOption[] = [
     AttachmentPickerComponent,
     GrantsPickerComponent,
     DirectorShaperComponent,
+    NoGitConnectionNoticeComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -625,6 +627,10 @@ const FRAMEWORKS: readonly PillOption[] = [
               (valueChange)="pickRepo($event)"
             />
           </div>
+          <g-no-git-connection-notice
+            [deployment]="config() ? (config()?.deployment ?? {}) : undefined"
+            (navigated)="svc.close(false)"
+          />
         }
         @case ("base") {
           @if (draft().repo !== noRepo) {
