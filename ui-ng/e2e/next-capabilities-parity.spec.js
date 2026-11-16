@@ -395,9 +395,7 @@ test("Scope set Remove and secret rows stay inside a phone viewport @phone", asy
     // A key chip keeps its name and actions on one line. Both are read
     // in one pass in the page: two boundingBox() round trips can fall
     // either side of the in-app scroll to #api-scope-sets.
-    const keyEl = await row
-      .getByText("token", { exact: true })
-      .elementHandle();
+    const keyEl = await row.getByText("token", { exact: true }).elementHandle();
     const { dy, height } = await page
       .getByTestId("replace-secret-walk-phone-token")
       .evaluate((replace, key) => {
