@@ -59,7 +59,7 @@ Reject  ──▶ the failed-rc path; the next run cuts vX.Y.0-rc.(N+1)
 | `.github/workflows/release-train.yml` / `.grain/workflows/release-train.yml` | Retired as trains: `workflow_dispatch` only. The GitHub Actions one always runs dry and says what it would cut. |
 | `scripts/release-from-trunk.sh` | The train: Phase 1 (judge the qualifying rc) and Phase 2 (wait on `grain/rc-hold` if held, then cut the next rc). Also has `approve`, `reject` and `rollback` modes, which only `promote-release.yml` / `promote.yml` run, for a person. |
 | `scripts/candidate-gate.sh` | `select-lkg` (which commit is known-good) and `check-qualification` (Stage 1 `nightly.yml` and Stage 2 `grain/release-qualification` on the rc). |
-| `pkg/orchestrator/releasequalification.go`, `releaseredrc.go` | Runs the `release-qualification` suite once Stage 1 passes, posts `grain/release-qualification`, raises `pipeline.rc-failed:<rc_tag>` (or `pipeline.release-escalated:<version>`), and keeps check run `grain/rc-hold` on a red rc's commit while `[rc-blocker <rc_tag>]` tasks are open (`docs/pipeline-steward.md`). |
+| `pkg/orchestrator/releasequalification.go`, `releaseredrc.go` | Runs the `release-qualification` suite once Stage 1 passes, posts `grain/release-qualification` (as a check run on a GitHub App connection, or a commit status on a PAT connection), raises `pipeline.rc-failed:<rc_tag>` (or `pipeline.release-escalated:<version>`), and keeps `grain/rc-hold` (check run or commit status) on a red rc's commit while `[rc-blocker <rc_tag>]` tasks are open (`docs/pipeline-steward.md`). |
 | `scripts/release-images.sh` | `rc`, `discard-rc`, `pending`, `discard-pending` and `promote`: what each step publishes to GHCR. |
 | `.grain/templates/release-notes.yml` | Draft `## Highlights`, run `scripts/release-notes.sh`, open a pull request for `docs/releases/vX.Y.0.md`. The train no longer files it per release: a release the train makes gets its notes from `publish-release.yml` (section 5). File it by hand for prose highlights or a staged release. |
 | `.grain/workflows/promote-release.yml` | A person's Approve or Reject. `workflow_dispatch` only, and `human: required` (`.grain/triggers/release-promotion.yml`). |
@@ -68,9 +68,10 @@ Reject  ──▶ the failed-rc path; the next run cuts vX.Y.0-rc.(N+1)
 Each train run is idempotent. A run that finds nothing to do does nothing, so
 filing another one by hand (a task from the `release-train` template) is
 always safe. The task has no GitHub token: grain reads `main`'s runs, the rc's
-`nightly.yml` jobs and its `grain/release-qualification` check run for it
-(`grain ci list --format github|github-jobs`, `grain ci checks --format
-github`), and the task hands them to the script as files. It holds neither
+`nightly.yml` jobs and its `grain/release-qualification` / `grain/rc-hold` check
+runs and commit statuses for it (`grain ci list --format github|github-jobs`,
+`grain ci checks --format github`), and the task hands them to the script as
+files. It holds neither
 `package-publish` nor `release-gate-read`, so it runs the script with
 `RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off`: it pushes git
 refs and nothing else. `publish-release.yml` publishes the images and the
@@ -121,8 +122,9 @@ stays red for a week ships nothing, and `latest` stays where it is.
 
 With `RELEASE_CI_SOURCE=github` (the default in GitHub Actions), the train
 reads workflow runs and jobs from GitHub Actions with `GITHUB_TOKEN`, and
-reads the `grain/release-qualification` check run on the rc's commit and the
-`grain/rc-hold` check run on a dropped rc's commit (checks: read). Without a
+reads the `grain/release-qualification` check run or commit status on the rc's
+commit and the `grain/rc-hold` check run or commit status on a dropped rc's
+commit (`checks: read`, `statuses: read`). Without a
 GitHub token neither can be read: no rc qualifies, and Phase 2 says it has no
 `grain/rc-hold` to wait on rather than holding. With `RELEASE_CI_SOURCE=grain`, it reads CI runs through the
 `release-gate-read` capability (`api:release-gate-read`,
@@ -153,26 +155,39 @@ qualification, or that a person rejects, is dropped and a later run cuts
 - **Holding `rc.(N+1)` until triage and blockers complete (`grain/rc-hold`).** When
   `vX.Y.0-rc.N` (`N < RELEASE_MAX_RC_ATTEMPTS`) is confirmed red, the release
   reconciler raises `pipeline.rc-failed:vX.Y.0-rc.N` to wake the pipeline steward
-  (`docs/pipeline-steward.md`) and immediately posts check run `grain/rc-hold`
-  (`in_progress`, "triage pending") on the red rc's commit — the floor Phase 2
-  cuts `rc.(N+1)` after — before posting the completed
+  (`docs/pipeline-steward.md`) and immediately posts `grain/rc-hold`
+  (`in_progress` check run on a GitHub App connection, or `pending` commit status
+  on a PAT connection, "triage pending") on the red rc's commit — the floor
+  Phase 2 cuts `rc.(N+1)` after — before posting the completed
   `grain/release-qualification` failure. The steward titles its fix and revert
   tasks `[rc-blocker vX.Y.0-rc.N] ...`. While triage is pending (up to `1h`,
   `model.ReleaseHoldTriageGrace` / `GRAIN_RC_HOLD_GRACE`) or any open task
-  carries that marker, the reconciler keeps `grain/rc-hold` `in_progress`, and
-  completes it once every blocker has landed (`success`), when the steward
-  triages `vX.Y.0-rc.N` with no blocker or a person clears the notification
-  (`success`), when the triage window elapses with no blocker (`neutral`), or if
-  superseded (`neutral`). Before cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
+  carries that marker, the reconciler keeps `grain/rc-hold` `in_progress` (or
+  `pending` for commit statuses), and completes it once every blocker has landed
+  (`success`), when the steward triages `vX.Y.0-rc.N` with no blocker or a person
+  clears the notification (`success`), when the triage window elapses with no
+  blocker (`neutral` check run / `success` commit status), or if superseded
+  (`neutral` / `success`). Commit-status descriptions are prefixed with
+  `<rc_tag>: ` so two RCs sharing a commit never collide. Before cutting
+  `rc.(N+1)` (`next_n > 1`), Phase 2 reads
   `commits/<floor>/check-runs?check_name=grain%2Frc-hold&filter=all` (or
-  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` (the
-  environment, else `scripts/release.conf`) is unset it refuses rather than
-  trust another app's check run; if it is explicitly `none` no check run is
-  trusted, so nothing holds; and if the newest check
-  run from `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
+  `RELEASE_HOLD_CHECKS_JSON` in tests) when `RELEASE_QUALIFICATION_APP` is set,
+  and falls back to `commits/<floor>/statuses?per_page=100` (or
+  `RELEASE_HOLD_STATUSES_JSON` / the `.statuses` array embedded in
+  `RELEASE_HOLD_CHECKS_JSON` from `grain ci checks --format github`) when no
+  trusted check run exists and `RELEASE_QUALIFICATION_STATUS_LOGIN` is set: if
+  both `RELEASE_QUALIFICATION_APP` and `RELEASE_QUALIFICATION_STATUS_LOGIN`
+  (environment, else `scripts/release.conf`) are unset it refuses rather than
+  trust another app's check run or another login's status; if
+  `RELEASE_QUALIFICATION_APP` is explicitly `none` neither check runs nor commit
+  statuses are trusted, so nothing holds; and if the newest check run from
+  `RELEASE_QUALIFICATION_APP` is not `completed` (or, with no trusted check run,
+  the newest commit status from `RELEASE_QUALIFICATION_STATUS_LOGIN` is
+  `pending`), Phase 2 cuts nothing, logs
   `phase 2: vX.Y.0-rc.(N+1) is held by grain/rc-hold on <floor>: <summary>`,
-  emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run from
-  `RELEASE_QUALIFICATION_APP` means no hold, except in the run whose Phase 1
+  emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. Trusted check runs always take
+  precedence over commit statuses where both exist. No trusted check run or
+  status means no hold, except in the run whose Phase 1
   dropped `rc.N` itself: grain has not read the red verdict yet, so that run
   logs `phase 2: vX.Y.0-rc.(N+1) waits for the next run: ...`, emits
   `rc_held=vX.Y.0-rc.(N+1)` and cuts nothing, and the next run reads the hold
@@ -214,16 +229,30 @@ which case it is dropped without qualifying):
 2. **Stage 2 (`grain/release-qualification`).** Once Stage 1 is green, the
    deployment's release-qualification reconciler
    (`pkg/orchestrator/releasequalification.go`) runs
-   `.grain/suites/release-qualification.yml` against the rc and posts check
-   run `grain/release-qualification` on its commit. Only a check run created
-   by `RELEASE_QUALIFICATION_APP` (grain's own GitHub App) counts; same-named
-   check runs from any other app are ignored, and with no
-   `RELEASE_QUALIFICATION_APP` configured none is trusted and the rc never
-   passes. With `RELEASE_QUALIFICATION_APP` set explicitly to `none` (in the
-   environment or `scripts/release.conf`), as for a forge connection that is a
-   personal access token rather than a GitHub App (which cannot post check
-   runs), Stage 2 is skipped (`SKIPPED grain/release-qualification`) and Stage
-   1 alone qualifies the rc. It is never `none` by default.
+   `.grain/suites/release-qualification.yml` against the rc and posts its
+   verdict on the rc's commit:
+   - **GitHub App forge connection:** posts check run
+     `grain/release-qualification` (`in_progress`, then `success`, `failure`,
+     or `neutral` when stalled on infra). Only a check run created by
+     `RELEASE_QUALIFICATION_APP` (grain's own GitHub App, slug or numeric id)
+     counts; same-named check runs from any other app are ignored.
+   - **PAT forge connection (no GitHub App):** posts commit status
+     `grain/release-qualification` (`POST /repos/{o}/{r}/statuses/{sha}`),
+     which a PAT may write: `pending` while running, `success` on pass,
+     `failure` on confirmed red, and `error` when stalled on infra (`neutral`).
+     When no trusted check run exists, `candidate-gate.sh` and the train read
+     the newest `grain/release-qualification` commit status created by
+     `RELEASE_QUALIFICATION_STATUS_LOGIN` (from the environment,
+     `grain ci checks`'s `grain_status_login`, or `scripts/release.conf`),
+     ignoring statuses from any other login. Where both exist, trusted check
+     runs always take precedence over commit statuses.
+   - **Opt-out and fail-closed:** With `RELEASE_QUALIFICATION_APP` set
+     explicitly to `none` (in the environment or `scripts/release.conf`), Stage
+     2 is skipped (`SKIPPED grain/release-qualification`) and Stage 1 alone
+     qualifies the rc even if `RELEASE_QUALIFICATION_STATUS_LOGIN` is set. It
+     is never `none` by default: with both `RELEASE_QUALIFICATION_APP` and
+     `RELEASE_QUALIFICATION_STATUS_LOGIN` unset, nothing is trusted and the rc
+     never passes.
 
 A first product failure of any Stage 1 job or Stage 2 item gets one retry on
 the same rc (`flake`); cancelled, timed-out or capacity-starved runs are

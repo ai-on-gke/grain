@@ -370,7 +370,9 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 		t.Errorf("publish-release.yml does not verify the release (at %d) before it publishes its images (at %d)", verify, promote)
 	}
 	contains(t, text, "if: steps.verify.outputs.train == 'true'")
+	contains(t, text, "statuses: read")
 	contains(t, text, "RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}")
+	contains(t, text, "RELEASE_QUALIFICATION_STATUS_LOGIN: ${{ vars.RELEASE_QUALIFICATION_STATUS_LOGIN }}")
 	contains(t, text, "scripts/release-notes.sh write")
 	contains(t, text, "gh release create")
 	// Every step that publishes -- images, credentials, the GitHub Release

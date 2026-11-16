@@ -61,6 +61,7 @@ on:
 permissions:
   actions: write
   checks: read
+  statuses: read
   contents: read
 
 jobs:
@@ -85,8 +86,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The GitHub App (slug or id) grain posts grain/release-qualification
-          # as; a same-named check run from anything else never qualifies an rc.
+          # as (or, on a PAT forge, the commit-status login); a same-named
+          # check run or status from anything else never qualifies an rc.
           RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}
+          RELEASE_QUALIFICATION_STATUS_LOGIN: ${{ vars.RELEASE_QUALIFICATION_STATUS_LOGIN }}
           RELEASE_TRAIN_OUTPUT: ${{ runner.temp }}/release-train.out
         run: |
           set -euo pipefail

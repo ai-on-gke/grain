@@ -516,11 +516,23 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 		}
 		return clearPipelineNotification(ctx, store, model.NotificationSubject(model.FamilyRCFailed, rcTag), releaseQualificationNotifier)
 	}
-	// Only a hold grain's own App posted is grain's, as with the verdict
-	// (latestCheckRun); a connection grain cannot name posts none.
+	// Only a hold grain's own App (or, on a PAT connection, grain's own
+	// commit-status login) posted is grain's, as with the verdict
+	// (latestCheckRun / latestAttemptCommitStatus); a connection grain
+	// cannot name posts none.
 	app, err := forge.CheckRunApp(repo.StoredOwner(), repo.Name)
-	if err != nil || app == "" {
+	if err != nil {
 		return errors.Join(err, clear())
+	}
+	if app == "" {
+		statusForge, statusLogin, err := statusProjectionLogin(forge, repo)
+		if err != nil || statusLogin == "" {
+			return errors.Join(err, clear())
+		}
+		return errors.Join(
+			syncRCHoldStatus(ctx, store, statusForge, statusLogin, repo, rc, rcTag, sha, blockers, hadBlockers, done, n, now),
+			clear(),
+		)
 	}
 	checks, err := forge.ListCheckRuns(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
@@ -607,6 +619,79 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 		}
 	}
 	return clear()
+}
+
+// syncRCHoldStatus is syncRCHold projected as a commit status
+// (POST /repos/{o}/{r}/statuses/{sha}, context grain/rc-hold) when the
+// forge connection is not a GitHub App: pending while held, success once
+// lifted.
+func syncRCHoldStatus(ctx context.Context, store *model.Store, forge commitStatusProjectionForge, statusLogin string,
+	repo model.RepoRef, rc model.RCTag, rcTag, sha string, blockers []string, hadBlockers, done bool,
+	n *model.Notification, now time.Time) error {
+
+	statuses, err := forge.ListCommitStatuses(repo.StoredOwner(), repo.Name, sha)
+	if err != nil {
+		return fmt.Errorf("reading commit statuses on %s: %w", rcTag, err)
+	}
+	hold := latestRCHoldCommitStatus(statuses, model.ReleaseHoldCheckName, statusLogin, rcTag)
+	held := hold != nil && hold.State == "pending"
+
+	grace := releaseHoldGrace()
+	nOpen := n != nil && n.ClearedAt == nil
+	withinGrace := nOpen && grace > 0 && now.Sub(n.RaisedAt) < grace
+	stewardDone := false
+	if !done && len(blockers) == 0 && !hadBlockers && n != nil {
+		stewardDone, err = stewardTriagedCandidate(ctx, store, rcTag, n.RaisedAt)
+		if err != nil {
+			return err
+		}
+	}
+	triagePending := !done && len(blockers) == 0 && !hadBlockers && !stewardDone && withinGrace
+
+	next := rc
+	next.RC++
+	var state, desc string
+	switch {
+	case done && held:
+		state = "success"
+		desc = fmt.Sprintf("%s: superseded; nothing is held.", rcTag)
+	case !done && len(blockers) > 0:
+		want := github.TruncateCommitStatusDescription(
+			fmt.Sprintf("%s: holding %s until blockers land: task %s.", rcTag, next, strings.Join(blockers, ", task ")),
+		)
+		if !held || hold.Description != want {
+			state = "pending"
+			desc = want
+		}
+	case triagePending && !held:
+		if hold == nil {
+			state = "pending"
+			desc = fmt.Sprintf("%s: holding %s (triage pending, up to %s).", rcTag, next, humanDuration(grace))
+		}
+	case !done && len(blockers) == 0 && !triagePending && held:
+		state = "success"
+		switch {
+		case hadBlockers:
+			desc = fmt.Sprintf("%s: blockers landed; %s may be cut.", rcTag, next)
+		case stewardDone:
+			desc = fmt.Sprintf("%s: triaged with no blocker; %s may be cut.", rcTag, next)
+		case !nOpen:
+			desc = fmt.Sprintf("%s: triage acknowledged; %s may be cut.", rcTag, next)
+		default:
+			desc = fmt.Sprintf("%s: triage window elapsed; %s may be cut.", rcTag, next)
+		}
+	}
+	if state == "" {
+		return nil
+	}
+	if err := forge.CreateCommitStatus(repo.StoredOwner(), repo.Name, sha, github.CommitStatusWrite{
+		State:       state,
+		Context:     model.ReleaseHoldCheckName,
+		Description: desc,
+	}); err != nil {
+		return fmt.Errorf("posting commit status %s on %s: %w", model.ReleaseHoldCheckName, rcTag, err)
+	}
+	return nil
 }
 
 // stewardTriagedCandidate reports whether the pipeline steward's own run

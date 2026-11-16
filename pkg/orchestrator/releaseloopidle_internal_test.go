@@ -31,19 +31,22 @@ import (
 type fakeReleaseLoopForge struct {
 	github.Client // nil: anything else asked of it panics
 
-	mu           sync.Mutex
-	tags         []github.Tag
-	commits      map[string][]github.Commit // "base..head" -> commits oldest-first
-	workflowRuns map[string][]github.WorkflowRun
-	checkRuns    map[string][]github.CheckRun
-	app          string
+	mu             sync.Mutex
+	tags           []github.Tag
+	commits        map[string][]github.Commit // "base..head" -> commits oldest-first
+	workflowRuns   map[string][]github.WorkflowRun
+	checkRuns      map[string][]github.CheckRun
+	commitStatuses map[string][]github.CommitStatus
+	app            string
+	statusLogin    string
 }
 
 func newFakeReleaseLoopForge() *fakeReleaseLoopForge {
 	return &fakeReleaseLoopForge{
-		commits:      map[string][]github.Commit{},
-		workflowRuns: map[string][]github.WorkflowRun{},
-		checkRuns:    map[string][]github.CheckRun{},
+		commits:        map[string][]github.Commit{},
+		workflowRuns:   map[string][]github.WorkflowRun{},
+		checkRuns:      map[string][]github.CheckRun{},
+		commitStatuses: map[string][]github.CommitStatus{},
 	}
 }
 
@@ -86,6 +89,18 @@ func (f *fakeReleaseLoopForge) CheckRunApp(_, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.app, nil
+}
+
+func (f *fakeReleaseLoopForge) StatusLogin(_, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statusLogin, nil
+}
+
+func (f *fakeReleaseLoopForge) ListCommitStatuses(_, _, ref string) ([]github.CommitStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]github.CommitStatus(nil), f.commitStatuses[ref]...), nil
 }
 
 func (f *fakeReleaseLoopForge) setTags(tags ...github.Tag) {
@@ -409,6 +424,39 @@ func TestReleaseLoopIdleIsQuietWhileSomethingExplainsTheWait(t *testing.T) {
 	}
 	if !strings.Contains(n.Body, "no release-train tick has been filed yet") {
 		t.Errorf("want the tick state said, got:\n%s", n.Body)
+	}
+}
+
+func TestReleaseLoopRCHoldOnForgeRecognizesCommitStatus(t *testing.T) {
+	t.Parallel()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	forge := newFakeReleaseLoopForge()
+	forge.statusLogin = "grain-pat-bot"
+
+	// Untrusted login posting pending does not count as held.
+	forge.commitStatuses[loopRC1SHA] = []github.CommitStatus{
+		{ID: 1, Context: model.ReleaseHoldCheckName, State: "pending", Creator: "someone-else"},
+	}
+	if held, err := releaseLoopRCHeldOnForge(forge, repo, loopRC1SHA); err != nil || held {
+		t.Fatalf("untrusted hold = %v, %v; want false", held, err)
+	}
+
+	// Trusted login posting pending holds.
+	forge.commitStatuses[loopRC1SHA] = []github.CommitStatus{
+		{ID: 2, Context: model.ReleaseHoldCheckName, State: "pending", Creator: "Grain-PAT-Bot"},
+		{ID: 1, Context: model.ReleaseHoldCheckName, State: "success", Creator: "grain-pat-bot"},
+	}
+	if held, err := releaseLoopRCHeldOnForge(forge, repo, loopRC1SHA); err != nil || !held {
+		t.Fatalf("trusted pending hold = %v, %v; want true", held, err)
+	}
+
+	// Newer success from trusted login lifts the hold.
+	forge.commitStatuses[loopRC1SHA] = []github.CommitStatus{
+		{ID: 3, Context: model.ReleaseHoldCheckName, State: "success", Creator: "grain-pat-bot"},
+		{ID: 2, Context: model.ReleaseHoldCheckName, State: "pending", Creator: "grain-pat-bot"},
+	}
+	if held, err := releaseLoopRCHeldOnForge(forge, repo, loopRC1SHA); err != nil || held {
+		t.Fatalf("lifted hold = %v, %v; want false", held, err)
 	}
 }
 

@@ -199,24 +199,34 @@
 #                            the branch), run only when phase 2 looks for a
 #                            commit to cut; RELEASE_RUNS_JSON wins over it
 #                            (scripts/release-train-task.sh's main-runs)
-#   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON
-#                            files to read the rc's nightly.yml jobs and
-#                            check runs from instead
-#   RELEASE_HOLD_CHECKS_JSON a file to read a dropped rc's grain/rc-hold
-#                            check runs from instead
+#   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON,
+#   RELEASE_QUALIFICATION_STATUSES_JSON
+#                            files to read the rc's nightly.yml jobs, check
+#                            runs, and commit statuses from instead
+#   RELEASE_HOLD_CHECKS_JSON, RELEASE_HOLD_STATUSES_JSON
+#                            files to read a dropped rc's grain/rc-hold
+#                            check runs and commit statuses from instead
 #   RELEASE_QUALIFICATION_APP
 #                            the GitHub App (slug or numeric id) grain posts
 #                            grain/release-qualification and grain/rc-hold as:
 #                            only its check runs qualify an rc or lift a hold,
 #                            never same-named ones from an Actions workflow or
 #                            another app. "none", set explicitly here or in
-#                            scripts/release.conf (a forge connection that
-#                            is no GitHub App posts no check run), trusts
-#                            neither: Stage 1 alone qualifies an rc and no
-#                            grain/rc-hold holds the next. Empty here falls
-#                            back to scripts/release.conf; unset in both, no
-#                            check run is trusted and the train fails closed
+#                            scripts/release.conf, opts out of Stage 2 and
+#                            grain/rc-hold: Stage 1 alone qualifies an rc and
+#                            no grain/rc-hold holds the next. Empty here falls
+#                            back to scripts/release.conf; unset alongside
+#                            RELEASE_QUALIFICATION_STATUS_LOGIN, nothing is
+#                            trusted and the train fails closed
 #                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
+#   RELEASE_QUALIFICATION_STATUS_LOGIN
+#                            the GitHub login grain posts grain/release-qualification
+#                            and grain/rc-hold commit statuses as on a forge
+#                            connection with no GitHub App (e.g. a PAT): read
+#                            when no trusted check run exists, and ignored when
+#                            RELEASE_QUALIFICATION_APP=none. Empty here falls
+#                            back to scripts/release.conf
+#                            (candidate-gate.sh's CHECK_QUALIFICATION_STATUS_LOGIN)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -247,7 +257,7 @@
 #   RELEASE_MAJOR, RELEASE_FLOOR_MINOR, RELEASE_NEVER_PROMOTE,
 #   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE,
 #   RELEASE_MAX_PER_DAY, RELEASE_DAY_TZ, RELEASE_DAY_CAP_EXEMPT,
-#   RELEASE_QUALIFICATION_APP
+#   RELEASE_QUALIFICATION_APP, RELEASE_QUALIFICATION_STATUS_LOGIN
 #                            override scripts/release.conf as main has it
 set -euo pipefail
 
@@ -686,12 +696,14 @@ esac
 github_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 github_api="${RELEASE_GITHUB_API_URL:-${GITHUB_API_URL:-https://api.github.com}}"
 github_repo="${RELEASE_GITHUB_REPO:-${GITHUB_REPOSITORY:-${GRAIN_CI_REPO:-ai-on-gke/grain}}}"
-# The App trusted for grain/release-qualification and grain/rc-hold, from
-# the environment or else scripts/release.conf as main has it. "none" --
-# only ever an explicit setting, never a default -- trusts no check run:
-# Stage 1 alone qualifies, and nothing holds. Empty in both trusts nothing
-# and fails closed, so an unconfigured deployment never promotes on Stage 1.
+# The App (and/or commit-status login) trusted for grain/release-qualification
+# and grain/rc-hold, from the environment or else scripts/release.conf as main
+# has it. RELEASE_QUALIFICATION_APP=none -- only ever an explicit setting,
+# never a default -- opts out of Stage 2 and grain/rc-hold: Stage 1 alone
+# qualifies, and nothing holds. Empty in both trusts nothing and fails closed,
+# so an unconfigured deployment never promotes on Stage 1.
 qualification_app="${RELEASE_QUALIFICATION_APP:-$(conf_value RELEASE_QUALIFICATION_APP)}"
+qualification_status_login="${RELEASE_QUALIFICATION_STATUS_LOGIN:-$(conf_value RELEASE_QUALIFICATION_STATUS_LOGIN)}"
 github_get() { # github_get <path> <out>
   curl -fsS --max-time 60 -H "Authorization: Bearer $github_token" -H "Accept: application/vnd.github+json" \
     "${github_api%/}/repos/$github_repo/$1" -o "$2"
@@ -723,13 +735,39 @@ github_runs() { # github_runs <out> <branch>
   say "read $(jq '.workflow_runs | length' "$1") GitHub Actions runs of $github_repo's ${CANDIDATE_GATE_REQUIRED-tests release} on $2"
 }
 
+# github_commit_statuses <sha> <out> <what>: read paginated commit statuses
+# on <sha> into a single JSON array in <out>. Sets status_flooded=true when
+# every page up to RELEASE_GITHUB_PAGES was full (100 statuses).
+status_flooded=false
+github_commit_statuses() {
+  local sha="$1" dest="$2" what="$3" pages page n
+  pages="${RELEASE_GITHUB_PAGES:-3}"
+  : > "$work/status-pages.jsonl"
+  status_flooded=true
+  for ((page = 1; page <= pages; page++)); do
+    github_get "commits/$sha/statuses?per_page=100&page=$page" "$work/status-page.json" ||
+      die "could not read the commit statuses for $what on ${sha:0:12} from $github_api"
+    n="$(jq 'if type == "array" then length else error("not a commit status listing") end' "$work/status-page.json" 2>/dev/null)" ||
+      die "$github_api's answer for $what commit statuses on ${sha:0:12} is not a listing of statuses"
+    cat "$work/status-page.json" >> "$work/status-pages.jsonl"
+    if [ "$n" -lt 100 ]; then
+      status_flooded=false
+      break
+    fi
+  done
+  jq -s 'add // []' "$work/status-pages.jsonl" > "$dest"
+}
+
 # qualification_json <rc> <sha>: what check-qualification reads -- the
-# jobs of every nightly.yml run on the rc ($work/qual-runs.json) and the
-# check runs on its commit ($work/qual-checks.json, when there is a way to
-# read them; qual_checks names it then).
+# jobs of every nightly.yml run on the rc ($work/qual-runs.json), the
+# check runs on its commit ($work/qual-checks.json; qual_checks names it),
+# and any commit statuses ($work/qual-statuses.json; qual_statuses names it).
 qual_checks=""
+qual_statuses=""
 qualification_json() {
   local id app_id=""
+  qual_checks=""
+  qual_statuses=""
   [[ ! "$qualification_app" =~ ^[0-9]+$ ]] || app_id="&app_id=$qualification_app"
   if [ -n "${RELEASE_QUALIFICATION_RUNS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_RUNS_JSON "" "$work/qual-runs.json"
@@ -749,44 +787,60 @@ qualification_json() {
   fi
   if [ "$qualification_app" = none ]; then
     say "RELEASE_QUALIFICATION_APP=none, so no grain/release-qualification check run is read for $1: Stage 1 alone qualifies it"
-  elif [ -n "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
+    return 0
+  fi
+  if [ -n "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_CHECKS_JSON "" "$work/qual-checks.json"
     qual_checks="$work/qual-checks.json"
-  elif [ -n "$github_token" ]; then
+  elif [ -n "$github_token" ] && { [ -n "$qualification_app" ] || [ -z "$qualification_status_login" ]; }; then
     # GitHub filters by app only by id; candidate-gate.sh checks the app
     # of every check run it judges either way.
     github_get "commits/$2/check-runs?check_name=grain%2Frelease-qualification&filter=all&per_page=100$app_id" "$work/qual-checks.json" ||
       die "could not read the check runs on $1 from $github_api"
     qual_checks="$work/qual-checks.json"
-  else
+  fi
+  if [ -n "${RELEASE_QUALIFICATION_STATUSES_JSON:-}" ]; then
+    gate_json RELEASE_QUALIFICATION_STATUSES_JSON "" "$work/qual-statuses.json"
+    qual_statuses="$work/qual-statuses.json"
+  elif [ -n "$github_token" ] && [ -n "$qualification_status_login" ] && [ -z "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
+    github_commit_statuses "$2" "$work/qual-statuses.json" "grain/release-qualification"
+    qual_statuses="$work/qual-statuses.json"
+  fi
+  if [ -z "$qual_checks" ] && [ -z "$qual_statuses" ]; then
     say "no GitHub token and no RELEASE_QUALIFICATION_CHECKS_JSON (a task writes it with \`grain ci checks $2 --name grain/release-qualification --format github\`), so no grain/release-qualification check run to read for $1"
   fi
 }
 
 # rc_hold_summary <floor_sha>: if the newest grain/rc-hold check run on
-# floor_sha from RELEASE_QUALIFICATION_APP is not completed, prints its
-# summary; otherwise prints nothing. No check at all means no hold, and so
-# does an explicit RELEASE_QUALIFICATION_APP=none: no app is trusted to post
-# one. An empty one refuses rather than trust another app's check run.
-# When the listing was read and grain's app has posted no grain/rc-hold on
+# floor_sha from RELEASE_QUALIFICATION_APP is not completed -- or, when no
+# trusted check run exists and RELEASE_QUALIFICATION_STATUS_LOGIN is set,
+# the newest grain/rc-hold commit status from that login is pending --
+# prints its summary; otherwise prints nothing. No check/status at all
+# means no hold, and so does an explicit RELEASE_QUALIFICATION_APP=none:
+# nothing is trusted to post one. Empty in both refuses rather than trust
+# another app's check run or login's status.
+# When the listing was read and grain has posted no grain/rc-hold on
 # floor_sha at all, it leaves $work/hold-absent behind (it runs in a
 # command substitution, so a file is how Phase 2 learns that).
 rc_hold_summary() {
-  local app_id="" hold_checks="" pages page n flooded=false result
+  local app_id="" hold_checks="" hold_statuses="" pages page n flooded=false status_allow_array=false result="@absent"
   rm -f "$work/hold-absent"
   if [ "$qualification_app" = none ]; then
     say "RELEASE_QUALIFICATION_APP=none, so no grain/rc-hold check run on ${1:0:12} is trusted; not waiting on one" >&2
     return 0
   fi
   [[ ! "$qualification_app" =~ ^[0-9]+$ ]] || app_id="&app_id=$qualification_app"
+  if [ -z "${RELEASE_HOLD_CHECKS_JSON:-}" ] && [ -z "${RELEASE_HOLD_STATUSES_JSON:-}" ] && [ -z "$github_token" ]; then
+    say "no GitHub token, so no grain/rc-hold check run to read on ${1:0:12}; not waiting on one" >&2
+    return 0
+  fi
+  if [ -z "$qualification_app" ] && [ -z "$qualification_status_login" ]; then
+    die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, set RELEASE_QUALIFICATION_STATUS_LOGIN to the login grain posts commit statuses as, or set it to none in scripts/release.conf"
+  fi
   if [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
-    [ -n "$qualification_app" ] ||
-      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
     gate_json RELEASE_HOLD_CHECKS_JSON "" "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
-  elif [ -n "$github_token" ]; then
-    [ -n "$qualification_app" ] ||
-      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
+  elif [ -n "$github_token" ] && [ -n "$qualification_app" ]; then
     pages="${RELEASE_GITHUB_PAGES:-3}"
     : > "$work/hold-checks.jsonl"
     flooded=true
@@ -803,40 +857,86 @@ rc_hold_summary() {
     done
     jq -s '{check_runs: (map(.check_runs) | add // [])}' "$work/hold-checks.jsonl" > "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
-  else
-    say "no GitHub token, so no grain/rc-hold check run to read on ${1:0:12}; not waiting on one" >&2
-    return 0
   fi
-  # shellcheck disable=SC2016 # jq, not shell
-  result="$(jq -r --arg sha "${1,,}" --arg app "$qualification_app" --argjson flooded "$flooded" '
-    def epoch:
-      if . == null or . == "" then 0
-      else sub("\\.[0-9]+"; "")
-        | if test("Z$") then fromdateiso8601
-          else (capture("^(?<d>.*)(?<s>[+-])(?<h>[0-9]{2}):?(?<m>[0-9]{2})$") as $c
-            | ($c.d + "Z" | fromdateiso8601) - (($c.s + "1" | tonumber) * (($c.h | tonumber) * 3600 + ($c.m | tonumber) * 60)))
+  if [ -n "$hold_checks" ] && [ -n "$qualification_app" ]; then
+    # shellcheck disable=SC2016 # jq, not shell
+    result="$(jq -r --arg sha "${1,,}" --arg app "$qualification_app" --argjson flooded "$flooded" '
+      def epoch:
+        if . == null or . == "" then 0
+        else sub("\\.[0-9]+"; "")
+          | if test("Z$") then fromdateiso8601
+            else (capture("^(?<d>.*)(?<s>[+-])(?<h>[0-9]{2}):?(?<m>[0-9]{2})$") as $c
+              | ($c.d + "Z" | fromdateiso8601) - (($c.s + "1" | tonumber) * (($c.h | tonumber) * 3600 + ($c.m | tonumber) * 60)))
+            end
+        end;
+      def from_app: $app != "" and (.app | type == "object")
+        and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app);
+      def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($sha | startswith($h)) or ($h | startswith($sha));
+      (if type == "array" then .
+       elif type == "object" and (.check_runs | type == "array") then .check_runs
+       else error("not a check run listing") end) as $runs
+      | [ $runs[]
+          | select(.name == "grain/rc-hold")
+          | select(.head_sha | sha_ok)
+          | select(from_app) ]
+      | if length == 0 and $flooded then error("all fetched grain/rc-hold pages were from other apps") else . end
+      | sort_by([(.id // 0), ((.started_at // .startedAt) | epoch)])
+      | if length == 0 then "@absent" else
+          last
+          | select((.status // "") != "completed")
+          | ([.output.summary, .output.title, .status]
+              | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
+              | first // "in_progress")
+        end
+    ' "$hold_checks")" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
+  fi
+  if [ "$result" = "@absent" ] && [ -n "$qualification_status_login" ]; then
+    status_flooded=false
+    if [ -n "${RELEASE_HOLD_STATUSES_JSON:-}" ]; then
+      gate_json RELEASE_HOLD_STATUSES_JSON "" "$work/hold-statuses.json"
+      hold_statuses="$work/hold-statuses.json"
+      status_allow_array=true
+    elif [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
+      hold_statuses="$hold_checks"
+      status_allow_array=false
+    elif [ -n "$github_token" ]; then
+      github_commit_statuses "$1" "$work/hold-statuses.json" "grain/rc-hold"
+      hold_statuses="$work/hold-statuses.json"
+      status_allow_array=true
+    fi
+    if [ -n "$hold_statuses" ]; then
+      # shellcheck disable=SC2016 # jq, not shell
+      result="$(jq -r --arg login "$qualification_status_login" --argjson flooded "$status_flooded" --argjson allow_array "$status_allow_array" '
+        def epoch:
+          if . == null or . == "" then 0
+          else sub("\\.[0-9]+"; "")
+            | if test("Z$") then fromdateiso8601
+              else (capture("^(?<d>.*)(?<s>[+-])(?<h>[0-9]{2}):?(?<m>[0-9]{2})$") as $c
+                | ($c.d + "Z" | fromdateiso8601) - (($c.s + "1" | tonumber) * (($c.h | tonumber) * 3600 + ($c.m | tonumber) * 60)))
+              end
+          end;
+        def from_login: $login != "" and (.creator | type == "object")
+          and ((.creator.login // "" | ascii_downcase) == ($login | ascii_downcase));
+        (if type == "array" then (if $allow_array then . else [] end)
+         elif type == "object" and ((.statuses // []) | type == "array") then (.statuses // [])
+         else error("not a commit status listing") end) as $sts
+        | $sts | to_entries
+        | [ .[] | .key as $idx | .value
+            | select(.context == "grain/rc-hold")
+            | select(from_login)
+            | {v: ., k: [((.updated_at // .created_at) | epoch), (.id // 0), (-$idx)]} ]
+        | if length == 0 and $flooded then error("all fetched grain/rc-hold status pages were from other logins") else . end
+        | sort_by(.k)
+        | if length == 0 then "@absent" else
+            last.v
+            | select((.state // "") == "pending")
+            | ([.description, .state]
+                | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
+                | first // "pending")
           end
-      end;
-    def from_app: $app != "" and (.app | type == "object")
-      and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app);
-    def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($sha | startswith($h)) or ($h | startswith($sha));
-    (if type == "array" then .
-     elif type == "object" and (.check_runs | type == "array") then .check_runs
-     else error("not a check run listing") end) as $runs
-    | [ $runs[]
-        | select(.name == "grain/rc-hold")
-        | select(.head_sha | sha_ok)
-        | select(from_app) ]
-    | if length == 0 and $flooded then error("all fetched grain/rc-hold pages were from other apps") else . end
-    | sort_by([(.id // 0), ((.started_at // .startedAt) | epoch)])
-    | if length == 0 then "@absent" else
-        last
-        | select((.status // "") != "completed")
-        | ([.output.summary, .output.title, .status]
-            | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
-            | first // "in_progress")
-      end
-  ' "$hold_checks")" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
+      ' "$hold_statuses")" || die "could not parse grain/rc-hold commit statuses on ${1:0:12}"
+    fi
+  fi
   if [ "$result" = "@absent" ]; then
     : > "$work/hold-absent"
   elif [ -n "$result" ]; then
@@ -998,8 +1098,9 @@ if [ "$mode" = verify ]; then
   fi
   qualification_json "$from_rc" "$sha"
   q_status=0
-  q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$from_rc" --rc-sha "$sha" \
-    --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
+  q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" CHECK_QUALIFICATION_STATUS_LOGIN="$qualification_status_login" \
+    bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$from_rc" --rc-sha "$sha" \
+    --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} ${qual_statuses:+--statuses-json "$qual_statuses"} 2>&1)" || q_status=$?
   printf '%s\n' "$q_out" | sed 's/^/  /'
   [ "$q_status" = 0 ] || die "verify: $from_rc does not pass qualification now (check-qualification exited $q_status); $version is not published"
   # The tag only says the train made it; the train's tag grant reaches any
@@ -1258,8 +1359,9 @@ if [ -n "$rc" ]; then
     say "phase 1: $rc (${rc_sha:0:12}) is in qualification; asking the qualification gate"
     qualification_json "$rc" "$rc_sha"
     q_status=0
-    q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
-      --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
+    q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" CHECK_QUALIFICATION_STATUS_LOGIN="$qualification_status_login" \
+      bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
+      --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} ${qual_statuses:+--statuses-json "$qual_statuses"} 2>&1)" || q_status=$?
     printf '%s\n' "$q_out" | sed 's/^/  /'
     case "$q_status" in
       0)

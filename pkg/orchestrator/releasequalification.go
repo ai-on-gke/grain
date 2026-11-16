@@ -390,6 +390,122 @@ func latestAttemptCheckRun(runs []github.CheckRun, name, app, baseTag string) (i
 	return bestAttempt, out
 }
 
+// commitStatusProjectionForge is the optional half of a forge connection
+// used when no GitHub App is configured (e.g. a PAT): Stage 2 and
+// grain/rc-hold are projected as commit statuses instead of check runs.
+type commitStatusProjectionForge interface {
+	github.CommitStatusLister
+	github.CommitStatusWriter
+	github.CommitStatusIdentityReader
+}
+
+// statusProjectionLogin returns the commit-status writer/lister and
+// trusted creator login for repo, or ("", nil) when forge cannot project
+// commit statuses or has no forge login.
+func statusProjectionLogin(forge ReleaseQualificationForge, repo model.RepoRef) (commitStatusProjectionForge, string, error) {
+	sf, ok := forge.(commitStatusProjectionForge)
+	if !ok {
+		return nil, "", nil
+	}
+	login, err := sf.StatusLogin(repo.StoredOwner(), repo.Name)
+	if err != nil {
+		return nil, "", err
+	}
+	return sf, login, nil
+}
+
+func isCandidateLabelByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9') || b == '.' || b == '-' || b == '_'
+}
+
+// statusMentionsCandidate reports whether desc names label as a whole
+// candidate token (so v1.4.0-rc.1 does not match v1.4.0-rc.10 or v1.4.0).
+func statusMentionsCandidate(desc, label string) bool {
+	if label == "" {
+		return false
+	}
+	for from := 0; from < len(desc); {
+		i := strings.Index(desc[from:], label)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(label)
+		leftOK := start == 0 || !isCandidateLabelByte(desc[start-1])
+		rightOK := end == len(desc) || !isCandidateLabelByte(desc[end])
+		if leftOK && rightOK {
+			return true
+		}
+		from = start + 1
+	}
+	return false
+}
+
+// parseStatusAttempt extracts the Stage 2 attempt number from a commit
+// status description for rcTag ("Qualifying <rcTag> (attempt N)" or
+// "Release qualification of <rcTag> (attempt N): ..."), returning (1, true)
+// when rcTag is named with no attempt suffix.
+func parseStatusAttempt(desc, rcTag string) (int, bool) {
+	if !statusMentionsCandidate(desc, rcTag) {
+		return 0, false
+	}
+	const marker = " (attempt "
+	if i := strings.Index(desc, marker); i >= 0 {
+		rest := desc[i+len(marker):]
+		if end := strings.IndexByte(rest, ')'); end > 0 {
+			if n, err := strconv.Atoi(rest[:end]); err == nil && n >= 2 && strconv.Itoa(n) == rest[:end] {
+				return n, true
+			}
+		}
+	}
+	return 1, true
+}
+
+// latestAttemptCommitStatus is the highest Stage 2 attempt number login
+// posted under contextName for rcTag and the newest status within that
+// attempt (or 1, nil when login has posted none yet). statuses is
+// newest-first as returned by GitHub's GET .../commits/{ref}/statuses.
+func latestAttemptCommitStatus(statuses []github.CommitStatus, contextName, login, rcTag string) (int, *github.CommitStatus) {
+	bestAttempt := 1
+	var out *github.CommitStatus
+	for i := range statuses {
+		s := &statuses[i]
+		if s.Context != contextName || !strings.EqualFold(s.Creator, login) {
+			continue
+		}
+		attempt, ok := parseStatusAttempt(s.Description, rcTag)
+		if !ok {
+			continue
+		}
+		if out == nil || attempt > bestAttempt || (attempt == bestAttempt && s.ID > out.ID) {
+			bestAttempt = attempt
+			out = s
+		}
+	}
+	return bestAttempt, out
+}
+
+// latestRCHoldCommitStatus is the newest grain/rc-hold commit status
+// login posted for rcTag (identified by the "<rcTag>: " prefix), or nil.
+func latestRCHoldCommitStatus(statuses []github.CommitStatus, contextName, login, rcTag string) *github.CommitStatus {
+	prefix := rcTag + ": "
+	var out *github.CommitStatus
+	for i := range statuses {
+		s := &statuses[i]
+		if s.Context != contextName || !strings.EqualFold(s.Creator, login) {
+			continue
+		}
+		if !strings.HasPrefix(s.Description, prefix) {
+			continue
+		}
+		if out == nil || s.ID > out.ID {
+			out = s
+		}
+	}
+	return out
+}
+
 // infraStallActive reports whether notifyKey's pipeline.release-infra-stalled
 // notification is still open and unacknowledged.
 func infraStallActive(ctx context.Context, store *model.Store, notifyKey string) (bool, error) {
@@ -512,39 +628,80 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 		return fmt.Errorf("reading which GitHub App posts %s on %s: %w", checkName, rcTag, err)
 	}
 	baseTag := model.QualificationTag(gate.stem, repo, cand.key)
-	if app == "" {
-		// No check run of grain's can be told from anybody else's, so Stage 2
-		// cannot run; Stage 1's notifications need none, and are raised
-		// all the same (releasestage1.go).
-		q := rcQualification{store: store, forge: forge, repo: repo, suite: gate.suite, rcTag: rcTag, sha: sha,
-			tag: model.QualificationAttemptTag(baseTag, 1), now: now, check: checkName, release: cand.release,
-			notifyKey: cand.notifyKey}
-		_, stage1 := q.watchStage1(ctx, gate.cfg, commits, cand.rc, 1)
-		return errors.Join(stage1, fmt.Errorf("not qualifying %s: its forge connection is not a GitHub App grain can name, so its own %s could not be told from one anything else posted",
-			rcTag, checkName))
-	}
-	checks, err := forge.ListCheckRuns(repo.StoredOwner(), repo.Name, sha)
-	if err != nil {
-		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
-	}
-	attempt, check := latestAttemptCheckRun(checks, checkName, app, baseTag)
-	if check != nil && check.Status == "completed" {
-		if check.Conclusion == nil || *check.Conclusion != model.ConclusionNeutral {
-			return nil
-		}
-		nextTag := model.QualificationAttemptTag(baseTag, attempt+1)
-		nextRuns, err := store.SuiteRunsTagged(ctx, nextTag)
+
+	var (
+		statusForge   commitStatusProjectionForge
+		attempt       = 1
+		check         *github.CheckRun
+		statusPending bool
+	)
+	if app != "" {
+		checks, err := forge.ListCheckRuns(repo.StoredOwner(), repo.Name, sha)
 		if err != nil {
-			return err
+			return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 		}
-		if len(nextRuns) == 0 {
-			stalled, err := infraStallActive(ctx, store, cand.notifyKey)
-			if err != nil || stalled {
+		attempt, check = latestAttemptCheckRun(checks, checkName, app, baseTag)
+		if check != nil && check.Status == "completed" {
+			if check.Conclusion == nil || *check.Conclusion != model.ConclusionNeutral {
+				return nil
+			}
+			nextTag := model.QualificationAttemptTag(baseTag, attempt+1)
+			nextRuns, err := store.SuiteRunsTagged(ctx, nextTag)
+			if err != nil {
 				return err
 			}
+			if len(nextRuns) == 0 {
+				stalled, err := infraStallActive(ctx, store, cand.notifyKey)
+				if err != nil || stalled {
+					return err
+				}
+			}
+			attempt++
+			check = nil
 		}
-		attempt++
-		check = nil
+	} else {
+		var statusLogin string
+		statusForge, statusLogin, err = statusProjectionLogin(forge, repo)
+		if err != nil || statusLogin == "" {
+			// Neither a GitHub App nor a commit-status login grain can name:
+			// Stage 2 cannot run because grain's own verdict could not be told
+			// from one anything else posted; Stage 1's notifications need none,
+			// and are raised all the same (releasestage1.go).
+			q := rcQualification{store: store, forge: forge, repo: repo, suite: gate.suite, rcTag: rcTag, sha: sha,
+				tag: model.QualificationAttemptTag(baseTag, 1), now: now, check: checkName, release: cand.release,
+				notifyKey: cand.notifyKey}
+			_, stage1 := q.watchStage1(ctx, gate.cfg, commits, cand.rc, 1)
+			if err != nil {
+				return errors.Join(stage1, fmt.Errorf("reading which login posts %s on %s: %w", checkName, rcTag, err))
+			}
+			return errors.Join(stage1, fmt.Errorf("not qualifying %s: its forge connection is not a GitHub App and has no commit-status login grain can name, so its own %s could not be told from one anything else posted",
+				rcTag, checkName))
+		}
+		statuses, err := statusForge.ListCommitStatuses(repo.StoredOwner(), repo.Name, sha)
+		if err != nil {
+			return fmt.Errorf("reading commit statuses on %s: %w", rcTag, err)
+		}
+		var latestStatus *github.CommitStatus
+		attempt, latestStatus = latestAttemptCommitStatus(statuses, checkName, statusLogin, rcTag)
+		if latestStatus != nil && latestStatus.State != "pending" {
+			if latestStatus.State != "error" {
+				return nil
+			}
+			nextTag := model.QualificationAttemptTag(baseTag, attempt+1)
+			nextRuns, err := store.SuiteRunsTagged(ctx, nextTag)
+			if err != nil {
+				return err
+			}
+			if len(nextRuns) == 0 {
+				stalled, err := infraStallActive(ctx, store, cand.notifyKey)
+				if err != nil || stalled {
+					return err
+				}
+			}
+			attempt++
+			latestStatus = nil
+		}
+		statusPending = latestStatus != nil && latestStatus.State == "pending"
 	}
 	tag := model.QualificationAttemptTag(baseTag, attempt)
 
@@ -557,8 +714,11 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	if err != nil {
 		return err
 	}
-	q := rcQualification{store: store, forge: forge, repo: repo, suite: suite, rcTag: rcTag, sha: sha, tag: tag, now: now,
-		check: checkName, release: cand.release, notifyKey: cand.notifyKey}
+	q := rcQualification{
+		store: store, forge: forge, statusForge: statusForge, repo: repo, suite: suite,
+		rcTag: rcTag, sha: sha, tag: tag, attemptNum: attempt, statusPending: statusPending,
+		now: now, check: checkName, release: cand.release, notifyKey: cand.notifyKey,
+	}
 	if check != nil {
 		q.checkID = check.ID
 	}
@@ -643,7 +803,7 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 			return err
 		}
 	}
-	if q.checkID == 0 {
+	if q.checkID == 0 && !q.statusPending {
 		return q.post("in_progress", "", qualifyingTitle, summary)
 	}
 	return nil
@@ -652,18 +812,21 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 // rcQualification is one candidate's Stage 2, for the length of one
 // reconcile.
 type rcQualification struct {
-	store   *model.Store
-	forge   ReleaseQualificationForge
-	repo    model.RepoRef
-	suite   model.Suite
-	rcTag   string // the candidate's label (qualificationCandidate.label)
-	sha     string
-	tag     string
-	checkID int64
-	now     time.Time
-	// check is the check run's name, release the version the candidate
-	// would ship as, and notifyKey the key of its notifications
-	// (qualificationCandidate's).
+	store         *model.Store
+	forge         ReleaseQualificationForge
+	statusForge   commitStatusProjectionForge // non-nil when projecting verdicts as commit statuses
+	repo          model.RepoRef
+	suite         model.Suite
+	rcTag         string // the candidate's label (qualificationCandidate.label)
+	sha           string
+	tag           string
+	attemptNum    int
+	checkID       int64
+	statusPending bool
+	now           time.Time
+	// check is the check run's name (or commit status context), release the
+	// version the candidate would ship as, and notifyKey the key of its
+	// notifications (qualificationCandidate's).
 	check     string
 	release   string
 	notifyKey string
@@ -833,9 +996,12 @@ func ownRunComment(c model.Comment, taskID string) bool {
 		by.Kind == model.PrincipalAgent && by.ID == taskID
 }
 
-// post writes the check run on rc_sha: updating the one already there,
-// or creating it.
+// post writes the verdict on rc_sha: as a check run when grain has a
+// GitHub App, or as a commit status when it projects via a PAT/user login.
 func (q *rcQualification) post(status, conclusion, title, summary string) error {
+	if q.statusForge != nil {
+		return q.postCommitStatus(status, conclusion, title, summary)
+	}
 	run := github.CheckRunWrite{
 		Name:       q.check,
 		HeadSHA:    q.sha,
@@ -861,5 +1027,42 @@ func (q *rcQualification) post(status, conclusion, title, summary string) error 
 		return fmt.Errorf("posting %s on %s: %w", q.check, q.rcTag, err)
 	}
 	q.checkID = id
+	return nil
+}
+
+func (q *rcQualification) postCommitStatus(status, conclusion, title, summary string) error {
+	var state, desc string
+	if status != "completed" {
+		state = "pending"
+		desc = title
+	} else {
+		switch conclusion {
+		case model.ConclusionSuccess:
+			state = "success"
+		case model.ConclusionFailure:
+			state = "failure"
+		case model.ConclusionNeutral:
+			state = "error"
+		default:
+			state = "error"
+		}
+		desc = fmt.Sprintf("Release qualification of %s: %s", q.rcTag, conclusion)
+		if q.attemptNum > 1 {
+			desc = fmt.Sprintf("Release qualification of %s (attempt %d): %s", q.rcTag, q.attemptNum, conclusion)
+		}
+		if conclusion != model.ConclusionSuccess {
+			if first, _, _ := strings.Cut(strings.TrimSpace(summary), "\n"); first != "" {
+				desc += " - " + first
+			}
+		}
+	}
+	if err := q.statusForge.CreateCommitStatus(q.repo.StoredOwner(), q.repo.Name, q.sha, github.CommitStatusWrite{
+		State:       state,
+		Context:     q.check,
+		Description: desc,
+	}); err != nil {
+		return fmt.Errorf("posting commit status %s on %s: %w", q.check, q.rcTag, err)
+	}
+	q.statusPending = state == "pending"
 	return nil
 }

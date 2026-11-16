@@ -339,3 +339,44 @@ func (b *blockingTransport) Request(method, path string, headers map[string]stri
 	<-b.release
 	return b.inner.Request(method, path, headers, body)
 }
+
+func TestCredentialLogin(t *testing.T) {
+	t.Setenv("GRAIN_IN_CONTAINER", "1")
+	c, _ := LoadCredentialSet(t.TempDir())
+	rt := &routeTransport{routes: map[string]github.ApiResponse{
+		"GET /user": {Status: 200, Body: []byte(`{"login":"grain-pat-bot","id":77,"name":"Grain Bot"}`)},
+	}}
+	c.AppTransport = rt
+	if err := c.SetPAT("team-pat", "ghp_bot"); err != nil {
+		t.Fatal(err)
+	}
+	login, err := c.CredentialLogin("team-pat")
+	if err != nil || login != "grain-pat-bot" {
+		t.Fatalf("CredentialLogin(team-pat) = %q, %v; want grain-pat-bot", login, err)
+	}
+	// Shares cache with CredentialGitIdentity: still only one GET /user call.
+	id, err := c.CredentialGitIdentity("team-pat")
+	if err != nil || id.Name != "Grain Bot" {
+		t.Fatalf("CredentialGitIdentity(team-pat) = %+v, %v", id, err)
+	}
+	if n := rt.count("GET", "/user"); n != 1 {
+		t.Fatalf("/user called %d times, want 1", n)
+	}
+
+	// Anonymous, missing, and plain git host return empty without error.
+	if got, err := c.CredentialLogin("anonymous"); err != nil || got != "" {
+		t.Fatalf("CredentialLogin(anonymous) = %q, %v; want empty", got, err)
+	}
+	if got, err := c.CredentialLogin("missing"); err != nil || got != "" {
+		t.Fatalf("CredentialLogin(missing) = %q, %v; want empty", got, err)
+	}
+	if err := c.SetPAT("plain-git", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetHost("plain-git", CredentialHost{Host: "git.internal", Kind: model.GitHostGit}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.CredentialLogin("plain-git"); err != nil || got != "" {
+		t.Fatalf("CredentialLogin(plain-git) = %q, %v; want empty", got, err)
+	}
+}

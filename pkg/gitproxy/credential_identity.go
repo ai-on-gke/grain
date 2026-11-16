@@ -169,27 +169,28 @@ func (c *CredentialSet) ambientOwnerIdentity(name string) (CommitIdentity, bool)
 // credentialIdentityEntry is one CredentialGitIdentity answer, kept for
 // as long as key -- the token, or the App and its host -- is unchanged.
 type credentialIdentityEntry struct {
-	key string
-	id  CommitIdentity
+	key   string
+	id    CommitIdentity
+	login string
 }
 
-func (c *CredentialSet) cachedCredentialIdentity(name, key string) (CommitIdentity, bool) {
+func (c *CredentialSet) cachedCredentialIdentity(name, key string) (credentialIdentityEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.credentialIdentities[name]
 	if !ok || e.key != key {
-		return CommitIdentity{}, false
+		return credentialIdentityEntry{}, false
 	}
-	return e.id, true
+	return e, true
 }
 
-func (c *CredentialSet) cacheCredentialIdentity(name, key string, id CommitIdentity) {
+func (c *CredentialSet) cacheCredentialIdentity(name, key string, id CommitIdentity, login string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.credentialIdentities == nil {
 		c.credentialIdentities = map[string]credentialIdentityEntry{}
 	}
-	c.credentialIdentities[name] = credentialIdentityEntry{key: key, id: id}
+	c.credentialIdentities[name] = credentialIdentityEntry{key: key, id: id, login: login}
 }
 
 // githubUser is the part of a /user or /users/{login} answer a commit
@@ -201,27 +202,17 @@ type githubUser struct {
 	Email string `json:"email"`
 }
 
-// tokenGitIdentity asks h's API who token is (GET /user) and builds the
-// commit identity from the answer, preferring the host account's own git
-// config (HostGitIdentity) where available and hostGit is set, then the
-// display name and email from /user, and falling back to the login and
-// its noreply address for whichever half is still empty. The cache holds
-// /user's own answer, so an owner lookup (hostGit false) and a commit
-// lookup share one request per token.
-func (c *CredentialSet) tokenGitIdentity(name string, h CredentialHost, token string, hostGit bool) (CommitIdentity, error) {
+// tokenIdentity asks h's API who token is (GET /user), caching both the
+// commit identity and the forge login per token so commit-author and
+// commit-status-login lookups share one request.
+func (c *CredentialSet) tokenIdentity(name string, h CredentialHost, token string) (CommitIdentity, string, error) {
 	key := h.Host + "\x00" + token
-	withHost := func(id CommitIdentity) CommitIdentity {
-		if !hostGit {
-			return id
-		}
-		return applyHostGitIdentity(id, c.HostGitIdentity())
-	}
-	if id, ok := c.cachedCredentialIdentity(name, key); ok {
-		return withHost(id), nil
+	if e, ok := c.cachedCredentialIdentity(name, key); ok {
+		return e.id, e.login, nil
 	}
 	transport, err := c.appTransportFor(name)
 	if err != nil {
-		return CommitIdentity{}, err
+		return CommitIdentity{}, "", err
 	}
 	resp, err := transport.Request("GET", "/user", map[string]string{
 		"Accept":        "application/vnd.github+json",
@@ -229,17 +220,17 @@ func (c *CredentialSet) tokenGitIdentity(name string, h CredentialHost, token st
 		"Authorization": "token " + token,
 	}, nil)
 	if err != nil {
-		return CommitIdentity{}, fmt.Errorf("asking %s who credential %q is: %s", h.Host, name, shortMessage(err.Error()))
+		return CommitIdentity{}, "", fmt.Errorf("asking %s who credential %q is: %s", h.Host, name, shortMessage(err.Error()))
 	}
 	if resp.Status != http.StatusOK {
-		return CommitIdentity{}, fmt.Errorf("asking %s who credential %q is: HTTP %d", h.Host, name, resp.Status)
+		return CommitIdentity{}, "", fmt.Errorf("asking %s who credential %q is: HTTP %d", h.Host, name, resp.Status)
 	}
 	var who githubUser
 	if err := json.Unmarshal(resp.Body, &who); err != nil {
-		return CommitIdentity{}, fmt.Errorf("reading %s's /user answer for credential %q: %v", h.Host, name, err)
+		return CommitIdentity{}, "", fmt.Errorf("reading %s's /user answer for credential %q: %v", h.Host, name, err)
 	}
 	if who.Login == "" {
-		return CommitIdentity{}, fmt.Errorf("%s answered /user for credential %q with no login", h.Host, name)
+		return CommitIdentity{}, "", fmt.Errorf("%s answered /user for credential %q with no login", h.Host, name)
 	}
 	login := AmbientIdentity{Login: who.Login, ID: who.ID, Name: strings.TrimSpace(who.Name)}
 	id := CommitIdentity{Name: oneLine(login.Name), Email: oneLine(strings.TrimSpace(who.Email))}
@@ -249,8 +240,26 @@ func (c *CredentialSet) tokenGitIdentity(name string, h CredentialHost, token st
 	if id.Email == "" {
 		id.Email = login.NoreplyEmail(h.Host)
 	}
-	c.cacheCredentialIdentity(name, key, id)
-	return withHost(id), nil
+	c.cacheCredentialIdentity(name, key, id, who.Login)
+	return id, who.Login, nil
+}
+
+// tokenGitIdentity asks h's API who token is (GET /user) and builds the
+// commit identity from the answer, preferring the host account's own git
+// config (HostGitIdentity) where available and hostGit is set, then the
+// display name and email from /user, and falling back to the login and
+// its noreply address for whichever half is still empty. The cache holds
+// /user's own answer, so an owner lookup (hostGit false) and a commit
+// lookup share one request per token.
+func (c *CredentialSet) tokenGitIdentity(name string, h CredentialHost, token string, hostGit bool) (CommitIdentity, error) {
+	id, _, err := c.tokenIdentity(name, h, token)
+	if err != nil {
+		return CommitIdentity{}, err
+	}
+	if !hostGit {
+		return id, nil
+	}
+	return applyHostGitIdentity(id, c.HostGitIdentity()), nil
 }
 
 func applyHostGitIdentity(id, host CommitIdentity) CommitIdentity {
@@ -272,8 +281,8 @@ func applyHostGitIdentity(id, host CommitIdentity) CommitIdentity {
 // -- the sandbox's default fills that half.
 func (c *CredentialSet) appGitIdentity(name string, h CredentialHost, app AppCredential, cred Credential) (CommitIdentity, error) {
 	key := h.Host + "\x00app\x00" + app.AppID
-	if id, ok := c.cachedCredentialIdentity(name, key); ok {
-		return id, nil
+	if e, ok := c.cachedCredentialIdentity(name, key); ok {
+		return e.id, nil
 	}
 	slug, err := c.fetchAppSlug(name, h, app)
 	if err != nil {
@@ -305,7 +314,7 @@ func (c *CredentialSet) appGitIdentity(name string, h CredentialHost, app AppCre
 		// on the next dispatch.
 		return id, nil
 	}
-	c.cacheCredentialIdentity(name, key, id)
+	c.cacheCredentialIdentity(name, key, id, bot)
 	return id, nil
 }
 
@@ -400,6 +409,58 @@ func (c *CredentialSet) appBotLogin(name string, depth int) (string, bool, error
 		return "", true, err
 	}
 	return slug + "[bot]", true, nil
+}
+
+// CredentialLogin returns the forge account login that API calls made
+// with credential name (or its paired SSH API credential) act as --
+// e.g. the user login for a PAT or ambient login, or `<slug>[bot]` for
+// a GitHub App. It returns ("", nil) when the credential has no forge
+// login (anonymous, plain git host, unpaired SSH key, or unconfigured).
+func (c *CredentialSet) CredentialLogin(name string) (string, error) {
+	return c.credentialLogin(name, 0)
+}
+
+func (c *CredentialSet) credentialLogin(name string, depth int) (string, error) {
+	if name == "" || name == "anonymous" || namesOneFile(name) != nil {
+		return "", nil
+	}
+	if c.IsAmbient(name) {
+		id, err := c.AmbientIdentityOf(name)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(id.Login), nil
+	}
+	cred, ok := c.Get(name)
+	if !ok {
+		return "", nil
+	}
+	if cred.SSH != nil {
+		if depth > 0 {
+			return "", nil
+		}
+		api, paired := c.APICredential(cred)
+		if !paired {
+			return "", nil
+		}
+		return c.credentialLogin(api.Name, depth+1)
+	}
+	h := c.HostOf(name)
+	if h.Kind == model.GitHostGit {
+		return "", nil
+	}
+	if appCred, ok := c.loadAppCredential(name); ok {
+		slug, err := c.appSlug(name, h, appCred)
+		if err != nil {
+			return "", err
+		}
+		return slug + "[bot]", nil
+	}
+	if cred.Token == nil || *cred.Token == "" {
+		return "", nil
+	}
+	_, login, err := c.tokenIdentity(name, h, *cred.Token)
+	return login, err
 }
 
 // credentialIdentityFlight is one CredentialGitIdentity run started by

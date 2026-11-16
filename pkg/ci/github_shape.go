@@ -119,6 +119,24 @@ type GitHubCheckRun struct {
 	App         *GitHubApp `json:"app"`
 }
 
+// GitHubUser is the creator of a commit status.
+type GitHubUser struct {
+	Login string `json:"login"`
+}
+
+// GitHubCommitStatus is one of GitHub's commit statuses
+// (GET /repos/{owner}/{repo}/commits/{sha}/statuses).
+type GitHubCommitStatus struct {
+	ID          int64       `json:"id"`
+	Context     string      `json:"context"`
+	State       string      `json:"state"`
+	Description string      `json:"description,omitempty"`
+	TargetURL   string      `json:"target_url,omitempty"`
+	CreatedAt   *time.Time  `json:"created_at,omitempty"`
+	UpdatedAt   *time.Time  `json:"updated_at,omitempty"`
+	Creator     *GitHubUser `json:"creator"`
+}
+
 // ExternalAttempts is an optional extension of ExternalRuns: the forge's
 // answers the release train's gate judges on every attempt of, read
 // through grain's own forge connection. Like ExternalRuns it does no
@@ -131,6 +149,15 @@ type ExternalAttempts interface {
 	// them) on commit sha of repo, and the slug of the GitHub App grain's
 	// own check runs there are posted as ("" when it cannot tell).
 	ExternalCheckRuns(ctx context.Context, repo, sha, name string) (runs []GitHubCheckRun, app string, err error)
+}
+
+// ExternalCommitStatuses is an optional extension of ExternalAttempts:
+// every commit status on commit sha of repo (filtered to contextName when
+// non-empty, newest first, with creator login) and the GitHub login
+// grain's own commit statuses there are posted as ("" when it cannot
+// tell).
+type ExternalCommitStatuses interface {
+	ExternalCommitStatuses(ctx context.Context, repo, sha, contextName string) (statuses []GitHubCommitStatus, login string, err error)
 }
 
 // GitHubConclusion is a conclusion as GitHub writes it: null for one it

@@ -437,6 +437,20 @@ func (c credentialTokenSource) AppSlugFor(owner, repo string) (string, error) {
 	return strings.TrimSuffix(login, "[bot]"), nil
 }
 
+// StatusLoginFor is github.StatusLoginSource: the GitHub login behind
+// owner/repo's credential (gitproxy.CredentialSet.CredentialLogin), or ""
+// when that credential has no forge login.
+func (c credentialTokenSource) StatusLoginFor(owner, repo string) (string, error) {
+	if c.credentials == nil {
+		return "", nil
+	}
+	cred, ok := c.selectCredential(owner, repo)
+	if !ok {
+		return "", nil
+	}
+	return c.credentials.CredentialLogin(cred.Name)
+}
+
 // selectMergeCredential is owner/repo's merge credential's name, and the
 // credential itself when the store holds it (github.MergeTokenSource).
 func (c credentialTokenSource) selectMergeCredential(owner, repo string) (string, gitproxy.Credential, bool) {

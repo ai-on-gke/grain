@@ -131,6 +131,12 @@ func TestCredentialTokenSourceTokenFor(t *testing.T) {
 		if app, err := (credentialTokenSource{}).AppSlugFor("acme", "widgets"); app != "" || err != nil {
 			t.Fatalf("AppSlugFor with no credentials = (%q, %v), want no app", app, err)
 		}
+		if login, err := (credentialTokenSource{}).StatusLoginFor("acme", "widgets"); login != "" || err != nil {
+			t.Fatalf("StatusLoginFor with no credentials = (%q, %v), want empty", login, err)
+		}
+		if login, err := src.StatusLoginFor("other", "repo"); login != "" || err != nil {
+			t.Fatalf("StatusLoginFor for unmatched repo = (%q, %v), want empty", login, err)
+		}
 	})
 
 	t.Run("a named credential resolves its token file", func(t *testing.T) {

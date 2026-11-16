@@ -1038,6 +1038,50 @@ func (a actionsExternalRuns) ExternalCheckRuns(ctx context.Context, repoText, sh
 	return out, app, nil
 }
 
+func (a actionsExternalRuns) ExternalCommitStatuses(ctx context.Context, repoText, sha, contextName string) ([]ci.GitHubCommitStatus, string, error) {
+	repo, err := a.c.parseRepo(repoText)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := a.c.actionsRepoServed(ctx, repo); err != nil {
+		return nil, "", err
+	}
+	lister, ok := forgeReader[github.CommitStatusLister](a.c)
+	if !ok {
+		return nil, "", errors.New("this deployment's forge connection cannot list a commit's statuses")
+	}
+	statuses, err := lister.ListCommitStatuses(repo.StoredOwner(), repo.Name, sha)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading the commit statuses on %s of %s from the forge: %w", sha, repo, err)
+	}
+	var login string
+	if idReader, ok := forgeReader[github.CommitStatusIdentityReader](a.c); ok {
+		if l, err := idReader.StatusLogin(repo.StoredOwner(), repo.Name); err == nil {
+			login = l
+		}
+	}
+	out := make([]ci.GitHubCommitStatus, 0, len(statuses))
+	for _, s := range statuses {
+		if contextName != "" && s.Context != contextName {
+			continue
+		}
+		st := ci.GitHubCommitStatus{
+			ID:          s.ID,
+			Context:     s.Context,
+			State:       s.State,
+			Description: s.Description,
+			TargetURL:   s.TargetURL,
+			CreatedAt:   s.CreatedAt,
+			UpdatedAt:   s.UpdatedAt,
+		}
+		if s.Creator != "" {
+			st.Creator = &ci.GitHubUser{Login: s.Creator}
+		}
+		out = append(out, st)
+	}
+	return out, login, nil
+}
+
 func (a actionsExternalRuns) ExternalJobLog(ctx context.Context, id, job string) (string, error) {
 	repoText, runID, ok := ParseActionsRunID(id)
 	if !ok {

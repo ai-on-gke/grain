@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
@@ -589,20 +590,25 @@ func (p *GitProxy) externalAttempts() (ci.ExternalAttempts, bool) {
 }
 
 // githubChecksAnswer is `grain ci checks --format github`'s answer:
-// GitHub's GET .../commits/{sha}/check-runs, and the App grain's own forge
-// connection posts its check runs as, which a reader that trusts only
-// grain's (candidate-gate.sh's CHECK_QUALIFICATION_APP) matches each
-// check run's app against.
+// GitHub's GET .../commits/{sha}/check-runs, any commit statuses on the
+// same commit (GET .../commits/{sha}/statuses), and the identities grain's
+// own forge connection posts them as -- grain_app for check runs and
+// grain_status_login for commit statuses -- which a reader that trusts
+// only grain's (candidate-gate.sh's CHECK_QUALIFICATION_APP and
+// CHECK_QUALIFICATION_STATUS_LOGIN) matches against.
 type githubChecksAnswer struct {
-	TotalCount int                 `json:"total_count"`
-	CheckRuns  []ci.GitHubCheckRun `json:"check_runs"`
-	GrainApp   string              `json:"grain_app"`
+	TotalCount       int                     `json:"total_count"`
+	CheckRuns        []ci.GitHubCheckRun     `json:"check_runs"`
+	Statuses         []ci.GitHubCommitStatus `json:"statuses,omitempty"`
+	GrainApp         string                  `json:"grain_app"`
+	GrainStatusLogin string                  `json:"grain_status_login,omitempty"`
+	GrainNote        string                  `json:"grain_note,omitempty"`
 }
 
 // serveCIChecks answers /cli/ci/checks?sha=<commit>[&repo=][&name=][&format=github]:
-// every check run (every attempt of each, GitHub's filter=all) on a commit
-// of a repository this sandbox may read CI for, read through grain's own
-// forge connection.
+// every check run (every attempt of each, GitHub's filter=all) and commit
+// status on a commit of a repository this sandbox may read CI for, read
+// through grain's own forge connection.
 func (p *GitProxy) serveCIChecks(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
 	q := r.URL.Query()
 	repo, _, err := p.ciReadRepo(scope, q.Get("repo"))
@@ -630,17 +636,45 @@ func (p *GitProxy) serveCIChecks(w http.ResponseWriter, r *http.Request, scope n
 		return
 	}
 	name := strings.TrimSpace(q.Get("name"))
-	runs, app, err := attempts.ExternalCheckRuns(r.Context(), repo, sha, name)
-	if err != nil {
-		cliError(w, fmt.Errorf("%w: %v", namespace.ErrNotFound, err))
-		return
+	runs, app, checkErr := attempts.ExternalCheckRuns(r.Context(), repo, sha, name)
+	var statuses []ci.GitHubCommitStatus
+	var statusLogin, note string
+	var statusErr error
+	statusReader, hasStatusReader := p.Namespace.ExternalCI.(ci.ExternalCommitStatuses)
+	if hasStatusReader {
+		statuses, statusLogin, statusErr = statusReader.ExternalCommitStatuses(r.Context(), repo, sha, name)
+	}
+	if checkErr != nil {
+		var ghErr *github.Error
+		if hasStatusReader && statusErr == nil && errors.As(checkErr, &ghErr) && ghErr.Status == http.StatusForbidden {
+			// A fine-grained PAT cannot read the Checks API (HTTP 403),
+			// while commit statuses remain readable.
+			runs = nil
+			note = "check runs unreadable (HTTP 403); reading commit statuses"
+		} else {
+			cliError(w, fmt.Errorf("%w: %v", namespace.ErrNotFound, checkErr))
+			return
+		}
+	} else if hasStatusReader && statusErr != nil {
+		if app == "" {
+			cliError(w, fmt.Errorf("%w: %v", namespace.ErrNotFound, statusErr))
+			return
+		}
+		note = fmt.Sprintf("commit statuses unreadable: %v", statusErr)
 	}
 	if runs == nil {
 		runs = []ci.GitHubCheckRun{}
 	}
 	if format == formatGitHub {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(githubChecksAnswer{TotalCount: len(runs), CheckRuns: runs, GrainApp: app})
+		_ = json.NewEncoder(w).Encode(githubChecksAnswer{
+			TotalCount:       len(runs),
+			CheckRuns:        runs,
+			Statuses:         statuses,
+			GrainApp:         app,
+			GrainStatusLogin: statusLogin,
+			GrainNote:        note,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -662,6 +696,33 @@ func (p *GitProxy) serveCIChecks(w http.ResponseWriter, r *http.Request, scope n
 			}
 		}
 		fmt.Fprintf(w, "%-12s %-40s %s  %s\n", verdict, run.Name, from, run.HTMLURL)
+	}
+	if len(statuses) > 0 {
+		statusWhat := "commit status(es)"
+		if name != "" {
+			statusWhat = fmt.Sprintf("commit status(es) for %q", name)
+		}
+		fmt.Fprintf(w, "%d %s on %s in %s:\n", len(statuses), statusWhat, shortSHA(sha), repo)
+		for _, st := range statuses {
+			from := "no creator"
+			if st.Creator != nil && st.Creator.Login != "" {
+				from = st.Creator.Login
+				if statusLogin != "" && strings.EqualFold(st.Creator.Login, statusLogin) {
+					from += " (grain)"
+				}
+			}
+			line := fmt.Sprintf("%-12s %-40s %s", st.State, st.Context, from)
+			if st.Description != "" {
+				line += "  " + st.Description
+			}
+			if st.TargetURL != "" {
+				line += "  " + st.TargetURL
+			}
+			fmt.Fprintln(w, line)
+		}
+	}
+	if note != "" {
+		fmt.Fprintf(w, "(%s)\n", note)
 	}
 }
 

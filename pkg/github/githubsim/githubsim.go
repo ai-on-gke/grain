@@ -124,6 +124,8 @@ var (
 	branchRulesRe            = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/rules/branches/(.+)$`)
 	rulesetRe                = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/rulesets/(\d+)$`)
 	checkRunsRe              = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/check-runs$`)
+	commitStatusesRe         = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/statuses$`)
+	commitStatusRe           = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/status$`)
 	// The three Actions endpoints github.RESTClient.FailedJobLogs walks
 	// from a commit to a log: the commit's runs, one run's jobs, one
 	// job's log. actionsRunsRe is also what ListWorkflowRuns reads when a
@@ -180,6 +182,7 @@ var (
 	issueCommentReactionsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/issues/comments/(\d+)/reactions$`)
 	pullCommentReactionsRe   = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/pulls/comments/(\d+)/reactions$`)
 	createCheckRunsRe        = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs$`)
+	createStatusRe           = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/statuses/([^/]+)$`)
 	updateCheckRunRe         = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)$`)
 	rerequestCheckRunRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)/rerequest$`)
 	rerequestCheckSuiteRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-suites/(\d+)/rerequest$`)
@@ -461,6 +464,13 @@ type Sim struct {
 	// PATCH it, as on GitHub. Empty records none (and lets anyone
 	// update), which is what a test that never asks who posted gets.
 	CheckRunApp string
+	// CommitStatuses is keyed like CheckRuns (by sha or branch ref) in
+	// chronological append order; GET .../commits/{ref}/statuses returns
+	// them newest first, as GitHub does.
+	CommitStatuses map[string][]github.CommitStatus
+	// StatusLogin is the GitHub login recorded as creator.login on every
+	// commit status created through POST .../statuses/{sha}.
+	StatusLogin string
 	// RerequestedCheckSuites and RerequestedCheckRuns record every
 	// POST .../check-suites/{id}/rerequest and .../check-runs/{id}/rerequest
 	// call the sim accepted. DisableCheckRerequest makes both endpoints
@@ -545,6 +555,7 @@ type Sim struct {
 	// CommentReactions records reactions posted via ReactionPoster.
 	CommentReactions []CommentReaction
 	nextCheckRunID   int64
+	nextStatusID     int64
 	// RefuseMerges, when non-empty, is what GitHub answers PUT
 	// .../pulls/N/merge with instead of merging: a 405 carrying this
 	// message, which is the shape of every refusal that is a rule on
@@ -1719,6 +1730,22 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			return jsonResponse(200, checkRunsJSON(runs)), nil
 		}
+		if m := commitStatusesRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			ref, err := url.PathUnescape(m[3])
+			if err != nil {
+				ref = m[3]
+			}
+			return jsonResponse(200, commitStatusesJSON(s.commitStatusesFor(ref))), nil
+		}
+		if m := commitStatusRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			ref, err := url.PathUnescape(m[3])
+			if err != nil {
+				ref = m[3]
+			}
+			return jsonResponse(200, combinedStatusJSON(s.commitStatusesFor(ref))), nil
+		}
 		if m := gitCommitRe.FindStringSubmatch(p); m != nil && s.BareRepo != "" {
 			s.mustOwn(m[1], m[2])
 			cmd := exec.Command("git", "--git-dir", s.BareRepo, "rev-list", "--parents", "-n", "1", "--end-of-options", m[3]+"^{commit}")
@@ -2401,6 +2428,48 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			s.CheckRuns[payload.HeadSHA] = append(s.CheckRuns[payload.HeadSHA], cr)
 			return jsonResponse(201, map[string]any{"id": id, "head_sha": payload.HeadSHA, "status": cr.Status}), nil
 		}
+		if m := createStatusRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			sha, err := url.PathUnescape(m[3])
+			if err != nil {
+				sha = m[3]
+			}
+			var payload struct {
+				State       string `json:"state"`
+				Context     string `json:"context"`
+				Description string `json:"description"`
+				TargetURL   string `json:"target_url"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				return github.ApiResponse{}, err
+			}
+			switch payload.State {
+			case "pending", "success", "failure", "error":
+			default:
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Invalid state"}`)}, nil
+			}
+			if len([]rune(payload.Description)) > 140 {
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Validation Failed: description is too long (maximum is 140 characters)"}`)}, nil
+			}
+			s.nextStatusID++
+			id := 9000 + s.nextStatusID
+			at := s.now().UTC().Truncate(time.Second)
+			if s.CommitStatuses == nil {
+				s.CommitStatuses = map[string][]github.CommitStatus{}
+			}
+			st := github.CommitStatus{
+				ID:          id,
+				Context:     payload.Context,
+				State:       payload.State,
+				Description: payload.Description,
+				TargetURL:   payload.TargetURL,
+				Creator:     s.StatusLogin,
+				CreatedAt:   &at,
+				UpdatedAt:   &at,
+			}
+			s.CommitStatuses[sha] = append(s.CommitStatuses[sha], st)
+			return jsonResponse(201, commitStatusJSON(st)), nil
+		}
 		if m := rerequestCheckSuiteRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			if s.DisableCheckRerequest {
@@ -2815,6 +2884,94 @@ func (s *Sim) checkRunsFor(ref string) []github.CheckRun {
 		}
 	}
 	return nil
+}
+
+func (s *Sim) commitStatusesFor(ref string) []github.CommitStatus {
+	if statuses, ok := s.CommitStatuses[ref]; ok {
+		return statuses
+	}
+	if sha := s.branchSHA(ref); sha != "" {
+		return s.CommitStatuses[sha]
+	}
+	keys := make([]string, 0, len(s.CommitStatuses))
+	for key := range s.CommitStatuses {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if s.branchSHA(key) == ref {
+			return s.CommitStatuses[key]
+		}
+	}
+	return nil
+}
+
+func commitStatusJSON(st github.CommitStatus) map[string]any {
+	m := map[string]any{
+		"id":          st.ID,
+		"context":     st.Context,
+		"state":       st.State,
+		"description": st.Description,
+		"target_url":  st.TargetURL,
+	}
+	if st.CreatedAt != nil {
+		m["created_at"] = st.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if st.UpdatedAt != nil {
+		m["updated_at"] = st.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	if st.Creator != "" {
+		m["creator"] = map[string]any{"login": st.Creator}
+	}
+	return m
+}
+
+// commitStatusesJSON formats statuses newest-first, matching GitHub's
+// GET /repos/{owner}/{repo}/commits/{ref}/statuses response.
+func commitStatusesJSON(statuses []github.CommitStatus) []map[string]any {
+	out := make([]map[string]any, 0, len(statuses))
+	for i := len(statuses) - 1; i >= 0; i-- {
+		out = append(out, commitStatusJSON(statuses[i]))
+	}
+	return out
+}
+
+func combinedStatusJSON(statuses []github.CommitStatus) map[string]any {
+	seen := map[string]bool{}
+	latest := make([]map[string]any, 0, len(statuses))
+	overall := "pending"
+	hasFailure, hasPending, hasSuccess := false, false, false
+	for i := len(statuses) - 1; i >= 0; i-- {
+		st := statuses[i]
+		if seen[st.Context] {
+			continue
+		}
+		seen[st.Context] = true
+		latest = append(latest, map[string]any{
+			"id":          st.ID,
+			"context":     st.Context,
+			"state":       st.State,
+			"description": st.Description,
+			"target_url":  st.TargetURL,
+		})
+		switch st.State {
+		case "failure", "error":
+			hasFailure = true
+		case "pending":
+			hasPending = true
+		case "success":
+			hasSuccess = true
+		}
+	}
+	switch {
+	case hasFailure:
+		overall = "failure"
+	case hasPending:
+		overall = "pending"
+	case hasSuccess:
+		overall = "success"
+	}
+	return map[string]any{"state": overall, "statuses": latest}
 }
 
 // pullRequest returns the pull request numbered number, if Sim has one.

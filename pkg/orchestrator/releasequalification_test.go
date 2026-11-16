@@ -39,15 +39,17 @@ var rqItems = []string{"qualification-mergequeue", "qualification-ci-diagnostics
 	"qualification-base-triage", "qualification-system-smoke"}
 
 type fakeQualificationForge struct {
-	app      string // the App grain posts as; "" when it cannot tell
-	tags     []github.Tag
-	nightly  string // "" for no run yet, else its conclusion
-	anySHA   bool   // nightly is on every commit, not only rqSHA
-	heads    map[int64]string
-	checks   []github.CheckRun
-	branches map[string]bool
-	nextID   int64
-	messages map[string]string // annotated tag -> its message
+	app         string // the App grain posts as; "" when it cannot tell
+	statusLogin string // the login grain posts commit statuses as; "" when none
+	tags        []github.Tag
+	nightly     string // "" for no run yet, else its conclusion
+	anySHA      bool   // nightly is on every commit, not only rqSHA
+	heads       map[int64]string
+	checks      []github.CheckRun
+	statuses    map[string][]github.CommitStatus // sha -> chronological statuses
+	branches    map[string]bool
+	nextID      int64
+	messages    map[string]string // annotated tag -> its message
 }
 
 func (f *fakeQualificationForge) ListTags(owner, repo string) ([]github.Tag, error) {
@@ -95,6 +97,46 @@ func (f *fakeQualificationForge) ListCheckRuns(owner, repo, ref string) ([]githu
 
 func (f *fakeQualificationForge) CheckRunApp(owner, repo string) (string, error) {
 	return f.app, nil
+}
+
+func (f *fakeQualificationForge) StatusLogin(owner, repo string) (string, error) {
+	return f.statusLogin, nil
+}
+
+func (f *fakeQualificationForge) ListCommitStatuses(owner, repo, ref string) ([]github.CommitStatus, error) {
+	src := f.statuses[ref]
+	out := make([]github.CommitStatus, 0, len(src))
+	// Return newest-first like GitHub's GET /commits/{ref}/statuses.
+	for i := len(src) - 1; i >= 0; i-- {
+		out = append(out, src[i])
+	}
+	return out, nil
+}
+
+func (f *fakeQualificationForge) CreateCommitStatus(owner, repo, sha string, st github.CommitStatusWrite) error {
+	f.nextID++
+	if f.statuses == nil {
+		f.statuses = map[string][]github.CommitStatus{}
+	}
+	f.statuses[sha] = append(f.statuses[sha], github.CommitStatus{
+		ID:          f.nextID,
+		Context:     st.Context,
+		State:       st.State,
+		Description: github.TruncateCommitStatusDescription(st.Description),
+		TargetURL:   st.TargetURL,
+		Creator:     f.statusLogin,
+	})
+	return nil
+}
+
+func (f *fakeQualificationForge) statusesForContext(sha, ctxName string) []github.CommitStatus {
+	var out []github.CommitStatus
+	for _, s := range f.statuses[sha] {
+		if s.Context == ctxName {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (f *fakeQualificationForge) ListWorkflowRuns(owner, repo, sha string) ([]github.CheckRun, error) {
@@ -543,5 +585,223 @@ func TestReleaseQualificationTellsScratchFixturesFromDefects(t *testing.T) {
 	if len(tasks["qualification-mergequeue"]) != 1 || len(tasks["qualification-base-triage"]) != 2 ||
 		len(tasks["qualification-ci-diagnostics"]) != 2 {
 		t.Fatalf("got %v, want mergequeue passed and the other two retried", tasks)
+	}
+}
+
+func TestReleaseQualificationProjectsCommitStatusesWithoutApp(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.app = ""
+	forge.statusLogin = "grain-pat-bot"
+	forge.nightly = "success"
+
+	syncQualification(t, ctx, store, forge, baseTime)
+	if len(forge.checks) != 0 {
+		t.Fatalf("posted check runs %+v on a PAT forge, want commit statuses only", forge.checks)
+	}
+	tasks := qualificationTasks(t, ctx, store, repo)
+	if len(tasks["qualification-mergequeue"]) != 1 || len(tasks["qualification-ci-diagnostics"]) != 1 ||
+		len(tasks["qualification-base-triage"]) != 1 || len(tasks["qualification-system-smoke"]) != 0 {
+		t.Fatalf("started %v, want first 3 items started and system-smoke held", tasks)
+	}
+	sts := forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(sts) != 1 || sts[0].State != "pending" || sts[0].Creator != "grain-pat-bot" || !strings.Contains(sts[0].Description, rqTag) {
+		t.Fatalf("statuses after start = %+v, want one pending status for %s", sts, rqTag)
+	}
+
+	// Reconciling again while pending must not spam duplicate pending statuses.
+	syncQualification(t, ctx, store, forge, baseTime.Add(time.Minute))
+	if sts = forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName); len(sts) != 1 {
+		t.Fatalf("statuses after no-op tick = %+v, want no duplicate pending status", sts)
+	}
+
+	at := baseTime.Add(2 * time.Minute)
+	for _, item := range rqItems[:3] {
+		finishQualificationTask(t, ctx, store, tasks[item][0], "PASS", at)
+	}
+	syncQualification(t, ctx, store, forge, at)
+	tasks = qualificationTasks(t, ctx, store, repo)
+	if len(tasks["qualification-system-smoke"]) != 1 {
+		t.Fatalf("after first 3 pass, got %v, want system-smoke started", tasks)
+	}
+	if sts = forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName); len(sts) != 1 {
+		t.Fatalf("statuses while system-smoke runs = %+v, want still 1 pending", sts)
+	}
+
+	finishQualificationTask(t, ctx, store, tasks["qualification-system-smoke"][0], "PASS", at.Add(time.Minute))
+	syncQualification(t, ctx, store, forge, at.Add(time.Minute))
+	sts = forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(sts) != 2 || sts[1].State != "success" || !strings.Contains(sts[1].Description, rqTag) {
+		t.Fatalf("statuses after pass = %+v, want pending then success", sts)
+	}
+
+	// Final: further ticks do nothing.
+	syncQualification(t, ctx, store, forge, at.Add(2*time.Minute))
+	if sts = forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName); len(sts) != 2 {
+		t.Fatalf("statuses after terminal pass = %+v, want unchanged", sts)
+	}
+}
+
+func TestReleaseQualificationCommitStatusIgnoresUntrustedAndEarlierCandidate(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.app = ""
+	forge.statusLogin = "grain-pat-bot"
+	forge.nightly = "success"
+	forge.statuses = map[string][]github.CommitStatus{
+		rqSHA: {
+			// Untrusted login spoofing a passing verdict for rqTag.
+			{ID: 1, Context: model.ReleaseQualificationCheckName, State: "success",
+				Description: "Release qualification of " + rqTag + ": success", Creator: "untrusted-user"},
+			// Earlier discarded rc.1 on the same commit from grain's own login.
+			{ID: 2, Context: model.ReleaseQualificationCheckName, State: "failure",
+				Description: "Release qualification of v1.4.0-rc.1: failure", Creator: "grain-pat-bot"},
+		},
+	}
+
+	syncQualification(t, ctx, store, forge, baseTime)
+	tasks := qualificationTasks(t, ctx, store, repo)
+	if len(tasks["qualification-mergequeue"]) != 1 {
+		t.Fatalf("tasks = %v, want Stage 2 started despite untrusted and earlier-rc statuses", tasks)
+	}
+	sts := forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(sts) != 3 || sts[2].State != "pending" || sts[2].Creator != "grain-pat-bot" || !strings.Contains(sts[2].Description, rqTag) {
+		t.Fatalf("statuses = %+v, want a new pending status for %s from grain-pat-bot", sts, rqTag)
+	}
+}
+
+func qualificationTasksForTag(t *testing.T, ctx context.Context, store *model.Store, tag string) map[string][]string {
+	t.Helper()
+	runs, err := store.SuiteRunsTagged(ctx, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for _, run := range runs {
+		for _, task := range run.Tasks {
+			out[task.TemplateID] = append(out[task.TemplateID], task.TaskID)
+		}
+	}
+	return out
+}
+
+func TestReleaseQualificationCommitStatusInfraStallAndFreshAttempt(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.app = ""
+	forge.statusLogin = "grain-pat-bot"
+	forge.nightly = "success"
+	baseTag := model.ReleaseQualificationTag(repo, rqTag)
+
+	at := stallAttemptOnInfra(t, ctx, store, forge, repo, rqTag, 1, false, baseTime)
+	sts := forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(sts) != 2 || sts[1].State != "error" || !strings.Contains(sts[1].Description, "neutral") {
+		t.Fatalf("statuses after infra stall = %+v, want pending then error (neutral)", sts)
+	}
+	subject := model.NotificationSubject(model.FamilyReleaseInfraStalled, rqTag)
+	n, err := store.OpenNotification(ctx, subject)
+	if err != nil || n == nil || n.AckedAt != nil {
+		t.Fatalf("infra-stalled notification = %+v, %v; want open and unacked", n, err)
+	}
+
+	// While unacked, stay stalled and do not start attempt 2.
+	syncQualification(t, ctx, store, forge, at.Add(time.Minute))
+	if runs, _ := store.SuiteRunsTagged(ctx, model.QualificationAttemptTag(baseTag, 2)); len(runs) != 0 {
+		t.Fatalf("attempt 2 started while stall unacked: %+v", runs)
+	}
+
+	// Acknowledge the stall: attempt 2 starts and posts a fresh pending status.
+	if err := store.AckNotification(ctx, n.ID, "operator", at.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(3 * time.Minute)
+	syncQualification(t, ctx, store, forge, at)
+	tag2 := model.QualificationAttemptTag(baseTag, 2)
+	tasks2 := qualificationTasksForTag(t, ctx, store, tag2)
+	if len(tasks2["qualification-mergequeue"]) != 1 {
+		t.Fatalf("attempt 2 tasks = %v, want fresh suite started", tasks2)
+	}
+	sts = forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(sts) != 3 || sts[2].State != "pending" || !strings.Contains(sts[2].Description, "(attempt 2)") {
+		t.Fatalf("statuses after attempt 2 start = %+v, want pending (attempt 2)", sts)
+	}
+
+	// Pass attempt 2 -> posts success status with (attempt 2).
+	at = at.Add(time.Minute)
+	for _, item := range rqItems[:3] {
+		finishQualificationTask(t, ctx, store, tasks2[item][0], "PASS", at)
+	}
+	syncQualification(t, ctx, store, forge, at)
+	tasks2 = qualificationTasksForTag(t, ctx, store, tag2)
+	finishQualificationTask(t, ctx, store, tasks2["qualification-system-smoke"][0], "PASS", at.Add(time.Minute))
+	syncQualification(t, ctx, store, forge, at.Add(time.Minute))
+	sts = forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(sts) != 4 || sts[3].State != "success" || !strings.Contains(sts[3].Description, "(attempt 2)") {
+		t.Fatalf("statuses after attempt 2 pass = %+v, want success (attempt 2)", sts)
+	}
+}
+
+func TestReleaseQualificationCommitStatusFailureAndRCHoldLifecycle(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.app = ""
+	forge.statusLogin = "grain-pat-bot"
+	forge.nightly = "success"
+
+	syncQualification(t, ctx, store, forge, baseTime)
+	tasks := qualificationTasks(t, ctx, store, repo)
+	at := baseTime.Add(time.Minute)
+	finishQualificationTask(t, ctx, store, tasks["qualification-mergequeue"][0], "FAIL", at)
+	syncQualification(t, ctx, store, forge, at)
+	tasks = qualificationTasks(t, ctx, store, repo)
+	finishQualificationTask(t, ctx, store, tasks["qualification-mergequeue"][1], "FAIL", at.Add(time.Minute))
+	at = at.Add(2 * time.Minute)
+	syncQualification(t, ctx, store, forge, at)
+
+	qualSts := forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(qualSts) != 2 || qualSts[1].State != "failure" {
+		t.Fatalf("qualification statuses = %+v, want pending then failure", qualSts)
+	}
+	// grain/rc-hold is posted immediately as a pending commit status.
+	holdSts := forge.statusesForContext(rqSHA, model.ReleaseHoldCheckName)
+	if len(holdSts) != 1 || holdSts[0].State != "pending" || !strings.HasPrefix(holdSts[0].Description, rqTag+": ") {
+		t.Fatalf("rc-hold statuses = %+v, want one pending status for %s", holdSts, rqTag)
+	}
+
+	// Repeated tick while triage pending must not spam duplicate pending statuses.
+	at = at.Add(time.Minute)
+	syncQualification(t, ctx, store, forge, at)
+	if holdSts = forge.statusesForContext(rqSHA, model.ReleaseHoldCheckName); len(holdSts) != 1 {
+		t.Fatalf("rc-hold statuses after no-op tick = %+v, want 1", holdSts)
+	}
+
+	// Filing an [rc-blocker] updates the hold description with the blocker task ID.
+	blockerID, err := store.NewTaskID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:        blockerID,
+		Title:     "Fix regression " + model.RCBlockerMarker(rqTag),
+		Body:      "fix",
+		Target:    &repo,
+		CreatedAt: &at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Minute)
+	syncQualification(t, ctx, store, forge, at)
+	holdSts = forge.statusesForContext(rqSHA, model.ReleaseHoldCheckName)
+	if len(holdSts) != 2 || holdSts[1].State != "pending" || !strings.Contains(holdSts[1].Description, blockerID) {
+		t.Fatalf("rc-hold statuses with blocker = %+v, want pending naming %s", holdSts, blockerID)
+	}
+
+	// Closing the blocker lifts grain/rc-hold by posting state=success.
+	closeTask(t, ctx, store, blockerID, at.Add(time.Minute))
+	at = at.Add(2 * time.Minute)
+	syncQualification(t, ctx, store, forge, at)
+	holdSts = forge.statusesForContext(rqSHA, model.ReleaseHoldCheckName)
+	if len(holdSts) != 3 || holdSts[2].State != "success" || !strings.Contains(holdSts[2].Description, "blockers landed") {
+		t.Fatalf("rc-hold statuses after blocker landed = %+v, want success", holdSts)
 	}
 }

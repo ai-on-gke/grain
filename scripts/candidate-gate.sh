@@ -61,7 +61,7 @@
 #     "LKG <sha>", exiting 0; or "LKG none", exiting 1.
 #
 #   candidate-gate.sh check-qualification --rc-tag TAG --rc-sha SHA
-#       --runs-json FILE [--checks-json FILE]
+#       --runs-json FILE [--checks-json FILE] [--statuses-json FILE]
 #
 #     Whether release candidate TAG (vX.Y.Z-rc.N) on SHA has qualified:
 #       Stage 1   every job of nightly.yml run on SHA. FILE is GET
@@ -84,20 +84,26 @@
 #       Stage 2   the grain/release-qualification check run on SHA
 #                 (CHECK_QUALIFICATION_CHECK), from --checks-json, GitHub's
 #                 GET /repos/{owner}/{repo}/commits/{sha}/check-runs answer
-#                 (or a bare array of check runs). Only a check run the
-#                 GitHub App CHECK_QUALIFICATION_APP names (its slug or
-#                 numeric id: grain's own forge connection) created
-#                 counts; one of the same name from any other app -- an
-#                 Actions workflow with checks: write, another installed
-#                 app -- is reported as IGNORED and never judged. With
-#                 CHECK_QUALIFICATION_APP "none", set explicitly (a
-#                 deployment whose forge connection is no GitHub App, and
-#                 so posts no check run) Stage 2 is SKIPPED and no check
-#                 run is read at all: Stage 1 alone qualifies the RC.
-#                 With CHECK_QUALIFICATION_APP empty or unset no check run
-#                 is trusted at all (exit 64): an unconfigured gate never
-#                 passes. Otherwise only judged once Stage 1 passes;
-#                 without --checks-json it is PENDING;
+#                 (or a bare array of check runs), or -- when no trusted
+#                 check run exists and CHECK_QUALIFICATION_STATUS_LOGIN is
+#                 set -- the newest commit status of that context from
+#                 --statuses-json (GitHub's GET .../commits/{sha}/statuses
+#                 answer, or an object with a statuses array) or from
+#                 --checks-json's .statuses array (written by `grain ci
+#                 checks --format github`). Only a check run the GitHub App
+#                 CHECK_QUALIFICATION_APP names (its slug or numeric id) or
+#                 a commit status created by CHECK_QUALIFICATION_STATUS_LOGIN
+#                 (case-insensitive GitHub login) counts; one of the same
+#                 name from any other app or login is reported as IGNORED
+#                 and never judged. Where both exist, check runs take
+#                 precedence over commit statuses. With
+#                 CHECK_QUALIFICATION_APP "none", set explicitly, Stage 2 is
+#                 SKIPPED and neither check runs nor statuses are read:
+#                 Stage 1 alone qualifies the RC. With both
+#                 CHECK_QUALIFICATION_APP and CHECK_QUALIFICATION_STATUS_LOGIN
+#                 empty or unset nothing is trusted (exit 64): an
+#                 unconfigured gate never passes. Otherwise only judged once
+#                 Stage 1 passes; without a listing it is PENDING;
 #       never     TAG, and the release it would become, are not in
 #                 RELEASE_NEVER_PROMOTE (scripts/release.conf).
 #     Every job (and the check run) is judged on its attempts in order:
@@ -169,16 +175,21 @@ CHECK_QUALIFICATION_CHECK="${CHECK_QUALIFICATION_CHECK-grain/release-qualificati
 # trusted: grain's own forge connection, which posts it. Anything else
 # that can write check runs on the repository can post one by that name.
 # "none" -- only ever as an explicit setting, never a default -- skips
-# Stage 2: no check run is trusted, so none is read, and Stage 1 alone
-# qualifies the RC. Empty or unset trusts nothing and fails closed.
+# Stage 2: neither check runs nor commit statuses are trusted, so none are
+# read, and Stage 1 alone qualifies the RC.
 CHECK_QUALIFICATION_APP="${CHECK_QUALIFICATION_APP-}"
+# The GitHub login whose CHECK_QUALIFICATION_CHECK commit status is trusted
+# when no trusted check run exists (a deployment whose forge connection is
+# a PAT rather than a GitHub App). Empty or unset alongside an empty
+# CHECK_QUALIFICATION_APP trusts nothing and fails closed.
+CHECK_QUALIFICATION_STATUS_LOGIN="${CHECK_QUALIFICATION_STATUS_LOGIN-}"
 CHECK_QUALIFICATION_MAX_FLAKES="${CHECK_QUALIFICATION_MAX_FLAKES:-2}"
 CHECK_QUALIFICATION_INFRA_STALL="${CHECK_QUALIFICATION_INFRA_STALL:-3}"
 
 usage() {
   cat >&2 <<'EOF'
 usage: candidate-gate.sh select-lkg --runs-json FILE [--floor-sha SHA] [--ref REF] [--max-commits N]
-       candidate-gate.sh check-qualification --rc-tag TAG --rc-sha SHA --runs-json FILE [--checks-json FILE]
+       candidate-gate.sh check-qualification --rc-tag TAG --rc-sha SHA --runs-json FILE [--checks-json FILE] [--statuses-json FILE]
 EOF
   exit 64
 }
@@ -408,6 +419,30 @@ JQ_CHECK_RUN='
          else (.app.slug // "") == $app end);
   def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($rc | startswith($h)) or ($h | startswith($rc));
 '
+# from_login: a commit status posted by the GitHub login $login names
+# (case-insensitive, as GitHub logins are).
+# shellcheck disable=SC2016 # jq, not shell
+JQ_COMMIT_STATUS='
+  def from_login: $login != "" and (.creator | type == "object")
+    and ((.creator.login // "" | ascii_downcase) == ($login | ascii_downcase));
+  def status_list:
+    if type == "array" then (if $allow_array then . else [] end)
+    elif type == "object" then (.statuses // [])
+    else [] end;
+'
+# shellcheck disable=SC2016 # jq, not shell
+JQ_STAGE2_STATUSES="$JQ_EPOCH$JQ_COMMIT_STATUS"'
+  status_list
+  | to_entries
+  | [ .[] | .key as $idx | .value
+      | select(.context == $check) | select(from_login)
+      | {stage: "qualification", job: .context,
+         key: [((.updated_at // .created_at) | epoch), (.id // 0), (-$idx)],
+         c: ({pending: "pending", success: "success", failure: "failure", error: "infra"}[.state // ""] // "failure")} ]
+  | select(length > 0)
+  | sort_by(.key)
+  | [.[0].stage, .[0].job, (map(.c) | join(","))]
+  | @tsv'
 # The attempts of every job in a listing, one line per job: stage, job
 # and the class of each attempt in order (pending, success, failure,
 # infra; skipped only when the job never ran at all), comma-separated.
@@ -468,13 +503,14 @@ JQ_ATTEMPTS="$JQ_CHECK_RUN"'
   | @tsv'
 
 check_qualification() {
-  local tag="" rc="" runs="" checks=""
+  local tag="" rc="" runs="" checks="" statuses=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --rc-tag) tag="${2:-}"; shift 2 ;;
       --rc-sha) rc="${2:-}"; shift 2 ;;
       --runs-json) runs="${2:-}"; shift 2 ;;
       --checks-json) checks="${2:-}"; shift 2 ;;
+      --statuses-json) statuses="${2:-}"; shift 2 ;;
       *) usage ;;
     esac
   done
@@ -485,6 +521,7 @@ check_qualification() {
   [[ "$rc" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "--rc-sha $rc is not a commit sha"
   [ -f "$runs" ] || die "--runs-json $runs is not a file"
   [ -z "$checks" ] || [ -f "$checks" ] || die "--checks-json $checks is not a file"
+  [ -z "$statuses" ] || [ -f "$statuses" ] || die "--statuses-json $statuses is not a file"
   rc="${rc,,}"
 
   local names optional ignore nightly_workflow nightly_ids=""
@@ -587,31 +624,63 @@ check_qualification() {
     done < <(jq -r '.[].id' <<< "$names")
   fi
 
-  # Stage 2: the agent suite's check run, once Stage 1 is clean -- unless
-  # no app is trusted to post it, when no check run is read at all.
+  # Stage 2: the agent suite's check run (or commit status when no trusted
+  # check run exists and CHECK_QUALIFICATION_STATUS_LOGIN is set), once
+  # Stage 1 is clean -- unless CHECK_QUALIFICATION_APP=none opts out.
   if [ "$CHECK_QUALIFICATION_APP" = none ]; then
     echo "SKIPPED $CHECK_QUALIFICATION_CHECK: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)"
   elif [ "${#failed[@]}" -gt 0 ] || [ "${#pending[@]}" -gt 0 ] || [ "${#infra[@]}" -gt 0 ]; then
     echo "PENDING $CHECK_QUALIFICATION_CHECK: waits for Stage 1 (nightly.yml) to pass"
-  elif [ -z "$checks" ]; then
+  elif [ -z "$checks" ] && [ -z "$statuses" ]; then
     wait_for "$CHECK_QUALIFICATION_CHECK" "no check run listing was given"
-  elif [ -z "$CHECK_QUALIFICATION_APP" ]; then
-    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none to qualify on Stage 1 alone"
+  elif [ -z "$CHECK_QUALIFICATION_APP" ] && [ -z "$CHECK_QUALIFICATION_STATUS_LOGIN" ]; then
+    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run or commit status can be trusted: set CHECK_QUALIFICATION_APP to the slug or id of the GitHub App grain posts it as, set CHECK_QUALIFICATION_STATUS_LOGIN to the login grain posts commit statuses as, or set CHECK_QUALIFICATION_APP=none to qualify on Stage 1 alone"
   else
-    local foreign
-    foreign="$(jq -r --arg rc "$rc" --arg check "$CHECK_QUALIFICATION_CHECK" --arg app "$CHECK_QUALIFICATION_APP" "$JQ_CHECK_RUN"'
-      [ (if type == "array" then . else (.check_runs // []) end)[]
-        | select(.name == $check) | select(.head_sha | sha_ok) | select(from_app | not)
-        | .app.slug // (.app.id // "no app" | tostring) ]
-      | select(length > 0) | "\(length) from \(unique | join(", "))"' "$checks")" ||
-      die "--checks-json $checks is not a check run listing"
-    [ -z "$foreign" ] ||
-      echo "IGNORED $CHECK_QUALIFICATION_CHECK: $foreign, not $CHECK_QUALIFICATION_APP; only grain's own app is trusted"
-    table="$(jq -r --arg rc "$rc" --arg which qualification --arg check "$CHECK_QUALIFICATION_CHECK" \
-      --arg app "$CHECK_QUALIFICATION_APP" --argjson names "[]" --argjson optional "[]" --argjson ignore "[]" "$JQ_EPOCH$JQ_ATTEMPTS" "$checks")" ||
-      die "--checks-json $checks is not a check run listing"
+    table=""
+    if [ -n "$checks" ] && [ -n "$CHECK_QUALIFICATION_APP" ]; then
+      local foreign
+      foreign="$(jq -r --arg rc "$rc" --arg check "$CHECK_QUALIFICATION_CHECK" --arg app "$CHECK_QUALIFICATION_APP" "$JQ_CHECK_RUN"'
+        [ (if type == "array" then . else (.check_runs // []) end)[]
+          | select(.name == $check) | select(.head_sha | sha_ok) | select(from_app | not)
+          | .app.slug // (.app.id // "no app" | tostring) ]
+        | select(length > 0) | "\(length) from \(unique | join(", "))"' "$checks")" ||
+        die "--checks-json $checks is not a check run listing"
+      [ -z "$foreign" ] ||
+        echo "IGNORED $CHECK_QUALIFICATION_CHECK: $foreign, not $CHECK_QUALIFICATION_APP; only grain's own app is trusted"
+      table="$(jq -r --arg rc "$rc" --arg which qualification --arg check "$CHECK_QUALIFICATION_CHECK" \
+        --arg app "$CHECK_QUALIFICATION_APP" --argjson names "[]" --argjson optional "[]" --argjson ignore "[]" "$JQ_EPOCH$JQ_ATTEMPTS" "$checks")" ||
+        die "--checks-json $checks is not a check run listing"
+    fi
+    if [ -z "$table" ] && [ -n "$CHECK_QUALIFICATION_STATUS_LOGIN" ]; then
+      local status_file="" status_allow_array=false
+      if [ -n "$statuses" ]; then
+        status_file="$statuses"
+        status_allow_array=true
+      elif [ -n "$checks" ]; then
+        status_file="$checks"
+      fi
+      if [ -n "$status_file" ]; then
+        local foreign_status
+        foreign_status="$(jq -r --arg check "$CHECK_QUALIFICATION_CHECK" --arg login "$CHECK_QUALIFICATION_STATUS_LOGIN" \
+          --argjson allow_array "$status_allow_array" "$JQ_COMMIT_STATUS"'
+          [ status_list[]
+            | select(.context == $check) | select(from_login | not)
+            | .creator.login // "no creator" ]
+          | select(length > 0) | "\(length) from \(unique | join(", "))"' "$status_file")" ||
+          die "${statuses:+--statuses-json $statuses}${statuses:-"--checks-json $checks"} is not a commit status listing"
+        [ -z "$foreign_status" ] ||
+          echo "IGNORED $CHECK_QUALIFICATION_CHECK: $foreign_status, not $CHECK_QUALIFICATION_STATUS_LOGIN; only grain's own status login is trusted"
+        table="$(jq -r --arg check "$CHECK_QUALIFICATION_CHECK" --arg login "$CHECK_QUALIFICATION_STATUS_LOGIN" \
+          --argjson allow_array "$status_allow_array" "$JQ_STAGE2_STATUSES" "$status_file")" ||
+          die "${statuses:+--statuses-json $statuses}${statuses:-"--checks-json $checks"} is not a commit status listing"
+      fi
+    fi
     if [ -z "$table" ]; then
-      wait_for "$CHECK_QUALIFICATION_CHECK" "no $CHECK_QUALIFICATION_CHECK check run on ${rc:0:12} yet"
+      if [ -n "$CHECK_QUALIFICATION_APP" ]; then
+        wait_for "$CHECK_QUALIFICATION_CHECK" "no $CHECK_QUALIFICATION_CHECK check run on ${rc:0:12} yet"
+      else
+        wait_for "$CHECK_QUALIFICATION_CHECK" "no $CHECK_QUALIFICATION_CHECK commit status on ${rc:0:12} yet"
+      fi
     else
       while IFS=$'\t' read -r stage job attempts; do
         [ -n "$job" ] || continue
@@ -624,8 +693,8 @@ check_qualification() {
           success) pass "$job" "passed ($attempts)" ;;
           pending) wait_for "$job" "still running ($attempts)" ;;
           infra)
-            # grain concludes neutral only once a Stage 2 item has used all
-            # of its own infrastructure re-runs (pipeline.release-infra-stalled).
+            # grain concludes neutral (or commit status error) only once a Stage 2
+            # item has used all of its own infrastructure re-runs (pipeline.release-infra-stalled).
             echo "INFRA $job: cancelled, timed out or starved of capacity ($attempts); re-run, not red; stalled after Stage 2's infra re-runs"
             infra+=("$job")
             rerun "$stage" "$job" infra

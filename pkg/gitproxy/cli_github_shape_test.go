@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
@@ -34,12 +35,16 @@ import (
 )
 
 // fakeForgeCI is GitHub Actions runs of acme/widgets and the check runs
-// on its commits, with every attempt of each run's jobs.
+// and commit statuses on its commits, with every attempt of each run's jobs.
 type fakeForgeCI struct {
-	runs   []ci.Run
-	jobs   map[string][]ci.GitHubJob
-	checks map[string][]ci.GitHubCheckRun
-	app    string
+	runs        []ci.Run
+	jobs        map[string][]ci.GitHubJob
+	checks      map[string][]ci.GitHubCheckRun
+	statuses    map[string][]ci.GitHubCommitStatus
+	app         string
+	statusLogin string
+	checkErr    error
+	statusErr   error
 }
 
 func (f fakeForgeCI) FindExternalRuns(_ context.Context, filter ci.RunFilter, limit int) ([]ci.Run, string) {
@@ -68,6 +73,9 @@ func (f fakeForgeCI) ExternalJobAttempts(_ context.Context, id string) ([]ci.Git
 }
 
 func (f fakeForgeCI) ExternalCheckRuns(_ context.Context, repo, sha, name string) ([]ci.GitHubCheckRun, string, error) {
+	if f.checkErr != nil {
+		return nil, f.app, f.checkErr
+	}
 	var out []ci.GitHubCheckRun
 	for _, run := range f.checks[repo+"@"+sha] {
 		if name == "" || run.Name == name {
@@ -75,6 +83,19 @@ func (f fakeForgeCI) ExternalCheckRuns(_ context.Context, repo, sha, name string
 		}
 	}
 	return out, f.app, nil
+}
+
+func (f fakeForgeCI) ExternalCommitStatuses(_ context.Context, repo, sha, contextName string) ([]ci.GitHubCommitStatus, string, error) {
+	if f.statusErr != nil {
+		return nil, f.statusLogin, f.statusErr
+	}
+	var out []ci.GitHubCommitStatus
+	for _, st := range f.statuses[repo+"@"+sha] {
+		if contextName == "" || st.Context == contextName {
+			out = append(out, st)
+		}
+	}
+	return out, f.statusLogin, nil
 }
 
 const (
@@ -361,5 +382,169 @@ func TestCLIGitHubRunsPickAnLKGInCandidateGate(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "LKG "+sha) {
 		t.Errorf("select-lkg over grain's answer = %v\n%s", err, out)
+	}
+}
+
+func TestCLICIChecksCommitStatusesAnd403Fallback(t *testing.T) {
+	at := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	forge := fakeForgeCI{
+		checkErr:    &github.Error{Status: http.StatusForbidden, Body: []byte(`{"message":"Resource not accessible by personal access token"}`)},
+		statusLogin: "grain-pat-bot",
+		statuses: map[string][]ci.GitHubCommitStatus{
+			"acme/widgets@" + rcSHA: {
+				{ID: 71, Context: "grain/release-qualification", State: "success", Description: "Stage 2 passed for v1.2.0-rc.1", CreatedAt: &at, UpdatedAt: &at, Creator: &ci.GitHubUser{Login: "grain-pat-bot"}},
+				{ID: 70, Context: "grain/release-qualification", State: "failure", Description: "spoofed", CreatedAt: &at, UpdatedAt: &at, Creator: &ci.GitHubUser{Login: "intruder"}},
+				{ID: 69, Context: "other/status", State: "success", CreatedAt: &at, UpdatedAt: &at, Creator: &ci.GitHubUser{Login: "grain-pat-bot"}},
+			},
+		},
+	}
+	get := forgeProxy(t, forge)
+
+	rec := get("/cli/ci/checks?repo=acme/widgets&sha=" + rcSHA + "&name=grain/release-qualification&format=github")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ci/checks with 403 check-runs fallback = %d %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		TotalCount       int                     `json:"total_count"`
+		CheckRuns        []ci.GitHubCheckRun     `json:"check_runs"`
+		Statuses         []ci.GitHubCommitStatus `json:"statuses"`
+		GrainApp         string                  `json:"grain_app"`
+		GrainStatusLogin string                  `json:"grain_status_login"`
+		GrainNote        string                  `json:"grain_note"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("ci/checks JSON: %v\n%s", err, rec.Body)
+	}
+	if got.TotalCount != 0 || len(got.CheckRuns) != 0 || len(got.Statuses) != 2 || got.GrainApp != "" || got.GrainStatusLogin != "grain-pat-bot" {
+		t.Fatalf("ci/checks = %+v", got)
+	}
+	if !strings.Contains(got.GrainNote, "403") {
+		t.Errorf("grain_note = %q, want 403 note", got.GrainNote)
+	}
+
+	text := get("/cli/ci/checks?repo=acme/widgets&sha=" + rcSHA + "&name=grain/release-qualification")
+	if text.Code != http.StatusOK || !strings.Contains(text.Body.String(), "grain-pat-bot (grain)") || !strings.Contains(text.Body.String(), "2 commit status(es)") {
+		t.Errorf("ci/checks text = %d\n%s", text.Code, text.Body)
+	}
+
+	// On a PAT forge (app == ""), failing to read commit statuses fails closed.
+	failForge := fakeForgeCI{
+		statusErr: &github.Error{Status: http.StatusBadGateway, Body: []byte("upstream error")},
+	}
+	failGet := forgeProxy(t, failForge)
+	if rec := failGet("/cli/ci/checks?repo=acme/widgets&sha=" + rcSHA + "&format=github"); rec.Code != http.StatusNotFound {
+		t.Errorf("ci/checks with status error and no app = %d %s, want 404", rec.Code, rec.Body)
+	}
+}
+
+func TestCLIGitHubShapesCommitStatusQualificationInCandidateGate(t *testing.T) {
+	for _, tool := range []string{"bash", "jq"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is not installed", tool)
+		}
+	}
+	at := time.Date(2026, 11, 3, 2, 0, 0, 0, time.UTC)
+	done := at.Add(2 * time.Hour)
+	base := qualifiedRC()
+	base.app = ""
+	base.checks = nil
+	base.checkErr = &github.Error{Status: http.StatusForbidden, Body: []byte("PAT cannot read Checks API")}
+	base.statusLogin = "grain-pat-bot"
+
+	runGate := func(t *testing.T, forge fakeForgeCI, appOverride, loginOverride string) (string, int) {
+		t.Helper()
+		get := forgeProxy(t, forge)
+		dir := t.TempDir()
+		write := func(name, path string) string {
+			rec := get(path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s = %d %s", path, rec.Code, rec.Body)
+			}
+			file := filepath.Join(dir, name)
+			if err := os.WriteFile(file, rec.Body.Bytes(), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return file
+		}
+		runs := write("qual-runs.json", "/cli/ci/runs?repo=acme/widgets&ref=v1.2.0-rc.1&workflow=nightly.yml&format=github-jobs")
+		checks := write("qual-checks.json", "/cli/ci/checks?repo=acme/widgets&sha="+rcSHA+"&name=grain/release-qualification&format=github")
+		var answer struct {
+			GrainApp         string `json:"grain_app"`
+			GrainStatusLogin string `json:"grain_status_login"`
+		}
+		raw, _ := os.ReadFile(checks)
+		_ = json.Unmarshal(raw, &answer)
+		app := answer.GrainApp
+		if appOverride != "" {
+			app = appOverride
+		}
+		login := answer.GrainStatusLogin
+		if loginOverride != "" {
+			login = loginOverride
+		}
+		cmd := exec.Command("bash", "../../scripts/candidate-gate.sh", "check-qualification",
+			"--rc-tag", "v1.2.0-rc.1", "--rc-sha", rcSHA, "--runs-json", runs, "--checks-json", checks)
+		cmd.Env = append(os.Environ(),
+			"CHECK_QUALIFICATION_JOBS=go-long=go, shuffled and repeated",
+			"CHECK_QUALIFICATION_IGNORE=", "RELEASE_NEVER_PROMOTE=",
+			"CHECK_QUALIFICATION_APP="+app,
+			"CHECK_QUALIFICATION_STATUS_LOGIN="+login,
+		)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if exit, ok := err.(*exec.ExitError); ok {
+			code = exit.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), code
+	}
+
+	// Pass from trusted login while untrusted failure is ignored.
+	passForge := base
+	passForge.statuses = map[string][]ci.GitHubCommitStatus{
+		"acme/widgets@" + rcSHA: {
+			{ID: 82, Context: "grain/release-qualification", State: "failure", Description: "spoofed", CreatedAt: &done, UpdatedAt: &done, Creator: &ci.GitHubUser{Login: "intruder"}},
+			{ID: 81, Context: "grain/release-qualification", State: "success", Description: "Stage 2 passed for v1.2.0-rc.1", CreatedAt: &done, UpdatedAt: &done, Creator: &ci.GitHubUser{Login: "grain-pat-bot"}},
+		},
+	}
+	if out, code := runGate(t, passForge, "", ""); code != 0 ||
+		!strings.Contains(out, "Qualification: PASS v1.2.0-rc.1.") ||
+		!strings.Contains(out, "IGNORED grain/release-qualification: 1 from intruder, not grain-pat-bot") {
+		t.Errorf("status pass = exit %d\n%s", code, out)
+	}
+
+	// Neutral/infra (error state) returns exit 3.
+	infraForge := base
+	infraForge.statuses = map[string][]ci.GitHubCommitStatus{
+		"acme/widgets@" + rcSHA: {
+			{ID: 83, Context: "grain/release-qualification", State: "error", Description: "Stage 2 stalled on infra for v1.2.0-rc.1", CreatedAt: &done, UpdatedAt: &done, Creator: &ci.GitHubUser{Login: "grain-pat-bot"}},
+		},
+	}
+	if out, code := runGate(t, infraForge, "", ""); code != 3 || !strings.Contains(out, "Qualification: INFRA") {
+		t.Errorf("status error/neutral = exit %d, want 3\n%s", code, out)
+	}
+
+	// Failure returns exit 1.
+	failForge := base
+	failForge.statuses = map[string][]ci.GitHubCommitStatus{
+		"acme/widgets@" + rcSHA: {
+			{ID: 84, Context: "grain/release-qualification", State: "failure", Description: "Stage 2 failed for v1.2.0-rc.1", CreatedAt: &done, UpdatedAt: &done, Creator: &ci.GitHubUser{Login: "grain-pat-bot"}},
+		},
+	}
+	if out, code := runGate(t, failForge, "", ""); code != 1 || !strings.Contains(out, "FAIL grain/release-qualification") {
+		t.Errorf("status failure = exit %d, want 1\n%s", code, out)
+	}
+
+	// Check runs take precedence where both exist.
+	bothForge := qualifiedRC()
+	bothForge.statusLogin = "grain-pat-bot"
+	bothForge.statuses = map[string][]ci.GitHubCommitStatus{
+		"acme/widgets@" + rcSHA: {
+			{ID: 85, Context: "grain/release-qualification", State: "failure", Description: "stale status", CreatedAt: &done, UpdatedAt: &done, Creator: &ci.GitHubUser{Login: "grain-pat-bot"}},
+		},
+	}
+	if out, code := runGate(t, bothForge, "", ""); code != 0 || !strings.Contains(out, "Qualification: PASS v1.2.0-rc.1.") {
+		t.Errorf("check-run precedence over status = exit %d, want 0\n%s", code, out)
 	}
 }

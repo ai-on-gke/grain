@@ -506,10 +506,10 @@ func releaseLoopRCHeldInStore(ctx context.Context, store *model.Store, repo mode
 }
 
 // releaseLoopRCHeldOnForge reports whether grain/rc-hold is in progress on
-// sha, as the train reads it (rc_hold_summary).
+// sha (as a check run, or as a pending commit status when no check run
+// exists), as the train reads it (rc_hold_summary).
 func releaseLoopRCHeldOnForge(rawClient github.Client, repo model.RepoRef, sha string) (bool, error) {
-	runner, ok := rawClient.(releaseLoopCheckRunner)
-	if !ok || sha == "" {
+	if sha == "" {
 		return false, nil
 	}
 	var app string
@@ -520,24 +520,56 @@ func releaseLoopRCHeldOnForge(rawClient github.Client, repo model.RepoRef, sha s
 		}
 		app = a
 	}
-	checks, err := runner.ListCheckRuns(repo.StoredOwner(), repo.Name, sha)
-	if err != nil {
-		return false, err
+	var statusLogin string
+	if idReader, ok := rawClient.(github.CommitStatusIdentityReader); ok {
+		l, err := idReader.StatusLogin(repo.StoredOwner(), repo.Name)
+		if err != nil {
+			return false, err
+		}
+		statusLogin = l
 	}
-	var latest *github.CheckRun
-	for i := range checks {
-		c := &checks[i]
-		if c.Name != model.ReleaseHoldCheckName {
-			continue
+	if runner, ok := rawClient.(releaseLoopCheckRunner); ok && (app != "" || statusLogin == "") {
+		checks, err := runner.ListCheckRuns(repo.StoredOwner(), repo.Name, sha)
+		if err != nil {
+			return false, err
 		}
-		if app != "" && c.App != "" && c.App != app {
-			continue
+		var latest *github.CheckRun
+		for i := range checks {
+			c := &checks[i]
+			if c.Name != model.ReleaseHoldCheckName {
+				continue
+			}
+			if app != "" && c.App != "" && c.App != app {
+				continue
+			}
+			if latest == nil || c.ID >= latest.ID {
+				latest = c
+			}
 		}
-		if latest == nil || c.ID >= latest.ID {
-			latest = c
+		if latest != nil {
+			return latest.Status != "completed", nil
 		}
 	}
-	return latest != nil && latest.Status != "completed", nil
+	if statusLogin != "" {
+		if lister, ok := rawClient.(github.CommitStatusLister); ok {
+			statuses, err := lister.ListCommitStatuses(repo.StoredOwner(), repo.Name, sha)
+			if err != nil {
+				return false, err
+			}
+			var latest *github.CommitStatus
+			for i := range statuses {
+				s := &statuses[i]
+				if s.Context != model.ReleaseHoldCheckName || !strings.EqualFold(s.Creator, statusLogin) {
+					continue
+				}
+				if latest == nil || s.ID > latest.ID {
+					latest = s
+				}
+			}
+			return latest != nil && latest.State == "pending", nil
+		}
+	}
+	return false, nil
 }
 
 // newestRCOrReleaseFloor is the newest release (vX.Y.Z) or rc

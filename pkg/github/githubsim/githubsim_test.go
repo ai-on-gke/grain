@@ -1369,3 +1369,55 @@ func TestSimRecordsAWorkflowDispatchAndListsIt(t *testing.T) {
 		t.Errorf("a dispatch with no ref = %d (%d recorded), want 422 and nothing recorded", resp.Status, len(sim.Dispatches))
 	}
 }
+
+func TestSimCommitStatusesCreateListAndValidate(t *testing.T) {
+	sim, headSHA := releaseSim(t)
+	sim.StatusLogin = "grain-pat-bot"
+	client := github.NewClient(sim, nil)
+
+	if err := client.CreateCommitStatus("acme", "widgets", headSHA, github.CommitStatusWrite{
+		State:       "pending",
+		Context:     "grain/release-qualification",
+		Description: "Stage 2 running for v2.5.0-rc.1",
+	}); err != nil {
+		t.Fatalf("CreateCommitStatus(pending): %v", err)
+	}
+	if err := client.CreateCommitStatus("acme", "widgets", headSHA, github.CommitStatusWrite{
+		State:       "success",
+		Context:     "grain/release-qualification",
+		Description: "Stage 2 passed for v2.5.0-rc.1",
+		TargetURL:   "https://grain.example/suites/1",
+	}); err != nil {
+		t.Fatalf("CreateCommitStatus(success): %v", err)
+	}
+
+	listed, err := client.ListCommitStatuses("acme", "widgets", headSHA)
+	if err != nil {
+		t.Fatalf("ListCommitStatuses: %v", err)
+	}
+	if len(listed) != 2 || listed[0].State != "success" || listed[1].State != "pending" || listed[0].ID <= listed[1].ID {
+		t.Fatalf("ListCommitStatuses = %+v, want newest-first [success, pending]", listed)
+	}
+	if listed[0].Creator != "grain-pat-bot" || listed[0].TargetURL != "https://grain.example/suites/1" {
+		t.Errorf("newest status = %+v", listed[0])
+	}
+
+	combined, err := client.CommitStatuses("acme", "widgets", headSHA)
+	if err != nil {
+		t.Fatalf("CommitStatuses: %v", err)
+	}
+	if len(combined) != 1 || combined[0].State != "success" {
+		t.Errorf("CommitStatuses = %+v, want latest state success", combined)
+	}
+
+	// Raw invalid state and overlong (>140 rune) description return 422.
+	resp, err := sim.Request("POST", "/repos/acme/widgets/statuses/"+headSHA, nil, []byte(`{"state":"bogus","context":"grain/release-qualification"}`))
+	if err != nil || resp.Status != 422 {
+		t.Errorf("invalid state = (%+v, %v), want 422", resp, err)
+	}
+	overlong := fmt.Sprintf(`{"state":"pending","context":"grain/release-qualification","description":"%s"}`, strings.Repeat("x", 141))
+	resp, err = sim.Request("POST", "/repos/acme/widgets/statuses/"+headSHA, nil, []byte(overlong))
+	if err != nil || resp.Status != 422 {
+		t.Errorf("overlong description = (%+v, %v), want 422", resp, err)
+	}
+}
