@@ -428,6 +428,15 @@ Rules:
     not jump to another item.
   - The composer is locked to its target task.
   - Batch actions name their scope (repos, owners) in the confirmation.
+  - A batch action acts only on the selected rows its state allows (Run
+    now skips running and closed work, Submit wants `awaiting_submit`).
+    When that is fewer than the selection, the label counts them
+    (`Submit (2)`). It is offered only when the role reaches every one of
+    those rows.
+  - A bulk action shows its progress in the selection bar and offers
+    Stop: calls already sent finish, and the rest are never sent.
+    Afterwards only the rows that failed or were never sent stay ticked
+    (`ui-ng/e2e/next-tasks-batch-actions.spec.js`).
   - Undo for reversible actions.
   - An action that moves a branch, opens a pull request on someone's
     behalf or drops a record (promote, merge back, delete) asks first in

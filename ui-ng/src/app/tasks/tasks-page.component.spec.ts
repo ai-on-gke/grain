@@ -1252,8 +1252,8 @@ describe("TasksPageComponent", () => {
       store.close(["40", "41"]),
       store.defer(["42"]),
     ]);
-    expect(a).toEqual({ failed: 1, landed: ["40"] });
-    expect(b).toEqual({ failed: 0, landed: ["42"] });
+    expect(a).toEqual({ failed: 1, landed: ["40"], skipped: [] });
+    expect(b).toEqual({ failed: 0, landed: ["42"], skipped: [] });
   });
 
   it("fills the Filter this view box from ?q= and lets typing replace it", async () => {
