@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo",
+    "head"
+  ],
+  "properties": {
+    "repo": {
+      "type": "string",
+      "enum": [
+        "ai-on-gke/grain"
+      ]
+    },
+    "head": {
+      "type": "string",
+      "enum": [
+        "a1"
+      ]
+    }
+  }
+}

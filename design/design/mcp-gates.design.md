@@ -10,11 +10,11 @@ The normative contract is [MCP gates specification](../spec/mcp-gates/mcp-gates.
 
 **Terminology:** Existing task **goals** describe desired outcomes or standing intent, such as `pr-merged`, `base-green` and `person-closes`. **Gates** are the new extensible evaluators/requirements used to determine readiness or completion in service of those goals. A goal can require several gates; a gate is not a replacement name for an existing task goal. Existing goal APIs, configuration, collectors and runtime behavior retain their names and semantics. In this proposal, `gate_*`, `gate_state`, gate IDs/versions/scopes and the proposed `completion_authority=gates` value name only the new extension.
 
-This terminology correction follows [Task #39's merged documentation PR #1666](https://github.com/ai-on-gke/grain/pull/1666); its agreed design decisions are unchanged. Stable `MGD-*` and `MGS-*` requirement IDs are retained for traceability.
+This terminology correction follows [Task #39's merged documentation PR #1666](https://github.com/ai-on-gke/grain/pull/1666); its authority and lifecycle decisions are preserved; Task #47 now replaces the unspecified snapshot transport with the bounded v2 protocol below. Stable `MGD-*` and `MGS-*` requirement IDs are retained for traceability.
 
 ## Problem and verified baseline
 
-Inspected `origin/main` at `5a5189ae4a11afd30e142a467fd0ef7cd34cd4a9` (2026-11-16). The working branch started at that same commit. These are source observations, not claims that all older designs are fully implemented:
+Inspected `origin/main` at `5a5189ae4a11afd30e142a467fd0ef7cd34cd4a9` (2026-11-16). That was Task #39’s baseline. Task #47 started at `d8ff32019` and reuses Task #44’s rename commit `1ac7e412d`; it does not repeat or rename legacy goal APIs. These are source observations, not claims that all older designs are fully implemented:
 
 | Authority or observation today | Verified source | Consequence for migration |
 |---|---|---|
@@ -62,9 +62,21 @@ An attachment states an obligation. A grant permits a read or action. Neither im
 
 The task contract has stable attachment IDs, provider identity and artifact/version pins, gate and state/schema versions, canonical argument hash, child links, and lifecycle policy revision. There are no automatically required gates based solely on tool-name discovery. Grain can offer discovered tools in an editor, then record a separately authorized attachment. Defaults/templates resolve into explicit attachments at admission.
 
-A snapshot represents all relevant authorized facts at a durable evidence revision, including required children, messages and action records. Bounded inline data plus snapshot-bound pages provide full relevant state without dumping transcripts or secrets. Missing necessary data yields unknown or a permission blocker, never a favorable assumption. All results in a decision bundle use the same snapshot. A changed head, contract, message watermark, permissions, child outcome or relevant external evidence invalidates the bundle.
+A snapshot materializes a bounded redacted cut of Grain’s committed observations at a durable evidence revision, including required children, messages and action records. It does not promise simultaneous historical reads of independent external systems. Bounded inline data plus retained snapshot-bound pages provide the declared evidence scope; explicit completeness/unavailability markers prevent omitted data from becoming negative facts. Missing necessary data yields unknown or a permission blocker, never a favorable assumption. All results in a decision bundle use the same snapshot. A changed head, contract, message watermark, permissions, child outcome or relevant external evidence invalidates the bundle.
 
 Opaque state is an optimization for provider interpretation, not proof of an approval or CI verdict. Grain persists it with an expected revision, byte/depth bounds, a schema version and attachment identity. State migrations are explicit pure operations through a pinned compatible evaluator mode; recovery can discard state only if the provider declares replay from authoritative evidence safe. Otherwise the task rests visibly for migration or repair.
+
+### Snapshot transport decision
+
+Use bounded **Grain-driven rounds**, specified in [MGS-11](../spec/mcp-gates/mcp-gates.spec.md#MGS-11), over the existing Grain-to-capability call direction. [Server.Refresh/CallTool](../../pkg/capability/protocol/server.go) already retains advertised control tools and calls them with context timeouts; the [client](../../pkg/capability/protocol/client.go) returns structured JSON or the first JSON text result. No provider-to-Grain callback path is established. A handle cannot supply that path.
+
+Before evaluation Grain copies the authorized DB observation cut and fixed page contents into its own retained store, then repeatedly calls the same pinned gate tool. The provider returns either non-final `needs_data` (catalog references/cursors plus a small request-carried accumulator) or a final verdict. Grain reauthorizes and fulfills requested reads from those bytes, then calls again at the same snapshot/pins/clock. Prefetched declared inputs allow a single-round fast path. V2 providers need no network access, persistent session or callback credential for snapshot reads.
+
+Continuation records cannot CAS `gate_state`, install waits/buttons/actions, grant progress or trigger agent/evaluator/task dispatch. Only a valid final can enter the existing acceptance transaction. Retrying a round reuses its exact stored payload; a bounded accumulator is transient and distinct from durable provider state. Revocation, evidence/freshness changes, expired/lost pages or deadline exhaustion abort rather than mixing snapshots.
+
+The 30-second budget covers construction plus every round/retry; eight rounds share the original 64-page/8-MiB allowance. Published bulk pages expire after 60 seconds; cited evidence/decision receipts survive for audit. Stale churn is coalesced, limited to three starts per minute and held/escalated under fixed bounds. There is no arbitrary namespace traversal, late live fetch, unbounded transcript or truncation-to-success path.
+
+This **supersedes** the historical “registered read-only snapshot access handle” transport requirement. Opaque IDs remain selectors only. Callback/bidirectional transport is deferred to a separately reviewed protocol, not an unspecified future hook. Concrete schema/transcript, authorization, cancellation and storage responsibilities are in the [implementation checklist](../spec/mcp-gates/mcp-gates.spec.md#MGS-11).
 
 ## Actions, waivers and interface {#MGD-2}
 
@@ -126,15 +138,15 @@ Names below are proposed examples, not built-in implicit attachments. Every conf
 
 This PR files and implements none of these phases. Dependencies are linear unless noted.
 
-1. **Contract and evidence foundations.** Define DB records, snapshot/reference API, provider registry pins, journal/cursors, action registry and permissions. Retain all current collectors and legacy decisions. Add fixture coverage for current finish/state/goal cases. Capture exact legacy predicates for imports, including release-row absence and nightly windows.
-2. **Observation-only evaluation (depends on 1).** Deploy pinned read-only evaluators without lifecycle or dispatch authority. Store differences against legacy decisions, classify incompatibilities, measure boundedness and provider reliability. Shadow errors cannot block current tasks. Expose read-only results clearly labeled observation-only.
+1. **Contract and evidence foundations.** Define DB records, the retained immutable snapshot/page store and internal read resolver (not a provider callback API), provider declaration/schema pins, journal/cursors, action registry and permissions. Implement short observation-cut transactions, atomic ready publication, 60-second bulk TTL and copied decision evidence. Retain all current collectors and legacy decisions. Add fixture coverage for current finish/state/goal cases. Capture exact legacy predicates for imports, including release-row absence and nightly windows.
+2. **Observation-only evaluation (depends on 1).** Implement the v2 driver with persistent round/checkpoint/lease/counter records, exact retries, request-carried continuation and final-only state CAS; validate the complete example transcripts and MGS-11 checklist. Deploy pinned read-only evaluators without lifecycle or dispatch authority. Store differences against legacy decisions, classify incompatibilities, measure boundedness and provider reliability. Shadow errors cannot block current tasks. Expose read-only results clearly labeled observation-only.
 3. **Explicit task migration and central completion (depends on 2).** Stop/settle or fence live operations, snapshot each open task, resolve requirements/policies, obtain required authority, and transactionally switch `completion_authority` from legacy to gates. Suppress every legacy completion writer for that task in the same release. Legacy wake/dispatch drivers may temporarily emit observations or proposals to the same central lifecycle owner, but must lose direct lifecycle-write authority at handoff; compatibility adapters do not become a second owner. Centralize close transaction and Go/SQL projection parity before expanding cohort. Never allow two lifecycle authorities for one task.
 4. **Waiting and dispatch (depends on 3).** Move migrated tasks to cursor-fenced subscriptions, timer ledger and action arbitration. Replace the temporary legacy wake/dispatch proposal adapters (whose direct writes were already disabled in phase 3); retain collectors and journal production. Test restart, outage, contention and independent work before widening adoption.
 5. **API/tools/UI and generalization (foundation can develop after 1; authoritative rollout depends on 3–4).** Add versioned contract/result/action/waiver APIs, agent tool descriptions and Angular gate panels. Keep existing API fields as documented compatibility projections and regenerate shared route contracts if routes change. Remove legacy authority paths only after every task has migrated or terminated and rollback window has closed.
 
 ### Database, upgrades and rollback
 
-Use additive tables for contract revisions/attachments, evaluation bundles and per-gate state CAS revisions, evidence references, subscriptions/cursors, durable timers, progress/no-progress counters, action intents/events, waivers, and closure receipts. Store task authority epoch and lifecycle policy revision. Use unique keys for accepted evaluation IDs, action idempotency and event delivery IDs. Foreign keys and transaction/row locking protect attachment/contract ownership. Bounds apply before storing JSON. Opaque provider state is not indexed as lifecycle evidence.
+Use additive tables for contract revisions/attachments, evaluation bundles and per-gate state CAS revisions, materialized snapshot manifests/pages/ACLs and expiry, fenced round/checkpoint/read-selection/retry records, evidence references, subscriptions/cursors, durable timers, progress/no-progress counters, action intents/events, waivers, and closure receipts. Store task authority epoch and lifecycle policy revision. Use unique keys for accepted evaluation IDs, action idempotency and event delivery IDs. Foreign keys and transaction/row locking protect attachment/contract ownership. Bounds apply before storing JSON. Opaque provider state is not indexed as lifecycle evidence.
 
 The canonical lifecycle decision reads a versioned projection record; both `StateOf` and SQL `task_state` must apply the same authority discriminator and precedence. Extend parity tests to active blockers, terminal outcome, live operation and compatibility badges across SQLite and PostgreSQL. Do not repurpose `CompletedAt` into both report-delivered and succeeded; retain legacy fields for old readers with explicit projection rules.
 
@@ -142,14 +154,16 @@ Upgrade readers before writers. A daemon must advertise supported protocol, sche
 
 Existing open tasks remain legacy until migrated; no universal default gate is inferred from history. Import attaches equivalent predicates and records provenance plus any intentional semantic changes requiring approval. Unavailable providers leave required gates unknown with durable backoff and escalation, never automatically waived or delegated to legacy. Tasks with independent work may continue safely. Provider upgrades require new pins and an audited migration/replay decision before switching contracts.
 
-## Remaining implementation decisions
+## Resolved defaults and rollout choices
 
 | Decision | Recommendation |
 |---|---|
 | Initial hosting and trust | Reuse configured capability MCP server identity/transport; separate read-only evaluator credentials and allowlisted scope. Start with in-tree providers behind the same protocol. |
-| Protocol limits | Adopt the concrete v1 limits in the spec; measure shadow evaluations before changing them through a protocol/config revision. |
-| Snapshot retention | Retain decision evidence and closure receipts for task audit lifetime; expire bulk pages after a configured window and rebuild a new snapshot rather than mixing revisions. |
+| Protocol limits | Adopt the concrete v2 limits in the spec; measure shadow evaluations before changing them through a protocol/config revision. |
+| Snapshot retention | Adopt MGS-11: fixed 60-second bulk TTL, no live refill; retain copied cited evidence and closure receipts for task audit lifetime. |
 | Historical regression | Default to notify plus separately authorized repair; opt into automatic reopen explicitly for monitored outcomes. Standing sessions rest instead of closing. |
 | Requirement editing authority | Person-authorized relaxation with reason and audit; permit agents to propose edits and append obligations only within preauthorized template constraints. |
 
 These recommendations leave rollout choices for later work, not the agreed separation of gates, permissions, actions, lifecycle, and durable wakes.
+
+The transport choice and defaults are resolved; no operator decision blocks protocol implementation. Follow [MGS-11’s checklist and sibling-scope integration boundaries](../spec/mcp-gates/mcp-gates.spec.md#MGS-11). Task #45’s Observe/Watch populates committed observations and Task #46’s triggers consumes authenticated events; neither supplies a callback for gate paging, and transient round activity must never feed either scheduling loop. This change implements/deploys none of those components and files no implementation tasks.
