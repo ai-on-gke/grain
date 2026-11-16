@@ -186,7 +186,11 @@ Both belong on the surface that *states the problem* -- the sentence
    merge itself**, so the task moves to merged, the queue row closes, and
    post-merge dispatch and the base-branch run fire as they do for any
    other merge. That is the whole argument for it: the hand merge it
-   replaces left every one of those undone.
+   replaces left every one of those undone. It overrides *everything* it
+   names. An owner who has decided to merge over one review's findings
+   uses **Accept findings** (`grain accept-findings`) instead, which clears
+   only that review's findings on that gate
+   ([declarations.md](declarations.md#gating-reviews)).
 
    A reason is required. It is recorded on the task when it is asked for,
    and on the task and the pull request again when the merge happens,
