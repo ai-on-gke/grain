@@ -43,24 +43,11 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
-// dayPrefix is what the reset says before its time when it falls on
-// another day than today on ZONE's clock -- "Nov 16, " -- and "" when it
-// is today: the spec runs at any hour, and two hours from late evening is
-// tomorrow.
-function dayPrefix(now, ms) {
-  const day = (t) =>
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: ZONE,
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    }).format(new Date(t));
-  if (day(now) === day(ms)) return "";
-  return `${new Intl.DateTimeFormat("en-US", {
-    timeZone: ZONE,
-    month: "short",
-    day: "numeric",
-  }).format(new Date(ms))}, `;
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
+  const day = (ms) =>
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
 }
 
 for (const size of SIZES) {
@@ -76,8 +63,7 @@ for (const size of SIZES) {
         },
         [theme, ZONE],
       );
-      const now = Date.now();
-      const until = now + (2 * 60 + 15) * 60 * 1000;
+      const until = Date.now() + (2 * 60 + 15) * 60 * 1000;
       await page.route(/\/api\/usage(\?.*)?$/, async (route) => {
         const res = await route.fetch();
         const body = await res.json();
@@ -105,9 +91,14 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
       await expect(reset).toContainText(
         new RegExp(
-          `resets ${dayPrefix(now, until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -137,7 +128,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets ${dayPrefix(now, until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });
