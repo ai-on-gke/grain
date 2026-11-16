@@ -395,6 +395,9 @@ export interface MergeGate {
   reviewTask?: string;
   approvedBy?: string;
   overridable?: boolean;
+  // A findings gate whose review's findings a person may accept as they
+  // are (POST /api/tasks/{id}/accept-findings, model.MergeGate.Acceptable).
+  acceptable?: boolean;
 }
 
 export interface AccessRequestItem {
