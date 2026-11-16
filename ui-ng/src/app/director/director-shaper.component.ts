@@ -131,7 +131,7 @@ import {
               placeholder:
                 'Ask Director to tighten scope, suggest acceptance criteria, or pick repo/priority…',
               submitLabel: 'Ask Director to shape',
-              disabled: !canWrite() || sessions.isBusy('send'),
+              disabled: !canWrite(),
             }"
             (send)="onSend($event)"
           />
@@ -209,10 +209,12 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
       state: this.taskState(),
       failureSummary: this.failureSummary(),
     });
+    this.prompt.set("");
+    this.staged.set([]);
     const ok = await this.sessions.sendTo(DIRECTOR_ID, shaped, ev.attachments);
-    if (ok) {
-      this.prompt.set("");
-      this.staged.set([]);
+    if (!ok && !this.prompt() && this.staged().length === 0) {
+      this.prompt.set(ev.body);
+      this.staged.set(ev.attachments);
     }
   }
 }

@@ -1,6 +1,7 @@
 /* Shared conversation thread and composer styles (Sessions & Task Detail). */
 
 .chat-log {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -10,7 +11,8 @@
   gap: 12px;
 }
 
-.chat-log:focus-visible {
+.chat-log:focus-visible,
+.new-session-pending-list:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }
@@ -36,18 +38,70 @@
   color: var(--md-sys-color-on-surface);
 }
 
-.msg.is-handover {
+.msg.is-handover,
+.msg.is-sending,
+.msg.is-queued {
   border-style: dashed;
+}
+
+.msg.is-failed {
+  border-color: var(--md-sys-color-error);
 }
 
 .msg-meta {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   margin-bottom: 4px;
   font-size: 11px;
   line-height: 16px;
   color: var(--md-sys-color-on-surface-variant);
+}
+
+.msg-meta .status-pill {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.session-msg-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-error);
+}
+
+.session-msg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.session-staged-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.session-staged-file {
+  padding: 2px 8px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.new-session-pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
 }
 
 .msg.is-human .msg-meta {
@@ -55,7 +109,14 @@
 }
 
 .msg-author {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 500;
+}
+
+.msg-author g-actor-chip {
+  display: flex;
+  min-width: 0;
 }
 
 .msg-body > :first-child {

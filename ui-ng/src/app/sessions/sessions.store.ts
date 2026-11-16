@@ -62,6 +62,23 @@ export interface SessionRow {
   line: string;
 }
 
+export type PendingSendState = "sending" | "queued" | "sent" | "failed";
+
+export interface PendingSessionMessage {
+  key: string;
+  sessionId: string;
+  taskId: string;
+  body: string;
+  attachments: AttachmentUpload[];
+  createdAt: string;
+  authorLabel: string;
+  afterMaxId: number;
+  afterCommentLen: number;
+  postStarted: boolean;
+  state: PendingSendState;
+  error?: string;
+}
+
 export interface CreateSessionOptions {
   title?: string;
   message?: string;
@@ -117,12 +134,15 @@ export class SessionsStore {
   readonly detailError = signal<string | null>(null);
   readonly drafts = signal<Record<string, string>>({});
   readonly stagedAttachments = signal<Record<string, AttachmentUpload[]>>({});
+  readonly pendingMessages = signal<PendingSessionMessage[]>([]);
+  readonly sendNotice = signal<string>("");
   // Tracks sessions whose running turn predates a run-fixed edit (grants, model, network).
   readonly staleRuns = signal<Record<string, string>>({});
 
   readonly rows = computed<SessionRow[]>(() => {
     const tasks = this.tasks();
     const details = this.details();
+    const pending = this.pendingMessages();
     const list = [...this.sessions()].sort(
       (a, b) => Number(b.id === DIRECTOR_ID) - Number(a.id === DIRECTOR_ID),
     );
@@ -130,10 +150,21 @@ export class SessionsStore {
       const d = session.taskId ? details[session.taskId] : undefined;
       const t = session.taskId ? tasks[session.taskId] : undefined;
       const task = d || t ? ({ ...d, ...t } as Task) : null;
+      const lastPending = pending
+        .filter(
+          (p) =>
+            p.sessionId === session.id &&
+            (!session.taskId || p.taskId === session.taskId) &&
+            p.state !== "failed",
+        )
+        .at(-1);
+      const fallbackPending = lastPending?.body
+        ? lastLine([{ id: 0, body: lastPending.body }])
+        : "";
       return {
         session,
         task,
-        line: lastLine(d?.comments) || task?.activity || "",
+        line: lastLine(d?.comments) || task?.activity || fallbackPending || "",
       };
     });
   });
@@ -146,6 +177,14 @@ export class SessionsStore {
   readonly selectedDetail = computed<TaskDetail | null>(() => {
     const tid = this.selected()?.session.taskId;
     return tid ? (this.details()[tid] ?? null) : null;
+  });
+
+  readonly selectedPending = computed<PendingSessionMessage[]>(() => {
+    const sid = this.selectedId();
+    const tid = this.selected()?.session.taskId;
+    return this.pendingMessages().filter(
+      (p) => p.sessionId === sid && (!tid || p.taskId === tid),
+    );
   });
 
   readonly directorRow = computed<SessionRow | null>(() => {
@@ -181,6 +220,11 @@ export class SessionsStore {
 
   private readonly fetchedFor = new Map<string, string>();
   private configLoaded = false;
+  private pendingSeq = 0;
+  private inFlightSends = 0;
+  private readonly activeSessionSends = new Map<string, number>();
+  private readonly sendChains = new Map<string, Promise<void>>();
+  private readonly claimedCommentKeys = new Set<string>();
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
@@ -417,7 +461,94 @@ export class SessionsStore {
     this.fetchedFor.set(id, key);
     if (r.changed || !this.details()[id]) {
       this.details.update((m) => ({ ...m, [id]: r.body }));
+      this.pruneConsumedForTask(id);
     }
+  }
+
+  private commentBaseline(taskId: string): {
+    afterMaxId: number;
+    afterCommentLen: number;
+  } {
+    const comments = this.details()[taskId]?.comments ?? [];
+    let afterMaxId = 0;
+    for (const c of comments) {
+      if (typeof c.id === "number" && c.id > afterMaxId) {
+        afterMaxId = c.id;
+      }
+    }
+    return { afterMaxId, afterCommentLen: comments.length };
+  }
+
+  private pruneConsumedForTask(taskId: string): void {
+    const serverComments = this.details()[taskId]?.comments;
+    if (!serverComments?.length) return;
+    const current = this.pendingMessages();
+    if (
+      !current.some(
+        (p) => p.taskId === taskId && p.postStarted && p.state !== "failed",
+      )
+    ) {
+      return;
+    }
+    const consumedIdx = new Set<number>();
+    let changed = false;
+    const next = current.filter((p) => {
+      if (p.taskId !== taskId || !p.postStarted || p.state === "failed") {
+        return true;
+      }
+      const idx = serverComments.findIndex((c, i) => {
+        if (consumedIdx.has(i)) return false;
+        if (
+          typeof c.id === "number" &&
+          this.claimedCommentKeys.has(`${taskId}:${c.id}`)
+        ) {
+          return false;
+        }
+        if (c.authorKind && c.authorKind !== "human") return false;
+        const isAfter =
+          typeof c.id === "number"
+            ? c.id > p.afterMaxId
+            : i >= p.afterCommentLen;
+        if (!isAfter) return false;
+        if ((c.body ?? "").trim() !== p.body.trim()) return false;
+        if (!p.body.trim() && p.attachments.length > 0) {
+          return (c.attachments?.length ?? 0) >= p.attachments.length;
+        }
+        return true;
+      });
+      if (idx !== -1) {
+        consumedIdx.add(idx);
+        const cid = serverComments[idx].id;
+        if (typeof cid === "number") {
+          this.claimedCommentKeys.add(`${taskId}:${cid}`);
+        }
+        changed = true;
+        return false;
+      }
+      return true;
+    });
+    if (changed) {
+      this.pendingMessages.set(next);
+    }
+  }
+
+  private updatePending(
+    key: string,
+    patch: Partial<PendingSessionMessage>,
+  ): void {
+    this.pendingMessages.update((list) =>
+      list.map((p) => (p.key === key ? { ...p, ...patch } : p)),
+    );
+  }
+
+  private bumpSendBusy(delta: number): void {
+    this.inFlightSends = Math.max(0, this.inFlightSends + delta);
+    this.busy.update((b) => {
+      const next = new Set(b);
+      if (this.inFlightSends > 0) next.add("send");
+      else next.delete("send");
+      return next;
+    });
   }
 
   isBusy(name: string): boolean {
@@ -456,29 +587,184 @@ export class SessionsStore {
     const row = this.rows().find((r) => r.session.id === sessionId);
     const taskId = row?.session.taskId;
     const body = rawBody.trim();
-    if (
-      !row ||
-      !taskId ||
-      (!body && attachments.length === 0) ||
-      this.isBusy("send")
-    ) {
+    if (!row || !taskId || (!body && attachments.length === 0)) {
       return false;
     }
-    return this.run("send", async () => {
-      await this.api.post(
-        "POST /api/tasks/{id}/comments",
-        { id: taskId },
-        { body, attachments },
-      );
-      if (clearSessionDraft) {
-        if (this.draftFor(sessionId) === rawBody) {
-          this.setDraft(sessionId, "");
+    // Clear synchronously before the first await so rapid double-Enter on the
+    // same text is ignored, while new text typed during an in-flight POST can
+    // be queued immediately behind it.
+    if (clearSessionDraft) {
+      this.setDraft(sessionId, "");
+      this.setAttachments(sessionId, []);
+    }
+    this.actionError.set(null);
+    this.sendNotice.set("");
+
+    const activeCount = this.activeSessionSends.get(sessionId) ?? 0;
+    const initialState: PendingSendState =
+      activeCount > 0 ? "queued" : "sending";
+    this.activeSessionSends.set(sessionId, activeCount + 1);
+
+    const baseline = this.commentBaseline(taskId);
+    const key = `pending-${++this.pendingSeq}`;
+    const entry: PendingSessionMessage = {
+      key,
+      sessionId,
+      taskId,
+      body,
+      attachments: [...attachments],
+      createdAt: new Date().toISOString(),
+      authorLabel: this.access.identityLabel() || "Operator",
+      afterMaxId: baseline.afterMaxId,
+      afterCommentLen: baseline.afterCommentLen,
+      postStarted: initialState === "sending",
+      state: initialState,
+    };
+    this.pendingMessages.update((list) => [...list, entry]);
+
+    return this.enqueuePendingDelivery(key, sessionId);
+  }
+
+  async retryMessage(key: string): Promise<boolean> {
+    const existing = this.pendingMessages().find((p) => p.key === key);
+    if (!existing || existing.state !== "failed") {
+      return false;
+    }
+    const { sessionId } = existing;
+    const row = this.rows().find((r) => r.session.id === sessionId);
+    const taskId = row?.session.taskId || existing.taskId;
+    if (!taskId) return false;
+
+    if (this.actionError() === existing.error) {
+      this.actionError.set(null);
+    }
+    this.sendNotice.set("");
+
+    const activeCount = this.activeSessionSends.get(sessionId) ?? 0;
+    const nextState: PendingSendState = activeCount > 0 ? "queued" : "sending";
+    this.activeSessionSends.set(sessionId, activeCount + 1);
+
+    const baseline = this.commentBaseline(taskId);
+    const updated: PendingSessionMessage = {
+      ...existing,
+      taskId,
+      createdAt: new Date().toISOString(),
+      afterMaxId: baseline.afterMaxId,
+      afterCommentLen: baseline.afterCommentLen,
+      postStarted: nextState === "sending",
+      state: nextState,
+      error: undefined,
+    };
+
+    this.pendingMessages.update((list) => {
+      const without = list.filter((p) => p.key !== key);
+      let insertAt = -1;
+      for (let i = 0; i < without.length; i++) {
+        if (
+          without[i].sessionId === sessionId &&
+          without[i].state !== "failed"
+        ) {
+          insertAt = i;
         }
-        if (this.attachmentsFor(sessionId) === attachments) {
-          this.setAttachments(sessionId, []);
+      }
+      if (insertAt === -1) {
+        const firstFailed = without.findIndex(
+          (p) => p.sessionId === sessionId && p.state === "failed",
+        );
+        if (firstFailed === -1) return [...without, updated];
+        return [
+          ...without.slice(0, firstFailed),
+          updated,
+          ...without.slice(firstFailed),
+        ];
+      }
+      return [
+        ...without.slice(0, insertAt + 1),
+        updated,
+        ...without.slice(insertAt + 1),
+      ];
+    });
+
+    return this.enqueuePendingDelivery(key, sessionId);
+  }
+
+  discardMessage(key: string): void {
+    const existing = this.pendingMessages().find((p) => p.key === key);
+    if (!existing) return;
+    this.pendingMessages.update((list) => list.filter((p) => p.key !== key));
+    if (this.actionError() === existing.error) {
+      this.actionError.set(null);
+    }
+    this.sendNotice.set("");
+  }
+
+  private async enqueuePendingDelivery(
+    key: string,
+    sessionId: string,
+  ): Promise<boolean> {
+    this.bumpSendBusy(1);
+    const prev = this.sendChains.get(sessionId) ?? Promise.resolve();
+    let postOk = false;
+    let postedTaskId = "";
+
+    const step = prev.then(async () => {
+      try {
+        const cur = this.pendingMessages().find((p) => p.key === key);
+        if (!cur || (cur.state !== "sending" && cur.state !== "queued")) {
+          return;
+        }
+        const latestTaskId =
+          this.rows().find((r) => r.session.id === sessionId)?.session.taskId ||
+          cur.taskId;
+        postedTaskId = latestTaskId;
+        const baseline = this.commentBaseline(latestTaskId);
+        this.updatePending(key, {
+          taskId: latestTaskId,
+          afterMaxId: baseline.afterMaxId,
+          afterCommentLen: baseline.afterCommentLen,
+          postStarted: true,
+          state: "sending",
+          error: undefined,
+        });
+
+        await this.api.post(
+          "POST /api/tasks/{id}/comments",
+          { id: latestTaskId },
+          { body: cur.body, attachments: cur.attachments },
+        );
+        postOk = true;
+        this.fetchedFor.delete(latestTaskId);
+        this.updatePending(key, { state: "sent", error: undefined });
+        this.pruneConsumedForTask(latestTaskId);
+      } catch (err) {
+        const msg = errorText(err);
+        this.actionError.set(msg);
+        this.sendNotice.set(
+          "Message not sent. Retry it from the conversation.",
+        );
+        this.updatePending(key, { state: "failed", error: msg });
+      } finally {
+        const nextCount = (this.activeSessionSends.get(sessionId) ?? 1) - 1;
+        if (nextCount <= 0) {
+          this.activeSessionSends.delete(sessionId);
+        } else {
+          this.activeSessionSends.set(sessionId, nextCount);
         }
       }
     });
+
+    const tail = step.catch(() => undefined);
+    this.sendChains.set(sessionId, tail);
+
+    try {
+      await step;
+      if (postOk && postedTaskId) {
+        await this.refresh();
+      }
+      return postOk;
+    } finally {
+      this.bumpSendBusy(-1);
+    }
   }
 
   async stopTurn(): Promise<boolean> {
@@ -575,7 +861,16 @@ export class SessionsStore {
         { id },
         { carryHandover },
       );
-      if (res?.sessions) this.applyList(res);
+      if (res?.sessions) {
+        this.applyList(res);
+        const nextTaskId = res.sessions.find((s) => s.id === id)?.taskId;
+        this.pendingMessages.update((list) =>
+          list.filter(
+            (p) =>
+              p.sessionId !== id || (!!nextTaskId && p.taskId === nextTaskId),
+          ),
+        );
+      }
       this.staleRuns.update((m) => {
         const next = { ...m };
         delete next[id];
@@ -621,6 +916,11 @@ export class SessionsStore {
   remove(id: string): Promise<boolean> {
     return this.run("delete", async () => {
       await this.api.delete("DELETE /api/console-sessions/{id}", { id });
+      this.pendingMessages.update((list) =>
+        list.filter((p) => p.sessionId !== id),
+      );
+      this.sendChains.delete(id);
+      this.activeSessionSends.delete(id);
       if (this.selectedId() === id) this.selectedId.set(DIRECTOR_ID);
     });
   }
