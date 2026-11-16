@@ -316,3 +316,19 @@ func UnfilledPlaceholders(s string) []string {
 	}
 	return names
 }
+
+// UnfilledFields is every `{{name}}` in tmpl that values has no entry
+// for, in the order it first appears: the holes SubstituteFields(tmpl,
+// values) leaves. Unlike UnfilledPlaceholders of the rendered text, it
+// does not mistake a value's own braces for a hole -- a task titled
+// "Render a literal {{task_title}}" is a title, not an unfilled field,
+// and a review named after it must still be filed.
+func UnfilledFields(tmpl string, values map[string]string) []string {
+	var names []string
+	for _, name := range UnfilledPlaceholders(tmpl) {
+		if _, ok := values[name]; !ok {
+			names = append(names, name)
+		}
+	}
+	return names
+}

@@ -457,6 +457,11 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 	filled.Fields = nil
 	filled.Title = model.SubstituteFields(filled.Title, allVars)
 	filled.Body = model.SubstituteFields(filled.Body, allVars)
+	// Titled from the template's own title, rendered once: rendering
+	// filled.Title again would expand any {{task_title}} the task's own
+	// title carries a second time, and would read braces that are the
+	// title's own as a hole the template left.
+	title := filledTitleOr(tmpl.Title, allVars, "Review: "+subject, "review template "+tmpl.ID)
 
 	var review model.Task
 	var err error
@@ -471,10 +476,10 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 			changeUnderReviewSection(task, true) + facts
 		review, err = newReview(ctx, store, task, filled, targetedReviewTitle(task, triggerNames(matches)), body, true, now)
 	case settings.fixes:
-		review, err = newReview(ctx, store, task, filled, reviewTaskTitleFor(filled, task, subject),
+		review, err = newReview(ctx, store, task, filled, title,
 			reviewTaskBody(filled, task, ref, task.BranchName())+facts, false, now)
 	default:
-		review, err = newReview(ctx, store, task, filled, reviewTaskTitleFor(filled, task, subject),
+		review, err = newReview(ctx, store, task, filled, title,
 			reviewFindingsBody(filled, task, ref, task.BranchName())+facts, false, now)
 		if task.Target != nil {
 			// A findings-only review opens no pull request and runs no grain CI

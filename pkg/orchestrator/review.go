@@ -580,15 +580,6 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 // in the title of the task or the body an agent is handed is worse than
 // the empty string a field with no default means.
 func reviewTaskTitle(tmpl model.Template, task model.Task) string {
-	return reviewTaskTitleFor(tmpl, task, reviewSubjectTitle(task))
-}
-
-// reviewTaskTitleFor is reviewTaskTitle naming the task under review as
-// subject (reviewSubjectTitleOr), for a caller that has the pull
-// request's own title to fall back on. Whatever the template's title
-// leaves unfilled, the review is never filed with a raw `{{name}}` in its
-// title: it falls back to "Review: <subject>" (filledTitleOr).
-func reviewTaskTitleFor(tmpl model.Template, task model.Task, subject string) string {
 	values := tmpl.FieldValues(nil)
 	if strings.TrimSpace(values["task_title"]) == "" {
 		// {{task_title}}, as a gating trigger's review fills it
@@ -597,25 +588,27 @@ func reviewTaskTitleFor(tmpl model.Template, task model.Task, subject string) st
 		if values == nil {
 			values = map[string]string{}
 		}
-		values["task_title"] = subject
+		values["task_title"] = reviewSubjectTitle(task)
 	}
-	return filledTitleOr(model.SubstituteFields(tmpl.Title, values), "Review: "+subject,
-		"review template "+tmpl.ID)
+	return filledTitleOr(tmpl.Title, values, "Review: "+reviewSubjectTitle(task), "review template "+tmpl.ID)
 }
 
-// filledTitleOr is title, rendered, unless it came out empty or still
-// holds a `{{name}}` nothing supplied (model.UnfilledPlaceholders), in
-// which case it is fallback: the machinery files these tasks with nobody
-// watching, and a literal "{{task_title}}" in a task list is worse than a
-// plainer title grain builds itself (task 6235). what names the template
+// filledTitleOr is the template title tmpl rendered with values, unless
+// tmpl names a `{{name}}` values does not supply (model.UnfilledFields)
+// or it renders empty, in which case it is fallback: the machinery files
+// these tasks with nobody watching, and a literal "{{task_title}}" in a
+// task list is worse than a plainer title grain builds itself (task
+// 6235). The holes are read from the template, not the rendered title,
+// so braces in a value -- a task titled after this very bug -- neither
+// count as one nor stop the task being filed. what names the template
 // for the log line.
-func filledTitleOr(title, fallback, what string) string {
-	title = strings.TrimSpace(title)
-	if holes := model.UnfilledPlaceholders(title); len(holes) > 0 {
+func filledTitleOr(tmpl string, values map[string]string, fallback, what string) string {
+	if holes := model.UnfilledFields(tmpl, values); len(holes) > 0 {
 		log.Printf("orchestrator: %s's title %q leaves {{%s}} unfilled; titling the task %q instead",
-			what, title, strings.Join(holes, "}}, {{"), fallback)
+			what, tmpl, strings.Join(holes, "}}, {{"), fallback)
 		return fallback
 	}
+	title := strings.TrimSpace(model.SubstituteFields(tmpl, values))
 	if title == "" {
 		return fallback
 	}

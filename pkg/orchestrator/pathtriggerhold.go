@@ -322,7 +322,7 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 		if err != nil {
 			return model.Task{}, fmt.Errorf("orchestrator: composing trigger %s's task for %s: %w", rule.Trigger.Name, ref, err)
 		}
-		comp.Title = filledTitleOr(model.SubstituteFields(comp.Title, vars),
+		comp.Title = filledTitleOr(comp.Title, vars,
 			fmt.Sprintf("Trigger %s: %s", rule.Trigger.Name, ref), "trigger "+rule.Trigger.Name)
 		comp.Body = model.SubstituteFields(comp.Body, vars) + facts
 		id, err := store.NewTaskID(ctx)

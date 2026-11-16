@@ -106,3 +106,45 @@ func TestAMergeTriggerNeverFilesAnUnfilledTitle(t *testing.T) {
 		t.Errorf("title = %q, want %q", got[0].Title, want)
 	}
 }
+
+// A task titled with literal braces -- this very bug's own task was
+// "... render a literal {{task_title}}" -- still has its reviews filed,
+// named after it: the braces are the title's, not a hole the template
+// left, and refusing them would hold the change's review gate shut with
+// no review to clear it.
+func TestATaskTitledWithBracesStillGetsItsReviews(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	sensitive := gateTrigger("release-machinery", model.TriggerHumanOnFindings, "release")
+	sensitive.Template, sensitive.Sensitive = model.SecurityReviewTemplateID, true
+	findings := gateTrigger("every-pr", model.TriggerHumanOnFindings, "src")
+	findings.Template = templateID("code")
+	declareTriggers(t, ctx, store, branchSHA(t, sim.BareRepo, "main"), map[string]string{
+		"code": "Code review: {{task_title}} ({{pr}})",
+	}, sensitive, findings)
+	task := finishTouching(t, ctx, store, sim, "t1", "release/build.sh", true)
+	task.Title = "Review titles render a literal {{task_title}}"
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	pushFile(t, sim.BareRepo, model.BranchName(task.ID), "src/a.go", "changed\n")
+	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+
+	ref := linkOf(reloaded(t, ctx, store, task.ID), model.LinkFixes)
+	titles := map[string]bool{}
+	for _, f := range triggered(t, ctx, store) {
+		titles[f.Title] = true
+	}
+	for _, want := range []string{
+		"Targeted review (release-machinery): " + task.Title,
+		"Code review: " + task.Title + " (" + ref + ")",
+	} {
+		if !titles[want] {
+			t.Errorf("no task titled %q among %v", want, titles)
+		}
+	}
+}

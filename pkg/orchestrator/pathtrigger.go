@@ -312,7 +312,7 @@ func fileMergeTrigger(ctx context.Context, deps Deps, repo model.RepoRef, branch
 		if group != "" {
 			fallback += ": " + group
 		}
-		comp.Title = filledTitleOr(model.SubstituteFields(comp.Title, vars), fallback, "trigger "+rule.Trigger.Name)
+		comp.Title = filledTitleOr(comp.Title, vars, fallback, "trigger "+rule.Trigger.Name)
 		comp.Body = model.SubstituteFields(comp.Body, vars) + triggerFacts(rule,
 			fmt.Sprintf("merges to `%s` from %s to %s", branch, shortCommit(from), shortCommit(to)), group, paths,
 			[][2]string{{"branch", branch}, {"from_sha", from}, {"to_sha", to}})
@@ -408,13 +408,6 @@ func fileCoalesced(ctx context.Context, store *model.Store, tag string, now time
 	task, err := build(prev, superseding)
 	if err != nil {
 		return model.Task{}, err
-	}
-	if holes := model.UnfilledPlaceholders(task.Title); len(holes) > 0 {
-		// Every build titles its task through filledTitleOr; one that did
-		// not is refused rather than filed with a raw placeholder in its
-		// title (task 6235).
-		return model.Task{}, fmt.Errorf("orchestrator: refusing to file %s titled %q: {{%s}} is unfilled",
-			tag, task.Title, strings.Join(holes, "}}, {{"))
 	}
 	if prev != nil {
 		if superseding {
