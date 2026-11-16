@@ -1167,6 +1167,13 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			if err := refuseReviewOfGrants(capabilities); err != nil {
 				return Result{Text: err.Error(), IsError: true}
 			}
+			// A retired bare name (self-debug, grain-ci, ...) grants
+			// nothing: refused here, naming what it became, rather than
+			// answered "Recorded" and filed holding a row every dispatch
+			// would refuse.
+			if err := model.RefuseRetiredTaskGrants(capabilities); err != nil {
+				return Result{Text: "propose_task: " + err.Error(), IsError: true}
+			}
 			task := ProposedTask{
 				ID:                  id,
 				Title:               title,

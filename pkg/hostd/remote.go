@@ -137,13 +137,22 @@ type RemotePeer struct {
 	// (or those inferred from its protocol version when it predates
 	// Hello.Features).
 	Features []Feature `json:"features,omitempty"`
+	// AgentsOnly, Platform, UpdateMode and UpdatePin are the hello's
+	// (Hello.AgentsOnly, Hello.Platform, Hello.UpdateMode/UpdatePin): with
+	// FeatureSelfUpdate, what Settings compares with the controller's
+	// grain-agentd release to say an update is available.
+	AgentsOnly bool   `json:"agentsOnly,omitempty"`
+	Platform   string `json:"platform,omitempty"`
+	UpdateMode string `json:"updateMode,omitempty"`
+	UpdatePin  string `json:"updatePin,omitempty"`
 }
 
 // Hello returns the protocol version and contract features p reported, so
 // callers can check p.Hello().Has(f).
 func (p RemotePeer) Hello() Hello {
 	proto, _ := strconv.Atoi(p.Protocol)
-	return Hello{Build: p.Build, Protocol: proto, Features: p.Features}
+	return Hello{Build: p.Build, Protocol: proto, Features: p.Features, AgentsOnly: p.AgentsOnly,
+		Platform: p.Platform, UpdateMode: p.UpdateMode, UpdatePin: p.UpdatePin}
 }
 
 // RemoteStatus is Settings' view of a hostd that dials in.
@@ -661,5 +670,7 @@ func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
 	} else {
 		st.Features = legacyFeatures(h.Protocol)
 	}
+	st.AgentsOnly, st.Platform = h.AgentsOnly, h.Platform
+	st.UpdateMode, st.UpdatePin = h.UpdateMode, h.UpdatePin
 	r.last[name] = st
 }

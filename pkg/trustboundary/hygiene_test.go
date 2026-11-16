@@ -318,7 +318,11 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 						}
 					}
 				}
-				if wantArgs, ok := secretStoreMethodArity[sel]; ok && hasSecrets && len(x.Args) == wantArgs {
+				// A file can reach the secret store through a field or
+				// parameter whose type it never names (s.secrets.Resolve(ctx,
+				// name) with no pkg/secrets import), so the receiver's own
+				// name counts as well as the import.
+				if wantArgs, ok := secretStoreMethodArity[sel]; ok && (hasSecrets || mentionsSecret(fn.X)) && len(x.Args) == wantArgs {
 					add("calls secret store ." + sel + "(...)")
 				}
 			}
@@ -332,6 +336,21 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// mentionsSecret reports whether any identifier in a call's receiver
+// expression (s.secrets, srv.SecretStore, deps.Secrets()) names a secret
+// store, so a store reached through a field or accessor is caught even when
+// the file never imports pkg/secrets.
+func mentionsSecret(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && strings.Contains(strings.ToLower(id.Name), "secret") {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func scanScriptSource(src string) []string {
@@ -520,6 +539,17 @@ func rw(ctx context.Context, s *secrets.Store) {
 	_ = s.Set("tok", "key", []byte("val"))
 }`,
 			want: "calls secret store .Resolve(...)",
+		},
+		{
+			// Review 5475: a store reached through a field or interface
+			// the file declares itself, with no pkg/secrets import.
+			name: "secrets store via field without the import",
+			src: `package foo
+import "context"
+type literalSecrets interface{ Set(secret, key string, value []byte) error }
+type srv struct{ secrets literalSecrets }
+func (s *srv) put(ctx context.Context, v []byte) error { return s.secrets.Set("tok", "key", v) }`,
+			want: "calls secret store .Set(...)",
 		},
 		{
 			name: "benign zero-arg OverlapPolicy.Allows and http.Header.Set",

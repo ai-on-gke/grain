@@ -1,0 +1,126 @@
+## gcp-key
+POST /api/tasks               400 unknown capability gcp-key
+POST /api/tasks grants        400 unknown capability gcp-key
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability gcp-key
+POST /api/schedules           400 unknown capability gcp-key
+PUT /api/config defaults      400 defaultCapabilities: unknown capability gcp-key
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability gcp-key
+PUT repo ciCapabilities       400 ciCapabilities: capability "gcp-key" is not supported for CI
+## gcp-key:ops
+POST /api/tasks               400 unknown capability gcp-key:ops
+POST /api/tasks grants        400 unknown capability gcp-key:ops
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability gcp-key:ops
+POST /api/schedules           400 unknown capability gcp-key:ops
+PUT /api/config defaults      400 defaultCapabilities: unknown capability gcp-key:ops
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability gcp-key:ops
+PUT repo ciCapabilities       400 ciCapabilities: capability "gcp-key:ops" is not supported for CI
+## claude-proxy
+POST /api/tasks               400 unknown capability claude-proxy
+POST /api/tasks grants        400 unknown capability claude-proxy
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability claude-proxy
+POST /api/schedules           400 unknown capability claude-proxy
+PUT /api/config defaults      400 defaultCapabilities: unknown capability claude-proxy
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability claude-proxy
+PUT repo ciCapabilities       400 ciCapabilities: capability "claude-proxy" is not supported for CI
+## gemini-key
+POST /api/tasks               400 unknown capability gemini-key
+POST /api/tasks grants        400 unknown capability gemini-key
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability gemini-key
+POST /api/schedules           400 unknown capability gemini-key
+PUT /api/config defaults      400 defaultCapabilities: unknown capability gemini-key
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability gemini-key
+PUT repo ciCapabilities       400 ciCapabilities: capability "gemini-key" is not supported for CI
+## image-signing
+POST /api/tasks               400 unknown capability image-signing
+POST /api/tasks grants        400 unknown capability image-signing
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability image-signing
+POST /api/schedules           400 unknown capability image-signing
+PUT /api/config defaults      400 defaultCapabilities: unknown capability image-signing
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability image-signing
+PUT repo ciCapabilities       400 ciCapabilities: capability "image-signing" is not supported for CI
+## registry-push
+POST /api/tasks               400 unknown capability registry-push
+POST /api/tasks grants        400 unknown capability registry-push
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability registry-push
+POST /api/schedules           400 unknown capability registry-push
+PUT /api/config defaults      400 defaultCapabilities: unknown capability registry-push
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability registry-push
+PUT repo ciCapabilities       400 ciCapabilities: capability "registry-push" is not supported for CI
+## grain-ci
+POST /api/tasks               400 unknown capability grain-ci
+POST /api/tasks grants        400 unknown capability grain-ci
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability grain-ci
+POST /api/schedules           400 unknown capability grain-ci
+PUT /api/config defaults      400 defaultCapabilities: unknown capability grain-ci
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability grain-ci
+PUT repo ciCapabilities       400 ciCapabilities: capability "grain-ci" is not supported for CI
+## bootstrap-playbooks
+POST /api/tasks               400 unknown capability bootstrap-playbooks
+POST /api/tasks grants        400 unknown capability bootstrap-playbooks
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability bootstrap-playbooks
+POST /api/schedules           400 unknown capability bootstrap-playbooks
+PUT /api/config defaults      400 defaultCapabilities: unknown capability bootstrap-playbooks
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability bootstrap-playbooks
+PUT repo ciCapabilities       400 ciCapabilities: capability "bootstrap-playbooks" is not supported for CI
+## github-credential:bot
+POST /api/tasks               400 unknown capability github-credential:bot
+POST /api/tasks grants        400 unknown capability github-credential:bot
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability github-credential:bot
+POST /api/schedules           400 unknown capability github-credential:bot
+PUT /api/config defaults      400 defaultCapabilities: unknown capability github-credential:bot
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability github-credential:bot
+PUT repo ciCapabilities       400 ciCapabilities: capability "github-credential:bot" is not supported for CI
+## read-issues
+POST /api/tasks               400 unknown capability read-issues
+POST /api/tasks grants        400 unknown capability read-issues
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability read-issues
+POST /api/schedules           400 unknown capability read-issues
+PUT /api/config defaults      400 defaultCapabilities: unknown capability read-issues
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability read-issues
+PUT repo ciCapabilities       400 ciCapabilities: capability "read-issues" is not supported for CI
+## github-sandbox
+POST /api/tasks               400 unknown capability github-sandbox
+POST /api/tasks grants        400 unknown capability github-sandbox
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability github-sandbox
+POST /api/schedules           400 unknown capability github-sandbox
+PUT /api/config defaults      400 defaultCapabilities: unknown capability github-sandbox
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability github-sandbox
+PUT repo ciCapabilities       400 ciCapabilities: capability "github-sandbox" is not supported for CI
+## self-debug
+POST /api/tasks               400 unknown capability self-debug
+POST /api/tasks grants        400 unknown capability self-debug
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability self-debug
+POST /api/schedules           400 unknown capability self-debug
+PUT /api/config defaults      400 defaultCapabilities: unknown capability self-debug
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability self-debug
+PUT repo ciCapabilities       400 ciCapabilities: capability "self-debug" is not supported for CI
+## local-scripts:deploy
+POST /api/tasks               400 unknown capability local-scripts:deploy
+POST /api/tasks grants        400 unknown capability local-scripts:deploy
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability local-scripts:deploy
+POST /api/schedules           400 unknown capability local-scripts:deploy
+PUT /api/config defaults      400 defaultCapabilities: unknown capability local-scripts:deploy
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability local-scripts:deploy
+PUT repo ciCapabilities       400 ciCapabilities: capability "local-scripts:deploy" is not supported for CI
+## grain-log
+POST /api/tasks               400 unknown capability grain-log
+POST /api/tasks grants        400 unknown capability grain-log
+POST /api/tasks/2/capabilities 400 attach is required: true to grant, false to remove
+POST /api/templates           400 unknown capability grain-log
+POST /api/schedules           400 unknown capability grain-log
+PUT /api/config defaults      400 defaultCapabilities: unknown capability grain-log
+PUT repo defaultCapabilities  400 defaultCapabilities: unknown capability grain-log
+PUT repo ciCapabilities       400 ciCapabilities: capability "grain-log" is not supported for CI

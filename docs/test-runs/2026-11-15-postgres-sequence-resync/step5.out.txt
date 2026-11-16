@@ -1,0 +1,80 @@
+== daemon A (active)
+a-1 POST /api/tasks -> 201 id=1
+a-1 POST /api/tasks/1/comments -> 200 
+a-1 POST /api/settings -> 200
+a-1 POST /api/templates -> 201 id=template-1
+a-1 POST /api/suites -> 201 "id":"suite-1"
+a-2 POST /api/tasks -> 201 id=3
+a-2 POST /api/tasks/3/comments -> 200 
+a-2 POST /api/settings -> 200
+a-2 POST /api/templates -> 201 id=template-2
+a-2 POST /api/suites -> 201 "id":"suite-2"
+a-3 POST /api/tasks -> 201 id=4
+a-3 POST /api/tasks/4/comments -> 200 
+a-3 POST /api/settings -> 200
+a-3 POST /api/templates -> 201 id=template-3
+a-3 POST /api/suites -> 201 "id":"suite-3"
+200 
+201 
+201 
+-- sequences with two put behind by hand
+board_sequence.id                                   1 f            2 BEHIND
+config_audit.id                                    29 t           29 ok
+integration_event.id                               10 t           10 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       3 t            3 ok
+suite_sequence.id                                   3 t            3 ok
+task_comment.id                                     4 t            4 ok
+task_event.id                                       1 f            1 BEHIND
+task_sequence.number                                4 t            4 ok
+template_sequence.number                            3 t            3 ok
+== daemon B (same database, its own data directory and port), waiting on the lock
+grain daemon: PostgreSQL single-writer advisory lock (schema=public) is held by pid=106411 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle; waiting up to 30s for drain
+lock holders: grain-daemon-writer-lock, grain-daemon-writer-lock
+-- sequences while B waits (task_event and board_sequence must still be BEHIND)
+board_sequence.id                                   1 f            2 BEHIND
+config_audit.id                                    29 t           29 ok
+integration_event.id                               10 t           10 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       3 t            3 ok
+suite_sequence.id                                   3 t            3 ok
+task_comment.id                                     4 t            4 ok
+task_event.id                                       1 f            1 BEHIND
+task_sequence.number                                4 t            4 ok
+template_sequence.number                            3 t            3 ok
+-- A keeps allocating
+a-while-b-waits POST /api/tasks -> 201 id=5
+a-while-b-waits POST /api/tasks/5/comments -> 200 
+a-while-b-waits POST /api/settings -> 200
+a-while-b-waits POST /api/templates -> 201 id=template-4
+a-while-b-waits POST /api/suites -> 201 "id":"suite-4"
+== A loses its lease: its lock connection is terminated, B takes the lock over
+1 lock connection(s) of A terminated
+-- A's log
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+grain daemon: PostgreSQL writer lock session interrupted (FATAL: terminating connection due to administrator command (SQLSTATE 57P01)); attempting to re-acquire
+grain daemon: PostgreSQL single-writer advisory lock lost: postgres: another grain daemon holds the single-writer advisory lock: taken by pid=107176 app="grain-daemon-writer-lock" addr=127.0.0.1/32 st
+grain daemon: releasing PostgreSQL single-writer advisory lock (schema=public)
+grain daemon: PostgreSQL single-writer advisory lock lost: postgres: another grain daemon holds the single-writer advisory lock: taken by pid=107176 app="grain-daemon-writer-lock" addr=127.0.0.1/32 st
+-- B's log
+grain daemon: PostgreSQL single-writer advisory lock (schema=public) is held by pid=106411 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle; waiting up to 30s for drain
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+grain: PostgreSQL sequence public.board_sequence_id_seq for board_sequence.id was behind (next=1, max=2); resynced to 2
+grain: PostgreSQL sequence public.task_event_id_seq for task_event.id was behind (next=1, max=1); resynced to 1
+A exited
+-- sequences after B became the writer
+board_sequence.id                                   2 t            2 ok
+config_audit.id                                    37 t           37 ok
+integration_event.id                               12 t           12 ok
+secret_resolution_audit.id                          4 t            4 ok
+suite_item.id                                       4 t            4 ok
+suite_sequence.id                                   4 t            4 ok
+task_comment.id                                     5 t            5 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                5 t            5 ok
+template_sequence.number                            4 t            4 ok
+b-active POST /api/tasks -> 201 id=6
+b-active POST /api/tasks/6/comments -> 200 
+b-active POST /api/settings -> 200
+b-active POST /api/templates -> 201 id=template-5
+b-active POST /api/suites -> 201 "id":"suite-5"

@@ -107,6 +107,8 @@ func (a SandboxHealthAdapter) Health(ctx context.Context) []ui.SandboxSnapshot {
 			Error:             s.Error,
 			TerminationReason: sandboxTerminationReason(s),
 			LoadAverage:       s.LoadAverage,
+			CPUCores:          s.CPUCores,
+			CPUWindowMS:       s.CPUWindow.Milliseconds(),
 			MemoryUsedMB:      s.MemoryUsedMB,
 			MemoryTotalMB:     s.MemoryTotalMB,
 			SwapUsedMB:        s.SwapUsedMB,

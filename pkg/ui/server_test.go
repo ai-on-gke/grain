@@ -377,7 +377,7 @@ func TestMutatingRoutesRespondWithTheTask(t *testing.T) {
 		// rather than among the proposals.
 		{name: "defer", path: "/defer", want: model.StateDeferred},
 		{name: "undefer", path: "/undefer", want: model.StateQueued},
-		{name: "capability", path: "/capabilities", body: `{"id":"github-sandbox","attach":true}`, want: model.StateQueued},
+		{name: "capability", path: "/capabilities", body: `{"grant":"https://grain.dev/capabilities/github#sandbox-repo={}","attach":true}`, want: model.StateQueued},
 		// Asking for a run leaves the task queued -- the run itself is a
 		// dispatch cycle's to start (ui.Client.RunNow) -- so this row
 		// proves the wiring rather than a transition.

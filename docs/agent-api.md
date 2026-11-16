@@ -266,16 +266,18 @@ table only so the table stays total.
 | `external-dev` | `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` |
 | `external-read` | `tasks:read`, `ci:read`, `repos:read`, `templates:read`, `deployment:read` |
 
-The `self-debug` capability is now an alias. A task holding it is also
-served its preset's routes, and keeps the tools it always had under
-their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
+The `self-debug` capability was retired onto `api:self-debug` plus
+`https://grain.dev/capabilities/grain#source={}` (schema migration 115):
+`api:self-debug` serves the preset's routes and keeps the tools under their
+existing names (`list_grain_tasks`, `read_grain_metrics`, ...), while
+`grain#source` provides the source checkout. Its bare name was an alias for
+one release and is not any longer.
 
 `team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
-`release-notes`, `self-upgrade` and `test-quarantine` are aliases
-too, but their
-in-process capabilities are retired (design/design/unified-grants.design.md §4):
-they have no tools of their own any longer, and a run holding one is
-served its preset's routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
+`release-notes`, `self-upgrade` and `test-quarantine` were retired onto
+the `api:<preset>` presets of the same names (design/design/unified-grants.design.md §4):
+they have no tools of their own any longer, and a run holding the preset is
+served its routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
 routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
 `defer_task`; for pipeline-control, the pipeline-pause routes, which an
@@ -284,13 +286,11 @@ upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
 `/api/release-notes*` routes and `grain memory` / `grain release-notes`;
 for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
 plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
-`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
-`api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
-lists and the standing sessions. The bare name keeps granting the preset
-wherever it is still written, such as a repository's own `.grain`
-declarations.
+lists and the standing sessions -- and importing an older `grain/config`
+export upgrades them the same way (`model.RetiredGrantsBecame`). The bare
+names were aliases for one release and are no longer accepted.
 
 The per-ability capabilities that were queued separately are presets over
 this mechanism rather than new tool plumbing:
@@ -481,14 +481,23 @@ own repository:
 
 - A `repo=` naming another repository is refused. A request naming none
   is given the job's.
-- A route whose path names another repository
-  (`/api/repos/{owner}/{name}/...`) is refused.
-- Whatever the answer holds of another repository's is dropped. An
-  object whose `repo` is another's answers 404, and list elements whose
-  `repo` is another's are removed (`GET /api/tasks`, which takes no
-  repository filter, is held to the job's repository this way).
-- `POST /api/tasks/from-template` files for the job's repository only,
-  from the templates the grant allows, and files the task approved.
+- A route naming another repository or one of its resources --
+  `/api/repos/{owner}/{name}/...`, `/api/tasks/{id}/...`,
+  `/api/ci/runs/{id}/...`, `/api/fs/task/...`, `/api/fs/ci/...` -- is
+  refused, as is any resource with no repository (`no_repo` tasks) or
+  route whose answer has no repository narrowing.
+- Whatever a collection answer holds outside the job's repository is
+  dropped: an object whose `repo` is another's answers 404, and list
+  elements belonging to another repository (or, for a `ci_api_repos`
+  repository, carrying no `repo`) are removed.
+- `POST /api/tasks/from-template` files for the job's repository only
+  (refusing a template that reads, writes, or grants API access on another
+  repository), from the templates the grant allows, and files the task
+  approved unless the template asks for unaccepted person-held grants,
+  deployment-wide or write API/daemon grants beyond the job's own repository
+  bounds, or person-only settings (`DeclarationAcceptance`, `keep_running`,
+  elevated priority, or a declared push set), in which case it lands proposed
+  for a person.
 
 A job may hold only the scopes whose answers narrow to one repository:
 `ci:read`, `tasks:read`, `tasks:from-template`, `sandboxes:read`,
@@ -885,6 +894,13 @@ auto-submit do not release it. `POST /api/tasks/{id}/human-review/release`
 (`tasks:write`) releases it as a person, recorded with who did; every
 agent is refused there, and on Submit or a `PATCH` turning auto-merge on
 while the hold stands. See [merging.design.md](../design/design/merging.design.md#gates).
+
+A review's *findings* are not a hold either of these releases. `POST
+/api/tasks/{id}/accept-findings` (`tasks:write`, body `{gate, reviewTask?,
+reason, head?}`) is a person accepting one review's findings on one gate as
+they are. It needs an unlimited role (grain/operator), is refused for every
+agent, and clears nothing else
+([declarations.md](declarations.md#gating-reviews)).
 
 ## Paging a list
 

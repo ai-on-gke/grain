@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v29"
+const Version = "trust-boundary/v30"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -84,7 +84,7 @@ type Category struct {
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
 //
-// v29 adds the authorization-bearing, secret-handling, route-registering and
+// v30 adds the authorization-bearing, secret-handling, route-registering and
 // release-signing surfaces found unclassified by the structural classification
 // hygiene test (task 5325): pkg/ghwebhook/ and the remaining UI route-table,
 // route-scope, cross-task, namespace-FS, PR-filing, sandbox-CLI and repo-reach
@@ -98,15 +98,25 @@ type Category struct {
 // hold_for_approval,priority_dispatch,proposal_seeding,ref_push,
 // scratch_fixture}.go, pkg/ui/{capability_catalogue,capability_grants,
 // capability_policy,capability_status,capability_servers_figma,change_submit,
-// console_sessions,secrets,task_secret}.go,
-// pkg/daemon/{ca_store,loose_credentials,secretsrepo,statemanager,staterepo}.go)
+// console_sessions,repo_release_workflows,secrets,task_secret}.go,
+// pkg/daemon/{ca_store,capability_literals_migrate,loose_credentials,
+// secretsrepo,statemanager,staterepo}.go)
 // to capabilities-secrets; pkg/sandboxaccess/ and pkg/daemon/mcpserver.go to
 // exec-sandbox; pkg/actionscache/, pkg/agent/credcheck/ and pkg/daemon/hub.go
 // to credential-proxy; pkg/attest/ and scripts/checkpost-report.sh to
 // merge-gate; the whole pkg/releaseapproval/ prefix (covering keystore.go and
-// kms.go beside releaseapproval.go) to release-promotion; pkg/agentd/release/
-// and scripts/build-agentd.sh to release-machinery; and
+// kms.go beside releaseapproval.go) to release-promotion; pkg/agentd/release/,
+// scripts/build-agentd.sh and pkg/agentd/update.go (the signed, pinned
+// grain-agentd self-update) to release-machinery; and
 // scripts/migrate-local-to-gke.sh to setup-scripts.
+//
+// v29 adds pkg/ui/access_code_mode.go to auth-routes beside
+// pkg/ui/accesscode.go (task 5973, found in the security review of task
+// 3908): it decides whether the access code is on, in recovery or off
+// (accessCodeModeNow, which serveHTTP consults to disable LocalAPIToken),
+// which routes an access code may reach in recovery mode
+// (accessCodeRecoveryRoute, admitAccessCodeRequest) and which names an
+// access-code sign-in may claim (accessNameAllowed).
 //
 // v28 adds the six sibling surfaces the post-merge security review of v26
 // found unclassified across scripts/ and pkg/ (task 3926, finding 3.1 of
@@ -327,7 +337,7 @@ var Categories = []Category{
 		files: []string{
 			"pkg/ui/server.go", "pkg/ui/deployment_routes.go",
 			"pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
-			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
+			"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
 			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
@@ -463,9 +473,14 @@ var Categories = []Category{
 			"pkg/ui/capability_policy.go", "pkg/ui/capability_status.go",
 			"pkg/ui/change_submit.go", "pkg/ui/console_sessions.go",
 			"pkg/ui/secrets.go", "pkg/ui/task_secret.go",
-			// Daemon CA private-key store, loose-credential migration, and
-			// secrets-store / secrets-repo wiring.
+			// Per-repository release secrets: who may list and set the
+			// secrets a repository's release runs are given.
+			"pkg/ui/repo_release_workflows.go",
+			// Daemon CA private-key store, loose-credential migration
+			// (including typed-in capability-server credentials moved into
+			// the secrets store), and secrets-store / secrets-repo wiring.
 			"pkg/daemon/ca_store.go", "pkg/daemon/loose_credentials.go",
+			"pkg/daemon/capability_literals_migrate.go",
 			"pkg/daemon/secretsrepo.go", "pkg/daemon/statemanager.go",
 			"pkg/daemon/staterepo.go",
 		},
@@ -565,6 +580,10 @@ var Categories = []Category{
 		// manifest verifier, pinned public key and signer.
 		prefixes: []string{"scripts/granule/", "pkg/agentd/release/"},
 		files: []string{
+			// grain-agentd update: the owner-run self-update that takes a
+			// signed release only inside the allowlist's update.pin and
+			// refuses a downgrade (checkUpdateVersion).
+			"pkg/agentd/update.go",
 			"scripts/release-images.sh",
 			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 			// What the release jobs run besides: the patch-release branch
