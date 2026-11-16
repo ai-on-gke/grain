@@ -453,12 +453,13 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
 
 // SECTION_ANCHORS is where an old link that now lands inside a bigger
 // section points within it, when the link carries no #fragment of its
-// own: /settings/secrets opens Capabilities at its stored secrets.
+// own: /settings/credentials opens Capabilities at its Deployment
+// credentials card, /settings/secrets at that card's secrets.
 export const SECTION_ANCHORS: Readonly<Record<string, string>> = {
-  credentials: "other-secrets",
+  credentials: "credentials",
   secrets: "other-secrets",
-  "legacy-capabilities": "other-secrets",
-  integrations: "other-secrets",
+  "legacy-capabilities": "credentials",
+  integrations: "credentials",
   hub: "registry-status",
 };
 
