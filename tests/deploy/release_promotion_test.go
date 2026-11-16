@@ -181,6 +181,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
 		"scripts/release-assets.sh", "scripts/build-cli.sh", "scripts/build-agentd.sh",
+		"pkg/agentd/update.go",
 		"pkg/agentd/release/release.go", "pkg/agentd/release/cmd/grain-agentd-sign/main.go",
 		".github/workflows/release-train-assets.yml",
 		"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",

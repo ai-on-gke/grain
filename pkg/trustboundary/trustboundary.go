@@ -87,26 +87,36 @@ type Category struct {
 // v30 adds the authorization-bearing, secret-handling, route-registering and
 // release-signing surfaces found unclassified by the structural classification
 // hygiene test (task 5325): pkg/ghwebhook/, pkg/ui/verifier_session.go (the
-// verifier's HMAC-signed session binding) and the remaining UI route-table,
-// route-scope, cross-task, namespace-FS, PR-filing, sandbox-CLI and repo-reach
-// gates (pkg/ui/deployment_routes.go, tasks_from_template.go,
-// agent_cross_task.go, api_fs.go, pull_requests_api.go,
-// sandbox_cli_actions.go, refs.go, repo_reach.go) to auth-routes; the
-// grant/capability admission predicates, capability UI/API gates, secret
-// writers and daemon key/credential store loaders
-// (pkg/model/{canonical_grant_migration,capability,ci_read_default,
-// console_session,console_session_reach,declaration_acceptance,external_ref,
-// hold_for_approval,priority_dispatch,proposal_seeding,ref_push,
-// scratch_fixture}.go, pkg/ui/{capability_catalogue,capability_grants,
-// capability_policy,capability_status,capability_servers_figma,change_submit,
-// console_sessions,repo_release_workflows,secrets,task_secret}.go,
-// pkg/daemon/{ca_store,capability_literals_migrate,loose_credentials,
-// secretsrepo,statemanager,staterepo}.go)
-// to capabilities-secrets; pkg/sandboxaccess/ and pkg/daemon/mcpserver.go to
-// exec-sandbox; pkg/actionscache/, pkg/agent/credcheck/ and pkg/daemon/hub.go
-// to credential-proxy; pkg/attest/ and scripts/checkpost-report.sh to
-// merge-gate; the whole pkg/releaseapproval/ prefix (covering keystore.go and
-// kms.go beside releaseapproval.go) to release-promotion; pkg/agentd/release/,
+// verifier's HMAC-signed session binding), Unix-socket SO_PEERCRED / host
+// account and local access-code auth (pkg/ui/hostaccount.go, peercred_linux.go,
+// peercred_other.go, localtoken.go), role-gated handlers and scope-set storage
+// (pkg/ui/accept_findings.go, merge_gates.go, task_config_change.go,
+// relay_comment.go, console.go, events.go, api_scope_sets.go), and the
+// remaining UI route-table, route-scope, cross-task, namespace-FS, PR-filing,
+// sandbox-CLI and repo-reach gates (pkg/ui/deployment_routes.go,
+// tasks_from_template.go, agent_cross_task.go, api_fs.go,
+// pull_requests_api.go, sandbox_cli_actions.go, refs.go, repo_reach.go) to
+// auth-routes; the grant/capability admission predicates, built-in templates,
+// declaration/schedule/standing-task grant propagation, capability UI/API
+// gates, secret readers/writers and daemon key/credential/grant-migration
+// loaders (pkg/model/{canonical_grant_migration,capability,change_target,
+// ci_read_default,console_session,console_session_reach,declaration_acceptance,
+// external_ref,gke_sandbox_cluster_template,hold_for_approval,
+// notification_wake,pipeline_steward_template,priority_dispatch,
+// proposal_seeding,ref_push,repo_declaration_store,runtime_grant_retirement,
+// schedule_fire,scratch_fixture,standing_task,steward_audit_template,
+// system_template,workflow_review_template}.go, pkg/ui/{capability_catalogue,
+// capability_grants,capability_policy,capability_status,
+// capability_servers_figma,change_submit,console_sessions,
+// declaration_acceptance,repo_release_workflows,secrets,secrets_redact,
+// task_secret}.go, pkg/daemon/{ca_store,capability_literals_migrate,
+// localscripts_migrate,loose_credentials,secretsrepo,statemanager,
+// staterepo}.go) to capabilities-secrets; pkg/sandboxaccess/ and
+// pkg/daemon/mcpserver.go to exec-sandbox; pkg/actionscache/,
+// pkg/agent/credcheck/, pkg/daemon/hub.go and pkg/ui/hub.go to
+// credential-proxy; pkg/attest/ and scripts/checkpost-report.sh to merge-gate;
+// the whole pkg/releaseapproval/ prefix (covering keystore.go and kms.go beside
+// releaseapproval.go) to release-promotion; pkg/agentd/release/,
 // scripts/build-agentd.sh and pkg/agentd/update.go (the signed, pinned
 // grain-agentd self-update) to release-machinery; and
 // scripts/migrate-local-to-gke.sh to setup-scripts.
@@ -414,6 +424,16 @@ var Categories = []Category{
 			"pkg/ui/tasks_from_template.go", "pkg/ui/agent_cross_task.go",
 			"pkg/ui/api_fs.go", "pkg/ui/pull_requests_api.go",
 			"pkg/ui/sandbox_cli_actions.go", "pkg/ui/refs.go", "pkg/ui/repo_reach.go",
+			// Direct role/operator gates on finding acceptance, force-merge,
+			// config-change approval, comment relay, WebSocket console and
+			// SSE/event streams; API scope-set CRUD (api:<set> expansion
+			// storage); local access-code minting and loopback detection;
+			// and Unix-socket SO_PEERCRED / host-account authentication.
+			"pkg/ui/accept_findings.go", "pkg/ui/merge_gates.go",
+			"pkg/ui/task_config_change.go", "pkg/ui/relay_comment.go",
+			"pkg/ui/console.go", "pkg/ui/events.go", "pkg/ui/api_scope_sets.go",
+			"pkg/ui/localtoken.go", "pkg/ui/hostaccount.go",
+			"pkg/ui/peercred_linux.go", "pkg/ui/peercred_other.go",
 		},
 	},
 	{
@@ -467,21 +487,37 @@ var Categories = []Category{
 			"pkg/model/hold_for_approval.go", "pkg/model/priority_dispatch.go",
 			"pkg/model/proposal_seeding.go", "pkg/model/ref_push.go",
 			"pkg/model/scratch_fixture.go",
+			// Built-in system templates that declare default grants, plus
+			// declared-grant storage, runtime grant-expansion retirement,
+			// change-target grant/approval hooks, and schedule/standing-task
+			// grant propagation.
+			"pkg/model/change_target.go", "pkg/model/repo_declaration_store.go",
+			"pkg/model/runtime_grant_retirement.go", "pkg/model/schedule_fire.go",
+			"pkg/model/standing_task.go", "pkg/model/system_template.go",
+			"pkg/model/pipeline_steward_template.go",
+			"pkg/model/gke_sandbox_cluster_template.go",
+			"pkg/model/steward_audit_template.go",
+			"pkg/model/workflow_review_template.go",
+			"pkg/model/notification_wake.go",
 			// UI/API capability catalogue, grant attachment, policy preview,
 			// status checks, one-shot Submit grant lifecycle, standing
-			// console sessions, and secret store / pending-secret writers.
+			// console sessions, declaration acceptance, and secret store
+			// readers/writers (including secret-redaction value loading).
 			"pkg/ui/capability_catalogue.go", "pkg/ui/capability_grants.go",
 			"pkg/ui/capability_policy.go", "pkg/ui/capability_status.go",
 			"pkg/ui/change_submit.go", "pkg/ui/console_sessions.go",
-			"pkg/ui/secrets.go", "pkg/ui/task_secret.go",
+			"pkg/ui/declaration_acceptance.go",
+			"pkg/ui/secrets.go", "pkg/ui/secrets_redact.go", "pkg/ui/task_secret.go",
 			// Per-repository release secrets: who may list and set the
 			// secrets a repository's release runs are given.
 			"pkg/ui/repo_release_workflows.go",
-			// Daemon CA private-key store, loose-credential migration
-			// (including typed-in capability-server credentials moved into
-			// the secrets store), and secrets-store / secrets-repo wiring.
+			// Daemon CA private-key store, loose-credential and
+			// local-scripts-to-host-script grant migrations (including
+			// typed-in capability-server credentials moved into the secrets
+			// store), and secrets-store / secrets-repo wiring.
 			"pkg/daemon/ca_store.go", "pkg/daemon/loose_credentials.go",
 			"pkg/daemon/capability_literals_migrate.go",
+			"pkg/daemon/localscripts_migrate.go",
 			"pkg/daemon/secretsrepo.go", "pkg/daemon/statemanager.go",
 			"pkg/daemon/staterepo.go",
 		},
@@ -513,7 +549,7 @@ var Categories = []Category{
 			// and grc_ credentials.
 			"pkg/hub/", "cmd/grain-hub/", "pkg/registry/", "cmd/grain-registry/",
 		},
-		files: []string{"pkg/daemon/hub.go"},
+		files: []string{"pkg/daemon/hub.go", "pkg/ui/hub.go"},
 	},
 	{
 		ID:          "merge-gate",

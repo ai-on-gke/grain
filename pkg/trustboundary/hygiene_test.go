@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -130,6 +131,12 @@ var routeScopeIdents = map[string]bool{
 var grantPredicateFuncs = map[string]bool{
 	"CanonicalGrant":             true,
 	"CanonicalGrantKey":          true,
+	"StoredGrantSpelling":        true,
+	"LegacyGrantString":          true,
+	"CanonicalLegacyGrants":      true,
+	"CanonicalStoredGrant":       true,
+	"CanonicalStoredGrants":      true,
+	"SetRuntimeGrantExpansions":  true,
 	"ParseAPIGrant":              true,
 	"APIGrantsOf":                true,
 	"SandboxAPIGrantsOf":         true,
@@ -141,6 +148,8 @@ var grantPredicateFuncs = map[string]bool{
 	"AgentEscalatedCapabilities": true,
 	"UncoveredCapabilityRefs":    true,
 	"SplitRequestGrants":         true,
+	"accessRoleFromContext":      true,
+	"newAccessCode":              true,
 }
 
 var grantPredicateMethods = map[string]bool{
@@ -167,12 +176,14 @@ var secretPkgFuncs = map[string]bool{
 // secret material to their argument counts, distinguishing Store.Set(s, k, v)
 // from http.Header.Set(k, v) or ForbiddenSet.Set(repos).
 var secretStoreMethodArity = map[string]int{
-	"Resolve":     2,
-	"KnownValues": 1,
-	"Set":         3,
-	"Ensure":      2,
-	"Rotate":      2,
-	"ImportKey":   1,
+	"Resolve":          2,
+	"KnownValues":      1,
+	"Set":              3,
+	"Ensure":           2,
+	"Rotate":           2,
+	"ImportKey":        1,
+	"WrapKeyWithKMS":   3,
+	"UnwrapKeyFromKMS": 2,
 }
 
 var scriptContinuationRE = regexp.MustCompile(`\\\r?\n`)
@@ -229,6 +240,9 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 		add("imports pkg/secretsrepo")
 	}
 
+	isModelPkg := f.Name != nil && f.Name.Name == "model"
+	secretVars := collectSecretVars(f)
+
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.Ident:
@@ -237,9 +251,27 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 			}
 		case *ast.SelectorExpr:
 			if id, ok := x.X.(*ast.Ident); ok {
-				if imports[id.Name] == modelImportPath && x.Sel.Name == "Grant" {
-					add("uses model.Grant")
+				switch imports[id.Name] {
+				case modelImportPath:
+					if x.Sel.Name == "Grant" {
+						add("uses model.Grant")
+					}
+				case "syscall", "golang.org/x/sys/unix":
+					if x.Sel.Name == "SO_PEERCRED" {
+						add("reads Unix peer credentials via SO_PEERCRED")
+					}
 				}
+			}
+		case *ast.CompositeLit:
+			if isModelPkg && exprNamesGrantType(x.Type) {
+				add("constructs model.Grant")
+			}
+			if exprNamesVerifiedIdentity(x.Type) {
+				add("constructs VerifiedIdentity")
+			}
+		case *ast.FuncType:
+			if isModelPkg && funcTypeUsesGrant(x) {
+				add("uses model.Grant in function signature")
 			}
 		case *ast.FuncDecl:
 			name := x.Name.Name
@@ -249,8 +281,8 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 			if grantPredicateFuncs[name] {
 				add("declares grant predicate " + name)
 			}
-			if name == "Allows" && x.Type.Params != nil && len(x.Type.Params.List) > 0 {
-				add("declares Allows(...)")
+			if (name == "Allows" || name == "allows") && x.Type.Params != nil && len(x.Type.Params.List) > 0 {
+				add("declares " + name + "(...)")
 			}
 			if name == "RequiresHuman" || name == "OwnerApproval" {
 				add("declares " + name)
@@ -264,8 +296,8 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 				if grantPredicateFuncs[fn.Name] {
 					add("calls " + fn.Name + "(...)")
 				}
-				if fn.Name == "Allows" && len(x.Args) > 0 {
-					add("calls Allows(...)")
+				if (fn.Name == "Allows" || fn.Name == "allows") && len(x.Args) > 0 {
+					add("calls " + fn.Name + "(...)")
 				}
 				if fn.Name == "RequiresHuman" || fn.Name == "OwnerApproval" {
 					add("calls " + fn.Name + "(...)")
@@ -279,8 +311,8 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 				if (sel == "route" || sel == "HandleFunc" || sel == "Handle") && (hasNetHTTP || routePatternArg(x)) {
 					add("registers HTTP route via ." + sel + "(...)")
 				}
-				if sel == "Allows" && len(x.Args) > 0 {
-					add("calls .Allows(...)")
+				if (sel == "Allows" || sel == "allows") && len(x.Args) > 0 {
+					add("calls ." + sel + "(...)")
 				}
 				if sel == "RequiresHuman" || sel == "OwnerApproval" {
 					add("calls ." + sel + "(...)")
@@ -326,9 +358,10 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 				}
 				// A file can reach the secret store through a field or
 				// parameter whose type it never names (s.secrets.Resolve(ctx,
-				// name) with no pkg/secrets import), so the receiver's own
-				// name counts as well as the import.
-				if wantArgs, ok := secretStoreMethodArity[sel]; ok && (hasSecrets || mentionsSecret(fn.X)) && len(x.Args) == wantArgs {
+				// name), or aliased via store := s.Config.Secrets, with no
+				// pkg/secrets import), so both the receiver expression and any
+				// local alias bound from a secret-named expression count.
+				if wantArgs, ok := secretStoreMethodArity[sel]; ok && (hasSecrets || mentionsSecret(fn.X) || isSecretVar(fn.X, secretVars)) && len(x.Args) == wantArgs {
 					add("calls secret store ." + sel + "(...)")
 				}
 			}
@@ -342,6 +375,97 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// collectSecretVars records local variable names assigned from an expression
+// mentioning a secret store (e.g. store := s.tasks.Config.Secrets) so method
+// calls on the alias are still flagged when pkg/secrets is not imported.
+func collectSecretVars(f *ast.File) map[string]bool {
+	vars := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range x.Rhs {
+				if i < len(x.Lhs) && (mentionsSecret(rhs) || isSecretVar(rhs, vars)) {
+					if id, ok := x.Lhs[i].(*ast.Ident); ok && id.Name != "_" {
+						vars[id.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for i, rhs := range x.Values {
+				if i < len(x.Names) && (mentionsSecret(rhs) || isSecretVar(rhs, vars)) {
+					if x.Names[i].Name != "_" {
+						vars[x.Names[i].Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	return vars
+}
+
+func isSecretVar(e ast.Expr, vars map[string]bool) bool {
+	if len(vars) == 0 || e == nil {
+		return false
+	}
+	for {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.Ident:
+			return vars[x.Name]
+		default:
+			return false
+		}
+	}
+}
+
+func exprNamesGrantType(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name == "Grant"
+	case *ast.ArrayType:
+		return exprNamesGrantType(x.Elt)
+	case *ast.StarExpr:
+		return exprNamesGrantType(x.X)
+	case *ast.MapType:
+		return exprNamesGrantType(x.Key) || exprNamesGrantType(x.Value)
+	case *ast.Ellipsis:
+		return exprNamesGrantType(x.Elt)
+	case *ast.ParenExpr:
+		return exprNamesGrantType(x.X)
+	default:
+		return false
+	}
+}
+
+func exprNamesVerifiedIdentity(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name == "VerifiedIdentity" || x.Name == "callerVerification"
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "VerifiedIdentity" || x.Sel.Name == "callerVerification"
+	case *ast.ParenExpr:
+		return exprNamesVerifiedIdentity(x.X)
+	default:
+		return false
+	}
+}
+
+func funcTypeUsesGrant(ft *ast.FuncType) bool {
+	for _, list := range []*ast.FieldList{ft.Params, ft.Results} {
+		if list == nil {
+			continue
+		}
+		for _, field := range list.List {
+			if exprNamesGrantType(field.Type) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // mentionsSecret reports whether any identifier in a call's receiver
@@ -359,18 +483,37 @@ func mentionsSecret(e ast.Expr) bool {
 	return found
 }
 
-// routePatternRE matches the first argument of a ServeMux-style
-// registration: an optional method, then a path.
-var routePatternRE = regexp.MustCompile(`^"(?:(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|CONNECT|TRACE) +)?/`)
+// routePatternRE matches the unquoted prefix of a ServeMux-style registration:
+// an optional HTTP method, then a leading "/".
+var routePatternRE = regexp.MustCompile(`^(?:(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|CONNECT|TRACE) +)?/`)
 
 // routePatternArg reports whether call's first argument is a string literal
-// that reads as an HTTP route pattern ("GET /api/x", "/healthz").
+// (quoted or raw, or the left prefix of a "+" concatenation) that reads as an
+// HTTP route pattern ("GET /api/x", `POST /api/x`, "/healthz", "GET /api/"+p).
 func routePatternArg(call *ast.CallExpr) bool {
 	if len(call.Args) == 0 {
 		return false
 	}
-	lit, ok := call.Args[0].(*ast.BasicLit)
-	return ok && lit.Kind == token.STRING && routePatternRE.MatchString(lit.Value)
+	expr := call.Args[0]
+	for {
+		switch x := expr.(type) {
+		case *ast.ParenExpr:
+			expr = x.X
+		case *ast.BinaryExpr:
+			if x.Op != token.ADD {
+				return false
+			}
+			expr = x.X
+		case *ast.BasicLit:
+			if x.Kind != token.STRING {
+				return false
+			}
+			s, err := strconv.Unquote(x.Value)
+			return err == nil && routePatternRE.MatchString(s)
+		default:
+			return false
+		}
+	}
 }
 
 func scanScriptSource(src string) []string {
@@ -602,6 +745,84 @@ func (s *Server) registerWidgetRoutes() { s.route("GET /api/widgets", s.handleLi
 			src: `package planner
 func plan(g *graph) { g.route(nodeA, nodeB) }`,
 			want: "",
+		},
+		{
+			name: "raw string route registration",
+			src: `package ui
+func (s *Server) reg() { s.route(` + "`GET /api/widgets`" + `, s.h) }`,
+			want: "registers HTTP route via .route(...)",
+		},
+		{
+			name: "concatenated route registration",
+			src: `package ui
+func (s *Server) reg(suffix string) { s.HandleFunc("POST /api/"+suffix, s.h) }`,
+			want: "registers HTTP route via .HandleFunc(...)",
+		},
+		{
+			name: "secrets store aliased to a local variable without import",
+			src: `package ui
+import "context"
+func redact(ctx context.Context, s *Server) {
+	store := s.tasks.Config.Secrets
+	_, _ = store.KnownValues(ctx)
+}`,
+			want: "calls secret store .KnownValues(...)",
+		},
+		{
+			name: "lowercase role allows check and accessRoleFromContext",
+			src: `package ui
+import "context"
+func check(ctx context.Context) bool {
+	role := accessRoleFromContext(ctx)
+	return role.allows("merge:force", "o/r")
+}`,
+			want: "calls .allows(...)",
+		},
+		{
+			name: "sibling canonical grant helper StoredGrantSpelling",
+			src: `package ui
+import "github.com/ai-on-gke/grain/pkg/model"
+func spell(s string) string { return model.StoredGrantSpelling(s) }`,
+			want: "calls model.StoredGrantSpelling(...)",
+		},
+		{
+			name: "same-package model Grant construction",
+			src: `package model
+func tmpl() []Grant { return []Grant{{Capability: "grain#host-exec"}} }`,
+			want: "constructs model.Grant",
+		},
+		{
+			name: "same-package model Grant in function signature",
+			src: `package model
+func merge(a, b []Grant) []Grant { return append(a, b...) }`,
+			want: "uses model.Grant in function signature",
+		},
+		{
+			name: "same-package model pure struct with Grants field",
+			src: `package model
+type Item struct { Grants []Grant }`,
+			want: "",
+		},
+		{
+			name: "unix socket SO_PEERCRED credential read",
+			src: `package ui
+import "syscall"
+func peer(fd int) (*syscall.Ucred, error) {
+	return syscall.GetsockoptUcred(fd, syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+}`,
+			want: "reads Unix peer credentials via SO_PEERCRED",
+		},
+		{
+			name: "VerifiedIdentity minting",
+			src: `package ui
+func mint(email string) VerifiedIdentity { return VerifiedIdentity{Email: email} }`,
+			want: "constructs VerifiedIdentity",
+		},
+		{
+			name: "local access code minting",
+			src: `package ui
+func initCode() (string, error) { return newAccessCode() }`,
+			want: "calls newAccessCode(...)",
 		},
 	}
 
