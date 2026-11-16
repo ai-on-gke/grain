@@ -129,7 +129,7 @@ func TestAnAdoptedAntigravityRunIsReadByAntigravitysParser(t *testing.T) {
 	store := pool.Store
 
 	task := model.Task{ID: "t", Intent: model.IntentImplement, Title: "t", Admission: model.AdmissionDurable,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "p"}}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "p"}}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "p"}}}
 	if err := store.PutTask(ctx, task); err != nil {
