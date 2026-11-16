@@ -364,6 +364,12 @@
   gap: 14px;
 }
 
+/* A planned value is whatever the setting holds -- a URL, a list of
+   rules -- so it breaks anywhere rather than widen the table. */
+.s-plan-panel .s-table td.s-mono {
+  overflow-wrap: anywhere;
+}
+
 .s-btn-danger {
   min-height: 36px;
   padding: 0 14px;

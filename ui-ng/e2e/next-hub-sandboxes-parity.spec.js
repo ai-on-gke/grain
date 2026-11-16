@@ -281,10 +281,10 @@ test("Hub registration token is write-only and stays editable under a config-rep
   await expect(token).toBeEnabled();
   await expect(token).toHaveAttribute("type", "password");
   await expect(token).toHaveAttribute("autocomplete", "new-password");
-  await expect(page.getByTestId("registry-token-state")).toHaveText("not set");
+  await expect(page.getByTestId("registry-token-state")).toHaveText("Not set");
   await token.fill("grc_parity_walk_token");
   await page.getByTestId("save-hub-token").click();
-  await expect(page.getByTestId("registry-token-state")).toHaveText("set");
+  await expect(page.getByTestId("registry-token-state")).toHaveText("Stored");
   await expect(token).toHaveValue("");
   expect(sent).toEqual([
     { method: "PUT", body: { value: "grc_parity_walk_token" } },
@@ -296,7 +296,7 @@ test("Hub registration token is write-only and stays editable under a config-rep
   expect(sent).toHaveLength(1);
   await page.getByTestId("clear-hub-token").click();
   await page.getByRole("button", { name: "Clear token" }).click();
-  await expect(page.getByTestId("registry-token-state")).toHaveText("not set");
+  await expect(page.getByTestId("registry-token-state")).toHaveText("Not set");
   expect(sent.map((x) => x.method)).toEqual(["PUT", "DELETE"]);
 });
 
