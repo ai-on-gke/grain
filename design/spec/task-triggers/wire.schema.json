@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:grain:task-triggers:wire:v1",
   "title": "Proposed Grain trigger bindings",
-  "description": "Documentation schema. Cross-field authority, byte limits, source scope and provider schemas remain normative in TTS-1 through TTS-15. Additional providers require registered schemas and reviewed version evolution; this file defines the two concrete examples only.",
+  "description": "Proposed closed trigger binding and normalized event schemas. See TTS-17\u201325 in implementation.spec.md for transport, authority, persistence and semantic checks beyond JSON Schema. No live configuration or runtime is installed.",
   "$ref": "#/$defs/binding",
   "$defs": {
     "provider": {
@@ -24,8 +24,7 @@
         },
         "release": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512
+          "pattern": "^sha256:[0-9a-f]{64}$"
         },
         "source_type": {
           "type": "string",
@@ -39,8 +38,7 @@
         },
         "schema_digest": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 512
+          "pattern": "^sha256:[0-9a-f]{64}$"
         },
         "config_revision": {
           "type": "string",
@@ -395,7 +393,7 @@
         }
       }
     },
-    "binding": {
+    "binding_common": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -440,14 +438,9 @@
           "$ref": "#/$defs/provider"
         },
         "source": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/calendar"
-            },
-            {
-              "$ref": "#/$defs/github_review_requests"
-            }
-          ]
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32
         },
         "event_kind": {
           "type": "string",
@@ -484,8 +477,7 @@
             },
             "revision": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 512
+              "pattern": "^sha256:[0-9a-f]{64}$"
             },
             "tracking": {
               "enum": [
@@ -579,11 +571,16 @@
               "items": {
                 "enum": [
                   "task.create_from_trigger",
-                  "task.coalesce_trigger"
+                  "task.coalesce_trigger",
+                  "task.update_trigger"
                 ]
               },
               "minItems": 1,
-              "maxItems": 2
+              "maxItems": 3,
+              "uniqueItems": true,
+              "contains": {
+                "const": "task.create_from_trigger"
+              }
             }
           }
         },
@@ -641,7 +638,8 @@
               "enum": [
                 "new",
                 "coalesce",
-                "ignore"
+                "ignore",
+                "update"
               ]
             },
             "key_fields": {
@@ -797,69 +795,6 @@
         {
           "if": {
             "properties": {
-              "source": {
-                "properties": {
-                  "type": {
-                    "const": "calendar"
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "event_kind": {
-                "const": "time.occurrence"
-              },
-              "mode": {
-                "const": "occurrence"
-              },
-              "provider": {
-                "properties": {
-                  "id": {
-                    "const": "builtin:time"
-                  },
-                  "source_type": {
-                    "const": "calendar"
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "source": {
-                "properties": {
-                  "type": {
-                    "const": "github_review_requests"
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "event_kind": {
-                "const": "github.pull_request.review_requested"
-              },
-              "mode": {
-                "const": "occurrence"
-              },
-              "provider": {
-                "properties": {
-                  "source_type": {
-                    "const": "github_review_requests"
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
               "policy": {
                 "properties": {
                   "approval": {
@@ -892,8 +827,113 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "repeat": {
+                "properties": {
+                  "policy": {
+                    "const": "new"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "permissions": {
+                "properties": {
+                  "actions": {
+                    "contains": {
+                      "const": "task.create_from_trigger"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "repeat": {
+                "properties": {
+                  "policy": {
+                    "const": "coalesce"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "permissions": {
+                "properties": {
+                  "actions": {
+                    "contains": {
+                      "const": "task.coalesce_trigger"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "repeat": {
+                "properties": {
+                  "policy": {
+                    "const": "ignore"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "permissions": {
+                "properties": {
+                  "actions": {
+                    "contains": {
+                      "const": "task.create_from_trigger"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "repeat": {
+                "properties": {
+                  "policy": {
+                    "const": "update"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "permissions": {
+                "properties": {
+                  "actions": {
+                    "contains": {
+                      "const": "task.update_trigger"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
-      ]
+      ],
+      "description": "Provider-independent envelope only. MUST additionally validate source against the pinned registry source_schema, kind/mode against the descriptor and event filter/mapping paths against the registered kind schema. This alone never admits an unknown provider. The root binding is the two stricter shipped profiles."
     },
     "event": {
       "type": "object",
@@ -1101,7 +1141,64 @@
           "type": "object"
         }
       },
-      "description": "Validate extensions separately against the pinned kind schema. Enforce encoded byte/depth limits and authenticated provenance in TTS-3; JSON Schema maxLength alone is not a UTF-8 byte bound."
+      "description": "Validate extensions separately against the pinned kind schema. Enforce encoded byte/depth limits and authenticated provenance in TTS-3; JSON Schema maxLength alone is not a UTF-8 byte bound.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "time.occurrence"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "kind_version": {
+                "const": "1"
+              },
+              "extensions": {
+                "$ref": "#/$defs/time_occurrence_extensions"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "github.pull_request.review_requested"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "kind_version": {
+                "const": "1"
+              },
+              "extensions": {
+                "$ref": "#/$defs/github_review_requested_extensions"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "title"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "github_review_requested_extensions": {
       "type": "object",
@@ -1118,11 +1215,13 @@
       "properties": {
         "repository_id": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "number": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "head": {
           "type": "string",
@@ -1137,7 +1236,8 @@
         },
         "recipient_id": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "request_epoch": {
           "type": "string",
@@ -1193,6 +1293,110 @@
           ]
         }
       }
+    },
+    "binding": {
+      "description": "Concrete time and GitHub occurrence profiles, layered over the provider-independent closed binding envelope.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/binding_common"
+        },
+        {
+          "properties": {
+            "source": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/calendar"
+                },
+                {
+                  "$ref": "#/$defs/github_review_requests"
+                }
+              ]
+            },
+            "kind_version": {
+              "const": "1"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "source": {
+                    "properties": {
+                      "type": {
+                        "const": "calendar"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "event_kind": {
+                    "const": "time.occurrence"
+                  },
+                  "mode": {
+                    "const": "occurrence"
+                  },
+                  "provider": {
+                    "properties": {
+                      "id": {
+                        "const": "builtin:time"
+                      },
+                      "source_type": {
+                        "const": "calendar"
+                      }
+                    }
+                  },
+                  "repeat": {
+                    "properties": {
+                      "on_head_change": {
+                        "const": "ignore"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "source": {
+                    "properties": {
+                      "type": {
+                        "const": "github_review_requests"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "event_kind": {
+                    "const": "github.pull_request.review_requested"
+                  },
+                  "mode": {
+                    "const": "occurrence"
+                  },
+                  "provider": {
+                    "properties": {
+                      "source_type": {
+                        "const": "github_review_requests"
+                      }
+                    }
+                  },
+                  "repeat": {
+                    "properties": {
+                      "on_head_change": {
+                        "const": "new_request_only"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
     }
   }
 }

@@ -1,0 +1,32 @@
+{
+  "protocol_version": "1.0",
+  "provider": "builtin:time",
+  "provider_version": "1",
+  "source": "sha256:92fc2442a8aa6b76b8fe5bf6aa42bec79fa0258b02a96adeafca619b30f62449",
+  "event_id": "[\"source-uuid-daily\",1,\"2026-11-17T09:00:00Z\"]",
+  "kind": "time.occurrence",
+  "kind_version": "1",
+  "occurred_at": "2026-11-17T09:00:00Z",
+  "received_at": "2026-11-17T09:03:00Z",
+  "resource": null,
+  "provenance": {
+    "transport": "time",
+    "authentication_ref": "controller:calendar-pin-1",
+    "actor": "service:time",
+    "actor_kind": "automation",
+    "installation": null,
+    "origin_task": null,
+    "origin_action": null,
+    "causation_id": null,
+    "chain_id": "tick-chain-1",
+    "depth": 0
+  },
+  "extensions": {
+    "scheduled_at": "2026-11-17T09:00:00Z",
+    "local_date": "2026-11-17",
+    "cadence_epoch": 1,
+    "time_zone": "UTC",
+    "covered_through": null
+  },
+  "payload": {}
+}

@@ -1,0 +1,39 @@
+{
+  "binding_id": "requested-pr-review",
+  "entries": [
+    {
+      "event_key": "sha256:799413bd6b6766aef7521ddff3b060c56467023fcad52ae554b5b4fdbe5eb3da",
+      "match_id": "sha256:34955bffaf869acca6a5d00b570c7467ffa6412025ce062ce58c35b8b7ee71c5",
+      "disposition": "created",
+      "receipt": {
+        "receipt_id": "receipt-812",
+        "firing_key": "sha256:b3c49f05f98c5b56add60c03a31ac3c2ae8b2a27d587d5727de3b2518b22160e",
+        "match_id": "sha256:34955bffaf869acca6a5d00b570c7467ffa6412025ce062ce58c35b8b7ee71c5",
+        "binding_id": "requested-pr-review",
+        "binding_version": 1,
+        "event_key": "sha256:799413bd6b6766aef7521ddff3b060c56467023fcad52ae554b5b4fdbe5eb3da",
+        "slot_id": "primary",
+        "replay_epoch": "live",
+        "disposition": "created",
+        "task_id": "9001",
+        "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+        "authority_digest": "sha256:3e359f300d0cf937d4ecb1fbe254573bb40a7ebcd9c70987a5e463de47146125",
+        "committed_at": "2026-11-16T19:00:05Z"
+      },
+      "task_id": "9001",
+      "reason_code": "filed_under_current_authority",
+      "trace": []
+    }
+  ],
+  "next_page_cursor": null,
+  "coverage": {
+    "mode": "bounded",
+    "from": "2026-11-09T19:00:00Z",
+    "through": "2026-11-16T19:00:02Z",
+    "gap": {
+      "code": "history_lost",
+      "from": "2026-11-09T19:00:00Z",
+      "through": "2026-11-16T19:00:02Z"
+    }
+  }
+}

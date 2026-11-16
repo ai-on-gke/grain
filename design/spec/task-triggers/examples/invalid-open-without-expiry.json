@@ -1,0 +1,36 @@
+{
+  "definition": "provider_call",
+  "message": {
+    "method": "event_open",
+    "arguments": {
+      "protocol_version": "1.0",
+      "request_id": "open-bad",
+      "provider_pin": {
+        "id": "capability:github/install-17",
+        "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+        "source_type": "github_review_requests",
+        "version": "1",
+        "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+        "config_revision": "7"
+      },
+      "subscription_id": "sub-review-17",
+      "generation": 1,
+      "authorization_epoch": 4,
+      "source": {
+        "type": "github_review_requests",
+        "host": "github.com",
+        "installation": "install-17",
+        "repository_id": 12345,
+        "repository": "ai-on-gke/grain",
+        "recipient": {
+          "kind": "team",
+          "id": 77
+        }
+      },
+      "after_cursor": null,
+      "limit": 100,
+      "deadline": "2026-11-16T19:00:30Z",
+      "expires_at": null
+    }
+  }
+}

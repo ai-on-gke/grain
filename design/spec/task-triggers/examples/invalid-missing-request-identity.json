@@ -1,0 +1,42 @@
+{
+  "definition": "event",
+  "message": {
+    "protocol_version": "1.0",
+    "provider": "capability:github/install-17",
+    "provider_version": "1",
+    "source": "sha256:58ad7108e778172884e13d6c5890942077a7a9d43ced7619da27e63fb0ee9eac",
+    "event_id": "[\"github.com\",\"install-17\",12345,\"8c639\",\"review_requested\",\"team\",77]",
+    "kind": "github.pull_request.review_requested",
+    "kind_version": "1",
+    "occurred_at": null,
+    "received_at": "2026-11-16T19:00:02Z",
+    "resource": {
+      "type": "github.pull_request",
+      "id": "github.com/repository/12345/pull/812",
+      "revision": "head:abc123"
+    },
+    "provenance": {
+      "transport": "webhook",
+      "authentication_ref": "verification:901",
+      "actor": "github:user:12",
+      "actor_kind": "human",
+      "installation": "install-17",
+      "origin_task": null,
+      "origin_action": null,
+      "causation_id": null,
+      "chain_id": null,
+      "depth": 0
+    },
+    "extensions": {
+      "repository_id": 12345,
+      "number": 812,
+      "head": "abc123",
+      "recipient_kind": "team",
+      "recipient_id": 77,
+      "url": "https://github.com/ai-on-gke/grain/pull/812"
+    },
+    "payload": {
+      "title": "Please review this change"
+    }
+  }
+}

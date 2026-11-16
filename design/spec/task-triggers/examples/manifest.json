@@ -1,0 +1,37 @@
+{
+  "valid": {
+    "github-binding.json": "binding",
+    "time-binding.json": "binding",
+    "update-binding.json": "binding",
+    "github-event.json": "event",
+    "time-event.json": "event",
+    "malicious-payload.json": "event",
+    "descriptor.json": "descriptor",
+    "gateway-page.json": "relay_result",
+    "github-sequence.json": "transcript",
+    "time-sequence.json": "transcript",
+    "cursor-expired.json": "provider_result",
+    "apply-binding.json": "mutation",
+    "replay-apply.json": "replay_request",
+    "firing-history.json": "history_result",
+    "preview-result.json": "preview_result",
+    "filing-authorization.json": "filing_authorization"
+  },
+  "invalid": [
+    "invalid-floating-provider.json",
+    "invalid-callback.json",
+    "invalid-state-profile.json",
+    "invalid-undeclared-head-kind.json",
+    "invalid-update-without-action.json",
+    "invalid-standing-without-approval.json",
+    "invalid-missing-request-identity.json",
+    "invalid-unknown-kind-version.json",
+    "invalid-open-without-expiry.json",
+    "invalid-cursor-on-error.json",
+    "invalid-unconditional-edit.json",
+    "invalid-replay-flood.json",
+    "invalid-orphan-created-receipt.json",
+    "invalid-executable-filter.json",
+    "invalid-enable-without-preview.json"
+  ]
+}

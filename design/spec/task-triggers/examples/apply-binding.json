@@ -1,0 +1,133 @@
+{
+  "operation": "apply",
+  "request_id": "apply-binding-1",
+  "binding_id": "requested-pr-review",
+  "expected_version": 0,
+  "expected_control_revision": 0,
+  "candidate": {
+    "api_version": "grain.trigger/v1",
+    "id": "requested-pr-review",
+    "version": 1,
+    "provider": {
+      "id": "capability:github/install-17",
+      "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+      "source_type": "github_review_requests",
+      "version": "1",
+      "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+      "config_revision": "7"
+    },
+    "source": {
+      "type": "github_review_requests",
+      "host": "github.com",
+      "installation": "install-17",
+      "repository_id": 12345,
+      "repository": "ai-on-gke/grain",
+      "recipient": {
+        "kind": "team",
+        "id": 77
+      }
+    },
+    "event_kind": "github.pull_request.review_requested",
+    "kind_version": "1",
+    "mode": "occurrence",
+    "filter": {
+      "all": [
+        {
+          "path": "/extensions/recipient_kind",
+          "op": "eq",
+          "value": "team"
+        },
+        {
+          "path": "/extensions/recipient_id",
+          "op": "eq",
+          "value": 77
+        }
+      ]
+    },
+    "template": {
+      "id": "repo:template:ai-on-gke:grain:requested-review",
+      "revision": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+      "tracking": "pinned"
+    },
+    "parameters": {
+      "pr": {
+        "from": "/extensions/number",
+        "type": "integer",
+        "max_bytes": 20
+      },
+      "head": {
+        "from": "/extensions/head",
+        "type": "string",
+        "max_bytes": 128
+      },
+      "title": {
+        "from": "/payload/title",
+        "type": "string",
+        "max_bytes": 1024
+      }
+    },
+    "target": {
+      "repository": "ai-on-gke/grain",
+      "base": "main"
+    },
+    "identity": {
+      "owner": "user:review-owner",
+      "service": "service:trigger-filer"
+    },
+    "permissions": {
+      "read_repositories": [
+        "ai-on-gke/grain"
+      ],
+      "task_capabilities": [],
+      "actions": [
+        "task.create_from_trigger",
+        "task.coalesce_trigger"
+      ]
+    },
+    "policy": {
+      "admission": "standard",
+      "approval": "proposed",
+      "approval_authorization": null,
+      "auto_merge": false,
+      "auto_approve_proposals": false
+    },
+    "repeat": {
+      "policy": "coalesce",
+      "key_fields": [
+        "/resource/id",
+        "/extensions/recipient_kind",
+        "/extensions/recipient_id"
+      ],
+      "on_head_change": "new_request_only",
+      "active_limit": 1
+    },
+    "delivery": {
+      "initial": "baseline",
+      "enable": "future_only",
+      "catch_up": "hold",
+      "max_age_seconds": 86400,
+      "debounce_seconds": 30,
+      "batch_max": 20
+    },
+    "state": "paused",
+    "quotas": {
+      "matches_per_hour": 100,
+      "tasks_per_day": 20,
+      "queue_size": 100,
+      "concurrent_tasks": 1,
+      "fanout_per_event": 1,
+      "cost_units_per_day": 1000
+    },
+    "loops": {
+      "automation": "hold",
+      "max_depth": 3,
+      "max_chain_tasks": 10
+    }
+  },
+  "control": null,
+  "job_id": null,
+  "old_queue": "hold",
+  "authorization_ref": "filing-grant-4",
+  "preview_token": null,
+  "reason": "Create paused review binding under approved repository/template ceiling"
+}

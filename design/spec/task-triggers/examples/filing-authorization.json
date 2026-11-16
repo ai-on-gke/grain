@@ -1,0 +1,19 @@
+{
+  "authorization_id": "filing-grant-4",
+  "binding_id": "requested-pr-review",
+  "binding_version": 1,
+  "binding_digest": "sha256:736852f1cafd5a8877f048f7284002c3d77f9e9e643ba572bce6a67c55765505",
+  "source_key": "sha256:58ad7108e778172884e13d6c5890942077a7a9d43ced7619da27e63fb0ee9eac",
+  "authorization_partition": "partition-review-team77",
+  "security_digest": "sha256:9f8fe8c7bb10bea04cee661a285acac8ebd1ec5637765aa531d765dea97c3110",
+  "template_tracking": "pinned",
+  "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+  "owner": "user:review-owner",
+  "service": "service:trigger-filer",
+  "issued_by": "verified:user:review-owner",
+  "verification_ref": "person:approval-verification-4",
+  "created_at": "2026-11-16T18:55:00Z",
+  "expires_at": "2026-12-16T18:55:00Z",
+  "revoked_at": null,
+  "authorization_epoch": 4
+}
