@@ -402,7 +402,7 @@ it rather than copy it.
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
-| Info popover | `shared/info-popover.component.ts` (`<g-info-popover>`) | the (i) beside a chip or a cut-short summary whose meaning takes a sentence: opens on click, tap, Enter or Space, closes on Escape (focus back on the (i)), an outside click or a scroll, and stays inside the viewport |
+| Info popover | `shared/info-popover.component.ts` (`<g-info-popover>`) | the (i) beside a chip or a cut-short summary whose meaning takes a sentence: opens on click, tap, Enter or Space; one is open at a time; closes on Escape (focus back on the (i)) or an outside click; sits below its (i), or above when there is no room, inside the viewport; follows its (i) as the pane scrolls and closes once the (i) scrolls out of view |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
 | Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
 | Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |

@@ -17,13 +17,21 @@ import {
   Component,
   ElementRef,
   HostListener,
+  Injector,
+  type OnDestroy,
   ViewEncapsulation,
+  afterNextRender,
   inject,
   input,
   signal,
 } from "@angular/core";
 
 let nextId = 0;
+// The popover open now, if any: opening another closes it.
+let openPopover: InfoPopoverComponent | null = null;
+function setOpenPopover(p: InfoPopoverComponent | null): void {
+  openPopover = p;
+}
 
 // InfoPopover is the (i) beside a label whose meaning takes a sentence
 // or more: a chip's state, a summary cut short. Unlike a gTip tooltip it
@@ -31,8 +39,10 @@ let nextId = 0;
 // button -- and stays open until it is clicked again, Escape is pressed
 // or something else is clicked, so a phone can read it and a screen
 // reader can reach it (aria-expanded, aria-controls). It is placed
-// fixed beside its button and kept inside the viewport, so it never
-// widens the page it sits in.
+// fixed beside its button -- below it, or above when there is no room --
+// and kept inside the viewport, so it never widens the page it sits in;
+// it follows its button as the pane scrolls, and closes once that
+// button has scrolled out of view. One is open at a time.
 @Component({
   selector: "g-info-popover",
   encapsulation: ViewEncapsulation.None,
@@ -57,6 +67,7 @@ let nextId = 0;
         [attr.aria-label]="label()"
         [style.top.px]="top()"
         [style.left.px]="left()"
+        [style.visibility]="placed() ? null : 'hidden'"
         [attr.data-testid]="testid() ? testid() + '-panel' : null"
       >
         {{ text() }}
@@ -107,7 +118,7 @@ let nextId = 0;
     }
   `,
 })
-export class InfoPopoverComponent {
+export class InfoPopoverComponent implements OnDestroy {
   readonly text = input.required<string>();
   // label names what the popover explains: the button reads "About <label>".
   readonly label = input.required<string>();
@@ -116,8 +127,16 @@ export class InfoPopoverComponent {
   protected readonly open = signal(false);
   protected readonly top = signal(0);
   protected readonly left = signal(0);
+  // placed is false between opening and the panel's first measurement,
+  // so it never shows for a frame where it does not fit.
+  protected readonly placed = signal(false);
   protected readonly panelId = `g-info-pop-${++nextId}`;
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
+  // Scroll happens inside panes (.settings-content, .shell-main), whose
+  // scroll events never reach window: listen on document in the capture
+  // phase while open, as TipDirective does.
+  private readonly onScroll = () => this.follow();
 
   protected toggle(ev: Event): void {
     // The (i) often sits in a row that is itself clickable or a link:
@@ -125,41 +144,91 @@ export class InfoPopoverComponent {
     ev.preventDefault();
     ev.stopPropagation();
     if (this.open()) {
-      this.open.set(false);
+      this.close();
       return;
     }
-    this.place();
+    // One popover open at a time: the click that opens this one stopped
+    // propagating, so another open one never hears it as outside.
+    if (openPopover && openPopover !== this) openPopover.close();
+    setOpenPopover(this);
+    this.placed.set(false);
+    this.place(0);
     this.open.set(true);
+    document.addEventListener("scroll", this.onScroll, true);
+    afterNextRender(
+      () => {
+        const panel =
+          this.host.nativeElement.querySelector<HTMLElement>(
+            ".g-info-pop-panel",
+          );
+        this.place(panel?.getBoundingClientRect().height ?? 0);
+        this.placed.set(true);
+      },
+      { injector: this.injector },
+    );
   }
 
-  private place(): void {
+  // place puts the panel under its button, or above it when it would
+  // run off the bottom of the viewport, kept 16px inside every edge.
+  private place(height: number): void {
     const btn = this.host.nativeElement.querySelector("button");
     const r = btn?.getBoundingClientRect();
     if (!r) return;
     const vw = window.innerWidth;
+    const vh = window.innerHeight;
     const width = Math.min(320, vw - 32);
-    this.top.set(r.bottom + 6);
+    let top = r.bottom + 6;
+    if (height && top + height > vh - 16) {
+      top = Math.max(16, r.top - height - 6);
+    }
+    this.top.set(top);
     this.left.set(Math.max(16, Math.min(r.left, vw - width - 16)));
+  }
+
+  // follow keeps the panel beside its button as the pane under it
+  // scrolls -- a click that focuses the (i) can scroll it a little -- and
+  // closes it once the button has scrolled out of view.
+  private follow(): void {
+    if (!this.open()) return;
+    const r = this.host.nativeElement
+      .querySelector("button")
+      ?.getBoundingClientRect();
+    if (!r || r.bottom < 0 || r.top > window.innerHeight) {
+      this.close();
+      return;
+    }
+    const panel =
+      this.host.nativeElement.querySelector<HTMLElement>(".g-info-pop-panel");
+    this.place(panel?.getBoundingClientRect().height ?? 0);
+  }
+
+  close(): void {
+    if (openPopover === this) setOpenPopover(null);
+    document.removeEventListener("scroll", this.onScroll, true);
+    if (this.open()) this.open.set(false);
   }
 
   @HostListener("document:click", ["$event"])
   protected onDocumentClick(ev: Event): void {
     if (!this.open()) return;
     if (this.host.nativeElement.contains(ev.target as Node)) return;
-    this.open.set(false);
+    this.close();
   }
 
   @HostListener("document:keydown.escape")
   protected onEscape(): void {
     if (!this.open()) return;
-    this.open.set(false);
+    this.close();
     this.host.nativeElement.querySelector("button")?.focus();
   }
 
-  // A fixed panel would drift off its button on a scroll: close it.
-  @HostListener("window:scroll")
+  // A fixed panel would drift off its button on a resize: close it.
   @HostListener("window:resize")
-  protected onMove(): void {
-    if (this.open()) this.open.set(false);
+  protected onResize(): void {
+    this.close();
+  }
+
+  ngOnDestroy(): void {
+    this.close();
   }
 }

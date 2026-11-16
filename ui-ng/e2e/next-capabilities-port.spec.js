@@ -94,6 +94,30 @@ test("state chips say host, not hostd, and their (i) opens on click, Enter and S
   // A click anywhere else closes it.
   await page.getByTestId("card-capability-servers").locator("h3").click();
   await expect(panel).toHaveCount(0);
+
+  // Opening another (i) closes this one: one popover at a time.
+  await info.click();
+  await expect(panel).toBeVisible();
+  const other = page.getByTestId(`cap-server-state-info-${FIGMA}`);
+  await other.click();
+  await expect(panel).toHaveCount(0);
+  await expect(
+    page.getByTestId(`cap-server-state-info-${FIGMA}-panel`),
+  ).toBeVisible();
+  // Scrolling the pane it sits in keeps it beside its button, or closes
+  // it, rather than leaving it floating over other rows.
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(200);
+  const otherPanel = page.getByTestId(`cap-server-state-info-${FIGMA}-panel`);
+  if (await otherPanel.count()) {
+    const b = await other.boundingBox();
+    const p = await otherPanel.boundingBox();
+    const gap = Math.min(
+      Math.abs(p.y - (b.y + b.height)),
+      Math.abs(b.y - (p.y + p.height)),
+    );
+    expect(gap).toBeLessThanOrEqual(8);
+  }
 });
 
 test("a server's name opens its own page, which loads directly and goes back", async ({

@@ -18,6 +18,7 @@ import {
   capServerState,
   capServerStateHelp,
   holderLabel,
+  removeServerConfirm,
   sortCapServers,
   summarize,
 } from "./capability-servers";
@@ -85,5 +86,23 @@ describe("capability servers", () => {
     expect(holderLabel({ kind: "default", id: "deployment", grant: "g" })).toBe(
       "Deployment defaults",
     );
+  });
+});
+
+describe("removeServerConfirm", () => {
+  const run = () => Promise.resolve();
+  it("says grain could not count when usage is unknown", () => {
+    const req = removeServerConfirm("srv", null, run);
+    expect(req.message).toContain("could not count");
+    expect(req.items).toEqual([]);
+  });
+  it("lists each holder with its grant", () => {
+    const req = removeServerConfirm(
+      "srv",
+      [{ kind: "template", id: "n", name: "Nightly", grant: "srv#t" }],
+      run,
+    );
+    expect(req.message).toContain("1 grant still names");
+    expect(req.items).toEqual(["Template “Nightly” — srv#t"]);
   });
 });

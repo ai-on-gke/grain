@@ -44,6 +44,7 @@ import {
   capServerStateHelp,
   capServerSummary,
   holderLabel,
+  removeServerConfirm,
   summarize,
 } from "./capability-servers";
 import { SettingsStateService } from "./settings-state.service";
@@ -135,11 +136,11 @@ interface ProbeResult {
               <span
                 class="status-pill neutral"
                 data-testid="capability-server-usage-count"
-                >granted by {{ holders().length }}</span
+                >granted by {{ usageCount() }}</span
               >
               <g-info-popover
                 [text]="grantedHelp"
-                [label]="'granted by ' + holders().length"
+                [label]="'granted by ' + usageCount()"
               />
             </span>
             <span class="cap-chip-group">
@@ -295,7 +296,11 @@ interface ProbeResult {
             <div class="s-subhead">
               <h4 class="s-subhead-title">Granted by</h4>
             </div>
-            @if (holders().length === 0) {
+            @if (!usageKnown()) {
+              <p class="s-hint" data-testid="capability-server-usage-unknown">
+                grain could not read what grants this server's capabilities.
+              </p>
+            } @else if (holders().length === 0) {
               <p class="s-hint">Nothing grants this server's capabilities.</p>
             } @else {
               <ul class="cap-holders" data-testid="capability-usage">
@@ -417,7 +422,12 @@ export class CapabilityServerDetailComponent {
   protected readonly grantedHelp = GRANTED_HELP;
   protected readonly loading = signal(true);
   protected readonly servers = signal<CapabilityServerRow[]>([]);
-  protected readonly usage = signal<Record<string, CapabilityHolder[]>>({});
+  // usage is what grants each server, by ID; null until read, or when it
+  // could not be (no capabilities:read, or the read failed), so nothing
+  // claims that nothing grants a server.
+  protected readonly usage = signal<Record<string, CapabilityHolder[]> | null>(
+    null,
+  );
   protected readonly busy = signal(false);
   protected readonly testing = signal(false);
   protected readonly probe = signal<ProbeResult | null>(null);
@@ -466,7 +476,11 @@ export class CapabilityServerDetailComponent {
       releasable: false,
     }));
   });
-  protected readonly holders = computed(() => this.usage()[this.id()] ?? []);
+  protected readonly holders = computed(() => this.usage()?.[this.id()] ?? []);
+  protected readonly usageKnown = computed(() => this.usage() !== null);
+  protected readonly usageCount = computed(() =>
+    this.usageKnown() ? String(this.holders().length) : "?",
+  );
   protected readonly bindings = computed(() => {
     const c = this.server()?.config;
     return Object.keys((c?.command ? c?.env : c?.headers) ?? {}).sort();
@@ -542,7 +556,10 @@ export class CapabilityServerDetailComponent {
   }
 
   private async loadUsage(): Promise<void> {
-    if (!this.access.can("GET /api/capability-servers/usage")) return;
+    if (!this.access.can("GET /api/capability-servers/usage")) {
+      this.usage.set(null);
+      return;
+    }
     try {
       const u = await this.api.get<
         { id: string; holders?: CapabilityHolder[] }[]
@@ -553,8 +570,9 @@ export class CapabilityServerDetailComponent {
       }
       this.usage.set(byId);
     } catch {
-      // Usage is a warning's detail; the page works without it.
-      this.usage.set({});
+      // Usage is a warning's detail; the page works without it, and
+      // says it could not count rather than that nothing grants it.
+      this.usage.set(null);
     }
   }
 
@@ -604,20 +622,11 @@ export class CapabilityServerDetailComponent {
   protected async askRemove(): Promise<void> {
     const id = this.id();
     await this.loadUsage();
-    const holders = this.holders();
-    this.confirmReq.set({
-      title: "Remove this capability server?",
-      message:
-        holders.length > 0
-          ? `${id} will be detached. ${holders.length} ${
-              holders.length === 1 ? "grant still names" : "grants still name"
-            } its capabilities, and will be refused them until changed:`
-          : `${id} will be detached. Nothing grants its capabilities.`,
-      items: holders.map((h) => `${holderLabel(h)} — ${h.grant}`),
-      accept: "Remove",
-      destructive: true,
-      run: () => this.remove(id),
-    });
+    this.confirmReq.set(
+      removeServerConfirm(id, this.usageKnown() ? this.holders() : null, () =>
+        this.remove(id),
+      ),
+    );
   }
 
   protected async onConfirmDone(accepted: boolean): Promise<void> {

@@ -293,3 +293,41 @@ export function holderLabel(h: CapabilityHolder): string {
     [kind, name].filter(Boolean).join(" ") + (h.repo ? ` on ${h.repo}` : "")
   );
 }
+
+// removeServerConfirm is the question Remove asks of a capability
+// server, from its row or its own page: what still grants it, listed
+// one per line (ConfirmRequest.items), or -- holders null, when grain
+// could not read GET /api/capability-servers/usage -- that it could not
+// count them, rather than claiming nothing does.
+export function removeServerConfirm(
+  id: string,
+  holders: readonly CapabilityHolder[] | null,
+  run: () => Promise<unknown>,
+): {
+  title: string;
+  message: string;
+  items: string[];
+  accept: string;
+  destructive: true;
+  run: () => Promise<unknown>;
+} {
+  let message: string;
+  if (holders === null) {
+    message = `Remove ${id}? grain could not count what grants its capabilities; anything that does is refused them once it is removed.`;
+  } else if (holders.length === 0) {
+    message = `Remove ${id}? Nothing grants its capabilities.`;
+  } else {
+    const n = holders.length;
+    message = `Remove ${id}? ${n} ${
+      n === 1 ? "grant still names" : "grants still name"
+    } its capabilities, and will be refused them until changed:`;
+  }
+  return {
+    title: "Remove capability server?",
+    message,
+    items: (holders ?? []).map((h) => `${holderLabel(h)} — ${h.grant}`),
+    accept: "Remove",
+    destructive: true,
+    run,
+  };
+}

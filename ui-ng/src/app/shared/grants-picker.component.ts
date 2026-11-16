@@ -287,11 +287,15 @@ export interface GrantAttachEvent {
                     [attr.data-testid]="(testid() || 'gp') + '-method-verdict'"
                     [attr.data-verdict]="v.verdict"
                   >
-                    This grant is {{ v.note }} (<a
-                      routerLink="/settings/capabilities"
-                      fragment="capability-policy"
-                      >Settings → Capabilities</a
-                    >).
+                    This grant is {{ v.note }}
+                    @if (v.verdict !== "ci_only") {
+                      (<a
+                        routerLink="/settings/capabilities"
+                        fragment="capability-policy"
+                        >Settings → Capabilities</a
+                      >)
+                    }
+                    .
                   </p>
                 }
               }
@@ -374,7 +378,11 @@ export class GrantsPickerComponent {
   protected readonly rawGrant = signal("");
   protected readonly checking = signal(false);
   protected readonly checkError = signal<string | null>(null);
-  private loadedCatalogue = false;
+  // The run the method listing was last read for ("<kind>|<repo>"), the
+  // read in flight, and whether the scope sets have been read.
+  private loadedKey: string | null = null;
+  private loadSeq = 0;
+  private loadedSets = false;
 
   protected readonly heldSet = computed(() => new Set(this.held()));
 
@@ -433,8 +441,16 @@ export class GrantsPickerComponent {
   // refused" (true of some other repository) would only mislead. A CI
   // job's trigger event is still unknown, so it keeps the kind's verdict.
   private readonly kindVerdictShown = computed(
-    () => !this.repo() || this.runKind() === "ci",
+    () => !this.subjectRepo() || this.runKind() === "ci",
   );
+
+  // subjectRepo is the repository the listing judges one run in: only a
+  // whole owner/name (a repo still being typed, or mistyped, is no run to
+  // ask about, and the server refuses one that does not parse).
+  private readonly subjectRepo = computed(() => {
+    const r = (this.repo() ?? "").trim();
+    return /^[^/\s]+\/[^/\s]+$/.test(r) ? r : "";
+  });
 
   protected methodVerdict(m: CapabilityMethod): GrantVerdict | null {
     const kind = this.runKind();
@@ -506,10 +522,17 @@ export class GrantsPickerComponent {
     effect(() => {
       const extra = this.extraHeld();
       if (!extra.length || this.disabled()) return;
-      untracked(() => {
-        void this.loadCatalogue();
-        void this.checkAliases(extra);
-      });
+      untracked(() => void this.checkAliases(extra));
+    });
+    // The listing is read again whenever the run it judges changes (the
+    // repository chosen, or the kind of run), while anything shows it.
+    effect(() => {
+      this.runKind();
+      this.subjectRepo();
+      const shown =
+        this.builderOpen() || (this.extraHeld().length > 0 && !this.disabled());
+      if (!shown) return;
+      untracked(() => void this.loadCatalogue());
     });
   }
 
@@ -598,17 +621,23 @@ export class GrantsPickerComponent {
   }
 
   private async loadCatalogue(): Promise<void> {
-    if (this.loadedCatalogue) return;
-    this.loadedCatalogue = true;
-    const repo = this.repo();
-    const kind = encodeURIComponent(this.runKind());
+    const repo = this.subjectRepo();
+    const kind = this.runKind();
+    const key = `${kind}|${repo}`;
+    if (this.loadedKey === key) return;
+    this.loadedKey = key;
+    const seq = ++this.loadSeq;
+    // With a repository the listing judges this run (policyRefusal);
+    // without one it names no run, and each method's policy[kind] is the
+    // kind's verdict -- asking for a kind alone would judge a run with no
+    // repository and refuse whatever a repo-scoped rule admits.
     const query = repo
-      ? `kind=${kind}&repo=${encodeURIComponent(repo)}`
-      : `kind=${kind}`;
+      ? `kind=${encodeURIComponent(kind)}&repo=${encodeURIComponent(repo)}`
+      : undefined;
     const [setsRes, methodsRes] = await Promise.allSettled([
-      this.access.can("GET /api/api-scope-sets", repo)
-        ? this.api.get<APIScopeSetsResponse>("GET /api/api-scope-sets")
-        : Promise.resolve({ sets: [] }),
+      this.loadedSets || !this.access.can("GET /api/api-scope-sets", repo)
+        ? Promise.resolve(null)
+        : this.api.get<APIScopeSetsResponse>("GET /api/api-scope-sets"),
       this.access.can("GET /api/capability-methods", repo)
         ? this.api.get<{ items?: CapabilityMethod[] }>(
             "GET /api/capability-methods",
@@ -617,7 +646,10 @@ export class GrantsPickerComponent {
           )
         : Promise.resolve({ items: [] }),
     ]);
-    if (setsRes.status === "fulfilled") {
+    // A later read (the repository changed again) wins.
+    if (seq !== this.loadSeq) return;
+    if (setsRes.status === "fulfilled" && setsRes.value) {
+      this.loadedSets = true;
       const sets = setsRes.value?.sets ?? [];
       this.scopeSets.set(sets);
       if (!this.selectedApiSet() && sets[0]) {
@@ -633,10 +665,16 @@ export class GrantsPickerComponent {
         ? val
         : (val?.items ?? val?.methods ?? []);
       this.methods.set(list);
-      const first = list.find((m) => !m.policyRefusal) ?? null;
-      if (!this.selectedMethod() && first) {
-        this.selectedMethod.set(first.ref);
+      // Keep the choice only while it can still be granted: otherwise
+      // the first method that can.
+      const options = this.methodOptions();
+      const current = options.find((o) => o.value === this.selectedMethod());
+      if (!current || current.disabled) {
+        this.selectedMethod.set(options.find((o) => !o.disabled)?.value ?? "");
       }
+    } else {
+      // Read again next time rather than keep a failed listing.
+      this.loadedKey = "";
     }
     if (!this.selectedApiSet()) {
       this.selectedApiSet.set(this.apiOptions()[0]?.value ?? "tasks-read");
@@ -676,6 +714,12 @@ export class GrantsPickerComponent {
       ).trim();
       if (!ref) {
         this.checkError.set("Choose a capability method.");
+        return;
+      }
+      const chosen = this.methods().find((m) => m.ref === ref);
+      const refusal = chosen ? this.methodVerdict(chosen) : null;
+      if (refusal?.verdict === "ci_only" || chosen?.policyRefusal) {
+        this.checkError.set(refusal?.note || "This method cannot be granted.");
         return;
       }
       let parsedWith: Record<string, unknown> | undefined;

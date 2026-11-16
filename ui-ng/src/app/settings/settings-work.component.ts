@@ -40,6 +40,7 @@ import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
 import { InfoPopoverComponent } from "../shared/info-popover.component";
 import { CapabilityServerDetailComponent } from "./capability-server-detail.component";
 import {
+  type CapabilityHolder,
   type CapabilityServerRow,
   capServerKind,
   capServerName,
@@ -47,6 +48,7 @@ import {
   capServerState,
   capServerStateHelp,
   capServerSummary,
+  removeServerConfirm,
   sortCapServers,
   summarize,
 } from "./capability-servers";
@@ -2199,16 +2201,26 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     await req.run();
   }
 
-  // Removing a server drops it from every grant naming it, so it asks
-  // first, as host and Git connection removal do.
-  protected confirmRemoveCapServer(id: string): void {
-    this.confirmReq.set({
-      title: "Remove capability server?",
-      message: `Remove ${id}? Tasks that hold a grant on it can no longer use it.`,
-      accept: "Remove",
-      destructive: true,
-      run: () => this.removeCapServer(id),
-    });
+  // Removing a server leaves every grant naming it granting nothing, so
+  // it asks first and lists them (GET /api/capability-servers/usage),
+  // the same question the server's own page asks.
+  protected async confirmRemoveCapServer(id: string): Promise<void> {
+    let holders: CapabilityHolder[] | null = null;
+    if (this.access.can("GET /api/capability-servers/usage")) {
+      try {
+        const u = await this.api.get<
+          { id: string; holders?: CapabilityHolder[] }[]
+        >("GET /api/capability-servers/usage");
+        holders =
+          (Array.isArray(u) ? u : []).find((row) => row.id === id)?.holders ??
+          [];
+      } catch {
+        // The list is the warning's detail; Remove works without it.
+      }
+    }
+    this.confirmReq.set(
+      removeServerConfirm(id, holders, () => this.removeCapServer(id)),
+    );
   }
 
   protected async removeCapServer(id: string): Promise<void> {

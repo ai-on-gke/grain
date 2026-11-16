@@ -28,7 +28,13 @@ const DENIED = "https://grain.dev/capabilities/gcp#gcp-key";
 
 class FakeApi {
   posts: { key: string; body: unknown }[] = [];
-  get = (key: string) => {
+  gets: { key: string; query?: string }[] = [];
+  methods: unknown[] | null = null;
+  get = (key: string, _p?: unknown, query?: string) => {
+    this.gets.push({ key, query });
+    if (key === "GET /api/capability-methods" && this.methods) {
+      return Promise.resolve({ items: this.methods });
+    }
     if (key === "GET /api/capability-methods") {
       return Promise.resolve({
         items: [
@@ -64,8 +70,7 @@ class FakeApi {
   };
 }
 
-async function mount(held: string[], repo?: string) {
-  const api = new FakeApi();
+async function mount(held: string[], repo?: string, api = new FakeApi()) {
   TestBed.configureTestingModule({
     providers: [
       provideRouter([]),
@@ -130,5 +135,49 @@ describe("GrantsPickerComponent policy verdicts", () => {
   it("shows no kind verdict once a repository has judged the one run", async () => {
     const { el } = await mount([`${MAYBE}={}`], "acme/widgets");
     expect(el.querySelector('[data-testid^="held-grant-verdict-"]')).toBeNull();
+  });
+
+  it("asks for the run's verdicts only with a whole owner/name, and again when the repository changes", async () => {
+    const { api, fixture } = await mount([`${MAYBE}={}`], "acme");
+    const listings = () =>
+      api.gets
+        .filter((g) => g.key === "GET /api/capability-methods")
+        .map((g) => g.query ?? "");
+    // A half-typed repository names no run: the plain listing.
+    expect(listings()).toEqual([""]);
+    fixture.componentRef.setInput("repo", "acme/widgets");
+    await fixture.whenStable();
+    expect(listings()).toEqual(["", "kind=task&repo=acme%2Fwidgets"]);
+    fixture.componentRef.setInput("repo", "acme/gadgets");
+    await fixture.whenStable();
+    expect(listings().at(-1)).toBe("kind=task&repo=acme%2Fgadgets");
+  });
+
+  it("never chooses a method that cannot be granted, and links CI-only to no policy", async () => {
+    const api = new FakeApi();
+    api.methods = [
+      {
+        ref: "https://grain.dev/capabilities/repo#read",
+        capability: "https://grain.dev/capabilities/repo",
+        method: "read",
+        policy: { task: "ci_only" },
+      },
+      {
+        ref: MAYBE,
+        capability: "https://grain.dev/capabilities/github",
+        method: "read-issues",
+      },
+    ];
+    const { el, fixture } = await mount([], undefined, api);
+    el.querySelector<HTMLButtonElement>('[data-testid="gp-add-open"]')!.click();
+    await fixture.whenStable();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="gp-mode-method"]',
+    )!.click();
+    await fixture.whenStable();
+    expect(
+      el.querySelector('[data-testid="gp-method-ref"]')?.textContent,
+    ).toContain("read-issues");
+    expect(el.querySelector('[data-testid="gp-method-verdict"]')).toBeNull();
   });
 });
