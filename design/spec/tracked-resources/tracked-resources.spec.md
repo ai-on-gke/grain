@@ -10,7 +10,7 @@ MUST, MUST NOT, SHOULD, SHOULD NOT and MAY have their BCP 14 meanings. Requireme
 
 1. A tracked resource MUST identify an explicitly referenced observable entity. Grain MUST own persisted references, relations, authorization views, observations, journal, subscriptions, cursors and durable timers. Providers MUST report identity/state/change, never whether a tracked resource is “met”.
 2. Merely attaching/watching a reference MUST NOT grant access, block dispatch or require completion. A required gate MUST explicitly bind the desired outcome; a dispatch prerequisite MUST separately declare its predicate and affected work. Advisory linkage MUST NOT prevent completion. New dispatch prerequisite predicates MUST be interpreted by explicitly attached gates (which need not be required for completion); only imported legacy dispatch predicates may retain their existing interpreter. A provider MUST NOT become a second outcome interpreter.
-3. The Task #39 [evaluator specification](../mcp-goals/mcp-goals.spec.md) governs snapshots, typed actions, waivers and atomic lifecycle ownership, subject to Task #44's proposed `gate_*`/`gate_state` rename. Implementations MUST negotiate/pin the actual gate protocol and migrate explicitly; they MUST NOT infer that the rename has landed from this document. Existing concrete task goals/APIs MUST retain their names and predicates. This protocol adds tracked-resource evidence; it does not independently switch completion authority.
+3. The Task #39 [evaluator specification](../mcp-gates/mcp-gates.spec.md) governs snapshots, typed actions, waivers and atomic lifecycle ownership, using Task #44's merged documentation spelling `gate_*`/`gate_state`. Implementations MUST negotiate/pin the actual gate protocol and migrate explicitly; they MUST NOT infer runtime protocol support from a documentation merge. Existing concrete task goals/APIs MUST retain their names and predicates. This protocol adds tracked-resource evidence; it does not independently switch completion authority.
 4. Resolve/Observe MUST be read-only. Watch MAY create/renew/remove authenticated delivery subscriptions using a distinct watch permission; it MUST NOT comment, submit, close, merge or otherwise modify the observed resource. Those operations MUST use independently authorized registered typed actions with current preconditions.
 5. Required reference/gate edits MUST audit actor, authority epoch, before/after contract revision, reason and affected evidence. Removal/relaxation, retargeting, follow-latest/pin changes, provider replacement and success-to-closure changes MUST require authorized person approval unless that exact transformation was preauthorized. Agents MAY propose edits. Ordinary reference removal MUST fail if it would leave an attached gate dangling.
 
@@ -73,14 +73,14 @@ These are hypothetical resolved adapter outputs, not external API requests. Prov
 ```json
 {
   "version": "1",
-  "provider": {"capability_id": "https://example.org/capabilities/citc", "method": "workspaces"},
-  "resource_kind": "citc.workspace",
+  "provider": {"capability_id": "https://example.org/capabilities/workspaces", "method": "workspaces"},
+  "resource_kind": "example.workspace",
   "identifier": {"authority": "workspace-installation-a", "workspace_id": "ws-17"},
   "tracking": {"facet": "content_submission", "mode": "pinned", "selector": {"snapshot_id": "S1", "content_digest": "sha256:111"}}
 }
 ```
 
-A follow-latest workspace uses the same identifier with `{"facet":"content_submission","mode":"follow_latest","selector":null}`. Its observation identifies S1 today and may identify S2 tomorrow.
+The CITC workspace example deliberately uses the neutral illustrative kind `example.workspace` and capability key `workspaces`; these are adapter fixture names, not actual service identifiers. A follow-latest workspace uses the same identifier with `{"facet":"content_submission","mode":"follow_latest","selector":null}`. Its observation identifies S1 today and may identify S2 tomorrow.
 
 ```json
 {
