@@ -30,7 +30,7 @@ var preemptRepo = model.RepoRef{Owner: "acme", Name: "widgets"}
 func preemptTask(id, base string) model.Task {
 	return model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "task " + id,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "h"}}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "h"}}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "h"}},
 		Target:   &preemptRepo, Base: base,

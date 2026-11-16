@@ -385,8 +385,8 @@ func TestCompositionTaskCarriesWhatWasComposed(t *testing.T) {
 	if task.Intent != model.IntentImplement || task.Binding != model.BindingDirective {
 		t.Errorf("task = %+v, want an implement/directive task", task)
 	}
-	if task.Origin.Reason != model.ReasonSuite || task.Origin.Attribution.Actor != model.SuitePrincipal {
-		t.Errorf("origin = %+v, want the suite's", task.Origin)
+	if task.Filing.Reason != model.ReasonSuite || task.Filing.Attribution.Actor != model.SuitePrincipal {
+		t.Errorf("origin = %+v, want the suite's", task.Filing)
 	}
 	if task.Approval == nil || task.Approval.Actor != model.SuitePrincipal || task.ApprovedAt == nil {
 		t.Errorf("approval = %+v/%v, want it stamped for the filing actor", task.Approval, task.ApprovedAt)

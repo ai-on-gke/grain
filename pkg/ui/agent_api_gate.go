@@ -1141,7 +1141,7 @@ func (c *Client) externalProposalLineage(ctx context.Context, task model.Task, p
 // ("external:<name>") filed t: t's origin names it as the actor, whoever
 // it acted on behalf of.
 func filedByExternal(t model.Task, principal string) bool {
-	a := t.Origin.Attribution.Actor
+	a := t.Filing.Attribution.Actor
 	return principal != "" && a.Kind == model.PrincipalAgent && strings.TrimSpace(a.ID) == principal
 }
 
@@ -1195,12 +1195,12 @@ func proposedByOf(t model.Task) string {
 			return model.NormalizeTaskID(l.Target)
 		}
 	}
-	if t.Origin.Attribution.OnBehalfOf != nil {
-		if id := inGrainAgentTaskID(*t.Origin.Attribution.OnBehalfOf); id != "" {
+	if t.Filing.Attribution.OnBehalfOf != nil {
+		if id := inGrainAgentTaskID(*t.Filing.Attribution.OnBehalfOf); id != "" {
 			return id
 		}
 	}
-	return inGrainAgentTaskID(t.Origin.Attribution.Actor)
+	return inGrainAgentTaskID(t.Filing.Attribution.Actor)
 }
 
 func inGrainAgentTaskID(p model.Principal) string {
@@ -3907,7 +3907,7 @@ func createDrawsOnOtherText(body []byte) bool {
 	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 		return true
 	}
-	parsedOrigin, originErr := model.ParseWorkOrigin(req.Origin, nil)
+	parsedOrigin, originErr := model.ParseWorkOrigin(req.WorkOrigin, nil)
 	inheritsExternalRef := strings.TrimSpace(req.ExternalRef) == "" &&
 		(strings.TrimSpace(req.ProposedBy) != "" ||
 			model.NormalizeTaskID(req.Reverts) != "" ||

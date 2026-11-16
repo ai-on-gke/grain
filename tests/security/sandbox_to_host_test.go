@@ -357,7 +357,7 @@ func putSecurityTask(t *testing.T, store *model.Store, id string, target model.R
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  "security task " + id,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},

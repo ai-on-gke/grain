@@ -284,7 +284,7 @@ func reviewedWantsAutoMerge(ctx context.Context, store *model.Store, review mode
 //
 // Only for a review task. LinkProposedBy is also what a propose_task
 // proposal carries back to the run that proposed it, and a proposal is
-// not a review of anything -- Origin.Reason is what tells the two apart
+// not a review of anything -- Filing.Reason is what tells the two apart
 // (isReviewTask), the same field syncEntry reads to keep a review out of
 // its repo's merge queue.
 //

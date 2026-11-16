@@ -32,7 +32,7 @@ func TestAnAdoptedRunsClockAndLeasesAreReadBack(t *testing.T) {
 	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	task := model.Task{
 		ID: "t", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: human},
 	}

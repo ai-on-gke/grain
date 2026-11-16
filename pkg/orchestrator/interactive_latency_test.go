@@ -517,7 +517,7 @@ func TestRunDispatchCycleParksTasksOffTheTargetRepoList(t *testing.T) {
 		Body:        "hello",
 		Interactive: true,
 		Target:      &target,
-		Origin:      model.Origin{Attribution: aliceSays, Reason: model.ReasonDirect},
+		Filing:      model.Filing{Attribution: aliceSays, Reason: model.ReasonDirect},
 		Approval:    &aliceSays,
 		CreatedAt:   &now,
 	}); err != nil {

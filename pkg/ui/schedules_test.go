@@ -1364,8 +1364,8 @@ func TestRunScheduleNowFilesATaskWithoutMovingTheCadence(t *testing.T) {
 	if task.Title != "Nightly dependency bump" || task.Body != "bump them" {
 		t.Errorf("task = %q/%q, want the schedule's own content", task.Title, task.Body)
 	}
-	if task.Origin.Reason != model.ReasonSchedule || task.Origin.Attribution.Actor != model.SchedulePrincipal {
-		t.Errorf("origin = %+v, want it attributed to the schedule principal", task.Origin)
+	if task.Filing.Reason != model.ReasonSchedule || task.Filing.Attribution.Actor != model.SchedulePrincipal {
+		t.Errorf("origin = %+v, want it attributed to the schedule principal", task.Filing)
 	}
 	if task.Approval == nil {
 		t.Error("want the firing already approved, exactly as the cadence's own firing is")

@@ -319,7 +319,7 @@ func TestVeryLongTaskTitleCreatesValidSluggedBranchAndCappedPullRequest(t *testi
 	longSentenceTitle := strings.Repeat("Investigate and repair intermittent streaming timeout across multi-region clusters 🚀 ", 30)
 	t1 := model.Task{
 		ID: "2077", Intent: model.IntentImplement, Title: longSentenceTitle, Body: "details",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &repo,
 		Binding:  model.BindingDirective,
@@ -351,7 +351,7 @@ func TestVeryLongTaskTitleCreatesValidSluggedBranchAndCappedPullRequest(t *testi
 	unbrokenWordTitle := strings.Repeat("supercalifragilisticexpialidocious", 60)
 	t2 := model.Task{
 		ID: "2078", Intent: model.IntentImplement, Title: unbrokenWordTitle, Body: "details",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &repo,
 		Binding:  model.BindingDirective,

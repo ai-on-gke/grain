@@ -182,14 +182,14 @@ func TestRunLiveFailsWhenGitHubRefusesTheDeploymentsCredential(t *testing.T) {
 			"the remote printed and nothing else -- that output is the entire point of this task. " +
 			"Do not run the command a second time, do not look for another way to land the commit, " +
 			"and do not call ask_question or comment_on_issue: your reply is the report here.",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},
 		Binding: model.BindingDirective,
 		Target:  &model.RepoRef{Owner: owner, Name: repoName},
 	}
-	task.Approval = &model.Attribution{Actor: task.Origin.Attribution.Actor}
+	task.Approval = &model.Attribution{Actor: task.Filing.Attribution.Actor}
 	if err := store.PutTask(context.Background(), task); err != nil {
 		db.Close()
 		t.Fatalf("seeding the task: %v", err)
@@ -411,14 +411,14 @@ func TestPushThroughTheDaemonsProxyIsRefusedWhenTheCredentialMayNotWrite(t *test
 	task := model.Task{
 		ID:     "credential-refusal-check",
 		Intent: model.IntentImplement,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},
 		Binding: model.BindingDirective,
 		Target:  &model.RepoRef{Owner: owner, Name: repoName},
 	}
-	task.Approval = &model.Attribution{Actor: task.Origin.Attribution.Actor}
+	task.Approval = &model.Attribution{Actor: task.Filing.Attribution.Actor}
 	if err := store.PutTask(context.Background(), task); err != nil {
 		t.Fatal(err)
 	}
