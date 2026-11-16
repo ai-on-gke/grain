@@ -86,7 +86,8 @@ type Category struct {
 //
 // v30 adds the authorization-bearing, secret-handling, route-registering and
 // release-signing surfaces found unclassified by the structural classification
-// hygiene test (task 5325): pkg/ghwebhook/ and the remaining UI route-table,
+// hygiene test (task 5325): pkg/ghwebhook/, pkg/ui/verifier_session.go (the
+// verifier's HMAC-signed session binding) and the remaining UI route-table,
 // route-scope, cross-task, namespace-FS, PR-filing, sandbox-CLI and repo-reach
 // gates (pkg/ui/deployment_routes.go, tasks_from_template.go,
 // agent_cross_task.go, api_fs.go, pull_requests_api.go,
@@ -338,7 +339,7 @@ var Categories = []Category{
 			"pkg/ui/server.go", "pkg/ui/deployment_routes.go",
 			"pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
-			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
+			"pkg/ui/allowlist.go", "pkg/ui/verifier.go", "pkg/ui/verifier_session.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
 			"pkg/ui/team_scope.go",
