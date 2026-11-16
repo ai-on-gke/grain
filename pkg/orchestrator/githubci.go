@@ -855,12 +855,14 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 			if j.RunURL == "" && j.JobURL != "" {
 				j.RunURL = runURLOf(j.JobURL)
 			}
+			prev, _ := deps.Store.GetGitHubCIJob(ctx, j.Repo, j.CheckRunID)
 			if err := deps.Store.PutGitHubCIJob(ctx, j); err != nil {
 				return nil, err
 			}
 			if j.Failed() && hasTailer && !gitHubCIBudgetLow(now) {
-				existing, _ := deps.Store.GetGitHubCIJob(ctx, j.Repo, j.CheckRunID)
-				if existing == nil || (!existing.TailFetched && existing.FailureTail == "") {
+				// Re-fetch when a re-run bumped the attempt (even if the forge
+				// reuses the same job ID) or when no tail has been fetched yet.
+				if prev == nil || prev.RunAttempt < j.RunAttempt || (!prev.TailFetched && prev.FailureTail == "") {
 					if tail, err := tailer.JobLogTail(run.Repo.StoredOwner(), run.Repo.Name, gj.ID); err == nil {
 						source := ""
 						if tail != "" {

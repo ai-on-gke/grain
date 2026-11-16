@@ -395,3 +395,194 @@ func TestRESTAsksAnEnterpriseRepositorysOwnAPI(t *testing.T) {
 		t.Fatalf("owner/name asked %q", urls)
 	}
 }
+
+type errForge struct {
+	fakeForge
+	failCommit string
+}
+
+func (f errForge) PullsForCommit(ctx context.Context, repo, sha string) ([]Pull, error) {
+	if sha == f.failCommit {
+		return nil, fmt.Errorf("503 Service Unavailable")
+	}
+	return f.fakeForge.PullsForCommit(ctx, repo, sha)
+}
+
+func TestCheckChainAllWalksEveryUnreviewedMerge(t *testing.T) {
+	f := fakeForge{
+		pulls: map[string][]Pull{
+			"c5": {merged(1630, "c5", "main", "grain-bot[bot]", "grain-bot[bot]", "h1630")},
+			"c4": {merged(1626, "c4", "main", "alice", "alice", "h1626abcdef0123456789")},
+			"c3": {merged(1620, "c3", "main", "dave", "dave", "h1620")},
+			"c2": {merged(1612, "c2", "main", "carol", "carol", "h1612abcdef0123456789")},
+			// c1 has no PR (direct push)
+		},
+		reviews: map[int][]Review{
+			1620: {{Login: "bob", State: "APPROVED", CommitID: "h1620", Association: "MEMBER"}},
+			1612: {{Login: "bob", State: "APPROVED", CommitID: "earlier-head", Association: "MEMBER"}},
+		},
+		parents: map[string]string{
+			"c5":   "c4",
+			"c4":   "c3",
+			"c3":   "c2",
+			"c2":   "c1",
+			"c1":   "prev",
+			"prev": "",
+		},
+	}
+
+	rec, refusals, err := policy.CheckChainAll(context.Background(), f, "c5", "prev", 100)
+	if err == nil {
+		t.Fatal("expected refusal error, got nil")
+	}
+	if IsForgeError(err) {
+		t.Fatalf("unexpected ForgeError: %v", err)
+	}
+	if rec.Commit != "" || len(rec.Merges) != 0 {
+		t.Fatalf("refused CheckChainAll returned non-zero record: %+v", rec)
+	}
+	if len(refusals) != 3 {
+		t.Fatalf("got %d refusals, want 3: %+v", len(refusals), refusals)
+	}
+	if r := refusals[0]; r.Pull != 1626 || r.MergedBy != "alice" || r.HeadSHA != "h1626abcdef0123456789" || r.Commit != "c4" {
+		t.Errorf("refusal[0] = %+v", r)
+	}
+	if r := refusals[1]; r.Pull != 1612 || r.MergedBy != "carol" || r.HeadSHA != "h1612abcdef0123456789" || r.Commit != "c2" || !strings.Contains(r.Reason, "earlier head") {
+		t.Errorf("refusal[1] = %+v", r)
+	}
+	if r := refusals[2]; r.Pull != 0 || r.Commit != "c1" || !strings.Contains(r.Reason, "pushed onto the branch") {
+		t.Errorf("refusal[2] = %+v", r)
+	}
+
+	// max caps total commits walked, not only passing merges, and still
+	// returns refusals collected before hitting the limit.
+	_, partial, err := policy.CheckChainAll(context.Background(), f, "c5", "prev", 2)
+	if err == nil || !strings.Contains(err.Error(), "more than 2") {
+		t.Fatalf("max=2 err = %v, want more than 2", err)
+	}
+	if len(partial) != 1 || partial[0].Pull != 1626 {
+		t.Fatalf("max=2 partial refusals = %+v, want [#1626]", partial)
+	}
+
+	// Missing since reports the chain gap alongside refusals already seen.
+	_, partial, err = policy.CheckChainAll(context.Background(), f, "c5", "elsewhere", 100)
+	if err == nil || !strings.Contains(err.Error(), "never reaches") {
+		t.Fatalf("missing since err = %v", err)
+	}
+	if len(partial) != 4 { // c4, c2, c1, and prev (no PR)
+		t.Fatalf("missing since partial refusals = %+v", partial)
+	}
+
+	// Empty since checks only sha.
+	_, single, err := policy.CheckChainAll(context.Background(), f, "c4", "", 100)
+	if err == nil || len(single) != 1 || single[0].Pull != 1626 {
+		t.Fatalf("empty since: refusals=%+v err=%v", single, err)
+	}
+
+	// A forge error midway through the walk aborts immediately as a ForgeError.
+	_, forgeRefusals, err := policy.CheckChainAll(context.Background(), errForge{fakeForge: f, failCommit: "c2"}, "c5", "prev", 100)
+	if !IsForgeError(err) {
+		t.Fatalf("expected ForgeError, got %v", err)
+	}
+	if len(forgeRefusals) != 0 {
+		t.Fatalf("forge error returned refusals %+v, want none", forgeRefusals)
+	}
+
+	// Once every commit is reviewed, CheckChainAll returns the same Record as CheckChain.
+	f.reviews[1626] = []Review{{Login: "bob", State: "APPROVED", CommitID: "h1626abcdef0123456789", Association: "OWNER"}}
+	f.reviews[1612] = []Review{{Login: "bob", State: "APPROVED", CommitID: "h1612abcdef0123456789", Association: "COLLABORATOR"}}
+	f.pulls["c1"] = []Pull{merged(1608, "c1", "main", "grain-bot[bot]", "grain-bot[bot]", "h1608")}
+	rec, refusals, err = policy.CheckChainAll(context.Background(), f, "c5", "prev", 100)
+	if err != nil || len(refusals) != 0 {
+		t.Fatalf("all reviewed: refusals=%+v err=%v", refusals, err)
+	}
+	wantRec, err := policy.CheckChain(context.Background(), f, "c5", "prev", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, _ := json.Marshal(rec)
+	wantJSON, _ := json.Marshal(wantRec)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("record mismatch:\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+}
+
+func TestFormatAndParseRefusalLog(t *testing.T) {
+	in := []Refusal{
+		{
+			Commit:   "111111111111abcdef",
+			Pull:     1626,
+			MergedBy: "alice",
+			HeadSHA:  "deadbeef00001111222233334444555566667777",
+			Reason:   "with no approval from an owner, member or collaborator other than its author, and not by grain",
+		},
+		{
+			Commit:   "222222222222abcdef",
+			Pull:     1612,
+			MergedBy: "",
+			HeadSHA:  "",
+			Reason:   "and bob's approval was of an earlier head than the 999999999999 that was merged",
+		},
+		{
+			Commit: "333333333333abcdef",
+			Reason: "not the merge commit of any pull request merged into main or release/v*: pushed onto the branch, not merged through a pull request",
+		},
+	}
+
+	var b strings.Builder
+	b.WriteString("2026-11-16T10:50:12.1234567Z + grep -q 'reviewed-merge: refused:' /tmp/err\r\n")
+	b.WriteString("2026-11-16T10:50:12.2345678Z reviewed-merge: refused: 3 unreviewed commit(s) between 111111111111 and 000000000000\r\n")
+	b.WriteString("2026-11-16T10:50:12.3456789Z " + FormatRefusalLine(in[0]) + "\r\n")
+	b.WriteString("2026-11-16T10:50:12.4567890Z ##[error]" + FormatRefusalLine(in[1]) + "\r\n")
+	b.WriteString("2026-11-16T10:50:12.5678901Z " + FormatRefusalLine(in[2]) + "\r\n")
+	// Duplicate line should be deduplicated.
+	b.WriteString("2026-11-16T10:50:12.6789012Z " + FormatRefusalLine(in[0]) + "\r\n")
+
+	got, raw, matched := ParseRefusalLog(b.String())
+	if !matched {
+		t.Fatal("expected matched=true")
+	}
+	if len(raw) != 0 {
+		t.Fatalf("expected no rawLines when structured refusals exist, got %q", raw)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d refusals, want 3: %+v", len(got), got)
+	}
+	if got[0].Pull != 1626 || got[0].MergedBy != "alice" || got[0].HeadSHA != in[0].HeadSHA || got[0].Commit != "111111111111" || got[0].Reason != in[0].Reason {
+		t.Errorf("got[0] = %+v", got[0])
+	}
+	if got[1].Pull != 1612 || got[1].MergedBy != "" || got[1].HeadSHA != "" || got[1].Commit != "222222222222" || got[1].Reason != in[1].Reason {
+		t.Errorf("got[1] = %+v", got[1])
+	}
+	if got[2].Pull != 0 || got[2].Commit != "333333333333" || got[2].Reason != in[2].Reason {
+		t.Errorf("got[2] = %+v", got[2])
+	}
+
+	// Legacy single-refusal format (with carrier prefix).
+	legacy := "2026-11-16T10:50:12.0Z reviewed-merge: refused: aaaaaaaaaaaa carries bbbbbbbbbbbb, which it was built on: bbbbbbbbbbbb did not reach main through a reviewed merge: pull request #1608 was merged by alice, with no approval from an owner, member or collaborator other than its author, and not by grain\n"
+	gotLegacy, rawLegacy, matchedLegacy := ParseRefusalLog(legacy)
+	if !matchedLegacy || len(rawLegacy) != 0 || len(gotLegacy) != 1 {
+		t.Fatalf("legacy parse: matched=%v refusals=%+v raw=%q", matchedLegacy, gotLegacy, rawLegacy)
+	}
+	if r := gotLegacy[0]; r.Pull != 1608 || r.MergedBy != "alice" || r.Commit != "bbbbbbbbbbbb" || r.Base != "main" {
+		t.Errorf("legacy refusal = %+v", r)
+	}
+
+	// Forge error does NOT match as a refusal.
+	forgeLog := "2026-11-16T10:50:12.0Z reviewed-merge: forge error, not a policy refusal: could not read the pull requests for abc: 503 Service Unavailable\n"
+	if r, raw, ok := ParseRefusalLog(forgeLog); ok || len(r) != 0 || len(raw) != 0 {
+		t.Fatalf("forge error matched as refusal: ok=%v r=%+v raw=%q", ok, r, raw)
+	}
+
+	// Mid-line shell command referencing the prefix does NOT match.
+	shellLog := "2026-11-16T10:50:12.0Z + grep -q 'reviewed-merge: refused:' /tmp/err\n"
+	if _, _, ok := ParseRefusalLog(shellLog); ok {
+		t.Fatal("shell command trace falsely matched as refusal")
+	}
+
+	// Chain-cap error with no PR lines still matches and preserves raw line.
+	capLog := "reviewed-merge: refused: aaaaaaaaaaaa is more than 1000 first-parent commits past bbbbbbbbbbbb, so the chain between them was not checked\n"
+	if r, raw, ok := ParseRefusalLog(capLog); !ok || len(r) != 0 || len(raw) != 1 || !strings.Contains(raw[0], "more than 1000") {
+		t.Fatalf("cap parse: ok=%v r=%+v raw=%q", ok, r, raw)
+	}
+}

@@ -18,13 +18,15 @@
 // scripts/release-images.sh attests onto the images it publishes.
 //
 //	reviewed-merge -repo owner/name -commit <sha> [-since <sha>] \
-//	  [-branches main,release/v*] [-mergers grain-login,...]
+//	  [-branches main,release/v*] [-mergers grain-login,...] [-all]
 //
 // -since is the commit already checked -- what the branch's published
 // image was built from -- and every first-parent commit after it up to
-// -commit is checked too. The forge is GitHub's REST API at
-// $GITHUB_API_URL (https://api.github.com by default), read with
-// $GITHUB_TOKEN when it is set.
+// -commit is checked too. With -all, the whole chain back to -since is
+// walked rather than stopping at the first refusal, and every refused pull
+// request (with its number, merger and head SHA) is printed to stderr. The
+// forge is GitHub's REST API at $GITHUB_API_URL (https://api.github.com by
+// default), read with $GITHUB_TOKEN when it is set.
 //
 // Exit 0 with the record on stdout; 1, with the reason on stderr, for a
 // commit that is refused; 3, with the forge's error on stderr, for one
@@ -68,6 +70,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string, fo
 	branches := fs.String("branches", "main,release/v*", "the release branches, comma-separated path patterns")
 	mergers := fs.String("mergers", "", "the forge logins grain merges as, comma-separated")
 	max := fs.Int("max", 1000, "the most first-parent commits to walk")
+	all := fs.Bool("all", false, "walk the whole first-parent chain and list every unreviewed merge rather than stopping at the first")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -81,13 +84,25 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string, fo
 	policy := reviewedmerge.Policy{Repo: *repo, Branches: splitList(*branches), Mergers: splitList(*mergers)}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	rec, err := policy.CheckChain(ctx, forge, *commit, *since, *max)
+	var (
+		rec      reviewedmerge.Record
+		refusals []reviewedmerge.Refusal
+		err      error
+	)
+	if *all {
+		rec, refusals, err = policy.CheckChainAll(ctx, forge, *commit, *since, *max)
+	} else {
+		rec, err = policy.CheckChain(ctx, forge, *commit, *since, *max)
+	}
 	if reviewedmerge.IsForgeError(err) {
 		fmt.Fprintf(stderr, "reviewed-merge: forge error, not a policy refusal: %v\n", err)
 		return 3
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "reviewed-merge: refused: %v\n", err)
+		fmt.Fprintf(stderr, "%s%v\n", reviewedmerge.RefusalPrefix, err)
+		for _, r := range refusals {
+			fmt.Fprintln(stderr, reviewedmerge.FormatRefusalLine(r))
+		}
 		if len(policy.Mergers) == 0 {
 			fmt.Fprintln(stderr, "reviewed-merge: no -mergers were given, so no merge grain made counts -- only a forge approval does (vars.GRAIN_MERGE_LOGINS)")
 		}

@@ -60,8 +60,15 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 )
+
+// RefusalPrefix is the stderr prefix cmd/reviewed-merge writes on every
+// policy refusal line, and the marker grain's base-branch publishing
+// reconciler matches to route refusals straight to an operator notification.
+const RefusalPrefix = "reviewed-merge: refused: "
 
 // RecordType is the in-toto predicate type and the first field of every
 // Record: what it is and its format.
@@ -161,6 +168,20 @@ type Merge struct {
 	By string `json:"by"`
 }
 
+// Refusal is one commit (or pull request) in a checked chain that did not
+// reach a release branch through a reviewed merge. Pull is 0 when the commit
+// was pushed directly onto the branch rather than merged through a pull
+// request.
+type Refusal struct {
+	Commit   string `json:"commit"`
+	Pull     int    `json:"pull,omitempty"`
+	Base     string `json:"base,omitempty"`
+	Author   string `json:"author,omitempty"`
+	MergedBy string `json:"merged_by,omitempty"`
+	HeadSHA  string `json:"head_sha,omitempty"`
+	Reason   string `json:"reason"`
+}
+
 // Record is what a release build writes into its image's attestation: the
 // commit, the commit before it that was already checked, and how every
 // commit between reached the branch.
@@ -190,12 +211,12 @@ func (p Policy) isMerger(login string) bool {
 	return false
 }
 
-// Check answers for one commit: how it reached a release branch, or why it
-// did not reach one through a reviewed merge.
-func (p Policy) Check(ctx context.Context, f Forge, sha string) (Merge, error) {
+// checkCommit evaluates one commit, returning either the verified Merge, the
+// Refusal(s) explaining why it did not pass, or a ForgeError.
+func (p Policy) checkCommit(ctx context.Context, f Forge, sha string) (Merge, []Refusal, error) {
 	pulls, err := f.PullsForCommit(ctx, p.Repo, sha)
 	if err != nil {
-		return Merge{}, &ForgeError{What: "the pull requests for " + short(sha), Err: err}
+		return Merge{}, nil, &ForgeError{What: "the pull requests for " + short(sha), Err: err}
 	}
 	var delivered []Pull
 	for _, pr := range pulls {
@@ -204,24 +225,54 @@ func (p Policy) Check(ctx context.Context, f Forge, sha string) (Merge, error) {
 		}
 	}
 	if len(delivered) == 0 {
-		return Merge{}, fmt.Errorf("%s is not the merge commit of any pull request merged into %s: it was pushed onto the branch, not merged through a pull request",
-			short(sha), strings.Join(p.Branches, " or "))
+		reason := fmt.Sprintf("not the merge commit of any pull request merged into %s: pushed onto the branch, not merged through a pull request",
+			strings.Join(p.Branches, " or "))
+		return Merge{}, []Refusal{{Commit: sha, Reason: reason}}, nil
 	}
-	var why []string
+	var refusals []Refusal
 	for _, pr := range delivered {
 		if p.isMerger(pr.MergedBy) {
-			return Merge{Commit: sha, Pull: pr.Number, Base: pr.Base, Via: "grain", By: pr.MergedBy}, nil
+			return Merge{Commit: sha, Pull: pr.Number, Base: pr.Base, Via: "grain", By: pr.MergedBy}, nil, nil
 		}
 		approver, reason, err := p.approvedBy(ctx, f, pr)
 		if err != nil {
-			return Merge{}, err
+			return Merge{}, nil, err
 		}
 		if approver != "" {
-			return Merge{Commit: sha, Pull: pr.Number, Base: pr.Base, Via: "review", By: approver}, nil
+			return Merge{Commit: sha, Pull: pr.Number, Base: pr.Base, Via: "review", By: approver}, nil, nil
 		}
-		why = append(why, fmt.Sprintf("pull request #%d was merged by %s, %s", pr.Number, orNobody(pr.MergedBy), reason))
+		refusals = append(refusals, Refusal{
+			Commit:   sha,
+			Pull:     pr.Number,
+			Base:     pr.Base,
+			Author:   pr.Author,
+			MergedBy: pr.MergedBy,
+			HeadSHA:  pr.HeadSHA,
+			Reason:   reason,
+		})
 	}
-	return Merge{}, fmt.Errorf("%s did not reach %s through a reviewed merge: %s", short(sha), delivered[0].Base, strings.Join(why, "; "))
+	return Merge{}, refusals, nil
+}
+
+// Check answers for one commit: how it reached a release branch, or why it
+// did not reach one through a reviewed merge.
+func (p Policy) Check(ctx context.Context, f Forge, sha string) (Merge, error) {
+	m, refusals, err := p.checkCommit(ctx, f, sha)
+	if err != nil {
+		return Merge{}, err
+	}
+	if len(refusals) == 0 {
+		return m, nil
+	}
+	if refusals[0].Pull == 0 {
+		return Merge{}, fmt.Errorf("%s is not the merge commit of any pull request merged into %s: it was pushed onto the branch, not merged through a pull request",
+			short(sha), strings.Join(p.Branches, " or "))
+	}
+	why := make([]string, 0, len(refusals))
+	for _, r := range refusals {
+		why = append(why, fmt.Sprintf("pull request #%d was merged by %s, %s", r.Pull, orNobody(r.MergedBy), r.Reason))
+	}
+	return Merge{}, fmt.Errorf("%s did not reach %s through a reviewed merge: %s", short(sha), refusals[0].Base, strings.Join(why, "; "))
 }
 
 // approvedBy is the forge's review record for pr: who approved its merged
@@ -308,6 +359,227 @@ func (p Policy) CheckChain(ctx context.Context, f Forge, sha, since string, max 
 		}
 		at = parent
 	}
+}
+
+// CheckChainAll checks sha and every first-parent ancestor of it back to,
+// and not including, since -- walking the whole chain rather than stopping
+// at the first unreviewed commit. When every commit passes, it returns the
+// same Record as CheckChain and no refusals. When one or more commits are
+// refused, it returns a zero Record, every Refusal in newest-first order,
+// and a non-nil error. A ForgeError stops the walk at once and is returned
+// with IsForgeError(err) == true.
+func (p Policy) CheckChainAll(ctx context.Context, f Forge, sha, since string, max int) (Record, []Refusal, error) {
+	rec := Record{Type: RecordType, Repo: p.Repo, Commit: sha, Since: since}
+	var refusals []Refusal
+	at := sha
+	walked := 0
+	for {
+		if at == since {
+			if len(refusals) > 0 {
+				return Record{}, refusals, fmt.Errorf("%d unreviewed commit(s) between %s and %s", len(refusals), short(sha), short(since))
+			}
+			return rec, nil, nil
+		}
+		if walked >= max {
+			return Record{}, refusals, fmt.Errorf("%s is more than %d first-parent commits past %s, so the chain between them was not checked", short(sha), max, short(since))
+		}
+		m, commitRefusals, err := p.checkCommit(ctx, f, at)
+		if err != nil {
+			if at != sha {
+				return Record{}, nil, fmt.Errorf("%s carries %s, which it was built on: %w", short(sha), short(at), err)
+			}
+			return Record{}, nil, err
+		}
+		walked++
+		if len(commitRefusals) > 0 {
+			refusals = append(refusals, commitRefusals...)
+		} else {
+			rec.Merges = append(rec.Merges, m)
+		}
+		if since == "" {
+			if len(refusals) > 0 {
+				return Record{}, refusals, fmt.Errorf("%s did not reach a release branch through a reviewed merge", short(sha))
+			}
+			return rec, nil, nil
+		}
+		parent, err := f.FirstParent(ctx, p.Repo, at)
+		if err != nil {
+			return Record{}, nil, &ForgeError{What: short(at) + "'s first parent", Err: err}
+		}
+		if parent == "" {
+			return Record{}, refusals, fmt.Errorf("%s's first-parent chain never reaches %s", short(sha), short(since))
+		}
+		at = parent
+	}
+}
+
+// FormatRefusalLine formats one Refusal as a single stderr line beginning
+// with RefusalPrefix, suitable for both human readers and ParseRefusalLog.
+func FormatRefusalLine(r Refusal) string {
+	if r.Pull > 0 {
+		var meta []string
+		if r.HeadSHA != "" {
+			meta = append(meta, "head "+r.HeadSHA)
+		}
+		if r.Commit != "" {
+			meta = append(meta, "commit "+short(r.Commit))
+		}
+		if len(meta) > 0 {
+			return fmt.Sprintf("%sPR #%d merged by %s (%s): %s",
+				RefusalPrefix, r.Pull, orNobody(r.MergedBy), strings.Join(meta, ", "), r.Reason)
+		}
+		return fmt.Sprintf("%sPR #%d merged by %s: %s",
+			RefusalPrefix, r.Pull, orNobody(r.MergedBy), r.Reason)
+	}
+	return fmt.Sprintf("%scommit %s (no pull request): %s", RefusalPrefix, short(r.Commit), r.Reason)
+}
+
+var (
+	actionsLogStamp      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+`)
+	refusalPRLine        = regexp.MustCompile(`^PR #(\d+) merged by (.+?)(?: \((?:head ([^,\s)]+)(?:, )?)?(?:commit ([^,\s)]+))?\))?: (.+)$`)
+	refusalDirectLine    = regexp.MustCompile(`^commit ([^\s)]+) \(no pull request\): (.+)$`)
+	refusalSummaryHeader = regexp.MustCompile(`^(?:\d+ unreviewed commit\(s\) between \S+ and \S+|\S+ did not reach a release branch through a reviewed merge)$`)
+	legacyCarrierPrefix  = regexp.MustCompile(`^(?:\S+ carries \S+, which it was built on: )+`)
+	legacyPRLine         = regexp.MustCompile(`^(\S+) did not reach (\S+) through a reviewed merge: (.+)$`)
+	legacyWhyPR          = regexp.MustCompile(`^pull request #(\d+) was merged by (.+?), (.+)$`)
+	legacyDirectLine     = regexp.MustCompile(`^(\S+) is not the merge commit of any pull request merged into (.+?): (.+)$`)
+)
+
+// ParseRefusalLog extracts reviewed-merge policy refusals from CI job logs.
+// It strips optional GitHub Actions RFC3339 line timestamps and annotation
+// prefixes, matches lines starting with RefusalPrefix, and parses both the
+// multi-refusal (-all) format from FormatRefusalLine and the legacy
+// single-refusal format from CheckChain. Forge errors ("reviewed-merge: forge
+// error, ...") do not match.
+//
+// matched is true when at least one RefusalPrefix line appeared. Unparsed
+// refusal lines (such as a chain-length cap or missing-since error) are
+// returned in rawLines; summary header lines are omitted from rawLines once
+// structured refusals are present.
+func ParseRefusalLog(logText string) (refusals []Refusal, rawLines []string, matched bool) {
+	seenPR := map[int]int{}
+	seenCommit := map[string]bool{}
+	seenRaw := map[string]bool{}
+	var summaryLines []string
+
+	addRefusal := func(r Refusal) {
+		if r.MergedBy == "an unknown account" {
+			r.MergedBy = ""
+		}
+		if r.Pull > 0 {
+			if idx, ok := seenPR[r.Pull]; ok {
+				if refusals[idx].HeadSHA == "" && r.HeadSHA != "" {
+					refusals[idx].HeadSHA = r.HeadSHA
+				}
+				if refusals[idx].Commit == "" && r.Commit != "" {
+					refusals[idx].Commit = r.Commit
+				}
+				if refusals[idx].MergedBy == "" && r.MergedBy != "" {
+					refusals[idx].MergedBy = r.MergedBy
+				}
+				return
+			}
+			seenPR[r.Pull] = len(refusals)
+			refusals = append(refusals, r)
+			return
+		}
+		if r.Commit != "" {
+			if seenCommit[r.Commit] {
+				return
+			}
+			seenCommit[r.Commit] = true
+		}
+		refusals = append(refusals, r)
+	}
+
+	addRaw := func(s string) {
+		if s == "" || seenRaw[s] {
+			return
+		}
+		seenRaw[s] = true
+		rawLines = append(rawLines, s)
+	}
+
+	for _, raw := range strings.Split(logText, "\n") {
+		line := strings.TrimSuffix(raw, "\r")
+		line = strings.TrimPrefix(line, "\ufeff")
+		line = actionsLogStamp.ReplaceAllString(line, "")
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "##[error]")
+		line = strings.TrimPrefix(line, "::error::")
+		line = strings.TrimSpace(line)
+
+		rest, ok := strings.CutPrefix(line, RefusalPrefix)
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			continue
+		}
+		matched = true
+
+		if m := refusalPRLine.FindStringSubmatch(rest); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			addRefusal(Refusal{
+				Pull:     n,
+				MergedBy: strings.TrimSpace(m[2]),
+				HeadSHA:  strings.TrimSpace(m[3]),
+				Commit:   strings.TrimSpace(m[4]),
+				Reason:   strings.TrimSpace(m[5]),
+			})
+			continue
+		}
+		if m := refusalDirectLine.FindStringSubmatch(rest); m != nil {
+			addRefusal(Refusal{
+				Commit: strings.TrimSpace(m[1]),
+				Reason: strings.TrimSpace(m[2]),
+			})
+			continue
+		}
+		if refusalSummaryHeader.MatchString(rest) {
+			summaryLines = append(summaryLines, rest)
+			continue
+		}
+
+		body := legacyCarrierPrefix.ReplaceAllString(rest, "")
+		if m := legacyPRLine.FindStringSubmatch(body); m != nil {
+			commit, base, whyAll := m[1], m[2], m[3]
+			parsedAny := false
+			for _, part := range strings.Split(whyAll, "; ") {
+				if wm := legacyWhyPR.FindStringSubmatch(strings.TrimSpace(part)); wm != nil {
+					n, _ := strconv.Atoi(wm[1])
+					addRefusal(Refusal{
+						Commit:   commit,
+						Pull:     n,
+						Base:     base,
+						MergedBy: strings.TrimSpace(wm[2]),
+						Reason:   strings.TrimSpace(wm[3]),
+					})
+					parsedAny = true
+				}
+			}
+			if parsedAny {
+				continue
+			}
+		}
+		if m := legacyDirectLine.FindStringSubmatch(body); m != nil {
+			addRefusal(Refusal{
+				Commit: m[1],
+				Reason: fmt.Sprintf("not the merge commit of any pull request merged into %s: %s", m[2], m[3]),
+			})
+			continue
+		}
+
+		addRaw(rest)
+	}
+
+	if len(refusals) == 0 && len(rawLines) == 0 {
+		for _, s := range summaryLines {
+			addRaw(s)
+		}
+	}
+	return refusals, rawLines, matched
 }
 
 func short(sha string) string {

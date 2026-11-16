@@ -66,7 +66,9 @@ on:
         default: ""
         type: string
 
-# Each job names what it needs: `images` publishes (packages: write) and
+# Each job names what it needs: `reviewed-merge` checks the commit chain
+# against GitHub's review records (contents: read, pull-requests: read)
+# before any build starts; `images` publishes (packages: write) and
 # authenticates to Google Cloud (id-token: write) but cannot write to the
 # repository (contents: read); `assets` writes release assets (contents:
 # write) and runs nothing `images` built; `on-demand` only reads.
@@ -164,13 +166,184 @@ jobs:
             echo "branch=$on"
           } >> "$GITHUB_OUTPUT"
 
+  reviewed-merge:
+    name: check reviewed merge
+    needs: [on-demand]
+    # Fail fast before the ~40-minute image build when any commit since the
+    # last published image lacks a grain merge or non-author approval.
+    # scripts/release-images.sh still runs the same check at publish time so
+    # it can attest the record onto each signed image.
+    if: ${{ !cancelled() && (needs.on-demand.result == 'skipped' || (needs.on-demand.result == 'success' && needs.on-demand.outputs.build == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Reads git history, the public registry's revision label, and GitHub's
+    # pull-request review records -- no registry push or signing credentials.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check reviewed-merge chain
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRAIN_MERGE_LOGINS: ${{ vars.GRAIN_MERGE_LOGINS }}
+          REQUIRE_REVIEWED_MERGE: ${{ vars.REQUIRE_REVIEWED_MERGE }}
+          PACKAGE_PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          ON_DEMAND_BRANCH: ${{ needs.on-demand.outputs.branch }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/heads/rc/v*|refs/heads/release/v*)
+              is_release_ref=true
+              ;;
+            refs/tags/v*)
+              if [ -n "${ON_DEMAND_BRANCH:-}" ]; then
+                is_release_ref=false
+              else
+                is_release_ref=true
+              fi
+              ;;
+            *)
+              is_release_ref=false
+              ;;
+          esac
+
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_release_ref" != "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "release" ]; then
+            dry_run="true"
+          elif [ -z "$dry_run" ]; then
+            dry_run="false"
+          fi
+          if [ "$dry_run" = "true" ]; then
+            echo "Dry-run mode enabled: skipping reviewed-merge check"
+            exit 0
+          fi
+
+          commit="$(git rev-parse HEAD)"
+          ref_name="${ON_DEMAND_BRANCH:-${GH_REF_NAME}}"
+          case "${REQUIRE_REVIEWED_MERGE:-true}" in
+            0 | [Ff]alse | FALSE | [Nn]o | NO)
+              echo "reviewed-merge: WARNING: REQUIRE_REVIEWED_MERGE=${REQUIRE_REVIEWED_MERGE}, so ${commit:0:7} is allowed without checking that it reached ${ref_name} through a reviewed merge"
+              exit 0
+              ;;
+          esac
+
+          if [ ! -f cmd/reviewed-merge/main.go ]; then
+            if [ -n "${INPUT_COMMIT:-}" ]; then
+              echo "::notice::${commit:0:12} predates cmd/reviewed-merge: skipping pre-build reviewed-merge check"
+              exit 0
+            fi
+            echo "cmd/reviewed-merge/main.go is missing: refusing to build ${commit:0:12}" >&2
+            exit 1
+          fi
+
+          grain_repo="docker.io/grainai/grain"
+          if [ -f scripts/release-image-repos.sh ]; then
+            # shellcheck source=/dev/null
+            . ./scripts/release-image-repos.sh
+            grain_repo="$(release_image_repo_for daemon)"
+          fi
+          branch="${ref_name//\//..}"
+          held=""
+          if docker buildx version >/dev/null 2>&1; then
+            held="$(docker buildx imagetools inspect "${grain_repo}:${branch}" \
+              --format '{{ index .Image.Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
+            held="$(printf '%s' "$held" | tr -d '[:space:]')"
+            [ "$held" != "<no value>" ] || held=""
+          fi
+
+          since=""
+          if [[ "$held" =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$held" "$commit" 2>/dev/null; then
+            since="$held"
+          else
+            since="$(git merge-base "$commit" refs/remotes/origin/main 2>/dev/null || true)"
+            [ "$since" != "$commit" ] || since=""
+          fi
+
+          args=(-repo "$GITHUB_REPOSITORY" -commit "$commit" \
+            -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" \
+            -mergers "${GRAIN_MERGE_LOGINS:-}")
+          if grep -q '"all"' cmd/reviewed-merge/main.go; then
+            args=(-all "${args[@]}")
+          fi
+          if [ -n "$since" ]; then
+            args+=(-since "$since")
+          fi
+
+          err_file="${RUNNER_TEMP}/reviewed-merge.err"
+          out_file="${RUNNER_TEMP}/reviewed-merge.json"
+          rc=0
+          go run ./cmd/reviewed-merge "${args[@]}" >"$out_file" 2>"$err_file" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "reviewed-merge: ${commit:0:12} reached ${ref_name} through reviewed merges${since:+ since ${since:0:7}}: $(cat "$out_file")"
+            exit 0
+          fi
+
+          cat "$err_file" >&2
+          if grep -q '^reviewed-merge: refused:' "$err_file" && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            server_url="${GITHUB_SERVER_URL:-https://github.com}"
+            {
+              echo "### Reviewed-merge check refused \`${commit:0:12}\` on \`${ref_name}\`"
+              echo ""
+              if [ -n "$since" ]; then
+                echo "Checked first-parent chain \`${since:0:12}..${commit:0:12}\`."
+              else
+                echo "Checked commit \`${commit:0:12}\`."
+              fi
+              echo ""
+              echo "Every unreviewed merge in the chain:"
+              echo ""
+              has_detail=false
+              if grep -qE '^reviewed-merge: refused: (PR #|commit )' "$err_file"; then
+                has_detail=true
+              fi
+              while IFS= read -r line; do
+                case "$line" in
+                  "reviewed-merge: refused: PR #"*)
+                    rest="${line#reviewed-merge: refused: }"
+                    pr_num="${rest#PR #}"
+                    pr_num="${pr_num%% *}"
+                    echo "- [PR #${pr_num}](${server_url}/${GITHUB_REPOSITORY}/pull/${pr_num}) — ${rest}"
+                    ;;
+                  "reviewed-merge: refused: commit "*)
+                    echo "- ${line#reviewed-merge: refused: }"
+                    ;;
+                  "reviewed-merge: refused: "*)
+                    if [ "$has_detail" = false ]; then
+                      echo "- ${line#reviewed-merge: refused: }"
+                    fi
+                    ;;
+                esac
+              done < "$err_file"
+              echo ""
+              echo "To unblock: an owner, member or collaborator who is not the author approves the merged head; then re-run \`release.yml\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
+
   images:
     name: release images
-    needs: [on-demand]
-    # A push, release or plain dispatch skips `on-demand` and builds the
-    # ref's head as it always has; an on-demand dispatch builds only when
-    # the commit was accepted and is not already published.
-    if: ${{ !cancelled() && (needs.on-demand.result == 'skipped' || (needs.on-demand.result == 'success' && needs.on-demand.outputs.build == 'true')) }}
+    needs: [on-demand, reviewed-merge]
+    # Run only after the fast reviewed-merge gate passes. A push, release or
+    # plain dispatch skips `on-demand` and builds the ref's head as it always
+    # has; an on-demand dispatch builds only when the commit was accepted and
+    # is not already published.
+    if: ${{ !cancelled() && needs.reviewed-merge.result == 'success' && (needs.on-demand.result == 'skipped' || (needs.on-demand.result == 'success' && needs.on-demand.outputs.build == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:

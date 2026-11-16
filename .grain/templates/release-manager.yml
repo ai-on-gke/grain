@@ -176,6 +176,16 @@ body: |
     silently refused their opt-in schedule, task 4392) shows in
     `grain api GET /api/repos/ai-on-gke/grain/declarations` and
     the Inbox. File one fix for it, as for a red check.
+  - **An unreviewed merge blocking `release.yml`.** When `release.yml` is
+    refused by the reviewed-merge gate (`reviewed-merge: refused:`),
+    grain's base-branch publishing reconciler already maintains the
+    deduplicated notification `pipeline.unreviewed-merge:ai-on-gke/grain`
+    listing every refused PR and the exact unblock step (updating it in
+    place as PRs are approved and clearing it when `release.yml`
+    publishes). Do not file a triage task and do not raise a duplicate
+    `release-manager:vX.Y.Z` notification for it: point at
+    `pipeline.unreviewed-merge:ai-on-gke/grain` in your check-in `reason`
+    instead.
 
   **Only a person can** grant something your task does not hold
   (person-only grants, capability servers, network access, the edition's
