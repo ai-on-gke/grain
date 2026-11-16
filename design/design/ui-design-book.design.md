@@ -273,7 +273,15 @@ inspector and Task Detail. Sessions shares its message styles.
   chat bubbles.
 - The composer is `box-sizing: border-box; width: 100%`; attach, hint and
   Send share one row. A "New messages ↓" pill appears when something arrives
-  while you are scrolled up.
+  while you are scrolled up; a page of earlier comments is not "new".
+- **Every message is an anchor** (`id="comment-<id>"`, `data-comment-id`).
+  `/next/task/<id>#comment=<n>` and the pane's
+  `/next/tasks?task=<id>#comment=<n>` land on it, on load and on every
+  fragment change: Conversation tab, paged back to it if it is older than
+  the loaded page, scrolled into the thread and the viewport, focused, and
+  ringed in `primary` on `primary-container` for 2.5s. A link to no comment
+  of the task says so in a snackbar and leaves the page alone. Phones have
+  no pane, so the pane form opens the task page there.
 
 ### Settings
 

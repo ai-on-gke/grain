@@ -17,6 +17,7 @@ import {
   Component,
   ElementRef,
   HostListener,
+  NgZone,
   OnDestroy,
   ViewEncapsulation,
   afterRenderEffect,
@@ -50,6 +51,11 @@ export type ConversationMode = "inline" | "expanded" | "fullscreen";
 // Pixels from the bottom within which the thread counts as "following" new
 // messages; further up, new messages raise the jump pill instead.
 const FOLLOW_SLACK_PX = 48;
+
+// How long a comment a #comment= link led to stays highlighted
+// (.msg.is-linked in conversation.css fades over the same).
+const LINKED_HIGHLIGHT_MS = 2500;
+const SETTLE_STOPPERS = ["wheel", "touchstart", "keydown"] as const;
 
 export interface ComposerConfig {
   placeholder?: string;
@@ -163,6 +169,8 @@ export interface ComposerConfig {
             [class.is-human]="human(c)"
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
+            [id]="'comment-' + c.id"
+            [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
           >
             <span class="msg-meta">
@@ -338,6 +346,7 @@ export class ConversationComponent implements OnDestroy {
   protected readonly unseen = signal(0);
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly zone = inject(NgZone);
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
   private readonly thread = viewChild<ElementRef<HTMLElement>>("thread");
   private readonly composer =
@@ -377,7 +386,9 @@ export class ConversationComponent implements OnDestroy {
     // Follow new messages when the reader is at the bottom; otherwise count
     // them for the "New messages" pill. A task switch always jumps to the end.
     afterRenderEffect(() => {
-      const n = this.comments().length;
+      const list = this.comments();
+      const n = list.length;
+      const newest = n ? list[n - 1].id : 0;
       const task = this.taskId();
       this.transcript();
       this.mode();
@@ -387,17 +398,97 @@ export class ConversationComponent implements OnDestroy {
         for (const child of Array.from(el.children)) this.resize.observe(child);
       }
       const switched = task !== this.lastTask;
-      const grew = n > this.lastCount;
+      // Only comments after the newest one already drawn are new: a page
+      // of earlier ones (Load earlier, a #comment= link) lands above.
+      const arrived = list.filter((c) => c.id > this.lastNewest).length;
       if (switched || this.following) {
         this.scrollToEnd();
         this.following = true;
         if (this.unseen()) this.unseen.set(0);
-      } else if (grew) {
-        this.unseen.update((u) => u + (n - this.lastCount));
+      } else if (arrived && n > this.lastCount) {
+        this.unseen.update((u) => u + arrived);
       }
       this.lastTask = task;
       this.lastCount = n;
+      this.lastNewest = newest;
     });
+  }
+
+  private lastNewest = 0;
+  private linkedTimer: ReturnType<typeof setTimeout> | null = null;
+  private settleTimer: ReturnType<typeof setInterval> | null = null;
+
+  // revealComment scrolls comment id into view in the thread and the page
+  // around it, focuses it (as a browser does a fragment's target, so a
+  // screen reader reads it and Tab carries on from it) and highlights it
+  // briefly. It answers false when the comment is not drawn. The thread
+  // stops following the end, and the comment is scrolled to again while
+  // markdown and images above it are still settling.
+  revealComment(id: number): boolean {
+    const root = this.thread()?.nativeElement;
+    const el = root?.querySelector<HTMLElement>(`[data-comment-id="${id}"]`);
+    if (!root || !el) return false;
+    this.following = false;
+    this.unseen.set(0);
+    const place = () => {
+      const prev = root.style.scrollBehavior;
+      root.style.scrollBehavior = "auto";
+      root.scrollTop +=
+        el.getBoundingClientRect().top - root.getBoundingClientRect().top - 8;
+      root.style.scrollBehavior = prev;
+      el.scrollIntoView?.({ block: "nearest" });
+    };
+    place();
+    if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+    el.focus({ preventScroll: true });
+    el.classList.remove("is-linked");
+    // Restarts the highlight on a comment linked to twice in a row.
+    void el.offsetWidth;
+    el.classList.add("is-linked");
+    if (this.linkedTimer) clearTimeout(this.linkedTimer);
+    this.stopSettling();
+    // Both timers only touch the DOM, so they run outside Angular and do
+    // not hold the app unstable while the highlight fades.
+    this.zone.runOutsideAngular(() => this.settle(el, place));
+    return true;
+  }
+
+  private settle(el: HTMLElement, place: () => void): void {
+    this.linkedTimer = setTimeout(
+      () => el.classList.remove("is-linked"),
+      LINKED_HIGHLIGHT_MS,
+    );
+    let last = Math.round(el.getBoundingClientRect().top);
+    let still = 0;
+    let ticks = 0;
+    // The reader scrolling, or pressing a key, takes over from here.
+    const win = this.host.nativeElement.ownerDocument.defaultView;
+    const stop = () => this.stopSettling();
+    for (const ev of SETTLE_STOPPERS) {
+      win?.addEventListener(ev, stop, { passive: true, once: true });
+    }
+    this.unlistenSettle = () => {
+      for (const ev of SETTLE_STOPPERS) win?.removeEventListener(ev, stop);
+    };
+    this.settleTimer = setInterval(() => {
+      const top = Math.round(el.getBoundingClientRect().top);
+      if (top === last) still++;
+      else if (!this.following && el.isConnected) {
+        still = 0;
+        place();
+        last = Math.round(el.getBoundingClientRect().top);
+      }
+      if (still >= 3 || ++ticks > 40 || !el.isConnected) this.stopSettling();
+    }, 50);
+  }
+
+  private unlistenSettle: (() => void) | null = null;
+
+  private stopSettling(): void {
+    if (this.settleTimer) clearInterval(this.settleTimer);
+    this.settleTimer = null;
+    this.unlistenSettle?.();
+    this.unlistenSettle = null;
   }
 
   private resize?: ResizeObserver;
@@ -424,6 +515,8 @@ export class ConversationComponent implements OnDestroy {
   // inert, so it stays where Angular rendered it (no manual DOM moves).
   ngOnDestroy() {
     this.resize?.disconnect();
+    this.stopSettling();
+    if (this.linkedTimer) clearTimeout(this.linkedTimer);
     const el = this.modal()?.nativeElement;
     if (el?.open) el.close();
   }
