@@ -249,6 +249,12 @@ import {
             Press Space to pick the repo up, the arrow keys or Home and End to
             move it, Space to drop it, Escape to cancel.
           </p>
+          @if (picked(); as held) {
+            <p class="repos-caption" data-testid="repos-pick-hint">
+              Moving {{ held }}: tap another repo's handle to put it there, or
+              its own handle to leave it where it is.
+            </p>
+          }
           <p class="sr-only" aria-live="polite" data-testid="repos-announcer">
             {{ announcement() }}
           </p>
@@ -666,10 +672,23 @@ export class ReposPageComponent implements OnInit, OnDestroy {
     return this.ordered().findIndex((r) => repoKey(r.repo) === repoKey(repo));
   }
 
+  // A finger has no arrow keys and a phone fires no drag events, so with
+  // a row picked up, tapping another row's handle puts it in that row's
+  // place -- the classic list's "Move here" (ReorderPickup.jsx). Before
+  // this a tap there only picked the other row up instead (2026-11-16
+  // repository walkthrough).
   protected togglePick(repo: string): void {
-    if (this.picked() === repo) {
+    const held = this.picked();
+    if (held === repo) {
       this.picked.set(null);
       this.say(`Dropped ${repo} at position ${this.indexOf(repo) + 1}`);
+      return;
+    }
+    if (held && this.indexOf(held) >= 0) {
+      const to = this.indexOf(repo);
+      this.picked.set(null);
+      if (to !== this.indexOf(held)) this.commit(held, to);
+      setTimeout(() => this.focusHandle(held));
       return;
     }
     this.picked.set(repo);
