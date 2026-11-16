@@ -74,3 +74,43 @@ func TestTaskDetailCIGateReadsRecordedGitHubChecks(t *testing.T) {
 		})
 	}
 }
+
+// A pass grain recorded minutes ago, at a head whose previous commit ran
+// more checks, is not CI passing: the task page says it is still running.
+func TestTaskDetailCIGateDoesNotPassWhileRecordedChecksMayStillRun(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	head := "abcdef0123456789abcdef0123456789abcdef01"
+	prev := "1111111111111111111111111111111111111111"
+	task := model.Task{ID: "g2", Title: "held", Intent: model.IntentImplement, Target: &repo,
+		Branch: "grain/task-g2", Links: []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#8"},
+			{Kind: model.LinkTrustBoundaryCleared, Target: "v28@" + head}}}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	older, recent := baseTime.Add(-3*time.Hour), baseTime.Add(-5*time.Minute)
+	for i, j := range []model.GitHubCIJob{
+		{Commit: prev, JobName: "go", Conclusion: "success", CompletedAt: &older},
+		{Commit: prev, JobName: "ui e2e", Conclusion: "success", CompletedAt: &older},
+		{Commit: head, JobName: "go", Conclusion: "success", CompletedAt: &recent},
+	} {
+		j.Repo, j.CheckRunID, j.Ref, j.Workflow = repo.String(), int64(i+1), "grain/task-g2", "Tests"
+		if err := store.PutGitHubCIJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	detail, err := client.GetTask(ctx, "g2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range detail.MergeGates {
+		if g.ID == model.GateCI {
+			if g.State != model.GateStateRunning || !strings.Contains(g.Detail, "others may still be running") {
+				t.Fatalf("CI gate = %+v, want running while others may still run", g)
+			}
+			return
+		}
+	}
+	t.Fatal("no CI gate")
+}

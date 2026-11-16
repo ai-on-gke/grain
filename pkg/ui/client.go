@@ -2028,8 +2028,10 @@ func (c *Client) Attachment(ctx context.Context, taskID string, id int64) (model
 // recordedHeadChecks is what grain has recorded of the GitHub checks on
 // t's pull request's branch (model.GitHubCIJob, written by the webhook and
 // the pull request sync), for the CI gate of a change grain's own CI has no
-// verdict on. nil -- the gate as it always was -- for a task with no pull
-// request, one in a repository grain CI judges, or when a read fails.
+// verdict on. Those rows hold finished checks only, so a pass is read
+// cautiously (model.RecordedHeadChecks). nil -- the gate as it always was
+// -- for a task with no pull request, one in a repository grain CI judges,
+// or when a read fails.
 func (c *Client) recordedHeadChecks(ctx context.Context, t model.Task, obs *model.Observation) *model.HeadChecks {
 	pr := model.TaskPullRequest(t)
 	if pr == nil || (obs != nil && obs.CI != nil) {
@@ -2045,7 +2047,17 @@ func (c *Client) recordedHeadChecks(ctx context.Context, t model.Task, obs *mode
 		log.Printf("ui: task %s: reading its pull request's GitHub checks: %v", t.ID, err)
 		return nil
 	}
-	return model.HeadChecksFrom(jobs, "")
+	// The head grain last classified, where it has one, is the newest it
+	// knows of without asking GitHub.
+	var head string
+	for _, l := range t.Links {
+		if l.Kind == model.LinkTrustBoundaryCleared {
+			if i := strings.LastIndexByte(l.Target, '@'); i >= 0 {
+				head = l.Target[i+1:]
+			}
+		}
+	}
+	return model.RecordedHeadChecks(jobs, head, c.now())
 }
 
 // mergeGateStates resolves only the task states ComputeMergeGates inspects

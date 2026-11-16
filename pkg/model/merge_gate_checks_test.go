@@ -188,3 +188,50 @@ func TestReplaceReviewFindingsSummaryRewritesOnlyBareSummaries(t *testing.T) {
 		t.Fatalf("records = %+v", got)
 	}
 }
+
+// grain records a check only once it has finished, so recorded passes are
+// not CI passing until they have settled: the run is as complete as the
+// previous commit's, or has gone quiet. A head that has moved past the
+// recorded checks is unsettled too, and a failure stands either way.
+func TestRecordedHeadChecksDoNotPassWhileChecksMayStillRun(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	head := "abcdef0123456789abcdef0123456789abcdef01"
+	prev := "1111111111111111111111111111111111111111"
+	recent := now.Add(-5 * time.Minute)
+	older := now.Add(-3 * time.Hour)
+
+	for _, tc := range []struct {
+		name   string
+		jobs   []model.GitHubCIJob
+		head   string
+		state  model.MergeGateState
+		detail string
+	}{
+		{"a recent pass with nothing to compare is still running",
+			[]model.GitHubCIJob{ghJob(1, head, "go", "success", recent)}, "",
+			model.GateStateRunning, "1 check passed at abcdef012345 so far; others may still be running"},
+		{"fewer checks than the previous commit ran is still running",
+			[]model.GitHubCIJob{ghJob(1, prev, "go", "success", older), ghJob(2, prev, "ui e2e", "success", older),
+				ghJob(3, head, "go", "success", recent)}, head,
+			model.GateStateRunning, "1 check passed at abcdef012345 so far; others may still be running"},
+		{"every check the previous commit ran has passed",
+			[]model.GitHubCIJob{ghJob(1, prev, "go", "success", older), ghJob(2, prev, "ui e2e", "failure", older),
+				ghJob(3, head, "go", "success", recent), ghJob(4, head, "ui e2e", "success", recent)}, head,
+			model.GateStatePassed, "passed (2 checks at abcdef012345)"},
+		{"checks gone quiet for an hour have passed",
+			[]model.GitHubCIJob{ghJob(1, head, "go", "success", now.Add(-model.RecordedChecksQuiet))}, "",
+			model.GateStatePassed, "passed (1 check at abcdef012345)"},
+		{"a head past the recorded checks is not passed by them",
+			[]model.GitHubCIJob{ghJob(1, prev, "go", "success", older)}, head,
+			model.GateStateRunning, "1 check passed at 111111111111 so far; the pull request's head has moved past it"},
+		{"a failure stands while others run",
+			[]model.GitHubCIJob{ghJob(1, head, "go", "failure", recent)}, "",
+			model.GateStateFailing, "failing: Tests / go at abcdef012345"},
+	} {
+		g := ciGateWith(t, model.RecordedHeadChecks(tc.jobs, tc.head, now))
+		if g.State != tc.state || g.Detail != tc.detail {
+			t.Errorf("%s: gate = %s %q, want %s %q", tc.name, g.State, g.Detail, tc.state, tc.detail)
+		}
+	}
+}

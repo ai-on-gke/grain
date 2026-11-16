@@ -857,5 +857,5 @@ func headChecksOf(ctx context.Context, deps Deps, repo model.RepoRef, headRef, h
 	if err != nil {
 		return nil
 	}
-	return model.HeadChecksFrom(jobs, head)
+	return model.RecordedHeadChecks(jobs, head, time.Now())
 }

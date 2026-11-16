@@ -15,6 +15,7 @@
 package model
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -675,7 +676,7 @@ func firstGateText(vals ...string) string {
 
 // headChecksGate is the CI gate's state and detail from the checks at a
 // pull request's head: failing when any failed, running while any is
-// unfinished, passed otherwise.
+// unfinished or the passes recorded so far are unsettled, passed otherwise.
 func headChecksGate(c *HeadChecks) (MergeGateState, string) {
 	at := ""
 	if c.Commit != "" {
@@ -684,6 +685,9 @@ func headChecksGate(c *HeadChecks) (MergeGateState, string) {
 	switch {
 	case len(c.Failing) > 0:
 		return GateStateFailing, "failing: " + nameList(c.Failing) + at
+	case c.Unsettled:
+		return GateStateRunning, fmt.Sprintf("%s passed%s so far; %s", countNoun(c.Passed, "check"), at,
+			cmp.Or(c.UnsettledWhy, "others may still be running"))
 	case len(c.Pending) > 0:
 		return GateStateRunning, fmt.Sprintf("running: %d of %d checks unfinished (%s)%s",
 			len(c.Pending), c.Total(), nameList(c.Pending), at)
