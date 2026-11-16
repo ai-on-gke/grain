@@ -757,7 +757,11 @@ func exercise(t *testing.T, label, bin string) {
 			if drainErr != nil {
 				t.Fatalf("drain with a run going: %v", drainErr)
 			}
-			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: filepath.Join(stageRoot, "drain-gate", "go"), Data: []byte("1"), Perm: 0o600}); err != nil {
+			// The agent runs on this machine. Release the process directly:
+			// a Stage request can create the file, then lose its reply when
+			// the last run ends and the agent exits. Only the run's Exit
+			// delivery is guaranteed during drain, not that extra reply.
+			if err := os.WriteFile(filepath.Join(stageRoot, "drain-gate", "go"), []byte("1"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if err := <-lastRun; err != nil {
