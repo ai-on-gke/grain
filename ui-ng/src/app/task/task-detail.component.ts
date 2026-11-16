@@ -86,6 +86,10 @@ import {
   ForceMergeDialogComponent,
   type ForceMergeRequest,
 } from "./force-merge-dialog.component";
+import {
+  AcceptFindingsDialogComponent,
+  type AcceptFindingsRequest,
+} from "./accept-findings-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskStore } from "./task.store";
@@ -142,6 +146,7 @@ export function duration(from?: string, to?: string): string {
     TaskActionAreaComponent,
     TaskChangesTabComponent,
     ForceMergeDialogComponent,
+    AcceptFindingsDialogComponent,
     TaskEditPanelComponent,
     ConversationComponent,
   ],
@@ -153,6 +158,7 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:click)": "onDocClick($event)",
@@ -162,7 +168,9 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       aria-labelledby="task-title"
-      [attr.inert]="confirming() || forceMergeReq() ? '' : null"
+      [attr.inert]="
+        confirming() || forceMergeReq() || acceptFindingsReq() ? '' : null
+      "
     >
       @if (store.loadError(); as err) {
         <div class="stage-header">
@@ -1075,6 +1083,13 @@ export function duration(from?: string, to?: string): string {
       <g-force-merge-dialog [request]="f" (done)="forceMergeReq.set(null)" />
     }
 
+    @if (acceptFindingsReq(); as a) {
+      <g-accept-findings-dialog
+        [request]="a"
+        (done)="acceptFindingsReq.set(null)"
+      />
+    }
+
     <ng-template #treeNode let-n let-level="level">
       <li class="tree-item">
         <span class="tree-row" [class.is-root]="n.root">
@@ -1192,6 +1207,9 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly closePr = signal(false);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
   protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
+  protected readonly acceptFindingsReq = signal<AcceptFindingsRequest | null>(
+    null,
+  );
   protected readonly editOpen = signal(false);
   protected readonly moreMenuOpen = signal(false);
   protected readonly compactOpen = signal(false);
@@ -1595,6 +1613,7 @@ export class TaskDetailComponent implements OnDestroy {
     "retry-merge",
     "send-back",
     "force-merge",
+    "accept-findings",
     "rollover",
     "recreate-sandbox",
   ];
@@ -1675,7 +1694,7 @@ export class TaskDetailComponent implements OnDestroy {
         void this.sendBack();
         return;
       case "accept-findings":
-        this.openForceMerge(a.gate);
+        this.openAcceptFindings(a.gate);
         return;
       case "force-merge":
         this.openForceMerge();
@@ -1726,6 +1745,42 @@ export class TaskDetailComponent implements OnDestroy {
 
   // openForceMerge opens the gate-override dialog: for one gate when a
   // finding is being accepted, for every unsatisfied gate otherwise.
+  // openAcceptFindings opens the accept-findings dialog for one gate: the
+  // person merges over that review's findings as they are, with a reason.
+  protected openAcceptFindings(gateId?: string): void {
+    const t = this.t();
+    const g = t?.mergeGates?.find((x) => x.id === gateId);
+    if (!t || !g) return;
+    const head = t.ci?.commit;
+    this.acceptFindingsReq.set({
+      task: t,
+      gate: g,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "accept-findings",
+            (x) =>
+              this.api.post(
+                "POST /api/tasks/{id}/accept-findings",
+                { id: x },
+                {
+                  gate: g.id,
+                  ...(g.reviewTask ? { reviewTask: g.reviewTask } : {}),
+                  reason,
+                  ...(head ? { head } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok)
+              this.done(`Accepted ${g.label || g.id} findings on #${t.id}`);
+            return ok;
+          }),
+    });
+  }
+
   protected openForceMerge(gate?: string): void {
     const t = this.t();
     if (!t) return;

@@ -143,6 +143,7 @@ const ONE_KEY = new Set(["approve"]);
     "./inbox-inspector.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   template: `
     <section
@@ -210,7 +211,9 @@ const ONE_KEY = new Set(["approve"]);
           {{ err }}
         </p>
       }
-      @if (store.actionError(); as err) {
+      <!-- Never the same sentence twice: an action refused because the
+           list could not be read says what the banner above already does. -->
+      @if (actionErrorShown(); as err) {
         <p class="banner banner-error" role="alert" data-testid="action-error">
           {{ err }}
           <button
@@ -1256,6 +1259,10 @@ const ONE_KEY = new Set(["approve"]);
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
+  protected readonly actionErrorShown = computed(() => {
+    const err = this.store.actionError();
+    return err && err !== this.store.loadError() ? err : null;
+  });
   protected readonly wsStore = inject(WorkstreamsStore);
   protected readonly access = inject(AccessService);
   private readonly directorCtx = inject(DirectorContextService);

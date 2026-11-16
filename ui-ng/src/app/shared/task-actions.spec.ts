@@ -46,6 +46,7 @@ const REVIEW_FINDINGS: MergeGate = {
   state: "findings",
   reviewTask: "5882",
   overridable: true,
+  acceptable: true,
 };
 const APPROVAL: MergeGate = {
   id: "approval",
@@ -159,15 +160,21 @@ describe("availableActions", () => {
     expect(nextStep(t)).toBe("Fix or accept 1 review finding");
   });
 
-  it("never offers accept or force merge to a limited role", () => {
+  it("offers accept, but never force merge, to a limited role", () => {
     const t = task({
       state: "awaiting_submit",
       mergeGates: [CI_PASSED, REVIEW_FINDINGS],
     });
     const got = ids(t, limited);
     expect(got).toContain("send-back");
-    expect(got).not.toContain("accept-findings");
+    expect(got).toContain("accept-findings");
     expect(got).not.toContain("force-merge");
+    // Findings no review stands behind are not the owner's to accept.
+    const held = task({
+      state: "awaiting_submit",
+      mergeGates: [CI_PASSED, { ...REVIEW_FINDINGS, acceptable: false }],
+    });
+    expect(ids(held, limited)).not.toContain("accept-findings");
   });
 
   it("CI failed: send back to fix, no Submit", () => {

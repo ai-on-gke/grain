@@ -26,7 +26,14 @@
             "tsConfig": "tsconfig.app.json",
             "baseHref": "/next/",
             "assets": [{ "glob": "**/*", "input": "public" }],
-            "styles": ["../ui-shared/tokens.css", "src/styles.css"]
+            "styles": ["../ui-shared/tokens.css", "src/styles.css"],
+            "allowedCommonJsDependencies": [
+              "@braintree/sanitize-url",
+              "cytoscape-cose-bilkent",
+              "cytoscape-fcose",
+              "dayjs",
+              "elkjs"
+            ]
           },
           "configurations": {
             "production": {

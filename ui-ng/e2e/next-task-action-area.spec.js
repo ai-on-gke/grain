@@ -47,6 +47,7 @@ const REVIEW_FINDINGS = {
   state: "findings",
   reviewTask: "9001",
   overridable: true,
+  acceptable: true,
 };
 const APPROVAL = { id: "approval", label: "Approval", state: "needed" };
 const FINDING = {

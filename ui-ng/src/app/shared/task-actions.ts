@@ -76,12 +76,6 @@ export interface TaskAction {
   secondary?: boolean;
 }
 
-const REVIEW_GATE_IDS = ["security-review", "review", "targeted-review"];
-
-function isReviewGate(g: MergeGate): boolean {
-  return REVIEW_GATE_IDS.includes(g.id) || g.id.startsWith("trigger:");
-}
-
 export function isStoppedTurn(t: AnyTask): boolean {
   return (
     t.state === "awaiting_reply" &&
@@ -264,7 +258,7 @@ function submitSentence(t: AnyTask): string {
     const n = findingsCount(t, g.id);
     const it = n > 1 ? "them" : "it";
     parts.push(
-      `${label(g)} ${findingsPhrase(t, g)}. Fix ${it} (send ${it} back to the agent)${g.overridable ? ` or accept ${it}` : ""} to continue.`,
+      `${label(g)} ${findingsPhrase(t, g)}. Fix ${it} (send ${it} back to the agent)${g.acceptable ? ` or accept ${it}` : ""} to continue.`,
     );
   }
   if (failing.length) {
@@ -340,7 +334,7 @@ export function nextStep(t: AnyTask, listOnly = false): string {
     const what = findings.every((g) => g.id === "security-review")
       ? "security finding"
       : "review finding";
-    const canAccept = findings.some((g) => g.overridable);
+    const canAccept = findings.some((g) => g.acceptable);
     return `${canAccept ? "Fix or accept" : "Fix"} ${plural(n, what)}`;
   }
   const failing = gates.filter((g) => g.state === "failing");
@@ -599,25 +593,24 @@ function submitActions(t: AnyTask, viewer: ActionViewer): TaskAction[] {
       gate: fixable.length === 1 ? fixable[0].id : undefined,
     });
   }
-  // Accept: an overridable review gate's findings, taken as they are,
-  // with a reason (the gate override, POST force-merge overrideGates).
-  if (
-    viewer.fullAccess &&
-    viewer.can("POST /api/tasks/{id}/force-merge", repo)
-  ) {
-    for (const g of gates) {
-      if (g.state !== "findings" || !g.overridable || !isReviewGate(g))
-        continue;
+  // Accept: a review's findings on one gate, taken as they are, with a
+  // reason (POST accept-findings). Offered where the server says the
+  // findings are a review's to accept (MergeGate.acceptable); CI, the
+  // other gates and approvals still apply afterwards.
+  if (viewer.can("POST /api/tasks/{id}/accept-findings", repo)) {
+    const acceptable = gates.filter(
+      (g) => g.state === "findings" && !!g.acceptable,
+    );
+    for (const g of acceptable) {
       out.push({
         id: "accept-findings",
         label:
-          gates.filter((x) => x.state === "findings" && x.overridable).length >
-          1
+          acceptable.length > 1
             ? `Accept ${label(g)} findings…`
             : "Accept findings…",
-        route: "POST /api/tasks/{id}/force-merge",
+        route: "POST /api/tasks/{id}/accept-findings",
         variant: "tonal",
-        tip: "Override this gate with a reason and merge",
+        tip: "Merge over this review's findings as they are, with a reason. CI, the other gates and approvals still apply.",
         gate: g.id,
       });
     }

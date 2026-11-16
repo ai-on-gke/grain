@@ -16,12 +16,16 @@ package ui
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"io/fs"
 	"net/http"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -46,6 +50,25 @@ var hashedAssetExtensions = map[string]bool{
 	".png":   true,
 	".jpg":   true,
 	".webp":  true,
+}
+
+var hashedAssetContentTypes = map[string]string{
+	".js":    "text/javascript; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".woff2": "font/woff2",
+	".woff":  "font/woff",
+	".ttf":   "font/ttf",
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".jpg":   "image/jpeg",
+	".webp":  "image/webp",
+}
+
+func hashedAssetContentType(relPath string) string {
+	if ct, ok := hashedAssetContentTypes[path.Ext(relPath)]; ok {
+		return ct
+	}
+	return "application/octet-stream"
 }
 
 var (
@@ -115,11 +138,264 @@ func isAssetPath(upath string) bool {
 	return hashedAssetExtensions[ext] || ext == ".map"
 }
 
+type cachedGzipBundle struct {
+	once sync.Once
+	gz   []byte
+	err  error
+}
+
+type frontendAssets struct {
+	static           fs.FS
+	staticETags      map[string]string
+	staticNext       fs.FS
+	staticNextETags  map[string]string
+	handler          http.Handler
+	gzipBundles      sync.Map // clean request path ("/next/<name>" or "/assets/<name>") -> *cachedGzipBundle
+	gzipComputations atomic.Int64
+}
+
+var defaultFrontendAssets = sync.OnceValue(func() *frontendAssets {
+	static, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		// staticFS is embedded at build time from a directory this package
+		// ships -- its absence is a build-time mistake, not a runtime
+		// condition a caller can do anything about.
+		panic("ui: embedding static/: " + err.Error())
+	}
+	staticNext, err := fs.Sub(staticNextFS, "static-next")
+	if err != nil {
+		panic("ui: embedding static-next/: " + err.Error())
+	}
+	return newFrontendAssets(static, staticNext)
+})
+
+func newFrontendAssets(static, staticNext fs.FS) *frontendAssets {
+	return &frontendAssets{
+		static:          static,
+		staticETags:     precomputeAssetETags(static),
+		staticNext:      staticNext,
+		staticNextETags: precomputeAssetETags(staticNext),
+		handler:         frontendHandler(static, staticNext),
+	}
+}
+
+func (s *Server) setFrontendFS(static, staticNext fs.FS) {
+	s.frontend.Store(newFrontendAssets(static, staticNext))
+}
+
+// serveHashedFrontendBundle serves content-hashed embedded frontend bundles
+// directly without identity verification or the access-code gate when r
+// satisfies all six exact-match exemption conditions (authentication.design.md).
+// Those bundles are immutable build output of this open-source repository with
+// no deployment data; index.html, the SPA fallback, unhashed assets, and every
+// API route stay gated.
+func (s *Server) serveHashedFrontendBundle(w http.ResponseWriter, r *http.Request) bool {
+	if s == nil || r == nil || r.URL == nil {
+		return false
+	}
+	// 1. Method is GET or HEAD.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	// 2. Not a hub tunnel request.
+	if isHubTunnelRequest(r) {
+		return false
+	}
+	// 3. Empty query string.
+	if r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.Fragment != "" || r.URL.RawFragment != "" {
+		return false
+	}
+	// 4. Raw escaped path contains no percent-escapes, no "//", no "." or ".."
+	// segments, no trailing "/", and equals path.Clean of itself.
+	rawPath := r.URL.EscapedPath()
+	if rawPath == "" || rawPath != r.URL.Path || r.URL.RawPath != "" {
+		return false
+	}
+	if strings.ContainsAny(r.RequestURI, "%?#\\") {
+		return false
+	}
+	if !strings.HasPrefix(rawPath, "/") || strings.HasSuffix(rawPath, "/") ||
+		strings.ContainsAny(rawPath, "%?#\\") || strings.Contains(rawPath, "//") ||
+		path.Clean(rawPath) != rawPath {
+		return false
+	}
+	parts := strings.Split(rawPath[1:], "/")
+	for _, seg := range parts {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	// 5. Path is exactly /next/<name> (Angular UI) or /assets/<name> (legacy UI)
+	// with a single segment <name>.
+	if len(parts) != 2 {
+		return false
+	}
+	fa := s.frontend.Load()
+	if fa == nil {
+		return false
+	}
+	prefix, name := parts[0], parts[1]
+	var (
+		frontend string
+		fsys     fs.FS
+		etags    map[string]string
+		relPath  string
+	)
+	switch prefix {
+	case "next":
+		frontend = frontendNext
+		fsys = fa.staticNext
+		etags = fa.staticNextETags
+		relPath = name
+	case "assets":
+		frontend = frontendLegacy
+		fsys = fa.static
+		etags = fa.staticETags
+		relPath = "assets/" + name
+	default:
+		return false
+	}
+	// 6. <name> exists as a regular file in the same embedded filesystem that
+	// serves it, and isContentHashedAsset accepts it. Never index.html, never
+	// the SPA fallback, never directories, never .map files.
+	if name == "index.html" || strings.HasSuffix(strings.ToLower(name), ".map") {
+		return false
+	}
+	if fsys == nil || !isContentHashedAsset(frontend, relPath) {
+		return false
+	}
+	info, err := fs.Stat(fsys, relPath)
+	if err != nil || info.IsDir() || !info.Mode().IsRegular() {
+		return false
+	}
+	fa.serveExemptBundle(w, r, rawPath, fsys, relPath, info.Size(), etags[relPath])
+	return true
+}
+
+var copyBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 32*1024)
+		return &buf
+	},
+}
+
+// serveExemptBundle serves an exempt content-hashed bundle, ignoring Range
+// headers (always 200 with the full body), answering conditional 304 requests
+// from the precomputed ETag before opening the file, streaming the identity
+// variant straight from fsys without a full-file heap copy, and caching only
+// the gzipped representation (computed once on first gzip request, keyed by
+// rawPath).
+func (fa *frontendAssets) serveExemptBundle(w http.ResponseWriter, r *http.Request, rawPath string, fsys fs.FS, relPath string, size int64, precomputedETag string) {
+	wantGzip := acceptsGzip(r)
+	etag := precomputedETag
+	if wantGzip && etag != "" && !strings.HasPrefix(etag, "W/") {
+		etag = "W/" + etag
+	}
+
+	h := w.Header()
+	h.Set("Cache-Control", cacheControlImmutable)
+	setVaryAcceptEncoding(h)
+	if etag != "" {
+		h.Set("ETag", etag)
+	}
+	if r.Header.Get("Range") == "" && exemptETagMatches(r.Header.Get("If-None-Match"), etag) {
+		h.Del("Content-Type")
+		h.Del("Content-Length")
+		h.Del("Content-Encoding")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	ct := hashedAssetContentType(relPath)
+	if wantGzip {
+		v, _ := fa.gzipBundles.LoadOrStore(rawPath, &cachedGzipBundle{})
+		entry := v.(*cachedGzipBundle)
+		entry.once.Do(func() {
+			raw, readErr := fs.ReadFile(fsys, relPath)
+			if readErr != nil {
+				entry.err = readErr
+				return
+			}
+			var buf bytes.Buffer
+			gz := gzipWriters.Get().(*gzip.Writer)
+			gz.Reset(&buf)
+			_, _ = gz.Write(raw)
+			_ = gz.Close()
+			gzipWriters.Put(gz)
+			entry.gz = bytes.Clone(buf.Bytes())
+			fa.gzipComputations.Add(1)
+		})
+		if entry.err != nil {
+			h.Del("ETag")
+			h.Del("Vary")
+			h.Set("Cache-Control", cacheControlNoStore)
+			http.Error(w, "reading embedded asset", http.StatusInternalServerError)
+			return
+		}
+		h.Set("Content-Type", ct)
+		h.Set("Content-Encoding", "gzip")
+		h.Set("Content-Length", strconv.Itoa(len(entry.gz)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(entry.gz)
+		}
+		return
+	}
+
+	f, openErr := fsys.Open(relPath)
+	if openErr != nil {
+		h.Del("ETag")
+		h.Del("Vary")
+		h.Set("Cache-Control", cacheControlNoStore)
+		http.Error(w, "reading embedded asset", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	h.Set("Content-Type", ct)
+	h.Set("Content-Length", strconv.FormatInt(size, 10))
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		bufp := copyBufPool.Get().(*[]byte)
+		_, _ = io.CopyBuffer(w, f, *bufp)
+		copyBufPool.Put(bufp)
+	}
+}
+
+// exemptETagMatches reports whether an If-None-Match header matches etag for
+// the active variant on the exempt path (the strong ETag for identity
+// responses, the weak "W/" ETag for gzip responses).
+func exemptETagMatches(header, etag string) bool {
+	if header == "" || etag == "" {
+		return false
+	}
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
+}
+
+func setVaryAcceptEncoding(h http.Header) {
+	for _, v := range h.Values("Vary") {
+		for _, tok := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(tok), "Accept-Encoding") {
+				return
+			}
+		}
+	}
+	h.Add("Vary", "Accept-Encoding")
+}
+
 // frontendHandler serves both embedded frontends from the one "/"
 // catch-all: the Angular UI in staticNext under /next/ (a bare /next
 // redirects to /next/), and the React UI in static everywhere else.
 // Both sit behind the same ServeHTTP -- security headers, CSRF, the
-// access-code gate and verified-identity admission -- so the new UI has
+// access-code gate and verified-identity admission (with exact-match
+// content-hashed /next/<name> and /assets/<name> bundles served ahead
+// of verifyCallerNow by serveHashedFrontendBundle) -- so the new UI has
 // no authentication path of its own: it is the same origin, the same
 // session cookie and the same /api/ as the old one.
 func frontendHandler(static, staticNext fs.FS) http.Handler {
