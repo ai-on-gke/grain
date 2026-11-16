@@ -513,9 +513,18 @@ export interface CapabilityMethod {
   args?: Record<string, unknown>;
   requiresArgs?: boolean;
   releasable?: boolean;
+  // policy is the capability policy's verdict per run kind it restricts
+  // (omitted for a kind it admits unconditionally).
+  policy?: Partial<
+    Record<CapabilityRunKind, "denied" | "may_be_refused" | "ci_only">
+  >;
+  // policyRefusal, on a listing asked about one run (?kind=&repo=), is
+  // why the policy denies this method to that run.
   policyRefusal?: string;
   aliasOf?: string[];
 }
+
+export type CapabilityRunKind = "task" | "process" | "ci";
 
 export interface APIScopeSetRow {
   name: string;

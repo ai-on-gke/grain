@@ -95,6 +95,7 @@ import { GrantsPickerComponent } from "../shared/grants-picker.component";
           }
           <g-grants-picker
             testid="repo-ci-caps"
+            runKind="ci"
             [offered]="offered()"
             [held]="list"
             [repo]="repo()"

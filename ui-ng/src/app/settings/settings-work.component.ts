@@ -39,6 +39,7 @@ import {
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
 
 interface ConsoleSessionRow {
   id: string;
@@ -174,7 +175,12 @@ export function listedSecrets(
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent, ConfirmDialogComponent, RouterLink],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    RouterLink,
+    GrantsPickerComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./settings-capabilities.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -499,17 +505,16 @@ export function listedSecrets(
               }
             </div>
             <div class="s-field">
-              <label class="s-label" for="ag-caps"
-                >Default capabilities (comma-separated)</label
-              >
-              <input
-                id="ag-caps"
-                class="s-input s-mono"
-                type="text"
-                placeholder="repo:read,ci:read"
-                [value]="defaultCapsText()"
+              <span class="s-label">Default capabilities</span>
+              <!-- The deployment's defaults go to tasks on every
+                   repository, so each verdict is the policy's for agent
+                   tasks at large (judgeRun off). -->
+              <g-grants-picker
+                testid="deployment-default-grants"
+                [held]="defaultCaps()"
+                [judgeRun]="false"
                 [disabled]="!canWriteSettings()"
-                (input)="setDefaultCapsText($any($event.target).value)"
+                (heldChange)="state.setField('defaultCapabilities', $event)"
               />
             </div>
           </div>
@@ -1910,17 +1915,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     this.state.setField("qaShadowOnControl", !this.qaShadowOnControl());
   }
 
-  protected defaultCapsText(): string {
+  protected defaultCaps(): string[] {
     const v = this.state.val<unknown>("defaultCapabilities", []);
-    return Array.isArray(v) ? v.join(", ") : String(v || "");
-  }
-
-  protected setDefaultCapsText(raw: string): void {
-    const list = raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    this.state.setField("defaultCapabilities", list);
+    return Array.isArray(v) ? (v as string[]) : [];
   }
 
   private loadForSection(): void {

@@ -46,6 +46,7 @@ import {
 } from "../shared/pill-select.component";
 import type { CapabilityOption } from "../api/models";
 import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
 import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
 import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -203,6 +204,8 @@ export function importIntervalSeconds(
 interface AgentFields {
   setup: string;
   prompt: string;
+  // caps is the default grants as JSON: a grant's own arguments may hold
+  // commas, so the list is never joined into one string.
   caps: string;
 }
 
@@ -339,6 +342,7 @@ interface PendingReleaseRow {
     PillSelectComponent,
     ConfirmDialogComponent,
     RepoCICapabilitiesComponent,
+    GrantsPickerComponent,
     RepoQualificationPlanComponent,
     RepoWorkOwnershipComponent,
     StatusIconComponent,
@@ -1007,19 +1011,18 @@ interface PendingReleaseRow {
                     ></textarea>
                   </div>
                   <div class="s-field">
-                    <label class="s-label" for="rp-caps"
-                      >Default capabilities (comma-separated)</label
+                    <span class="s-label" id="rp-caps-label"
+                      >Default capabilities</span
                     >
-                    <input
-                      id="rp-caps"
-                      class="s-input tabular"
-                      type="text"
-                      [value]="repoCaps()"
+                    <g-grants-picker
+                      testid="repo-default-grants"
+                      [held]="repoCaps()"
+                      [repo]="repoSlug()"
                       [disabled]="
                         configRepoOnly() ||
                         !can('PUT /api/repos/{owner}/{name}/capabilities')
                       "
-                      (input)="repoCaps.set($any($event.target).value)"
+                      (heldChange)="repoCaps.set($event)"
                     />
                   </div>
                   <div class="s-inline">
@@ -2007,7 +2010,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly agentBaseline = signal<AgentFields>({
     setup: "",
     prompt: "",
-    caps: "",
+    caps: "[]",
   });
   private readonly workflowBaseline = signal<string>("[]");
 
@@ -2027,7 +2030,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (
       ab.setup !== this.setupCommand() ||
       ab.prompt !== this.promptExtension() ||
-      ab.caps !== this.repoCaps()
+      ab.caps !== JSON.stringify(this.repoCaps())
     ) {
       out.push("agent settings");
     }
@@ -2042,7 +2045,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
-  protected readonly repoCaps = signal("");
+  protected readonly repoCaps = signal<string[]>([]);
 
   protected readonly branches = signal<BranchRow[]>([]);
   protected readonly newBranchName = signal("");
@@ -2285,7 +2288,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     const ab = this.agentBaseline();
     this.setupCommand.set(ab.setup);
     this.promptExtension.set(ab.prompt);
-    this.repoCaps.set(ab.caps);
+    this.repoCaps.set(JSON.parse(ab.caps) as string[]);
     const wf = JSON.parse(this.workflowBaseline()) as [string, string][];
     this.workflows.set(wf.map(([path, text]) => ({ path, text })));
     const cur = this.workflows().find(
@@ -2507,9 +2510,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           )
           .then((c) => {
             if (Array.isArray(c?.defaultCapabilities)) {
-              this.repoCaps.set(c.defaultCapabilities.join(", "));
+              this.repoCaps.set([...c.defaultCapabilities]);
             }
-            this.agentBaseline.update((b) => ({ ...b, caps: this.repoCaps() }));
+            this.agentBaseline.update((b) => ({
+              ...b,
+              caps: JSON.stringify(this.repoCaps()),
+            }));
           })
           .catch(() => undefined);
       }
@@ -3256,10 +3262,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         );
       }
       if (this.can("PUT /api/repos/{owner}/{name}/capabilities")) {
-        const defaultCapabilities = this.repoCaps()
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
+        const defaultCapabilities = this.repoCaps();
         await this.api.put("PUT /api/repos/{owner}/{name}/capabilities", p, {
           defaultCapabilities,
         });
@@ -3267,7 +3270,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       this.agentBaseline.set({
         setup: this.setupCommand(),
         prompt: this.promptExtension(),
-        caps: this.repoCaps(),
+        caps: JSON.stringify(this.repoCaps()),
       });
       this.snackbar.show("Saved repository agent settings");
     } catch (err) {
