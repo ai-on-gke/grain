@@ -414,12 +414,14 @@ Commands:
   reopen <id>                          reopen a closed task
   retry <id>                           clear a failed task's retry cap so it dispatches again
   retry-merge <id>                     put a pull request the merge queue gave up on back on the queue
+  accept-findings -gate g <id> <reason...>
+                                       a person accepts one review's findings on gate g as they are (-review r,
+                                       -head sha), recorded with the reason; clears nothing else
   force-merge [-override-gates g] <id> <reason...>
-                                       merge this change anyway, overriding the queue's own decision --
-                                       an operator's action (merge:force), recorded with the reason on
-                                       the task and pull request, and refused if the branch does not
-                                       merge cleanly; -override-gates must explicitly name any skipped
-                                       review gate (e.g. security-review); -head <sha> pins the commit
+                                       merge anyway, overriding *every* gate it names and the queue's own
+                                       decision (merge:force), recorded with the reason on the task and pull
+                                       request, refused if the branch does not merge cleanly; -override-gates
+                                       names each skipped review gate; -head <sha> pins the commit
   pr adopt|review|status|submit <pr>   adopt (-mode review-only|finish), review (-design), report on
                                        (-threads), or approve/submit a pull request (see prcmd.go)
   run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
@@ -698,10 +700,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdReopen(ctx, c, out, cmdArgs)
 	case "retry":
 		return cmdRetry(ctx, c, out, cmdArgs)
-	case "retry-merge":
-		return cmdRetryMerge(ctx, c, out, cmdArgs)
-	case "force-merge":
-		return cmdForceMerge(ctx, c, out, cmdArgs)
+	case "retry-merge", "accept-findings", "force-merge":
+		return mergeCommands[cmd](ctx, c, out, cmdArgs)
 	case "run-now":
 		return cmdRunNow(ctx, c, out, cmdArgs)
 	case "config":
