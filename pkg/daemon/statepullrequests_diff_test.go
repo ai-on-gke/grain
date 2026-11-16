@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
@@ -316,5 +317,95 @@ func TestStateRepoPullRequestClientReadsConfigPolicyFromBaseBranch(t *testing.T)
 	data, exists, err := client.ReadFile("grain", "config", "pr-branch", trustboundary.ConfigPolicyPath)
 	if err != nil || !exists || string(data) != mainPolicy {
 		t.Fatalf("ReadFile(pr-branch, %s) = (%q, %v, %v), want main's %q", trustboundary.ConfigPolicyPath, data, exists, err, mainPolicy)
+	}
+}
+
+// StateRepoPullRequestClient wrapped with github.WithCaller must expose
+// WorkflowRunsOnCommit and ListActionsJobAttempts so Stage 0 and Stage 1
+// release qualification can read workflow runs and job retry attempts on
+// forge repositories while still returning empty on the local config repo.
+func TestStateRepoPullRequestClientForwardsStage1JobAttempts(t *testing.T) {
+	t.Parallel()
+	repo := newDiffTestRepo(t)
+	sha := strings.TrimSpace(gitT(t, repo.seed, "rev-parse", "HEAD"))
+	repo.sim.WorkflowRuns = []githubsim.WorkflowRun{{
+		ID: 77, Name: "nightly", Path: ".github/workflows/nightly.yml",
+		HeadBranch: "main", HeadSHA: sha, Event: "push",
+		Status: "completed", Conclusion: "success", RunAttempt: 2,
+		Jobs: []githubsim.WorkflowJob{
+			{Name: "pkg/cli stress under load", Conclusion: "failure", RunAttempt: 1},
+			{Name: "pkg/cli stress under load", Conclusion: "success", RunAttempt: 2},
+		},
+	}}
+
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	defer db.Close()
+	stateRepo, err := OpenStateRepo(ctx, dataDir)
+	if err != nil {
+		t.Fatalf("opening state repo: %v", err)
+	}
+	if err := loadStateRepo(ctx, dataDir, stateRepo, db, storeMigration{}); err != nil {
+		t.Fatalf("loading state repo: %v", err)
+	}
+	manager := NewStateManager(dataDir, db, stateRepo, OpenSecrets(dataDir), nil, nil)
+
+	var client github.Client = &StateRepoPullRequestClient{
+		Client:  github.NewClient(repo.sim, nil),
+		Manager: manager,
+		Store:   store,
+	}
+	client = github.WithCaller(client, "release-qualification")
+
+	if _, ok := client.(github.ActionsJobAttemptsReader); !ok {
+		t.Fatalf("WithCaller(StateRepoPullRequestClient) = %T, hides github.ActionsJobAttemptsReader", client)
+	}
+	reader, ok := client.(interface {
+		WorkflowRunsOnCommit(owner, repo, headSHA string) ([]github.WorkflowRun, error)
+		ListActionsJobAttempts(owner, repo string, runID int64) ([]github.ActionsRunJob, error)
+	})
+	if !ok {
+		t.Fatalf("WithCaller(StateRepoPullRequestClient) = %T, hides Stage 1 job-attempt reader methods", client)
+	}
+
+	runs, err := reader.WorkflowRunsOnCommit("acme", "widgets", sha)
+	if err != nil {
+		t.Fatalf("WorkflowRunsOnCommit(acme/widgets): %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != 77 || runs[0].Name != "nightly" || runs[0].RunAttempt != 2 {
+		t.Fatalf("WorkflowRunsOnCommit(acme/widgets) = %+v, want run 77 attempt 2", runs)
+	}
+
+	jobs, err := reader.ListActionsJobAttempts("acme", "widgets", 77)
+	if err != nil {
+		t.Fatalf("ListActionsJobAttempts(acme/widgets): %v", err)
+	}
+	if len(jobs) != 2 || jobs[0].RunAttempt != 1 || jobs[0].Conclusion != "failure" ||
+		jobs[1].RunAttempt != 2 || jobs[1].Conclusion != "success" {
+		t.Fatalf("ListActionsJobAttempts(acme/widgets) = %+v, want attempts 1 (failure) and 2 (success)", jobs)
+	}
+
+	if localRuns, err := reader.WorkflowRunsOnCommit("grain", "config", sha); err != nil || len(localRuns) != 0 {
+		t.Fatalf("WorkflowRunsOnCommit(grain/config) = (%+v, %v), want empty nil", localRuns, err)
+	}
+	if localJobs, err := reader.ListActionsJobAttempts("grain", "config", 77); err != nil || len(localJobs) != 0 {
+		t.Fatalf("ListActionsJobAttempts(grain/config) = (%+v, %v), want empty nil", localJobs, err)
+	}
+
+	if err := staterepo.SaveSettings(dataDir, staterepo.Settings{
+		Remote: "https://github.com/acme/grain-config.git",
+		Branch: "main",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if disabledRuns, err := reader.WorkflowRunsOnCommit("grain", "config", sha); err != nil || len(disabledRuns) != 0 {
+		t.Fatalf("disabled WorkflowRunsOnCommit(grain/config) = (%+v, %v), want empty nil", disabledRuns, err)
+	}
+	if disabledJobs, err := reader.ListActionsJobAttempts("grain", "config", 77); err != nil || len(disabledJobs) != 0 {
+		t.Fatalf("disabled ListActionsJobAttempts(grain/config) = (%+v, %v), want empty nil", disabledJobs, err)
 	}
 }

@@ -43,20 +43,11 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
-// localDay is ms's calendar day on ZONE's clock.
-function localDay(ms) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: ZONE }).format(
-    new Date(ms),
-  );
-}
-
-// localMonthDay is how the page names a later day: "Nov 16".
-function localMonthDay(ms) {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: ZONE,
-    month: "short",
-    day: "numeric",
-  }).format(new Date(ms));
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
+  const day = (ms) =>
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
 }
 
 for (const size of SIZES) {
@@ -100,17 +91,14 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
-      // A reset on a later local day names that day first ("Nov 16,
-      // 12:26 AM PST"); one later today is the time alone. Which one
-      // depends on the hour this runs, so the expectation is worked out
-      // the same way rather than assuming today.
-      const prefix =
-        localDay(until) === localDay(Date.now())
-          ? ""
-          : `${localMonthDay(until)}, `;
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
       await expect(reset).toContainText(
         new RegExp(
-          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -140,7 +128,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });
