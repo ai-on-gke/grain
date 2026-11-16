@@ -447,6 +447,20 @@ Rules:
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
   the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`).
+- **A capability row says what the policy will do with it.** Every
+  capability picker is `g-grants-picker`, never a comma-separated text box
+  (a grant's own arguments hold commas). It reads
+  `GET /api/capability-methods` when shown and marks each row the
+  capability policy restricts with a "denied by policy", "may be refused"
+  or "CI only" badge. The badge links to
+  `/next/settings/capabilities#capability-policy` and carries the server's
+  whole reason as its accessible name. With a repository (or a no-repo
+  task) the run is judged (`policyRefusal`). A template with no repository
+  and the deployment's defaults set `judgeRun` off and show the run kind's
+  verdict. The builder lists a refused method disabled with its reason,
+  never hidden, and a held id grain retired stays as a removable row
+  labelled "No longer offered"
+  (`ui-ng/e2e/next-capability-policy-verdicts.spec.ts`).
 - **Say a wire code in words.** A reason or state code from the API
   (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
   A code nobody has mapped yet shows as itself, which beats showing nothing.
