@@ -19,8 +19,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -29,11 +29,7 @@ import (
 // their team: the local CLI's own requester and team metadata, which
 // the local policy then reads like Silo's.
 func TestCreateAuthorFilesTheTaskAsItsRequester(t *testing.T) {
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	store, db := sqlitetest.Open(t)
 	ctx := context.Background()
 	if err := store.PutConfig(ctx, model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
 		t.Fatal(err)

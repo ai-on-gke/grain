@@ -14,7 +14,10 @@
  */
 
 g-repo-detail-page {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .repo-page-scroll {

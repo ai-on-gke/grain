@@ -314,7 +314,7 @@ func awaitCIRun(t *testing.T, service *ci.Service, id string) ci.Run {
 		if run.Conclusion != "" {
 			return run
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

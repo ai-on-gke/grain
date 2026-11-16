@@ -63,9 +63,14 @@ async function queued(demoServer, code, title, extra = {}) {
 // accept confirms the shared dialog, ticking its "someone else's work"
 // box when the scope it names asks for one.
 async function accept(dialog, name) {
+  // The box renders with the button, so wait for the button before asking
+  // whether there is a box: counting first races the dialog opening, finds
+  // no box, and then waits on a button the unticked box keeps disabled.
+  const button = dialog.getByRole("button", { name, exact: true });
+  await expect(button).toBeVisible();
   const tick = dialog.getByTestId("confirm-multi-repo");
   if (await tick.count()) await tick.check();
-  await dialog.getByRole("button", { name, exact: true }).click();
+  await button.click();
 }
 
 const row = (page, id) =>
@@ -214,7 +219,9 @@ test("Bulk edit sets a free Task priority, and capabilities attach and detach", 
   await page.goto("tasks?tab=backlog");
   const bar = page.getByTestId("batch-bar");
 
-  // Bulk edit: 1e3 is refused beside the field; 12 lands on both.
+  // Bulk edit: 2.5 is refused beside the field (1e3 is read as 1000, as
+  // classic reads it: next-tasks-intake-regressions.spec.js); 12 lands
+  // on both.
   await tick(page, x.id).check();
   await tick(page, y.id).check();
   await bar.getByTestId("batch-more").click();
@@ -222,7 +229,7 @@ test("Bulk edit sets a free Task priority, and capabilities attach and detach", 
   const form = page.getByTestId("batch-edit-dialog");
   await expect(form).toContainText("Edit 2 tasks");
   expect(await axe()).toEqual([]);
-  await form.getByTestId("bulk-priority").fill("1e3");
+  await form.getByTestId("bulk-priority").fill("2.5");
   await expect(form.getByTestId("bulk-priority-error")).toBeVisible();
   await expect(form.getByTestId("batch-edit-apply")).toBeDisabled();
   await form.getByTestId("bulk-priority").fill("12");

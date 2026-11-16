@@ -519,6 +519,9 @@ type Task struct {
 	DependsOn       []string               `json:"dependsOn,omitempty"`
 	DependsOnStates map[string]model.State `json:"dependsOnStates,omitempty"`
 	Blocked         bool                   `json:"blocked"`
+	GoalMode        *model.GoalModeConfig  `json:"goalMode,omitempty"`
+	GoalAssumptions []model.GoalAssumption `json:"goalAssumptions,omitempty"`
+	GoalScorecard   *model.GoalScorecard   `json:"goalScorecard,omitempty"`
 	// Parked is a blocked task whose last run parked it on those blockers
 	// through wait_for_task (model.ParkedOutcome), which the page words as
 	// "waiting on" rather than "blocked on". Set on a task's own detail.
@@ -1453,6 +1456,15 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
+	if gm, ok := model.GoalModeOf(t); ok {
+		out.GoalMode = &gm
+	}
+	if assumptions := model.GoalAssumptionsOf(t); len(assumptions) > 0 {
+		out.GoalAssumptions = assumptions
+	}
+	if sc, ok := model.GoalScorecardOf(t); ok {
+		out.GoalScorecard = sc
+	}
 	return out
 }
 

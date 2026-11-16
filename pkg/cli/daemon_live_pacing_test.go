@@ -39,23 +39,14 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 // pacingStore is an on-disk store to write run rows into, opened the same
 // way the daemon's own is.
 func pacingStore(t *testing.T) (*model.Store, context.Context) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	return store, ctx
 }
 

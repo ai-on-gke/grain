@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Injectable, NgZone, OnDestroy, inject, signal } from "@angular/core";
+import { dismissActiveTooltip } from "../shared/tip.directive";
 
 export interface SnackbarAction {
   label: string;
@@ -79,6 +80,7 @@ export class SnackbarService implements OnDestroy {
       durationMs: ms,
     };
     this.clearTimer();
+    dismissActiveTooltip(250);
     this.current.set(snack);
     this.remaining = ms;
     if (ms > 0) this.startTimer(snack.id);

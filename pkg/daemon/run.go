@@ -1675,6 +1675,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// (persistentSandboxes' own doc comment).
 		PersistentSandboxes: persistentSandboxes,
 		Config: orchestrator.Config{
+			DataDir: cfg.DataDir,
 			// Every agent sandbox found OOM-killed is a decrease signal
 			// for auto overcommit (orchestrator.applySandboxOOM).
 			NoteOOM: overcommitNoteOOM(cfg.Overcommit),

@@ -1560,9 +1560,12 @@ one answer all four places ask: true under grain's own modes, false under
 - **Starting and collecting.** `scheduledWorkflowGrainCIOff` reads the
   firing's schedule (`ScheduledWorkflowRun.ScheduleID`) when the repository
   disables grain CI, and lets an opted-in one through.
-- **The cancel sweep.** `scheduledRunKeepsGrainCI` leaves a running run
+- **The cancel sweep.** `scheduledOrRepoCancelReason` leaves a running run
   alone when its `RequestedBy` is `workflow-schedule:<id>` (or an infra
-  re-run of one) and that schedule opts in.
+  re-run of one) and that schedule opts in, and if that schedule has been
+  renamed or withdrawn while the run is in flight, cancels it naming the
+  withdrawn schedule (`scheduleGoneCancelReason`) rather than blaming a
+  repository switch.
 
 Nothing else changes, because nothing else was ever on this path: the run
 is a `schedule` event, which judges no pull request, and the only check

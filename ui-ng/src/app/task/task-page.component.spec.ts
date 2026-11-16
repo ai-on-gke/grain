@@ -22,7 +22,11 @@ import { CreateTaskService } from "../create/create-task.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskPageComponent, backFrom, duration } from "./task-page.component";
-import { TaskStore } from "./task.store";
+import {
+  DEEP_LINK_HEAD_QUERY,
+  TaskStore,
+  parseCommentFragment,
+} from "./task.store";
 
 type Call = {
   method: string;
@@ -324,6 +328,14 @@ describe("TaskPageComponent", () => {
     expect(
       q(f, '[data-testid="task-details"] .description strong')!.textContent,
     ).toBe("merge");
+    // The prompt and the facts sit in separate panes.
+    expect(
+      q(f, '[data-testid="task-prompt-pane"] .description strong'),
+    ).toBeTruthy();
+    expect(q(f, '[data-testid="task-prompt-pane"] dl.g-attrs')).toBeNull();
+    expect(
+      q(f, '[data-testid="task-attributes-pane"] dl.g-attrs'),
+    ).toBeTruthy();
 
     // Zero Classic links & zero <select> elements
     expect(root.querySelectorAll("select")).toHaveLength(0);
@@ -1698,5 +1710,311 @@ describe("duration", () => {
     );
     expect(navSpy).not.toHaveBeenCalled();
     fakeModal.remove();
+  });
+
+  it("keeps Details tab accessible above 1080px without redirecting to Conversation", async () => {
+    const origMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("min-width: 1080px"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    try {
+      const api = new FakeApi();
+      const f = await render(api, "details");
+      const detailsTab = q(f, '[data-testid="task-tab-details"]')!;
+      expect(detailsTab).toBeTruthy();
+      expect(detailsTab.getAttribute("aria-current")).toBe("page");
+      expect(q(f, '[data-testid="task-details"] .description')).toBeTruthy();
+      expect(q(f, ".task-aside")).toBeNull();
+    } finally {
+      window.matchMedia = origMatchMedia;
+    }
+  });
+
+  it("renders Docs tab with prompt, PR markdown diff, and report comments, and drives doc-reader-modal Prev/Next/backdrop/Escape", async () => {
+    const api = new FakeApi();
+    api.fullDiff = [
+      api.fullDiff,
+      "diff --git a/docs/plan.md b/docs/plan.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/docs/plan.md",
+      "@@ -0,0 +1,4 @@",
+      "+# Rollout Plan",
+      "+",
+      "+- Step 1: Ship Docs tab",
+      "+- Step 2: Verify E2E",
+    ].join("\n");
+    api.detail = {
+      ...api.detail,
+      comments: [
+        ...(api.detail.comments ?? []),
+        {
+          id: 9,
+          author: "agent",
+          authorKind: "agent",
+          summary: "Audit findings",
+          body: "## Audit findings\n\n- Scroll containment checked\n- Modal keyboard trap verified",
+        },
+      ],
+    };
+    const f = await render(api);
+
+    // Open Docs directly from Prompt pane button.
+    q<HTMLButtonElement>(f, '[data-testid="prompt-open-docs"]')!.click();
+    await settle(f);
+    expect(
+      q(f, '[data-testid="task-tab-docs"]')!.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(q(f, '[data-testid="task-docs-shell"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-prompt"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-pr:docs/plan.md"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-comment-9"]')).toBeTruthy();
+    // Short chat comment ("Please fix it") is excluded from Docs picker.
+    expect(q(f, '[data-testid="doc-item-comment-1"]')).toBeNull();
+
+    // Switch active doc inside Docs tab.
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="doc-item-pr:docs/plan.md"]',
+    )!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="docs-reader-title"]')!.textContent).toContain(
+      "plan.md",
+    );
+    expect(q(f, '[data-testid="docs-reader-body"]')!.textContent).toContain(
+      "Rollout Plan",
+    );
+
+    // Open full-screen modal from Docs tab.
+    q<HTMLButtonElement>(f, '[data-testid="docs-fullscreen"]')!.click();
+    await settle(f);
+    const modal = q<HTMLDialogElement>(f, '[data-testid="doc-reader-modal"]')!;
+    expect(modal.getAttribute("aria-modal")).toBe("true");
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Navigate Next -> Comment report, then Prev -> PR plan.md -> Prev -> Prompt.
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "3 / 3",
+    );
+    expect(q(f, '[data-testid="doc-modal-body"]')!.textContent).toContain(
+      "Scroll containment checked",
+    );
+    expect(
+      q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.disabled,
+    ).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Dragging from inside modal body out onto backdrop must NOT dismiss modal.
+    q(f, '[data-testid="doc-modal-body"]')!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-prev"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Backdrop click closes modal.
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
+    expect(modal.getAttribute("aria-modal")).toBeNull();
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(false);
+
+    // Open from Prompt full screen button and dismiss with Escape.
+    q<HTMLButtonElement>(f, '[data-testid="task-tab-details"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="prompt-fullscreen"]')!.click();
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "1 / 3",
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
+  });
+});
+
+describe("#comment=<id> deep links", () => {
+  let opened = false;
+  afterEach(() => {
+    if (opened) TestBed.inject(TaskStore).close();
+    opened = false;
+    TestBed.resetTestingModule();
+  });
+
+  // A 1,200-comment thread (ids 1..1200) served 500 at a time.
+  function threadApi(): { api: FakeApi; heads: string[]; pages: string[] } {
+    const all = Array.from({ length: 1200 }, (_, i) => ({
+      id: i + 1,
+      author: "agent",
+      authorKind: "agent" as const,
+      body: `comment ${i + 1}`,
+    }));
+    const api = new FakeApi();
+    const heads: string[] = [];
+    const pages: string[] = [];
+    api.getIfChanged = ((_r: string, _p: unknown, query?: string) => {
+      heads.push(query ?? "");
+      const limit = Number(
+        new URLSearchParams(query ?? "").get("comments_limit") ?? "100",
+      );
+      const slice = all.slice(-limit);
+      return Promise.resolve({
+        body: {
+          ...structuredClone(api.detail),
+          comments: slice,
+          olderComments: all.length - slice.length,
+        },
+        changed: true,
+      });
+    }) as unknown as FakeApi["getIfChanged"];
+    const get = api.get;
+    api.get = ((route: string, params?: { id?: string }, query?: string) => {
+      if (
+        route === "GET /api/tasks/{id}" &&
+        query?.includes("comments_before=")
+      ) {
+        pages.push(query);
+        const q = new URLSearchParams(query);
+        const before = Number(q.get("comments_before"));
+        const limit = Number(q.get("comments_limit"));
+        const idx = all.findIndex((c) => c.id === before);
+        const start = Math.max(0, idx - limit);
+        return Promise.resolve({
+          comments: all.slice(start, idx),
+          olderComments: start,
+        });
+      }
+      return get(route, params, query);
+    }) as FakeApi["get"];
+    return { api, heads, pages };
+  }
+
+  it("parses only #comment=<id> fragments", () => {
+    expect(parseCommentFragment("")).toEqual({ kind: "none" });
+    expect(parseCommentFragment("#task:7")).toEqual({ kind: "none" });
+    expect(parseCommentFragment("#comment=0")).toEqual({
+      kind: "comment",
+      id: 0,
+    });
+    expect(parseCommentFragment("comment=42")).toEqual({
+      kind: "comment",
+      id: 42,
+    });
+    expect(parseCommentFragment("#comment=bad")).toEqual({
+      kind: "invalid",
+      raw: "#comment=bad",
+    });
+  });
+
+  it("cold-loads a full page, pages back 500 at a time to the linked comment, and commits once", async () => {
+    const { api, heads, pages } = threadApi();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const store = TestBed.inject(TaskStore);
+    opened = true;
+    const commits: number[] = [];
+    store.open("7", 10);
+    // Overlapping reads (the poll, an event) join the deep-link read.
+    const again = store.refresh();
+    await vi.waitFor(() => {
+      const n = store.detail()?.comments?.length ?? 0;
+      if (n && commits.at(-1) !== n) commits.push(n);
+      expect(n).toBe(1200);
+    });
+    await again;
+    expect(heads).toEqual([DEEP_LINK_HEAD_QUERY]);
+    expect(pages).toEqual([
+      "comments_limit=500&comments_before=701&attempts_limit=1",
+      "comments_limit=500&comments_before=201&attempts_limit=1",
+    ]);
+    expect(commits).toEqual([1200]);
+
+    // The next 100-comment poll keeps every comment shown.
+    await store.refresh();
+    expect(store.detail()?.comments?.length).toBe(1200);
+  });
+
+  it("pages an already shown thread back to a comment named by a later link", async () => {
+    const { api, pages } = threadApi();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const store = TestBed.inject(TaskStore);
+    opened = true;
+    store.open("7");
+    await store.refresh();
+    expect(store.detail()?.comments?.length).toBe(100);
+    expect(await store.loadOlderCommentsThrough(50)).toBe(true);
+    expect(pages).toEqual([
+      "comments_limit=500&comments_before=1101&attempts_limit=1",
+      "comments_limit=500&comments_before=601&attempts_limit=1",
+      "comments_limit=500&comments_before=101&attempts_limit=1",
+    ]);
+    expect(store.detail()?.comments?.[0].id).toBe(1);
+    expect(await store.loadOlderCommentsThrough(99999)).toBe(false);
+  });
+
+  it("switches the task page to Conversation for a #comment= link and names a bad one", async () => {
+    window.history.replaceState(null, "", "/task/7#comment=1");
+    try {
+      const f = await render(new FakeApi(), "runs");
+      opened = true;
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-conversation"]')!.getAttribute(
+          "aria-current",
+        ),
+      ).toBe("page");
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-comment-id="1"]')!.classList.contains(
+            "comment-highlight",
+          ),
+        ).toBe(true);
+      });
+      const snacks = TestBed.inject(SnackbarService);
+      window.history.replaceState(null, "", "/task/7#comment=bad");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      expect(snacks.current()?.message).toContain("does not name a comment");
+      window.history.replaceState(null, "", "/task/7#comment=99999");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      expect(snacks.current()?.message).toContain(
+        "Comment 99999 is not in this task's conversation.",
+      );
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 });
