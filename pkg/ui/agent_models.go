@@ -141,6 +141,7 @@ func (s *Server) handleListAgentModels(w http.ResponseWriter, r *http.Request) {
 	case "claude":
 		lister = s.tasks.Config.ClaudeModels
 	default:
+		w.Header().Set("Cache-Control", cacheControlNoStore)
 		http.Error(w, "unknown agent framework", http.StatusBadRequest)
 		return
 	}

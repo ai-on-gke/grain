@@ -878,6 +878,34 @@ func TestAListedRepositorysCIAPITokenIsIsolatedEndToEnd(t *testing.T) {
 		}
 	}
 
+	// Batch task summaries narrow per task: widgetsTask is returned, while
+	// grainTask (foreign repo), noRepoTask (repo-less), and missing ids are
+	// silently omitted and indistinguishable.
+	sumW := do(http.MethodGet, fmt.Sprintf("/api/tasks/summaries?ids=%s,%s,%s,999999&comments_limit=1&attempts_limit=1",
+		widgetsTask.ID, grainTask.ID, noRepoTask.ID), "")
+	if sumW.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks/summaries = %d %s", sumW.Code, sumW.Body)
+	}
+	var sumResp struct {
+		Tasks map[string]ui.TaskDetail `json:"tasks"`
+	}
+	if err := json.Unmarshal(sumW.Body.Bytes(), &sumResp); err != nil {
+		t.Fatalf("decoding /api/tasks/summaries: %v (%s)", err, sumW.Body)
+	}
+	if len(sumResp.Tasks) != 1 {
+		t.Fatalf("GET /api/tasks/summaries = %+v, want only widgetsTask %s", sumResp.Tasks, widgetsTask.ID)
+	}
+	if _, ok := sumResp.Tasks[widgetsTask.ID]; !ok {
+		t.Fatalf("GET /api/tasks/summaries missing widgetsTask %s", widgetsTask.ID)
+	}
+	if fSum, mSum := do(http.MethodGet, "/api/tasks/summaries?ids="+grainTask.ID, ""), do(http.MethodGet, "/api/tasks/summaries?ids=999999", ""); fSum.Code != http.StatusOK || mSum.Code != http.StatusOK || fSum.Body.String() != mSum.Body.String() {
+		t.Errorf("CI summaries foreign vs missing diverged: foreign=(%d %q) missing=(%d %q)",
+			fSum.Code, fSum.Body.String(), mSum.Code, mSum.Body.String())
+	}
+	if badRepoW := do(http.MethodGet, "/api/tasks/summaries?ids="+grainTask.ID+"&repo=ai-on-gke/grain", ""); badRepoW.Code != http.StatusForbidden {
+		t.Errorf("CI summaries with foreign ?repo= = %d %s, want 403", badRepoW.Code, badRepoW.Body)
+	}
+
 	// 3. Plain template files approved and records automation attribution
 	// rather than claiming a human operator filed it.
 	plainW := do(http.MethodPost, "/api/tasks/from-template", `{"template":"triage","fields":{"item":"bug-1"}}`)

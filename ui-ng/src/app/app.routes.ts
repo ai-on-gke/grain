@@ -131,6 +131,39 @@ function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
   };
 }
 
+// Before the single-tenant reset every page lived under /t/<team>/, and
+// links people saved from then still name one. The team means nothing
+// now, so teamPathMatcher takes the rest of the path and the route below
+// redirects to it on its own (the classic UI's parseSegments does the
+// same), keeping the query and fragment: /t/acme/tasks is /tasks, and
+// /t/acme alone is the Inbox.
+function teamPathMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s.length < 2 || s[0]?.path !== "t") return null;
+  return {
+    consumed: s,
+    posParams: {
+      rest: new UrlSegment(
+        s
+          .slice(2)
+          .map((x) => x.path)
+          .join("/"),
+        {},
+      ),
+    },
+  };
+}
+
+const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
+  inject(Router).createUrlTree(
+    [
+      "/",
+      ...String(params["rest"] ?? "")
+        .split("/")
+        .filter(Boolean),
+    ],
+    { queryParams, ...(fragment ? { fragment } : {}) },
+  );
+
 // repoLeaveGuard asks the repository page before leaving it with an
 // unsaved edit (RepoDetailPageComponent.canLeave). It is duck-typed so
 // the page stays lazy: importing the component here would pull it into
@@ -144,6 +177,7 @@ const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
 // classic UI for everything else.
 export const routes: Routes = [
   { path: "", pathMatch: "full", redirectTo: "inbox" },
+  { matcher: teamPathMatcher, redirectTo: teamless },
   {
     path: "inbox",
     title: "Inbox · grain",
@@ -373,6 +407,13 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+  },
+  {
+    path: "repos",
+    pathMatch: "full",
+    title: "Repos · grain",
+    loadComponent: () =>
+      import("./repos/repos-page.component").then((m) => m.ReposPageComponent),
   },
   // The classic UI keeps a repository's tab at
   // /repos/<owner>/<name>/settings/<tab>; pasted under /next/ that read
