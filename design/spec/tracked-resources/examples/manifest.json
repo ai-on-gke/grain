@@ -233,5 +233,20 @@
     "file": "list-request.json",
     "definition": "list_request",
     "valid": true
+  },
+  {
+    "file": "resolve-preview-request.json",
+    "definition": "resolve_preview_request",
+    "valid": true
+  },
+  {
+    "file": "unresolved-attach-request.json",
+    "definition": "attach_request",
+    "valid": true
+  },
+  {
+    "file": "invalid-implicit-grant.json",
+    "definition": "attach_request",
+    "valid": false
   }
 ]

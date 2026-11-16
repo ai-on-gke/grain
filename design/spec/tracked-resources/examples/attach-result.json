@@ -93,5 +93,11 @@
   },
   "freshness": "fresh",
   "gate_ids": [],
-  "error": null
+  "error": null,
+  "tracking": {
+    "facet": "outcome",
+    "mode": "follow_latest",
+    "selector": null
+  },
+  "grant_id": "grant-A"
 }

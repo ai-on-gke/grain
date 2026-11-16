@@ -27,7 +27,7 @@ All objects are UTF-8 JSON; timestamps are RFC 3339 UTC. IDs/tokens are opaque s
 | TrackingScope | `facet: string`, `mode: "follow_latest" \| "pinned"`, `selector: object \| null`; pinned requires non-null selector identifying an immutable subject |
 | TrackedResourceReference | `version: "1"`, `provider: ResourceProviderIdentity`, `resource_kind: string`, `identifier: object`, `tracking: TrackingScope` |
 | TaskResourceReference | `task_id: string`, `reference_id: string`, `reference: TrackedResourceReference`, `pin: ResourceProviderPin`, `relation: "watches" \| "uses" \| "produced_by" \| "spawned_task"`, `view_id: string`, `reference_revision: integer >= 1` |
-| TaskRelation extensions | Spawned task relations additionally carry `child_role: "required" \| "advisory" \| "independent"`; required MUST link a separately authorized required success gate by `gate_id: string`. Other relations MUST NOT carry these fields. |
+| TaskRelation extensions | Spawned task relations additionally carry `child_role: "required" \| "advisory" \| "independent"`; required MUST link a separately authorized required gate (default success; an explicitly approved different predicate follows MGS-7) by `gate_id: string`. Other relations MUST NOT carry these fields. |
 
 1. Canonical resource identity MUST include provider identity, kind and the identifier's authority/installation plus stable resource key. Core MUST treat kind and identifier as registry-schema data, not a fixed external-provider enum. A human URL, workspace name, repository name or bug title MUST NOT alone identify a resource if it can be reused/renamed.
 2. Resolve MUST define canonicalization, including locator-to-stable-ID mapping, exact string case rules and identifier schema version. Grain MUST use canonical JSON (RFC 8785) to compare/hash validated records. Resource identity excludes mutable display fields, credentials and release pin; tracked identity additionally includes TrackingScope. Different scopes MUST NOT share decision evidence without explicit validated mapping.
@@ -192,10 +192,11 @@ The following routes/tools are proposed, not deployed:
 
 | Agent tool | Proposed API | Contract |
 |---|---|---|
-| `resource_attach` | `POST /api/tasks/{id}/resources` | Input candidate, provider pin, tracking, relation and expected contract revision; returns a task-local reference or redacted unresolved blocker. Resolve preview is explicit and read-authorized. No auto-grant/gate. |
+| `resource_resolve` | `POST /api/tasks/{id}/resources/resolve` | Read-only candidate preview under an explicitly named current resolve grant; never attaches or grants access. |
+| `resource_attach` | `POST /api/tasks/{id}/resources` | Input candidate, explicit grant_id, provider pin, tracking, relation and expected contract revision; returns a task-local reference or redacted unresolved blocker. Resolve preview is explicit and read-authorized. No auto-grant/gate. |
 | `resource_list` | `GET /api/tasks/{id}/resources` | Authorized paginated references with relation, observation/freshness and linked gate IDs; at most 100 per page. |
 | `resource_get` | `GET /api/tasks/{id}/resources/{reference_id}` | Current authorized bounded view, immutable evidence references and wait/error state. |
-| `resource_edit` | `PATCH /api/tasks/{id}/resources/{reference_id}` | Full replacement under expected reference/contract revisions; explicit pin/tracking/retarget invalidation, no implicit grant or requirement weakening. |
+| `resource_edit` | `PATCH /api/tasks/{id}/resources/{reference_id}` | Full candidate/tracking/grant replacement under expected reference/contract revisions; explicit pin/tracking/retarget invalidation, no implicit grant or requirement weakening. |
 | `resource_remove` | `DELETE /api/tasks/{id}/resources/{reference_id}` | Expected contract revision required; refuses live required bindings unless part of an authorized atomic gate edit. |
 | `resource_watch_change` | `POST /api/tasks/{id}/resources/{reference_id}/watch-change` | Input after accepted observation sequence, max wait 30 seconds or explicit park; returns changed/unchanged/unavailable and new sequence. A park persists a cursor-fenced wait and stops the run under existing sandbox-preservation rules. |
 
@@ -233,4 +234,4 @@ These are required future conformance tests, not runtime tests added by this doc
 | Tracked-resource change/message/live push races closure | Atomic evidence/message/operation fences reject stale close; later remote discoveries follow recorded regression policy. |
 | Pin/fact schema upgrade or rollback | Explicit compatible migration and fresh Observe; no cross-pin token ordering or old-result reuse, one lifecycle owner. |
 | Remove reference required by gate | Reject or perform authorized atomic contract edit with audit; no dangling ignored condition. |
-| Restart after backup restored revoked grant | Reauthorize and reconcile; stale cached views and old remote subscriptions cannot restore authority. |
+| Restart after backup restored revoked grant | Ordinary restart reauthorizes and reconciles; backup restore holds every old grant until fresh person approval in the new recovery UUID, including revocations lost from the backup. No old cache or subscription restores authority. |

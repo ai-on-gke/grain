@@ -94,5 +94,11 @@
   "freshness": "fresh",
   "gate_ids": [],
   "error": null,
-  "shared_watcher_count": 2
+  "shared_watcher_count": 2,
+  "tracking": {
+    "facet": "outcome",
+    "mode": "follow_latest",
+    "selector": null
+  },
+  "grant_id": "grant-A"
 }

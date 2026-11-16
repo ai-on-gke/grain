@@ -108,7 +108,7 @@ def semantic(value, request=None):
         require(evidence_bytes <= 32768, "evidence data bytes exceeded")
     if "reference" in value and "pin" in value:
         require(value["reference"]["provider"] == value["pin"]["identity"], "provider/pin mismatch")
-    if "tracking" in value and "candidate" in value:
+    if "tracking" in value and isinstance(value.get("candidate"), dict):
         kind = REG["descriptor"]["kinds"][0]
         Draft202012Validator(kind["candidate_schema"]).validate(value["candidate"])
 

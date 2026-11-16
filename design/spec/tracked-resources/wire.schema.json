@@ -1616,7 +1616,8 @@
         "pin",
         "tracking",
         "relation",
-        "unresolved"
+        "unresolved",
+        "grant_id"
       ],
       "properties": {
         "expected_contract_revision": {
@@ -1650,8 +1651,36 @@
         },
         "unresolved": {
           "type": "boolean"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "unresolved": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "grant_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      ]
     },
     "edit_request": {
       "type": "object",
@@ -1660,10 +1689,13 @@
         "expected_contract_revision",
         "idempotency_key",
         "reason",
-        "expected_reference_revision",
-        "reference",
+        "candidate",
         "pin",
-        "relation"
+        "tracking",
+        "relation",
+        "unresolved",
+        "grant_id",
+        "expected_reference_revision"
       ],
       "properties": {
         "expected_contract_revision": {
@@ -1679,16 +1711,14 @@
           "minLength": 1,
           "maxLength": 2048
         },
-        "expected_reference_revision": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
-        "reference": {
-          "$ref": "#/$defs/reference"
+        "candidate": {
+          "$ref": "#/$defs/object"
         },
         "pin": {
           "$ref": "#/$defs/pin"
+        },
+        "tracking": {
+          "$ref": "#/$defs/tracking"
         },
         "relation": {
           "enum": [
@@ -1696,8 +1726,44 @@
             "uses",
             "produced_by"
           ]
+        },
+        "unresolved": {
+          "type": "boolean"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_reference_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "unresolved": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "grant_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      ]
     },
     "remove_request": {
       "type": "object",
@@ -2032,7 +2098,9 @@
         "observation",
         "freshness",
         "gate_ids",
-        "error"
+        "error",
+        "tracking",
+        "grant_id"
       ],
       "properties": {
         "task_id": {
@@ -2129,6 +2197,26 @@
           "anyOf": [
             {
               "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tracking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/tracking"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
             },
             {
               "type": "null"
@@ -2342,6 +2430,30 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "resolve_preview_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "pin",
+        "tracking",
+        "grant_id"
+      ],
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/object"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "tracking": {
+          "$ref": "#/$defs/tracking"
+        },
+        "grant_id": {
+          "$ref": "#/$defs/id"
         }
       }
     }
