@@ -32,7 +32,7 @@
               "cytoscape-cose-bilkent",
               "cytoscape-fcose",
               "dayjs",
-              "elkjs/lib/elk.bundled.js"
+              "elkjs"
             ]
           },
           "configurations": {

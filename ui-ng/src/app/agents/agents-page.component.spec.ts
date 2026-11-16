@@ -63,12 +63,28 @@ class FakeApi {
   detailReads: string[] = [];
   failDetail = new Set<string>();
 
-  getIfChanged = (route: string, p?: { id?: string }) => {
+  getIfChanged = (route: string, p?: { id?: string }, query?: string) => {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
         body: structuredClone(this.live),
         changed: !this.listUnchanged,
       });
+    }
+    if (route === "GET /api/tasks/summaries") {
+      const ids =
+        new URLSearchParams(query ?? "")
+          .get("ids")
+          ?.split(",")
+          .filter(Boolean) ?? [];
+      const tasks: Record<string, TaskDetail> = {};
+      for (const id of ids) {
+        this.detailReads.push(id);
+        if (this.failDetail.has(id)) continue;
+        tasks[id] =
+          this.details[id] ??
+          ({ state: "running", attempts: [] } as unknown as TaskDetail);
+      }
+      return Promise.resolve({ body: { tasks }, changed: true });
     }
     this.detailReads.push(p?.id ?? "");
     if (this.failDetail.has(p?.id ?? "")) {

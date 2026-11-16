@@ -26,21 +26,8 @@ import { Router } from "@angular/router";
 import type { DiffPreviewHunk, DiffPreviewLine } from "../api/models";
 import { ThemeService } from "../services/theme.service";
 import { renderMarkdown, safeHref } from "../sessions/session-view";
-import { MediaViewerService } from "./media-viewer.service";
-import type { MermaidTheme } from "./mermaid-render";
-
-// The diagram wrapper (and, behind it, Mermaid itself) loads with the first
-// ```mermaid fence on screen, so pages without one never pay for either.
-type MermaidRender = typeof import("./mermaid-render");
-let mermaidRender: MermaidRender | null = null;
-let mermaidRenderLoad: Promise<MermaidRender> | null = null;
-function loadMermaidRender(): Promise<MermaidRender> {
-  mermaidRenderLoad ??= import("./mermaid-render").then(
-    (m) => (mermaidRender = m),
-  );
-  mermaidRenderLoad.catch(() => (mermaidRenderLoad = null));
-  return mermaidRenderLoad;
-}
+import { MediaViewerService, withFreshSvgIds } from "./media-viewer.service";
+import { handleMermaidClick, hydrateMermaid } from "./mermaid";
 
 const KEYWORDS = new Set([
   "async",
@@ -563,6 +550,13 @@ const ALLOWED_MD_ATTRS = new Set([
   "start",
   "aria-hidden",
   "aria-label",
+  "aria-pressed",
+  "role",
+  "data-mermaid",
+  "data-mermaid-view",
+  "data-mermaid-pane",
+  "data-mermaid-canvas",
+  "data-mermaid-expand",
 ]);
 
 const SAFE_DATA_IMAGE_RE =
@@ -633,11 +627,9 @@ export class MarkdownDirective {
   private readonly doc = inject(DOCUMENT);
   private readonly theme = inject(ThemeService);
   private readonly viewer = inject(MediaViewerService);
+  private shown: string | null = null;
 
   readonly gMarkdown = input<string>("");
-
-  /** Bumped on every render so a late diagram never lands in new content. */
-  private generation = 0;
 
   private static readonly cache = new Map<string, string>();
 
@@ -647,7 +639,7 @@ export class MarkdownDirective {
       let html = MarkdownDirective.cache.get(src);
       if (html === undefined) {
         html = sanitizeMarkdownHtml(
-          renderMarkdown(src),
+          renderMarkdown(src, { mermaid: true }),
           this.doc.defaultView as (Window & typeof globalThis) | null,
         );
         if (MarkdownDirective.cache.size >= 500) {
@@ -659,85 +651,32 @@ export class MarkdownDirective {
       // sanitizeMarkdownHtml enforces
       // a strict tag/attribute allowlist as defense-in-depth before innerHTML.
       void (this.sanitizer.bypassSecurityTrustHtml(html) as SafeHtml);
-      this.el.nativeElement.innerHTML = html;
-      this.drawDiagrams(this.theme.resolved());
-    });
-  }
-
-  // drawDiagrams turns each ```mermaid code card into its diagram. Mermaid
-  // loads on the first one (shared/mermaid-render.ts); a diagram that does
-  // not parse keeps its code card under a note saying why.
-  private drawDiagrams(theme: MermaidTheme): void {
-    const gen = ++this.generation;
-    const blocks = Array.from(
-      (this.el.nativeElement as HTMLElement).querySelectorAll<HTMLElement>(
-        ".mermaid-block",
-      ),
-    );
-    for (const block of blocks) {
-      const src = block.querySelector(".code-card pre code")?.textContent ?? "";
-      const hit = mermaidRender?.cachedMermaidSvg(theme, src);
-      if (hit && mermaidRender) {
-        this.showDiagram(block, mermaidRender.withFreshIds(hit));
-        continue;
+      // A theme change only redraws diagrams; it keeps the DOM (and any
+      // Source / Before / After choice) that is already there.
+      const mode = this.theme.resolved();
+      if (this.shown !== src) {
+        this.el.nativeElement.innerHTML = html;
+        this.shown = src;
       }
-      const status = this.doc.createElement("p");
-      status.className = "mermaid-status";
-      status.setAttribute("role", "status");
-      status.textContent = "Rendering diagram…";
-      block.prepend(status);
-      const fail = (err: unknown, text = String(err)) => {
-        if (gen !== this.generation || !block.isConnected) return;
-        status.className = "mermaid-note";
-        status.textContent = `Diagram could not be rendered (${text}). Showing the Mermaid source.`;
-        block.classList.add("is-invalid");
-      };
-      loadMermaidRender().then(
-        (m) =>
-          m.renderMermaidSvg(src, theme).then(
-            (svg) => {
-              if (gen !== this.generation || !block.isConnected) return;
-              status.remove();
-              this.showDiagram(block, svg);
-            },
-            (err) => fail(err, m.mermaidErrorText(err)),
-          ),
-        () => fail(null, "the diagram renderer did not load"),
-      );
-    }
-  }
-
-  private showDiagram(block: HTMLElement, svg: string): void {
-    const card = block.querySelector<HTMLElement>(".code-card");
-    const wrap = this.doc.createElement("div");
-    wrap.className = "mermaid-diagram";
-    // The head and buttons reuse the code card's look; the SVG has passed
-    // Mermaid's strict mode and sanitizeMermaidSvg.
-    wrap.innerHTML =
-      `<div class="code-card-head"><span class="code-lang">diagram</span>` +
-      `<span class="mermaid-actions">` +
-      `<button type="button" class="code-copy-btn" data-mermaid-source aria-pressed="false">Source</button>` +
-      `<button type="button" class="code-copy-btn" data-mermaid-expand aria-label="Open diagram full screen">Expand</button>` +
-      `</span></div>` +
-      `<button type="button" class="mermaid-canvas" data-mermaid-expand aria-label="Open diagram full screen"></button>`;
-    const canvas = wrap.querySelector<HTMLElement>(".mermaid-canvas")!;
-    canvas.innerHTML = svg;
-    // In a narrow pane a wide diagram scales down only so far -- to 60%,
-    // where its labels are still readable -- and then scrolls sideways.
-    const drawn = canvas.querySelector("svg");
-    const vbWidth = drawn?.viewBox?.baseVal?.width ?? 0;
-    if (drawn && vbWidth > 0) {
-      drawn.style.minWidth = `${Math.round(vbWidth * 0.6)}px`;
-    }
-    if (card) card.hidden = true;
-    block.classList.add("is-rendered");
-    block.prepend(wrap);
+      if (html.includes("data-mermaid=")) {
+        hydrateMermaid(this.el.nativeElement, mode, this.doc);
+      }
+    });
   }
 
   @HostListener("click", ["$event"])
   onClick(ev: MouseEvent): void {
     const target = ev.target as HTMLElement | null;
-    if (this.onDiagramClick(ev, target)) return;
+    if (this.expandDiagram(target)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    if (handleMermaidClick(target)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
     const copyBtn = target?.closest<HTMLButtonElement>("[data-copy-code]");
     if (copyBtn) {
       ev.preventDefault();
@@ -776,37 +715,27 @@ export class MarkdownDirective {
     }
   }
 
-  private onDiagramClick(ev: MouseEvent, target: HTMLElement | null): boolean {
-    const block = target?.closest<HTMLElement>(".mermaid-block");
+  // Expand opens every drawn diagram under this element in the full-screen
+  // viewer, starting at the clicked block's first pane, so the arrow keys
+  // page across a Before / After pair and the rest of the message.
+  private expandDiagram(target: HTMLElement | null): boolean {
+    const block = target
+      ?.closest("[data-mermaid-expand]")
+      ?.closest<HTMLElement>("[data-mermaid]");
     if (!block) return false;
-    const toggle = target?.closest<HTMLButtonElement>("[data-mermaid-source]");
-    if (toggle) {
-      ev.preventDefault();
-      const card = block.querySelector<HTMLElement>(":scope > .code-card");
-      const show = !!card?.hidden;
-      if (card) card.hidden = !show;
-      block.classList.toggle("is-source", show);
-      toggle.setAttribute("aria-pressed", String(show));
-      return true;
-    }
-    if (!target?.closest("[data-mermaid-expand]")) return false;
-    ev.preventDefault();
-    const svg = block.querySelector(".mermaid-canvas svg");
-    if (!svg) return true;
-    const blocks = Array.from(
-      (this.el.nativeElement as HTMLElement).querySelectorAll<HTMLElement>(
-        ".mermaid-block.is-rendered",
-      ),
-    );
-    const n = blocks.length;
-    const freshIds = mermaidRender?.withFreshIds ?? ((x: string) => x);
+    const host = this.el.nativeElement as HTMLElement;
+    const canvases = Array.from(
+      host.querySelectorAll<HTMLElement>("[data-mermaid-canvas]"),
+    ).filter((c) => c.querySelector("svg"));
+    const start = canvases.findIndex((c) => block.contains(c));
+    if (start < 0) return true;
     this.viewer.open(
-      blocks.map((b, i) => ({
+      canvases.map((c) => ({
         kind: "svg" as const,
-        name: n > 1 ? `Diagram ${i + 1}` : "Diagram",
-        svg: freshIds(b.querySelector(".mermaid-canvas svg")!.outerHTML),
+        name: c.getAttribute("aria-label") || "Diagram",
+        svg: withFreshSvgIds(c.querySelector("svg")!.outerHTML),
       })),
-      blocks.indexOf(block),
+      start,
     );
     return true;
   }

@@ -100,6 +100,9 @@ export interface GrainConfig {
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
   capabilities?: CapabilityOption[];
+  // ciCapabilities is what can be granted to a repository's CI jobs
+  // (the repo page's CI capabilities card).
+  ciCapabilities?: CapabilityOption[];
   defaultCapabilities?: string[];
   repoDefaultCapabilities?: Record<string, string[]>;
   agentBackends?: AgentBackendOption[];
@@ -395,6 +398,9 @@ export interface MergeGate {
   reviewTask?: string;
   approvedBy?: string;
   overridable?: boolean;
+  // A findings gate whose review's findings a person may accept as they
+  // are (POST /api/tasks/{id}/accept-findings, model.MergeGate.Acceptable).
+  acceptable?: boolean;
 }
 
 export interface AccessRequestItem {
@@ -667,6 +673,10 @@ export interface TaskDetail extends Task {
   pendingConfigChange?: PendingConfigChange | null;
   ci?: TaskCIStatus | null;
   ciFaults?: { kind?: string; summary?: string; detail?: string }[];
+}
+
+export interface TaskSummariesResponse {
+  tasks: Record<string, TaskDetail>;
 }
 
 // One standing conversation (pkg/ui console_sessions.go

@@ -91,58 +91,49 @@ test("Mermaid diagrams and attached images open full screen on the task page @ph
     // On a phone the description is on the Details tab.
     await page.goto(`/next/task/${task.id}?tab=details`);
     // A phone keeps a hidden second copy of the details; use what shows.
+    // Drawing itself (Source, Before / After, the parse-error note) is
+    // next-mermaid-diagrams.spec.ts's; this spec owns Expand and the viewer.
     const blocks = page.locator(".mermaid-block").filter({ visible: true });
     const desc = blocks.first().locator("xpath=..");
-
-    // The valid fence is a diagram, inside the description and the window.
     const good = blocks.nth(0);
     const svg = good.locator(".mermaid-canvas svg");
     await expect(svg).toBeVisible({ timeout: 20_000 });
-    await expect(good.locator(":scope > .code-card")).toBeHidden();
-    // The diagram's frame stays inside the description and the window;
-    // a diagram wider than the pane scrolls inside it rather than
-    // shrinking its labels past 60%.
+    const natural = await svg.evaluate((el) => el.viewBox.baseVal.width);
+
+    // Expand sits in the diagram's toolbar, inside the description and the
+    // window, level with the view buttons.
+    const expand = good.getByRole("button", {
+      name: "Open diagram full screen",
+    });
     const descBox = await desc.boundingBox();
-    const canvasBox = await good.locator(".mermaid-canvas").boundingBox();
-    expect(canvasBox.x).toBeGreaterThanOrEqual(descBox.x - 0.5);
-    expect(canvasBox.x + canvasBox.width).toBeLessThanOrEqual(
+    const expandBox = await expand.boundingBox();
+    inside(expandBox, vw, vh);
+    expect(expandBox.x + expandBox.width).toBeLessThanOrEqual(
       descBox.x + descBox.width + 0.5,
     );
-    expect(canvasBox.x + canvasBox.width).toBeLessThanOrEqual(vw + 0.5);
-    const svgBox = await svg.boundingBox();
-    const natural = await svg.evaluate((el) => el.viewBox.baseVal.width);
-    expect(svgBox.width).toBeGreaterThanOrEqual(natural * 0.6 - 1);
-    expect(svgBox.width).toBeLessThanOrEqual(natural + 1);
+    expect(expandBox.height).toBeGreaterThanOrEqual(24);
+    const sourceBox = await good
+      .getByRole("button", { name: "Source" })
+      .boundingBox();
+    expect(Math.abs(sourceBox.y - expandBox.y)).toBeLessThan(2);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth - window.innerWidth,
       ),
     ).toBeLessThanOrEqual(0);
-    await expect(svg.locator("text", { hasText: "Proxy" })).toHaveCount(1);
 
-    // Source shows the fence under the diagram, and hides it again.
-    const source = good.getByRole("button", { name: "Source" });
-    await source.click();
-    await expect(source).toHaveAttribute("aria-pressed", "true");
-    await expect(good.locator(":scope > .code-card")).toBeVisible();
-    await source.click();
-    await expect(good.locator(":scope > .code-card")).toBeHidden();
-
-    // The invalid fence keeps its source under a note naming the problem.
+    // A diagram that could not be drawn has nothing to expand.
     const bad = blocks.nth(1);
-    await expect(bad.locator(".mermaid-note")).toContainText(
+    await expect(bad.getByRole("status")).toContainText(
       "Diagram could not be rendered",
     );
-    await expect(bad.locator(".code-card")).toBeVisible();
-    await expect(bad.locator(".code-card pre")).toContainText("A -->");
-    await expect(bad.locator(".mermaid-canvas")).toHaveCount(0);
+    await expect(
+      bad.getByRole("button", { name: "Open diagram full screen" }),
+    ).toBeHidden();
 
     // Expand opens the diagram full screen, fitted to the window; zoom
     // makes it bigger; Escape closes and gives focus back.
     const viewer = page.getByTestId("media-viewer");
-    const expand = good.locator(".code-card-head").getByRole("button", {
-      name: "Open diagram full screen",
-    });
     await expand.focus();
     await page.keyboard.press("Enter");
     await expect(viewer).toBeVisible();

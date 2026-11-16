@@ -317,7 +317,7 @@ export class MediaViewerComponent implements OnDestroy {
     return it.kind === "image" ? `Image: ${it.name}` : it.name;
   });
   // The SVG has passed Mermaid's strict mode and sanitizeMermaidSvg
-  // (shared/mermaid-render.ts) before it was handed to the viewer.
+  // (shared/mermaid.ts) before it was handed to the viewer.
   protected readonly svgHtml = computed<SafeHtml>(() => {
     const it = this.item();
     return this.sanitizer.bypassSecurityTrustHtml(

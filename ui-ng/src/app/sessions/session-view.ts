@@ -14,6 +14,11 @@
 
 import { Marked } from "marked";
 import { renderCodeCard } from "../shared/code-highlight";
+import {
+  hasMermaidFence,
+  transformMermaidTokens,
+  type MermaidToken,
+} from "../shared/mermaid";
 
 export * from "./session-helpers";
 
@@ -114,6 +119,14 @@ function isLocal(href: string): boolean {
 const md = new Marked({
   gfm: true,
   breaks: true,
+  // "mermaid" tokens come from transformMermaidTokens, which builds their
+  // markup from escaped text.
+  extensions: [
+    {
+      name: "mermaid",
+      renderer: (token) => (token as unknown as MermaidToken).html,
+    },
+  ],
   renderer: {
     html({ text }) {
       return text.replace(
@@ -127,11 +140,6 @@ const md = new Marked({
         : escapeText(token.text);
     },
     code({ text, lang }) {
-      // [gMarkdown] draws a ```mermaid fence as a diagram once Mermaid has
-      // loaded, and keeps the code card as the fallback and the Source view.
-      if ((lang || "").trim().split(/\s+/)[0].toLowerCase() === "mermaid") {
-        return `<div class="mermaid-block">${renderCodeCard(text, "mermaid")}</div>`;
-      }
       return renderCodeCard(text, lang);
     },
     // Links open in a new tab and only to web or mail addresses; images
@@ -158,7 +166,19 @@ const md = new Marked({
   },
 });
 
-// renderMarkdown turns a message into HTML for [innerHTML].
-export function renderMarkdown(src: string): string {
-  return md.parse(src, { async: false });
+// renderMarkdown turns a message into HTML for [innerHTML]. With
+// {mermaid: true} (the [gMarkdown] directive, which draws them) ```mermaid
+// fences become diagram blocks; otherwise they stay code cards.
+export function renderMarkdown(
+  src: string,
+  opts: { mermaid?: boolean } = {},
+): string {
+  if (!opts.mermaid || !hasMermaidFence(src)) {
+    return md.parse(src, { async: false });
+  }
+  const lexed = md.lexer(src);
+  const tokens = Object.assign(transformMermaidTokens(lexed), {
+    links: lexed.links,
+  });
+  return md.parser(tokens);
 }

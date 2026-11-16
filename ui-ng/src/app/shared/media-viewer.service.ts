@@ -16,10 +16,23 @@ import { Injectable, computed, signal } from "@angular/core";
 
 // One thing the full-screen viewer can show: an attached image (src is its
 // attachment URL) or a rendered Mermaid diagram (svg is already sanitized
-// by shared/mermaid-render.ts).
+// by shared/mermaid.ts).
 export type ViewerItem =
   | { kind: "image"; name: string; src: string }
   | { kind: "svg"; name: string; svg: string };
+
+let freshId = 0;
+
+// withFreshSvgIds gives the viewer's copy of a drawn Mermaid diagram ids of
+// its own. Mermaid scopes its <style>, markers and node ids under the root
+// svg id, so the copy would otherwise repeat ids still on the page.
+export function withFreshSvgIds(svg: string): string {
+  const root = /<svg[^>]*\sid="([A-Za-z][\w-]*)"/.exec(svg)?.[1];
+  if (!root) return svg;
+  const fresh = `${root}-v${++freshId}`;
+  const escaped = root.replace(/[-]/g, "\\-");
+  return svg.replace(new RegExp(`${escaped}(?!\\d)`, "g"), fresh);
+}
 
 export interface ViewerState {
   items: readonly ViewerItem[];

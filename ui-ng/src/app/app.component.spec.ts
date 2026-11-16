@@ -820,4 +820,45 @@ describe("AppComponent shell", () => {
     expect(details?.textContent).toContain("Antigravity · opus-5.5");
     expect(details?.textContent).toContain("Claude · opus-4.5");
   });
+
+  it("keeps active Tasks narrowing when New board is chosen on /tasks, and drops another page's query", async () => {
+    const { fixture: f } = await render();
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl(
+      "/tasks?tab=asked&q=merge&repo=acme%2Fwidgets&view=timeline",
+    );
+    await f.whenStable();
+
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="rail-create-menu"]')!
+      .click();
+    await f.whenStable();
+    const newBoardOnTasks = [
+      ...el(f).querySelectorAll<HTMLAnchorElement>(
+        '[data-testid="create-menu"] a',
+      ),
+    ].find((a) => a.textContent?.includes("New board"))!;
+    newBoardOnTasks.click();
+    await f.whenStable();
+    expect(router.url).toContain("tab=asked");
+    expect(router.url).toContain("q=merge");
+    expect(router.url).toContain("view=timeline");
+    expect(router.url).toContain("newBoard=1");
+
+    await router.navigateByUrl("/inbox?item=4");
+    await f.whenStable();
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="rail-create-menu"]')!
+      .click();
+    await f.whenStable();
+    const newBoardOnInbox = [
+      ...el(f).querySelectorAll<HTMLAnchorElement>(
+        '[data-testid="create-menu"] a',
+      ),
+    ].find((a) => a.textContent?.includes("New board"))!;
+    newBoardOnInbox.click();
+    await f.whenStable();
+    expect(router.url).toBe("/tasks?newBoard=1");
+  });
 });
