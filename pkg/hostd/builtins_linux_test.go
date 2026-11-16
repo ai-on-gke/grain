@@ -120,8 +120,17 @@ func TestHostdOffersNoBuiltinsWhenItsBinaryIsWritableByOthers(t *testing.T) {
 	if !strings.Contains(ts.logs.String(), "not grain's built-in ones") {
 		t.Errorf("logs do not say why:\n%s", ts.logs.String())
 	}
-	// The remedy keeps the binary executable: "make it 0644" did not.
-	if logs := ts.logs.String(); !strings.Contains(logs, "chmod go-w") || strings.Contains(logs, "0644") {
+	// The remedy keeps the binary executable: "make it 0644" did not. Paths
+	// are left out of the 0644 check: the random temp directory's name can
+	// hold those digits (/tmp/hostd3620644524).
+	logs := ts.logs.String()
+	var words []string
+	for _, w := range strings.Fields(logs) {
+		if !strings.Contains(w, "/") {
+			words = append(words, w)
+		}
+	}
+	if !strings.Contains(logs, "chmod go-w") || strings.Contains(strings.Join(words, " "), "0644") {
 		t.Errorf("logs do not say to remove group and other write, and only that:\n%s", logs)
 	}
 }
