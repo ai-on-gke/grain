@@ -186,7 +186,6 @@ import { extractGrainDrafts } from "./director-draft";
             mode="expanded"
             data-testid="director-drawer-conversation"
             [taskId]="tid"
-            [anchorIds]="false"
             [repo]="detail()?.repo"
             [comments]="comments()"
             [transcript]="sessions.directorTranscript()"

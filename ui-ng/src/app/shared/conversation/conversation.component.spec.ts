@@ -13,10 +13,11 @@
 // limitations under the License.
 
 import { ComponentFixture, TestBed } from "@angular/core/testing";
-import { Component, signal, viewChild } from "@angular/core";
+import { Component, signal } from "@angular/core";
 import {
+  type CommentTarget,
   ConversationComponent,
-  ConversationMode,
+  type ConversationMode,
 } from "./conversation.component";
 import type { Comment } from "../../api/models";
 
@@ -38,6 +39,7 @@ function mk(id: number, body = `message ${id}`): Comment {
       <g-conversation
         [taskId]="'42'"
         [comments]="comments()"
+        [targetComment]="targetComment()"
         [(mode)]="mode"
         [(draft)]="draft"
         [config]="{ placeholder: 'Type here', submitLabel: 'Send to #42' }"
@@ -48,10 +50,10 @@ function mk(id: number, body = `message ${id}`): Comment {
 })
 class HostComponent {
   readonly comments = signal<Comment[]>([mk(1), mk(2)]);
+  readonly targetComment = signal<CommentTarget | null>(null);
   readonly mode = signal<ConversationMode>("inline");
   readonly draft = signal("");
   readonly sent: string[] = [];
-  readonly conv = viewChild.required(ConversationComponent);
 }
 
 describe("ConversationComponent", () => {
@@ -203,14 +205,19 @@ describe("ConversationComponent", () => {
     expect(thread.scrollTop).toBe(2000);
   });
 
-  it("counts a page of earlier messages as nothing new", async () => {
-    f.componentInstance.comments.set([mk(5), mk(6)]);
+  it("follows new messages without a pill when already at the bottom", async () => {
+    f.componentInstance.comments.set([mk(1), mk(2), mk(3)]);
     f.detectChanges();
     await f.whenStable();
+    f.detectChanges();
+    expect(q('[data-testid="convo-jump"]')).toBeNull();
+  });
+
+  it("does not raise New messages when older history is paged in above, and reveals, focuses and highlights a linked comment", async () => {
     const thread = q<HTMLElement>(".convo-thread")!;
     Object.defineProperty(thread, "scrollHeight", {
       configurable: true,
-      value: 2000,
+      value: 2400,
     });
     Object.defineProperty(thread, "clientHeight", {
       configurable: true,
@@ -218,33 +225,33 @@ describe("ConversationComponent", () => {
     });
     thread.scrollTop = 0;
     thread.dispatchEvent(new Event("scroll"));
-    f.componentInstance.comments.set([mk(3), mk(4), mk(5), mk(6)]);
+
+    f.componentInstance.comments.set([mk(-2), mk(-1), mk(0), mk(1), mk(2)]);
     f.detectChanges();
     await f.whenStable();
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).toBeNull();
-    f.componentInstance.comments.set([mk(3), mk(4), mk(5), mk(6), mk(7)]);
+
+    f.componentInstance.targetComment.set({ id: 0, seq: 1 });
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    const target = q<HTMLElement>('[data-comment-id="0"]')!;
+    expect(target.classList.contains("comment-highlight")).toBe(true);
+    expect(document.activeElement).toBe(target);
+
+    // A new message at the end still counts while reading the linked one.
+    f.componentInstance.comments.set([
+      mk(-2),
+      mk(-1),
+      mk(0),
+      mk(1),
+      mk(2),
+      mk(3),
+    ]);
     f.detectChanges();
     await f.whenStable();
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).not.toBeNull();
-  });
-
-  it("anchors each message and reveals one by id, focused and highlighted", () => {
-    const el = q<HTMLElement>("#comment-2")!;
-    expect(el.dataset["commentId"]).toBe("2");
-    expect(f.componentInstance.conv().revealComment(99)).toBe(false);
-    expect(f.componentInstance.conv().revealComment(2)).toBe(true);
-    expect(document.activeElement).toBe(el);
-    expect(el.classList).toContain("is-linked");
-    expect(el.getAttribute("tabindex")).toBe("-1");
-  });
-
-  it("follows new messages without a pill when already at the bottom", async () => {
-    f.componentInstance.comments.set([mk(1), mk(2), mk(3)]);
-    f.detectChanges();
-    await f.whenStable();
-    f.detectChanges();
-    expect(q('[data-testid="convo-jump"]')).toBeNull();
   });
 });

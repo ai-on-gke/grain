@@ -56,7 +56,10 @@ import {
 } from "../shared/zoned-day";
 import { isHuman } from "../sessions/session-helpers";
 
-import { ConversationComponent } from "../shared/conversation/conversation.component";
+import {
+  type CommentTarget,
+  ConversationComponent,
+} from "../shared/conversation/conversation.component";
 
 import {
   AttachmentListComponent,
@@ -90,7 +93,7 @@ import {
 } from "./accept-findings-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
-import { TaskStore } from "./task.store";
+import { TaskStore, parseCommentFragment } from "./task.store";
 
 export type TaskTab = "conversation" | "runs" | "changes" | "tree" | "details";
 
@@ -114,20 +117,6 @@ function isTab(v: unknown): v is TaskTab {
 }
 
 // duration is a run's length in words ("4m 12s", "38s").
-// linkedComment reads a #comment=<id> fragment ("comment=13") as the
-// comment it links to on task, or null for any other fragment. A
-// #comment= naming no comment (truncated or mistyped on its way to the
-// address bar) is a link with a null comment, which is said, not ignored.
-export function linkedComment(
-  fragment: string | null | undefined,
-  task: string,
-): { task: string; comment: number | null; hash: string } | null {
-  const f = String(fragment ?? "").trim();
-  if (!f.startsWith("comment=")) return null;
-  const m = /^comment=(\d+)$/.exec(f);
-  return { task, comment: m ? Number(m[1]) : null, hash: `#${f.slice(0, 40)}` };
-}
-
 export function duration(from?: string, to?: string): string {
   if (!from) return "";
   const end = to ? Date.parse(to) : Date.now();
@@ -169,6 +158,7 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/detail-panes.css",
     "../shared/mermaid.css",
   ],
   host: {
@@ -837,6 +827,7 @@ export function duration(from?: string, to?: string): string {
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
                   [preserveFragment]="!!pane()"
+                  (click)="forceConversationTab.set(false)"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -870,6 +861,7 @@ export function duration(from?: string, to?: string): string {
                     [repo]="t.repo"
                     [comments]="comments()"
                     [questionCommentId]="t.questionCommentId"
+                    [targetComment]="commentTarget()"
                     [olderCount]="t.olderComments ?? 0"
                     [loadingOlder]="store.isBusy('older-comments', t.id)"
                     (loadEarlier)="store.loadOlderComments()"
@@ -1213,72 +1205,81 @@ export function duration(from?: string, to?: string): string {
 
         <ng-template #details>
           <div class="details" data-testid="task-details">
-            <h2 class="section-title">Details</h2>
-            @if (t.description) {
-              <div
-                class="msg-body description"
-                [gMarkdown]="t.description"
-              ></div>
-            }
-            @if (t.attachments?.length) {
-              <g-attachment-list
-                [taskId]="t.id"
-                [repo]="t.repo"
-                [attachments]="t.attachments"
-              />
-            }
-            <dl class="facts">
-              <dt>Priority</dt>
-              <dd>
-                <g-priority-chip
-                  [priority]="prio(t)"
-                  [editable]="priorityEditable()"
-                  [disabled]="store.isBusy('priority', t.id)"
-                  testid="task-priority"
-                  menuTestid="task-priority-menu"
-                  (priorityChange)="setDirectPriority($event)"
-                />
-              </dd>
-              <dt>Repository</dt>
-              <dd>{{ t.repo || "None" }}</dd>
-              @if (t.base) {
-                <dt>Base</dt>
-                <dd class="mono">{{ t.base }}</dd>
-              }
-              <dt>Model</dt>
-              <dd>{{ t.model || "Deployment default" }}</dd>
-              @if (t.agentBackendId) {
-                <dt>Connection</dt>
-                <dd class="mono">{{ t.agentBackendId }}</dd>
-              }
-              @if (t.networkAccess) {
-                <dt>Network</dt>
-                <dd>{{ t.networkAccess }}</dd>
-              }
-              <dt>Filed</dt>
-              <dd>
-                {{ filedAgo(t.createdAt) }} by
-                {{ t.authorLabel || t.author || "unknown" }}
-              </dd>
-              @if (t.approvedByLabel) {
-                <dt>Approved by</dt>
-                <dd>{{ t.approvedByLabel }}</dd>
-              }
-              @if (t.admission && t.admission !== "standard") {
-                <dt>Admission</dt>
-                <dd>{{ t.admission }} (starts past worker limits)</dd>
-              }
-              @if (t.goal; as g) {
-                <dt>Goal</dt>
-                <dd>{{ g.kind }}</dd>
-              }
-              <dt>Capabilities</dt>
-              <dd>{{ capCount() }}</dd>
-              @if (t.closedReason) {
-                <dt>Closed</dt>
-                <dd>{{ t.closedReason }}</dd>
-              }
-            </dl>
+            <div class="g-panes">
+              <section class="g-pane" data-testid="task-prompt-pane">
+                <h2 class="g-pane-title">Prompt</h2>
+                @if (t.description) {
+                  <div
+                    class="msg-body description g-pane-prompt"
+                    [gMarkdown]="t.description"
+                  ></div>
+                } @else {
+                  <p class="g-pane-empty">No prompt text.</p>
+                }
+                @if (t.attachments?.length) {
+                  <g-attachment-list
+                    [taskId]="t.id"
+                    [repo]="t.repo"
+                    [attachments]="t.attachments"
+                  />
+                }
+              </section>
+              <section class="g-pane" data-testid="task-attributes-pane">
+                <h2 class="g-pane-title">Attributes</h2>
+                <dl class="g-attrs">
+                  <dt>Priority</dt>
+                  <dd>
+                    <g-priority-chip
+                      [priority]="prio(t)"
+                      [editable]="priorityEditable()"
+                      [disabled]="store.isBusy('priority', t.id)"
+                      testid="task-priority"
+                      menuTestid="task-priority-menu"
+                      (priorityChange)="setDirectPriority($event)"
+                    />
+                  </dd>
+                  <dt>Repository</dt>
+                  <dd>{{ t.repo || "None" }}</dd>
+                  @if (t.base) {
+                    <dt>Base</dt>
+                    <dd class="mono">{{ t.base }}</dd>
+                  }
+                  <dt>Model</dt>
+                  <dd>{{ t.model || "Deployment default" }}</dd>
+                  @if (t.agentBackendId) {
+                    <dt>Connection</dt>
+                    <dd class="mono">{{ t.agentBackendId }}</dd>
+                  }
+                  @if (t.networkAccess) {
+                    <dt>Network</dt>
+                    <dd>{{ t.networkAccess }}</dd>
+                  }
+                  <dt>Filed</dt>
+                  <dd>
+                    {{ filedAgo(t.createdAt) }} by
+                    {{ t.authorLabel || t.author || "unknown" }}
+                  </dd>
+                  @if (t.approvedByLabel) {
+                    <dt>Approved by</dt>
+                    <dd>{{ t.approvedByLabel }}</dd>
+                  }
+                  @if (t.admission && t.admission !== "standard") {
+                    <dt>Admission</dt>
+                    <dd>{{ t.admission }} (starts past worker limits)</dd>
+                  }
+                  @if (t.goal; as g) {
+                    <dt>Goal</dt>
+                    <dd>{{ g.kind }}</dd>
+                  }
+                  <dt>Capabilities</dt>
+                  <dd>{{ capCount() }}</dd>
+                  @if (t.closedReason) {
+                    <dt>Closed</dt>
+                    <dd>{{ t.closedReason }}</dd>
+                  }
+                </dl>
+              </section>
+            </div>
 
             <!-- Capabilities & Grants Editor -->
             @if (can("POST /api/tasks/{id}/capabilities")) {
@@ -1526,19 +1527,6 @@ export class TaskDetailComponent implements OnDestroy {
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
   private readonly moreWrap = viewChild<ElementRef<HTMLElement>>("moreWrap");
-  private readonly conversation = viewChild(ConversationComponent);
-
-  // linked is the comment the address's #comment=<id> points at, for the
-  // task that was open when it arrived, until it has been shown (or said
-  // not to be there). comment is null for a #comment= naming no comment.
-  private readonly linked = signal<{
-    task: string;
-    comment: number | null;
-    hash: string;
-  } | null>(null);
-  private readonly fragment = signal<string | null>(null);
-  private linkLoading = "";
-  private linkTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.moreMenuOpen()) {
@@ -1548,12 +1536,24 @@ export class TaskDetailComponent implements OnDestroy {
     }
   };
 
+  // A #comment=<id> link: the comment to reveal once it is held, the
+  // request waiting for it, and whether it switched to Conversation.
+  protected readonly commentTarget = signal<CommentTarget | null>(null);
+  protected readonly forceConversationTab = signal(false);
+  private readonly pendingCommentLink = signal<CommentTarget | null>(null);
+  private commentSeq = 0;
+  private lastFragmentKey = "";
+  private lastFragmentAt = 0;
+  // fragmentFor is the fragment last followed and the task it was for.
+  private fragmentFor: { id: string; raw: string } | null = null;
+
   protected readonly t = computed(() => this.store.detail());
   protected readonly partOfStream = computed(() => {
     const id = this.t()?.id;
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
+    if (this.forceConversationTab()) return "conversation";
     const rp =
       this.pane() && isTab(this.routePane()) ? this.routePane() : undefined;
     const v = rp ?? this.tab();
@@ -1758,37 +1758,39 @@ export class TaskDetailComponent implements OnDestroy {
     const paneSub = route.queryParamMap.subscribe((q) =>
       this.routePane.set(q.get("pane") ?? undefined),
     );
-    // /next/task/<id>#comment=<n> and /next/tasks?task=<id>#comment=<n>,
-    // the links grain writes into notes and notifications.
-    const fragSub = route.fragment.subscribe((f) => this.fragment.set(f));
+    // #comment=<id> arrives with the route (a link followed into the app),
+    // or as a hash change on a page already open.
+    const fragSub = route.fragment.subscribe((frag) => {
+      if (frag) this.queueCommentFragment(frag);
+    });
+    const win = this.doc.defaultView;
+    const onHash = (): void =>
+      this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
+    win?.addEventListener("hashchange", onHash);
     inject(DestroyRef).onDestroy(() => {
       paneSub.unsubscribe();
       fragSub.unsubscribe();
-      if (this.linkTimer) clearTimeout(this.linkTimer);
+      win?.removeEventListener("hashchange", onHash);
     });
-    // A #comment= belongs to the task it arrived with. When the task
-    // changes under an unchanged fragment -- a pane stepping to another
-    // task, a workstream node click that keeps the address's fragment --
-    // it is not followed again on the new task.
-    let lastFragment: string | null | undefined;
-    let followed = false;
-    effect(() => {
-      const frag = this.fragment();
-      const id = this.id();
-      untracked(() => {
-        if (followed && frag === lastFragment) {
-          if (this.linked()?.task !== id) this.linked.set(null);
-          return;
-        }
-        followed = true;
-        lastFragment = frag;
-        this.linked.set(linkedComment(frag, id));
-      });
-    });
-    effect(() => this.followCommentLink());
     effect(() => {
       const id = this.id();
       untracked(() => {
+        this.commentTarget.set(null);
+        this.pendingCommentLink.set(null);
+        this.forceConversationTab.set(false);
+        const raw =
+          route.snapshot.fragment || this.doc.defaultView?.location.hash || "";
+        // A fragment belongs to the task it arrived with. A pane (Tasks,
+        // Workstreams) that moves to another task keeps the address's
+        // #comment=, which names a comment of the task it came from.
+        const frag = raw.replace(/^#/, "");
+        const prev = this.fragmentFor;
+        const stale = !!frag && !!prev && prev.id !== id && prev.raw === frag;
+        this.fragmentFor = stale ? prev : frag ? { id, raw: frag } : null;
+        const parsed =
+          !stale && this.fragmentIsForTask(id)
+            ? parseCommentFragment(raw)
+            : ({ kind: "none" } as const);
         this.confirmClose.set(false);
         this.confirming.set(null);
         this.editOpen.set(false);
@@ -1799,7 +1801,53 @@ export class TaskDetailComponent implements OnDestroy {
         this.replyTarget.set(null);
         this.deferUntilOpen.set(false);
         this.deferDate.set("");
-        this.store.open(id);
+        this.store.open(id, parsed.kind === "comment" ? parsed.id : null);
+        if (raw && !stale) this.queueCommentFragment(raw, id);
+      });
+    });
+    // Reveal a linked comment once the conversation holds it, paging older
+    // comments in (500 at a time) when it is further back than shown.
+    effect(() => {
+      const pending = this.pendingCommentLink();
+      const t = this.t();
+      if (!pending || !t || t.id !== this.id()) return;
+      untracked(() => {
+        const list = t.comments ?? [];
+        if (list.some((c) => c.id === pending.id)) {
+          this.pendingCommentLink.set(null);
+          this.commentTarget.set(pending);
+          return;
+        }
+        const mayBeOlder =
+          (t.olderComments ?? 0) > 0 &&
+          (list.length === 0 || pending.id < list[0].id);
+        if (!mayBeOlder) {
+          this.pendingCommentLink.set(null);
+          this.snackbar.show(
+            `Comment ${pending.id} is not in this task's conversation.`,
+          );
+          return;
+        }
+        if (this.store.isBusy("older-comments", t.id)) return;
+        const taskId = t.id;
+        void this.store.loadOlderCommentsThrough(pending.id).then((res) => {
+          if (
+            this.id() !== taskId ||
+            this.pendingCommentLink()?.seq !== pending.seq
+          ) {
+            return;
+          }
+          this.pendingCommentLink.set(null);
+          if (res === "found") {
+            this.commentTarget.set(pending);
+          } else if (res === "missing") {
+            // Only "missing" says so: a failed read is already in the
+            // page's error banner and says nothing about the comment.
+            this.snackbar.show(
+              `Comment ${pending.id} is not in this task's conversation.`,
+            );
+          }
+        });
       });
     });
     effect(() => {
@@ -1834,73 +1882,6 @@ export class TaskDetailComponent implements OnDestroy {
     void this.loadConfigCapabilities();
   }
 
-  // followCommentLink shows the comment linked: on the Conversation tab,
-  // after paging back to it when it is older than the comments loaded,
-  // scrolled to, focused and highlighted (ConversationComponent's
-  // revealComment). A comment that is not this task's says so in a
-  // snackbar and leaves the page where it was.
-  private followCommentLink(): void {
-    const link = this.linked();
-    const t = this.t();
-    const tab = this.current();
-    if (!link || !t || t.id !== link.task) return;
-    untracked(() => {
-      if (link.comment === null) {
-        this.linked.set(null);
-        this.snackbar.show(`This link's ${link.hash} does not name a comment.`);
-        return;
-      }
-      const id = link.comment;
-      const comments = t.comments ?? [];
-      if (!comments.some((c) => c.id === id)) {
-        const first = comments[0]?.id;
-        const key = `${t.id}:${id}`;
-        if ((t.olderComments ?? 0) > 0 && first !== undefined && id < first) {
-          if (this.linkLoading === key) return;
-          this.linkLoading = key;
-          void this.store.loadCommentsThrough(id).then((outcome) => {
-            if (this.linkLoading === key) this.linkLoading = "";
-            if (this.linked() !== link) return;
-            // A failed read is reported by the store's own error banner;
-            // it says nothing about whether the comment exists.
-            if (outcome === "missing") this.notInConversation(id);
-            else if (outcome === "aborted") this.linked.set(null);
-          });
-          return;
-        }
-        if (this.linkLoading !== key) this.notInConversation(id);
-        return;
-      }
-      if (tab !== "conversation") {
-        void this.router.navigate([], {
-          queryParams: this.tabQuery("conversation"),
-          queryParamsHandling: "merge",
-          preserveFragment: true,
-          replaceUrl: true,
-        });
-        return;
-      }
-      // The thread draws a frame after the detail lands; look for the
-      // comment for up to two seconds.
-      this.linked.set(null);
-      if (this.linkTimer) clearTimeout(this.linkTimer);
-      let tries = 0;
-      const look = () => {
-        this.linkTimer = null;
-        if (this.store.detail()?.id !== link.task) return;
-        if (this.conversation()?.revealComment(id)) return;
-        if (++tries < 40) this.linkTimer = setTimeout(look, 50);
-        else this.snackbar.show(`Comment ${id} is not shown on this page.`);
-      };
-      this.linkTimer = setTimeout(look);
-    });
-  }
-
-  private notInConversation(id: number): void {
-    this.linked.set(null);
-    this.snackbar.show(`Comment ${id} is not in this task's conversation.`);
-  }
-
   private async loadConfigCapabilities(): Promise<void> {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
@@ -1914,6 +1895,44 @@ export class TaskDetailComponent implements OnDestroy {
   ngOnDestroy(): void {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
     this.store.close(this.id());
+  }
+
+  // fragmentIsForTask reports whether the page's fragment belongs to task
+  // id: on /task/<n> (or /tasks/<n>) only when n is id; in a list's pane,
+  // whichever task the pane shows.
+  private fragmentIsForTask(id: string): boolean {
+    const path = this.doc.defaultView?.location.pathname ?? "";
+    const m = /\/tasks?\/([^/?#]+)\/?$/.exec(path);
+    return !m || decodeURIComponent(m[1]) === String(id);
+  }
+
+  // queueCommentFragment asks for the comment a #comment=<id> fragment
+  // names, switching to Conversation; any other fragment is left alone.
+  private queueCommentFragment(raw: string, taskId?: string): void {
+    let id = taskId;
+    if (id === undefined) {
+      try {
+        id = this.id();
+      } catch {
+        return; // The id input is not bound yet; the id effect reads it.
+      }
+    }
+    if (!id || !this.fragmentIsForTask(id)) return;
+    const parsed = parseCommentFragment(raw);
+    if (parsed.kind === "none") return;
+    // The route and the window can both report one navigation.
+    const key = `${id}:${raw.replace(/^#/, "")}`;
+    const now = Date.now();
+    if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) return;
+    this.lastFragmentKey = key;
+    this.lastFragmentAt = now;
+    this.fragmentFor = { id, raw: raw.replace(/^#/, "") };
+    if (parsed.kind === "invalid") {
+      this.snackbar.show(`This link's ${parsed.raw} does not name a comment.`);
+      return;
+    }
+    this.forceConversationTab.set(true);
+    this.pendingCommentLink.set({ id: parsed.id, seq: ++this.commentSeq });
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {

@@ -1,0 +1,97 @@
+/* Prompt and Attributes panes: the one structure task detail (full page and
+   inspector panes) and the Processes inspectors use to keep what an agent is
+   told apart from the facts about it. Design book §4 "Prompt and attributes
+   panes". */
+
+.g-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-lowest);
+}
+
+:root[data-theme="dark"] .g-pane {
+  background: var(--md-sys-color-surface-container);
+}
+
+.g-panes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.g-pane-title {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.g-pane-prompt {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.g-pane-prompt pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.g-pane-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Key-value attributes. The key column never takes more than 40% of the
+   pane, so a long value wraps beside its key instead of clipping. Scoped to
+   .g-pane so a page's own single-class rule (task detail's .facts, say)
+   cannot win the cascade when its stylesheet happens to load later. */
+.g-pane .g-attrs {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.g-pane .g-attrs dt {
+  max-width: 40cqi;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+.g-pane .g-attrs dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.g-pane:has(> .g-attrs) {
+  container-type: inline-size;
+}
+
+/* On narrow panes the key sits over its value. */
+@container (max-width: 260px) {
+  .g-pane .g-attrs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .g-pane .g-attrs dt {
+    max-width: none;
+  }
+  .g-pane .g-attrs dd + dt {
+    margin-top: 8px;
+  }
+}

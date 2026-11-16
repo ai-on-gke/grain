@@ -120,7 +120,6 @@ import {
             mode="expanded"
             data-testid="shaper-conversation"
             [taskId]="tid"
-            [anchorIds]="false"
             [repo]="detail()?.repo"
             [comments]="comments()"
             [transcript]="sessions.directorTranscript()"

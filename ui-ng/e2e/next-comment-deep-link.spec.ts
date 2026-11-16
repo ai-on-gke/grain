@@ -68,6 +68,13 @@ async function rolledOver(page: Page): Promise<Detail> {
   return from;
 }
 
+// msg is comment id in the task's own conversation thread.
+function msg(page: Page, id: number): Locator {
+  return page
+    .getByRole("log", { name: "Conversation thread" })
+    .locator(`article.msg[data-comment-id="${id}"]`);
+}
+
 // expectInView asserts the comment's whole box is inside the viewport and
 // inside the conversation thread that clips it.
 async function expectInView(page: Page, comment: Locator): Promise<void> {
@@ -108,7 +115,7 @@ test(
     const t = await longestThread(page);
     const first = t.comments![0].id;
     await page.goto(`/next/task/${t.id}#comment=${first}`);
-    const comment = page.locator(`#comment-${first}`);
+    const comment = msg(page, first);
     await expectInView(page, comment);
 
     // A link to another comment on the page already open follows it too.
@@ -116,7 +123,7 @@ test(
     await page.evaluate((id) => {
       window.location.hash = `comment=${id}`;
     }, last);
-    await expectInView(page, page.locator(`#comment-${last}`));
+    await expectInView(page, msg(page, last));
     expect(pageErrors).toEqual([]);
   },
 );
@@ -135,7 +142,7 @@ test(
         new RegExp(`/next/task/${t.id}\\?.*#comment=${first}$`),
       );
     }
-    await expectInView(page, page.locator(`#comment-${first}`));
+    await expectInView(page, msg(page, first));
   },
 );
 
@@ -148,7 +155,7 @@ test(
     const first = from.comments![0].id;
     await page.goto(`/next/task/${from.id}#comment=${first}`);
     await expect(page.getByTestId("task-rolled-over-to")).toBeVisible();
-    await expectInView(page, page.locator(`#comment-${first}`));
+    await expectInView(page, msg(page, first));
   },
 );
 
@@ -177,7 +184,7 @@ test(
       await route.fulfill({ response: res, json: body });
     });
     await page.goto(`/next/task/${t.id}#comment=${ids[0]}`);
-    await expectInView(page, page.locator(`#comment-${ids[0]}`));
+    await expectInView(page, msg(page, ids[0]));
     expect(before).toHaveLength(1);
     expect(before[0]).toContain(`comments_before=${ids[ids.length - 1]}`);
     await expect(page.getByTestId("load-older-comments")).toHaveCount(0);
@@ -193,7 +200,7 @@ test("a #comment= naming no comment of the task says so", async ({ page }) => {
   ).toBeVisible();
 });
 
-// Review 6251's findings, each held in a browser.
+// The review's findings (task 6251), each held in a browser.
 
 test("a second #comment= link during a page-back walk is not reported missing", async ({
   page,
@@ -203,9 +210,12 @@ test("a second #comment= link during a page-back walk is not reported missing", 
   const ids = t.comments!.map((c) => c.id);
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
+  let walking!: () => void;
+  const walk = new Promise<void>((r) => (walking = r));
   await page.route(new RegExp(`/api/tasks/${t.id}\\?`), async (route) => {
     const url = new URL(route.request().url());
     if (url.searchParams.has("comments_before")) {
+      walking();
       await gate;
       return route.continue();
     }
@@ -217,14 +227,15 @@ test("a second #comment= link during a page-back walk is not reported missing", 
     body.olderComments = ids.length - 1;
     await route.fulfill({ response: res, json: body });
   });
+  // A cold #comment= load pages back before it draws the thread.
   await page.goto(`/next/task/${t.id}#comment=${ids[1]}`);
-  await expect(page.locator(`#comment-${ids[ids.length - 1]}`)).toBeVisible();
+  await walk;
   await page.evaluate((id) => {
     window.location.hash = `comment=${id}`;
   }, ids[0]);
   await page.waitForTimeout(200);
   release();
-  await expectInView(page, page.locator(`#comment-${ids[0]}`));
+  await expectInView(page, msg(page, ids[0]));
   await expect(
     page.getByText(/is not in this task's conversation/),
   ).toHaveCount(0);
@@ -278,59 +289,7 @@ test("a bare #comment= link in a note stays on the task", async ({ page }) => {
   await expect(page).toHaveURL(
     new RegExp(`/next/task/${t.id}#comment=${first}$`),
   );
-  await expectInView(page, page.locator(`#comment-${first}`));
-});
-
-test("grabbing the thread ends the settle, and focus stays visible after the ring", async ({
-  page,
-}) => {
-  await page.goto("/next/");
-  const t = await longestThread(page);
-  const first = t.comments![0].id;
-  await page.goto(`/next/task/${t.id}`);
-  await expect(page.locator(`#comment-${first}`)).toBeAttached();
-  const top = await page.evaluate(async (id) => {
-    const th = document.querySelector<HTMLElement>(".convo-thread")!;
-    window.location.hash = `comment=${id}`;
-    const el = () => document.getElementById(`comment-${id}`);
-    while (!el()?.classList.contains("is-linked")) {
-      await new Promise((r) => requestAnimationFrame(r));
-    }
-    th.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    th.style.scrollBehavior = "auto";
-    th.scrollTop = 40;
-    await new Promise((r) => setTimeout(r, 300));
-    return th.scrollTop;
-  }, first);
-  expect(top).toBe(40);
-  const comment = page.locator(`#comment-${first}`);
-  await expect(comment).not.toHaveClass(/is-linked/, { timeout: 4000 });
-  await expect(comment).toBeFocused();
-  const outline = await comment.evaluate(
-    (e) => getComputedStyle(e).outlineColor,
-  );
-  expect(outline).not.toBe("rgba(0, 0, 0, 0)");
-});
-
-test("the Director drawer beside its own task does not repeat comment ids", async ({
-  page,
-}) => {
-  await page.goto("/next/task/13");
-  await expect(
-    page.locator("g-task-detail [id^=comment-]").first(),
-  ).toBeVisible();
-  await page.keyboard.press("d");
-  await expect(
-    page.locator("g-director-drawer [data-comment-id]").first(),
-  ).toBeVisible();
-  const dups = await page.evaluate(() => {
-    const seen = new Map<string, number>();
-    for (const e of Array.from(document.querySelectorAll("[id^=comment-]"))) {
-      seen.set(e.id, (seen.get(e.id) ?? 0) + 1);
-    }
-    return [...seen].filter(([, n]) => n > 1);
-  });
-  expect(dups).toEqual([]);
+  await expectInView(page, msg(page, first));
 });
 
 test("a #comment= is not followed again on the next task a workstream pane shows", async ({
