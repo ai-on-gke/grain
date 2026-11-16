@@ -189,6 +189,7 @@ import { extractGrainDrafts } from "./director-draft";
             [repo]="detail()?.repo"
             [comments]="comments()"
             [transcript]="sessions.directorTranscript()"
+            [finishedTranscript]="lastTurn()"
             [draft]="draft()"
             (draftChange)="draft.set($event)"
             [stagedAttachments]="staged()"
@@ -239,6 +240,10 @@ export class DirectorDrawerComponent implements OnInit, OnDestroy {
     () => this.sessions.directorRow()?.session.taskId ?? "",
   );
   protected readonly comments = computed(() => this.detail()?.comments ?? []);
+  protected readonly lastTurn = computed(() => {
+    const t = this.sessions.directorLastTurn();
+    return t && t.taskId === this.taskId() ? t.text : null;
+  });
 
   protected readonly latestDraft = computed(() => {
     const list = this.comments();

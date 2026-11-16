@@ -1793,9 +1793,9 @@ describe("inbox page helpers", () => {
       await new Promise((r) => setTimeout(r, 20));
       await f.whenStable();
 
-      expect(q(f, '[data-testid="inbox-live-transcript"]')?.textContent).toBe(
-        "step 1: checking cluster...",
-      );
+      expect(
+        q(f, '[data-testid="inbox-live-transcript"]')?.textContent?.trim(),
+      ).toBe("step 1: checking cluster...");
 
       const store = TestBed.inject(InboxStore);
       expect(store.selectedTranscript()).toBe("step 1: checking cluster...");

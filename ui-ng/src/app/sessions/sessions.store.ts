@@ -163,6 +163,14 @@ export class SessionsStore {
 
   readonly directorTranscript = signal<string | null>(null);
 
+  // The Director's last finished turn's transcript, kept after the turn ends
+  // so its steps fold into an "N steps" disclosure on the reply instead of
+  // vanishing. Only what this page already polled (and the attempt's stored
+  // transcript, read once at the end); nothing new is stored server-side.
+  readonly directorLastTurn = signal<{ taskId: string; text: string } | null>(
+    null,
+  );
+
   readonly status = computed(() => sessionStatus(this.selected()?.task));
 
   readonly currentLiveKey = computed(() =>
@@ -508,12 +516,12 @@ export class SessionsStore {
       row.task?.state !== "running" ||
       row.task?.activityBySetup
     ) {
-      this.stopDirectorTranscript();
+      this.endDirectorTranscript();
       return;
     }
     const open = (detail?.attempts ?? []).find((a) => !a.finishedAt);
     if (!open) {
-      this.stopDirectorTranscript();
+      this.endDirectorTranscript();
       return;
     }
     const taskId = row.session.taskId;
@@ -532,6 +540,38 @@ export class SessionsStore {
         TRANSCRIPT_POLL_MS,
       );
     });
+  }
+
+  // A turn that was being followed has ended: keep what it did for the
+  // reply's "N steps" disclosure, then read the attempt's whole transcript
+  // once, since the last poll may predate its final steps.
+  private endDirectorTranscript(): void {
+    const key = this.transcriptKey;
+    const text = this.directorTranscript();
+    this.stopDirectorTranscript();
+    if (!key) return;
+    const [taskId, n] = key.split(":");
+    if (text?.trim()) this.directorLastTurn.set({ taskId, text });
+    void this.loadDirectorLastTurn(taskId, Number(n));
+  }
+
+  private async loadDirectorLastTurn(
+    taskId: string,
+    attemptNo: number,
+  ): Promise<void> {
+    try {
+      const r = await this.api.get<{ transcript?: string }>(
+        "GET /api/tasks/{id}/attempts/{number}/transcript",
+        { id: taskId, number: attemptNo },
+      );
+      // A newer turn started meanwhile owns the thread now.
+      if (this.transcriptKey) return;
+      if (r?.transcript?.trim()) {
+        this.directorLastTurn.set({ taskId, text: r.transcript });
+      }
+    } catch {
+      // Keep whatever the live polls already read.
+    }
   }
 
   private stopDirectorTranscript(): void {
