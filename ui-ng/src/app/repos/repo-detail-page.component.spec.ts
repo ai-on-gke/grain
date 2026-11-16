@@ -22,6 +22,7 @@ import {
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
+import { routes as appRoutes } from "../app.routes";
 import {
   RepoDetailPageComponent,
   declaredPushRef,
@@ -29,6 +30,7 @@ import {
   releaseActionReasons,
   removeRepoMessage,
   unjudgedGatesFor,
+  unknownReleaseText,
 } from "./repo-detail-page.component";
 
 interface RepoCall {
@@ -48,6 +50,9 @@ class FakeRepoApi {
   calls: RepoCall[] = [];
   ciMode = "grain";
   refusePut: string | null = null;
+  releasesList: { name: string; status: string; prodBranch: string }[] = [
+    { name: "v1.2", status: "active", prodBranch: "v1.2" },
+  ];
   // gates answers GET /api/base-branch-gates from the stored CI mode, as
   // the server does for a watched branch it has never enrolled.
   gates = (): unknown[] =>
@@ -146,16 +151,15 @@ class FakeRepoApi {
       });
     }
     if (key === "GET /api/repos/{owner}/{name}/releases") {
-      return Promise.resolve([
-        { name: "v1.2", status: "active", prodBranch: "v1.2" },
-      ]);
+      return Promise.resolve(structuredClone(this.releasesList));
     }
     if (key === "GET /api/repos/{owner}/{name}/releases/{release}/candidates") {
+      const rel = String(params?.["release"] ?? "v1.2");
       return Promise.resolve([
         {
-          id: "rc-1",
-          version: "v1.2.0-rc1",
-          branch: "v1.2.rc.1",
+          id: rel === "v1.2" ? "rc-1" : `rc-${rel}`,
+          version: `${rel}.0-rc1`,
+          branch: `${rel}.rc.1`,
           status: "active",
         },
       ]);
@@ -214,7 +218,23 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
             component: RepoDetailPageComponent,
           },
           {
+            path: "repos/:owner/:name/releases/:release",
+            component: RepoDetailPageComponent,
+          },
+          {
             path: "repos/:owner/:name/:tab",
+            component: RepoDetailPageComponent,
+          },
+          {
+            path: "repos/:host/:owner/:name",
+            component: RepoDetailPageComponent,
+          },
+          {
+            path: "repos/:host/:owner/:name/releases/:release",
+            component: RepoDetailPageComponent,
+          },
+          {
+            path: "repos/:host/:owner/:name/:tab",
             component: RepoDetailPageComponent,
           },
           { path: "settings/repositories", children: [] },
@@ -783,9 +803,139 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
         ?.textContent,
     ).toContain("cannot switch declarations on or off");
   });
+
+  it("deep-links to a release, scrolls its row into view, puts selected releases in the URL, and guards leaving via app.routes", async () => {
+    const api = new FakeRepoApi();
+    api.releasesList = [
+      { name: "v2.0", status: "active", prodBranch: "v2.0" },
+      { name: "v1.2", status: "active", prodBranch: "v1.2" },
+    ];
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(appRoutes, withComponentInputBinding()),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const scrollSpy = vi.fn();
+    const origScroll = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollSpy;
+    try {
+      const harness = await RouterTestingHarness.create(
+        "/repos/acme/platform/releases/v1.2",
+      );
+      harness.fixture.autoDetectChanges(true);
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 25));
+      await harness.fixture.whenStable();
+      const el = harness.fixture.nativeElement as HTMLElement;
+      const router = TestBed.inject(Router);
+
+      expect(router.url).toBe("/repos/acme/platform/releases/v1.2");
+      expect(
+        el
+          .querySelector('[data-testid="repo-tab-releases"]')
+          ?.getAttribute("aria-current"),
+      ).toBe("page");
+      expect(
+        el
+          .querySelector('[data-testid="release-row-v1.2"]')
+          ?.getAttribute("aria-current"),
+      ).toBe("true");
+      expect(
+        el
+          .querySelector('[data-testid="release-row-v2.0"]')
+          ?.getAttribute("aria-current"),
+      ).toBeNull();
+      // Loaded v1.2's candidates directly, never v2.0's.
+      expect(
+        api.calls
+          .filter(
+            (c) =>
+              c.key ===
+              "GET /api/repos/{owner}/{name}/releases/{release}/candidates",
+          )
+          .map((c) => c.params?.["release"]),
+      ).toEqual(["v1.2"]);
+      expect(scrollSpy).toHaveBeenCalled();
+
+      // Selecting v2.0 puts its URL in the address bar.
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="inspect-rc-v2.0"]',
+      )!.click();
+      await new Promise((r) => setTimeout(r, 20));
+      await harness.fixture.whenStable();
+      expect(router.url).toBe("/repos/acme/platform/releases/v2.0");
+      expect(
+        el
+          .querySelector('[data-testid="release-row-v2.0"]')
+          ?.getAttribute("aria-current"),
+      ).toBe("true");
+
+      // Hosted per-release route resolves host/owner/name and release, and
+      // keeps repoLeaveGuard active.
+      await harness.navigateByUrl(
+        "/repos/git.example.com/acme/platform/releases/v1.2",
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      await harness.fixture.whenStable();
+      const hostedEl = harness.fixture.nativeElement as HTMLElement;
+      expect(
+        hostedEl.querySelector('[data-testid="repo-detail-heading"]')
+          ?.textContent,
+      ).toContain("git.example.com/acme/platform");
+      expect(
+        hostedEl
+          .querySelector('[data-testid="release-link-v2.0"]')
+          ?.getAttribute("href"),
+      ).toBe("/next/repos/git.example.com/acme/platform/releases/v2.0");
+    } finally {
+      HTMLElement.prototype.scrollIntoView = origScroll;
+    }
+  });
+
+  it("shows the classic notice and links back to Releases when the URL names an unknown release", async () => {
+    const api = new FakeRepoApi();
+    api.releasesList = [
+      { name: "v2.0", status: "active", prodBranch: "v2.0" },
+      { name: "v1.2", status: "active", prodBranch: "v1.2" },
+    ];
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases/nosuch",
+      api,
+    );
+    const banner = el.querySelector('[data-testid="unknown-release-banner"]');
+    expect(banner?.textContent).toContain(
+      "acme/platform has no release named \u201cnosuch\u201d -- showing v2.0 instead.",
+    );
+    const backLink = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="unknown-release-back-link"]',
+    )!;
+    expect(backLink.getAttribute("href")).toBe(
+      "/next/repos/acme/platform/releases",
+    );
+    backLink.click();
+    await new Promise((r) => setTimeout(r, 20));
+    await harness.fixture.whenStable();
+    expect(TestBed.inject(Router).url).toBe("/repos/acme/platform/releases");
+    expect(
+      harness.fixture.nativeElement.querySelector(
+        '[data-testid="unknown-release-banner"]',
+      ),
+    ).toBeNull();
+  });
 });
 
-describe("removeRepoMessage and declaredPushRef", () => {
+describe("removeRepoMessage, declaredPushRef and unknownReleaseText", () => {
+  it("words an unknown release with or without a fallback release", () => {
+    expect(unknownReleaseText("acme/widgets", "gone", "1.0")).toBe(
+      "acme/widgets has no release named \u201cgone\u201d -- showing 1.0 instead. The link may be stale, or the release deleted; pick another below.",
+    );
+    expect(unknownReleaseText("acme/widgets", "gone", "")).toBe(
+      "acme/widgets has no release named \u201cgone\u201d -- the link may be stale, or the release deleted.",
+    );
+  });
   it("says removing the only allowed repo unrestricts the deployment", () => {
     expect(removeRepoMessage("acme/a", ["Acme/A"], [])).toContain(
       "An empty allowlist is what means unrestricted",

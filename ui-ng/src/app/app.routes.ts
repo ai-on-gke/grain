@@ -171,6 +171,11 @@ const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
 const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
   page?.canLeave ? page.canLeave() : true;
 
+const loadRepoDetail = () =>
+  import("./repos/repo-detail-page.component").then(
+    (m) => m.RepoDetailPageComponent,
+  );
+
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
 // have yet goes to the Inbox; the shell's links take the reader to the
@@ -438,46 +443,43 @@ export const routes: Routes = [
           }
         : null,
     title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
+    loadComponent: loadRepoDetail,
     canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name",
     title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
+    loadComponent: loadRepoDetail,
+    canDeactivate: [repoLeaveGuard],
+  },
+  {
+    path: "repos/:owner/:name/releases/:release",
+    title: "Repository · grain",
+    loadComponent: loadRepoDetail,
     canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name/:tab",
     title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
+    loadComponent: loadRepoDetail,
     canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name",
     title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
+    loadComponent: loadRepoDetail,
+    canDeactivate: [repoLeaveGuard],
+  },
+  {
+    path: "repos/:host/:owner/:name/releases/:release",
+    title: "Repository · grain",
+    loadComponent: loadRepoDetail,
     canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name/:tab",
     title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
+    loadComponent: loadRepoDetail,
     canDeactivate: [repoLeaveGuard],
   },
   { path: "**", redirectTo: "inbox" },
