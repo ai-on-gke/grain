@@ -176,9 +176,21 @@ What it is: GitHub Actions checks, or grain CI, on the PR head. Grain CI's
 verdict is copied onto the task as `Observation.CI` (`model/task.go`
 `CIStatus`) by `ui/ci.go` and `orchestrator.reconcileTaskCI`, and only for
 tasks holding grain CI. **GitHub Actions results are never written to
-`Observation.CI`.** The merge queue reads them each cycle in `syncEntry`
-(`healthFrom`, `checkRunsFor`) and records them only as the entry's merge
-queue state.
+`Observation.CI` (or to `ci_run`), and `ComputeMergeGates` reads neither
+of the places they are kept.** Those places are:
+
+- **Per-job rows.** `syncEntry` reads the head's check runs every cycle
+  (`checkRunsFor`) for every open PR link. Right after `e.observe`, and
+  before any `isQueueMember` branch, it calls `recordPolledChecks`
+  (`orchestrator/githubci.go`). That saves each *completed* check run as
+  a `model.GitHubCIJob` row (`store.PutGitHubCIJob`, `Via: "poll"`).
+  Webhook deliveries (`recordGitHubCIEvent`) write the same rows. So
+  queue membership does not matter for these rows. They are one per job
+  with GitHub's own conclusion. In-flight checks get no row, and no row
+  holds a per-head required-check verdict.
+- **The per-head verdict.** `healthFrom` / `forge.Observe` compute it in
+  `syncEntry` each cycle, but it is kept only as the entry's merge queue
+  state, which is written for queue members.
 
 The gate's state is a projection, not a state machine of its own.
 `ComputeMergeGates` reads, in order:
@@ -988,10 +1000,12 @@ decided not to".
 ### 2.6 CI gate always `running / waiting for checks` (task 6239)
 
 From §1.1 row 9: on a `ci_mode: github` repository, `Observation.CI` is
-nil, because only grain CI writes it. The gate then reads the merge
-queue state, and **the merge queue writes states only for its members**,
-which have auto-merge on. Every task held by a review gate has
-auto-merge off, so:
+nil, because only grain CI writes it. GitHub's results *are* recorded
+for every open PR, as per-job `GitHubCIJob` rows (`recordPolledChecks`,
+§1.1), but `ComputeMergeGates` does not read them. The gate then reads
+the merge queue state, and **the merge queue writes states only for its
+members**, which have auto-merge on. Every task held by a review gate
+has auto-merge off, so:
 
 - its CI gate is `running / waiting for checks` however green its
   checks are;
@@ -1001,9 +1015,10 @@ auto-merge off, so:
 - a member reads `passed` only in `waiting_queue` or `merging`.
 
 The gate is a projection of the queue's memory, not of the checks. The
-fix: compute the CI gate from the head's check runs (the same
-`healthFrom` / `forge.Reds` reading `syncEntry` does), cached per
-(PR, head) and refreshed for every open PR, member or not.
+fix: compute the CI gate from the per-head verdict `syncEntry` already
+computes with `healthFrom` for every open PR, member or not, and keep it
+beside the `GitHubCIJob` rows (§3.8 step 2 says why the rows alone are
+not enough).
 
 ### 2.7 Auto-merge silently turned off after a review pushes fixes (task 5813)
 
@@ -1423,11 +1438,25 @@ Part 2 that can land first.
    - `incrementalBase` already reads the old head from tags.
    - Also extend `closeFinishedReviews` / `staleReview` to close a
      completed review whose stacked PR is not merging.
-2. **CI gate from check runs** (task 6239). Record the head's required
-   check verdict for every open PR, whether or not it is a queue member,
-   in a new `Observation.PRChecks{head, verdict, at}`. Write it from
-   `syncEntry`'s `healthFrom` read, which already happens for every open
-   PR link. `ComputeMergeGates` reads it before the queue state.
+2. **CI gate from check runs** (task 6239). GitHub results are already
+   stored for every open PR, as `GitHubCIJob` rows (`recordPolledChecks`,
+   webhooks). The rows can't give the gate's verdict on their own:
+   - they are per job, and only for *completed* checks, so "still
+     running" and "not registered yet" leave no row;
+   - they carry no notion of which checks are required (the
+     `requiredCheck` / branch-protection reading `healthFrom` and
+     `forge.Observe` apply);
+   - they don't record that one head superseded another.
+
+   So store the **per-head verdict** `syncEntry` already computes with
+   `healthFrom` for every open PR link, before any `isQueueMember`
+   branch. Record it as a small `Observation.PRChecks{head, verdict,
+   pending[], failing[], at}` that references the `GitHubCIJob` rows for
+   detail, rather than copying them. `ComputeMergeGates` reads it before
+   the queue state, and links the failing jobs' rows for the gate's
+   detail. Deriving the verdict from the rows at read time is the
+   alternative. It is rejected because it would repeat the required-check
+   logic outside `forge`, and it can't tell pending from absent.
 3. **Stop gate-scoped records from orphaning** (§2.5).
    - `settlePathTriggerHold` records abandoned and unmerged-fix findings
      on `trigger:<name>`, with `ReviewTask` and `HeadSHA`.
