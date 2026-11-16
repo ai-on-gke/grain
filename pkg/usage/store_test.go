@@ -130,3 +130,44 @@ func TestCapRecomputesWhenSettingsChange(t *testing.T) {
 		t.Fatalf("cap a second after advisory was set = %d, want max_workers 6", got)
 	}
 }
+
+// A weekly limit's pause learns the week's capacity under its own key,
+// leaving the interval's capacity as it was.
+func TestLearnFromWeeklyPauseKeepsTheIntervalCapacity(t *testing.T) {
+	store, ctx := openStore(t)
+	for i, ago := range []time.Duration{20 * time.Minute, 3 * 24 * time.Hour, 8 * 24 * time.Hour} {
+		if err := store.RecordRunUsage(ctx, run(string(rune('a'+i)), "conn", "opus", ago, 400000)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.RecordUsageCapacity(ctx, model.UsageCapacity{Connection: "conn", Model: "opus", Tokens: 123, Window: DefaultWindow, ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	until := now.Add(2 * 24 * time.Hour)
+	pause := model.UsageLimitPause{Connection: "conn", Model: "opus", Until: until, Reason: weeklyReason}
+	if err := LearnFromPause(ctx, store, pause, now); err != nil {
+		t.Fatal(err)
+	}
+	caps, err := store.ListUsageCapacities(ctx)
+	if err != nil || len(caps) != 2 {
+		t.Fatalf("capacities = %+v, %v", caps, err)
+	}
+	if c := caps[0]; c.Model != "opus" || c.Tokens != 123 {
+		t.Fatalf("interval capacity = %+v, want it untouched", c)
+	}
+	// The 8-day-old run is outside the week.
+	if c := caps[1]; c.Model != "opus"+weeklyCapacitySuffix || c.Tokens != 800000 || c.Window != WeeklyWindow || !c.ResetAt.Equal(until) {
+		t.Fatalf("weekly capacity = %+v", c)
+	}
+	if err := store.PutUsageLimitPause(ctx, "k", pause); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Load(ctx, store, now, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := scope(t, rep, "conn", "opus")
+	if s.WeeklyLimit != 800000 || s.WeeklyUsed != 800000 || s.PauseHorizon != HorizonWeekly || s.Limit != 123 {
+		t.Fatalf("scope = %+v", s)
+	}
+}

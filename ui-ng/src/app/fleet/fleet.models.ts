@@ -168,6 +168,20 @@ export interface BaseBranchPublishing {
   detail: string;
 }
 
+// CIWaitHealth is one task resume_later deferred on a CI verdict that has
+// waited longer than CIWaitHealthAge, an hour (pkg/ui/sandbox_health.go):
+// CI is "my-branch" or the run id it waits on, Since when it was deferred,
+// Recovered a wait read back from resume_later's own comment.
+export interface CIWaitHealth {
+  taskId: string;
+  repo?: string;
+  branch?: string;
+  ciMode?: string;
+  ci: string;
+  since: string;
+  recovered?: boolean;
+}
+
 export interface SandboxHealthResponse {
   enabled: boolean;
   checkedAt?: string;
@@ -177,6 +191,7 @@ export interface SandboxHealthResponse {
   daemon?: DaemonHealth;
   dispatchBlocked?: DispatchCondition[];
   baseBranchPublishing?: BaseBranchPublishing[];
+  ciWaits?: CIWaitHealth[];
   standingSandboxes?: StandingSandboxStatus[];
   persistentSandboxes?: PersistentSandboxStatus[];
   packageCache?: PackageCacheStats[];
