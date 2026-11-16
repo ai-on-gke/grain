@@ -12,6 +12,8 @@ The normative contract is [MCP gates specification](../spec/mcp-gates/mcp-gates.
 
 This terminology correction follows [Task #39's merged documentation PR #1666](https://github.com/ai-on-gke/grain/pull/1666); its authority and lifecycle decisions are preserved; Task #47 now replaces the unspecified snapshot transport with the bounded v2 protocol below. Stable `MGD-*` and `MGS-*` requirement IDs are retained for traceability.
 
+The source-audited [migration coverage matrix](../../docs/mcp-gates-migration-coverage.md) maps current admission, lifecycle, review, integration, recovery and protected-action paths to this proposal, distinguishing compatibility imports from intentional changes and enforcement blockers.
+
 Related proposal: [extensible tracked resources](tracked-resources.design.md) supplies resource identity, scoped observations and durable change detection to evaluator snapshots. It uses the **gates** terminology from the merged Task #44 documentation rename; neither proposal implements the runtime protocol. Resource providers report facts, while gates interpret required action prerequisites and task outcomes; existing concrete task goals remain distinct.
 
 ## Problem and verified baseline
