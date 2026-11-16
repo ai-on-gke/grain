@@ -174,7 +174,8 @@ func GrainReviewBlockers(task model.Task) []string {
 		case model.LinkHumanOnlyHold:
 			out = append(out, "it is held for a person's review")
 		case model.LinkReviewQuestions:
-			out = append(out, "a grain review left questions open")
+			out = append(out, "a grain review left questions open: reply with your decision, "+
+				"or accept its findings as they are")
 		}
 	}
 	if model.HumanReviewHeld(task) {
