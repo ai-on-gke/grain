@@ -334,6 +334,10 @@ interface PendingReleaseRow {
   soakReady?: boolean;
 }
 
+// lastTaskTotals is the last task total each repository page read,
+// kept across the page being rebuilt on a tab switch (loadCoreRepo).
+const lastTaskTotals = new Map<string, number>();
+
 @Component({
   selector: "g-repo-detail-page",
   imports: [
@@ -2142,6 +2146,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // page still says what is left there (2026-11-16 repository
   // walkthrough: /next/ showed no count at all).
   protected readonly taskTotal = signal<number | null>(null);
+  private taskTotalFor: string | null = null;
   protected readonly offTargetList = computed(
     () => this.targetRepos().length > 0 && this.removeState() === "untargeted",
   );
@@ -2429,19 +2434,33 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     const p = this.params();
     if (!p.owner || !p.name) return;
     const jobs: Promise<void>[] = [];
-    if (this.can("GET /api/tasks")) {
-      this.taskTotal.set(null);
+    // The total does not depend on the tab, and every tab switch comes
+    // through here: re-reading it on each one blanked the line above the
+    // tab strip mid-request and jumped the tabs under the reader's finger.
+    const slug = this.repoSlug();
+    if (this.can("GET /api/tasks") && slug !== this.taskTotalFor) {
+      this.taskTotalFor = slug;
+      // Overview (/repos/<o>/<n>) and the other tabs are separate route
+      // entries, so moving between them builds a new page: it starts from
+      // the last total read for this repository rather than from nothing,
+      // and the read below only refreshes it.
+      this.taskTotal.set(lastTaskTotals.get(slug.toLowerCase()) ?? null);
       jobs.push(
         this.api
           .get<{ total?: number }>(
             "GET /api/tasks",
             undefined,
-            `repo=${encodeURIComponent(this.repoSlug())}&limit=1&cursor=&fields=summary`,
+            `repo=${encodeURIComponent(slug)}&limit=1&cursor=&fields=summary`,
           )
           .then((r) => {
-            if (typeof r?.total === "number") this.taskTotal.set(r.total);
+            if (this.taskTotalFor !== slug) return;
+            if (typeof r?.total === "number") {
+              lastTaskTotals.set(slug.toLowerCase(), r.total);
+              this.taskTotal.set(r.total);
+            }
           })
           .catch(() => {
+            if (this.taskTotalFor === slug) this.taskTotalFor = null;
             // The count is a pointer to the task list, not something the
             // page needs: leave it out rather than raise the banner.
           }),

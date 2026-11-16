@@ -368,6 +368,20 @@ per-release route.
   `scrollWidth` stays at the viewport width. axe found no serious or
   critical violations at desktop, phone and dark.
 
+### Follow-up from review (task 6521)
+- **Finding**: the task total was re-read on every tab switch. While the
+  read was in flight the line above the tab strip vanished, so the tabs
+  jumped by a line under the reader's finger.
+- **Cause**: Overview (`/repos/<o>/<n>`) and the other tabs
+  (`/repos/<o>/<n>/<tab>`) are separate route entries, so a switch
+  between them builds a new page.
+- **Fix**: the page reads the total once per repository, and a rebuilt
+  page starts from the last total read for it, refreshing quietly.
+- **Coverage**: the removed-repository test holds the refresh for 800 ms
+  across Overview → CI and checks at once that the line is still there
+  with the same bounding box. It also checks that CI → Merge Queue reads
+  nothing. It failed against a build without the fix and passes with it.
+
 ## Regression coverage
 - `ui-ng/e2e/next-repo-walkthrough-fixes.spec.js` (new, real demo with
   `-github-sim -qualification`) covers each of the six. Tests tagged

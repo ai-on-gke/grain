@@ -242,6 +242,37 @@ test("a removed repository's page still counts the tasks left there, closed ones
   await page.goto(`/next/repos/${REPO}`);
   await expect(total).toHaveText("1 task filed here, closed ones included.");
 
+  // The total is the repository's, not the tab's: a tab switch neither
+  // re-reads it nor moves it (it used to blank mid-request and jump the
+  // tab strip by a line).
+  const before = await total.boundingBox();
+  const reads = [];
+  page.on("request", (r) => {
+    if (/\/api\/tasks\?repo=/.test(r.url())) reads.push(r.url());
+  });
+  // Hold the refresh, so a page that blanked the line while reading
+  // would be caught with it blank.
+  await page.route("**/api/tasks?repo=*", async (route) => {
+    await new Promise((r) => setTimeout(r, 800));
+    await route.continue();
+  });
+  await page.getByTestId("repo-tab-ci").click();
+  await expect(page).toHaveURL(/\/ci$/);
+  // Checked at once, not retried: the refresh is still being held.
+  expect(await total.count()).toBe(1);
+  expect(await total.textContent()).toContain("1 task filed here");
+  expect(await total.boundingBox()).toEqual(before);
+  await page.unroute("**/api/tasks?repo=*");
+  await page.waitForTimeout(900);
+  // Overview and the tabs are separate routes, so that first switch
+  // builds a new page, which refreshes the total while showing the one
+  // it had. Between two tabs the page is the same, and reads nothing.
+  reads.length = 0;
+  await page.getByTestId("repo-tab-merge-queue").click();
+  await expect(page).toHaveURL(/\/merge-queue$/);
+  expect(await total.boundingBox()).toEqual(before);
+  expect(reads).toEqual([]);
+
   await page.request.delete(`/api/repos/${REPO}`);
   await page.goto(`/next/repos/${REPO}`);
   await expect(total).toHaveText(
