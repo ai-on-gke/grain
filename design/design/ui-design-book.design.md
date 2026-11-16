@@ -331,8 +331,22 @@ hand-written list: a choice the daemon cannot use stays listed as a `disabled`
 `PillOption` with the server's reason as its `hint`. A number whose stored `0`
 means grain's default shows blank with the server's `<key>Default` as its
 placeholder, and a cleared box saves that default again. A card a link points
-at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+at carries an `id` (`#capability-policy`, `#credentials`, `#other-secrets`), and the page
 scrolls to the URL's fragment once the section has rendered.
+
+A card follows the scope of the routes it writes through, not its section's:
+Settings → Capabilities' Deployment credentials holds its fields to
+`settings:write` and its stored secrets to `secrets:write`, whatever
+`capabilities:admin` says. A config-repo lock disables and dims (`.s-dimmed`,
+with the `on-surface-variant` colour rather than opacity) the settings it
+covers but never the secrets beside them, which the API keeps writable. A
+secret is listed by name and key only, never its value. Its value
+box is `type="password"`, with "From file…" for multi-line values such as
+PEMs, never a textarea masked by CSS. Every removal of a secret, key, scope
+set or server asks first through `<g-confirm-dialog>`, saying what stops
+working. A table cell holding a list (scopes, repositories) stays on one line,
+truncates with the full list in its `title`, and drops secondary columns
+(`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
 
 A setting kept in the secret store rather than in grain/config (the Hub's
 `grc_…` registration token) stays editable while a config-repo lock
@@ -376,6 +390,7 @@ it rather than copy it.
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
+| Prompt and attributes panes | `shared/detail-panes.css` (`.g-panes`, `.g-pane`, `.g-attrs`) | what an agent is told beside the facts about it: task detail, Processes schedule and template inspectors |
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
@@ -400,6 +415,16 @@ Rules:
   loaded. Prefix page-specific classes, and search for a name before you use
   it. Example: Task Detail's `.gate-card` restyled the Backlog's approval
   card until it was renamed `.intake-card`.
+- **A prompt has its own pane.** Wherever a page shows the prompt an agent
+  is (or will be) given -- task detail on the full page and in every
+  inspector pane, and the Processes schedule and template inspectors -- it
+  sits in a `.g-pane` headed "Prompt", rendered with `[gMarkdown]`, never
+  as a raw monospace text well. The facts about it (priority, repository,
+  cadence, overlap, ...) go in a second `.g-pane` below, headed
+  "Attributes" for tasks and "Configuration" for processes, as a `.g-attrs`
+  key-value list. The key column is capped at 40% of the pane and the list
+  stacks key over value when the pane is under 260px, so no value clips or
+  overlaps its key at any split width (`ui-ng/e2e/next-prompt-panes.spec.js`).
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
