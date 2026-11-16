@@ -120,6 +120,37 @@ func median(ds []time.Duration) time.Duration {
 	return ds[len(ds)/2]
 }
 
+// A different schema isolates task data, but not the cluster-wide snapshot
+// used by ChangeToken. Its writes may rebuild an otherwise unchanged list.
+func TestTaskListOnPostgresRebuildsAfterAnotherSchemaWrites(t *testing.T) {
+	srv, store := postgresListServer(t, 2, 1)
+	first, _ := timedList(t, srv, "/api/tasks", "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", first.Code, first.Body)
+	}
+	cachedToken := ui.TaskListToken(srv)
+	builds := ui.TaskListBuilds(srv)
+
+	other, _ := postgrestest.Open(t)
+	if err := other.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := store.ChangeToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token == cachedToken {
+		t.Fatal("another schema's write did not move the cluster snapshot token")
+	}
+	rec, _ := timedList(t, srv, "/api/tasks", first.Header().Get("ETag"))
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("poll after another schema's write = %d, want 304: %s", rec.Code, rec.Body)
+	}
+	if after := ui.TaskListBuilds(srv); after != builds+1 {
+		t.Errorf("poll built the list %d times after token changed, want 1", after-builds)
+	}
+}
+
 // TestTaskListOnPostgresIsCheapAtSixThousandTasks pins the two numbers
 // grain task 5812 asked for: a quiet poll is a 304 built from nothing,
 // and the poll that does build costs what the open tasks cost, not what
@@ -140,17 +171,28 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	etag := first.Header().Get("ETag")
 	t.Logf("cold build: %v", cold)
 
-	builds := ui.TaskListBuilds(srv)
 	var quiet []time.Duration
 	for i := 0; i < 9; i++ {
+		cachedToken := ui.TaskListToken(srv)
+		builds := ui.TaskListBuilds(srv)
 		rec, took := timedList(t, srv, "/api/tasks", etag)
 		if rec.Code != http.StatusNotModified {
 			t.Fatalf("quiet poll %d status = %d, want 304", i, rec.Code)
 		}
 		quiet = append(quiet, took)
-	}
-	if after := ui.TaskListBuilds(srv); after != builds {
-		t.Errorf("nine quiet polls built the list %d times, want 0", after-builds)
+		// Postgres's snapshot token is cluster-wide: autovacuum or a
+		// transaction in another test's schema can invalidate this list.
+		// Only an unchanged token promises that a poll needs no rebuild.
+		// Read after the request so a change during it also counts.
+		token, err := store.ChangeToken(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after := ui.TaskListBuilds(srv); token == cachedToken && after != builds {
+			t.Errorf("quiet poll %d built the list %d times with an unchanged token, want 0", i, after-builds)
+		} else if after != builds {
+			t.Logf("quiet poll %d rebuilt after a cluster snapshot change", i)
+		}
 	}
 	t.Logf("quiet poll p50: %v", median(quiet))
 

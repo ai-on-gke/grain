@@ -40,6 +40,13 @@ import (
 // outside: both produce byte-identical answers, which is the point.
 func TaskListBuilds(s *Server) int { return int(s.taskList.builds.Load()) }
 
+// TaskListToken is the store token under which the current list was cached.
+func TaskListToken(s *Server) string {
+	s.taskList.mu.Lock()
+	defer s.taskList.mu.Unlock()
+	return s.taskList.token
+}
+
 // TaskDetailBuilds is the equivalent count for GET /api/tasks/{id}.
 func TaskDetailBuilds(s *Server) int { return int(s.taskDetails.builds.Load()) }
 
