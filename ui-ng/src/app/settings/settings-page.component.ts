@@ -28,6 +28,7 @@ import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
+import { CapabilityServerDetailComponent } from "./capability-server-detail.component";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
@@ -68,6 +69,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
   selector: "g-settings-page",
   imports: [
     RouterLink,
+    CapabilityServerDetailComponent,
     SettingsComputeComponent,
     SettingsCodeComponent,
     SettingsWorkComponent,
@@ -347,7 +349,15 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     />
                   }
                   @case ("work") {
-                    <g-settings-work [section]="activeSection()" />
+                    @if (
+                      activeSection() === "capabilities" && activeServerId()
+                    ) {
+                      <g-capability-server-detail
+                        [serverId]="activeServerId()!"
+                      />
+                    } @else {
+                      <g-settings-work [section]="activeSection()" />
+                    }
                   }
                   @case ("security") {
                     <g-settings-security [section]="activeSection()" />
@@ -439,11 +449,13 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
 
   readonly section = input<string | undefined>(undefined);
+  readonly serverId = input<string | undefined>(undefined);
   readonly path = input<string | undefined>(undefined);
 
   protected readonly filterQuery = signal("");
   protected readonly ready = signal(false);
   private readonly routeSection = signal<string | null>(null);
+  private readonly routeServerId = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
 
   private subs: Subscription[] = [];
@@ -459,6 +471,10 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     const raw = this.routeSection() ?? this.section();
     return resolveSettingsSection(raw) ?? DEFAULT_SETTINGS_SECTION;
   });
+
+  protected readonly activeServerId = computed<string | null>(
+    () => this.routeServerId() ?? this.serverId() ?? null,
+  );
 
   protected readonly queryFilePath = computed(
     () => this.path() ?? this.routeFilePath(),
@@ -510,6 +526,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
             return;
           }
           this.routeSection.set(sec);
+          this.routeServerId.set(pm.get("serverId"));
           this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
         },
       ),
@@ -610,6 +627,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     // Leaving a section stops any scroll still chasing its anchor.
     this.scrollToAnchor("");
     this.routeSection.set(id);
+    this.routeServerId.set(null);
     void this.router.navigate(["/settings", id]);
   }
 

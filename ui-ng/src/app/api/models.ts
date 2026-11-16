@@ -542,6 +542,8 @@ export interface CompareResponse {
   diff: string;
 }
 
+export type CapabilityPolicyVerdict = "denied" | "may_be_refused" | "ci_only";
+
 export interface CapabilityMethod {
   ref: string;
   capability: string;
@@ -551,6 +553,7 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  policy?: Record<string, CapabilityPolicyVerdict>;
   aliasOf?: string[];
 }
 

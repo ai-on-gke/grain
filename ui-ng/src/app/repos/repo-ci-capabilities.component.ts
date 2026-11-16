@@ -98,6 +98,7 @@ import { GrantsPickerComponent } from "../shared/grants-picker.component";
             [offered]="offered()"
             [held]="list"
             [repo]="repo()"
+            runKind="ci"
             [disabled]="readOnly() || saving()"
             (heldChange)="save($event)"
           />

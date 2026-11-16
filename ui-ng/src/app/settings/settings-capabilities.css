@@ -84,6 +84,17 @@
   pointer-events: none;
 }
 
+.s-server-link {
+  color: var(--md-sys-color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.s-server-link:hover {
+  text-decoration-thickness: 2px;
+}
+
 .s-retired code {
   font-size: 12px;
 }

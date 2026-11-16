@@ -655,7 +655,14 @@ export function listedSecrets(
                   @for (srv of capServers(); track srv.id) {
                     @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="s-mono">{{ srv.id }}</td>
+                      <td class="s-mono">
+                        <a
+                          class="s-server-link"
+                          [routerLink]="['/settings', 'capabilities', srv.id]"
+                          [attr.data-testid]="'open-cap-server-' + srv.id"
+                          >{{ srv.id }}</a
+                        >
+                      </td>
                       <td class="s-mono">
                         {{
                           srv.config?.serverUrl ||
