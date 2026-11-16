@@ -667,3 +667,37 @@ test("Fleet asks before pausing or resuming the pipeline, and says resuming canc
     await page.request.delete("/api/pipeline-pause").catch(() => {});
   }
 });
+
+// Start CI run put a refusal on the page's action banner, behind the
+// dialog's scrim, and left the dialog open with nothing said (2026-11-16
+// walkthrough: POST /api/ci/runs answers 403 on a repository not in grain
+// CI mode).
+test("CI's Run workflow dialog says why a run was refused", async ({
+  page,
+}) => {
+  const refusal =
+    'grain CI is not enabled for acme/widgets: set its CI Mode to "Use Grain CI"';
+  const posts = [];
+  await page.route("**/api/ci/runs", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posts.push(route.request().postDataJSON());
+    return route.fulfill({ status: 403, json: { error: refusal } });
+  });
+  await page.goto("ci");
+  await page.getByRole("button", { name: "Run workflow" }).first().click();
+  const dialog = page.getByTestId("ci-run-dialog");
+  await dialog.getByTestId("ci-run-repo-input").fill("acme/widgets");
+  await dialog.getByTestId("ci-run-ref-input").fill("main");
+  await dialog.getByRole("button", { name: "Start CI run" }).click();
+  await expect(dialog.getByTestId("ci-dialog-error")).toContainText(refusal);
+  await expect(
+    dialog.getByRole("button", { name: "Start CI run" }),
+  ).toBeEnabled();
+  expect(posts).toHaveLength(1);
+
+  // Closing and opening it again starts clean.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole("button", { name: "Run workflow" }).first().click();
+  await expect(page.getByTestId("ci-dialog-error")).toHaveCount(0);
+});
