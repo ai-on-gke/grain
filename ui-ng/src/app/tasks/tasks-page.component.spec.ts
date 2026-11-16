@@ -60,25 +60,37 @@ class FakeApi {
   boards: Board[] = [];
   calls: Call[] = [];
 
-  // The pane's task detail (GET /api/tasks/{id}) and the list.
-  getIfChanged = (route: string, params?: { id?: string }) =>
-    Promise.resolve(
+  // The pane's task detail (GET /api/tasks/{id}), batch summaries, and the list.
+  getIfChanged = (route: string, params?: { id?: string }, query?: string) => {
+    const detailFor = (id: string) => ({
+      ...(this.live.find((t) => t.id === id) ??
+        this.closed.find((t) => t.id === id) ?? {
+          id,
+          title: "Gone",
+          state: "closed",
+        }),
+      comments: [],
+      attempts: [],
+    });
+    if (route === "GET /api/tasks/summaries") {
+      const ids =
+        new URLSearchParams(query ?? "")
+          .get("ids")
+          ?.split(",")
+          .filter(Boolean) ?? [];
+      return Promise.resolve({
+        body: {
+          tasks: Object.fromEntries(ids.map((id) => [id, detailFor(id)])),
+        },
+        changed: true,
+      });
+    }
+    return Promise.resolve(
       route === "GET /api/tasks/{id}"
-        ? {
-            body: {
-              ...(this.live.find((t) => t.id === params?.id) ??
-                this.closed.find((t) => t.id === params?.id) ?? {
-                  id: params?.id,
-                  title: "Gone",
-                  state: "closed",
-                }),
-              comments: [],
-              attempts: [],
-            },
-            changed: true,
-          }
+        ? { body: detailFor(params?.id ?? ""), changed: true }
         : { body: structuredClone(this.live), changed: true },
     );
+  };
   queries: string[] = [];
   get = (route: string, _p?: unknown, query?: string) => {
     if (route === "GET /api/base-branch-gates") {
@@ -767,19 +779,27 @@ describe("TasksPageComponent", () => {
         }),
       );
       const baseGet = api.getIfChanged;
-      api.getIfChanged = (route: string, params?: { id?: string }) =>
-        route === "GET /api/tasks/{id}" && params?.id === "40"
+      api.getIfChanged = (
+        route: string,
+        params?: { id?: string },
+        query?: string,
+      ) =>
+        route === "GET /api/tasks/summaries"
           ? Promise.resolve({
               body: {
-                ...task("40", "awaiting_submit", 5, {
-                  mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
-                }),
-                comments: [],
-                attempts: [],
+                tasks: {
+                  "40": {
+                    ...task("40", "awaiting_submit", 5, {
+                      mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
+                    }),
+                    comments: [],
+                    attempts: [],
+                  },
+                },
               },
               changed: true,
             })
-          : baseGet(route, params);
+          : baseGet(route, params, query);
       const f = await render(api, "merging");
       expect(q(f, '[data-testid="ci-40"]')!.textContent).toContain("✕ CI");
 
@@ -1232,8 +1252,8 @@ describe("TasksPageComponent", () => {
       store.close(["40", "41"]),
       store.defer(["42"]),
     ]);
-    expect(a).toEqual({ failed: 1, landed: ["40"] });
-    expect(b).toEqual({ failed: 0, landed: ["42"] });
+    expect(a).toEqual({ failed: 1, landed: ["40"], skipped: [] });
+    expect(b).toEqual({ failed: 0, landed: ["42"], skipped: [] });
   });
 
   it("fills the Filter this view box from ?q= and lets typing replace it", async () => {
@@ -1330,6 +1350,42 @@ describe("TasksPageComponent", () => {
     expect(alert.some((t) => t.includes("could not be read"))).toBe(true);
     // Never "Nothing in this tab" for a list it could not read.
     expect(q(f, '[data-testid="tasks-pane-empty"]')).toBeNull();
+  });
+
+  it("explains why saved boards could not be loaded instead of saying none exist, and returns focus from the save bar", async () => {
+    const api = new FakeApi();
+    const origGet = api.get;
+    api.get = (route: string, p?: unknown, query?: string) => {
+      if (route === "GET /api/boards") {
+        return Promise.reject({
+          status: 500,
+          error: { error: "store unavailable" },
+        });
+      }
+      return origGet(route, p, query);
+    };
+    const f = await render(api);
+    const trigger = q<HTMLButtonElement>(
+      f,
+      '[data-testid="saved-boards-btn"]',
+    )!;
+    trigger.click();
+    await settle(f);
+    const errEl = q(f, '[data-testid="boards-load-error"]');
+    expect(errEl?.textContent).toContain(
+      "The boards could not be loaded (store unavailable).",
+    );
+    expect(
+      q(f, '[data-testid="saved-boards-menu"]')?.textContent,
+    ).not.toContain("No saved boards yet.");
+
+    // Opening and cancelling the save bar returns focus to the Boards trigger.
+    q<HTMLButtonElement>(f, '[data-testid="board-save-open"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="board-save-cancel"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="board-save-form"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("loads saved boards and base-branch gates when tasks resolve before config on a cached reload", async () => {

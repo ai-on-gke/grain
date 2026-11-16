@@ -106,7 +106,8 @@ func TestHorizontalObjectAccess(t *testing.T) {
 
 	// Lists and the namespace narrow rather than refuse: they answer, but
 	// with nothing of the other repository in them.
-	for _, target := range []string{"/api/tasks", "/api/tasks?repo=" + matrixOtherRepo, "/api/inbox",
+	for _, target := range []string{"/api/tasks", "/api/tasks?repo=" + matrixOtherRepo,
+		"/api/tasks/summaries?ids=" + matrixOtherTask + "," + matrixAgentTask, "/api/inbox",
 		"/api/fs/task/" + matrixOtherTask, "/api/fs/task/"} {
 		for _, c := range horizontalCallers() {
 			f := shared

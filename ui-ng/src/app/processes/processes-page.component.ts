@@ -88,6 +88,7 @@ import {
   templateSourceBadge,
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
+import { MarkdownDirective } from "../shared/code-highlight";
 
 const TABS: readonly { id: ProcessTab; label: string; tip: string }[] = [
   {
@@ -189,6 +190,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    MarkdownDirective,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -198,6 +200,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     "../ci/ci-list.css",
     "./processes-list.css",
     "./processes-detail.css",
+    "../shared/conversation.css",
+    "../shared/code-highlight.css",
+    "../shared/detail-panes.css",
+    "../shared/mermaid.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -1054,43 +1060,6 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     </div>
                   </div>
 
-                  <div class="proc-meta-row">
-                    <g-actor-chip
-                      [label]="
-                        s.type === 'workflow'
-                          ? 'workflow'
-                          : s.source || 'deployment'
-                      "
-                      [kind]="
-                        s.system && s.type !== 'workflow' ? 'grain' : 'service'
-                      "
-                    />
-                    <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
-                    @if (s.repo) {
-                      <span class="tabular"
-                        >Repo: <strong>{{ s.repo }}</strong>
-                        {{ s.base ? "@ " + s.base : "" }}</span
-                      >
-                    }
-                    <span
-                      >Overlap: <strong>{{ s.overlap || "skip" }}</strong></span
-                    >
-                    @if (s.overlapGroup) {
-                      <span data-testid="sched-overlap-group"
-                        >Overlap group:
-                        <strong>{{ s.overlapGroup }}</strong></span
-                      >
-                    }
-                    <!-- An event trigger's nextRunAt is a placeholder a year
-                         out (model.Schedule); schedNextRunOf labels it. -->
-                    @if (schedNextRunOf(s); as nr) {
-                      <span class="tabular">Next: {{ nr }}</span>
-                    }
-                    @if (s.lastRunAt) {
-                      <span class="tabular">Last: {{ s.lastRunAt }}</span>
-                    }
-                  </div>
-
                   @if (s.declaredIn) {
                     <p class="banner banner-info" style="margin: 6px 0 0">
                       Declared in <code>{{ s.declaredIn.repo }}</code> at
@@ -1112,12 +1081,97 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                   }
                 </div>
 
-                @if (s.description) {
-                  <div class="proc-card">
-                    <h3 class="section-title">Prompt / instructions</h3>
-                    <div class="proc-prompt-well">{{ s.description }}</div>
-                  </div>
-                }
+                <div class="g-panes">
+                  <section
+                    class="g-pane"
+                    aria-labelledby="sched-prompt-h"
+                    data-testid="sched-prompt-pane"
+                  >
+                    <h3 id="sched-prompt-h" class="g-pane-title">Prompt</h3>
+                    @if (s.description) {
+                      <div
+                        class="msg-body g-pane-prompt"
+                        data-testid="sched-prompt"
+                        [gMarkdown]="s.description"
+                      ></div>
+                    } @else {
+                      <p class="g-pane-empty">
+                        No prompt of its own{{
+                          s.templateName || s.suiteName
+                            ? " — it files from " +
+                              (s.templateName || s.suiteName)
+                            : ""
+                        }}.
+                      </p>
+                    }
+                  </section>
+                  <section
+                    class="g-pane"
+                    aria-labelledby="sched-config-h"
+                    data-testid="sched-config-pane"
+                  >
+                    <h3 id="sched-config-h" class="g-pane-title">
+                      Configuration
+                    </h3>
+                    <dl class="g-attrs">
+                      <dt>Source</dt>
+                      <dd>
+                        <g-actor-chip
+                          [label]="
+                            s.type === 'workflow'
+                              ? 'workflow'
+                              : s.source || 'deployment'
+                          "
+                          [kind]="
+                            s.system && s.type !== 'workflow'
+                              ? 'grain'
+                              : 'service'
+                          "
+                        />
+                      </dd>
+                      <dt>Cadence</dt>
+                      <dd>{{ cadenceOf(s.recurrence, s.timeZone) }}</dd>
+                      @if (s.templateName || s.templateId) {
+                        <dt>Template</dt>
+                        <dd>{{ s.templateName || s.templateId }}</dd>
+                      }
+                      @if (s.suiteName || s.suiteId) {
+                        <dt>Suite</dt>
+                        <dd>{{ s.suiteName || s.suiteId }}</dd>
+                      }
+                      <dt>Repository</dt>
+                      <dd class="tabular">{{ s.repo || "None" }}</dd>
+                      @if (s.base) {
+                        <dt>Base</dt>
+                        <dd class="tabular">{{ s.base }}</dd>
+                      }
+                      @if (s.model) {
+                        <dt>Model</dt>
+                        <dd>{{ s.model }}</dd>
+                      }
+                      <dt>Overlap</dt>
+                      <dd>{{ s.overlap || "skip" }}</dd>
+                      @if (s.overlapGroup) {
+                        <dt>Overlap group</dt>
+                        <dd data-testid="sched-overlap-group">
+                          {{ s.overlapGroup }}
+                        </dd>
+                      }
+                      <dt>Auto-merge</dt>
+                      <dd>{{ s.autoMerge ? "on" : "off" }}</dd>
+                      <!-- An event trigger's nextRunAt is a placeholder a year
+                           out (model.Schedule); schedNextRunOf labels it. -->
+                      @if (schedNextRunOf(s); as nr) {
+                        <dt>Next run</dt>
+                        <dd class="tabular">{{ nr }}</dd>
+                      }
+                      @if (s.lastRunAt) {
+                        <dt>Last run</dt>
+                        <dd class="tabular">{{ s.lastRunAt }}</dd>
+                      }
+                    </dl>
+                  </section>
+                </div>
 
                 <g-composition-view [composition]="scheduleComposition()" />
 
@@ -1263,26 +1317,6 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     </div>
                   </div>
 
-                  <div class="proc-meta-row">
-                    <g-actor-chip
-                      [label]="
-                        t.declaredIn?.repo ||
-                        (t.system ? 'grain' : 'deployment')
-                      "
-                      [kind]="t.system ? 'grain' : 'service'"
-                    />
-                    <span
-                      >Task title: <strong>{{ t.title }}</strong></span
-                    >
-                    @if (t.repo) {
-                      <span class="tabular"
-                        >Bound to {{ t.repo
-                        }}{{ t.base ? " @ " + t.base : "" }}</span
-                      >
-                    }
-                    <span>Auto-merge: {{ t.autoMerge ? "on" : "off" }}</span>
-                  </div>
-
                   @if (t.declaredIn) {
                     <p
                       class="banner banner-info"
@@ -1297,6 +1331,68 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                       <code>POST /api/tasks/from-template</code>.
                     </p>
                   }
+                </div>
+
+                <div class="g-panes">
+                  <section
+                    class="g-pane"
+                    aria-labelledby="tmpl-prompt-h"
+                    data-testid="tmpl-prompt-pane"
+                  >
+                    <h3 id="tmpl-prompt-h" class="g-pane-title">Prompt</h3>
+                    @if (t.description) {
+                      <div
+                        class="msg-body g-pane-prompt"
+                        data-testid="tmpl-prompt-preview"
+                        [gMarkdown]="t.description"
+                      ></div>
+                    } @else {
+                      <p class="g-pane-empty" data-testid="tmpl-prompt-preview">
+                        Empty prompt body.
+                      </p>
+                    }
+                  </section>
+                  <section
+                    class="g-pane"
+                    aria-labelledby="tmpl-config-h"
+                    data-testid="tmpl-config-pane"
+                  >
+                    <h3 id="tmpl-config-h" class="g-pane-title">
+                      Configuration
+                    </h3>
+                    <dl class="g-attrs">
+                      <dt>Source</dt>
+                      <dd>
+                        <g-actor-chip
+                          [label]="
+                            t.declaredIn?.repo ||
+                            (t.system ? 'grain' : 'deployment')
+                          "
+                          [kind]="t.system ? 'grain' : 'service'"
+                        />
+                      </dd>
+                      <dt>Task title</dt>
+                      <dd>{{ t.title }}</dd>
+                      <dt>Repository</dt>
+                      <dd class="tabular">
+                        {{ t.repo || "Chosen at launch" }}
+                      </dd>
+                      @if (t.base) {
+                        <dt>Base</dt>
+                        <dd class="tabular">{{ t.base }}</dd>
+                      }
+                      @if (t.model) {
+                        <dt>Model</dt>
+                        <dd>{{ t.model }}</dd>
+                      }
+                      @if (t.priority) {
+                        <dt>Priority</dt>
+                        <dd class="tabular">{{ t.priority }}</dd>
+                      }
+                      <dt>Auto-merge</dt>
+                      <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
+                    </dl>
+                  </section>
                 </div>
 
                 @if ((t.fields ?? []).length > 0) {
@@ -1332,16 +1428,6 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     </ul>
                   </div>
                 }
-
-                <div class="proc-card">
-                  <h3 class="section-title">Prompt preview</h3>
-                  <div
-                    class="proc-prompt-well"
-                    data-testid="tmpl-prompt-preview"
-                  >
-                    {{ t.description || "(empty prompt body)" }}
-                  </div>
-                </div>
 
                 <g-composition-view [composition]="templateComposition()" />
               } @else {
@@ -3002,6 +3088,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly launchTemplate = input<string | undefined>(undefined);
   readonly run = input<string | undefined>(undefined);
   readonly runSuite = input<string | undefined>(undefined);
+  // ?repo=owner/name on the declarations tab opens that repository's
+  // .grain/ declarations: Settings → Repositories links each row here.
+  readonly repo = input<string | undefined>(undefined);
 
   protected readonly store = inject(ProcessesStore);
   protected readonly access = inject(AccessService);
@@ -3050,6 +3139,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly selectedSuiteRunId = signal<number | null>(null);
   protected readonly selectedDeclRepo = signal<string | null>(null);
   protected readonly mobileDetailOpen = signal(false);
+  private handledRepoLinkKey = "";
 
   protected readonly scheduleComposition = signal<Composition | null>(null);
   protected readonly templateComposition = signal<Composition | null>(null);
@@ -3535,6 +3625,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         ) {
           this.selectDeclRepo(repos[0], false);
         }
+      });
+    });
+
+    // Open the repository ?repo= names on the declarations tab, on any
+    // width: the link was followed for that repository, so on a phone it
+    // opens its inspector rather than the list.
+    effect(() => {
+      const tab = this.activeTab();
+      const repo = (this.repo() ?? "").trim();
+      const loaded = this.store.loaded();
+      untracked(() => {
+        if (tab !== "declarations" || !repo || !loaded) return;
+        const key = `${tab}:${repo}`;
+        if (key === this.handledRepoLinkKey) return;
+        this.handledRepoLinkKey = key;
+        const known = this.store
+          .knownRepos()
+          .find((r) => r.toLowerCase() === repo.toLowerCase());
+        this.selectDeclRepo(known ?? repo, true);
       });
     });
 

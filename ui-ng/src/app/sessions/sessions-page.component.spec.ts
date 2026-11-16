@@ -387,6 +387,52 @@ describe("SessionsPageComponent", () => {
     expect(q(f, '[data-testid="apply-now-banner"]')).toBeNull();
   });
 
+  it("saves Reads all on the session, not the deployment's settings", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    (
+      q(f, '[data-testid="session-settings-toggle"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    const box = q(f, '[data-testid="session-reads-all"]') as HTMLInputElement;
+    box.checked = !box.checked;
+    box.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) =>
+          c.method === "PUT" &&
+          c.route === "PUT /api/console-sessions/{id}" &&
+          (c.body as { readsAll?: boolean })?.readsAll === box.checked,
+      ),
+    ).toBeTruthy();
+    expect(api.calls.some((c) => c.route === "POST /api/settings")).toBe(false);
+  });
+
+  it("saves a session's settings on the session while it has no open run", async () => {
+    const api = new FakeApi();
+    api.sessions = api.sessions.map((s) =>
+      s.id === "director" ? { ...s, taskId: undefined } : s,
+    );
+    const f = await render(api);
+    (
+      q(f, '[data-testid="session-settings-toggle"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    const box = q(f, '[data-testid="session-reads-all"]') as HTMLInputElement;
+    box.checked = !box.checked;
+    box.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) =>
+          c.route === "PUT /api/console-sessions/{id}" &&
+          (c.body as { readsAll?: boolean })?.readsAll === box.checked,
+      ),
+    ).toBeTruthy();
+    expect(api.calls.some((c) => c.route === "POST /api/settings")).toBe(false);
+  });
+
   it("edits API-scope grants and model in the session settings drawer, with no team field", async () => {
     const api = new FakeApi();
     const f = await render(api);
@@ -399,9 +445,9 @@ describe("SessionsPageComponent", () => {
     expect(drawer).toBeTruthy();
     expect(drawer.querySelectorAll("select")).toHaveLength(0);
 
-    // Sessions have no team: grain is single-tenant, and the server's
-    // vestigial session team gates nothing, so there is no field for it.
+    // No team: grain has none, so the drawer offers no team visibility.
     expect(q(f, '[data-testid="session-team-input"]')).toBeNull();
+    expect(drawer.textContent).not.toMatch(/team/i);
 
     // Add API scope grant via <g-grants-picker>
     (
@@ -516,7 +562,7 @@ describe("SessionsPageComponent", () => {
     });
   });
 
-  it("starts a new session from the dialog, with no team field", async () => {
+  it("starts a new session from the dialog, which asks for no team", async () => {
     const api = new FakeApi();
     const f = await render(api);
     (q(f, '[data-testid="new-session"]') as HTMLButtonElement).click();
@@ -528,6 +574,7 @@ describe("SessionsPageComponent", () => {
     name.value = "New one";
     name.dispatchEvent(new Event("input"));
     expect(q(f, '[data-testid="new-session-team"]')).toBeNull();
+    expect(dialog.textContent).not.toMatch(/team/i);
     (q(f, '[data-testid="new-session-create"]') as HTMLButtonElement).click();
     await settle(f);
     expect(
