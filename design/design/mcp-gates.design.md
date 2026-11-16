@@ -1,22 +1,22 @@
-# Extensible MCP gates for completion and scheduling
+# Extensible MCP gates for actions, completion and scheduling
 
 **Owner:** @ai-on-gke/ai-factory-root-owners
 
 **Status:** proposed architecture; documentation only, not implemented. Implementation phases below are dependencies for later work, not authorization to implement, deploy, or file follow-up tasks.
 
-**The core rule:** Grain alone owns task lifecycle and dispatch. Explicitly attached, pinned, read-only MCP gate evaluators explain whether completion obligations are satisfied and what useful work or durable waits remain; they never acquire action authority from their names, results, or persisted state.
+**The core rule:** Grain alone owns task lifecycle and dispatch. Explicitly attached, pinned, read-only MCP gate evaluators explain whether action prerequisites and completion obligations are satisfied and what useful work or durable waits remain; they never acquire action authority from their names, results, or persisted state.
 
-The normative contract is [MCP gates specification](../spec/mcp-gates/mcp-gates.spec.md), with [wire schemas](../spec/mcp-gates/wire.schema.json). This design explains the boundaries and migration. The specification governs the proposed gate protocol; existing behavior remains governed by its current contracts until a task explicitly migrates.
+The normative contract is [MCP gates specification](../spec/mcp-gates/mcp-gates.spec.md), with [wire schemas](../spec/mcp-gates/wire.schema.json) and the normative [action gate bindings extension](../spec/mcp-gates/action-bindings.spec.md), [binding/action schema](../spec/mcp-gates/action-bindings.schema.json) and [examples](../spec/mcp-gates/action-bindings.examples.json). This design explains the boundaries and migration. The specification governs the proposed gate protocol; existing behavior remains governed by its current contracts until separately authorized task migration or resource action admission.
 
 **Terminology:** Existing task **goals** describe desired outcomes or standing intent, such as `pr-merged`, `base-green` and `person-closes`. **Gates** are the new extensible evaluators/requirements used to determine readiness or completion in service of those goals. A goal can require several gates; a gate is not a replacement name for an existing task goal. Existing goal APIs, configuration, collectors and runtime behavior retain their names and semantics. In this proposal, `gate_*`, `gate_state`, gate IDs/versions/scopes and the proposed `completion_authority=gates` value name only the new extension.
 
 This terminology correction follows [Task #39's merged documentation PR #1666](https://github.com/ai-on-gke/grain/pull/1666); its authority and lifecycle decisions are preserved; Task #47 now replaces the unspecified snapshot transport with the bounded v2 protocol below. Stable `MGD-*` and `MGS-*` requirement IDs are retained for traceability.
 
-Related proposal: [extensible tracked resources](tracked-resources.design.md) supplies resource identity, scoped observations and durable change detection to evaluator snapshots. It uses the **gates** terminology from the merged Task #44 documentation rename; neither proposal implements the runtime protocol. Resource providers report facts, while gates interpret required outcomes; existing concrete task goals remain distinct. The [resource transaction contract](../spec/tracked-resources/implementation.spec.md#TDS-14) atomically invalidates task evidence on accepted observations or dirty hints; gate snapshot/page and lifecycle definitions remain authoritative here and in MGS-11.
+Related proposal: [extensible tracked resources](tracked-resources.design.md) supplies resource identity, scoped observations and durable change detection to evaluator snapshots. It uses the **gates** terminology from the merged Task #44 documentation rename; neither proposal implements the runtime protocol. Resource providers report facts, while gates interpret required action prerequisites and task outcomes; existing concrete task goals remain distinct. The [resource transaction contract](../spec/tracked-resources/implementation.spec.md#TDS-14) atomically invalidates task evidence on accepted observations or dirty hints; gate snapshot/page, protected action binding and lifecycle definitions remain authoritative here, in MGS-11 and in AGB-1–8.
 
 ## Problem and verified baseline
 
-Inspected `origin/main` at `5a5189ae4a11afd30e142a467fd0ef7cd34cd4a9` (2026-11-16). That was Task #39’s baseline. Task #47 started at `d8ff32019` and reuses Task #44’s rename commit `1ac7e412d`; it does not repeat or rename legacy goal APIs. These are source observations, not claims that all older designs are fully implemented:
+Inspected `origin/main` at `5a5189ae4a11afd30e142a467fd0ef7cd34cd4a9` (2026-11-16). That was Task #39’s baseline. Task #47 started at `d8ff32019` and reuses Task #44’s rename commit `1ac7e412d`; it does not repeat or rename legacy goal APIs. Task #50's action-binding extension builds on Task #47's committed transport (`3df930079`) without changing its wire schema or fixtures. These are source observations, not claims that all older designs are fully implemented:
 
 | Authority or observation today | Verified source | Consequence for migration |
 |---|---|---|
@@ -82,13 +82,58 @@ This **supersedes** the historical “registered read-only snapshot access handl
 
 ## Actions, waivers and interface {#MGD-2}
 
-Evaluation does no mutation and has no write credentials. It may return work for an agent and typed requests to registered operations. Grain validates and arbitrates these, then uses the same authorized operation path available to an agent. If the agent lacks a tool or grant, the task offers a permission request; no controller-only privileged shortcut is required to make progress. A future executor optimization must use the same path, preconditions, idempotency and audit.
+Evaluation does no mutation and has no write credentials. It may return work for an agent and typed requests to registered operations. Grain validates and arbitrates these, then uses the same authorized operation path available to an agent. All protected effects use the executor and non-optional resource guard policy in MGD-7. If the agent lacks a tool or grant, the task offers a permission request; no controller-only privileged shortcut is required to make progress. A future executor optimization must use the same path, preconditions, idempotency and audit.
 
 UI buttons contain a label, registered action ID, constrained input schema and confirmation requirements. Providers cannot send executable JavaScript, arbitrary URLs or an alternate approval mechanism. The server registry controls operation permissions, minimum confirmation, human-only restrictions and evidence scope. The server rechecks all of these at click time and records an immutable event before an idempotent operation is driven. A note is never approval; acknowledgment is receipt only.
 
 A waiver is a Grain-owned, reasoned, actor-attributed exception to a named gate and scoped evidence/contract version. It is shown as **waived**, never **met**. A new head, changed requirement, revoked waiver or changed scoped evidence invalidates it. A waiver of a completion obligation cannot authorize merge, deployment, secret access or another protected action. Existing merge gate overrides stay separate registered operations with `merge:force`, exact-head scope, reason and confirmation.
 
 The task detail shows each gate's result, summary, optional human text, evidence, blockers, waits and buttons. Agent prompts receive optional agent text and actionable work separately. Neither text field is machine authority. The task row has one primary state but exposes every blocker, so a running agent can coexist with a review wait and a permission need.
+
+## Action gate bindings and enforceable operations {#MGD-7}
+
+A gate can guard an operation before it executes as well as evaluate a completion outcome. The attachment purpose is explicit. A merge request aggregates current-head check/review/scoped approval guards; the implementation task separately aggregates integration and required child outcomes. Monitoring is advisory unless separately attached as required policy, and existing concrete task goals retain their semantics. Requiring integration before executing that same merge is a rejected dependency cycle.
+
+```mermaid
+flowchart TD
+  C[Agent / operator / automation request] --> X[Grain action executor]
+  P[Controller registry + inherited resource policies + all task bindings] --> X
+  X --> A[Check caller authorization]
+  A --> G[Resolve and evaluate required guards on one current context]
+  G --> B[Blocked with structured remediation]
+  G --> F[Fenced lease + resource locks + version recheck]
+  F --> O[Conditional provider operation]
+  O --> R[Reconcile authoritative outcome / hold uncertain result]
+  R --> E[Authenticated success evidence]
+  E --> T[Separate task completion gates + required children]
+```
+
+Resource policy is not optional task metadata. The controller normalizes action aliases and equivalent effects, resolves authority/repository/resource policy and every active task-origin resource binding, and requires their union. Taskless actions receive the same policy. An agent cannot choose another contract, task, tool name, direct base push or queue path to omit a review. Empty coverage, incompatible guard sets and missing providers fail closed. Completion authority migration and action policy admission are independent.
+
+The [AGB specification](../spec/mcp-gates/action-bindings.spec.md) governs exact schemas, invalidation, authorization, conditional execution, idempotency, unknown outcomes, structured remediation and scoped overrides. Registry versions, policy/contract revisions and exact resource/head identity fence the decision. Successful operation receipts feed completion; a guard result or callback text cannot confer execution permission. An override is a reasoned, separately authorized, exact-action/head/guard exception, never a completion waiver or a broad force flag.
+
+### Source audit and actual enforcement boundary
+
+This is a source audit, not a live credential/permission audit. The rows identify integration work still required; they do not claim these paths already implement a unified executor.
+
+| Current path inspected | Current behavior / boundary limitation | Required protected-operation boundary |
+|---|---|---|
+| [`sync.go`](../../pkg/orchestrator/sync.go), [`mergegates.go`](../../pkg/orchestrator/mergegates.go), [`merge_gates.go`](../../pkg/ui/merge_gates.go), [`mergerules.go`](../../pkg/orchestrator/mergerules.go), [`github.go`](../../pkg/github/github.go) (`MergePullRequestWithMessage`), [`mergequeue.go`](../../pkg/github/mergequeue.go) | Queue checks, exact-head named review overrides and expected-SHA merge exist; queue enrollment can defer the effect. No general action binding resolution is claimed. | Route queue/merge/auto-merge effects through executor; fence final execution, not just initial enqueue. Reconcile merged head/receipt. |
+| [`mergeidentity.go`](../../pkg/github/mergeidentity.go) (`forMerge`), [`githubtoken.go`](../../pkg/capability/githubtoken/githubtoken.go), [`git_credentials.go`](../../pkg/mcp/git_credentials.go), [`ssh_git_credentials.go`](../../pkg/mcp/ssh_git_credentials.go) | Named/App/personal/ambient credentials and SSH paths need assessment. When no separate merge credential is configured, merge can use the push credential. A distinct merge identity alone does not remove other tokens' rights. | Keep privileged credential inside executor adapter; all agent/automation credential and mint/refresh paths must lack direct integration authority or be constrained by an enforced proxy. |
+| [`protocol.go`](../../pkg/gitproxy/protocol.go), [`core.go`](../../pkg/gitproxy/core.go), [`refupdates.go`](../../pkg/gitproxy/refupdates.go), [`cli_actions.go`](../../pkg/gitproxy/cli_actions.go), [`commandforge.go`](../../pkg/gitproxy/commandforge.go), [`agent_api.go`](../../pkg/ui/agent_api.go) | The smart-HTTP proxy restricts paths and pushes to the task branch; scoped CLI and API authorization are useful existing controls. They are not proof that every equivalent protected effect is guarded. | Deny/reroute protected-base writes and authenticated generic tunnels; cover REST/GraphQL/SSH, capability tools, CLI, API and bot/CI identities by effect. |
+| [`change_submit.go`](../../pkg/ui/change_submit.go), [`submit.go`](../../pkg/change/submit.go), [`change.go`](../../pkg/change/change.go) (`Provider.Submit`, `SubmitGranter`) | Submit is person-authorized, has blockers, records a provider grant and calls a provider. Raw provider credentials/submit routes and exact-snapshot execution need separate proof. | Unified executor owns scoped approval, exact CL snapshot condition, submit grants and authoritative renumbered-target reconciliation. No unrestricted raw submit identity in admitted callers. |
+| [`githubsandbox.go`](../../pkg/capability/githubsandbox/githubsandbox.go) | Disposable-repo capability places a raw repo-scoped token with contents/pull-request/packages write. Repo-scoped is not merge-disabled. Disposable repos are not implicitly protected production resources. | Inventory admission per actual repository/effect; do not admit such a token to an enforced protected cohort without removing/constraining its bypass. |
+| [`registrypush.go`](../../pkg/capability/registrypush/registrypush.go), [`packagepublish.go`](../../pkg/capability/packagepublish/packagepublish.go), [`refresh.go`](../../pkg/capability/packagepublish/refresh.go), [`gcpkey`](../../pkg/capability/gcpkey), [`release.go`](../../pkg/capability/release/release.go) | Registry/package token placements and refresh, cloud keys and release tools can cross other mutation boundaries. Capability admission is not an action guard on each subsequent upload/deploy. | Promotion binds environment version and immutable digest; publication binds package/version/tag and digest. Credential refresh and alternate automation must not bypass executor; require operation-specific reconciliation. |
+
+GitHub permissions are not a universal merge firewall: contents-write can permit merge subject to repository policy, and existing PAT/App/write tokens cannot be presumed unable to merge. Forge rules may strengthen a verified boundary but need explicit separate authorization and examination of bypass identities and direct writes. Expected SHA prevents merging a changed PR head; it does not atomically freeze every review, policy, base or external resource version. A provider lacking the required conditional/exclusion mechanism is an enforcement blocker, even after an immediate re-read.
+
+Grain can prevent mutations only through routes and identities it controls. Independent human/credential actions are observed and attributed as external, with pending contexts invalidated. Safe initial admission requires an operator-reviewed credential/route inventory, exclusive control over admitted agent/automation effects, proven version fencing, compatible providers and durable recovery. If bypass credentials remain in that cohort, keep it observation-only with no Grain protected execution or refuse it. Independent human rights require an explicit trust limit, never a universal prevention claim. This PR changes no live credentials, grants or repository policies.
+
+### Ownership and rollout limits
+
+Task #47 retains snapshot transport and implementation-readiness ownership. This branch builds on its committed Grain-driven round protocol without changing `wire.schema.json` or transport fixtures. The separate binding schema composes a negotiated action-profile 3.0 envelope with that unchanged v2 transport: explicit action authority context, null task provenance when taskless, and context echoes on continuation/final replies. No callback transport or v2 compatibility fallback is added. Task #47's declaration/schema pins, copied pages, reauthorization, limits and replay/final-only commit rules apply unchanged. Direct task-record/message coordination was denied by grants; this source-level composition does not claim cross-owner implementation signoff.
+
+The [acceptance scenarios and responsibility matrix](../spec/mcp-gates/action-bindings.spec.md#AGB-7) include an agent merge blocked by review, then allowed only after accepted current-head evidence; concurrent edits/policy invalidation; external actions; provider failure; crash/retry reconciliation; and negative bypass probes. Remaining blockers include a general executor and policy index, credential isolation, external atomicity, durable action fencing, adapter reconciliation and negotiated profile/provider support. These are admission requirements, not authorization to implement or file phases.
 
 ## Scheduling and closure {#MGD-3}
 
@@ -100,7 +145,7 @@ Subscriptions and snapshots share a durable cursor fence. Grain reads snapshot a
 
 No-progress accounting uses authoritative operation/evidence changes and processed messages, not provider summary/state churn. Repeated identical work, pending results without a viable wait, malformed responses and provider outages cannot dispatch agents repeatedly. They back off, open a named blocker and escalate after a persisted threshold. Independent work continues. An unmet gate with no safe remedy rests with an explanation; it does not imply useful agent work.
 
-Closure is a transaction over the current contract, evidence revision, message watermark, result set, waiver set and operation ledger. Every required gate must be met or validly waived, all incoming user messages processed, and operations settled or explicitly dispositioned by Grain. If a live run needs stopping, Grain requests graceful stop and waits for settlement before retrying closure. A late push cannot be ignored by simply canceling a run. Retained historical completion evidence is immutable. Later regressions follow an explicit reopen or separate repair policy, never rewrite the old success silently.
+Closure is a transaction over the current contract, evidence revision, message watermark, result set, waiver set and operation ledger. Every required completion gate must be met or validly waived, all incoming user messages processed, and operations settled or explicitly dispositioned by Grain. If a live run needs stopping, Grain requests graceful stop and waits for settlement before retrying closure. A late push cannot be ignored by simply canceling a run. Retained historical completion evidence is immutable. Later regressions follow an explicit reopen or separate repair policy, never rewrite the old success silently.
 
 Proposed tasks have no execution authority; admission approval fixes an executable contract. Active primary states are running, waiting, needs answer, needs permission and needs acknowledgment, with a separate readiness/scheduling reason for admitted runnable tasks awaiting capacity. Terminal outcomes are succeeded, canceled and failed. A standing person-closes session rests after satisfying current work and closes successfully only on an authorized person's close event; cancel records canceled rather than pretending the session achieved an outcome goal. Exhausted task retry policy may fail a task; an individual evaluator error cannot do so alone.
 
@@ -116,7 +161,7 @@ Names below are proposed examples, not built-in implicit attachments. Every conf
 | Exact-head required checks | `gate_checks` reads repository's configured CI provider/check set | Preserve current-head identity; stale success cannot authorize merge. |
 | Ordinary / targeted / security / path-trigger reviews | `gate_review` with pinned policy, scope, reviewer role and head/path digest | Preserve distinct gates and findings; security-sensitive new edits invalidate old scope. Reviewer task finishing with findings completes review work but does not pass merge prerequisites. |
 | Operator Submit / human-review hold | Registered Submit/release/override actions plus `gate_approval` evidence | Submit records only its scoped human approval; cannot satisfy review findings. Protected hold rules remain. |
-| PR merged / CL submitted | `gate_integrated` with PR or all scoped CL outcomes | Integration evidence satisfies outcome. `gate_merge_ready` only authorizes requesting merge through its protected operation. Closed unmerged is not integrated; unreadable CL is unknown. |
+| PR merged / CL submitted | `gate_integrated` with PR or all scoped CL outcomes | Integration evidence satisfies outcome. `gate_merge_ready` supplies prerequisites for requesting merge through its protected operation; caller authorization remains separate. Closed unmerged is not integrated; unreadable CL is unknown. |
 | `tasks-closed` | `gate_children` with explicit terminal-closure or success predicate | Import legacy `until=closed` literally; new required-outcome links default to success. Failed/canceled closure is not successful delivery. `until=merged` imports integration predicate. |
 | Base green | `gate_base_green` references recorded branch CI confirmation | Preserve `BaseCICleared` non-reproduced failure as explicit evidence, not a provider inference or generic waiver. In-flight/broken evidence remains unmet/pending. |
 | Publishing recovery | `gate_publishing_recovered` reads release health and supersession evidence | Preserve existing `Publishing` option semantics, including missing release row behavior, for compatibility imports; new contracts should require positive publication evidence and freshness. Superseded releases without publication do not demonstrate recovery. |
@@ -129,7 +174,7 @@ Names below are proposed examples, not built-in implicit attachments. Every conf
 
 | Task | Explicit obligations | Work and wake behavior |
 |---|---|---|
-| Implementation | change delivered, current checks, reviews, scoped approval when required, integration | Request fixes while CI/review waits; request merge only when prerequisites and permission hold; close on observed integration. |
+| Implementation | Completion: change delivered, integration and required child success. Guards: current checks/reviews/scoped approval when required. | Request fixes while CI/review waits; request merge only when prerequisites and permission hold; close on observed integration. |
 | Report/research | artifact/report coverage, optional receipt acknowledgment | Ask an unresolved research question; otherwise present report and wait for receipt if configured. No PR goal or integration gate by default. |
 | Review | report on exact assigned head and disposition of findings | Record findings as successful review delivery; parent's review gate remains blocked. A new head invalidates assignment scope and triggers explicit reassignment/review policy. |
 | Repair | base green, optionally publishing recovered or nightly green | Work on a reproduced failure; wait on CI without rerunning an agent; non-reproduction needs recorded confirmation. Escalate unreadable CI. |
@@ -138,7 +183,7 @@ Names below are proposed examples, not built-in implicit attachments. Every conf
 
 ## Incremental implementation plan {#MGD-6}
 
-This PR files and implements none of these phases. Dependencies are linear unless noted.
+This PR files and implements none of these phases. Dependencies are linear unless noted. Protected-action enforcement additionally requires AGB-5/AGB-8 admission and boundary responsibilities; migrating task completion alone never establishes an action boundary.
 
 1. **Contract and evidence foundations.** Define DB records, the retained immutable snapshot/page store and internal read resolver (not a provider callback API), provider declaration/schema pins, journal/cursors, action registry and permissions. Implement short observation-cut transactions, atomic ready publication, 60-second bulk TTL and copied decision evidence. Retain all current collectors and legacy decisions. Add fixture coverage for current finish/state/goal cases. Capture exact legacy predicates for imports, including release-row absence and nightly windows.
 2. **Observation-only evaluation (depends on 1).** Implement the v2 driver with persistent round/checkpoint/lease/counter records, exact retries, request-carried continuation and final-only state CAS; validate the complete example transcripts and MGS-11 checklist. Deploy pinned read-only evaluators without lifecycle or dispatch authority. Store differences against legacy decisions, classify incompatibilities, measure boundedness and provider reliability. Shadow errors cannot block current tasks. Expose read-only results clearly labeled observation-only.
