@@ -702,6 +702,25 @@ function formatRefreshedAt(iso?: string): string {
                       </td>
                       <td class="s-actions-cell">
                         <div class="s-row-actions">
+                          <button
+                            type="button"
+                            class="btn-tonal s-btn-sm"
+                            [attr.data-testid]="'test-backend-' + b.id"
+                            [attr.aria-label]="'Test saved connection ' + b.id"
+                            [disabled]="
+                              connectionTests()[b.id]?.pending ||
+                              !access.can(
+                                'POST /api/agent-keys/{framework}/check'
+                              )
+                            "
+                            (click)="testBackend(b)"
+                          >
+                            {{
+                              connectionTests()[b.id]?.pending
+                                ? "Testing…"
+                                : "Test connection"
+                            }}
+                          </button>
                           @if (discovers(b) && canRefreshModels()) {
                             <button
                               type="button"
@@ -756,6 +775,22 @@ function formatRefreshedAt(iso?: string): string {
                         </div>
                       </td>
                     </tr>
+                    @if (connectionTests()[b.id]; as result) {
+                      <tr class="s-subrow">
+                        <td colspan="4">
+                          <div
+                            role="status"
+                            [attr.data-testid]="'test-result-' + b.id"
+                            [class]="
+                              's-banner ' +
+                              (result.pending ? '' : result.ok ? 'ok' : 'error')
+                            "
+                          >
+                            {{ result.detail }}
+                          </div>
+                        </td>
+                      </tr>
+                    }
                     @if (
                       openCredBackendId() === b.id && b.authMode !== "ambient"
                     ) {
@@ -806,7 +841,8 @@ function formatRefreshedAt(iso?: string): string {
                                 Paste the auth.json from a Codex ChatGPT login.
                                 Only this connection uses it, and grain keeps
                                 its tokens refreshed. API keys are ignored in
-                                this mode.
+                                this mode. JSON is checked here; Codex validates
+                                authentication when it runs.
                               </p>
                               <textarea
                                 class="s-textarea s-mono"
@@ -832,6 +868,17 @@ function formatRefreshedAt(iso?: string): string {
                                   )
                                 "
                               ></textarea>
+                              @if (codexAuthErrors()[b.id]) {
+                                <p
+                                  role="alert"
+                                  class="s-banner error"
+                                  [attr.data-testid]="
+                                    'codex-auth-error-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthErrors()[b.id] }}
+                                </p>
+                              }
                               <div class="s-inline">
                                 <button
                                   type="button"
@@ -978,6 +1025,12 @@ function formatRefreshedAt(iso?: string): string {
                 </button>
               }
             </div>
+            <p class="s-hint">
+              Save the connection and its credential first, then use Test
+              connection on its row. Tests use saved settings and never save
+              edits. Ambient, Vertex and Codex subscription authentication
+              cannot be tested here.
+            </p>
             <div class="s-grid">
               <div class="s-field">
                 <label class="s-label" for="nb-id">Connection ID</label>
@@ -2645,6 +2698,49 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     Partial<Record<string, BackendCodexAuthStatus>>
   >({});
   protected readonly codexAuthBusy = signal(false);
+  protected readonly codexAuthErrors = signal<Record<string, string>>({});
+  protected readonly connectionTests = signal<
+    Partial<Record<string, { pending: boolean; ok?: boolean; detail: string }>>
+  >({});
+
+  private clearConnectionTest(id: string): void {
+    this.connectionTests.update((m) => {
+      const next = { ...m };
+      delete next[id];
+      return next;
+    });
+  }
+
+  protected async testBackend(b: BackendEntry): Promise<void> {
+    if (this.connectionTests()[b.id]?.pending) return;
+    const pending = { pending: true, detail: "Testing saved connection…" };
+    this.connectionTests.update((m) => ({ ...m, [b.id]: pending }));
+    const finish = (ok: boolean, detail: string) => {
+      // A credential/configuration save invalidates an in-flight result too.
+      this.connectionTests.update((m) =>
+        m[b.id] === pending
+          ? { ...m, [b.id]: { pending: false, ok, detail } }
+          : m,
+      );
+    };
+    try {
+      const result = await this.api.post<{ ok: boolean; detail: string }>(
+        "POST /api/agent-keys/{framework}/check",
+        { framework: b.framework || "antigravity" },
+        undefined,
+        `backend=${encodeURIComponent(b.id)}`,
+      );
+      finish(
+        result?.ok === true,
+        result?.detail || "Connection test unavailable on this daemon.",
+      );
+    } catch {
+      finish(
+        false,
+        "Could not test the saved connection. Check your access, daemon connectivity and test support, then retry.",
+      );
+    }
+  }
   protected readonly newBackendId = signal("");
   protected readonly newBackendName = signal("");
   protected readonly newBackendFw = signal("antigravity");
@@ -3049,6 +3145,9 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       // An open Credential row that now holds a subscription login reads
       // its status, as opening it would have.
       const saved = this.backends().find((b) => b.id === backendId);
+      if (saved && this.isCodexSubscription(saved))
+        this.openCredBackendId.set(backendId);
+      this.clearConnectionTest(backendId);
       if (
         this.openCredBackendId() === backendId &&
         saved &&
@@ -3072,6 +3171,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         { value },
       );
       this.setBackendCredDraft(id, "");
+      this.clearConnectionTest(id);
       this.snackbar.show(`Updated credential for ${id}`);
     } catch (err) {
       this.state.recordError(err);
@@ -3096,6 +3196,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         id,
       });
       this.setBackendCredDraft(id, "");
+      this.clearConnectionTest(id);
       this.snackbar.show(`Cleared credential for ${id}`);
     } catch (err) {
       this.state.recordError(err);
@@ -3143,6 +3244,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected setCodexAuthDraft(id: string, value: string): void {
     this.codexAuthDrafts.update((d) => ({ ...d, [id]: value }));
+    this.codexAuthErrors.update((d) => ({ ...d, [id]: "" }));
   }
 
   private setCodexAuthStatus(id: string, res: unknown): void {
@@ -3172,6 +3274,17 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async saveCodexAuth(id: string): Promise<void> {
     const value = (this.codexAuthDrafts()[id] ?? "").trim();
     if (!value) return;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        throw new Error();
+    } catch {
+      this.codexAuthErrors.update((d) => ({
+        ...d,
+        [id]: "auth.json must contain a JSON object. Paste the contents of the Codex login file.",
+      }));
+      return;
+    }
     this.codexAuthBusy.set(true);
     try {
       const res = await this.api.put(
@@ -3181,9 +3294,13 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       );
       this.setCodexAuthStatus(id, res);
       this.setCodexAuthDraft(id, "");
+      this.clearConnectionTest(id);
       this.snackbar.show(`Saved subscription login for ${id}`);
-    } catch (err) {
-      this.state.recordError(err);
+    } catch {
+      this.codexAuthErrors.update((d) => ({
+        ...d,
+        [id]: "Could not save auth.json. Check your access and daemon credential storage, then retry.",
+      }));
     } finally {
       this.codexAuthBusy.set(false);
     }
@@ -3208,6 +3325,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       );
       this.setCodexAuthStatus(id, res);
       this.setCodexAuthDraft(id, "");
+      this.clearConnectionTest(id);
       this.snackbar.show(`Cleared subscription login for ${id}`);
     } catch (err) {
       this.state.recordError(err);
