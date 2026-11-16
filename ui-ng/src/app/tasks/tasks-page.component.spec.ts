@@ -102,6 +102,10 @@ class FakeApi {
     if (route === "GET /api/tasks/{id}/tree") {
       return Promise.resolve({ origin: "", done: 0, total: 0, nodes: [] });
     }
+    // The task pane's merge re-check panel; none here.
+    if (route === "GET /api/merge-batches") {
+      return Promise.resolve({ batches: [] });
+    }
     this.queries.push(query ?? "");
     return Promise.resolve({ tasks: this.closed, nextCursor: "", total: 1 });
   };

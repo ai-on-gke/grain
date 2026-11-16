@@ -26,6 +26,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  NgZone,
   OnDestroy,
   OnInit,
   computed,
@@ -258,6 +259,7 @@ const REFRESH_MS = 10_000;
 export class MergeRecheckPanelComponent implements OnInit, OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
+  private readonly zone = inject(NgZone);
 
   readonly repo = input<string>("");
   readonly task = input<string>("");
@@ -286,7 +288,15 @@ export class MergeRecheckPanelComponent implements OnInit, OnDestroy {
       return;
     }
     void this.refresh();
-    this.timer = setInterval(() => void this.refresh(), REFRESH_MS);
+    // Outside the zone, as task.store's poll is: a repeating timer inside
+    // it keeps the app from ever reading as stable, which hung every
+    // spec that renders a task page or the Merge Queue tab.
+    this.zone.runOutsideAngular(() => {
+      this.timer = setInterval(() => {
+        if (document.visibilityState === "hidden") return;
+        this.zone.run(() => void this.refresh());
+      }, REFRESH_MS);
+    });
   }
 
   ngOnDestroy(): void {
