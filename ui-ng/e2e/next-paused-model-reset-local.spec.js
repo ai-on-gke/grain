@@ -137,7 +137,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${prefix}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });
