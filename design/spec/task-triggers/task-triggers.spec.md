@@ -298,6 +298,6 @@ These are requirements for future implementation validation, not tasks filed by 
 
 ## TTS-15: Implementation gates {#TTS-15}
 
-[TTS-17–25](implementation.spec.md) resolves transport/hosting, registration leases, canonical identities, cross-version filing keys, transaction/outbox/fencing, exact management contracts and schedule migration ownership. Finite quota/cost defaults and retention fences are specified there; operators may narrow them. External GitHub history remains explicitly bounded and can be unrecoverable.
+[TTS-17–25](implementation.spec.md) resolves transport/hosting, registration leases, canonical identities, cross-version filing keys, transaction/outbox/fencing, exact management contracts and schedule migration ownership. Task #57 exclusively owns the shared capability broker envelope; TTS-23 defines binding-scoped invocation authority and the pending canonical-pin integration gate without a competing broker protocol. Finite quota/cost defaults and retention fences are specified there; operators may narrow them. External GitHub history remains explicitly bounded and can be unrecoverable.
 
 The [readiness matrix](implementation.spec.md#TTS-25) names concrete owners and enablement blockers. Essential runtime transport, authority and persistence are **specified but not implemented**. No binding is ready to enable merely because documents and schemas validate. The [design phases](../../design/task-triggers.design.md#phases-not-filed-tasks) are sequencing only: no implementation task, live declaration or subscription is filed.

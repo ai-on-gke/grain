@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:grain:task-triggers:protocol:v1",
   "title": "Proposed pull-provider and trigger management contracts",
-  "description": "Normative documentation only. Validate the indicated $defs plus TTS-17\u201325 semantic, byte, scope, lease and transaction requirements. No endpoint is installed.",
+  "description": "Normative documentation only. Validate the indicated $defs plus TTS-17\u201325 semantic, byte, scope, lease and transaction requirements. No endpoint is installed. These are domain payloads and management records, not a shared broker envelope. Task #57 exclusively owns that envelope and registered Grain-call protocol; see TTS-23.",
   "$ref": "#/$defs/provider_call",
   "$defs": {
     "error": {
