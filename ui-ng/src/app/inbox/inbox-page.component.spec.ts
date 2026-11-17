@@ -488,6 +488,59 @@ describe("InboxPageComponent", () => {
     expect(q(f, '[data-testid="action-error"]')).toBeNull();
   });
 
+  it("keeps one task's failed grant on screen while another task is answered", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      accessTask(api, "3", "Needs lib"),
+      accessTask(api, "4", "Needs lib too"),
+    ];
+    const pending: Record<string, { ok: () => void; fail: () => void }> = {};
+    api.post = (route, params, body) => {
+      api.posts.push({ route, params, body });
+      const id = String((params as { id?: string }).id);
+      return new Promise((resolve, reject) => {
+        pending[id] = {
+          ok: () => resolve({}),
+          fail: () => reject(new Error("grant refused")),
+        };
+      });
+    };
+    const f = await render(api);
+    const grant = () =>
+      q(f, '[data-testid="grant-access"]') as HTMLButtonElement;
+    const banner = () =>
+      q(f, '[data-testid="action-error"]')?.textContent ?? "";
+
+    refRow(f, "#3").querySelector<HTMLButtonElement>(".row-main")!.click();
+    await settle(f);
+    grant().click();
+    await settle(f);
+    refRow(f, "#4").querySelector<HTMLButtonElement>(".row-main")!.click();
+    await settle(f);
+
+    pending["3"].fail();
+    await settle(f);
+    expect(banner()).toContain("#3: grant refused");
+
+    // Answering #4 leaves #3's reason on screen, and #4 landing does too.
+    grant().click();
+    await settle(f);
+    expect(api.posts.map((p) => p.params)).toEqual([{ id: "3" }, { id: "4" }]);
+    expect(banner()).toContain("#3: grant refused");
+    api.taskList = [api.taskList[0]];
+    pending["4"].ok();
+    await settle(f);
+    await settle(f);
+    expect(banner()).toContain("#3: grant refused");
+
+    // Answering #3 again is what clears it.
+    refRow(f, "#3").querySelector<HTMLButtonElement>(".row-main")!.click();
+    await settle(f);
+    grant().click();
+    await settle(f);
+    expect(q(f, '[data-testid="action-error"]')).toBeNull();
+  });
+
   it("disables what a viewer cannot do and says why", async () => {
     const api = new FakeApi();
     api.cfg = {
