@@ -109,7 +109,7 @@ func (s *Store) BusyRunCount(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `task_run` AS `r` LEFT JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-			"WHERE `r`.`finished_at` IS NULL AND COALESCE(`t`.`interactive`, 0) = 0").Scan(&n)
+			"WHERE `r`.`finished_at` IS NULL AND (`t`.`interactive` IS NULL OR `t`.`interactive` = 0)").Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("counting busy runs: %w", err)
 	}
