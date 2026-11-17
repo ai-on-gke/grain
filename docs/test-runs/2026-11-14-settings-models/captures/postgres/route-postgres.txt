@@ -1,0 +1,25 @@
+--1 first refresh: {"asked":true,"error":null,"discovered":{"models":["claude-walk-a"],"refreshedAt":"2026-11-15T14:24:49.261407025Z"}}
+--2 provider adds a model: {"asked":true,"error":null,"discovered":{"models":["claude-walk-a","claude-walk-new"],"refreshedAt":"2026-11-15T14:24:49.331862357Z"}}
+--3 provider 500: {"asked":true,"error":"Anthropic refused to list models (HTTP 500: fake provider is down) -- test the Claude Code OAuth token beside this field, or type a model name","discovered":{"models":["claude-walk-a","claude-walk-new"],"refreshedAt":"2026-11-15T14:24:49.331862357Z","error":"Anthropic refused to list models (HTTP 500: fake provider is down) -- test the Claude Code OAuth token beside this field, or type a model name"}}
+--4 provider hangs: {"asked":true,"error":"could not reach Anthropic at api.anthropic.com to list models: Get \"https://api.anthropic.com/v1/models?limit=1000\": context deadline exceeded","discovered":{"models":["claude-walk-a","claude-walk-new"],"refreshedAt":"2026-11-15T14:24:49.331862357Z","error":"could not reach Anthropic at api.anthropic.com to list models: Get \"https://api.anthropic.com/v1/models?limit=1000\": context deadline exceeded"}} (20s)
+--5 recovered: {"asked":true,"error":null,"discovered":{"models":["claude-walk-a","claude-walk-new"],"refreshedAt":"2026-11-15T14:25:09.495806163Z"}}
+--6 unknown connection: {"error":"no connection nope"}
+ HTTP 404
+--7 non-discovering framework: {"error":"connection \"legacy-cmd\" runs framework \"custom\", whose provider cannot be asked which models it serves; list them on the connection instead"}
+ HTTP 400
+-- roles
+viewer@example.com: HTTP 403 {"error":"viewer@example.com (role grain/viewer) holds no scope connections:write, which POST /api/deployment/agent-backends/{backendId}/discover needs: ask an access-cod
+ops@example.com: HTTP 403 {"error":"ops@example.com (role walk/ops-no-conn) holds no scope connections:write, which POST /api/deployment/agent-backends/{backendId}/discover needs: ask an access-co
+admin2@example.com: HTTP 200 {"backend":{"id":"anthro","name":"Fake Anthropic","framework":"claude","discovered":{"models":["claude-walk-a","claude-walk-new"],"refreshedAt":"2026-11-15T14:25:09.49580
+agent token without connections:write: HTTP 403 {"error":"external:walk-agent-ro holds no api grant for scope connections:write, which POST /api/deployment/agent-backends/{backendId}/discover needs"}
+agent token with connections:write, no reason: HTTP 403 {"error":"POST /api/deployment/agent-backends/{backendId}/discover is destructive (scope connections:write): give a reason"}
+agent token with connections:write and X-Grain-Acting-Reason: HTTP 200 {"backend":{"id":"anthro","name":"Fake Anthropic","framework":"claude","discovered":{"models":["claude-walk-a","claude-w
+-- provider hits
+2026-11-15T14:22:40.849669427Z ok auth=true
+2026-11-15T14:24:49.260797804Z ok auth=true
+2026-11-15T14:24:49.331280642Z ok auth=true
+2026-11-15T14:24:49.403765733Z 500 auth=true
+2026-11-15T14:24:49.454455155Z hang auth=true
+2026-11-15T14:25:09.495476437Z ok auth=true
+2026-11-15T14:25:11.653464706Z ok auth=true
+2026-11-15T14:25:11.747641727Z ok auth=true

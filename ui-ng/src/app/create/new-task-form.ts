@@ -14,6 +14,7 @@
 
 import type {
   AttachmentUpload,
+  GoalModeConfig,
   GrainConfig,
   Task,
   Template,
@@ -316,14 +317,19 @@ export function hasHistory(tasks: readonly Task[], repo: string): boolean {
 
 // Extracts a repository template stem suitable for POST /api/tasks/from-template
 // (pkg/ui/tasks_from_template.go FromTemplateStem), or "" when the template
-// must be launched through POST /api/tasks { templateId }.
+// must be launched through POST /api/tasks { templateId }. Only a template
+// the repository declares (an id under model.RepoDeclaredPrefix,
+// "repo:template:<owner>:<name>:<stem>", or one carrying declaredIn) has a
+// stem: from-template reads the repository's own declarations, so a stored
+// template ("template-3", made in Settings or POST /api/templates) sent
+// there is answered 404 "no template repo:template:...".
 export function fromTemplateStem(repo: string, tmpl: Template): string {
   if (!repo || repo === NO_REPO || tmpl.system) return "";
   const id = tmpl.id.trim();
   if (!id) return "";
   const [owner, name] = repo.trim().toLowerCase().split("/");
   if (!owner || !name) return "";
-  const prefix = `declared:template:${owner}:${name}:`;
+  const prefix = `repo:template:${owner}:${name}:`;
   if (id.toLowerCase().startsWith(prefix)) {
     const stem = id.slice(prefix.length);
     if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
@@ -335,9 +341,6 @@ export function fromTemplateStem(repo: string, tmpl: Template): string {
     const lastColon = id.lastIndexOf(":");
     const stem = lastColon >= 0 ? id.slice(lastColon + 1) : id;
     if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
-  }
-  if (!/[:/\\]/.test(id) && !id.startsWith(".")) {
-    return id;
   }
   return "";
 }
@@ -379,6 +382,7 @@ export interface NewTaskDraft {
   generatedFrom?: string;
   workstream?: boolean;
   autoApproveProposals?: boolean;
+  goalMode: GoalModeConfig | null;
 }
 
 export function emptyDraft(
@@ -427,6 +431,7 @@ export function emptyDraft(
     sandboxDiskGb: 0,
     approved: !!f.approved.default,
     atFront: !!f.atFront.default,
+    goalMode: null,
     ...prefill,
   };
 }
@@ -489,19 +494,35 @@ export function buildPayload(
     ...(d.autoApproveProposals !== undefined
       ? { autoApproveProposals: d.autoApproveProposals }
       : {}),
+    ...(d.goalMode?.enabled
+      ? {
+          goalMode: {
+            enabled: true,
+            maxPasses: d.goalMode.maxPasses ?? 8,
+            wallClockMinutes: d.goalMode.wallClockMinutes ?? 120,
+            ...(d.goalMode.mockMissingSecrets
+              ? { mockMissingSecrets: true }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField";
+  field:
+    "title" | "repo" | "newBranchName" | "templateField" | "foundIn" | "form";
   message: string;
 }
+
+const FOUND_IN_TAG_RE = /^v?\d+\.\d+\.\d+(?:-rc\.\d+)?$/;
 
 export function validate(
   d: NewTaskDraft,
   fields?: Record<FieldId, FieldConfig>,
   template?: Template | null,
   templateValues?: Record<string, string>,
+  config?: GrainConfig | null,
 ): Problem | null {
   if (template) {
     for (const tf of template.fields ?? []) {
@@ -515,6 +536,23 @@ export function validate(
   } else if (!d.title.trim()) {
     return { field: "title", message: "Give the task a title." };
   }
+  const repoShown = !fields || fields.repo.visibility !== "hidden";
+  const hasDefaultTarget = !!String(config?.["defaultTarget"] ?? "").trim();
+  if (
+    repoShown &&
+    !hasDefaultTarget &&
+    !d.repo.trim() &&
+    !template?.repo &&
+    !template?.declaredIn?.repo
+  ) {
+    return {
+      field: "repo",
+      message:
+        fields?.repo.allowNoRepo === false
+          ? "Pick a repository."
+          : "Pick a repository, or choose No repository.",
+    };
+  }
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
   if (
     branchShown &&
@@ -525,6 +563,17 @@ export function validate(
     return {
       field: "newBranchName",
       message: "Name the new branch, or untick the new-branch box.",
+    };
+  }
+  const foundInShown = !fields || fields.foundIn.visibility !== "hidden";
+  if (
+    foundInShown &&
+    d.foundIn.trim() &&
+    !FOUND_IN_TAG_RE.test(d.foundIn.trim())
+  ) {
+    return {
+      field: "foundIn",
+      message: "Use a release tag such as v3.6.0 or v3.6.0-rc.2.",
     };
   }
   return null;

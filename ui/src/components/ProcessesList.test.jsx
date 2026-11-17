@@ -536,4 +536,31 @@ describe("ProcessesList", () => {
       "refs/tags/latest",
     );
   });
+
+  it("names no pass on a suite run row that has not filed one", () => {
+    const run = {
+      suiteId: "suite-1",
+      suiteName: "Nightly sweep",
+      repo: "acme/widgets",
+      base: "main",
+      mode: "count",
+      count: 2,
+      tasks: null,
+      createdAt: "2026-11-13T03:00:00Z",
+    };
+    render(
+      <Harness
+        initialQuery={{ kind: ["suite"] }}
+        suiteRuns={[
+          { ...run, id: 3, status: "failed", pass: 0, error: "no template" },
+          { ...run, id: 2, status: "succeeded", pass: 2 },
+        ]}
+      />,
+    );
+    // The ended run that never filed a pass reads as its plan alone; the
+    // one that ran keeps its pass.
+    expect(screen.getByText("pass 2 · run 2×")).toBeInTheDocument();
+    expect(screen.queryByText(/pass 0/)).not.toBeInTheDocument();
+    expect(screen.getByText("run 2×")).toBeInTheDocument();
+  });
 });

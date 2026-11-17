@@ -286,6 +286,9 @@ func TestTheKubernetesManifestShipsTheObjectsItsHeaderClaims(t *testing.T) {
 		// grain-sandbox-egress, networkpolicy.yaml's open-network fence,
 		// so applying this file alone fences every open sandbox pod.
 		"NetworkPolicy",
+		// grain-sandbox-network-none, so -k8s-network-policy set on this
+		// file alone never runs a network:none task in an unfenced pod.
+		"NetworkPolicy",
 	}
 	var got []string
 	for _, obj := range objects {

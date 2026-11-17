@@ -19,11 +19,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestV1StatsAndFlush(t *testing.T) {
@@ -273,5 +276,69 @@ func TestGoCacheUntrustedJobsAndUnidentifiedCallersCannotPoisonEachOther(t *test
 		if code := do(http.MethodGet, "/gocache/action/"+action, token, nil); code != http.StatusNotFound {
 			t.Errorf("GET tok-a's entry with %q = %d, want 404", token, code)
 		}
+	}
+}
+
+// TestGoCacheReadOnlyRefusalsDoNotFloodTheLog is a go build in a task
+// sandbox: every artifact it compiles is PUT and refused, by design. The
+// daemon log gets one line for the burst, not one per artifact, while a
+// malformed request is still logged on its own.
+func TestGoCacheReadOnlyRefusalsDoNotFloodTheLog(t *testing.T) {
+	cache, err := NewCache(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var lines []string
+	srv := NewServer(Config{Cache: cache, JobTokens: NewJobTokenSet(false), Log: func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}})
+
+	put := func(path string, body []byte) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path, bytes.NewReader(body)))
+		return rec
+	}
+	action, _ := json.Marshal(GoCacheAction{OutputID: strings.Repeat("e", 64), Size: 1})
+	for i := 0; i < 500; i++ {
+		id := fmt.Sprintf("%064x", i)
+		for _, rec := range []*httptest.ResponseRecorder{
+			put("/gocache/output/"+id, []byte("x")),
+			put("/gocache/action/"+id, action),
+		} {
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), goCacheReadOnly) {
+				t.Fatalf("readonly PUT = %d %q, want 403 with goCacheReadOnly", rec.Code, rec.Body.String())
+			}
+		}
+	}
+	mu.Lock()
+	if len(lines) != 1 || !strings.Contains(lines[0], "refused PUT /gocache/") {
+		t.Fatalf("1000 readonly refusals logged %d lines, want 1: %q", len(lines), lines)
+	}
+	mu.Unlock()
+
+	// The next line, once the interval has passed, counts what was left out.
+	srv.goCacheReadOnlyLog.mu.Lock()
+	srv.goCacheReadOnlyLog.last = time.Now().Add(-goCacheReadOnlyLogEvery)
+	srv.goCacheReadOnlyLog.mu.Unlock()
+	put("/gocache/output/"+strings.Repeat("f", 64), []byte("x"))
+	mu.Lock()
+	if len(lines) != 2 || !strings.Contains(lines[1], "[999 more refused since the last line, not logged]") {
+		t.Fatalf("after the interval, lines = %q, want a second line counting 999 suppressed", lines)
+	}
+	mu.Unlock()
+
+	// A malformed request is a misconfiguration, and is not rate-limited.
+	for i := 0; i < 3; i++ {
+		if rec := put("/gocache/output/not-hex", []byte("x")); rec.Code != http.StatusBadRequest {
+			t.Fatalf("malformed PUT = %d, want 400", rec.Code)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) != 5 {
+		t.Errorf("after three malformed PUTs, %d lines logged, want 5: %q", len(lines), lines)
 	}
 }

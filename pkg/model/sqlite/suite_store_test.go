@@ -281,6 +281,15 @@ func TestCreateSuiteRunFilesOneTaskPerItemInTheFirstPass(t *testing.T) {
 	if tasks[0].TemplateName != "Smoke" || tasks[1].TemplateName != "Lint" {
 		t.Fatalf("got names %q/%q, want the resolved template names", tasks[0].TemplateName, tasks[1].TemplateName)
 	}
+	for _, ts := range tasks {
+		task, err := store.GetTask(ctx, ts.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.TemplateID != ts.TemplateID || task.SourceTemplateID != ts.TemplateID {
+			t.Errorf("task %s: template %q, source template %q, want both %q", ts.TaskID, task.TemplateID, task.SourceTemplateID, ts.TemplateID)
+		}
+	}
 
 	for _, ts := range tasks {
 		if !ts.Approved {
@@ -302,11 +311,11 @@ func TestCreateSuiteRunFilesOneTaskPerItemInTheFirstPass(t *testing.T) {
 		if task.Target == nil || *task.Target != widgets {
 			t.Errorf("task %s: got target %v, want %s", ts.TaskID, task.Target, widgets)
 		}
-		if task.Origin.Reason != model.ReasonSuite {
-			t.Errorf("task %s: got origin reason %q, want suite", ts.TaskID, task.Origin.Reason)
+		if task.Filing.Reason != model.ReasonSuite {
+			t.Errorf("task %s: got filing reason %q, want suite", ts.TaskID, task.Filing.Reason)
 		}
-		if task.Origin.Attribution.Actor != model.SuitePrincipal {
-			t.Errorf("task %s: got actor %+v, want SuitePrincipal", ts.TaskID, task.Origin.Attribution.Actor)
+		if task.Filing.Attribution.Actor != model.SuitePrincipal {
+			t.Errorf("task %s: got actor %+v, want SuitePrincipal", ts.TaskID, task.Filing.Attribution.Actor)
 		}
 		if !task.AutoMerge {
 			t.Errorf("task %s: want AutoMerge, the run's own switch is on", ts.TaskID)
@@ -566,7 +575,7 @@ func TestSuiteRunTasksReportPullRequestsAndProposals(t *testing.T) {
 	}
 	if err := store.PutTask(ctx, model.Task{
 		ID: followUpID, Intent: model.IntentImplement, Title: "follow up",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.SuitePrincipal},
 			Reason:      model.ReasonProposal,
 		},

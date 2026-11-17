@@ -584,7 +584,13 @@ type RepoDefaults struct {
 	// repository (model.RepoConfig.UpstreamRepo), "" when pull requests
 	// open against this repository itself.
 	UpstreamRepo string `json:"upstreamRepo"`
+	// QAFlowRef is the operator-only QA flow reference bound to this repository.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 }
+
+// RepoSettings aliases RepoDefaults, the JSON shape of GET/PUT
+// /api/repos/{owner}/{name}/settings.
+type RepoSettings = RepoDefaults
 
 // RepoDeclarationsStatus is what grain has made of one repository's
 // declarations (model.RepoDeclarationSync, plus what it declares now).
@@ -600,10 +606,11 @@ type RepoDeclarationsStatus struct {
 	Error string `json:"error,omitempty"`
 	// Templates, Suites, Schedules and Triggers are what this repository
 	// declares right now, each as the file it is declared in.
-	Templates []string `json:"templates,omitempty"`
-	Suites    []string `json:"suites,omitempty"`
-	Schedules []string `json:"schedules,omitempty"`
-	Triggers  []string `json:"triggers,omitempty"`
+	Templates      []string            `json:"templates,omitempty"`
+	Suites         []string            `json:"suites,omitempty"`
+	Schedules      []string            `json:"schedules,omitempty"`
+	Triggers       []string            `json:"triggers,omitempty"`
+	TriggerDetails []model.PathTrigger `json:"triggerDetails,omitempty"`
 	// Pushes is every declared template here with a `push:` list
 	// (grain/task-2536): what the runs of tasks filed from it may push in
 	// this repository beyond their own branch.
@@ -722,6 +729,7 @@ type SetRepoSettingsRequest struct {
 	// are opened and tracked against, or "" to open pull requests on this
 	// repository itself.
 	UpstreamRepo *string `json:"upstreamRepo,omitempty"`
+	QAFlowRef    *string `json:"qaFlowRef,omitempty"`
 }
 
 // SetRepoWatchDefaultBranchRequest is PUT /api/repos/{owner}/{name}/
@@ -840,6 +848,7 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.BaseRepairBypassesHumanGates = stored.BaseRepairBypassesHumanGates
 		out.UnfixableChecks = stored.UnfixableChecks
 		out.UpstreamRepo = stored.UpstreamRepo
+		out.QAFlowRef = stored.QAFlowRef
 		out.PortBranches = stored.PortBranches
 		out.DeclaredPortBranches = stored.DeclaredPortBranches
 		out.PairedBranches = stored.PairedBranches()
@@ -1208,6 +1217,11 @@ func (c *Client) SetRepoCIMode(ctx context.Context, repo string, mode string) (R
 
 // SetRepoSettings updates multiple repository settings in one request.
 func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSettingsRequest) (RepoDefaults, error) {
+	if req.QAFlowRef != nil {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, ""); err != nil {
+			return RepoDefaults{}, err
+		}
+	}
 	parsed, err := c.parseRepo(repo)
 	if err != nil {
 		return RepoDefaults{}, validationErrorf("repo: %v", err)
@@ -1384,6 +1398,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		if req.UpstreamRepo != nil {
 			rc.UpstreamRepo = upstreamRepo
 		}
+		if req.QAFlowRef != nil {
+			rc.QAFlowRef = strings.TrimSpace(*req.QAFlowRef)
+		}
 	})
 }
 
@@ -1507,6 +1524,7 @@ func (c *Client) repoDeclarationsStatus(ctx context.Context, repo model.RepoRef)
 	}
 	for _, tr := range triggers {
 		status.Triggers = append(status.Triggers, tr.Trigger.Path)
+		status.TriggerDetails = append(status.TriggerDetails, tr.Trigger)
 	}
 	rules, err := c.Store.MergeRulesOf(ctx, repo)
 	if err != nil {
@@ -1853,19 +1871,17 @@ func (c *Client) ciCapabilityIDs() []string {
 		if !spec.SupportsCI() {
 			continue
 		}
-		_, offered := c.capabilityByID(spec.Name)
-		if !offered {
-			_, offered = c.capabilityByID(model.CanonicalLegacyGrant(spec.Name))
-		}
+		canonical := model.RetiredGrantsBecame(spec.Name)[0]
+		_, offered := c.capabilityByID(canonical)
 		if offered || spec.CIOnly {
 			// A provider retired onto a method with a CI rule (the
-			// release server's) is offered as the grant it became,
-			// which is what its stored rows were rewritten to.
-			if _, ok := model.CIGrantRuleFor(spec.Name); ok {
-				ids = append(ids, model.CanonicalCIGrant(spec.Name))
+			// release server's, github#sandbox-repo) is offered as the
+			// grant it became, which is what its stored rows were rewritten to.
+			if _, ok := model.CIGrantRuleFor(canonical); ok {
+				ids = append(ids, model.CanonicalCIGrant(canonical))
 				continue
 			}
-			ids = append(ids, spec.Name)
+			ids = append(ids, canonical)
 		}
 	}
 	return ids
@@ -1912,7 +1928,7 @@ func (c *Client) cleanRepoCICapabilities(ctx context.Context, repo model.RepoRef
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {
 			canonicalID = model.RepoWriteCapability(target)
-		} else if model.IsCapabilityRef(id) || id == "gcp-key" || strings.HasPrefix(id, "gcp-key:") {
+		} else if model.IsCapabilityRef(id) {
 			// A capability server method, with its with: arguments: a
 			// CI job's grant admission mints it through its server
 			// (daemon.CiGrantReservations), so the repo may grant it
@@ -1934,6 +1950,9 @@ func (c *Client) cleanRepoCICapabilities(ctx context.Context, repo model.RepoRef
 			canonicalID = normalized
 		} else if !slices.Contains(allowed, id) {
 			if !slices.Contains(stored, id) {
+				if msg, _, ok := model.RetiredGrantRefusal(id); ok {
+					return nil, validationErrorf("ciCapabilities: %s; list that instead", msg)
+				}
 				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
 			}
 		}
@@ -2171,6 +2190,10 @@ func (s *Server) handleAddTargetRepo(w http.ResponseWriter, r *http.Request) {
 	teamID := r.URL.Query().Get("team")
 	var req AddRepoRequest
 	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.CloneURL != "" && (!strings.HasPrefix(req.CloneURL, "http://") && !strings.HasPrefix(req.CloneURL, "https://") && !strings.HasPrefix(req.CloneURL, "git://") && !strings.HasPrefix(req.CloneURL, "ssh://") && !strings.Contains(req.CloneURL, "@")) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid cloneUrl format"))
 		return
 	}
 	if req.Team != "" {

@@ -27,7 +27,7 @@ func TestStagedAttachmentIsHeldAgainstTheLiveRunUntilCleared(t *testing.T) {
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "a1b2", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: human},
 	}); err != nil {

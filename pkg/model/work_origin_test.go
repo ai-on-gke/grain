@@ -32,7 +32,7 @@ func TestWorkOriginIsInheritedAtAnyDepth(t *testing.T) {
 
 	planner := model.Task{
 		ID: "10", Intent: model.IntentImplement, Title: "plan",
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
 		Binding:    model.BindingDirective,
 		WorkOrigin: pr,
 	}
@@ -217,7 +217,7 @@ func TestANamedTaskOriginResolvesToItsTreesRoot(t *testing.T) {
 	proposal(t, store, ctx, "41", "40", nil)
 	named := model.Task{
 		ID: "42", Intent: model.IntentImplement, Title: "42",
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
 		Binding:    model.BindingDirective,
 		Links:      []model.Link{{Kind: model.LinkProposedBy, Target: "41"}},
 		WorkOrigin: model.TaskOrigin("41"),
@@ -232,7 +232,7 @@ func TestANamedTaskOriginResolvesToItsTreesRoot(t *testing.T) {
 	pr := model.GitHubOrigin(model.RepoRef{Owner: "bwsalmon", Name: "grain"}, 7)
 	planner := model.Task{
 		ID: "51", Intent: model.IntentImplement, Title: "51",
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect},
 		Binding:    model.BindingDirective,
 		WorkOrigin: pr,
 	}

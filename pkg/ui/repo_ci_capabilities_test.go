@@ -30,12 +30,12 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	t.Parallel()
 	srv, c := testServer(t)
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
-	original := model.RepoConfig{Repo: repo, DefaultCapabilities: []string{"gcp-key"}, PromptExtension: "Instructions", SetupCommand: "make deps"}
+	original := model.RepoConfig{Repo: repo, DefaultCapabilities: []string{model.GCPKeySandboxAgentGrant}, PromptExtension: "Instructions", SetupCommand: "make deps"}
 	if err := c.Store.PutRepoConfig(context.Background(), original); err != nil {
 		t.Fatal(err)
 	}
 	path := "/api/repos/acme/widgets/ci-capabilities"
-	rec := do(t, srv, http.MethodPut, path, `{"ciCapabilities":["github-sandbox","github-sandbox"]}`)
+	rec := do(t, srv, http.MethodPut, path, `{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}","https://grain.dev/capabilities/github#sandbox-repo={}"]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT: %d %s", rec.Code, rec.Body)
 	}

@@ -34,6 +34,28 @@ async function boardPath(page, name) {
   return `/boards/${board.id}`;
 }
 
+// A MUI Select's menu renders in a body portal whose invisible backdrop lingers
+// across its exit transition, and an App re-render (SSE / poll) while the menu
+// is open can drop an option click and leave the menu open on its old value.
+// Treat a pick as complete only once the menu has closed, the combobox shows
+// the chosen label, and the listbox portal has unmounted.
+async function pickSelect(page, label, optionName) {
+  const combo = page.getByRole("combobox", { name: label });
+  const option = page.getByRole("option", { name: optionName, exact: true });
+  await expect(async () => {
+    if ((await combo.getAttribute("aria-expanded")) !== "true") {
+      if ((await combo.textContent())?.trim() === optionName) return;
+      await combo.click({ timeout: 2_000 });
+    }
+    await option.click({ timeout: 2_000 });
+    await expect(combo).not.toHaveAttribute("aria-expanded", "true", {
+      timeout: 1_000,
+    });
+    await expect(combo).toHaveText(optionName, { timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+}
+
 test.afterEach(async ({ page }) => {
   while (seededBoards.length > 0) {
     const id = seededBoards.pop();
@@ -487,8 +509,7 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(page.getByText(/outside this range/)).toBeVisible();
 
     // Switch range to "Everything"
-    await page.getByRole("combobox", { name: "Range" }).click();
-    await page.getByRole("option", { name: "Everything" }).click();
+    await pickSelect(page, "Range", "Everything");
 
     // Closed task bar visible
     const closedRow = page.locator(".gantt-row", {
@@ -498,8 +519,7 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(closedRow.locator(".gantt-bar-ongoing")).toHaveCount(0);
 
     // Switch Lanes to "By state"
-    await page.getByRole("combobox", { name: "Lanes" }).click();
-    await page.getByRole("option", { name: "By state" }).click();
+    await pickSelect(page, "Lanes", "By state");
     await expect(page.locator(".gantt-lane-title").first()).toBeVisible();
 
     // Both asked states share one "Asked" lane, drawn straight after
@@ -539,10 +559,8 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     );
 
     // Restore defaults
-    await page.getByRole("combobox", { name: "Range" }).click();
-    await page.getByRole("option", { name: "Last 7 days" }).click();
-    await page.getByRole("combobox", { name: "Lanes" }).click();
-    await page.getByRole("option", { name: "No lanes" }).click();
+    await pickSelect(page, "Range", "Last 7 days");
+    await pickSelect(page, "Lanes", "No lanes");
   });
 
   test("6. Dashboard (Panels) presentation: multi-panel, scoping, whole-board narrowing, keep, panel reordering, empty state", async ({
@@ -1061,8 +1079,7 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     const picked = page.waitForRequest((r) =>
       r.url().includes("/api/metrics?"),
     );
-    await windowPicker.click();
-    await page.getByRole("option", { name: "Last 30 days" }).click();
+    await pickSelect(page, "Window", "Last 30 days");
     expect((await picked).url()).toContain("window=30d");
     await expect(page).toHaveURL(
       new RegExp(
@@ -1078,8 +1095,7 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(windowPicker).toHaveText("Last 30 days");
 
     // The board's own default clears the pick from the address.
-    await windowPicker.click();
-    await page.getByRole("option", { name: "Last 7 days" }).click();
+    await pickSelect(page, "Window", "Last 7 days");
     await expect(page).toHaveURL(
       new RegExp(`/boards/${reportBoard.id}\\?f=repo:any:acme/widgets$`),
     );
@@ -1093,8 +1109,7 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await page.goto(await boardPath(page, "Report"));
     const windowPicker = page.getByRole("combobox", { name: "Window" });
     await expect(windowPicker).toHaveText("Last 7 days");
-    await windowPicker.click();
-    await page.getByRole("option", { name: "Last 90 days" }).click();
+    await pickSelect(page, "Window", "Last 90 days");
     await expect(page).toHaveURL(/window=90d$/);
 
     const prompt = page.getByRole("dialog").locator("textarea").first();
@@ -1937,5 +1952,51 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
       `/boards/${dash.id}?f=repo:any:acme/widgets&f=author:any:ada`,
     );
     await expect(metricsKeep).toBeVisible();
+  });
+
+  // 2026-11-13 walkthrough (task 4727): re-sorting a dashboard from the
+  // toolbar offered "Keep" on its state counts panel, whose counts no
+  // sort can change. The list beside it draws the sort, so it still
+  // offers Keep.
+  test("6g. A re-sorted dashboard does not offer Keep on its state counts panel", async ({
+    page,
+  }) => {
+    const dash = await seedOne(page, "/api/boards", {
+      name: `WT Sorted Dash ${Date.now()}`,
+      folder: "",
+      kind: "panels",
+      description: "",
+      query: "f=repo:any:acme/widgets",
+      panels: [
+        { kind: "states", title: "Counts", width: "half", orderKey: 1000 },
+        { kind: "list", title: "Queue", width: "half", orderKey: 2000 },
+      ],
+    });
+    seededBoards.push(dash.id);
+    const listKeep = page.getByRole("button", {
+      name: "Keep this narrowing on “Queue”",
+    });
+    const countsKeep = page.getByRole("button", {
+      name: "Keep this narrowing on “Counts”",
+    });
+
+    await page.goto(`/boards/${dash.id}`);
+    await expect(page.getByRole("heading", { name: "Counts" })).toBeVisible();
+    await expect(listKeep).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Backlog order" }).click();
+    await page
+      .getByRole("group", { name: "Sort" })
+      .getByRole("button", { name: /Sort by/ })
+      .click();
+    await page.getByRole("menuitem", { name: /^created$/i }).click();
+    await expect(page).toHaveURL(/sort=created/);
+    await expect(page).toHaveURL(/f=repo:any:acme\/widgets/);
+    await expect(listKeep).toBeVisible();
+    await expect(countsKeep).toHaveCount(0);
+
+    // A narrowing that changes what is counted still offers it.
+    await page.goto(`/boards/${dash.id}?f=repo:any:acme/widgets&q=retry`);
+    await expect(countsKeep).toBeVisible();
   });
 });

@@ -63,6 +63,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_read":                      {"task_id", "owner", "name"},
 	"task_write":                     {"task_id", "owner", "name", "base"},
 	"task_filed_template":            {"task_id"},
+	"task_source_template":           {"task_id"},
 	"task_grant":                     {"task_id", "capability"},
 	"task_grant_wait":                {"task_id"},
 	"task_pause":                     {"task_id"},
@@ -172,6 +173,9 @@ var tablePrimaryKeys = map[string][]string{
 	"task_qa_assignment":             {"root_origin", "epoch"},
 	"task_qa_check_run":              {"id"},
 	"task_qa_finding":                {"id"},
+	"qa_flow_version":                {"hash"},
+	"qa_experiment":                  {"id"},
+	"qa_enrollment":                  {"root_origin"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.
@@ -245,6 +249,8 @@ type adaptedDriver struct {
 	cfg   Config
 	fence *writeFence
 }
+
+func (d *adaptedDriver) IsPostgresDriver() bool { return true }
 
 func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
 	conn, err := d.inner.Open(name)
@@ -846,13 +852,117 @@ func adaptSandboxUsage(query string) string {
 }
 
 func adaptBoolExpressions(query string) string {
-	for _, r := range boolExprReplacers {
+	candidates, narrowed := boolExprCandidates(query)
+	for i, r := range boolExprReplacers {
+		if narrowed && !candidates[i] {
+			continue
+		}
 		query = r.re1.ReplaceAllString(query, "${1}TRUE")
 		query = r.re0.ReplaceAllString(query, "${1}FALSE")
 		query = r.reNe1.ReplaceAllString(query, "${1}TRUE")
 		query = r.reNe0.ReplaceAllString(query, "${1}FALSE")
 	}
 	return query
+}
+
+// boolExprCandidates marks the boolColumns whose boolExprReplacers could
+// match query: those that end the text before some `= 0|1` or `!= 0|1`
+// (past whitespace and one quote), the only places those regexps
+// match. Every column's four regexps over the whole query is what
+// translating the schema spent its time on -- the joined DDL names
+// every column -- and under -race that was most of a minute per
+// Postgres test. The marks are a superset, and a replacement only ever
+// removes a site, so skipping the unmarked columns changes no answer.
+// narrowed is false, and every column is to be tried, when query holds
+// a byte outside ASCII, whose case folding a byte comparison misses.
+func boolExprCandidates(query string) (candidates []bool, narrowed bool) {
+	if !isASCII(query) {
+		return nil, false
+	}
+	candidates = make([]bool, len(boolColumns))
+	for i := 0; i < len(query); i++ {
+		if query[i] != '=' {
+			continue
+		}
+		j := i + 1
+		for j < len(query) && isRegexpSpace(query[j]) {
+			j++
+		}
+		if j >= len(query) || (query[j] != '0' && query[j] != '1') {
+			continue
+		}
+		if j+1 < len(query) && isWordByte(query[j+1]) {
+			continue
+		}
+		k := i
+		if k > 0 && query[k-1] == '!' {
+			k--
+		}
+		for k > 0 && isRegexpSpace(query[k-1]) {
+			k--
+		}
+		if k > 0 && (query[k-1] == '"' || query[k-1] == '`') {
+			k--
+		}
+		markBoolColumnsEndingAt(query, k, candidates)
+	}
+	return candidates, true
+}
+
+// boolDDLCandidates is boolExprCandidates for boolDDLReplacers, whose
+// regexps all need a quoted column, whitespace, then INTEGER.
+func boolDDLCandidates(query string) (candidates []bool, narrowed bool) {
+	if !isASCII(query) {
+		return nil, false
+	}
+	candidates = make([]bool, len(boolColumns))
+	upper := strings.ToUpper(query)
+	for from := 0; ; {
+		at := strings.Index(upper[from:], "INTEGER")
+		if at < 0 {
+			break
+		}
+		at += from
+		from = at + len("INTEGER")
+		k := at
+		for k > 0 && isRegexpSpace(query[k-1]) {
+			k--
+		}
+		if k == at || k == 0 || (query[k-1] != '"' && query[k-1] != '`') {
+			continue
+		}
+		markBoolColumnsEndingAt(query, k-1, candidates)
+	}
+	return candidates, true
+}
+
+// markBoolColumnsEndingAt marks each of boolColumns that query[:end]
+// ends with, ignoring ASCII case as the replacers' (?i) does.
+func markBoolColumnsEndingAt(query string, end int, candidates []bool) {
+	for i, col := range boolColumns {
+		if end >= len(col) && strings.EqualFold(query[end-len(col):end], col) {
+			candidates[i] = true
+		}
+	}
+}
+
+// isRegexpSpace is RE2's \s: [\t\n\f\r ].
+func isRegexpSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
+}
+
+// isWordByte is RE2's \w, what \b tests either side of.
+func isWordByte(c byte) bool {
+	return c == '_' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 func splitSqlValues(s string) []string {
@@ -964,12 +1074,7 @@ func adaptDDL(query string) string {
 		query = reReal.ReplaceAllString(query, "DOUBLE PRECISION")
 		query = reDropView.ReplaceAllString(query, "DROP VIEW IF EXISTS $1 CASCADE")
 
-		for _, r := range boolDDLReplacers {
-			query = r.reDef1.ReplaceAllString(query, "${1}BOOLEAN${2}TRUE")
-			query = r.reDef0.ReplaceAllString(query, "${1}BOOLEAN${2}FALSE")
-			query = r.reDefNN.ReplaceAllString(query, "${1}BOOLEAN${2}")
-			query = r.reDef.ReplaceAllString(query, "${1}BOOLEAN")
-		}
+		query = adaptBoolDDL(query)
 		// SQLite's INTEGER is always 64-bit; PostgreSQL's is int4, which
 		// overflows at 2^31 on cumulative milliseconds and byte counts
 		// that SQLite stores without complaint. After the boolean
@@ -981,6 +1086,22 @@ func adaptDDL(query string) string {
 		query = strings.ReplaceAll(query, "'0001-01-01 00:00:00')", "'0001-01-01 00:00:00'::timestamptz)")
 	}
 
+	return query
+}
+
+// adaptBoolDDL declares the boolColumns a CREATE or ALTER TABLE names
+// BOOLEAN rather than SQLite's INTEGER.
+func adaptBoolDDL(query string) string {
+	candidates, narrowed := boolDDLCandidates(query)
+	for i, r := range boolDDLReplacers {
+		if narrowed && !candidates[i] {
+			continue
+		}
+		query = r.reDef1.ReplaceAllString(query, "${1}BOOLEAN${2}TRUE")
+		query = r.reDef0.ReplaceAllString(query, "${1}BOOLEAN${2}FALSE")
+		query = r.reDefNN.ReplaceAllString(query, "${1}BOOLEAN${2}")
+		query = r.reDef.ReplaceAllString(query, "${1}BOOLEAN")
+	}
 	return query
 }
 

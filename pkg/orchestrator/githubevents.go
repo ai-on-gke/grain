@@ -497,7 +497,7 @@ func fileTaskFromMention(ctx context.Context, deps Deps, repo model.RepoRef, num
 	task := model.Task{
 		ID:         id,
 		Intent:     model.IntentImplement,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -568,6 +568,13 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	repo, number, sender, trusted := r.repo, r.number, r.sender, r.trusted
 	prTitle, prBody, headRef, headSHA, baseRef := r.prTitle, r.prBody, r.headRef, r.headSHA, r.baseRef
 	eventKey, extraNote := r.eventKey, r.extraNote
+	// The pull request's own text is written by whoever opened it, and the
+	// sections grain appends to this body later are found again by their
+	// headers (syncParallelReviewBodies, refreshQueuedReviewsAfterFinish):
+	// a description carrying one must not be mistaken for grain's own.
+	prTitle = neutralizeReviewSectionHeaders(prTitle)
+	prBody = neutralizeReviewSectionHeaders(prBody)
+	extraNote = neutralizeReviewSectionHeaders(extraNote)
 
 	if (headRef == "" || headSHA == "") && deps.Client != nil {
 		if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
@@ -641,7 +648,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 
 	origin, approval, approvedAt := attributionForSender(sender, trusted, model.ReasonReview, now)
 	if r.requester != nil {
-		origin = model.Origin{Attribution: *r.requester, Reason: model.ReasonReview}
+		origin = model.Filing{Attribution: *r.requester, Reason: model.ReasonReview}
 		approval, approvedAt = nil, nil
 		if trusted {
 			a := *r.requester
@@ -700,10 +707,13 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		"finding with `add_review_comment` (supplying `path` and `line` for inline diff findings). " +
 		"If the pull request looks clean with no findings, summarize what you checked via `comment_on_issue`.")
 
+	b.WriteString(earlierReviewsSection(ctx, deps.Store, deps.Client, r.shepherdTask, ref, headSHA, id))
+	b.WriteString(parallelReviewsSection(parallelReviewsFor(ctx, deps.Store, r.shepherdTask, ref, headSHA, id)))
+
 	task := model.Task{
 		ID:         id,
 		Intent:     model.IntentReview,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -713,6 +723,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		Base:       base,
 		WorkOrigin: model.GitHubOrigin(repo, number),
 		Grants:     grants,
+		Tags:       addReviewHeadTag(nil, headSHA),
 		Links:      links,
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
@@ -723,6 +734,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	if err := deps.Store.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("filing external PR review task %s: %w", task.ID, err)
 	}
+	syncParallelReviewBodies(ctx, deps.Store, r.shepherdTask, ref, headSHA)
 	log.Printf("orchestrator: filed external PR review task %s (trusted=%v) for %s", task.ID, trusted, ref)
 	return task.ID, nil
 }
@@ -820,15 +832,15 @@ func externalPRNumberForTarget(task model.Task) int {
 	return ref.Number
 }
 
-func attributionForSender(sender string, trusted bool, trustedReason model.OriginReason,
-	now time.Time) (model.Origin, *model.Attribution, *time.Time) {
+func attributionForSender(sender string, trusted bool, trustedReason model.FilingReason,
+	now time.Time) (model.Filing, *model.Attribution, *time.Time) {
 
 	human := model.Principal{Kind: model.PrincipalHuman, ID: sender}
 	if trusted {
 		attr := model.Attribution{Actor: human}
-		return model.Origin{Attribution: attr, Reason: trustedReason}, &attr, &now
+		return model.Filing{Attribution: attr, Reason: trustedReason}, &attr, &now
 	}
-	return model.Origin{
+	return model.Filing{
 		Attribution: model.Attribution{Actor: githubWebhookAutomation, OnBehalfOf: &human},
 		Reason:      model.ReasonProposal,
 	}, nil, nil
@@ -922,7 +934,7 @@ func openGrainTaskForPR(ctx context.Context, store *model.Store, ref model.PullR
 		if err != nil || t == nil {
 			return nil, err
 		}
-		if isReviewTask(*t) || t.Origin.Reason == model.ReasonFix {
+		if isReviewTask(*t) || t.Filing.Reason == model.ReasonFix {
 			continue
 		}
 		return t, nil

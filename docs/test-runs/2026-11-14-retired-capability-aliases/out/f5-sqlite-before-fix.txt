@@ -1,0 +1,22 @@
+== version
+dev (unstamped)
+null
+{"id":"2","state":"proposed","error":null}
+{"id":"2","state":"queued","error":null}
+proposer: task 2
+propose_task answered: {"isError":false,"text":"Recorded (1 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it."}
+proposer state once the run ended: awaiting_submit
+-- every task now
+[{"id":"1","title":"Director","state":"awaiting_reply"},{"id":"2","title":"f5 proposer","state":"awaiting_submit"},{"id":"3","title":"walk: bare names","state":"proposed"}]
+-- the filed proposal, task 3
+{"state":"proposed","approved":false,"capabilities":["grain-ci","https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/lib\"}","self-debug"],"grants":[]}
+walkthrough
+
+---
+
+grain: this proposal asked for `self-debug`, `grain-ci`, which task 2, which proposed it, does not hold itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+-- a person approves task 3; what dispatch does with it
+{"id":"3","state":"queued","error":null}
+{"state":"awaiting_reply","last":"This task could not be dispatched: it holds the capability `grain-ci`, and grain refuses it.\n\n> no provider is registered for capability \"grain-ci\" (grain-ci is a retired capability name and grants nothing any longer: it became https://grain.dev/capabilities/grain#ci={})\n\nNo run can start while that is true, and every attempt fails in the same place -- before the agent exists, so nothing here can answer you. Grain has stopped rather than repeating it.\n\nTake `grain-ci` off this task (its Capabilities, on the task's own pane), or close whatever gap the refusal names, and reply here to have it dispatched again."}
+-- what the proposer's conversation says
+-- daemon log about proposals

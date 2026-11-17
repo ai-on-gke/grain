@@ -148,10 +148,9 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 		t.Errorf("the owner's own task on a grain CI repository was refused: %v", err)
 	}
 	// Every grant is written as the one it is now, never as a retired
-	// name (grain/task-4485), and a task still granted a retired name
-	// is admitted as the grants it became.
+	// name (grain/task-4485).
 	for _, c := range p.Capabilities.Allow {
-		if tos := model.CanonicalLegacyGrants(c); len(tos) != 1 || tos[0] != c || strings.HasPrefix(c, model.APIGrantPrefix) {
+		if tos := model.RetiredGrantsBecame(c); len(tos) != 1 || tos[0] != c || strings.HasPrefix(c, model.APIGrantPrefix) {
 			t.Errorf("the starter policy allows the retired name %q (it became %v)", c, tos)
 		}
 		if _, admission := model.LegacyAdmissionAlias(c); admission {
@@ -161,7 +160,7 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	// grain grants every task CI read for its own repository, so the
 	// Director's api#ci-read is named without arguments: one naming ={}
 	// held each such task.
-	for _, held := range []string{grainci.LegacyName, "self-debug", "api:ci-read", "api:deployment:read",
+	for _, held := range []string{grainci.Grant, model.GrainSourceGrant, "api:ci-read", "api:deployment:read",
 		model.APIGrantString("ci-read", "acme/widgets")} {
 		task := own
 		task.Grants = []model.Grant{{Capability: held}}

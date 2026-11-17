@@ -120,6 +120,8 @@ type Template struct {
 	// (model.Template.Model) -- "" for a template that chose none, whose
 	// tasks run on their team's default model.
 	Model string `json:"model,omitempty"`
+	// QAFlowRef is the operator-only QA flow reference bound to this template.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// Interactive is whether every task filed from this template is a
 	// live chat with whoever is watching it (model.Template.Interactive).
 	// Omitted when false, like Repo, so a template saved before the
@@ -221,6 +223,7 @@ func templateFrom(t model.Template) Template {
 		Skills:        t.Skills.Clone(),
 		NetworkAccess: string(t.NetworkAccess),
 		Model:         t.Model,
+		QAFlowRef:     t.QAFlowRef,
 		CustomFields:  customFieldValues(t.CustomFields),
 		Capabilities:  []string{},
 		CreatedAt:     t.CreatedAt,
@@ -370,7 +373,8 @@ type CreateTemplateRequest struct {
 	NothingNeededAction string `json:"nothingNeededAction"`
 	// Model is the model every task this template files asks for
 	// (model.Template.Model), or "" to leave it to the team's default.
-	Model string `json:"model"`
+	Model     string `json:"model"`
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// Interactive sets model.Template.Interactive.
 	Interactive      bool                `json:"interactive"`
 	KeepRunning      bool                `json:"keepRunning,omitempty"`
@@ -407,6 +411,11 @@ func (c *Client) parseBinding(repo, base string) (*model.RepoRef, string, error)
 
 // CreateTemplate files a new template straight into the store.
 func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) (Template, error) {
+	if strings.TrimSpace(req.QAFlowRef) != "" {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, ""); err != nil {
+			return Template{}, err
+		}
+	}
 	if err := c.checkSettingsWritable(ctx, "template"); err != nil {
 		return Template{}, err
 	}
@@ -539,6 +548,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		Skills:        chosenSkills,
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
 		Model:         chosenModel,
+		QAFlowRef:     strings.TrimSpace(req.QAFlowRef),
 		Reads:         reads,
 		Writes:        writes,
 		Grants:        grants,
@@ -717,6 +727,9 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 		req.Model = comp.Model
 		req.modelFromTemplate = comp.Model
 	}
+	if strings.TrimSpace(req.QAFlowRef) == "" && comp.QAFlowRef != "" {
+		req.QAFlowRef = comp.QAFlowRef
+	}
 	if req.Capabilities == nil {
 		capabilities := make([]string, 0, len(comp.Grants))
 		for _, g := range comp.Grants {
@@ -859,7 +872,8 @@ type UpdateTemplateRequest struct {
 	NothingNeededAction *string `json:"nothingNeededAction,omitempty"`
 	// Model edits what CreateTemplateRequest.Model sets; an empty string
 	// clears it, so the template's tasks go back to the team's default.
-	Model *string `json:"model,omitempty"`
+	Model     *string `json:"model,omitempty"`
+	QAFlowRef *string `json:"qaFlowRef,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
 	Interactive      *bool               `json:"interactive,omitempty"`
 	KeepRunning      *bool               `json:"keepRunning,omitempty"`
@@ -881,6 +895,11 @@ type UpdateTemplateRequest struct {
 
 // UpdateTemplate edits a template's fields in place.
 func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTemplateRequest) (Template, error) {
+	if req.QAFlowRef != nil {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, ""); err != nil {
+			return Template{}, err
+		}
+	}
 	if err := c.checkSettingsWritable(ctx, "template"); err != nil {
 		return Template{}, err
 	}
@@ -1130,6 +1149,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 		}
 		if chosenModel != nil {
 			t.Model = *chosenModel
+		}
+		if req.QAFlowRef != nil {
+			t.QAFlowRef = strings.TrimSpace(*req.QAFlowRef)
 		}
 		if req.Capabilities != nil {
 			t.Grants = grants

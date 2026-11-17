@@ -16,10 +16,12 @@ import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   NgZone,
   type OnDestroy,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
   effect,
   inject,
@@ -29,23 +31,38 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
-import { GrainApi } from "../api/grain-api.service";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
+import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
   AttachmentUpload,
   Attempt,
   CapabilityOption,
   Comment,
+  CompareResponse,
   GrainConfig,
+  Task,
 } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
+import { BranchRefsService } from "../services/branch-refs.service";
 import { SnackbarService } from "../services/snackbar.service";
+import {
+  effectiveDisplayTimeZone,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
+import {
+  earliestWakeDay,
+  formatWakeTime,
+  zonedDayStart,
+} from "../shared/zoned-day";
 import { isHuman } from "../sessions/session-helpers";
 
-import { ConversationComponent } from "../shared/conversation/conversation.component";
+import {
+  type CommentTarget,
+  ConversationComponent,
+} from "../shared/conversation/conversation.component";
 
 import {
   AttachmentListComponent,
@@ -58,6 +75,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { DialogTrapDirective } from "../shared/dialog-trap.directive";
 import { submitBlock } from "../shared/gates";
 import {
   type GrantAttachEvent,
@@ -65,18 +83,31 @@ import {
 } from "../shared/grants-picker.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
+import { TaskDocsTabComponent } from "./task-docs-tab.component";
+import {
+  extractTaskDocuments,
+  type TaskDocumentItem,
+  type TaskDocumentSource,
+} from "./task-docs";
 import {
   ForceMergeDialogComponent,
   type ForceMergeRequest,
 } from "./force-merge-dialog.component";
+import {
+  AcceptFindingsDialogComponent,
+  type AcceptFindingsRequest,
+} from "./accept-findings-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
-import { TaskStore } from "./task.store";
+import { TaskGoalCardComponent } from "./task-goal-card.component";
+import { TaskStore, parseCommentFragment } from "./task.store";
 
-export type TaskTab = "conversation" | "runs" | "changes" | "tree" | "details";
+export type TaskTab =
+  "conversation" | "docs" | "runs" | "changes" | "tree" | "details";
 
 // Where the full page's back link goes, and what it says.
 export interface BackLink {
@@ -87,6 +118,7 @@ export interface BackLink {
 
 const TABS: { id: TaskTab; label: string }[] = [
   { id: "conversation", label: "Conversation" },
+  { id: "docs", label: "Docs" },
   { id: "runs", label: "Runs" },
   { id: "changes", label: "Changes and CI" },
   { id: "tree", label: "Workstream" },
@@ -120,13 +152,17 @@ export function duration(from?: string, to?: string): string {
     TipDirective,
     NgTemplateOutlet,
     ConfirmDialogComponent,
+    DialogTrapDirective,
     MarkdownDirective,
     PriorityChipComponent,
     AttachmentListComponent,
     GrantsPickerComponent,
     TaskGatesBarComponent,
+    TaskGoalCardComponent,
     TaskChangesTabComponent,
+    TaskDocsTabComponent,
     ForceMergeDialogComponent,
+    AcceptFindingsDialogComponent,
     TaskEditPanelComponent,
     ConversationComponent,
   ],
@@ -134,19 +170,31 @@ export function duration(from?: string, to?: string): string {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "./task-detail.component.css",
+    "./doc-reader-modal.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/detail-panes.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:click)": "onDocClick($event)",
   },
   template: `
     <section
+      #taskPage
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
+      (scroll)="rememberTabScroll()"
+      [class.is-details-view]="current() === 'details'"
+      [attr.tabindex]="current() === 'details' ? 0 : null"
       aria-labelledby="task-title"
-      [attr.inert]="confirming() || forceMergeReq() ? '' : null"
+      [attr.inert]="
+        confirming() || forceMergeReq() || acceptFindingsReq() || docModalOpen()
+          ? ''
+          : null
+      "
     >
       @if (store.loadError(); as err) {
         <div class="stage-header">
@@ -238,14 +286,25 @@ export function duration(from?: string, to?: string): string {
               </span>
             }
           </div>
-          <h1
-            class="view-headline task-title"
-            id="task-title"
-            tabindex="-1"
-            #heading
-          >
-            <span class="muted">#{{ t.id }}</span> {{ t.title }}
-          </h1>
+          @if (pane()) {
+            <h2
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h2>
+          } @else {
+            <h1
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h1>
+          }
           <div class="task-actions" role="group" aria-label="Task actions">
             @if (
               (t.state === "proposed" ||
@@ -262,7 +321,12 @@ export function duration(from?: string, to?: string): string {
                 Approve
               </button>
             }
-            @if (t.state === "awaiting_reply" && !parked() && !isStopped()) {
+            @if (
+              t.state === "awaiting_reply" &&
+              !parked() &&
+              !isStopped() &&
+              can("POST /api/tasks/{id}/comments")
+            ) {
               <button
                 type="button"
                 class="btn-primary"
@@ -284,10 +348,14 @@ export function duration(from?: string, to?: string): string {
                 Stop
               </button>
             }
+            <!-- Not while paused: Retry never lifts an operator's pause
+                 (ui.Client.Retry refuses it), so it would be a second
+                 "Resume" beside the pause's own that always fails. -->
             @if (
               (t.state === "failed" ||
                 (t.state === "awaiting_reply" && t.turnStopped) ||
                 isStopped()) &&
+              !t.paused &&
               can("POST /api/tasks/{id}/retry")
             ) {
               <button
@@ -392,10 +460,65 @@ export function duration(from?: string, to?: string): string {
                 type="button"
                 class="btn-text"
                 data-testid="act-defer"
+                gTip="Put it aside until you bring it back"
                 (click)="defer()"
               >
                 Defer
               </button>
+              @if (!deferUntilOpen()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="act-defer-until"
+                  gTip="Put it aside until a day you pick"
+                  (click)="openDeferUntil()"
+                >
+                  Defer until…
+                </button>
+              } @else {
+                <form
+                  class="defer-until"
+                  data-testid="defer-until-form"
+                  (submit)="deferUntil($event)"
+                >
+                  <label class="defer-until-label" for="defer-until-date"
+                    >Wake on</label
+                  >
+                  <input
+                    id="defer-until-date"
+                    type="date"
+                    class="defer-until-date"
+                    data-testid="defer-until-date"
+                    required
+                    [min]="earliestWake()"
+                    [value]="deferDate()"
+                    [attr.aria-describedby]="'defer-until-hint'"
+                    (input)="deferDate.set($any($event.target).value)"
+                  />
+                  <button
+                    type="submit"
+                    class="btn-tonal"
+                    data-testid="defer-until-submit"
+                    [disabled]="!deferWakeAt() || store.isBusy('defer', t.id)"
+                  >
+                    Defer until
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="defer-until-cancel"
+                    (click)="closeDeferUntil(true)"
+                  >
+                    Cancel
+                  </button>
+                  <span
+                    id="defer-until-hint"
+                    class="muted defer-until-hint"
+                    data-testid="defer-until-hint"
+                    >{{ deferHint() }}</span
+                  >
+                </form>
+              }
             }
             @if (
               (t.state === "queued" ||
@@ -591,28 +714,82 @@ export function duration(from?: string, to?: string): string {
           </p>
         }
 
-        <!-- Inline Pending Approval / Gate Panels -->
-
-        @if (store.actionError(); as err) {
+        <!-- Rollover (durable-tasks.design.md#DT-15): a closed durable
+             task's work goes on under another number, said before the
+             rest of the page so an old link leads somewhere. -->
+        @if (t.rolledOverTo; as next) {
           <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="task-action-error"
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-to"
           >
-            {{ err }}
-            <button
-              type="button"
-              class="btn-text"
-              (click)="store.actionError.set(null)"
+            <strong
+              >Rolled over to
+              <a
+                [routerLink]="linkTo(next)"
+                [queryParams]="linkQuery(next)"
+                [queryParamsHandling]="pane() ? 'merge' : ''"
+                (click)="onTreeNodeClick($event, next)"
+                >#{{ next }}</a
+              >.</strong
             >
-              Dismiss
-            </button>
+            This durable task passed its record limit, so its work carries on in
+            the successor, with its brief, handover, pull request and waits.
+            This record is kept as it was.
+          </p>
+        }
+        @if (t.rolledOverFrom; as prev) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-from"
+          >
+            Carries on the work of
+            <a
+              [routerLink]="linkTo(prev)"
+              [queryParams]="linkQuery(prev)"
+              [queryParamsHandling]="pane() ? 'merge' : ''"
+              (click)="onTreeNodeClick($event, prev)"
+              >#{{ prev }}</a
+            >, rolled over when it passed its record limit; its earlier
+            conversation and runs are there.
+          </p>
+        }
+
+        <!-- Inline Pending Approval / Gate Panels -->
+        @if (queuedPauseNotice(); as qpn) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-dispatch-paused"
+          >
+            {{ qpn.headline }}
+            @if (qpn.resetText) {
+              · {{ qpn.resetText }}
+            }
+          </p>
+        }
+        @if (t.state === "deferred" && t.deferredUntil) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-deferred-until"
+          >
+            Picks itself back up on
+            {{ wakeTime(t.deferredUntil)
+            }}{{
+              t.approved
+                ? ", onto the queue."
+                : ", back into Needs approval for someone to approve."
+            }}
           </p>
         }
         <g-task-gates-bar
           [task]="t"
+          [pane]="pane()"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
+          (forceMerge)="forceMergeReq.set($event)"
         />
 
         <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
@@ -663,7 +840,10 @@ export function duration(from?: string, to?: string): string {
           </section>
         }
 
-        <div class="task-layout">
+        <div
+          class="task-layout"
+          [class.is-details-tab]="current() === 'details'"
+        >
           <div class="task-main">
             <nav class="tab-strip task-tabs" aria-label="Task views">
               @for (tab of visibleTabs(); track tab.id) {
@@ -672,6 +852,8 @@ export function duration(from?: string, to?: string): string {
                   [routerLink]="[]"
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
+                  [preserveFragment]="!!pane()"
+                  (click)="forceConversationTab.set(false)"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -682,6 +864,9 @@ export function duration(from?: string, to?: string): string {
                       comments().length
                     }}</span>
                   }
+                  @if (tab.id === "docs" && docs().length) {
+                    <span class="tab-count tabular">{{ docs().length }}</span>
+                  }
                   @if (tab.id === "runs" && attempts().length) {
                     <span class="tab-count tabular">{{
                       attempts().length
@@ -691,13 +876,40 @@ export function duration(from?: string, to?: string): string {
               }
             </nav>
 
-            <div class="task-tab-body">
+            <div
+              #tabBody
+              class="task-tab-body"
+              (scroll)="rememberTabScroll()"
+              [attr.role]="current() === 'details' ? 'region' : null"
+              [attr.aria-label]="
+                current() === 'details' ? 'Task details' : null
+              "
+              [attr.tabindex]="current() === 'details' ? 0 : null"
+            >
               @switch (current()) {
+                @case ("docs") {
+                  <h2 class="sr-only">Documents</h2>
+                  <g-task-docs-tab
+                    [documents]="docs()"
+                    [loading]="docDiffLoading()"
+                    [(selectedId)]="selectedDocId"
+                    (openFullscreen)="openDocModal($event)"
+                  />
+                }
                 @case ("conversation") {
                   <h2 class="sr-only">Conversation</h2>
+                  <g-task-goal-card
+                    [task]="t"
+                    [attemptsCount]="attempts().length"
+                    (acted)="acted.emit()"
+                  />
                   @if (t.questionSummary && t.state === "awaiting_reply") {
                     <div class="question-card" data-testid="question">
                       <strong>Asked:</strong> {{ t.questionSummary }}
+                    </div>
+                  } @else if (t.noteSummary && t.state === "awaiting_reply") {
+                    <div class="note-card" data-testid="note-summary">
+                      <strong>Note:</strong> {{ t.noteSummary }}
                     </div>
                   }
                   <g-conversation
@@ -705,6 +917,7 @@ export function duration(from?: string, to?: string): string {
                     [repo]="t.repo"
                     [comments]="comments()"
                     [questionCommentId]="t.questionCommentId"
+                    [targetComment]="commentTarget()"
                     [olderCount]="t.olderComments ?? 0"
                     [loadingOlder]="store.isBusy('older-comments', t.id)"
                     (loadEarlier)="store.loadOlderComments()"
@@ -918,6 +1131,7 @@ export function duration(from?: string, to?: string): string {
                   <h2 class="sr-only">Changes and CI</h2>
                   <g-task-changes-tab
                     (forceMerge)="forceMergeReq.set($event)"
+                    (acceptFindings)="acceptFindingsReq.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
                     [prLabel]="prLabel()"
@@ -1038,7 +1252,7 @@ export function duration(from?: string, to?: string): string {
               }
             </div>
           </div>
-          @if (!pane()) {
+          @if (!pane() && current() !== "details") {
             <aside class="task-aside" aria-label="Details">
               <ng-container [ngTemplateOutlet]="details" />
             </aside>
@@ -1047,72 +1261,122 @@ export function duration(from?: string, to?: string): string {
 
         <ng-template #details>
           <div class="details" data-testid="task-details">
-            <h2 class="section-title">Details</h2>
-            @if (t.description) {
-              <div
-                class="msg-body description"
-                [gMarkdown]="t.description"
-              ></div>
-            }
-            @if (t.attachments?.length) {
-              <g-attachment-list
-                [taskId]="t.id"
-                [repo]="t.repo"
-                [attachments]="t.attachments"
-              />
-            }
-            <dl class="facts">
-              <dt>Priority</dt>
-              <dd>
-                <g-priority-chip
-                  [priority]="prio(t)"
-                  [editable]="priorityEditable()"
-                  [disabled]="store.isBusy('priority', t.id)"
-                  testid="task-priority"
-                  menuTestid="task-priority-menu"
-                  (priorityChange)="setDirectPriority($event)"
-                />
-              </dd>
-              <dt>Repository</dt>
-              <dd>{{ t.repo || "None" }}</dd>
-              @if (t.base) {
-                <dt>Base</dt>
-                <dd class="mono">{{ t.base }}</dd>
-              }
-              <dt>Model</dt>
-              <dd>{{ t.model || "Deployment default" }}</dd>
-              @if (t.agentBackendId) {
-                <dt>Connection</dt>
-                <dd class="mono">{{ t.agentBackendId }}</dd>
-              }
-              @if (t.networkAccess) {
-                <dt>Network</dt>
-                <dd>{{ t.networkAccess }}</dd>
-              }
-              <dt>Filed</dt>
-              <dd>
-                {{ ago(t.createdAt) }} ago by
-                {{ t.authorLabel || t.author || "unknown" }}
-              </dd>
-              @if (t.approvedByLabel) {
-                <dt>Approved by</dt>
-                <dd>{{ t.approvedByLabel }}</dd>
-              }
-              @if (t.admission && t.admission !== "standard") {
-                <dt>Admission</dt>
-                <dd>{{ t.admission }} (starts past worker limits)</dd>
-              }
-              @if (t.goal; as g) {
-                <dt>Goal</dt>
-                <dd>{{ g.kind }}</dd>
-              }
-              <dt>Capabilities</dt>
-              <dd>{{ capCount() }}</dd>
-              @if (t.closedReason) {
-                <dt>Closed</dt>
-                <dd>{{ t.closedReason }}</dd>
-              }
-            </dl>
+            <div class="g-panes">
+              <section class="g-pane" data-testid="task-prompt-pane">
+                <div class="g-pane-head">
+                  <h2 class="g-pane-title">Prompt</h2>
+                  @if (t.description || docs().length > 0) {
+                    <div class="g-pane-tools">
+                      <button
+                        type="button"
+                        class="btn-text g-pane-tool-btn"
+                        data-testid="prompt-open-docs"
+                        (click)="
+                          openDocsTab(t.description ? 'prompt' : undefined)
+                        "
+                      >
+                        Open Docs
+                      </button>
+                      @if (t.description) {
+                        <button
+                          type="button"
+                          class="icon-btn g-pane-tool-icon"
+                          data-testid="prompt-fullscreen"
+                          aria-label="Read prompt full screen"
+                          gTip="Full screen"
+                          (click)="openDocModal('prompt')"
+                        >
+                          ⤢
+                        </button>
+                      }
+                    </div>
+                  }
+                </div>
+                @if (t.description) {
+                  <div
+                    class="msg-body description g-pane-prompt"
+                    [gMarkdown]="t.description"
+                  ></div>
+                } @else {
+                  <p class="g-pane-empty">No prompt text.</p>
+                }
+                @if (t.attachments?.length) {
+                  <g-attachment-list
+                    [taskId]="t.id"
+                    [repo]="t.repo"
+                    [attachments]="t.attachments"
+                  />
+                }
+              </section>
+              <section class="g-pane" data-testid="task-attributes-pane">
+                <h2 class="g-pane-title">Attributes</h2>
+                <dl class="g-attrs">
+                  <dt>Priority</dt>
+                  <dd>
+                    <g-priority-chip
+                      [priority]="prio(t)"
+                      [editable]="priorityEditable()"
+                      [disabled]="store.isBusy('priority', t.id)"
+                      testid="task-priority"
+                      menuTestid="task-priority-menu"
+                      (priorityChange)="setDirectPriority($event)"
+                    />
+                  </dd>
+                  <dt>Repository</dt>
+                  <dd>{{ t.repo || "None" }}</dd>
+                  @if (t.base) {
+                    <dt>Base</dt>
+                    <dd class="mono">{{ t.base }}</dd>
+                  }
+                  <dt>Model</dt>
+                  <dd>{{ t.model || "Deployment default" }}</dd>
+                  @if (t.agentBackendId) {
+                    <dt>Connection</dt>
+                    <dd class="mono">{{ t.agentBackendId }}</dd>
+                  }
+                  @if (t.networkAccess) {
+                    <dt>Network</dt>
+                    <dd>{{ t.networkAccess }}</dd>
+                  }
+                  <dt>Filed</dt>
+                  <dd>
+                    {{ filedAgo(t.createdAt) }} by
+                    {{ t.authorLabel || t.author || "unknown" }}
+                  </dd>
+                  @if (t.approvedByLabel) {
+                    <dt>Approved by</dt>
+                    <dd>{{ t.approvedByLabel }}</dd>
+                  }
+                  @if (t.admission && t.admission !== "standard") {
+                    <dt>Admission</dt>
+                    <dd>{{ t.admission }} (starts past worker limits)</dd>
+                  }
+                  @if (t.goal; as g) {
+                    <dt>Goal</dt>
+                    <dd>{{ g.kind }}</dd>
+                  }
+                  <dt>Execution posture</dt>
+                  <dd data-testid="task-fact-posture">
+                    @if (t.goalMode?.enabled) {
+                      Autonomous goal ({{ t.goalMode?.maxPasses ?? 8 }} passes ·
+                      {{ t.goalMode?.wallClockMinutes ?? 120 }}m{{
+                        t.goalMode?.mockMissingSecrets
+                          ? " · mock missing secrets"
+                          : ""
+                      }})
+                    } @else {
+                      Supervised
+                    }
+                  </dd>
+                  <dt>Capabilities</dt>
+                  <dd>{{ capCount() }}</dd>
+                  @if (t.closedReason) {
+                    <dt>Closed</dt>
+                    <dd>{{ t.closedReason }}</dd>
+                  }
+                </dl>
+              </section>
+            </div>
 
             <!-- Capabilities & Grants Editor -->
             @if (can("POST /api/tasks/{id}/capabilities")) {
@@ -1134,7 +1398,11 @@ export function duration(from?: string, to?: string): string {
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
-                    <span class="status-pill neutral">
+                    <span
+                      class="status-pill neutral"
+                      data-testid="details-dep-chip"
+                      [attr.title]="depTitle(t, d)"
+                    >
                       <a
                         [routerLink]="linkTo(d)"
                         [queryParams]="linkQuery(d)"
@@ -1207,6 +1475,111 @@ export function duration(from?: string, to?: string): string {
       <g-force-merge-dialog [request]="f" (done)="forceMergeReq.set(null)" />
     }
 
+    @if (acceptFindingsReq(); as a) {
+      <g-accept-findings-dialog
+        [request]="a"
+        (done)="acceptFindingsReq.set(null)"
+      />
+    }
+
+    <dialog
+      #docModal
+      class="doc-reader-modal"
+      [attr.aria-modal]="docModalOpen() ? 'true' : null"
+      aria-labelledby="doc-reader-title"
+      data-testid="doc-reader-modal"
+      (close)="onDocModalClose()"
+    >
+      @if (docModalOpen() && modalDoc(); as mdoc) {
+        <div
+          class="doc-reader-inner"
+          gDialogTrap
+          (gDialogClose)="closeDocModal()"
+        >
+          <header class="doc-reader-modal-head">
+            <div class="doc-reader-modal-title-wrap">
+              <div class="doc-reader-modal-badges">
+                <span
+                  class="doc-modal-source"
+                  [attr.data-source]="mdoc.source"
+                  >{{ docSourceLabel(mdoc.source) }}</span
+                >
+                @if (mdoc.path) {
+                  <span class="doc-reader-modal-path mono">{{
+                    mdoc.path
+                  }}</span>
+                } @else if (mdoc.subtitle) {
+                  <span class="muted doc-reader-modal-path">{{
+                    mdoc.subtitle
+                  }}</span>
+                }
+                <span class="muted tabular">{{ mdoc.lineCount }} lines</span>
+              </div>
+              <h2 id="doc-reader-title" class="doc-reader-modal-title">
+                {{ mdoc.title }}
+              </h2>
+            </div>
+            <div class="doc-reader-modal-controls">
+              <button
+                #docModalPrev
+                type="button"
+                class="btn-text"
+                data-testid="doc-modal-prev"
+                aria-label="Previous document"
+                [disabled]="modalDocIndex() <= 0"
+                (click)="stepModalDoc(-1)"
+              >
+                ← Prev
+              </button>
+              <span
+                class="muted tabular doc-reader-pos"
+                data-testid="doc-modal-pos"
+                >{{ modalDocIndex() + 1 }} / {{ docs().length }}</span
+              >
+              <button
+                #docModalNext
+                type="button"
+                class="btn-text"
+                data-testid="doc-modal-next"
+                aria-label="Next document"
+                [disabled]="
+                  modalDocIndex() < 0 || modalDocIndex() >= docs().length - 1
+                "
+                (click)="stepModalDoc(1)"
+              >
+                Next →
+              </button>
+              <button
+                #docModalClose
+                type="button"
+                class="icon-btn"
+                data-testid="doc-modal-close"
+                aria-label="Close document reader"
+                gTip="Close (Esc)"
+                (click)="closeDocModal()"
+              >
+                ×
+              </button>
+            </div>
+          </header>
+          <div
+            #docModalScroll
+            class="doc-reader-modal-scroll"
+            tabindex="0"
+            role="region"
+            aria-label="Full screen document content"
+            data-testid="doc-modal-scroll"
+          >
+            <article
+              class="doc-reader-article msg-body"
+              [gMarkdown]="mdoc.markdown"
+              data-testid="doc-modal-body"
+            ></article>
+          </div>
+        </div>
+      }
+    </dialog>
+
     <ng-template #treeNode let-n let-level="level">
       <li class="tree-item">
         <span class="tree-row" [class.is-root]="n.root">
@@ -1244,7 +1617,9 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly api = inject(GrainApi);
+  private readonly feed = inject(TaskFeedStore);
   private readonly access = inject(AccessService);
+  private readonly branchRefs = inject(BranchRefsService);
   private readonly snackbar = inject(SnackbarService);
   private readonly create = inject(CreateTaskService);
   private readonly router = inject(Router);
@@ -1253,9 +1628,61 @@ export class TaskDetailComponent implements OnDestroy {
 
   readonly id = input.required<string>();
   readonly tab = input<string>();
-  // pane is the Tasks right-hand pane: narrower, Details as a tab, its
-  // tab kept in ?pane=, links to other tasks select them in the pane.
+  // pane is a list | detail right-hand pane (Tasks, Agents, Workstreams):
+  // narrower, Details as a tab, its tab kept in ?pane=, links to other
+  // tasks select them in the pane.
   readonly pane = input(false);
+
+  private readonly taskPage = viewChild<ElementRef<HTMLElement>>("taskPage");
+  private readonly tabBody = viewChild<ElementRef<HTMLElement>>("tabBody");
+  private scrollTaskId: string | null = null;
+  private scrollTab: TaskTab | null = null;
+  private readonly tabScroll = new Map<
+    TaskTab,
+    { page: number; body: number }
+  >();
+
+  protected rememberTabScroll(): void {
+    // Read while the user scrolls: by the time a tab has rendered, the old
+    // layout's offsets may already have been clamped by the browser.
+    if (this.scrollTaskId !== this.id() || this.scrollTab !== this.current())
+      return;
+    const page = this.taskPage()?.nativeElement;
+    const body = this.tabBody()?.nativeElement;
+    if (page && body && this.scrollTab) {
+      this.tabScroll.set(this.scrollTab, {
+        page: page.scrollTop,
+        body: body.scrollTop,
+      });
+    }
+  }
+
+  // "Defer until…": the day picked, in the deployment's display zone.
+  protected readonly deferUntilOpen = signal(false);
+  protected readonly deferDate = signal("");
+  protected readonly displayTz = signal(effectiveDisplayTimeZone());
+  protected readonly earliestWake = computed(() =>
+    earliestWakeDay(this.displayTz()),
+  );
+  protected readonly deferWakeAt = computed(() => {
+    const day = this.deferDate();
+    if (!day || day < this.earliestWake()) return null;
+    return zonedDayStart(day, this.displayTz());
+  });
+  protected readonly deferHint = computed(() => {
+    const at = this.deferWakeAt();
+    if (at !== null) {
+      return `Wakes ${formatWakeTime(new Date(at).toISOString(), this.displayTz())}`;
+    }
+    return this.deferDate()
+      ? "Pick a day after today"
+      : "Wakes at the start of the day you pick";
+  });
+  // routePane is ?pane= and routeTab is ?tab= as the router has them. The tab
+  // strip writes them, so the component reads them back itself: a host that
+  // does not bind [tab] (Agents, Workstreams) or a router test still switches tabs.
+  private readonly routePane = signal<string | undefined>(undefined);
+  private readonly routeTab = signal<string | undefined>(undefined);
   readonly closable = input(true);
   readonly from = input<string>();
   readonly back = input<BackLink | null>(null);
@@ -1267,7 +1694,26 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+
+  // depTitle is a dependency chip's hover text: the task it waits for,
+  // its title where the open-task feed knows it, its state, and whether
+  // it is what holds this task, as the classic dependency chip reads.
+  protected depTitle(t: Task, d: string): string {
+    const title = this.feed.tasks().find((x) => x.id === d)?.title;
+    const state = t.dependsOnStates?.[d];
+    let s = title ? `#${d} ${title}` : `#${d}`;
+    if (state) s += ` — ${stateLabel(state)}`;
+    if (t.blockedBy?.includes(d)) s += " (blocking this task)";
+    return s;
+  }
   protected readonly ago = ago;
+  // filedAgo reads "just now" rather than "now ago" for a task filed in
+  // the last minute (ago() says "now" there).
+  protected filedAgo(iso: string | undefined): string {
+    const a = ago(iso);
+    if (!a) return "";
+    return a === "now" ? "just now" : `${a} ago`;
+  }
   protected readonly dur = duration;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;
@@ -1277,6 +1723,9 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly closePr = signal(false);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
   protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
+  protected readonly acceptFindingsReq = signal<AcceptFindingsRequest | null>(
+    null,
+  );
   protected readonly editOpen = signal(false);
   protected readonly moreMenuOpen = signal(false);
   protected readonly compactOpen = signal(false);
@@ -1299,6 +1748,23 @@ export class TaskDetailComponent implements OnDestroy {
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
   private readonly moreWrap = viewChild<ElementRef<HTMLElement>>("moreWrap");
+  private readonly docModal =
+    viewChild<ElementRef<HTMLDialogElement>>("docModal");
+  private readonly docModalScroll =
+    viewChild<ElementRef<HTMLElement>>("docModalScroll");
+  private readonly docModalPrev =
+    viewChild<ElementRef<HTMLButtonElement>>("docModalPrev");
+  private readonly docModalNext =
+    viewChild<ElementRef<HTMLButtonElement>>("docModalNext");
+  private readonly docModalClose =
+    viewChild<ElementRef<HTMLButtonElement>>("docModalClose");
+
+  protected readonly selectedDocId = signal<string | null>(null);
+  protected readonly docModalOpen = signal(false);
+  protected readonly modalDocId = signal<string | null>(null);
+  private readonly docDiffText = signal("");
+  protected readonly docDiffLoading = signal(false);
+  private loadedDocDiffKey = "";
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.moreMenuOpen()) {
@@ -1308,21 +1774,40 @@ export class TaskDetailComponent implements OnDestroy {
     }
   };
 
+  // A #comment=<id> link: the comment to reveal once it is held, the
+  // request waiting for it, and whether it switched to Conversation.
+  protected readonly commentTarget = signal<CommentTarget | null>(null);
+  protected readonly forceConversationTab = signal(false);
+  private readonly pendingCommentLink = signal<CommentTarget | null>(null);
+  private commentSeq = 0;
+  private lastFragmentKey = "";
+  private lastFragmentAt = 0;
+
   protected readonly t = computed(() => this.store.detail());
+  protected readonly docs = computed<TaskDocumentItem[]>(() => {
+    const t = this.t();
+    return t ? extractTaskDocuments(t, { diffText: this.docDiffText() }) : [];
+  });
+  protected readonly modalDocIndex = computed(() => {
+    const list = this.docs();
+    if (list.length === 0) return -1;
+    const id = this.modalDocId();
+    const idx = id ? list.findIndex((d) => d.id === id) : 0;
+    return idx >= 0 ? idx : 0;
+  });
+  protected readonly modalDoc = computed<TaskDocumentItem | null>(() => {
+    const list = this.docs();
+    const idx = this.modalDocIndex();
+    return idx >= 0 ? (list[idx] ?? null) : null;
+  });
   protected readonly partOfStream = computed(() => {
     const id = this.t()?.id;
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    const v = this.tab();
-    if (
-      v === "details" &&
-      !this.pane() &&
-      typeof matchMedia === "function" &&
-      matchMedia("(min-width: 1080px)").matches
-    ) {
-      return "conversation";
-    }
+    if (this.forceConversationTab()) return "conversation";
+    const rp = this.pane() ? this.routePane() : this.routeTab();
+    const v = isTab(rp) ? rp : this.tab();
     return isTab(v) ? v : "conversation";
   });
   // What a parked task waits for, if it is a grant rather than a reply.
@@ -1462,6 +1947,15 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     return t ? submitBlock(t) : "";
   });
+  protected readonly queuedPauseNotice = computed(() =>
+    this.t()?.state === "queued"
+      ? summarizeDispatchStatus(
+          this.access.rawConfig(),
+          this.access.usage(),
+          this.access.clockNow(),
+        )
+      : null,
+  );
 
   protected actorLabel(c: Comment): string {
     if (c.authorKind === "automation" && c.author === "console-session") {
@@ -1503,9 +1997,94 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   constructor() {
+    const route = inject(ActivatedRoute);
+    const paneSub = route.queryParamMap.subscribe((q) => {
+      this.routePane.set(q.get("pane") ?? undefined);
+      this.routeTab.set(q.get("tab") ?? undefined);
+    });
+    // #comment=<id> arrives with the route (a link followed into the app),
+    // or as a hash change on a page already open.
+    const fragSub = route.fragment.subscribe((frag) => {
+      if (frag) this.queueCommentFragment(frag);
+    });
+    const win = this.doc.defaultView;
+    const onHash = (): void =>
+      this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
+    win?.addEventListener("hashchange", onHash);
+    inject(DestroyRef).onDestroy(() => {
+      paneSub.unsubscribe();
+      fragSub.unsubscribe();
+      win?.removeEventListener("hashchange", onHash);
+    });
+    effect((onCleanup) => {
+      const dlg = this.docModal()?.nativeElement;
+      if (!dlg) return;
+      let downInsideContent = false;
+      const onDown = (ev: MouseEvent): void => {
+        downInsideContent = ev.target !== dlg;
+      };
+      const onClick = (ev: MouseEvent): void => {
+        const draggedFromInside = downInsideContent;
+        downInsideContent = false;
+        if (!draggedFromInside && ev.target === dlg) {
+          this.zone.run(() => this.closeDocModal());
+        }
+      };
+      this.zone.runOutsideAngular(() => {
+        dlg.addEventListener("mousedown", onDown);
+        dlg.addEventListener("click", onClick);
+      });
+      onCleanup(() => {
+        dlg.removeEventListener("mousedown", onDown);
+        dlg.removeEventListener("click", onClick);
+      });
+    });
+    afterRenderEffect((onCleanup) => {
+      const id = this.id();
+      const tab = this.current();
+      const page = this.taskPage()?.nativeElement;
+      const body = this.tabBody()?.nativeElement;
+      if (this.scrollTaskId !== id) {
+        this.tabScroll.clear();
+        this.scrollTaskId = id;
+      }
+      this.scrollTab = null;
+      if (!page || !body || !win) return;
+      // Both scrollers are shared by all tabs. Wait for the browser to lay out
+      // the new reader before restoring its position. Polling task data must
+      // not move a reader or steal focus.
+      const position = this.tabScroll.get(tab);
+      const frame = win.requestAnimationFrame(() => {
+        if (this.id() !== id || this.current() !== tab) return;
+        page.scrollTop = position?.page ?? 0;
+        body.scrollTop = position?.body ?? 0;
+        this.scrollTab = tab;
+      });
+      onCleanup(() => win.cancelAnimationFrame(frame));
+    });
+    afterRenderEffect(() => {
+      const open = this.docModalOpen() && !!this.modalDoc();
+      const el = this.docModal()?.nativeElement;
+      if (!el) return;
+      if (open && !el.open) {
+        if (typeof el.showModal === "function") el.showModal();
+        else el.setAttribute("open", "");
+      } else if (!open && el.open) {
+        if (typeof el.close === "function") el.close();
+        else el.removeAttribute("open");
+      }
+    });
     effect(() => {
       const id = this.id();
       untracked(() => {
+        this.commentTarget.set(null);
+        this.pendingCommentLink.set(null);
+        this.forceConversationTab.set(false);
+        const raw =
+          route.snapshot.fragment || this.doc.defaultView?.location.hash || "";
+        const parsed = this.fragmentIsForTask(id)
+          ? parseCommentFragment(raw)
+          : ({ kind: "none" } as const);
         this.confirmClose.set(false);
         this.confirming.set(null);
         this.editOpen.set(false);
@@ -1514,7 +2093,59 @@ export class TaskDetailComponent implements OnDestroy {
         this.allowWordsOnParked.set(false);
         this.newDepId.set("");
         this.replyTarget.set(null);
-        this.store.open(id);
+        this.deferUntilOpen.set(false);
+        this.deferDate.set("");
+        this.selectedDocId.set(null);
+        this.docModalOpen.set(false);
+        this.modalDocId.set(null);
+        this.docDiffText.set("");
+        this.docDiffLoading.set(false);
+        this.loadedDocDiffKey = "";
+        this.store.open(id, parsed.kind === "comment" ? parsed.id : null);
+        if (raw) this.queueCommentFragment(raw, id);
+      });
+    });
+    // Reveal a linked comment once the conversation holds it, paging older
+    // comments in (500 at a time) when it is further back than shown.
+    effect(() => {
+      const pending = this.pendingCommentLink();
+      const t = this.t();
+      if (!pending || !t || t.id !== this.id()) return;
+      untracked(() => {
+        const list = t.comments ?? [];
+        if (list.some((c) => c.id === pending.id)) {
+          this.pendingCommentLink.set(null);
+          this.commentTarget.set(pending);
+          return;
+        }
+        const mayBeOlder =
+          (t.olderComments ?? 0) > 0 &&
+          (list.length === 0 || pending.id < list[0].id);
+        if (!mayBeOlder) {
+          this.pendingCommentLink.set(null);
+          this.snackbar.show(
+            `Comment ${pending.id} is not in this task's conversation.`,
+          );
+          return;
+        }
+        if (this.store.isBusy("older-comments", t.id)) return;
+        const taskId = t.id;
+        void this.store.loadOlderCommentsThrough(pending.id).then((found) => {
+          if (
+            this.id() !== taskId ||
+            this.pendingCommentLink()?.seq !== pending.seq
+          ) {
+            return;
+          }
+          this.pendingCommentLink.set(null);
+          if (found) {
+            this.commentTarget.set(pending);
+          } else {
+            this.snackbar.show(
+              `Comment ${pending.id} is not in this task's conversation.`,
+            );
+          }
+        });
       });
     });
     effect(() => {
@@ -1528,6 +2159,14 @@ export class TaskDetailComponent implements OnDestroy {
       if (this.current() === "tree") {
         this.id();
         untracked(() => void this.store.loadTree());
+      }
+    });
+    effect(() => {
+      const tab = this.current();
+      const modalOpen = this.docModalOpen();
+      const t = this.t();
+      if ((tab === "docs" || modalOpen) && t && t.id === this.id()) {
+        untracked(() => void this.ensureDocDiffLoaded());
       }
     });
     effect(() => {
@@ -1553,6 +2192,7 @@ export class TaskDetailComponent implements OnDestroy {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
       if (cfg?.capabilities) this.offeredCapabilities.set(cfg.capabilities);
+      this.displayTz.set(effectiveDisplayTimeZone(cfg?.timeZone));
     } catch {
       // Optional config read for capabilities list.
     }
@@ -1560,11 +2200,48 @@ export class TaskDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
-    this.store.close();
+    this.store.close(this.id());
+  }
+
+  // fragmentIsForTask reports whether the page's fragment belongs to task
+  // id: on /task/<n> (or /tasks/<n>) only when n is id; in a list's pane,
+  // whichever task the pane shows.
+  private fragmentIsForTask(id: string): boolean {
+    const path = this.doc.defaultView?.location.pathname ?? "";
+    const m = /\/tasks?\/([^/?#]+)\/?$/.exec(path);
+    return !m || decodeURIComponent(m[1]) === String(id);
+  }
+
+  // queueCommentFragment asks for the comment a #comment=<id> fragment
+  // names, switching to Conversation; any other fragment is left alone.
+  private queueCommentFragment(raw: string, taskId?: string): void {
+    let id = taskId;
+    if (id === undefined) {
+      try {
+        id = this.id();
+      } catch {
+        return; // The id input is not bound yet; the id effect reads it.
+      }
+    }
+    if (!id || !this.fragmentIsForTask(id)) return;
+    const parsed = parseCommentFragment(raw);
+    if (parsed.kind === "none") return;
+    // The route and the window can both report one navigation.
+    const key = `${id}:${raw.replace(/^#/, "")}`;
+    const now = Date.now();
+    if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) return;
+    this.lastFragmentKey = key;
+    this.lastFragmentAt = now;
+    if (parsed.kind === "invalid") {
+      this.snackbar.show(`This link's ${parsed.raw} does not name a comment.`);
+      return;
+    }
+    this.forceConversationTab.set(true);
+    this.pendingCommentLink.set({ id: parsed.id, seq: ++this.commentSeq });
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
-    return this.access.can(route, this.t()?.repo || undefined);
+    return this.access.canAccessTask(route, this.t()?.repo ?? null);
   }
 
   protected val(ev: Event): string {
@@ -1675,6 +2352,7 @@ export class TaskDetailComponent implements OnDestroy {
       .navigate([], {
         queryParams: this.tabQuery("conversation"),
         queryParamsHandling: "merge",
+        ...(this.pane() ? { preserveFragment: true } : {}),
       })
       .then(() => setTimeout(() => this.composer()?.nativeElement.focus()));
   }
@@ -1695,15 +2373,34 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
-    if (
-      await this.store.act(
-        "pause",
-        this.post("POST /api/tasks/{id}/pause", { immediate }),
-        id,
-      )
-    ) {
-      this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+    const run = async () => {
+      if (
+        await this.store.act(
+          "pause",
+          this.post("POST /api/tasks/{id}/pause", { immediate }),
+          id,
+        )
+      ) {
+        this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+      }
+    };
+    if (!immediate) {
+      await run();
+      return;
     }
+    // Asked first, as the classic Pause now is: unlike Pause, this one
+    // throws away whatever the run has not pushed, and Resume cannot
+    // bring that back.
+    this.confirming.set({
+      title: "Pause immediately",
+      message:
+        `Pause #${id} now? Its run is stopped at once, without the grace ` +
+        "period to push its work and write its handover; whatever it has " +
+        "not pushed is lost. Resume picks the task back up where it was left.",
+      accept: "Pause now",
+      destructive: true,
+      run,
+    });
   }
 
   protected async resumePaused(): Promise<void> {
@@ -1936,6 +2633,60 @@ export class TaskDetailComponent implements OnDestroy {
     ) {
       this.done(`Deferred #${id}`);
       this.snackbar.show(`Deferred #${id}`, {
+        label: "Undo",
+        run: async () => {
+          await this.store.act(
+            "undefer",
+            this.post("POST /api/tasks/{id}/undefer"),
+            id,
+          );
+        },
+      });
+    }
+  }
+
+  protected openDeferUntil(): void {
+    this.deferDate.set("");
+    this.deferUntilOpen.set(true);
+    // The picker replaces the button that opened it, so focus follows.
+    setTimeout(() => this.doc.getElementById("defer-until-date")?.focus());
+  }
+
+  protected closeDeferUntil(refocus = false): void {
+    this.deferUntilOpen.set(false);
+    this.deferDate.set("");
+    if (refocus) {
+      setTimeout(() =>
+        this.doc
+          .querySelector<HTMLElement>('[data-testid="act-defer-until"]')
+          ?.focus(),
+      );
+    }
+  }
+
+  protected wakeTime(iso: string): string {
+    return formatWakeTime(iso, this.displayTz());
+  }
+
+  // A picked day wakes at its start in the zone the wake time is printed
+  // in; a day before earliestWake() is refused here as the server would.
+  protected async deferUntil(ev: Event): Promise<void> {
+    ev.preventDefault();
+    const t = this.t();
+    const at = this.deferWakeAt();
+    if (!t || t.id !== this.id() || at === null) return;
+    const id = t.id;
+    const until = new Date(at).toISOString();
+    if (
+      await this.store.act(
+        "defer",
+        this.post("POST /api/tasks/{id}/defer", { deferredUntil: until }),
+        id,
+      )
+    ) {
+      this.closeDeferUntil();
+      this.done(`Deferred #${id} until ${this.wakeTime(until)}`);
+      this.snackbar.show(`Deferred #${id} until ${this.wakeTime(until)}`, {
         label: "Undo",
         run: async () => {
           await this.store.act(
@@ -2184,5 +2935,103 @@ export class TaskDetailComponent implements OnDestroy {
   protected send(ev: Event): void {
     ev.preventDefault();
     void this.submitComment();
+  }
+
+  protected openDocsTab(docId?: string): void {
+    this.forceConversationTab.set(false);
+    if (docId) this.selectedDocId.set(docId);
+    void this.router.navigate([], {
+      queryParams: this.tabQuery("docs"),
+      queryParamsHandling: "merge",
+      ...(this.pane() ? { preserveFragment: true } : {}),
+    });
+  }
+
+  protected openDocModal(docId?: string): void {
+    const list = this.docs();
+    if (list.length === 0) return;
+    const target =
+      (docId && list.some((d) => d.id === docId) ? docId : undefined) ??
+      list[0].id;
+    this.modalDocId.set(target);
+    this.docModalOpen.set(true);
+    setTimeout(() => {
+      const sc = this.docModalScroll()?.nativeElement;
+      if (sc) sc.scrollTop = 0;
+    });
+  }
+
+  protected closeDocModal(): void {
+    this.docModalOpen.set(false);
+  }
+
+  protected onDocModalClose(): void {
+    this.docModalOpen.set(false);
+  }
+
+  protected stepModalDoc(delta: number): void {
+    const list = this.docs();
+    const nextIdx = this.modalDocIndex() + delta;
+    if (nextIdx < 0 || nextIdx >= list.length) return;
+    const nextId = list[nextIdx].id;
+    this.modalDocId.set(nextId);
+    if (this.current() === "docs") this.selectedDocId.set(nextId);
+    setTimeout(() => {
+      const sc = this.docModalScroll()?.nativeElement;
+      if (sc) sc.scrollTop = 0;
+      if (delta < 0 && nextIdx === 0) {
+        const nextBtn = this.docModalNext()?.nativeElement;
+        if (nextBtn && !nextBtn.disabled) nextBtn.focus();
+        else this.docModalClose()?.nativeElement.focus();
+      } else if (delta > 0 && nextIdx === list.length - 1) {
+        const prevBtn = this.docModalPrev()?.nativeElement;
+        if (prevBtn && !prevBtn.disabled) prevBtn.focus();
+        else this.docModalClose()?.nativeElement.focus();
+      }
+    });
+  }
+
+  protected docSourceLabel(source: TaskDocumentSource): string {
+    switch (source) {
+      case "prompt":
+        return "Prompt";
+      case "pr":
+        return "PR diff";
+      case "comment":
+        return "Report";
+    }
+  }
+
+  private async ensureDocDiffLoaded(): Promise<void> {
+    const t = this.t();
+    if (!t || !t.repo || !t.branch || t.state === "proposed") return;
+    if (!this.can("GET /api/repos/{owner}/{name}/compare")) return;
+    const { owner, name } = splitRepo(t.repo);
+    if (!owner || !name) return;
+    const key = `${t.id}|${t.branch}|${t.base ?? ""}|${t.updatedAt ?? ""}`;
+    if (this.loadedDocDiffKey === key) return;
+    this.loadedDocDiffKey = key;
+    this.docDiffLoading.set(true);
+    try {
+      const present = await this.branchRefs.hasBranch(t.repo, t.branch);
+      if (this.id() !== t.id || present === false) return;
+      const qs = new URLSearchParams();
+      if (t.base) qs.set("base", t.base);
+      qs.set("head", t.branch);
+      const cmp = await this.api.get<CompareResponse>(
+        "GET /api/repos/{owner}/{name}/compare",
+        { owner, name },
+        qs.toString(),
+      );
+      if (this.id() === t.id) {
+        this.docDiffText.set(cmp?.diff ?? "");
+      }
+    } catch {
+      if (this.loadedDocDiffKey === key) {
+        this.loadedDocDiffKey = "";
+      }
+    } finally {
+      if (this.id() === t.id) this.docDiffLoading.set(false);
+    }
   }
 }

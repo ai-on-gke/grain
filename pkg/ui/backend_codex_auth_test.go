@@ -56,6 +56,12 @@ func TestBackendCodexAuthUploadReplaceClear(t *testing.T) {
 	put("two", `{"token":"private-token-two"}`, http.StatusOK)
 	put("one", `{"token":"private-token-replaced"}`, http.StatusOK)
 	put("one", `[]`, http.StatusBadRequest)
+	// Ordinary connection edits never replace the write-only login.
+	edited := do(t, srv, http.MethodPut, "/api/deployment/agent-backends/one", `{"id":"one","framework":"codex","name":"Renamed","authMode":"subscription"}`)
+	if edited.Code != http.StatusOK {
+		t.Fatalf("edit failed: %d", edited.Code)
+	}
+
 	put("missing", `{}`, http.StatusNotFound)
 	put("claude", `{}`, http.StatusNotFound)
 	for id, want := range map[string]string{"one": `{"token":"private-token-replaced"}`, "two": `{"token":"private-token-two"}`} {

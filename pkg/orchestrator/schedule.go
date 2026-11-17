@@ -19,10 +19,65 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
+
+// qualifyingRCPollInterval bounds how often a publishing-held schedule polls
+// forge tags to see whether a release candidate is currently in qualification.
+const qualifyingRCPollInterval = time.Minute
+
+type qualifyingRCCacheKey struct {
+	store *model.Store
+	repo  string
+}
+
+type qualifyingRCCacheEntry struct {
+	polledAt time.Time
+	rcTag    string
+}
+
+var qualifyingRCCache sync.Map // map[qualifyingRCCacheKey]qualifyingRCCacheEntry
+
+// qualifyingRCForRepo returns the release candidate currently in qualification
+// on repo (empty when none is, or when client cannot list tags). Results are
+// cached for qualifyingRCPollInterval per (store, repo) so a schedule held
+// during a multi-hour publishing hold does not hit the forge on every 15s
+// reconciler tick. Errors are not cached.
+func qualifyingRCForRepo(store *model.Store, client github.Client, repo model.RepoRef, now time.Time) (string, error) {
+	if client == nil || repo == (model.RepoRef{}) {
+		return "", nil
+	}
+	lister, ok := client.(github.TagLister)
+	if !ok {
+		return "", nil
+	}
+	key := qualifyingRCCacheKey{store: store, repo: strings.ToLower(repo.String())}
+	if v, ok := qualifyingRCCache.Load(key); ok {
+		entry := v.(qualifyingRCCacheEntry)
+		if !now.Before(entry.polledAt) && now.Sub(entry.polledAt) < qualifyingRCPollInterval {
+			return entry.rcTag, nil
+		}
+	}
+	tags, err := lister.ListTags(repo.StoredOwner(), repo.Name)
+	if err != nil {
+		return "", err
+	}
+	rcTag := qualifyingRCTag(tags)
+	qualifyingRCCache.Store(key, qualifyingRCCacheEntry{polledAt: now, rcTag: rcTag})
+	return rcTag, nil
+}
+
+func clearQualifyingRCCache(store *model.Store, repo model.RepoRef) {
+	if repo == (model.RepoRef{}) {
+		return
+	}
+	qualifyingRCCache.Delete(qualifyingRCCacheKey{store: store, repo: strings.ToLower(repo.String())})
+}
 
 // reconcileSchedule fires every schedule whose interval has come due --
 // filing a task, starting a suite run, or recording a workflow run to be
@@ -66,7 +121,42 @@ func reconcileSchedule(ctx context.Context, deps Deps, now time.Time) error {
 				continue
 			}
 		}
-		firing, err := deps.Store.FireSchedule(ctx, sched, now, loc, stateRepo)
+		var (
+			firing               model.ScheduleFiring
+			bypassPublishingHold bool
+			bypassedHold         *model.BaseBranchPublishing
+			qualifyingRC         string
+			holdRepo             model.RepoRef
+		)
+		// Only the release train is let through a publishing hold: its tick
+		// judges, promotes or drops the rc in qualification and cuts
+		// nothing (scripts/release-train-task.sh). Every other
+		// `skip-when: publishing-held` schedule stays held, rc or no rc.
+		if sched.SkipWhen == model.SkipWhenPublishingHeld && isReleaseTrainSchedule(sched) {
+			if hold, herr := deps.Store.PublishingHold(ctx, sched, now); herr == nil && hold != nil {
+				if parsedRepo, perr := model.ParseRepo(hold.Repo); perr == nil {
+					holdRepo = parsedRepo
+					if rcTag, rerr := qualifyingRCForRepo(deps.Store, deps.Client, parsedRepo, now); rerr != nil {
+						log.Printf("orchestrator: schedule %s: checking qualifying rc on %s while publishing is held by task %s: %v",
+							sched.ID, parsedRepo, hold.TriageTaskID, rerr)
+					} else if rcTag != "" {
+						bypassPublishingHold = true
+						bypassedHold = hold
+						qualifyingRC = rcTag
+					}
+				}
+			}
+		}
+		if bypassPublishingHold {
+			firing, err = deps.Store.FireScheduleUnderPublishingHold(ctx, sched, now, loc, stateRepo)
+		} else {
+			firing, err = deps.Store.FireSchedule(ctx, sched, now, loc, stateRepo)
+		}
+		if err == nil && bypassPublishingHold && !firing.Skipped && (firing.TaskID != "" || firing.SuiteRunID != 0 || firing.WorkflowRun) {
+			clearQualifyingRCCache(deps.Store, holdRepo)
+			log.Printf("orchestrator: schedule %s: publishing is held by task %s, but %s has release candidate %s in qualification; fired %s to judge/release/drop it (cut skipped)",
+				sched.ID, bypassedHold.TriageTaskID, holdRepo, qualifyingRC, firing.TaskID)
+		}
 		if err != nil {
 			// Written down on the schedule, and logged once per distinct
 			// failure rather than every cycle the same failure repeats

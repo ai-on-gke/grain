@@ -38,7 +38,7 @@ func filedTask(t *testing.T, ctx context.Context, store *model.Store, id string,
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "fix the thing", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &repo,
 		Binding:  model.BindingDirective,
@@ -2865,7 +2865,7 @@ func TestProcessResultFilesProposedTaskWithDeclarativeParametersAndTemplates(t *
 				"agent_framework":   "claude",
 				"reads":             []any{"acme/docs"},
 				"writes":            []any{map[string]any{"repo": "acme/backend", "base": "staging"}},
-				"capabilities":      []any{"grain-ci"},
+				"capabilities":      []any{model.GrainCIGrant},
 			},
 		},
 	)
@@ -2889,6 +2889,14 @@ func TestProcessResultFilesProposedTaskWithDeclarativeParametersAndTemplates(t *
 
 	if proposal.Title != "Audit auth" {
 		t.Errorf("title = %q, want 'Audit auth'", proposal.Title)
+	}
+	// Recorded as the template it was filed from, for reporting -- and
+	// not as TemplateID, which a run cannot hand on to work it files.
+	if proposal.SourceTemplateID != "audit-template" {
+		t.Errorf("source template = %q, want audit-template", proposal.SourceTemplateID)
+	}
+	if proposal.TemplateID != "" {
+		t.Errorf("template = %q, want none: a proposal takes no template's push set", proposal.TemplateID)
 	}
 	if !strings.Contains(proposal.Body, "Perform full audit for auth on standard tier") {
 		t.Errorf("body = %q, want interpolated body", proposal.Body)
@@ -2916,7 +2924,7 @@ func TestProcessResultFilesProposedTaskWithDeclarativeParametersAndTemplates(t *
 	// grain-ci is the target repository's CI Mode to grant, and a
 	// no_repo proposal has none: naming it is passed over.
 	for _, g := range proposal.Grants {
-		if g.Capability == "grain-ci" {
+		if model.IsGrainCIGrant(g.Capability) {
 			t.Errorf("grants = %+v, want no grain-ci grant on a no_repo proposal", proposal.Grants)
 		}
 	}
@@ -3255,5 +3263,65 @@ func TestProcessResultProposedTaskTakesItsTemplatesSandbox(t *testing.T) {
 	if proposal.SandboxCPUs != 8 || proposal.SandboxMemoryMB != 16384 || proposal.SandboxDiskGB != 100 {
 		t.Errorf("sizing = cpus:%d, mem:%d, disk:%d; want 8 and 16384 from the proposal, 100 from the template",
 			proposal.SandboxCPUs, proposal.SandboxMemoryMB, proposal.SandboxDiskGB)
+	}
+}
+
+// A relayed proposal is held to the deployment's maximum
+// (model.SandboxShapeLimits), as the live call is: a dimension above it
+// is lowered to it with a note in the body, a dimension within it is
+// kept, and the shape is still above the proposer's own, so the proposal
+// is filed for a person rather than on its proposer's permission.
+func TestProcessResultProposedTaskIsHeldToTheSandboxShapeMaximum(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+	if err := store.PutConfig(ctx, model.Config{SandboxShapeLimits: model.SandboxShapeLimits{
+		Max: model.SandboxShape{CPUs: 8, DiskGB: 200},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := toolResult(agent.ToolCall{
+		Name: "propose_task",
+		Arguments: map[string]any{
+			"title":             "Build everything",
+			"body":              "on a big machine",
+			"sandbox_cpus":      64,
+			"sandbox_memory_mb": 16384,
+			"sandbox_disk_gb":   5000,
+		},
+	})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposal *model.Task
+	for i := range tasks {
+		if tasks[i].ID != task.ID {
+			proposal = &tasks[i]
+		}
+	}
+	if proposal == nil {
+		t.Fatal("proposal was not filed")
+	}
+	if proposal.SandboxCPUs != 8 || proposal.SandboxMemoryMB != 16384 || proposal.SandboxDiskGB != 200 {
+		t.Errorf("sizing = cpus:%d, mem:%d, disk:%d; want 8 and 200 (the maximum) and 16384 (within it)",
+			proposal.SandboxCPUs, proposal.SandboxMemoryMB, proposal.SandboxDiskGB)
+	}
+	for _, want := range []string{"sandbox_cpus 64 (lowered to 8)", "sandbox_disk_gb 5000 (lowered to 200)", "sandboxShapeLimits"} {
+		if !strings.Contains(proposal.Body, want) {
+			t.Errorf("body does not say %q:\n%s", want, proposal.Body)
+		}
+	}
+	if strings.Contains(proposal.Body, "sandbox_memory_mb") {
+		t.Errorf("body names memory, which was within the maximum:\n%s", proposal.Body)
+	}
+	if proposal.ApprovedAt != nil {
+		t.Errorf("proposal approved at %v; a shape above its proposer's own is a person's to approve", proposal.ApprovedAt)
 	}
 }

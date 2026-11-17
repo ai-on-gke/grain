@@ -6,6 +6,8 @@ carry `Design-Item: design/design/durable-tasks.design.md#DT-n` trailers, so the
 design planner (`docs/design-docs.md`) finds them already open when this
 doc merges and files nothing twice.
 
+Proposed extension: [Configurable built-in gates](gates.design.md) and its [normative contract](../spec/gates/gates.spec.md) generalize DT-4 into versioned compiled evaluators while retaining Grain-owned admission, suspension, progress and close/rest policy. They do not change current behavior until an explicit per-task authority handoff.
+
 ## Why
 
 Some work in grain has to keep going until a goal is met or a person stops
@@ -1129,9 +1131,17 @@ for the reason under "Routes and scopes"). As built:
   task, a running one (the reconciler
   tries again once the run ends) and a console session, whose session
   tag cannot be shared and which already rolls over by being closed and
-  refiled. Telling the director it is past the limit is not built yet.
-- The UI banner on `/tasks/N` is follow-up work under the deployment's
-  screenshot rule; the API already answers with `rolledOverTo`.
+  refiled. A session past a limit is told so instead
+  (`History.RolloverDue`, `contextUpkeepSection`, grain/task-4222): its
+  prompt names the limit and asks it to write a fresh handover and say,
+  when the conversation next rests, that it is due to be closed and
+  refiled.
+- The task page banners a rolled-over task's successor, and the
+  successor links back, in both UIs (`task-rolled-over-to` /
+  `task-rolled-over-from`, grain/task-4222); the task list and board
+  carry a "rolled over to M" chip beside "superseded by". The demo seeds
+  a pair, "Watch the acme/widgets nightly build"
+  (`ui-ng/e2e/next-task-rollover.spec.js`).
 
 ### Follow-up work
 
@@ -1146,7 +1156,7 @@ for the reason under "Routes and scopes"). As built:
   badge, Compact and Write handover…, and summarised comments collapsed
   in place in the timeline (`ui/src/components/detail/TaskContext.jsx`).
 - Rollover's task-page banner, and telling a console session past the
-  limit that it should be closed and refiled.
+  limit that it should be closed and refiled. Done in grain/task-4222.
 
 ## Store and schema changes (summary)
 

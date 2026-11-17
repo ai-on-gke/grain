@@ -97,6 +97,13 @@ type StarvedScheduleFiring struct {
 	// run that names no schedule but carries the group's tag leaves HeldBy
 	// empty and sets Group.
 	HeldBy, Group string
+	// DeliberatelyHeld is true when the schedule is held by a declared
+	// condition (HoldReason, such as SuppressedByPublishingHeld) rather than
+	// starved behind a never-started firing: TaskID names the task holding it
+	// (baseBranchPublishing[].triageTaskID), no priority is raised, and no
+	// FamilyScheduleStarved notification is opened.
+	DeliberatelyHeld bool
+	HoldReason       ScheduleSuppressionReason
 }
 
 // blocker says whose firing the starved task (or suite run) came from,
@@ -167,12 +174,24 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 	switch {
 	case k.Reason == SuppressedByOpenTask && k.TaskID != "":
 	case k.Reason == SuppressedBySuiteRun:
+	case k.Reason == SuppressedByPublishingHeld && k.TaskID != "":
 	default:
 		return StarvedScheduleFiring{}, nil
 	}
 	occurrences := 1 + foldedOccurrences(sched, now, loc)
 	if !ScheduleStarved(k.Occurrence, now, occurrences) {
 		return StarvedScheduleFiring{}, nil
+	}
+	if k.Reason == SuppressedByPublishingHeld {
+		// Deliberately held while base-branch publishing is held: name the
+		// holding triage task rather than staying silent or calling it starved.
+		return StarvedScheduleFiring{
+			TaskID:           k.TaskID,
+			HeldFor:          now.Sub(k.Occurrence),
+			Occurrences:      occurrences,
+			DeliberatelyHeld: true,
+			HoldReason:       k.Reason,
+		}, nil
 	}
 	out := StarvedScheduleFiring{HeldFor: now.Sub(k.Occurrence), Occurrences: occurrences}
 	if k.HeldByScheduleID != "" && k.HeldByScheduleID != sched.ID {
