@@ -36,7 +36,7 @@ const LONG_PR_DOC_DIFF = [
   "@@ -0,0 +1,42 @@",
   "+# Design Book Addendum",
   "+",
-  "+Container query `@container task-page (max-width: 1060px)` collapses `.task-aside` when narrow.",
+  "+Container query `@container task-detail (max-width: 1060px)` collapses `.task-aside` when narrow.",
   ...Array.from(
     { length: 38 },
     (_, i) =>
