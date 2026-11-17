@@ -24,7 +24,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import { SessionsPageComponent } from "./sessions-page.component";
-import { SessionsStore } from "./sessions.store";
+import { COMMENTS_PAGE_SIZE, SessionsStore } from "./sessions.store";
 import { AccessService } from "../services/access.service";
 
 type Call = { method: string; route: string; params?: unknown; body?: unknown };
@@ -970,5 +970,122 @@ describe("SessionsPageComponent", () => {
     expect(f.nativeElement.textContent).toContain("Ship the patch now");
 
     releasePoll?.();
+  });
+
+  it("scrolls new replies into view on a full 50-comment window, including after sending, while leaving a scrolled-up reader in place", async () => {
+    const makeWindow = (startId: number, count = COMMENTS_PAGE_SIZE) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: startId + i,
+        author: i % 2 === 0 ? "ana" : "grain",
+        authorKind: (i % 2 === 0 ? "human" : "automation") as
+          "human" | "automation",
+        body: `Turn ${startId + i}`,
+      }));
+
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 100,
+      comments: makeWindow(101), // 101..150 (50 comments)
+    };
+
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+    const logEl = q(f, '[data-testid="chat-log"]') as HTMLElement;
+    expect(logEl).toBeTruthy();
+
+    let currentHeight = 2400;
+    Object.defineProperty(logEl, "clientHeight", {
+      configurable: true,
+      get: () => 400,
+    });
+    Object.defineProperty(logEl, "scrollHeight", {
+      configurable: true,
+      get: () => currentHeight,
+    });
+
+    // Park the reader near the bottom (within the 120px follow threshold).
+    logEl.scrollTop = 1950;
+    logEl.dispatchEvent(new Event("scroll"));
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+
+    // 1. A polled tall reply (+220px) slides the 50-comment window forward (102..151, still 50).
+    currentHeight = 2620;
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 101,
+      comments: makeWindow(102),
+    };
+    await store.refresh();
+    await settle(f);
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+    expect(q(f, '[data-testid="msg-151"]')?.textContent).toContain("Turn 151");
+    expect(logEl.scrollTop).toBe(2620);
+
+    // 2. Sending a message takes the window 50 -> 51 (optimistic), back to 50 on
+    //    the POST response (103..152), and 50 again when the agent's reply lands (104..153).
+    const basePost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route === "POST /api/tasks/{id}/comments") {
+        api.calls.push({ method: "POST", route, params, body });
+        const allReturned = makeWindow(100, COMMENTS_PAGE_SIZE + 3); // 100..152 (53 -> sliced to 103..152)
+        api.details["1"] = {
+          ...api.details["1"],
+          olderComments: 102,
+          comments: allReturned.slice(-COMMENTS_PAGE_SIZE),
+        };
+        currentHeight = 2780;
+        return Promise.resolve({
+          id: "1",
+          olderComments: 100,
+          comments: allReturned,
+        });
+      }
+      return basePost(route, params, body);
+    };
+
+    const box = q(f, '[data-testid="composer"]') as HTMLTextAreaElement;
+    box.value = "Turn 152";
+    box.dispatchEvent(new Event("input"));
+    f.detectChanges();
+    (q(f, '[data-testid="send"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+    expect(logEl.scrollTop).toBe(2780);
+
+    // Agent reply arrives on the next poll (104..153, still 50 comments).
+    currentHeight = 2960;
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 103,
+      comments: makeWindow(104),
+    };
+    await store.refresh();
+    await settle(f);
+    expect(logEl.querySelectorAll("article.msg")).toHaveLength(
+      COMMENTS_PAGE_SIZE,
+    );
+    expect(q(f, '[data-testid="msg-153"]')?.textContent).toContain("Turn 153");
+    expect(logEl.scrollTop).toBe(2960);
+
+    // 3. When the reader scrolls up, a sliding 50-comment window does not yank scrollTop.
+    logEl.scrollTop = 300;
+    logEl.dispatchEvent(new Event("scroll"));
+    currentHeight = 3120;
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 104,
+      comments: makeWindow(105),
+    };
+    await store.refresh();
+    await settle(f);
+    expect(q(f, '[data-testid="msg-154"]')?.textContent).toContain("Turn 154");
+    expect(logEl.scrollTop).toBe(300);
   });
 });

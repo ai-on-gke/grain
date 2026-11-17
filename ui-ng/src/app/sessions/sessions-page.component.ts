@@ -540,6 +540,7 @@ const FOCUS_COMPOSER = "focusComposer";
               aria-label="Conversation"
               tabindex="0"
               data-testid="chat-log"
+              (scroll)="onLogScroll()"
             >
               @if (olderCount() > 0) {
                 <button
@@ -1014,7 +1015,14 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private lastCount = 0;
   private lastFirstId: number | undefined = undefined;
   private lastTailId: number | undefined = undefined;
+  private lastPositiveTailId: number | undefined = undefined;
+  private lastScrollHeight = 0;
+  private following = true;
+  private logResize?: ResizeObserver;
+  private logResizeTarget: Element | null = null;
   private lastSession = "";
+  private scrollTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingScrollToBottom = false;
   private prependAnchor: { scrollHeight: number; scrollTop: number } | null =
     null;
 
@@ -1053,50 +1061,131 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     effect(() => {
       const list = this.comments();
       const n = list.length;
-      const firstId = list[0]?.id;
+      const firstId = list.find((c) => c.id > 0)?.id;
       const tailId = n > 0 ? list[n - 1]?.id : undefined;
+      let positiveTailId: number | undefined = undefined;
+      for (let i = n - 1; i >= 0; i--) {
+        if (list[i].id > 0) {
+          positiveTailId = list[i].id;
+          break;
+        }
+      }
       const sid = this.store.selectedId();
+      const taskId = this.store.selected()?.session.taskId ?? "";
+      const sessionKey = `${sid}:${taskId}`;
       const el = this.log()?.nativeElement;
       if (!el) return;
-      if (sid !== this.lastSession) {
-        this.lastSession = sid;
+      if (sessionKey !== this.lastSession) {
+        this.lastSession = sessionKey;
         this.lastCount = 0;
         this.lastFirstId = undefined;
         this.lastTailId = undefined;
+        this.lastPositiveTailId = undefined;
+        this.lastScrollHeight = 0;
+        this.following = true;
         this.prependAnchor = null;
+        this.clearScrollTimer();
       }
       const first = this.lastCount === 0;
       const prepended =
         !first &&
         this.lastFirstId !== undefined &&
         firstId !== undefined &&
-        firstId !== this.lastFirstId &&
-        n > this.lastCount;
-      const tailGrew =
-        n > this.lastCount && !prepended && tailId !== this.lastTailId;
-      const isOptimisticSend = tailId !== undefined && tailId < 0 && tailGrew;
+        firstId < this.lastFirstId;
+      const isOptimisticSend =
+        tailId !== undefined && tailId < 0 && tailId !== this.lastTailId;
+      const positiveTailGrew =
+        !prepended &&
+        positiveTailId !== undefined &&
+        (this.lastPositiveTailId === undefined ||
+          positiveTailId > this.lastPositiveTailId);
+      const tailGrew = isOptimisticSend || positiveTailGrew;
       this.lastCount = n;
       this.lastFirstId = firstId;
       this.lastTailId = tailId;
+      this.lastPositiveTailId = positiveTailId;
 
       if (prepended) {
         const anchor = this.prependAnchor;
         this.prependAnchor = null;
-        if (anchor) {
-          setTimeout(() => {
+        this.following = false;
+        this.clearScrollTimer();
+        this.scrollTimer = setTimeout(() => {
+          this.scrollTimer = null;
+          if (anchor) {
+            const prev = el.style.scrollBehavior;
+            el.style.scrollBehavior = "auto";
             el.scrollTop = Math.max(
               0,
               anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight),
             );
-          });
-        }
+            el.style.scrollBehavior = prev;
+          }
+          this.lastScrollHeight = el.scrollHeight;
+          this.watchLog(el);
+        });
         return;
       }
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      const baselineHeight =
+        this.lastScrollHeight > 0
+          ? Math.min(el.scrollHeight, this.lastScrollHeight)
+          : el.scrollHeight;
+      const nearBottom =
+        this.pendingScrollToBottom ||
+        (this.following &&
+          baselineHeight - el.scrollTop - el.clientHeight < 120);
       if ((first && n > 0) || isOptimisticSend || (tailGrew && nearBottom)) {
-        setTimeout(() => (el.scrollTop = el.scrollHeight));
+        if (this.scrollTimer) clearTimeout(this.scrollTimer);
+        this.pendingScrollToBottom = true;
+        this.following = true;
+        this.scrollTimer = setTimeout(() => {
+          this.scrollTimer = null;
+          this.pendingScrollToBottom = false;
+          this.following = true;
+          this.scrollToEnd(el);
+          this.watchLog(el);
+        });
+      } else if (tailGrew) {
+        this.following = false;
+        if (this.scrollTimer) clearTimeout(this.scrollTimer);
+        this.scrollTimer = setTimeout(() => {
+          this.scrollTimer = null;
+          this.lastScrollHeight = el.scrollHeight;
+          this.watchLog(el);
+        });
       }
     });
+  }
+
+  protected onLogScroll(): void {
+    if (this.pendingScrollToBottom) return;
+    const el = this.log()?.nativeElement;
+    if (!el) return;
+    this.lastScrollHeight = el.scrollHeight;
+    this.following = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
+
+  private scrollToEnd(el: HTMLElement): void {
+    const prev = el.style.scrollBehavior;
+    el.style.scrollBehavior = "auto";
+    el.scrollTop = el.scrollHeight;
+    el.style.scrollBehavior = prev;
+    this.lastScrollHeight = el.scrollHeight;
+  }
+
+  private watchLog(el: HTMLElement): void {
+    if (typeof ResizeObserver === "undefined") return;
+    if (el !== this.logResizeTarget) {
+      this.logResize?.disconnect();
+      this.logResize = new ResizeObserver(() => {
+        if (this.following) this.scrollToEnd(el);
+      });
+      this.logResize.observe(el);
+      this.logResizeTarget = el;
+    }
+    for (const child of Array.from(el.children)) {
+      this.logResize?.observe(child);
+    }
   }
 
   ngOnInit(): void {
@@ -1104,8 +1193,19 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.clearScrollTimer();
+    this.logResize?.disconnect();
+    this.logResizeTarget = null;
     this.store.setDirectorWatch("sessions-page", false);
     this.store.release("sessions-page");
+  }
+
+  private clearScrollTimer(): void {
+    if (this.scrollTimer) {
+      clearTimeout(this.scrollTimer);
+      this.scrollTimer = null;
+    }
+    this.pendingScrollToBottom = false;
   }
 
   protected loadEarlier(): void {
@@ -1116,6 +1216,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         scrollTop: el.scrollTop,
       };
     }
+    this.following = false;
     void this.store.loadOlderComments();
   }
 

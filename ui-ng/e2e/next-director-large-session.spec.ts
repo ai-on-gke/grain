@@ -260,8 +260,33 @@ test("300-comment Director session with ~9 MB binaries scrolls, clicks, pages, a
 
     const logBox = await sessionLog.boundingBox();
     expect(logBox).not.toBeNull();
-    const bottomScroll = await sessionLog.evaluate((el) => el.scrollTop);
+    let bottomScroll = await sessionLog.evaluate((el) => el.scrollTop);
     expect(bottomScroll).toBeGreaterThan(1000);
+
+    // When parked at the bottom of a full 50-comment window, a new tall server
+    // reply slides the 50-comment window forward and scrolls into the viewport.
+    await api(demoServer, accessCode, "POST", `/api/tasks/${taskId}/comments`, {
+      body: `${longMarkdown(301)}\n\nFull-window reply #301 scrolls into view.`,
+    });
+    const reply301 = sessionLog
+      .locator("article.msg")
+      .filter({ hasText: "Full-window reply #301 scrolls into view." });
+    await expect(reply301).toBeVisible({ timeout: 10_000 });
+    await expect(sessionLog.locator("article.msg")).toHaveCount(50);
+    await expect
+      .poll(
+        async () => {
+          const box = await reply301.boundingBox();
+          if (!box) return false;
+          return (
+            box.y + box.height > logBox!.y &&
+            box.y + box.height <= logBox!.y + logBox!.height + 4
+          );
+        },
+        { timeout: 2_000 },
+      )
+      .toBe(true);
+    bottomScroll = await sessionLog.evaluate((el) => el.scrollTop);
 
     await page.mouse.move(logBox!.x + logBox!.width / 2, logBox!.y + 160);
     await page.mouse.wheel(0, -600);

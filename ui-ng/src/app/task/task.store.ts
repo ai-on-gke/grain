@@ -121,6 +121,7 @@ export class TaskStore {
   private readonly trouble = new ReadTrouble();
   private pollAfter = 0;
   private transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+  private transcriptGen = 0;
   private transcriptLive = false;
   private transcriptFailures = 0;
   private optimisticSeq = 0;
@@ -503,49 +504,54 @@ export class TaskStore {
   }
 
   // watchTranscript reads one attempt's transcript, again every few
-  // seconds while that attempt has not finished.
+  // seconds while that attempt has not finished. Each call claims a new
+  // generation so an in-flight read from an earlier call cannot schedule a
+  // second polling chain or overwrite a newer selection.
   watchTranscript(attempt: number, live: boolean): void {
     this.stopTranscript();
+    const gen = this.transcriptGen;
     this.transcriptFor.set(attempt);
     this.transcript.set(null);
+    this.transcriptError.set(null);
     this.transcriptLive = live;
     this.transcriptFailures = 0;
-    void this.loadTranscript(attempt);
+    void this.loadTranscript(attempt, gen);
   }
 
   stopTranscript(): void {
+    this.transcriptGen++;
     this.transcriptLive = false;
     this.transcriptFailures = 0;
     if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
     this.transcriptTimer = null;
   }
 
-  private async loadTranscript(attempt: number): Promise<void> {
+  private async loadTranscript(attempt: number, gen: number): Promise<void> {
     const id = this.id();
-    if (!id) return;
+    if (!id || this.transcriptGen !== gen) return;
+    const stillCurrent = () =>
+      this.transcriptGen === gen &&
+      this.id() === id &&
+      this.transcriptFor() === attempt;
     try {
       const r = await this.api.get<{ transcript?: string }>(
         "GET /api/tasks/{id}/attempts/{number}/transcript",
         { id, number: String(attempt) },
       );
-      if (this.id() === id && this.transcriptFor() === attempt) {
+      if (stillCurrent()) {
         this.transcriptFailures = 0;
         this.transcript.set(r?.transcript ?? "");
         this.transcriptError.set(null);
       }
     } catch (err) {
-      if (this.id() === id && this.transcriptFor() === attempt) {
+      if (stillCurrent()) {
         this.transcriptFailures++;
         this.transcriptError.set(
           `The transcript could not be read: ${errorText(err)}`,
         );
       }
     } finally {
-      if (
-        this.transcriptLive &&
-        this.id() === id &&
-        this.transcriptFor() === attempt
-      ) {
+      if (this.transcriptLive && stillCurrent()) {
         const delay =
           this.transcriptFailures > 0
             ? Math.min(
@@ -553,15 +559,15 @@ export class TaskStore {
                 20000,
               )
             : TRANSCRIPT_POLL_MS;
+        if (this.transcriptTimer) {
+          clearTimeout(this.transcriptTimer);
+          this.transcriptTimer = null;
+        }
         this.zone.runOutsideAngular(() => {
           this.transcriptTimer = setTimeout(() => {
             this.transcriptTimer = null;
-            if (
-              this.transcriptLive &&
-              this.id() === id &&
-              this.transcriptFor() === attempt
-            ) {
-              this.zone.run(() => void this.loadTranscript(attempt));
+            if (this.transcriptLive && stillCurrent()) {
+              this.zone.run(() => void this.loadTranscript(attempt, gen));
             }
           }, delay);
         });
