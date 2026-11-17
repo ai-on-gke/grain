@@ -50,11 +50,21 @@ test("the rail's Inbox link names its count apart from its label", async ({
   const rail = page.getByRole("navigation", { name: "Primary destinations" });
   const badge = rail.getByTestId("rail-inbox-count");
   await expect(badge).toBeVisible();
-  const n = (await badge.innerText()).trim();
+  // The badge and the link's "(N waiting)" render from one count, which
+  // the demo keeps updating: read the badge and look for the link naming
+  // that same N together, again until a tick does not land between them.
+  let n = "";
+  await expect
+    .poll(async () => {
+      n = (await badge.innerText()).trim();
+      return rail
+        .getByRole("link", { name: `Inbox (${n} waiting)`, exact: true })
+        .count();
+    })
+    .toBe(1);
   expect(Number(n)).toBeGreaterThan(0);
   const inbox = rail.getByRole("link", {
-    name: `Inbox (${n} waiting)`,
-    exact: true,
+    name: /^Inbox \(\d+ waiting\)$/,
   });
   await expect(inbox).toBeVisible();
   await inbox.click();
