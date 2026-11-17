@@ -57,7 +57,7 @@ func TestMergeQueueMergesMainIntoAStaleHeadAndLandsItWithNoFixTask(t *testing.T)
 
 	task := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "task1",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}
@@ -172,7 +172,7 @@ func TestMergeQueueFilesAFixNamingTheConflictWhenItsOwnMergeIsRefused(t *testing
 
 	task := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "add config",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}

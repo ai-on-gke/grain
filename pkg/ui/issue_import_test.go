@@ -38,7 +38,7 @@ func putImportedTask(t *testing.T, ctx context.Context, store *model.Store, id s
 	now := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
 	if err := store.PutTask(ctx, model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "[#12] Crash on save", Body: "Imported from GitHub issue acme/widgets#12",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
 			Reason:      model.ReasonImported,
 		},
@@ -76,8 +76,8 @@ func TestAnImportedTaskReadsAsImportedBeforeAndAfterApproval(t *testing.T) {
 		t.Fatalf("an unapproved import is state %s imported=%v awaiting=%v, want proposed, imported, awaiting approval",
 			task.State, task.Imported, task.AwaitingImportApproval)
 	}
-	if task.Origin != "acme/widgets#12" {
-		t.Errorf("origin = %q, want acme/widgets#12", task.Origin)
+	if task.WorkOrigin != "acme/widgets#12" {
+		t.Errorf("origin = %q, want acme/widgets#12", task.WorkOrigin)
 	}
 	if kinds := ui.TaskKindTags(task); !slices.Contains(kinds, ui.TaskKindImported) || !slices.Contains(kinds, ui.TaskKindProposal) {
 		t.Errorf("kinds = %v, want imported and proposal", kinds)

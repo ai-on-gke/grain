@@ -175,7 +175,7 @@ func TestDiscoveredModelIsRetriedAndRoutesDispatch(t *testing.T) {
 	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
 	task := model.Task{
 		ID: "t-discovered", Intent: model.IntentImplement, Title: "Run on a discovered model",
-		Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: human, Reason: model.ReasonDirect},
 		Approval: &human, Model: "claude-opus-4-1",
 	}
 	if err := store.PutTask(ctx, task); err != nil {

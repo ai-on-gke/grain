@@ -25,6 +25,33 @@
   min-width: 0;
 }
 
+.g-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.g-pane-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.g-pane-tool-btn {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.g-pane-tool-icon {
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+}
+
 .g-pane-title {
   margin: 0;
   font-size: 12px;
@@ -94,4 +121,25 @@
   .g-pane .g-attrs dd + dt {
     margin-top: 8px;
   }
+}
+
+/* Workstream detail embeds <g-task-detail> inside the scrolling .ws-insp column
+   beneath .ws-rel: prevent .task-page from shrinking below its content while
+   keeping .convo-thread's bounded height independently scrollable. */
+.ws-insp > .ws-insp-head,
+.ws-insp > .ws-rel {
+  flex-shrink: 0;
+}
+
+.ws-insp g-task-detail,
+.ws-insp .task-page {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
+}
+
+.ws-insp .task-layout,
+.ws-insp .task-main,
+.ws-insp .task-tab-body {
+  overflow: visible;
 }

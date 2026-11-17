@@ -135,6 +135,18 @@ func AdjustRepoCIGrants(grants []Grant, repo RepoRef, d RepoCIDefaults) []Grant 
 	return append(slices.Clip(grants), DefaultCIReadGrant(repo))
 }
 
+// GrantsReadCI reports whether a task holding grants may read repo's CI
+// runs and logs from its sandbox, as SandboxNamespaceScope decides it:
+// grain#ci or grain#source, or an api grant whose ci:read reaches repo.
+func GrantsReadCI(grants []Grant, repo RepoRef) bool {
+	for _, g := range grants {
+		if IsGrainCIGrant(g.Capability) || IsGrainSourceGrant(g.Capability) {
+			return true
+		}
+	}
+	return grantsReadCI(grants, repo)
+}
+
 // grantsReadCI reports whether grants already open ci:read on repo.
 func grantsReadCI(grants []Grant, repo RepoRef) bool {
 	names := make([]string, len(grants))

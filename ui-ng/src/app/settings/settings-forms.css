@@ -325,6 +325,7 @@
   border-radius: var(--md-sys-shape-corner-medium);
   font-size: 14px;
   line-height: 20px;
+  overflow-wrap: anywhere;
 }
 
 .s-banner.readonly {

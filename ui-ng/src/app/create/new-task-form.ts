@@ -14,6 +14,7 @@
 
 import type {
   AttachmentUpload,
+  GoalModeConfig,
   GrainConfig,
   Task,
   Template,
@@ -394,6 +395,7 @@ export interface NewTaskDraft {
   generatedFrom?: string;
   workstream?: boolean;
   autoApproveProposals?: boolean;
+  goalMode: GoalModeConfig | null;
 }
 
 export const DEFAULT_PRIORITY = 5;
@@ -487,6 +489,7 @@ export function emptyDraft(
     admission: ADMISSIONS.includes(String(f.admission.default))
       ? String(f.admission.default)
       : defaultAdmissionForRepo(config, repo),
+    goalMode: null,
     ...prefill,
   };
 }
@@ -568,6 +571,18 @@ export function buildPayload(
     ...(d.parentId ? { parentId: d.parentId } : {}),
     ...(d.autoApproveProposals !== undefined
       ? { autoApproveProposals: d.autoApproveProposals }
+      : {}),
+    ...(d.goalMode?.enabled
+      ? {
+          goalMode: {
+            enabled: true,
+            maxPasses: d.goalMode.maxPasses ?? 8,
+            wallClockMinutes: d.goalMode.wallClockMinutes ?? 120,
+            ...(d.goalMode.mockMissingSecrets
+              ? { mockMissingSecrets: true }
+              : {}),
+          },
+        }
       : {}),
   };
 }

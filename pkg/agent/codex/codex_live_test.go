@@ -71,6 +71,19 @@ func skipUnlessLiveRequired(t *testing.T, reason string) {
 	t.Skipf("%s; skipping the live codex test (set %s=1 to make this a failure)", reason, liveAgentTestEnv)
 }
 
+func lookReviewedCodex(t *testing.T) string {
+	t.Helper()
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		skipUnlessLiveRequired(t, "no codex binary on $PATH")
+	}
+	out, err := exec.Command(codexPath, "--version").CombinedOutput()
+	if err != nil || validateVersion(string(out)) != nil {
+		skipUnlessLiveRequired(t, fmt.Sprintf("the codex on $PATH is not codex-cli %s", ReviewedCLIVersion))
+	}
+	return codexPath
+}
+
 // TestLiveCodexLoadsTheConfigGrainWrites asks a real codex what it loaded
 // out of the CODEX_HOME this package builds for one run -- `codex mcp
 // list --json`, which reads config.toml and prints the servers it found
@@ -84,10 +97,7 @@ func skipUnlessLiveRequired(t *testing.T, reason string) {
 // It needs no credential, only the binary, so it is the one live
 // assertion that still runs on a machine with no OPENAI_API_KEY.
 func TestLiveCodexLoadsTheConfigGrainWrites(t *testing.T) {
-	codexPath, err := exec.LookPath("codex")
-	if err != nil {
-		skipUnlessLiveRequired(t, "no codex binary on $PATH")
-	}
+	codexPath := lookReviewedCodex(t)
 
 	// Built the way Run builds it, rather than by hand: the point is to
 	// measure the file a real dispatch would write, so a change to
@@ -190,10 +200,7 @@ func TestLiveRunEndToEnd(t *testing.T) {
 	if apiKey == "" {
 		skipUnlessLiveRequired(t, "OPENAI_API_KEY is not set")
 	}
-	codexPath, err := exec.LookPath("codex")
-	if err != nil {
-		skipUnlessLiveRequired(t, "no codex binary on $PATH")
-	}
+	codexPath := lookReviewedCodex(t)
 
 	grainBinaryPath := buildGrainBinary(t)
 
@@ -449,10 +456,7 @@ type liveStubbedCodex struct {
 // backoff off.
 func newLiveStubbedCodex(t *testing.T, providerKeys []string, opts ...Option) liveStubbedCodex {
 	t.Helper()
-	codexPath, err := exec.LookPath("codex")
-	if err != nil {
-		skipUnlessLiveRequired(t, "no codex binary on $PATH")
-	}
+	codexPath := lookReviewedCodex(t)
 
 	provider := newStubResponsesAPI(t)
 	grainBinaryPath := buildGrainBinary(t)

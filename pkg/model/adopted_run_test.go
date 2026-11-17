@@ -23,7 +23,8 @@ import (
 
 // What a daemon adopting a run from a run host reads back about it
 // (orchestrator.ResumeAdoptedRun): LiveRuns carries when the run's agent
-// started, which is where its deadline is measured from, and the leases
+// started, which is where its deadline is measured from, and the model
+// and framework it runs on, which its stream is read with; and the leases
 // it minted while it set up are recorded against it, beside the one
 // admission reserved, until each is dropped.
 func TestAnAdoptedRunsClockAndLeasesAreReadBack(t *testing.T) {
@@ -31,7 +32,7 @@ func TestAnAdoptedRunsClockAndLeasesAreReadBack(t *testing.T) {
 	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	task := model.Task{
 		ID: "t", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: human},
 	}
@@ -52,9 +53,16 @@ func TestAnAdoptedRunsClockAndLeasesAreReadBack(t *testing.T) {
 	if err := store.SetRunAgentStarted(ctx, "t-1", agentStarted); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SetRunModel(ctx, "t-1", "opus-y", model.AgentFrameworkAntigravity); err != nil {
+		t.Fatal(err)
+	}
 	live, err = store.LiveRuns(ctx)
 	if err != nil || len(live) != 1 || live[0].AgentStartedAt == nil || !live[0].AgentStartedAt.Equal(agentStarted) {
 		t.Fatalf("live runs = %+v (%v), want its agent's start %v", live, err, agentStarted)
+	}
+	// And what it is on, which the adopting daemon reads its stream with.
+	if live[0].Model != "opus-y" || live[0].AgentFramework != model.AgentFrameworkAntigravity {
+		t.Fatalf("live run = %+v, want it on opus-y on antigravity", live[0])
 	}
 
 	expires := at.Add(time.Hour)

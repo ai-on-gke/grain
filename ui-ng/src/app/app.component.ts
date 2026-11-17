@@ -1024,6 +1024,24 @@ export class AppComponent implements OnInit, OnDestroy {
       prefill: { workstream: true, origin: "" },
     },
     {
+      kind: "task",
+      icon: "agents",
+      label: "Prototype a goal",
+      sub: "Hammer through autonomously — logs assumptions, verifies deliverables, opens a PR",
+      gate: "POST /api/tasks",
+      testid: "create-prototype-goal",
+      tip: "Run autonomously across bounded passes without stopping for questions.",
+      prefill: {
+        goalMode: {
+          enabled: true,
+          maxPasses: 8,
+          wallClockMinutes: 120,
+          mockMissingSecrets: true,
+        },
+        autoApproveProposals: true,
+      },
+    },
+    {
       kind: "route",
       icon: "sessions",
       label: "New session",

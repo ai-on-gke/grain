@@ -782,3 +782,34 @@ has no `model:` key. `grain state check` warns that applying it puts
 the work moves back to the team's default model. That reverts a
 preference, not a grant, because a model only runs on connections the
 team already has.
+
+### New UI: credentials and connection tests
+
+In `/next/settings/models`, create a Codex connection with **ChatGPT
+subscription (auth.json)** authentication and save it. The credential editor
+opens automatically: paste the JSON object from your Codex login's `auth.json`
+and select **Save login**. Grain uses the existing per-backend private auth
+file, including token refresh, for dispatched agents. The editor reports only
+whether a login is configured; it clears the draft after a successful upload.
+Invalid JSON and failed uploads leave existing credentials unchanged. Saving
+other connection fields does not replace credentials.
+
+**Test connection** tests a row's saved credential. Save setup or edits, then
+save any credential changes before testing; the button never saves edits.
+Google, Anthropic and OpenAI API-key checks make the existing cheap provider
+model-list request through `POST /api/agent-keys/{framework}/check?backend={id}`.
+The backend parameter resolves the connection's own (or explicitly borrowed)
+credential, just as dispatch does, without falling back to a deployment key.
+The request stores no result and runs no model turn. Pending and final results
+appear beneath the connection; failures can be retried. A successful test
+proves credential acceptance for the model-list request, not model-specific
+inference permissions, CLI installation or agent-host health.
+
+Real tests are currently unavailable for ambient host credentials, Claude
+Vertex authentication and Codex ChatGPT subscription logins. Their test
+results say so explicitly. Local catalog entries and readable auth files are
+not reported as successful provider tests. Validate these modes on the agent
+host or with a dispatched run. A daemon without credential testing configured
+reports an unavailable test rather than a success. Provider response bodies,
+model IDs and raw transport errors are not returned by per-connection tests,
+since they can reflect secrets.

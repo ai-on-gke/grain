@@ -1,0 +1,33 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "watch-4",
+  "status": "ready",
+  "modes": [
+    "cursor",
+    "poll"
+  ],
+  "subscription_id": "sub-A",
+  "generation": 1,
+  "cursor": "opaque:fence-2",
+  "replay": "gap_free",
+  "expires_at": "2026-11-16T21:15:00Z",
+  "min_poll_seconds": 30,
+  "max_poll_seconds": 3600,
+  "events": [
+    {
+      "subscription_id": "sub-A",
+      "generation": 1,
+      "event_id": "change-1",
+      "cursor": "opaque:fence-2",
+      "reference_key": "281a77a9cbad3a8f1562f530773cdcdff0cabedc3c8da7cc1b0861e628bdbf2f",
+      "emitted_at": "2026-11-16T21:00:04Z",
+      "facts": {
+        "lifecycle": "terminal",
+        "disposition": "succeeded",
+        "subject_revision": "receipt:closure-72"
+      }
+    }
+  ],
+  "has_more": false,
+  "error": null
+}

@@ -934,4 +934,141 @@ describe("NewTaskSheetComponent", () => {
       "Bypass queue",
     );
   });
+
+  it("filters title and body out of inline template composition preview pills", async () => {
+    const api = new FakeApi();
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/templates/{id}/composition") {
+        api.calls.push({ route, params, query });
+        return Promise.resolve({
+          kind: "task",
+          repo: "sidthe/grain",
+          tasks: [
+            {
+              title: "Fix auth",
+              fields: [
+                { name: "title", values: ["Fix auth"], source: "template" },
+                {
+                  name: "body",
+                  values: ["Long multi-paragraph prompt body text here"],
+                  source: "template",
+                },
+                { name: "repo", values: ["sidthe/grain"], source: "template" },
+                { name: "model", values: ["smart"], source: "deployment" },
+              ],
+            },
+          ],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+
+    const preview = q('[data-testid="nt-composition-preview"]');
+    expect(preview).toBeTruthy();
+    expect(preview!.textContent).toContain("Preview: Fix auth");
+    expect(preview!.textContent).toContain("repo: sidthe/grain");
+    expect(preview!.textContent).toContain("model: smart");
+    expect(preview!.textContent).not.toContain("title: Fix auth");
+    expect(preview!.textContent).not.toContain(
+      "Long multi-paragraph prompt body text here",
+    );
+  });
+
+  it("switches to Autonomous goal posture, configures bounded passes/wall-clock/mock-secrets, and files goalMode", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    expect(q('[data-testid="nt-posture"]')?.textContent).toContain(
+      "Supervised",
+    );
+    expect(q('[data-testid="nt-goal-config"]')).toBeNull();
+    expect(q('[data-testid="new-task-submit"]')?.textContent?.trim()).toBe(
+      "Create and start",
+    );
+
+    await pickPill(f, "nt-posture", "goal");
+    await settle(f);
+
+    const cfg = q('[data-testid="nt-goal-config"]')!;
+    expect(cfg).not.toBeNull();
+    expect(cfg.textContent).toContain("Runs without stopping for questions");
+    expect(q<HTMLInputElement>('[data-testid="nt-max-passes"]')!.value).toBe(
+      "8",
+    );
+    expect(q<HTMLInputElement>('[data-testid="nt-wall-clock"]')!.value).toBe(
+      "120",
+    );
+    expect(
+      q('[data-testid="nt-mock-secrets"]')!.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(q('[data-testid="new-task-submit"]')?.textContent?.trim()).toBe(
+      "Start autonomous goal",
+    );
+
+    type('[data-testid="nt-max-passes"]', "6");
+    type('[data-testid="nt-wall-clock"]', "90");
+    type('[data-testid="nt-title"]', "Prototype OAuth device flow");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Prototype OAuth device flow",
+      autoApproveProposals: true,
+      goalMode: {
+        enabled: true,
+        maxPasses: 6,
+        wallClockMinutes: 90,
+        mockMissingSecrets: true,
+      },
+    });
+  });
+
+  it("enforces bottom scroll padding and flex-shrink protection on .sheet-body above .sheet-foot", async () => {
+    const f = await render(new FakeApi());
+    await open(f);
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const css = readFileSync(
+      resolve(__dirname, "./new-task-sheet.component.css"),
+      "utf8",
+    );
+    expect(css).toContain("padding: 12px 24px 32px;");
+    expect(css).toContain("scroll-padding-bottom: 32px;");
+    expect(css).toContain(".sheet-body > * {\n  flex-shrink: 0;\n}");
+    expect(Buffer.byteLength(css, "utf8")).toBeLessThan(8000);
+  });
+
+  it("resets autoApproveProposals cleanly when toggling Goal posture back to Supervised", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    await pickPill(f, "nt-posture", "goal");
+    await settle(f);
+    expect(q('[data-testid="new-task-submit"]')?.textContent?.trim()).toBe(
+      "Start autonomous goal",
+    );
+
+    await pickPill(f, "nt-posture", "supervised");
+    await settle(f);
+    type('[data-testid="nt-title"]', "Supervised follow-up");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Supervised follow-up",
+      autoApproveProposals: false,
+    });
+  });
 });

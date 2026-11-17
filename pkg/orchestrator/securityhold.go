@@ -1081,7 +1081,7 @@ func holdIsAbout(task model.Task, ref model.PullRequestRef) bool {
 // (holdForTrustBoundary classifies nothing of it): a stacked fix, which
 // lands on a branch that is judged when it merges, or a review.
 func unjudged(task model.Task) bool {
-	return task.Origin.Reason == model.ReasonFix || isReviewTask(task)
+	return task.Filing.Reason == model.ReasonFix || isReviewTask(task)
 }
 
 // clearedTarget is LinkTrustBoundaryCleared's target for headSHA under this

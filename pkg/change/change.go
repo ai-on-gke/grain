@@ -162,7 +162,7 @@ type OpenRequest struct {
 // spec §4.6).
 func VerifiedRequester(task model.Task) string {
 	creator := strings.TrimSpace(task.Creator)
-	filer := task.Origin.Attribution.Actor
+	filer := task.Filing.Attribution.Actor
 	if creator == "" || !filer.Verified() || !strings.EqualFold(creator, strings.TrimSpace(filer.ID)) {
 		return ""
 	}
