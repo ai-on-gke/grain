@@ -76,7 +76,7 @@ export function processesRouteMatcher(
 const SYSTEM_TABS: Record<string, readonly [string, string?, string?]> = {
   health: ["/fleet"],
   sandboxes: ["/fleet"],
-  top: ["/fleet"],
+  top: ["/fleet", undefined, "top"],
   logs: ["/fleet", "logs"],
   pipeline: ["/fleet", "controls"],
   power: ["/fleet", "controls"],

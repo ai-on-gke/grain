@@ -778,3 +778,130 @@ test("CI's Run workflow dialog says why a run was refused", async ({
   await page.getByRole("button", { name: "Run workflow" }).first().click();
   await expect(page.getByTestId("ci-dialog-error")).toHaveCount(0);
 });
+
+// The 2026-11-17 walkthrough (docs/test-runs/2026-11-17-deployment-
+// operations.md): /next/ never showed GET /api/config's installNotice, so
+// an operator on the new UI was not told that a host-mode install still
+// needed migrating; and /system/top landed on Fleet with Host top folded.
+
+test("the host-mode install notice stands above the shell and clears once the install is migrated", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  let notice = {
+    kind: "host-mode",
+    message:
+      "this host-mode install has not been migrated: it still runs on the bare machine",
+    command: "sudo grain install --migrate",
+    affectedClis: [
+      "claude: no host binary, and no host is registered to run it",
+      "gemini: no host binary",
+    ],
+    docsUrl: "https://example.com/docs/host-mode-migration",
+  };
+  await page.route("**/api/config", async (r) => {
+    const res = await r.fetch();
+    const body = await res.json();
+    await r.fulfill({
+      response: res,
+      json: notice ? { ...body, installNotice: notice } : body,
+    });
+  });
+  await page.goto("inbox");
+  const banner = page.getByTestId("install-notice-banner");
+  await expect(banner).toBeVisible();
+  await expect(banner).toHaveAttribute("role", "status");
+  await expect(banner).toContainText(
+    "This host-mode install has not been migrated: it still runs on the bare machine.",
+  );
+  await expect(page.getByTestId("install-notice-banner-clis")).toHaveText(
+    "claude, gemini",
+  );
+  const docs = page.getByTestId("install-notice-docs");
+  await expect(docs).toHaveAttribute(
+    "href",
+    "https://example.com/docs/host-mode-migration",
+  );
+  await expect(docs).toHaveAttribute("target", "_blank");
+
+  // It stands above the rail and the page rather than over them.
+  const b = await banner.boundingBox();
+  const rail = await page.locator(".nav-rail").boundingBox();
+  const top = await page.locator(".top-bar").boundingBox();
+  expect(b.y).toBe(0);
+  expect(rail.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+  expect(top.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+
+  // Migrated: the next config read carries no notice, and it goes without
+  // a reload. The shell reads config again on a navigation at least 5s
+  // after its last read (AppComponent refreshDispatchStatus).
+  notice = null;
+  await page.waitForTimeout(5_500);
+  await page.locator('.nav-rail a[href="/next/fleet"]').click();
+  await expect(page).toHaveURL(/\/next\/fleet$/);
+  await expect(banner).toHaveCount(0, { timeout: 45_000 });
+});
+
+test("the classic /system/top address opens Fleet's host top snapshot", async ({
+  page,
+}) => {
+  await page.route("**/api/host/top*", (r) =>
+    r.fulfill({
+      json: { enabled: true, lines: ["PID USER COMMAND", "1 root systemd"] },
+    }),
+  );
+  await page.goto("system/top");
+  await expect(page).toHaveURL(/\/next\/fleet#top$/);
+  await expect(page.getByTestId("fleet-top-toggle")).toHaveText(
+    /Hide host top/,
+  );
+  await expect(page.getByLabel("Host top output")).toContainText("systemd");
+
+  // Plain /fleet keeps it folded.
+  await page.goto("fleet");
+  await expect(page.getByTestId("fleet-top-toggle")).toHaveText(/^\s*Host top/);
+  await expect(page.getByLabel("Host top output")).toHaveCount(0);
+});
+
+test("Fleet says host CPU, memory and vCPU it was not told are not reported", async ({
+  page,
+}) => {
+  let host = null;
+  await page.route("**/api/sandboxes*", (route) =>
+    route.fulfill({
+      json: host
+        ? {
+            enabled: true,
+            host,
+            budget: { committedCPUs: 2, budgetCPUs: 8, withinCap: true },
+            sandboxes: [],
+          }
+        : { enabled: false, ciWaits: [] },
+    }),
+  );
+  await page.goto("fleet");
+  await expect(page.getByTestId("meter-cpu-none")).toHaveText("Not reported");
+  await expect(page.getByTestId("meter-memory-none")).toHaveText(
+    "Not reported",
+  );
+  await expect(page.getByTestId("meter-vcpu-none")).toHaveText("Not reported");
+  await expect(page.getByTestId("meter-cpu")).not.toContainText("0%");
+  await expect(page.getByTestId("meter-cpu")).not.toContainText("cores");
+  await expect(page.getByTestId("meter-memory")).not.toContainText("0 MB");
+  await expect(page.getByTestId("meter-vcpu")).not.toContainText("Within cap");
+
+  host = {
+    cpus: 4,
+    cpuUtilization: 0.15,
+    memoryUsedMB: 4096,
+    memoryTotalMB: 16384,
+  };
+  await page.reload();
+  await expect(page.getByTestId("meter-cpu")).toContainText("4 cores");
+  await expect(page.getByTestId("meter-cpu")).toContainText("15%");
+  await expect(page.getByTestId("meter-memory")).toContainText("16.0 GB");
+  await expect(page.getByTestId("meter-vcpu")).toContainText("2 / 8 vCPU");
+  await expect(page.getByTestId("meter-vcpu")).toContainText("Within cap");
+  await expect(page.getByTestId("meter-cpu-none")).toHaveCount(0);
+  await expect(page.getByTestId("meter-memory-none")).toHaveCount(0);
+});

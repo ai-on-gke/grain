@@ -78,6 +78,8 @@ const ICONS: Record<string, string> = {
   // cloud_off: the daemon is not answering (the disconnected banner).
   cloudOff:
     "M19.35 10.04A7.49 7.49 0 0 0 12 4c-1.48 0-2.85.43-4.01 1.17l1.46 1.46A5.497 5.497 0 0 1 17.5 11.5v.5H19a3 3 0 0 1 3 3c0 1.13-.64 2.11-1.56 2.62l1.45 1.45A4.97 4.97 0 0 0 24 15c0-2.64-2.05-4.78-4.65-4.96zM3 5.27l2.75 2.74C2.56 8.15 0 10.77 0 14c0 3.31 2.69 6 6 6h11.73l2 2L21 20.73 4.27 4 3 5.27zM7.73 10l8 8H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h1.73z",
+  // warning: the host-mode install notice.
+  warning: "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
   inbox:
     "M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 12h-4a3 3 0 0 1-6 0H5V5h14v10z",
   workstreams:
@@ -191,6 +193,36 @@ export class DeferErrorDirective implements OnInit {
           <path [attr.d]="icons['cloudOff']" fill="currentColor" />
         </svg>
         <span>{{ text }}</span>
+      </div>
+    }
+    @if (installNotice(); as notice) {
+      <div
+        class="conn-banner install-banner"
+        role="status"
+        data-testid="install-notice-banner"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+          <path [attr.d]="icons['warning']" fill="currentColor" />
+        </svg>
+        <span>
+          {{ notice.text }}
+          @if (notice.clis) {
+            Cannot run until then:
+            <span data-testid="install-notice-banner-clis">{{
+              notice.clis
+            }}</span
+            >.
+          }
+          @if (notice.docsUrl) {
+            <a
+              [href]="notice.docsUrl"
+              target="_blank"
+              rel="noreferrer"
+              data-testid="install-notice-docs"
+              >Migration docs</a
+            >
+          }
+        </span>
       </div>
     }
     <div class="app-shell">
@@ -1016,6 +1048,25 @@ export class AppComponent implements OnInit, OnDestroy {
       at = "";
     }
     return `${d.reason} Unreachable${at ? ` since ${at}` : ""} — retrying automatically; this page will pick back up on its own once it answers again.`;
+  });
+  // The standing notice GET /api/config's installNotice carries
+  // (pkg/ui/install_notice.go): something about how this deployment is
+  // installed that only its operator can fix -- today a host-mode install
+  // still to be migrated. It has no close button, as classic's
+  // InstallNoticeBanner has none: nothing changes until the install is
+  // migrated and the daemon restarted.
+  protected readonly installNotice = computed(() => {
+    const n = this.access.rawConfig()?.["installNotice"] as
+      | { message?: string; affectedClis?: string[]; docsUrl?: string }
+      | null
+      | undefined;
+    if (!n?.message) return null;
+    const msg = n.message.trim().replace(/\.$/, "");
+    return {
+      text: `${msg[0].toUpperCase()}${msg.slice(1)}.`,
+      clis: (n.affectedClis ?? []).map((c) => c.split(":")[0]).join(", "),
+      docsUrl: /^https?:\/\//.test(n.docsUrl ?? "") ? n.docsUrl : "",
+    };
   });
   protected readonly navConfig = inject(NavConfigService);
   protected readonly help = inject(HelpService);

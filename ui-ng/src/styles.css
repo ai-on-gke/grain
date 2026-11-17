@@ -229,6 +229,25 @@ g-root:has(> .conn-banner) > .app-shell {
   flex: none;
 }
 
+/* The host-mode install notice (AppComponent installNotice) is the same
+   standing strip in the error colours: grain cannot run some agents until
+   its operator migrates the install. */
+.conn-banner.install-banner {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  border-bottom-color: var(--md-sys-color-error);
+}
+
+.conn-banner > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.install-banner a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .nav-rail {
   grid-area: rail;
   display: flex;

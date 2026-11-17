@@ -282,16 +282,27 @@ const PERSISTENT_ACTIONS: readonly {
             <article class="ops-kpi-card" data-testid="meter-cpu">
               <div class="ops-kpi-top">
                 <span class="ops-kpi-label">Host CPU &amp; Load</span>
-                <span class="status-pill neutral tabular">
-                  <g-status-icon tone="neutral" kind="progress" />
-                  {{ sandboxes()?.host?.cpus ?? "—" }} cores
-                </span>
+                @if (sandboxes()?.host) {
+                  <span class="status-pill neutral tabular">
+                    <g-status-icon tone="neutral" kind="progress" />
+                    {{ sandboxes()?.host?.cpus ?? "—" }} cores
+                  </span>
+                }
               </div>
-              <div class="ops-kpi-value tabular">
-                {{
-                  ((sandboxes()?.host?.cpuUtilization ?? 0) * 100).toFixed(0)
-                }}%
-              </div>
+              <!-- A GET /api/sandboxes answer with no host (no sandbox
+                   backend) says the host was not measured, as the disk card
+                   does, rather than showing an idle 0% host. -->
+              @if (sandboxes()?.host) {
+                <div class="ops-kpi-value tabular">
+                  {{
+                    ((sandboxes()?.host?.cpuUtilization ?? 0) * 100).toFixed(0)
+                  }}%
+                </div>
+              } @else {
+                <div class="ops-kpi-value" data-testid="meter-cpu-none">
+                  Not reported
+                </div>
+              }
               <div class="meter-track">
                 <div
                   [class]="
@@ -309,76 +320,98 @@ const PERSISTENT_ACTIONS: readonly {
                   "
                 ></div>
               </div>
-              <div class="fleet-meter-meta tabular">
-                <span
-                  >Load 1/5/15m:
-                  {{ (sandboxes()?.host?.loadAverage1 ?? 0).toFixed(2) }} /
-                  {{ (sandboxes()?.host?.loadAverage5 ?? 0).toFixed(2) }} /
-                  {{ (sandboxes()?.host?.loadAverage15 ?? 0).toFixed(2) }}</span
-                >
-              </div>
+              @if (sandboxes()?.host) {
+                <div class="fleet-meter-meta tabular">
+                  <span
+                    >Load 1/5/15m:
+                    {{ (sandboxes()?.host?.loadAverage1 ?? 0).toFixed(2) }} /
+                    {{ (sandboxes()?.host?.loadAverage5 ?? 0).toFixed(2) }} /
+                    {{
+                      (sandboxes()?.host?.loadAverage15 ?? 0).toFixed(2)
+                    }}</span
+                  >
+                </div>
+              }
             </article>
 
             <article class="ops-kpi-card" data-testid="meter-vcpu">
               <div class="ops-kpi-top">
                 <span class="ops-kpi-label">vCPU Allocation</span>
-                <span
-                  [class]="
-                    sandboxes()?.budget?.withinCap === false
-                      ? 'status-pill blast'
-                      : 'status-pill healthy'
-                  "
-                >
-                  <g-status-icon
-                    [tone]="
+                @if (vcpuReported()) {
+                  <span
+                    [class]="
                       sandboxes()?.budget?.withinCap === false
-                        ? 'blast'
-                        : 'healthy'
+                        ? 'status-pill blast'
+                        : 'status-pill healthy'
                     "
-                    [kind]="
+                  >
+                    <g-status-icon
+                      [tone]="
+                        sandboxes()?.budget?.withinCap === false
+                          ? 'blast'
+                          : 'healthy'
+                      "
+                      [kind]="
+                        sandboxes()?.budget?.withinCap === false
+                          ? 'warning'
+                          : 'healthy'
+                      "
+                    />
+                    {{
                       sandboxes()?.budget?.withinCap === false
-                        ? 'warning'
-                        : 'healthy'
-                    "
-                  />
+                        ? "Over cap"
+                        : "Within cap"
+                    }}
+                  </span>
+                }
+              </div>
+              @if (!vcpuReported()) {
+                <div class="ops-kpi-value" data-testid="meter-vcpu-none">
+                  Not reported
+                </div>
+              } @else {
+                <div class="ops-kpi-value tabular">
+                  {{ sandboxes()?.budget?.committedCPUs ?? 0 }} /
                   {{
-                    sandboxes()?.budget?.withinCap === false
-                      ? "Over cap"
-                      : "Within cap"
+                    sandboxes()?.budget?.budgetCPUs ??
+                      sandboxes()?.host?.cpus ??
+                      "—"
                   }}
-                </span>
-              </div>
-              <div class="ops-kpi-value tabular">
-                {{ sandboxes()?.budget?.committedCPUs ?? 0 }} /
-                {{
-                  sandboxes()?.budget?.budgetCPUs ??
-                    sandboxes()?.host?.cpus ??
-                    "—"
-                }}
-                vCPU
-              </div>
+                  vCPU
+                </div>
+              }
               <div class="meter-track">
                 <div class="meter-fill" [style.width.%]="vcpuPct()"></div>
               </div>
-              <div class="fleet-meter-meta tabular">
-                <span
-                  >{{ sandboxes()?.budget?.committedCount ?? 0 }} committed
-                  sandboxes</span
-                >
-              </div>
+              @if (vcpuReported()) {
+                <div class="fleet-meter-meta tabular">
+                  <span
+                    >{{ sandboxes()?.budget?.committedCount ?? 0 }} committed
+                    sandboxes</span
+                  >
+                </div>
+              }
             </article>
 
             <article class="ops-kpi-card" data-testid="meter-memory">
               <div class="ops-kpi-top">
                 <span class="ops-kpi-label">Host Memory</span>
-                <span class="status-pill neutral tabular">
-                  <g-status-icon tone="neutral" kind="progress" />
-                  {{ fmtMB(sandboxes()?.host?.memoryTotalMB) }}
-                </span>
+                @if (sandboxes()?.host?.memoryTotalMB) {
+                  <span class="status-pill neutral tabular">
+                    <g-status-icon tone="neutral" kind="progress" />
+                    {{ fmtMB(sandboxes()?.host?.memoryTotalMB) }}
+                  </span>
+                }
               </div>
-              <div class="ops-kpi-value tabular">
-                {{ fmtMB(sandboxes()?.host?.memoryUsedMB) }}
-              </div>
+              @if (sandboxes()?.host?.memoryTotalMB) {
+                <div class="ops-kpi-value tabular">
+                  {{ fmtMB(sandboxes()?.host?.memoryUsedMB) }}
+                </div>
+              } @else {
+                <div class="ops-kpi-value" data-testid="meter-memory-none">
+                  Not reported
+                </div>
+              }
               <div class="meter-track">
                 <div
                   [class]="
@@ -391,12 +424,14 @@ const PERSISTENT_ACTIONS: readonly {
                   [style.width.%]="memPct()"
                 ></div>
               </div>
-              <div class="fleet-meter-meta tabular">
-                <span
-                  >Swap: {{ fmtMB(sandboxes()?.host?.swapUsedMB) }} /
-                  {{ fmtMB(sandboxes()?.host?.swapTotalMB) }}</span
-                >
-              </div>
+              @if (sandboxes()?.host?.memoryTotalMB) {
+                <div class="fleet-meter-meta tabular">
+                  <span
+                    >Swap: {{ fmtMB(sandboxes()?.host?.swapUsedMB) }} /
+                    {{ fmtMB(sandboxes()?.host?.swapTotalMB) }}</span
+                  >
+                </div>
+              }
             </article>
 
             <article class="ops-kpi-card" data-testid="meter-disk">
@@ -1917,6 +1952,12 @@ export class FleetPageComponent implements OnInit {
     return this.access.can("GET /api/persistent-sandboxes/{name}/logs", repo);
   }
 
+  // With neither a sandbox budget nor a host the vCPU card has nothing to
+  // weigh, so it says so rather than calling an unmeasured host "Within cap".
+  protected readonly vcpuReported = computed(
+    () => !!(this.sandboxes()?.budget || this.sandboxes()?.host),
+  );
+
   protected readonly vcpuPct = computed<number>(() => {
     const b = this.sandboxes()?.budget;
     const cap = b?.budgetCPUs || this.sandboxes()?.host?.cpus || 0;
@@ -2041,6 +2082,13 @@ export class FleetPageComponent implements OnInit {
   private async bootstrap(): Promise<void> {
     await this.loadBootstrapConfig();
     this.bootstrapped = true;
+    // The classic System → Top tab's address (/system/top) lands here as
+    // #top (app.routes.ts SYSTEM_TABS): open the snapshot it asked for
+    // rather than leaving it folded behind Host top.
+    if (this.route.snapshot.fragment === "top" && this.canReadSandboxes()) {
+      this.topOpen.set(true);
+      void this.loadHostTop();
+    }
     await this.refreshAll();
   }
 
