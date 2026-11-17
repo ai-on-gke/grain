@@ -599,6 +599,34 @@ describe("GrantsPicker", () => {
     expect(onRemove).toHaveBeenCalledWith(held);
   });
 
+  // task 6516: an edit back to what the grant holds saved it again, and a
+  // Remove clicked while that write was in flight was undone by it.
+  it("saves nothing when an edit puts a held grant back as it was", async () => {
+    serve({ current: [cloudKey] });
+    const held = grantOf(cloudKey, { account: "dev", ttl: 60 });
+    const onSubmit = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[held]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={vi.fn()}
+      />,
+    );
+    const section = await waitFor(() => {
+      const el = document.querySelector(`[data-grant='${held}']`);
+      expect(el?.querySelector("input")).toBeTruthy();
+      return el;
+    });
+    const account = within(section).getByLabelText(/^account/);
+    await user.type(account, "x");
+    await user.type(account, "{Backspace}");
+    await new Promise((r) => setTimeout(r, 700));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   // grain/task-4797: an edit still waiting out its save delay when its
   // section was removed was saved as the section unmounted, and that
   // save put the removed grant back.
