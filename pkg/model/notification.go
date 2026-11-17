@@ -77,6 +77,9 @@ const (
 	ClearsOnBaseGreen = "base-green"
 	// ClearsOnTTL clears at a time.
 	ClearsOnTTL = "ttl"
+	// ClearsOnSuiteRun clears when a suite run is no longer active
+	// (finished, failed, or gone from the store).
+	ClearsOnSuiteRun = "suite-run"
 )
 
 // Notification subjects raised by steward verification (DT-14).
@@ -99,6 +102,8 @@ type NotificationClear struct {
 	Repo   string     `json:"repo,omitempty"`
 	Branch string     `json:"branch,omitempty"`
 	At     *time.Time `json:"at,omitempty"`
+	// SuiteRun is the run a ClearsOnSuiteRun condition waits on.
+	SuiteRun int64 `json:"suiteRun,omitempty"`
 	// TTL is how a caller asks for a ClearsOnTTL condition ("6h"); the
 	// store turns it into At at the first raise and keeps only At.
 	TTL string `json:"ttl,omitempty"`
@@ -137,8 +142,12 @@ func (c *NotificationClear) Validate(now time.Time) error {
 			c.At = &at
 		}
 		c.TTL = ""
+	case ClearsOnSuiteRun:
+		if c.SuiteRun <= 0 {
+			return errors.New("clears_when kind suite-run needs a suite run")
+		}
 	default:
-		return fmt.Errorf("clears_when kind %q: want task, base-green or ttl", c.Kind)
+		return fmt.Errorf("clears_when kind %q: want task, base-green, ttl or suite-run", c.Kind)
 	}
 	return nil
 }

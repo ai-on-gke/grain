@@ -1570,12 +1570,19 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// anyway tells its agent which of the two it is being sent for.
 	//
 	// Asked only where the answer could change something, since it can
-	// cost a GitHub read: a task the queue is not driving (no
-	// /auto-merge), a stacked one that merges into another task's branch
-	// rather than into the repository's own, a pull request that has
-	// already settled and one the queue has already given up on are each
-	// entries nothing below decides anything about.
-	if e.task.AutoMerge && !stacked && !blocked && !settled {
+	// cost a GitHub read: a stacked one that merges into another task's
+	// branch rather than into the repository's own, a pull request that
+	// has already settled and one the queue has already given up on are
+	// each entries nothing below decides anything about.
+	//
+	// Not gated on auto-merge: the failing arm below repairs a red
+	// change whether or not it is merging itself yet, and a gating
+	// review (.grain/triggers/every-pr.yml) withdraws auto-merge from
+	// every pull request until it passes. Gated on it, those entries had
+	// no reds split, read as all their own, and spent their one repair
+	// on a check the repository had declared unfixable before the queue
+	// gave up (2026-11-13 merge-and-reviews walkthrough, F3).
+	if !stacked && !blocked && !settled {
 		e.reds, e.unfixable = splitReds(e, find)
 	}
 	var review reviewState

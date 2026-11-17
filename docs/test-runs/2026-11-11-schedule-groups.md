@@ -87,7 +87,7 @@ Steps 1b′ and 1e were walked by hand on the pre-fix build, with the same `help
 | F3 | A `grain-ci: true` schedule renamed or withdrawn mid-run has its run cancelled as "repository switched to GitHub CI". | Item 1e. | **Fixed:** the reason names the schedule that went. `pkg/orchestrator` `TestAWithdrawnGrainCIScheduleSaysWhyItsRunWasCancelled`. |
 | F4 | `grain health` exits 0 with FAILING sections (all of them, not only stale schedules); the plan expected non-zero. | Item 2. | **Filed:** changing the exit status of an existing command is a compatibility decision. |
 | F5 | The starved notification blamed "its previous firing" for a peer's task. | Item 3. | **Fixed:** names the holder and group. `TestAStarvedGroupFiringNamesTheHolder`. |
-| F6 | Starved escalation ignores holders that are suite runs or workflow runs. | Item 3. | **Filed.** |
+| F6 | Starved escalation ignores holders that are suite runs or workflow runs. | Item 3. | **Fixed** (task 4609): a suite-run holder, own or the group's, now has its never-started pass raised; workflow runs start on their own and stay out of scope. |
 | F7 | `GET /api/sandboxes?section=staleSchedules` answers `{"staleSchedules":null}` when none. A `.grain/schedules` workflow entry is titled "Review last night's "check" workflow run" in the alert rather than its file name. | Item 2. | Noted only: the UI copes with `null`, and the title is cosmetic. |
 | — | The plan's "every minute" is not declarable (10-minute floor), and `faketime` does not move a Go daemon's clock. | Environment. | Worked around in SQL, as described above. |
 
