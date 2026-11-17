@@ -310,6 +310,14 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	})
 	defer stopOnCancel()
+	// The daemon's connections -- the session to the controller and the
+	// socket's -- outlive ctx until a stop has ended what still ran and
+	// the daemon has read those exits (stopped, below), as a drain's do
+	// (waitDrained): closed with ctx, a stop the host stayed down for was
+	// recorded only once -hostd-reattach-timeout passed, as a lost host
+	// (docs/test-runs/2026-11-14-host-stop.md, F1).
+	connCtx, closeConns := context.WithCancel(context.WithoutCancel(ctx))
+	defer closeConns()
 	// Serve waits for this below: the replacement hostd a cutover or
 	// handover starts next makes its own socket at the same path, and a
 	// remove still to come after Serve returned unlinked that one.
@@ -341,7 +349,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.serveRemote(ctx)
+			s.serveRemote(connCtx)
 		}()
 	}
 	if ln == nil {
@@ -359,9 +367,11 @@ func (s *Server) Serve(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.handle(ctx, conn.(*net.UnixConn))
+			s.handle(connCtx, conn.(*net.UnixConn))
 		}()
 	}
+	s.stopped()
+	closeConns()
 	s.wg.Wait()
 	// The accept loop ends only once ctx is done, and waitDrained returns
 	// on a done ctx, so this wait is short.
@@ -385,6 +395,29 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.cancelRunning(killStopping)
 	s.waitRunningDone()
 	return nil
+}
+
+// stopped ends, as killStopping, what still runs once Serve's ctx is done,
+// refusing new starts, and waits up to DrainExitGrace for the daemon to
+// read those processes' exits over the connections still open. A drain or
+// handover has done both already, and an exit written before the stop is
+// not waited for again: its spool is kept for the daemon to attach to.
+func (s *Server) stopped() {
+	if s.handedOverNow() {
+		return
+	}
+	s.mu.Lock()
+	s.closing = true
+	ended := map[*proc]bool{}
+	for _, p := range s.procs {
+		if !p.info.Exited || p.killKind == killStopping {
+			ended[p] = true
+		}
+	}
+	s.mu.Unlock()
+	s.cancelRunning(killStopping)
+	s.waitRunningDone()
+	s.waitExitsOf(context.Background(), s.exitGrace(), func(p *proc) bool { return ended[p] })
 }
 
 func (s *Server) init() {
@@ -772,14 +805,19 @@ func (s *Server) exitGrace() time.Duration {
 // the Exit, and waits for a host to come back before the run can finish
 // from the spool it kept (or loses a protocol-1 start outright).
 func (s *Server) waitExitsDelivered(ctx context.Context, nonDetachedOnly bool) {
-	wait := 2 * s.exitGrace()
+	s.waitExitsOf(ctx, 2*s.exitGrace(), func(p *proc) bool { return !nonDetachedOnly || !p.detached })
+}
+
+// waitExitsOf is waitExitsDelivered for the processes of s that of
+// reports, waiting at most wait.
+func (s *Server) waitExitsOf(ctx context.Context, wait time.Duration, of func(*proc) bool) {
 	timeout := time.NewTimer(wait)
 	defer timeout.Stop()
 	for {
 		s.mu.Lock()
 		pending := 0
 		for _, p := range s.procs {
-			if nonDetachedOnly && p.detached {
+			if !of(p) {
 				continue
 			}
 			if p.info.Exited && p.info.Attached {
@@ -794,7 +832,7 @@ func (s *Server) waitExitsDelivered(ctx context.Context, nonDetachedOnly bool) {
 		case <-ctx.Done():
 			return
 		case <-timeout.C:
-			s.logf("hostd: drained, but %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, wait)
+			s.logf("hostd: %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, wait)
 			return
 		case <-s.changed:
 		case <-time.After(s.poll()):
@@ -1233,9 +1271,11 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	s.mu.Lock()
 	killed := entry.killKind
 	s.mu.Unlock()
-	// runCtx is Serve's: hostd stopping can kill the process through it
-	// before stopOnCancel has said why, and that kill is the host's, not
-	// the run's (Serve's stopOnCancel).
+	// ctx is Serve's connCtx, cancelled by closeConns after stopped() has
+	// run cancelRunning(killStopping): a start that passed the s.closing
+	// check before stopped() and added entry after it (or a caller of
+	// serveRemote directly) is killed through runCtx with killKind unset,
+	// and that kill is still the host stopping, not the run's.
 	if killed == killNone && ctx.Err() != nil && !errors.Is(runCtx.Err(), context.DeadlineExceeded) &&
 		cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
 		killed = killStopping

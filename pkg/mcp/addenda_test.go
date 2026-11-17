@@ -518,3 +518,26 @@ func TestMixedHumanAndAutomationAddendaKeepSeparateAttributionInOneParagraph(t *
 		t.Errorf("RunCommandTimedOut(%q) = false, want the killed marker still found under mixed addenda", text)
 	}
 }
+
+// A truncated batch, and every later batch that would cross its gap, must stay
+// unacknowledged. Otherwise a PR receipt can be spent without its text reaching
+// the agent, and the dedicated next-dispatch feedback section never runs.
+func TestTruncatedAddendaDoNotAcknowledgeUnseenFeedback(t *testing.T) {
+	conversation := &ackingAddenda{}
+	client := addendaClient(t, 0, conversation)
+	conversation.append("fully shown first")
+	callAddendaSay(t, client)
+	callAddendaSay(t, client)
+	conversation.appendKind("automation", "External PR feedback: "+strings.Repeat("x", 2*maxAddendaNoticeBytes())+"UNSEEN-END")
+	if got := callAddendaSay(t, client); !strings.Contains(got, "cut here") || strings.Contains(got, "UNSEEN-END") {
+		t.Fatal("fixture did not truncate the feedback")
+	}
+	conversation.append("later human comment")
+	callAddendaSay(t, client)
+	callAddendaSay(t, client)
+	conversation.mu.Lock()
+	defer conversation.mu.Unlock()
+	if len(conversation.acked) != 1 || conversation.acked[0] != 1 {
+		t.Fatalf("acknowledged across truncated feedback: %v", conversation.acked)
+	}
+}

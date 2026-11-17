@@ -172,7 +172,16 @@ do not pull in an icon font.
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
   `Details (N)` breakdown, paired with status on the topbar live pill and
   contextual queue/settings notices formatted in the configured or local
-  timezone with relative countdowns.
+  timezone with relative countdowns. A page that changes the pause itself
+  (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
+  so the banner follows the click rather than the next poll.
+- **Disconnected banner:** the one standing banner above the whole shell
+  (`services/connection.service.ts`). It is raised when requests fail to
+  connect, when a gateway answers 502/503/504, or when a polled read goes
+  10 s unanswered. It says when the outage began, in the deployment's time
+  zone, and clears itself on the first answer. It sits in flow above the
+  rail and top bar, never over them (`g-root:has(> .conn-banner)` becomes a
+  column), is `role="status"`, and has no close button.
 
 ### Destinations fill the stage
 
@@ -916,3 +925,20 @@ Autonomous Goal Mode lets an operator hand Grain a multi-pass outcome ("Prototyp
 
 - **Tasks (`/next/tasks`)** and **Agents (`/next/agents`)**: render compact status pills (`data-testid="goal-badge-<id>"`) showing `Goal ✓` (`healthy`), `Goal capped` (`warn`), or `Goal · N/M` (`setup`).
 - **Workstreams (`/next/workstreams`)**: streams whose root or member tasks run in Autonomous Goal Mode display an `Autonomous goal` chip (`data-testid="ws-goal-chip-<key>"`).
+
+
+## Task gate observations
+
+Task detail may show a neutral **Built-in gates · Observation only** card when
+its ordinary task read supplies the observation sidecar. This is a diagnostic
+surface: keep the legacy-authority sentence visible, use explicit textual status,
+show stale/error/incomplete reasons, and never style a met observation as task
+readiness or successful completion. Remediation and wait predictions are inert
+text; no shadow action/override buttons or links are permitted. Existing task
+controls stay owned by legacy services. Collapse version/config/provenance and
+bounded comparison history into keyboard-accessible disclosures with at least 24px
+hit targets and the primary focus ring. Body/title use 14/20 (title 600), metadata
+uses 12/16 and identifiers/digests use monospace. Expiry must update locally even
+when later API requests are unchanged or unavailable. Supported/deferred runtime
+surfaces and the separate rollout/review process are in
+[the observation guide](../../docs/gate-observations.md).
