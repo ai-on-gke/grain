@@ -264,4 +264,45 @@ func TestAcceptFindingsTargetedReviewGate(t *testing.T) {
 	if !got.AutoMerge {
 		t.Error("auto-merge was not restored once both review gates' findings were accepted")
 	}
+
+	// Accepting targeted-review findings must not re-enable auto-merge when
+	// the repository's merge policy (`auto_merge: never`), a QA hold, or a
+	// broken-rules hold still stands.
+	for i, hold := range []model.Link{
+		{Kind: model.LinkMergePolicyWithdrawn, Target: "never"},
+		{Kind: model.LinkQAHold, Target: "qa-running"},
+		{Kind: model.LinkBrokenRulesHold, Target: "bad-rules"},
+	} {
+		tid := "72" + string(rune('0'+i))
+		rid := "73" + string(rune('0'+i))
+		seedReviewed(t, client, tid, rid, model.SecurityReviewTemplateID)
+		if err := client.Store.UpdateTask(ctx, tid, func(tk *model.Task) error {
+			tk.AutoMerge = false
+			tk.Links = append(tk.Links,
+				hold,
+				model.Link{Kind: model.LinkPathTriggerTask, Target: "payments=" + rid},
+				model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "payments"},
+			)
+			model.AddReviewFindings(tk, model.ReviewFindingsRecord{
+				Gate: "trigger:payments", ReviewTask: rid, Summary: "payments finding", HeadSHA: findingsHead, At: time.Now(),
+			})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.Store.Observe(ctx, model.Observation{
+			TaskID: tid, CompletedAt: &done,
+			CI: &model.CIStatus{RunID: "ci-1", Commit: findingsHead, Conclusion: "success", FinishedAt: &done},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.AcceptReviewFindings(person, tid, ui.AcceptFindingsRequest{
+			Gate: model.GateTargetedReview, Reason: "accepted under hold",
+		}); err != nil {
+			t.Fatalf("%s: accepting targeted-review findings: %v", hold.Kind, err)
+		}
+		if mustTask(t, client, tid).AutoMerge {
+			t.Errorf("%s: accepting findings restored auto-merge while %s still stood", tid, hold.Kind)
+		}
+	}
 }

@@ -239,7 +239,8 @@ func findingsReviews(t model.Task, gate string) []string {
 func reviewGatesSettled(t model.Task) bool {
 	for _, l := range t.Links {
 		switch l.Kind {
-		case model.LinkSecurityHold, model.LinkPathTriggerHold, model.LinkHumanOnlyHold:
+		case model.LinkSecurityHold, model.LinkBrokenRulesHold, model.LinkPathTriggerHold,
+			model.LinkHumanOnlyHold, model.LinkQAHold, model.LinkMergePolicyWithdrawn:
 			return false
 		}
 	}

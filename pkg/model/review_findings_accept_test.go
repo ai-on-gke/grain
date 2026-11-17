@@ -344,4 +344,68 @@ func TestTargetedReviewFindingsAndQuestionsStayOnTargetedReviewGate(t *testing.T
 			t.Errorf("%s: targeted-review gate = %s after acceptance, want passed", acceptGate, got)
 		}
 	}
+
+	// Clearing the code-review gate (ClearReviewFindingsForGate) leaves
+	// targeted-review findings and the awaits-person mark standing, and vice versa.
+	clearTask := model.Task{ID: "72", Links: []model.Link{
+		{Kind: model.LinkFixes, Target: "acme/widgets#72"},
+		{Kind: model.LinkPathTriggerTask, Target: "every-pr=r1"},
+		{Kind: model.LinkPathTriggerTask, Target: "payments=r2"},
+		{Kind: model.LinkTargetedReviewTrigger, Target: "payments"},
+	}}
+	model.AwaitPersonForAutoMerge(&clearTask, "review r2 left findings")
+	model.AddReviewFindings(&clearTask, model.ReviewFindingsRecord{
+		Gate: "trigger:every-pr", ReviewTask: "r1", Summary: "code finding", HeadSHA: "ddd444", At: acceptAt,
+	})
+	model.AddReviewFindings(&clearTask, model.ReviewFindingsRecord{
+		Gate: "trigger:payments", ReviewTask: "r2", Summary: "targeted finding", HeadSHA: "ddd444", At: acceptAt,
+	})
+	model.ClearReviewFindingsForGate(&clearTask, model.GateReview)
+	if got := gateState(t, clearTask, model.GateReview); got != model.GateStatePassed {
+		t.Errorf("code-review gate after ClearReviewFindingsForGate(review) = %s, want passed", got)
+	}
+	if got := gateState(t, clearTask, model.GateTargetedReview); got != model.GateStateFindings {
+		t.Errorf("targeted-review gate after ClearReviewFindingsForGate(review) = %s, want still findings", got)
+	}
+	if !model.AutoMergeAwaitsPerson(clearTask) {
+		t.Error("ClearReviewFindingsForGate(review) dropped LinkAutoMergeAwaitsPerson while targeted-review findings still stand")
+	}
+	model.ClearReviewFindingsForGate(&clearTask, model.GateTargetedReview)
+	if got := gateState(t, clearTask, model.GateTargetedReview); got != model.GateStatePassed {
+		t.Errorf("targeted-review gate after ClearReviewFindingsForGate(targeted-review) = %s, want passed", got)
+	}
+	if model.AutoMergeAwaitsPerson(clearTask) {
+		t.Error("LinkAutoMergeAwaitsPerson remained after all review findings cleared")
+	}
+
+	// When one targeted review serves two sensitive triggers and its findings
+	// record is stored under the first trigger, accepting the other trigger's
+	// empty record must not succeed as a no-op while leaving the findings and
+	// open questions in place.
+	multiTask := model.Task{ID: "73", Links: []model.Link{
+		{Kind: model.LinkFixes, Target: "acme/widgets#73"},
+		{Kind: model.LinkPathTriggerTask, Target: "grain-declarations=r2"},
+		{Kind: model.LinkPathTriggerTask, Target: "release-machinery=r2"},
+		{Kind: model.LinkTargetedReviewTrigger, Target: "grain-declarations"},
+		{Kind: model.LinkTargetedReviewTrigger, Target: "release-machinery"},
+		{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "r2", AfterCommentID: 7}.Target()},
+	}}
+	model.AddReviewFindings(&multiTask, model.ReviewFindingsRecord{
+		Gate: "trigger:grain-declarations", ReviewTask: "r2", Summary: "1 open question", HeadSHA: "eee555", At: acceptAt,
+	})
+	if _, ok := model.AcceptableReviewFindings(multiTask, "trigger:release-machinery", "r2"); ok {
+		t.Error("AcceptableReviewFindings reported trigger:release-machinery acceptable when nothing on it would clear")
+	}
+	if model.AcceptReviewFindings(&multiTask, accept("trigger:release-machinery", "r2", "eee555")) {
+		t.Fatal("AcceptReviewFindings succeeded on trigger:release-machinery while clearing nothing")
+	}
+	if len(model.ReviewFindingsAcceptances(multiTask)) != 0 {
+		t.Errorf("no-op acceptance recorded %+v", model.ReviewFindingsAcceptances(multiTask))
+	}
+	if !model.AcceptReviewFindings(&multiTask, accept(model.GateTargetedReview, "r2", "eee555")) {
+		t.Fatal("AcceptReviewFindings did not clear multi-trigger targeted review on targeted-review")
+	}
+	if _, ok := model.ReviewQuestionsOf(multiTask); ok || model.HasReviewFindings(multiTask) {
+		t.Errorf("questions or findings remain after targeted-review acceptance: %+v", multiTask.Links)
+	}
 }

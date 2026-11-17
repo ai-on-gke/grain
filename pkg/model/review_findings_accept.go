@@ -153,7 +153,12 @@ func AcceptableReviewFindings(t Task, gate, reviewTask string) (records []Review
 		return records, true
 	}
 	if q, has := ReviewQuestionsOf(t); has && q.ReviewTaskID == reviewTask && questionsGateCovers(t, gate, reviewTask) {
-		return nil, true
+		qGate := questionsGate(t, reviewTask)
+		if !slices.ContainsFunc(ReviewFindings(t), func(r ReviewFindingsRecord) bool {
+			return r.ReviewTask == reviewTask && findingsGateCovers(t, qGate, r.Gate)
+		}) {
+			return nil, true
+		}
 	}
 	if gate == GateSecurityReview {
 		for _, r := range HumanReviewReasons(t) {
@@ -170,6 +175,9 @@ func AcceptableReviewFindings(t Task, gate, reviewTask string) (records []Review
 // the targeted review's when it is a template-less sensitive trigger's
 // review, and the code review's otherwise.
 func questionsGate(t Task, reviewTask string) string {
+	if reviewTask == "" {
+		return GateReview
+	}
 	targeted := false
 	for _, l := range t.Links {
 		switch l.Kind {
