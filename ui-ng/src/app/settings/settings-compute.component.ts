@@ -2237,8 +2237,11 @@ function mib(mb: number): string {
           } @else if (hostds().length === 0) {
             <p class="s-card-desc">No hosts registered yet.</p>
           } @else {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Registered hosts">
+            <div class="s-table-wrap s-table-stack-wrap">
+              <table
+                class="s-table s-table-stack"
+                aria-label="Registered hosts"
+              >
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -2295,7 +2298,7 @@ function mib(mb: number): string {
                           {{ h.name }}
                         }
                       </td>
-                      <td>
+                      <td data-label="Owner">
                         @if (edit) {
                           <input
                             class="s-input s-input-inline"
@@ -2321,41 +2324,65 @@ function mib(mb: number): string {
                           —
                         }
                       </td>
-                      <td>
-                        <span
-                          [class]="
-                            'status-pill ' +
-                            (isRevoked
-                              ? 'error'
-                              : h.state === 'connected'
-                                ? 'healthy'
-                                : 'neutral')
-                          "
-                        >
-                          {{ isRevoked ? "revoked" : h.state || "offline" }}
-                        </span>
-                        @if (connLine) {
-                          <div
-                            class="s-meta"
-                            [attr.data-testid]="'hostd-connection-' + h.name"
+                      <td class="hd-status-cell" data-label="Status">
+                        <div class="s-cell-stack">
+                          <span
+                            [class]="
+                              'status-pill ' +
+                              (isRevoked
+                                ? 'error'
+                                : h.state === 'connected'
+                                  ? 'healthy'
+                                  : 'neutral')
+                            "
                           >
-                            {{ connLine }}
-                          </div>
-                        }
-                        @if (h.update && !isRevoked) {
-                          <div
-                            class="s-meta"
-                            [attr.data-testid]="'hostd-update-' + h.name"
-                          >
-                            Update available: {{ h.update.build }} →
-                            {{ h.update.available }}. On the host, run
-                            <span class="s-meta-mono">{{
-                              h.update.command
-                            }}</span>
-                          </div>
-                        }
+                            {{ isRevoked ? "revoked" : h.state || "offline" }}
+                          </span>
+                          @if (connLine) {
+                            <div
+                              class="s-meta"
+                              [attr.data-testid]="'hostd-connection-' + h.name"
+                            >
+                              {{ connLine }}
+                            </div>
+                          }
+                          @if (h.update && !isRevoked) {
+                            <div
+                              class="s-meta hd-update"
+                              [attr.data-testid]="'hostd-update-' + h.name"
+                            >
+                              <span>
+                                Update available: {{ h.update.build }} →
+                                {{ h.update.available }}. On the host, run
+                              </span>
+                              <div class="hd-update-cmd">
+                                <code class="s-meta-mono hd-update-code">{{
+                                  h.update.command
+                                }}</code>
+                                <button
+                                  type="button"
+                                  class="btn-text hd-update-copy"
+                                  [attr.data-testid]="
+                                    'copy-hostd-update-' + h.name
+                                  "
+                                  [attr.aria-label]="
+                                    'Copy update command for ' + h.name
+                                  "
+                                  (click)="
+                                    copyInvite(
+                                      h.update.command,
+                                      'Copied update command'
+                                    )
+                                  "
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                            </div>
+                          }
+                        </div>
                       </td>
-                      <td class="s-mono">
+                      <td class="s-mono" data-label="Labels & capacity">
                         @if (edit) {
                           <div class="s-inline">
                             <input
@@ -2389,18 +2416,20 @@ function mib(mb: number): string {
                             />
                           </div>
                         } @else {
-                          {{ formatLabels(h.labels) }}
-                          @if (h.capacity && h.capacity > 0) {
-                            <div
-                              class="s-meta"
-                              [attr.data-testid]="'hostd-capacity-' + h.name"
-                            >
-                              capacity {{ h.capacity }}
-                            </div>
-                          }
+                          <div class="s-cell-stack">
+                            <span>{{ formatLabels(h.labels) }}</span>
+                            @if (h.capacity && h.capacity > 0) {
+                              <div
+                                class="s-meta"
+                                [attr.data-testid]="'hostd-capacity-' + h.name"
+                              >
+                                capacity {{ h.capacity }}
+                              </div>
+                            }
+                          </div>
                         }
                       </td>
-                      <td class="s-actions-cell">
+                      <td class="s-actions-cell" data-label="Actions">
                         <!-- local is the co-located host: it holds no
                              token to rotate and can be neither renamed,
                              revoked nor deleted, so it offers none of

@@ -1,8 +1,10 @@
 # Action gate bindings and protected operations
 
+> **Deferred historical proposal.** Not normative for initial gates. Use [the canonical gate specification](../gates.spec.md). MCP hosting, paging and remote profiles below are not implementation prerequisites.
+
 **Status:** proposed, normative; documentation/schema only, not implemented. No credential, grant, repository rule, runtime or task migration is authorized by this document. No follow-up tasks are filed by it.
 
-**Extends:** [MCP gates](mcp-gates.spec.md), especially MGS-1 through MGS-5 and MGS-8. BCP 14 keywords apply. Stable requirements below use AGB IDs. [action-bindings.schema.json](action-bindings.schema.json) defines the control-plane objects and action evaluation profile; [examples](action-bindings.examples.json) are illustrative, never installed policy. JSON validation is followed by the semantic checks below.
+**Extends:** [Historical MCP gates](mcp-gates.spec.md), especially MGS-1 through MGS-5 and MGS-8. BCP 14 keywords apply. Stable requirements below use AGB IDs. [action-bindings.schema.json](action-bindings.schema.json) defines the control-plane objects and action evaluation profile; [examples](action-bindings.examples.json) are illustrative, never installed policy. JSON validation is followed by the semantic checks below.
 
 ## Purpose and authority {#AGB-1}
 
@@ -103,7 +105,7 @@ python3 - <<'PY'
 import json
 from pathlib import Path
 from jsonschema import Draft202012Validator, FormatChecker, RefResolver
-root = Path("design/spec/mcp-gates").resolve()
+root = Path("design/spec/gates/history").resolve()
 schema = json.loads((root / "action-bindings.schema.json").read_text())
 wire = json.loads((root / "wire.schema.json").read_text())
 examples = json.loads((root / "action-bindings.examples.json").read_text())

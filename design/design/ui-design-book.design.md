@@ -86,6 +86,11 @@ Rules that came from real defects:
   (`shared/status-icon.component.ts`) so it reads under colour-vision
   deficiency. Actors are shape-coded too: circle for a person, square for an
   agent, rounded square with the mark for grain itself.
+- **A note is not a question.** A task resting on a run's closing note
+  (`comment_on_issue`, `Task.noteSummary`) shows that note's own line under
+  a neutral "Note" pill with the neutral shape, and its page a hairline
+  "Note:" card. The filled "Asked:" card, the reply tone and the reply shape
+  belong to what a run actually asked (`questionSummary`).
 - **Dim with a colour, not opacity.** Fading text with `opacity: .35` drops
   contrast to about 2:1. To de-emphasise, switch to the `outline` or
   `on-surface-variant` token, which keep at least 4.5:1. Never dim anything
@@ -200,7 +205,11 @@ tabs and Details document scroll together. Roomier panes keep the header
 and tabs fixed above the Details scroller. Both scroll surfaces are
 keyboard focusable; the final attributes, grants and dependency controls
 must be reachable without chaining between nested vertical scrollers
-(`e2e/next-agent-details-scroll.spec.ts`).
+(`e2e/next-agent-details-scroll.spec.ts`). Tab navigation restores the outer
+page and tab reader positions separately for the selected task. An unvisited
+tab starts at the top, so leaving a scrolled Details view cannot hide its
+actions. Selecting another task clears these positions; routine updates
+leave the reader in place (`e2e/next-task-tab-scroll.spec.ts`).
 
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap

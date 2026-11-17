@@ -1,0 +1,2 @@
+{"kind": "mcp_sequence", "calls": [
+ {"tool": "comment_on_issue", "args": {"comment": "Report: the widgets README needs no change.", "summary": "Report: widgets README needs no change"}}]}

@@ -1,0 +1,1155 @@
+[
+  {
+    "name": "missing-evidence-fence",
+    "operation": "submit",
+    "where": "request",
+    "value": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "intent": "approve_and_queue",
+        "action_request": {
+          "request_id": "merge-1",
+          "idempotency_key": "request-59-1",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1
+        }
+      }
+    },
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Protected request must include complete evidence digest."
+  },
+  {
+    "name": "negative-cas",
+    "operation": "edit",
+    "where": "request",
+    "value": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "gate_edit": {
+          "mutation": {
+            "idempotency_key": "request-59-1",
+            "reason": "Evaluate the current contract for this exact evidence.",
+            "expected": {
+              "contract_revision": -1,
+              "authority_epoch": 1,
+              "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "head": "H1",
+              "resource_version": "pr-v3"
+            }
+          },
+          "attachments": [
+            {
+              "id": "delivery",
+              "type": "delivery",
+              "version": 1,
+              "purpose": "completion",
+              "required": true,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "57"
+              },
+              "config": {
+                "product": "report",
+                "semantics": "current_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "task",
+                "id": "57",
+                "revision": "1",
+                "imported": false
+              }
+            }
+          ],
+          "lifecycle": {
+            "intent": "finite",
+            "on_met": "close",
+            "on_limit": "hold",
+            "max_resumes": 5,
+            "max_stall_seconds": 43200
+          },
+          "authority_handoff": null
+        }
+      }
+    },
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "CAS revision cannot be negative."
+  },
+  {
+    "name": "unbound-override",
+    "operation": "issue",
+    "where": "request",
+    "value": {
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "kind": "action_override",
+        "binding_ids": [
+          "task/57/children"
+        ],
+        "target": {
+          "kind": "task",
+          "task_id": "57"
+        },
+        "head": null,
+        "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expires_at": "2026-11-18T00:15:00Z",
+        "operation_id": null,
+        "action_request": null,
+        "task_id": "57"
+      },
+      "reason": "Evaluate the current contract for this exact evidence."
+    },
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "Action override needs non-null matching action_request/request_id/head."
+  },
+  {
+    "name": "mixed-action-head",
+    "operation": "submit",
+    "where": "request",
+    "value": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "intent": "approve_and_queue",
+        "action_request": {
+          "request_id": "merge-1",
+          "idempotency_key": "request-59-1",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H2",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "Mutation and action head expectations must be identical."
+  },
+  {
+    "name": "completion-without-receipt",
+    "operation": "operation",
+    "where": "response",
+    "value": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "completed",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "approve_and_queue"
+    },
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "Completed submit requires succeeded or no_effect receipt."
+  },
+  {
+    "name": "findings-without-version",
+    "operation": "findings",
+    "where": "request",
+    "value": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "gate": "review",
+        "reviewTask": "58",
+        "review_version": "",
+        "reason": "Accept this documented low-risk finding on H1.",
+        "head": "H1",
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        }
+      }
+    },
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Findings disposition needs exact review version."
+  },
+  {
+    "name": "history-over-limit",
+    "operation": "history",
+    "where": "request",
+    "value": {
+      "id": "57",
+      "query": {
+        "limit": 101
+      }
+    },
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "History page bound is 100."
+  },
+  {
+    "name": "remote-config-schema",
+    "operation": "schema",
+    "where": "response",
+    "value": {
+      "type": "checks",
+      "version": 1,
+      "schema_digest": "sha256:7052d2b016ac24abc17bb06458bb49608f48146121b73f02e80b2f983f45c243",
+      "implementation": "grain/build-1/checks-v1",
+      "subjects": [
+        "change"
+      ],
+      "purposes": [
+        "completion",
+        "monitor",
+        "guard"
+      ],
+      "reads": [
+        "policy",
+        "change"
+      ],
+      "actions": [
+        "reevaluate"
+      ],
+      "config_schema": {
+        "$ref": "https://untrusted.invalid/schema"
+      },
+      "private_state": false
+    },
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "Discovery schema must be closed local catalogue schema."
+  },
+  {
+    "name": "unknown-policy-ready",
+    "operation": "action_preview",
+    "where": "response",
+    "value": {
+      "action": "change.merge",
+      "target": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "task_id": "57",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "permission": {
+        "scopes": [
+          "tasks:write"
+        ],
+        "person_required": true,
+        "allowed": true,
+        "reason": null
+      },
+      "coverage": "unknown",
+      "bindings": [
+        {
+          "id": "checks",
+          "type": "checks",
+          "version": 1,
+          "purpose": "guard",
+          "required": true,
+          "action": "change.merge",
+          "subject": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "config": {
+            "mode": "effective",
+            "extra_jobs": [],
+            "empty": "unknown",
+            "semantics": "current_v1"
+          },
+          "freshness_seconds": 300,
+          "origin": {
+            "kind": "task",
+            "id": "57",
+            "revision": "1",
+            "imported": false
+          }
+        }
+      ],
+      "results": [
+        {
+          "evaluation_id": "eval-1",
+          "revision": 1,
+          "disposition": "accepted",
+          "result": {
+            "evaluation_id": "eval-1",
+            "binding_id": "task/57/checks",
+            "type": "checks",
+            "version": 1,
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "status": "met",
+            "summary": "Complete required checks passed for H1.",
+            "human_text": null,
+            "agent_text": null,
+            "evidence": [
+              {
+                "kind": "check",
+                "id": "go/run-7",
+                "version": "attempt-1",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            ],
+            "dependencies": [
+              {
+                "key": "checks/pr1710",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "version": "obs-4",
+                "collection_generation": "checks-set-7",
+                "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "complete": true,
+                "observed_at": "2026-11-17T00:15:00Z",
+                "valid_until": "2026-11-17T00:20:00Z",
+                "authorization_revision": 4,
+                "dirty_generation": 3,
+                "covered_generation": 3
+              }
+            ],
+            "blockers": [],
+            "work": [],
+            "waits": [],
+            "actions": [],
+            "observed_at": "2026-11-17T00:15:00Z",
+            "valid_until": "2026-11-17T00:20:00Z",
+            "error": null
+          },
+          "accepted_at": "2026-11-17T00:15:00Z",
+          "invalidated_at": null,
+          "invalidation_reason": null,
+          "retry_at": null,
+          "dirty_generation": 3,
+          "covered_generation": 3
+        }
+      ],
+      "blockers": [],
+      "exceptions": [],
+      "available": true,
+      "submission": {
+        "method": "POST",
+        "path": "/api/tasks/57/submit?view=gates",
+        "tool": "api_submit",
+        "action": "submit",
+        "permission": {
+          "scopes": [
+            "tasks:write"
+          ],
+          "person_required": true,
+          "allowed": true,
+          "reason": null
+        },
+        "enabled": true,
+        "disabled_reason": null,
+        "expected": {
+          "contract_revision": 1,
+          "authority_epoch": 1,
+          "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head": "H1",
+          "resource_version": "pr-v3"
+        },
+        "submit_intent": "approve_and_queue"
+      }
+    },
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "Availability cannot be true without complete enforced or explicit-unguarded coverage."
+  },
+  {
+    "name": "historical-met-not-current",
+    "operation": "task",
+    "where": "response",
+    "value": {
+      "api_version": "grain.gates/v1",
+      "task_id": "57",
+      "authority": "builtins",
+      "authority_epoch": 1,
+      "revision": 1,
+      "contract": {
+        "api_version": "grain.gates/v1",
+        "task_id": "57",
+        "revision": 1,
+        "authority": "builtins",
+        "authority_epoch": 1,
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        },
+        "attachments": [
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "57"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "acknowledgment",
+            "type": "acknowledgment",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "57"
+            },
+            "config": {
+              "mode": "explicit_receipt"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "checks",
+            "type": "checks",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "mode": "effective",
+              "extra_jobs": [],
+              "empty": "unknown",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "review",
+            "type": "review",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "category": "security",
+              "requirement_id": "security/default",
+              "semantics": "current_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "approval",
+            "type": "approval",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "requirement_ids": [
+                "owners"
+              ],
+              "semantics": "exact_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "integration",
+            "type": "integration",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "kind": "pr_merged",
+              "semantics": "positive_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "children",
+            "type": "children",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "57"
+            },
+            "config": {
+              "tasks": [
+                "58"
+              ],
+              "predicate": "success"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "base_health",
+            "type": "base_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "semantics": "current_tip_v1",
+              "allow_nonreproduction": true
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "nightly_health",
+            "type": "nightly_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "workflow": "nightly",
+              "since": "2026-11-17T00:15:00Z",
+              "window_seconds": 86400,
+              "semantics": "window_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "publishing_health",
+            "type": "publishing_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "semantics": "positive_current_v1",
+              "expected_commit": "current_tip"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "pipeline_health",
+            "type": "pipeline_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "repos": [
+                "ai-on-gke/grain"
+              ],
+              "semantics": "scoped_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "qa_stage",
+            "type": "qa_stage",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "stage": "s3",
+              "flow_revision": "approved-qa-flow/7",
+              "assignment": "treatment"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          }
+        ],
+        "source_revisions": [
+          {
+            "source": "template/change",
+            "revision": "7"
+          },
+          {
+            "source": "repo/ai-on-gke/grain",
+            "revision": "9"
+          }
+        ]
+      },
+      "decision": null,
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "results": [
+        {
+          "evaluation_id": "eval-1",
+          "revision": 1,
+          "disposition": "invalidated",
+          "result": {
+            "evaluation_id": "eval-1",
+            "binding_id": "task/57/checks",
+            "type": "checks",
+            "version": 1,
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "status": "met",
+            "summary": "Complete required checks passed for H1.",
+            "human_text": null,
+            "agent_text": null,
+            "evidence": [
+              {
+                "kind": "check",
+                "id": "go/run-7",
+                "version": "attempt-1",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            ],
+            "dependencies": [
+              {
+                "key": "checks/pr1710",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "version": "obs-4",
+                "collection_generation": "checks-set-7",
+                "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "complete": true,
+                "observed_at": "2026-11-17T00:15:00Z",
+                "valid_until": "2026-11-17T00:20:00Z",
+                "authorization_revision": 4,
+                "dirty_generation": 3,
+                "covered_generation": 3
+              }
+            ],
+            "blockers": [],
+            "work": [],
+            "waits": [],
+            "actions": [],
+            "observed_at": "2026-11-17T00:15:00Z",
+            "valid_until": "2026-11-17T00:20:00Z",
+            "error": null
+          },
+          "accepted_at": "2026-11-17T00:15:00Z",
+          "invalidated_at": "2026-11-17T00:15:00Z",
+          "invalidation_reason": "New head",
+          "retry_at": null,
+          "dirty_generation": 3,
+          "covered_generation": 3
+        }
+      ],
+      "blockers": [],
+      "exceptions": [],
+      "actions": [
+        {
+          "method": "POST",
+          "path": "/api/tasks/57/submit?view=gates",
+          "tool": "api_submit",
+          "action": "submit",
+          "permission": {
+            "scopes": [
+              "tasks:write"
+            ],
+            "person_required": true,
+            "allowed": true,
+            "reason": null
+          },
+          "enabled": true,
+          "disabled_reason": null,
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          },
+          "submit_intent": "approve_and_queue"
+        }
+      ],
+      "legacy_state": "awaiting_submit",
+      "dirty": false
+    },
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": "Invalidated met is displayable history and cannot authorize execution."
+  },
+  {
+    "name": "wrong-evidence-fact-kind",
+    "operation": "evidence",
+    "where": "response",
+    "value": {
+      "reference": {
+        "kind": "approval",
+        "id": "go/run-7",
+        "version": "attempt-1",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "dependencies": [
+        {
+          "key": "checks/pr1710",
+          "subject": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "head": "H1",
+          "version": "obs-4",
+          "collection_generation": "checks-set-7",
+          "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "complete": true,
+          "observed_at": "2026-11-17T00:15:00Z",
+          "valid_until": "2026-11-17T00:20:00Z",
+          "authorization_revision": 4,
+          "dirty_generation": 3,
+          "covered_generation": 3
+        }
+      ],
+      "collected_at": "2026-11-17T00:15:00Z",
+      "valid_until": "2026-11-17T00:20:00Z",
+      "facts": {
+        "job_id": "go",
+        "suite_id": "required",
+        "app_id": "github-actions",
+        "provider": "github",
+        "run_id": "run-7",
+        "attempt": 1,
+        "required": true,
+        "applicable": true,
+        "status": "completed",
+        "conclusion": "success",
+        "issuer": {
+          "id": "github/app/actions",
+          "kind": "automation",
+          "delegated_by": null
+        },
+        "completed_at": "2026-11-17T00:15:00Z"
+      }
+    },
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Approval cannot carry check fact fields."
+  },
+  {
+    "name": "observation-cannot-enable-effects",
+    "operation": "task",
+    "where": "response",
+    "value": {
+      "api_version": "grain.gates/v1",
+      "task_id": "57",
+      "authority": "legacy",
+      "authority_epoch": 1,
+      "revision": 1,
+      "contract": null,
+      "decision": null,
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task-gates-v1"
+      },
+      "results": [],
+      "blockers": [],
+      "exceptions": [],
+      "actions": [],
+      "legacy_state": "awaiting_submit",
+      "dirty": false,
+      "gate_observations": {
+        "api_version": "grain.gates/v1",
+        "mode": "observation_only",
+        "authority": "legacy",
+        "lifecycle_effects": false,
+        "action_effects": true,
+        "dispatch_effects": false,
+        "automatic_cutover": false,
+        "source_revision": "legacy-observation-v1",
+        "compared_at": "2026-11-17T00:15:00Z",
+        "legacy_state": "awaiting_submit",
+        "bindings": [
+          {
+            "id": "checks",
+            "type": "checks",
+            "version": 1,
+            "purpose": "monitor",
+            "required": false,
+            "action": null,
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "mode": "effective",
+              "extra_jobs": [],
+              "empty": "unknown",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          }
+        ],
+        "results": [
+          {
+            "evaluation_id": "eval-1",
+            "revision": 1,
+            "disposition": "accepted",
+            "result": {
+              "evaluation_id": "eval-1",
+              "binding_id": "task/57/checks",
+              "type": "checks",
+              "version": 1,
+              "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "status": "met",
+              "summary": "Complete required checks passed for H1.",
+              "human_text": null,
+              "agent_text": null,
+              "evidence": [
+                {
+                  "kind": "check",
+                  "id": "go/run-7",
+                  "version": "attempt-1",
+                  "subject": {
+                    "kind": "change",
+                    "authority": "github.com",
+                    "repository": "ai-on-gke/grain",
+                    "change_kind": "pr",
+                    "id": "1710"
+                  },
+                  "head": "H1",
+                  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              ],
+              "dependencies": [
+                {
+                  "key": "checks/pr1710",
+                  "subject": {
+                    "kind": "change",
+                    "authority": "github.com",
+                    "repository": "ai-on-gke/grain",
+                    "change_kind": "pr",
+                    "id": "1710"
+                  },
+                  "head": "H1",
+                  "version": "obs-4",
+                  "collection_generation": "checks-set-7",
+                  "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "complete": true,
+                  "observed_at": "2026-11-17T00:15:00Z",
+                  "valid_until": "2026-11-17T00:20:00Z",
+                  "authorization_revision": 4,
+                  "dirty_generation": 3,
+                  "covered_generation": 3
+                }
+              ],
+              "blockers": [],
+              "work": [],
+              "waits": [],
+              "actions": [],
+              "observed_at": "2026-11-17T00:15:00Z",
+              "valid_until": "2026-11-17T00:20:00Z",
+              "error": null
+            },
+            "accepted_at": "2026-11-17T00:15:00Z",
+            "invalidated_at": null,
+            "invalidation_reason": null,
+            "retry_at": null,
+            "dirty_generation": 3,
+            "covered_generation": 3
+          }
+        ],
+        "dirty": false
+      }
+    },
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Observation-only display cannot claim lifecycle/action/dispatch effects or automatic cutover."
+  }
+]

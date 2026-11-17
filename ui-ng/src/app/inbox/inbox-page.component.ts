@@ -381,7 +381,7 @@ const ONE_KEY = new Set(["approve"]);
                               <span [class]="'status-pill ' + e.pillTone"
                                 ><g-status-icon
                                   [tone]="e.pillTone"
-                                  [kind]="e.kind"
+                                  [kind]="e.iconKind ?? e.kind"
                                 />{{ e.pillLabel }}</span
                               >
                               <span class="row-summary muted">{{
@@ -542,9 +542,10 @@ const ONE_KEY = new Set(["approve"]);
               <div class="inspector-header-row1">
                 <div class="inspector-meta-cluster">
                   <span [class]="'status-pill ' + sel.pillTone"
-                    ><g-status-icon [tone]="sel.pillTone" [kind]="sel.kind" />{{
-                      sel.pillLabel
-                    }}</span
+                    ><g-status-icon
+                      [tone]="sel.pillTone"
+                      [kind]="sel.iconKind ?? sel.kind"
+                    />{{ sel.pillLabel }}</span
                   >
                   @if (sel.taskLink) {
                     <a
