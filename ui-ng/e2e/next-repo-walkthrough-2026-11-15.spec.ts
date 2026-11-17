@@ -146,6 +146,91 @@ test(
   },
 );
 
+test(
+  "selecting another release after opening a per-release URL survives Releases actions that reload the tab",
+  { tag: ["@phone", "@dark"] },
+  async ({ page, axe }) => {
+    const relB = "2.0-url-e2e";
+    const relC = "3.0-url-e2e";
+    try {
+      const createRes = await page.request.post(
+        "/api/repos/acme/widgets/releases",
+        { data: { name: relB } },
+      );
+      expect(createRes.ok()).toBe(true);
+
+      await page.goto("repos/acme/widgets/releases/1.0");
+      const releasesTable = page.getByRole("table", { name: "Releases" });
+      const row10 = releasesTable.getByRole("row").filter({ hasText: "1.0" });
+      const rowB = releasesTable.getByRole("row").filter({ hasText: relB });
+
+      await expect(
+        row10.getByRole("button", { name: "Inspect RCs" }),
+      ).toHaveAttribute("aria-pressed", "true");
+      await expect(
+        rowB.getByRole("button", { name: "Inspect RCs" }),
+      ).toHaveAttribute("aria-pressed", "false");
+
+      // User picks relB, then creates relC (which triggers loadReleasesTab).
+      await rowB.getByRole("button", { name: "Inspect RCs" }).click();
+      await expect(
+        rowB.getByRole("button", { name: "Inspect RCs" }),
+      ).toHaveAttribute("aria-pressed", "true");
+
+      await page.getByLabel(/New release/i).fill(relC);
+      await page.getByRole("button", { name: "Create release" }).click();
+      await expect(
+        releasesTable.getByRole("row").filter({ hasText: relC }),
+      ).toBeVisible();
+      await expect(
+        rowB.getByRole("button", { name: "Inspect RCs" }),
+      ).toHaveAttribute("aria-pressed", "true");
+      await expect(
+        row10.getByRole("button", { name: "Inspect RCs" }),
+      ).toHaveAttribute("aria-pressed", "false");
+
+      // Opening an unknown release URL, picking relB, and deleting relC keeps
+      // relB selected and does not bring back the stale-release banner.
+      await page.goto("repos/acme/widgets/releases/nosuch-6419-e2e");
+      const fallbackNotice = page.getByRole("status").filter({
+        hasText: 'acme/widgets has no release named "nosuch-6419-e2e"',
+      });
+      await expect(fallbackNotice).toBeVisible();
+
+      await rowB.getByRole("button", { name: "Inspect RCs" }).click();
+      await expect(fallbackNotice).toHaveCount(0);
+      await expect(
+        rowB.getByRole("button", { name: "Inspect RCs" }),
+      ).toHaveAttribute("aria-pressed", "true");
+
+      await releasesTable
+        .getByRole("row")
+        .filter({ hasText: relC })
+        .getByRole("button", { name: "Delete" })
+        .click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText(`Remove release ${relC}?`);
+      await dialog.getByRole("button", { name: "Remove release" }).click();
+      await expect(
+        releasesTable.getByRole("row").filter({ hasText: relC }),
+      ).toHaveCount(0);
+
+      await expect(
+        rowB.getByRole("button", { name: "Inspect RCs" }),
+      ).toHaveAttribute("aria-pressed", "true");
+      await expect(fallbackNotice).toHaveCount(0);
+      expect(await axe()).toEqual([]);
+    } finally {
+      await page.request
+        .delete(`/api/repos/acme/widgets/releases/${relC}`)
+        .catch(() => null);
+      await page.request
+        .delete(`/api/repos/acme/widgets/releases/${relB}`)
+        .catch(() => null);
+    }
+  },
+);
+
 test("Settings -> Repositories Remove warns on stranded tasks and keeps removed repositories gone across section switches", async ({
   page,
   axe,

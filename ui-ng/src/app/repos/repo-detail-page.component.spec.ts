@@ -590,4 +590,232 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       false,
     );
   });
+
+  it("treats the URL release as a one-time initial selection so choosing another release survives tab-reloading actions", async () => {
+    localStorage.clear();
+    const api = new FakeRepoApi();
+    let v12Candidates: {
+      id: string;
+      version: string;
+      branch: string;
+      status: string;
+    }[] = [];
+    const baseGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/repos/{owner}/{name}/releases") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve([
+          { name: "v1.2", status: "active", prodBranch: "v1.2" },
+          { name: "v1.0", status: "active", prodBranch: "v1.0" },
+        ]);
+      }
+      if (
+        key === "GET /api/repos/{owner}/{name}/releases/{release}/candidates"
+      ) {
+        api.calls.push({ method: "GET", key, params, query });
+        if (params?.["release"] === "v1.2") {
+          return Promise.resolve(v12Candidates);
+        }
+        return Promise.resolve([
+          {
+            id: "v1.0-rc1",
+            version: "v1.0.0-rc1",
+            branch: "v1.0.rc.1",
+            status: "active",
+          },
+        ]);
+      }
+      return baseGet(key, params, query);
+    };
+    const basePost = api.post;
+    api.post = (key: string, params?: RouteParams, body?: unknown) => {
+      if (
+        key === "POST /api/repos/{owner}/{name}/releases/{release}/candidates"
+      ) {
+        api.calls.push({ method: "POST", key, params, body });
+        if (params?.["release"] === "v1.2") {
+          v12Candidates = [
+            {
+              id: "v1.2-rc1",
+              version: "v1.2.0-rc1",
+              branch: "v1.2.rc.1",
+              status: "active",
+            },
+          ];
+        }
+        return Promise.resolve({ ok: true });
+      }
+      return basePost(key, params, body);
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(routes, withComponentInputBinding()),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create(
+      "/repos/acme/platform/releases/v1.0",
+    );
+    harness.fixture.autoDetectChanges(true);
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 25));
+    await harness.fixture.whenStable();
+
+    const el = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.0"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.2"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="inspect-rc-v1.2"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.2"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    el.querySelector<HTMLButtonElement>('[data-testid="cut-rc-v1.2"]')!.click();
+    await new Promise((r) => setTimeout(r, 25));
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(
+      api.calls.filter(
+        (c) =>
+          c.key ===
+          "POST /api/repos/{owner}/{name}/releases/{release}/candidates",
+      ),
+    ).toEqual([
+      {
+        method: "POST",
+        key: "POST /api/repos/{owner}/{name}/releases/{release}/candidates",
+        params: { owner: "acme", name: "platform", release: "v1.2" },
+        body: {},
+      },
+    ]);
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.2"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.0"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      el.querySelector('[data-testid="candidate-row-v1.2-rc1"]'),
+    ).not.toBeNull();
+    expect(el.querySelector('[data-testid="stale-release-banner"]')).toBeNull();
+  });
+
+  it("keeps the user's chosen release and does not resurrect the stale-release banner on reload after opening an unknown release URL", async () => {
+    localStorage.clear();
+    const api = new FakeRepoApi();
+    let v10Candidates: {
+      id: string;
+      version: string;
+      branch: string;
+      status: string;
+    }[] = [];
+    const baseGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/repos/{owner}/{name}/releases") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve([
+          { name: "v1.2", status: "active", prodBranch: "v1.2" },
+          { name: "v1.0", status: "active", prodBranch: "v1.0" },
+        ]);
+      }
+      if (
+        key === "GET /api/repos/{owner}/{name}/releases/{release}/candidates" &&
+        params?.["release"] === "v1.0"
+      ) {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve(v10Candidates);
+      }
+      return baseGet(key, params, query);
+    };
+    const basePost = api.post;
+    api.post = (key: string, params?: RouteParams, body?: unknown) => {
+      if (
+        key ===
+          "POST /api/repos/{owner}/{name}/releases/{release}/candidates" &&
+        params?.["release"] === "v1.0"
+      ) {
+        api.calls.push({ method: "POST", key, params, body });
+        v10Candidates = [
+          {
+            id: "v1.0-rc1",
+            version: "v1.0.0-rc1",
+            branch: "v1.0.rc.1",
+            status: "active",
+          },
+        ];
+        return Promise.resolve({ ok: true });
+      }
+      return basePost(key, params, body);
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(routes, withComponentInputBinding()),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create(
+      "/repos/acme/platform/releases/nosuch-rel",
+    );
+    harness.fixture.autoDetectChanges(true);
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 25));
+    await harness.fixture.whenStable();
+
+    const el = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="stale-release-banner"]'),
+    ).not.toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.2"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="inspect-rc-v1.0"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="stale-release-banner"]')).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.0"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    el.querySelector<HTMLButtonElement>('[data-testid="cut-rc-v1.0"]')!.click();
+    await new Promise((r) => setTimeout(r, 25));
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(
+      el
+        .querySelector('[data-testid="inspect-rc-v1.0"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(el.querySelector('[data-testid="stale-release-banner"]')).toBeNull();
+  });
 });
