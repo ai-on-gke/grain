@@ -611,7 +611,7 @@ The operator turned this on with #4259 and #4260, holding merges only on finding
 - 2 had a review filed that wasn't catchable either: E18, E41.
 - **That leaves 22 catchable: 6 `diff`, 16 `context`.**
 
-Six of the 22 (E02, E03, E37, E38 and others before the import) would only have been reviewed if reviews had existed when that code merged. The estimate treats them as if they had.
+Four of the 22 (E02, E03, E37, E38, whose cause predates the import) would only have been reviewed if reviews had existed when that code merged. The estimate treats them as if they had.
 
 **How many a general review would catch,** under the assumptions in "How catch rates and costs are estimated":
 
