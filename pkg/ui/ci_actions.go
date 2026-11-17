@@ -1181,3 +1181,44 @@ func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Reque
 // actionsArtifactNote is why an Actions artifact is listed and not served.
 const actionsArtifactNote = "a GitHub Actions artifact is listed only: grain does not download it (it is a zip behind a redirect, " +
 	"sometimes gigabytes); fetch it from the run's page"
+
+// CIRunAttemptsResponse is GET /api/ci/runs/{id}/attempts: every attempt
+// of every job of a GitHub Actions run, in GitHub's shape.
+type CIRunAttemptsResponse struct {
+	TotalCount int            `json:"total_count"`
+	Jobs       []ci.GitHubJob `json:"jobs"`
+}
+
+// handleGetCIRunAttempts is GET /api/ci/runs/{id}/attempts: what `grain
+// ci test-history --workflow` and `grain ci flake-report` judge a job's
+// pass, fail and pass-on-retry from, commit by commit.
+func (s *Server) handleGetCIRunAttempts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !IsActionsRunID(id) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a GitHub Actions run id: only an Actions run has job attempts", id))
+		return
+	}
+	repoText, _, _ := ParseActionsRunID(id)
+	repo, err := s.tasks.parseRepo(repoText)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	if err := s.tasks.actionsRepoServed(r.Context(), repo); err != nil {
+		writeClientError(w, err)
+		return
+	}
+	jobs, err := actionsExternalRuns{s.tasks}.ExternalJobAttempts(r.Context(), id)
+	switch {
+	case errors.Is(err, errNoActionsReader):
+		writeError(w, http.StatusNotFound, err)
+		return
+	case err != nil:
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if jobs == nil {
+		jobs = []ci.GitHubJob{}
+	}
+	writeJSON(w, http.StatusOK, CIRunAttemptsResponse{TotalCount: len(jobs), Jobs: jobs})
+}

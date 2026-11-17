@@ -856,6 +856,7 @@ func (s *Server) routes() {
 	s.route("DELETE /api/ci/runs/{id}", s.handleCancelCIRun)
 	s.route("POST /api/ci/runs/{id}/rerun", s.handleRerunCIRun)
 	s.route("GET /api/ci/runs/{id}/log", s.handleGetCIRunLog)
+	s.route("GET /api/ci/runs/{id}/attempts", s.handleGetCIRunAttempts)
 	s.route("GET /api/ci/runs/{id}/artifacts", s.handleListCIRunArtifacts)
 	s.route("GET /api/ci/runs/{id}/artifacts/{job}/{name}", s.handleGetCIArtifact)
 	// The job cache behind those runs: what it holds, and the one thing

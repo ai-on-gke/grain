@@ -90,6 +90,10 @@ type TestHistoryReport struct {
 	// Notes are what the reader of the runs said about them: runs left
 	// out, a forge that could not be read.
 	Notes []string `json:"notes,omitempty"`
+	// Job is set when the test named is a GitHub Actions job read from
+	// every attempt of its runs (ApplyJobSummary): the counts above are
+	// then commits, Flaked those that passed only on a retry.
+	Job *JobAttemptSummary `json:"job,omitempty"`
 }
 
 // TestHistorySource is one CI provider's share of the runs a
@@ -410,6 +414,16 @@ func (r TestHistoryReport) Render() string {
 	for _, note := range r.Notes {
 		fmt.Fprintf(&b, "  Note: %s\n", note)
 	}
+	if j := r.Job; j != nil {
+		fmt.Fprintf(&b, "  Job %q read from every attempt of its runs, one execution per commit: %d commit(s)", j.Job, j.Commits)
+		if j.Infra > 0 || j.Pending > 0 {
+			fmt.Fprintf(&b, ", %d stopped by infrastructure and %d still running left out of the rates", j.Infra, j.Pending)
+		}
+		b.WriteString(".\n")
+		if j.ConfirmedRed > 0 {
+			fmt.Fprintf(&b, "  Confirmed red (failed again on its retry): %d.\n", j.ConfirmedRed)
+		}
+	}
 
 	if r.Executions == 0 {
 		if r.PassesUncounted {
@@ -423,7 +437,11 @@ func (r TestHistoryReport) Render() string {
 	fmt.Fprintf(&b, "\nSummary Statistics:\n")
 	fmt.Fprintf(&b, "  • Passed:  %d (%.1f%%)\n", r.Passed, r.PassRate)
 	fmt.Fprintf(&b, "  • Failed:  %d (%.1f%%)\n", r.Failed, r.FailRate)
-	fmt.Fprintf(&b, "  • Flaked:  %d (%.1f%%)\n", r.Flaked, r.FlakeRate)
+	if r.Job != nil {
+		fmt.Fprintf(&b, "  • Passed on retry: %d (%.1f%%; flake budget %.0f%%)\n", r.Flaked, r.FlakeRate, FlakeBudgetPercent)
+	} else {
+		fmt.Fprintf(&b, "  • Flaked:  %d (%.1f%%)\n", r.Flaked, r.FlakeRate)
+	}
 	if r.Quarantined > 0 {
 		fmt.Fprintf(&b, "  • Quarantined: %d (%.1f%%) -- failed, but quarantined, so the job passed\n", r.Quarantined, r.QuarantinedRate)
 	}
