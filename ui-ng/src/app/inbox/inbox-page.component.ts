@@ -1844,7 +1844,9 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       accept: `Clear ${n}`,
       destructive: true,
       reason,
-      run: () => this.runClearAlerts(req, reason),
+      // Exactly what the dialog counted: an alert raised while it is open
+      // (a new critical one, say) is left for its own decision.
+      run: () => this.runClearAlerts({ ids: dry.ids }, reason),
     });
   }
 

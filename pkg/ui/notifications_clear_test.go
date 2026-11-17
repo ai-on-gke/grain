@@ -19,6 +19,7 @@ package ui_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -197,5 +198,38 @@ func TestBulkClearNeedsNotificationsWrite(t *testing.T) {
 	}
 	if n, _ := h.client.Store.GetNotification(context.Background(), resp.Notification.ID); n == nil || !n.Open() {
 		t.Fatalf("a refused bulk clear cleared %+v", n)
+	}
+}
+
+// A store error partway through a bulk clear leaves what it already cleared
+// cleared, so that much is audited, with its reason, before the error says
+// how far it got.
+func TestABulkClearThatFailsPartwayAuditsWhatItCleared(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	raiseFor(t, client, ctx, "ops:disk", "warning")
+	raiseFor(t, client, ctx, "ops:cpu", "warning")
+	raiseFor(t, client, ctx, "ops:net", "warning")
+	calls := 0
+	client.SetClearNotificationForTest(func(ctx context.Context, id int64, by string) (bool, error) {
+		calls++
+		if calls == 2 {
+			return false, errors.New("database is locked")
+		}
+		return store.ClearNotificationByID(ctx, id, by)
+	})
+	resp, err := client.ClearNotifications(ctx, ui.ClearNotificationsRequest{Reason: "outage noise"})
+	if err == nil || !strings.Contains(err.Error(), "cleared 1 of 3") || !strings.Contains(err.Error(), "database is locked") {
+		t.Fatalf("a clear failing on its second notification = %+v, %v, want an error saying 1 of 3 were cleared", resp, err)
+	}
+	if got := openSubjects(t, client, ctx); len(got) != 2 {
+		t.Fatalf("open after the failure = %v, want the two not cleared", got)
+	}
+	audits, err := store.ConfigAuditOfSurface(ctx, "notifications", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audits) != 1 || !strings.Contains(audits[0].Summary, "cleared 1 ") || !strings.Contains(audits[0].Summary, "outage noise") {
+		t.Fatalf("audit entries = %+v, want one recording the one cleared and the reason", audits)
 	}
 }

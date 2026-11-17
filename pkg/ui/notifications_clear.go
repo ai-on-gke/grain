@@ -173,11 +173,21 @@ func (c *Client) ClearNotifications(ctx context.Context, req ClearNotificationsR
 	resp := ClearNotificationsResponse{Matched: len(matched), IDs: []int64{}, DryRun: req.DryRun}
 	families := map[string]bool{}
 	by := model.PrincipalString(actor)
+	clearOne := c.Store.ClearNotificationByID
+	if c.clearNotification != nil {
+		clearOne = c.clearNotification
+	}
 	for _, n := range matched {
 		if !req.DryRun {
-			cleared, err := c.Store.ClearNotificationByID(ctx, n.ID, by)
+			cleared, err := clearOne(ctx, n.ID, by)
 			if err != nil {
-				return resp, err
+				// What was cleared stays cleared, so it is audited with
+				// its reason before the error is returned.
+				if resp.Cleared > 0 {
+					c.auditNotificationClear(ctx, req, resp, reason)
+				}
+				return resp, fmt.Errorf("cleared %d of %d notifications before notification %d failed: %w",
+					resp.Cleared, len(matched), n.ID, err)
 			}
 			if !cleared {
 				continue
@@ -227,7 +237,9 @@ func (c *Client) auditNotificationClear(ctx context.Context, req ClearNotificati
 	summary := fmt.Sprintf("cleared %d of %s (%d expected back while their condition holds): %s",
 		resp.Cleared, what, resp.ExpectedBack, reason)
 	by := c.requestActor(ctx)
-	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+	// The clears happened whether or not the request was cancelled since,
+	// so the audit entry outlives the request's context.
+	if _, err := c.Store.RecordConfigAudit(context.WithoutCancel(ctx), model.ConfigAuditEntry{
 		At: c.now(), By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: "notifications", Summary: summary,
 	}); err != nil {
 		log.Printf("grain notifications: recording %q in the config audit: %v", summary, err)

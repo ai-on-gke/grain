@@ -1979,15 +1979,28 @@ describe("inbox page helpers", () => {
       box.dispatchEvent(new Event("input"));
       await f.whenStable();
       expect(accept.disabled).toBe(false);
+      api.notes = [
+        ...api.notes,
+        {
+          id: 4,
+          subject: "ops:raised-while-open",
+          title: "Raised while the dialog was open",
+          severity: "critical",
+        } as Notification,
+      ];
       const snacks = TestBed.inject(SnackbarService);
       accept.click();
       await new Promise((r) => setTimeout(r));
       await f.whenStable();
-      expect(calls[1]).toEqual({ reason: "noise after the outage" });
+      // The clear names what the dialog counted, not "everything open".
+      expect(calls[1]).toEqual({
+        ids: [1, 2, 3],
+        reason: "noise after the outage",
+      });
       expect(snacks.current()?.message).toBe(
         "Cleared 3 alerts; 1 will come back while its condition holds",
       );
-      expect(q(f, '[data-testid="group-clear-alerts"]')).toBeNull();
+      expect(api.notes.map((n) => n.id)).toEqual([4]);
     });
 
     it("offers Clear these under a filter and sends only the shown ids", async () => {

@@ -62,6 +62,9 @@ type Client struct {
 	allowedPrincipalsMigrateMu sync.Mutex
 	allowedPrincipalsMigrated  bool
 	deploymentOwnerSeeded      string
+	// clearNotification replaces Store.ClearNotificationByID in a bulk
+	// clear, for a test that needs one to fail partway; nil is the store.
+	clearNotification func(ctx context.Context, id int64, by string) (bool, error)
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
