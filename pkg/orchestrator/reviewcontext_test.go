@@ -237,6 +237,73 @@ func TestEarlierReviewQuestionAnsweredOnGitHubReadsAnswered(t *testing.T) {
 	}
 }
 
+// A review whose draft GitHub refused with its 422 -- the credential already
+// holds a pending review on the pull request, which a parallel review of the
+// same head drafted -- still puts its questions to the change's owner on their
+// own task, so their reply there answers them and the next review lists them
+// [answered] rather than [open] for good (docs/test-runs/2026-11-14-review-
+// context.md, finding A).
+func TestReviewWhoseDraftGitHubRefusedAsksTheOwnerAndTheirReplyAnswersIt(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+
+	sim.RefuseReviews = 1
+	res := toolResult(
+		reviewFinding("keep legacy endpoint or remove it?", "pkg/ui/server.go", 7),
+		agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Left one question."}},
+	)
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID), res, firstID+"-1",
+		baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (first review): %v", err)
+	}
+	if len(sim.Reviews) != 0 {
+		t.Fatalf("reviews on GitHub = %+v, want none: the draft was refused", sim.Reviews)
+	}
+	relayed := strings.Join(commentBodies(t, ctx, store, firstID), "\n")
+	if !strings.Contains(relayed, "one pending review per pull request") {
+		t.Errorf("the review's own conversation does not say why the draft failed:\n%s", relayed)
+	}
+	asked := ""
+	for _, b := range commentBodies(t, ctx, store, task.ID) {
+		if strings.Contains(b, "Review needs your decision.") && strings.Contains(b, "(task "+firstID+")") {
+			asked = b
+		}
+	}
+	if asked == "" {
+		t.Fatalf("the owner was never asked the refused review's questions: %q", commentBodies(t, ctx, store, task.ID))
+	}
+	if !strings.Contains(asked, "keep legacy endpoint or remove it?") || !strings.Contains(asked, "failed") {
+		t.Errorf("the question to the owner = %q, want the finding and that no review on GitHub holds it", asked)
+	}
+	if q, held := model.ReviewQuestionsOf(reloaded(t, ctx, store, task.ID)); !held || q.ReviewTaskID != firstID {
+		t.Fatalf("review questions = %+v (held %v), want the task held on review %s's", q, held, firstID)
+	}
+
+	say(t, ctx, store, task.ID, owner, "Remove it.", baseTime.Add(20*time.Minute))
+	if err := orchestrator.SyncReviewQuestions(ctx, store, baseTime.Add(21*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if s := stateOf(t, ctx, store, task.ID); s != model.StateQueued {
+		t.Fatalf("state = %q, want %q -- the owner's reply must answer the refused review's questions", s, model.StateQueued)
+	}
+
+	pushFile(t, sim.BareRepo, model.BranchName(task.ID), "pkg/gitproxy/proxy.go", "new proxy check\n")
+	run2 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID), run2, "t1-2",
+		baseTime.Add(30*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult (second push): %v", err)
+	}
+	secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("expected new security review, got %q (first %q)", secondID, firstID)
+	}
+	body := reloaded(t, ctx, store, secondID).Body
+	if want := "- [answered] `pkg/ui/server.go:7`: keep legacy endpoint or remove it?"; !strings.Contains(body, want) {
+		t.Errorf("second security review body missing %q:\n%s", want, body)
+	}
+}
+
 // When an earlier security review pushed fixes onto the branch that touched the
 // trust boundary, the follow-up security review names the earlier review, its
 // clean (pushed fixes) verdict, the commit SHA it pushed, and reviews the delta.
