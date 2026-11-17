@@ -186,7 +186,7 @@ Columns:
 | Kubernetes `k8sNamespace`, `k8sKubectl`, `k8sSandboxImage`, `k8sGranuleImage`, `k8sWorkspace`, `k8sGitProxyHost`, `k8sSandboxService`, `k8sServiceAccount`, `k8sNodeSelector`, `k8sPrivileged`, `k8sNetworkPolicy`, `k8sDeployment`, `k8sContainer`, `k8sPriorityClass{Interactive,Agent,Ci}` | Yes — Sandboxes; `PUT /api/settings` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; G) / editable | Yes | The first nine are `restartRequired`. |
 | Session sandbox idle TTL `sessionSandboxIdleTtl` | Yes — Sandboxes; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (non-bootstrap; G) / **read-only** | Yes | D-1 (fixed). |
 | Standing / persistent sandboxes (image, env, bound secret keys) | Action only — System → Sandboxes; `POST /api/persistent-sandboxes/{name}/{action}` (stop/start/restart/rebuild) | Yes — `tables/standing_sandbox.json`, `standing_sandbox_secret.json`, `standing_sandbox_env.json`, `persistent_sandbox.json` | Unlocked (Action) | No | Declarations are config-repo only; never auto-merge. |
-| Sandbox probe | Action — `POST /api/sandbox-probe` | No — action | Unlocked (Action) | No | |
+| Sandbox probe | Action — Sandboxes → "Probe sandbox runtime"; `POST /api/sandbox-probe` (`{id, argv}`) | No — action | Unlocked (Action) | No | Offered only where `GET /api/settings` reports `sandboxProbe: true` (a prober is wired and the backend is the Kubernetes granule one). The UI probes with `argv: ["true"]` and shows the sandbox, exit code, stdout and stderr. |
 
 ### 3.3 Executors (removed; external agent tokens)
 

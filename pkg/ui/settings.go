@@ -576,6 +576,11 @@ type Settings struct {
 	// System -> Agents & Task Branches offers it to a deployment still on
 	// the empty template (grain/task-{id}) as a one-line opt-in.
 	TaskBranchTemplateDefault string `json:"taskBranchTemplateDefault"`
+	// SandboxProbe says whether POST /api/sandbox-probe can build a
+	// sandbox on this deployment (Server.sandboxProbeAvailable), so
+	// Settings -> Sandboxes offers its probe only where it can work.
+	// Read-only: a save ignores it.
+	SandboxProbe bool `json:"sandboxProbe"`
 	// Capabilities is every capability grain ships a provider for, with
 	// this deployment's own readiness computed against it -- capability_
 	// status.go's own CapabilityStatus, bwsalmon/agents#611. Always
@@ -2736,6 +2741,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -2749,6 +2755,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -2762,6 +2769,7 @@ func (s *Server) handlePlanSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 

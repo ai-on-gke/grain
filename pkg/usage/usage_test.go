@@ -226,7 +226,7 @@ func TestWarnsBeforeADefaultModelRunsOut(t *testing.T) {
 		DefaultModels: []string{"Opus", "gemini"},
 	}
 	rep := Compute(in)
-	if len(rep.Warnings) != 1 || !strings.Contains(rep.Warnings[0], "default model opus on conn runs out in ~2h, before its reset; next on the default list: gemini") {
+	if len(rep.Warnings) != 1 || !strings.Contains(rep.Warnings[0], "default model opus on conn runs out of its 5h interval limit in ~2h, before its reset; next on the default list: gemini") {
 		t.Fatalf("warnings = %q", rep.Warnings)
 	}
 }

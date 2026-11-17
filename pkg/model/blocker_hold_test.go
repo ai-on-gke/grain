@@ -72,7 +72,7 @@ func TestBlockerHoldsReadsTheStore(t *testing.T) {
 		t.Helper()
 		task := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "t",
-			Origin:  model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Binding: model.BindingDirective,
 		}
 		if approved {

@@ -516,7 +516,10 @@ and `force`, and works in two modes:
 The refusals are the dependency picker's own (`dependsOnLinks`): the task
 itself, an unknown id, a standing chat or director session, or a task
 that already waits on this one. A waiting run sees only a target's title,
-state, outcome and its runs' closing note, never its transcript. When a
+state, outcome and its runs' closing note, never its transcript -- and
+when the target belongs to a repository or workspace outside the waiting
+task's own target, `reads` and `writes` (`Store.WaitTargetFor`), its
+title and closing note are withheld (`withheld: true`) too. When a
 run is *filing* follow-up work, `propose_task`'s `depends_on` is still
 the right tool. `wait_for_task` is for the run that has to wait itself.
 

@@ -1,0 +1,292 @@
+.qa-v3-studio {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.qa-v3-studio .qa-workbench-split {
+  display: grid;
+  grid-template-columns: clamp(300px, 30%, 440px) minmax(0, 1fr);
+  flex: 1;
+  min-height: 540px;
+  align-items: start;
+}
+
+.qa-v3-studio .qa-stage-tree {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  height: 100%;
+  min-width: 0;
+}
+
+.qa-v3-studio .qa-tree-controls {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qa-v3-studio input:not([type="checkbox"]),
+.qa-v3-studio select,
+.qa-v3-studio textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+}
+
+.qa-v3-studio .qa-kind-chips,
+.qa-v3-studio .qa-stage-meta,
+.qa-v3-studio .qa-step-node-main,
+.qa-v3-studio .qa-step-node-pills,
+.qa-v3-studio .qa-card-head,
+.qa-v3-studio .qa-subhead-row,
+.qa-v3-studio .qa-step-head-badges,
+.qa-v3-studio .qa-stage-toggles,
+.qa-v3-studio .qa-form-row,
+.qa-v3-studio .qa-inline-check,
+.qa-v3-studio .skill-header,
+.qa-v3-studio .check-engine-bar,
+.qa-v3-studio .check-row,
+.qa-v3-studio .check-params,
+.qa-v3-studio .dialog-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.qa-v3-studio .qa-step-node-main,
+.qa-v3-studio .qa-card-head,
+.qa-v3-studio .qa-subhead-row {
+  justify-content: space-between;
+}
+
+.qa-v3-studio .qa-kind-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.qa-v3-studio .qa-kind-chip[aria-pressed="true"],
+.qa-v3-studio .qa-step-node.is-selected {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  border-color: var(--md-sys-color-primary);
+  font-weight: 600;
+}
+
+.qa-v3-studio .qa-stage-group {
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.qa-v3-studio .qa-stage-header-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.qa-v3-studio .qa-stage-header-row.is-selected {
+  background: var(--md-sys-color-secondary-container);
+}
+
+.qa-v3-studio .qa-stage-collapse-btn,
+.qa-v3-studio .qa-stage-select-btn {
+  border: none;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  cursor: pointer;
+}
+
+.qa-v3-studio .qa-stage-select-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 4px;
+  text-align: left;
+  min-width: 0;
+}
+
+.qa-v3-studio .qa-stage-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-v3-studio .qa-step-count,
+.qa-v3-studio .qa-pill,
+.qa-v3-studio .severity-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+}
+
+.qa-v3-studio .qa-step-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px 8px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qa-v3-studio .qa-step-node {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  text-align: left;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.qa-v3-studio .qa-step-inspector,
+.qa-v3-studio .qa-inspector-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.qa-v3-studio .qa-step-inspector {
+  padding: 20px 24px;
+}
+
+.qa-v3-studio .qa-inspector-tabs {
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  margin-bottom: 0;
+}
+
+.qa-v3-studio .qa-flow-summary-bar,
+.qa-v3-studio .qa-contract-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.qa-v3-studio .qa-flow-summary-bar,
+.qa-v3-studio .qa-inspector-card,
+.qa-v3-studio .dry-run-results {
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.qa-v3-studio .qa-ordered-steps {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.qa-v3-studio .qa-flow-summary-bar {
+  display: grid;
+}
+
+.qa-v3-studio .qa-flow-summary-item,
+.qa-v3-studio .qa-contract-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qa-v3-studio .qa-inspector-card h3,
+.qa-v3-studio .qa-inspector-card h4 {
+  margin: 0;
+}
+
+.qa-v3-studio .qa-card-sub,
+.qa-v3-studio .qa-muted-id {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.qa-v3-studio .skill-text-readonly {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.qa-v3-studio table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.qa-v3-studio th,
+.qa-v3-studio td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.qa-v3-studio .check-row {
+  padding: 10px 0;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.qa-v3-studio .fixture-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+@media (max-width: 899.95px) {
+  .qa-v3-studio .qa-workbench-split {
+    grid-template-columns: 1fr;
+  }
+
+  .qa-v3-studio .qa-stage-tree {
+    border-right: none;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .qa-v3-studio .qa-step-inspector {
+    padding: 14px 16px calc(var(--grain-bottombar-height, 40px) + 24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qa-v3-studio * {
+    transition-duration: 0s !important;
+  }
+}

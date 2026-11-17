@@ -151,6 +151,7 @@ export interface Workstream {
   seriesRootIds?: string[];
   paused: boolean;
   planning: boolean;
+  goalMode?: boolean;
   stale: boolean;
   excludeRootFromProgress: boolean;
   createdMs: number;
@@ -991,6 +992,9 @@ function buildWorkstream(
     crossStreamCount,
     paused,
     planning,
+    goalMode: Boolean(
+      rootTask.goalMode?.enabled || nodes.some((n) => n.task.goalMode?.enabled),
+    ),
     stale,
     excludeRootFromProgress: c.excludeRootFromProgress,
     createdMs: Number.isFinite(createdMs) ? createdMs : lastActivityMs,

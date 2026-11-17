@@ -24,7 +24,6 @@ package cli
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +31,6 @@ import (
 	"net/http/httptest"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -55,16 +53,8 @@ func declaredFields() []model.CustomField {
 // custom_field.json would.
 func fieldTestServer(t *testing.T, fields []model.CustomField) (string, *model.Store) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	for _, f := range fields {
 		if err := store.PutCustomField(ctx, f); err != nil {
 			t.Fatalf("declaring %s: %v", f.Name, err)

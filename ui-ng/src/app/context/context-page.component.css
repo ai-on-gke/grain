@@ -1,22 +1,7 @@
-/* Context & Standing Memory (D-20) styles (< 8 kB alongside ops-surface.css). */
-
 g-context-page {
   display: contents;
 }
 
-.ctx-tab-btn {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font: inherit;
-}
-
-.ctx-tab-btn[aria-selected="true"] {
-  color: var(--md-sys-color-primary);
-  border-bottom-color: var(--md-sys-color-primary);
-}
-
-/* Context-scoped 30 / 70 split workspace — zero collision with .inbox-split */
 .ctx-split {
   display: grid;
   grid-template-columns: minmax(260px, 36%) minmax(0, 1fr);
@@ -56,14 +41,16 @@ g-context-page {
   .ctx-resizer::before {
     content: "";
     position: absolute;
-    top: 0;
-    bottom: 0;
-    left: -12px;
+    inset: 0 auto 0 -12px;
     width: 24px;
     cursor: col-resize;
   }
-  .ctx-resizer-pill {
+  .ctx-resizer-pill,
+  .ctx-resizer-badge {
     position: absolute;
+    pointer-events: none;
+  }
+  .ctx-resizer-pill {
     top: 50%;
     left: -2px;
     width: 4px;
@@ -71,10 +58,10 @@ g-context-page {
     transform: translateY(-50%);
     border-radius: 2px;
     background: var(--md-sys-color-outline);
-    pointer-events: none;
   }
   .ctx-resizer:hover .ctx-resizer-pill,
-  .ctx-split.is-dragging .ctx-resizer-pill {
+  .ctx-split.is-dragging .ctx-resizer-pill,
+  .ctx-resizer:focus-visible .ctx-resizer-pill {
     background: var(--md-sys-color-primary);
     height: 56px;
   }
@@ -82,13 +69,10 @@ g-context-page {
     outline: none;
   }
   .ctx-resizer:focus-visible .ctx-resizer-pill {
-    background: var(--md-sys-color-primary);
     outline: 2px solid var(--md-sys-color-primary);
     outline-offset: 3px;
-    height: 56px;
   }
   .ctx-resizer-badge {
-    position: absolute;
     top: 12px;
     left: 8px;
     padding: 2px 8px;
@@ -97,28 +81,36 @@ g-context-page {
     color: var(--md-sys-color-inverse-on-surface);
     font-size: 12px;
     white-space: nowrap;
-    pointer-events: none;
   }
   .ctx-split-controls {
     display: inline-flex;
     gap: 2px;
     margin-left: auto;
   }
-  .ctx-split-controls .btn-text[aria-pressed="true"] {
-    background: var(--md-sys-color-secondary-container);
-    color: var(--md-sys-color-on-secondary-container);
-  }
+}
+
+.ctx-list-pane,
+.ctx-row,
+.ctx-row-btn,
+.ctx-pane-head,
+.ctx-detail-pane,
+.ctx-summary-box {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ctx-list-pane,
+.ctx-row,
+.ctx-detail-pane {
+  background: var(--md-sys-color-surface);
 }
 
 .ctx-list-pane {
   position: relative;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
-  min-width: 0;
   overflow-x: hidden;
   border-right: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface);
 }
 
 .ctx-list {
@@ -127,22 +119,33 @@ g-context-page {
   padding: 0;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden auto;
   flex: 1;
 }
 
-.ctx-row {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  min-width: 0;
-  overflow: hidden;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface);
+.ctx-row-btn,
+.ctx-fs-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.ctx-row:hover {
+.ctx-row,
+.ctx-pane-head,
+.ctx-fs-row {
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.ctx-row {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ctx-row:hover,
+.ctx-fs-row:hover {
   background: var(--md-sys-color-surface-container-low);
 }
 
@@ -151,18 +154,9 @@ g-context-page {
 }
 
 .ctx-row-btn {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
   gap: 6px;
   padding: 12px 16px;
-  border: none;
-  background: transparent;
   color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
 .ctx-row-btn:focus-visible {
@@ -181,7 +175,8 @@ g-context-page {
 }
 
 .ctx-row-line2,
-.ctx-row-line3 {
+.ctx-row-line3,
+.ctx-counter {
   font-size: 12px;
 }
 
@@ -195,33 +190,28 @@ g-context-page {
 
 .ctx-pane-head {
   padding: 12px 16px;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-low);
-  display: flex;
-  flex-direction: column;
   gap: 8px;
-  min-width: 0;
 }
 
-.ctx-pane-head-row {
+.ctx-pane-head-row,
+.ctx-fs-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.ctx-pane-head-row {
   flex-wrap: wrap;
   min-width: 0;
 }
 
 .ctx-detail-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden auto;
   padding: 20px 24px;
   gap: 16px;
-  background: var(--md-sys-color-surface);
 }
 
 @media (max-width: 839.95px) {
@@ -231,8 +221,7 @@ g-context-page {
     position: relative;
     grid-template-columns: minmax(0, 1fr);
     grid-auto-rows: max-content;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: hidden auto;
   }
   .ctx-list-pane {
     border-right: none;
@@ -266,14 +255,18 @@ g-context-page {
   }
 }
 
+.ctx-textarea,
+.ctx-md-preview {
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+}
+
 .ctx-textarea {
   width: 100%;
   min-height: 300px;
   padding: 12px 14px;
-  border-radius: var(--md-sys-shape-corner-medium);
   border: 1px solid var(--md-sys-color-outline);
-  background: var(--md-sys-color-surface-container-lowest);
-  color: var(--md-sys-color-on-surface);
   font: 13px/20px var(--grain-font-mono);
   resize: vertical;
   box-sizing: border-box;
@@ -286,10 +279,7 @@ g-context-page {
 
 .ctx-md-preview {
   padding: 14px 16px;
-  border-radius: var(--md-sys-shape-corner-medium);
   border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-lowest);
-  color: var(--md-sys-color-on-surface);
   font-size: 14px;
   line-height: 22px;
   overflow-y: auto;
@@ -299,28 +289,23 @@ g-context-page {
 .ctx-md-preview h1,
 .ctx-md-preview h2,
 .ctx-md-preview h3 {
-  margin-top: 0.6em;
-  margin-bottom: 0.4em;
+  margin: 0.6em 0 0.4em;
   font-family: var(--grain-font-display);
 }
 
-.ctx-md-preview code {
+/* Inline code only: fenced blocks are code cards (code-highlight.css). */
+.ctx-md-preview :not(pre) > code {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--md-sys-color-surface-container-high);
-  font-family: var(--grain-font-mono);
-  font-size: 12px;
+  font: 12px var(--grain-font-mono);
 }
 
 .ctx-summary-box {
-  display: flex;
-  flex-direction: column;
   gap: 6px;
-  min-width: 0;
 }
 
 .ctx-counter {
-  font-size: 12px;
   color: var(--md-sys-color-on-surface-variant);
 }
 
@@ -338,31 +323,16 @@ g-context-page {
 }
 
 .ctx-fs-row {
-  width: 100%;
   padding: 10px 16px;
-  border: none;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
-  background: transparent;
   color: var(--md-sys-color-on-surface);
-  font: inherit;
-  text-align: left;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  cursor: pointer;
 }
 
-.ctx-fs-row:hover {
-  background: var(--md-sys-color-surface-container-low);
-}
-
+.ctx-split-controls .btn-text[aria-pressed="true"],
 .ctx-fs-row.is-selected {
   background: var(--md-sys-color-secondary-container);
   color: var(--md-sys-color-on-secondary-container);
 }
 
-/* Syntax highlight tokens inside dark-well (#8e95a5 >= 5.5:1 on #13151a) */
 .ctx-ln {
   display: inline-block;
   width: 38px;

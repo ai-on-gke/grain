@@ -370,8 +370,8 @@ g-workstream-detail {
 }
 
 /* The inspector is one scroller: "In this stream" and the task below it
-   scroll together. The task lays out flat inside it (an inline-size
-   container, task-detail.component.css) rather than scrolling on its own. */
+   scroll together. The task lays out flat inside it rather than scrolling
+   on its own, and its conversation keeps the inline thread window. */
 .ws-insp {
   position: relative;
   display: flex;
@@ -385,7 +385,25 @@ g-workstream-detail {
 
 .ws-insp > g-task-detail {
   flex: none;
-  container-type: inline-size;
+}
+
+.ws-insp .task-page.is-pane,
+.ws-insp .task-page.is-pane .task-layout,
+.ws-insp .task-page.is-pane .task-tab-body,
+.ws-insp .task-page.is-pane .task-aside {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+}
+
+.ws-insp .task-tab-body.is-conversation > .g-conversation,
+.ws-insp .task-tab-body.is-conversation > .g-conversation > .convo-host {
+  flex: none;
+}
+
+.ws-insp .task-tab-body.is-conversation .convo-host .convo-thread {
+  flex: 1 1 auto;
+  height: clamp(160px, 28dvh, 400px);
 }
 
 .ws-insp-mobile-bar {

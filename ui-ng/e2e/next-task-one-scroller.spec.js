@@ -14,13 +14,16 @@
 
 import { test, expect } from "./fixtures.js";
 
-// One pane, one scroller on the task (task 5626). With a long thread, the
-// Conversation tab of the task page and of the Tasks inspector fills its tab
+// One pane, one scroller (task 5626). With a long thread, the Conversation
+// tab of the task page and of the Tasks and Agents inspectors fills its tab
 // body: the thread is the only thing that scrolls, the composer sits pinned
 // below it inside the pane, and wheeling the thread never moves the tab body
-// or the page around it. On a phone the task scrolls as a whole instead, and
-// its tab body does not scroll inside it. The long thread is served in place
-// of the demo task's own comments, so the shared store is left alone.
+// or the page around it. On a phone the thread still fills the tab body and
+// the composer can be reached. The Workstreams inspector is the one scroller
+// for "In this stream" plus the task, which lays out flat inside it, and
+// stacked Context scrolls a picked document's detail into view. The long
+// thread and the document list are served in place of the demo's own, so the
+// shared store is left alone.
 
 const EXTRA = 40;
 
@@ -179,29 +182,132 @@ test.describe("task conversation has one scroller", () => {
     );
   });
 
-  test("phone task page: the task scrolls as one and its tab body does not scroll inside it", async ({
+  test("phone task page: the thread fills the tab body and the composer can be reached", async ({
     page,
     demoServer,
     accessCode,
   }) => {
     const t = await openTask(demoServer, accessCode);
+    await longThread(page, t.id);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`/next/tasks/${t.id}?tab=runs`);
-    await expect(page.locator(".task-tab-body")).toBeVisible();
-    const tabBody = await page
-      .locator(".task-tab-body")
-      .evaluate((el) => getComputedStyle(el).overflowY);
-    expect(tabBody).toBe("visible");
-    // Whatever the task holds, its end can be scrolled into view.
+    await page.goto(`/next/tasks/${t.id}?tab=conversation`);
+    await expect(page.locator(".task-tab-body .convo-thread")).toBeVisible();
+    // The thread scrolls; the tab body around it does not.
+    await expect
+      .poll(() => scrolling(page, [".task-tab-body", ".convo-thread"]))
+      .toEqual([".convo-thread"]);
+    // Scrolled to its end, the task shows the composer inside it.
     const end = await page.evaluate(() => {
       const p = document.querySelector(".task-page");
       p.scrollTop = p.scrollHeight;
-      const body = document.querySelector(".task-tab-body");
+      const c = document.querySelector(".convo-composer");
       return {
-        bodyBottom: body.getBoundingClientRect().bottom,
+        composerBottom: c.getBoundingClientRect().bottom,
         pageBottom: p.getBoundingClientRect().bottom,
       };
     });
-    expect(end.bodyBottom).toBeLessThanOrEqual(end.pageBottom + 0.5);
+    expect(end.composerBottom).toBeLessThanOrEqual(end.pageBottom + 0.5);
+  });
+
+  test("Agents inspector at 1440x900: only the thread scrolls and the composer stays in the pane", async ({
+    page,
+    demoServer,
+    accessCode,
+  }) => {
+    const tasks = await apiJson(demoServer, accessCode, "/api/tasks");
+    const list = Array.isArray(tasks) ? tasks : tasks.tasks;
+    const running = list.find(
+      (t) => t.state === "running" && !t.consoleSession,
+    );
+    expect(running, "grain demo seeds a running task").toBeTruthy();
+    await longThread(page, running.id);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/next/agents?task=${running.id}`);
+    const pane = page.getByTestId("agents-pane");
+    await expect(pane).toBeVisible();
+    await pane.getByTestId("task-tab-conversation").click();
+    await expectThreadIsTheScroller(page, '[data-testid="agents-pane"]');
+  });
+
+  test("Workstreams inspector at 1440x900: the inspector is the one scroller and the task lays out flat in it", async ({
+    page,
+  }) => {
+    await longThread(page, "\\d+");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/next/workstreams");
+    const row = page.locator('[data-testid^="ws-row-"]').first();
+    await expect(row).toBeVisible();
+    await row.click();
+    const insp = page.getByTestId("ws-inspector");
+    await expect(insp.locator("g-task-detail")).toBeVisible();
+    const tab = insp.getByTestId("task-tab-conversation");
+    if (await tab.count()) await tab.click();
+    await expect(insp.locator(".convo-thread")).toBeVisible();
+    const root = '[data-testid="ws-inspector"]';
+    // Neither the task nor its tab body is a scroller inside the inspector.
+    const styles = await page.evaluate(
+      (r) =>
+        [".task-page", ".task-tab-body"].map(
+          (s) =>
+            getComputedStyle(document.querySelector(`${r} ${s}`)).overflowY,
+        ),
+      root,
+    );
+    expect(styles).toEqual(["visible", "visible"]);
+    expect(await insp.evaluate((el) => getComputedStyle(el).overflowY)).toBe(
+      "auto",
+    );
+    // Scrolled to its end, the inspector shows the composer inside it.
+    const end = await insp.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      const c = el.querySelector(".convo-composer");
+      return {
+        composerBottom: c.getBoundingClientRect().bottom,
+        inspBottom: el.getBoundingClientRect().bottom,
+      };
+    });
+    expect(end.composerBottom).toBeLessThanOrEqual(end.inspBottom + 0.5);
+  });
+
+  test("stacked Context at 390x844: picking a document brings its detail into view", async ({
+    page,
+  }) => {
+    const docs = [];
+    for (let i = 0; i < 30; i++) {
+      docs.push({
+        name: `notes-${String(i).padStart(2, "0")}`,
+        summary: `Notes on part ${i} of the system`,
+        text: `# Part ${i}\n\nWhat we know about part ${i}.`,
+        length: 40,
+      });
+    }
+    await page.route(/\/api\/memory\/documents(\?.*)?$/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: { documents: docs } })
+        : route.continue(),
+    );
+    await page.route(/\/api\/memory\/documents\/[^/?]+(\?.*)?$/, (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const name = decodeURIComponent(
+        new URL(route.request().url()).pathname.split("/").pop(),
+      );
+      return route.fulfill({
+        json: docs.find((d) => d.name === name) ?? docs[0],
+      });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/next/context?tab=documents");
+    const split = page.getByTestId("context-split");
+    await expect(split).toBeVisible();
+    await page.locator('[data-testid="doc-row-notes-03"] .ctx-row-btn').click();
+    await expect
+      .poll(async () => {
+        const [s, d] = await Promise.all([
+          split.boundingBox(),
+          page.locator(".ctx-detail-pane").boundingBox(),
+        ]);
+        return Math.abs(d.y - s.y) < 2;
+      })
+      .toBe(true);
   });
 });

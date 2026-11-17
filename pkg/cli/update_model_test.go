@@ -22,11 +22,9 @@ package cli
 import (
 	"context"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -34,16 +32,8 @@ import (
 // connection and one Codex connection, each advertising a model of its own.
 func twoFrameworkServer(t *testing.T) string {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	if err := store.PutConfig(ctx, model.Config{AgentBackends: []model.AgentBackend{
 		{ID: "claude-day", Name: "Claude account", Framework: model.AgentFrameworkClaude, Models: []string{"claude-sonnet-5"}},
 		{ID: "codex-day", Name: "Codex account", Framework: model.AgentFrameworkCodex, Models: []string{"gpt-6"}},

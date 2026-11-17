@@ -766,7 +766,7 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 		Intent: model.IntentImplement,
 		Title:  fmt.Sprintf("Port %s to %s: %s", ref, target, title),
 		Body:   body,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: porter},
 			Reason:      model.ReasonDirect,
 		},
