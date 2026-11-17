@@ -289,7 +289,8 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 				}
 				evaluations = generation
 			}
-			unsupportedCache, rejectedCache := false, false
+			bindings := observationBindings(id, f)
+			unsupportedCache, rejectedCache, bindingsChanged := false, false, false
 			if !missing {
 				var cachedView gates.ObservationView
 				if err = json.Unmarshal([]byte(previous), &cachedView); err != nil {
@@ -297,15 +298,11 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 				}
 				unsupportedCache = !currentShadowBindings(cachedView, id)
 				rejectedCache = cachedView.Dirty
+				bindingsChanged = gates.Digest(cachedView.Bindings) != gates.Digest(bindings)
 			}
-			changed := missing || source != f.SourceVersion
-			if !missing {
-				var old gates.ObservationView
-				_ = json.Unmarshal([]byte(previous), &old)
-				if gates.Digest(old.Bindings) != gates.Digest(observationBindings(id, f)) {
-					unsupportedCache = true
-				}
-			}
+			// Normal assignment/policy scope changes are fresh evidence, not an
+			// unsupported persisted profile. Evaluate them immediately.
+			changed := missing || source != f.SourceVersion || bindingsChanged
 			if !changed && !unsupportedCache && !rejectedCache && now.Before(evaluated.Add(time.Minute)) {
 				if err = json.Unmarshal([]byte(previous), &view); err != nil {
 					return err
@@ -313,7 +310,7 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 			} else {
 				generation++
 				evaluations++
-				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: observationBindings(id, f), Results: []gates.EvaluationState{}}
+				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: bindings, Results: []gates.EvaluationState{}}
 				for _, b := range view.Bindings {
 					r := gates.Evaluate(b, f, now, generation)
 					if unsupportedCache {
@@ -567,6 +564,12 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 		}
 		if _, err := gates.Validate(b.Type, b.Version, b.Config); err != nil {
 			return false
+		}
+		if b.Type == "review" {
+			var config gates.ReviewConfig
+			if json.Unmarshal(b.Config, &config) != nil || (config.Semantics == "legacy_completion_v1" && !b.Origin.Imported) {
+				return false
+			}
 		}
 		r := v.Results[i].Result
 		if r.Type != b.Type || r.Version != b.Version || len(r.Work) > 0 || len(r.Actions) > 0 {

@@ -210,3 +210,41 @@ func TestReviewApprovalConfigDenials(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyReviewIsOnlyAnImportedMonitor(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		alter func(*Binding, *Facts)
+		want  string
+	}{
+		{"imported-monitor", func(*Binding, *Facts) {}, "met"},
+		{"not-imported", func(b *Binding, _ *Facts) { b.Origin.Imported = false }, "unknown"},
+		{"required", func(b *Binding, _ *Facts) { b.Required = true }, "unknown"},
+		{"guard", func(b *Binding, _ *Facts) { b.Purpose = "guard"; action := "change.merge"; b.Action = &action }, "unknown"},
+		{"unreadable", func(_ *Binding, f *Facts) {
+			r := f.Change.Reviews["scope"]
+			r.AssignmentReadable = false
+			f.Change.Reviews["scope"] = r
+		}, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := reviewFixture("ordinary")
+			b := ChangeBindings("1", *f.Change)[1]
+			tc.alter(&b, &f)
+			r := Evaluate(b, f, f.ObservedAt, 1)
+			if r.Status != tc.want {
+				t.Fatalf("%s: %s", r.Status, r.Summary)
+			}
+			if r.Status == "met" {
+				for _, d := range r.Dependencies {
+					if !d.Complete {
+						t.Fatal("legacy comparison declared an irrelevant incomplete current-head dependency")
+					}
+				}
+			}
+			if len(r.Work) > 0 || len(r.Actions) > 0 || len(r.Waits) > 0 {
+				t.Fatal("legacy comparison produced operational work")
+			}
+		})
+	}
+}

@@ -179,6 +179,19 @@ func RunChangeGates(t *testing.T, s *model.Store, db *sql.DB) {
 		if next.SourceRevision == v.SourceRevision || next.Results[0].Revision <= generation {
 			t.Fatal("source event did not invalidate persisted observation")
 		}
+		if diag.Counts["unknown_unsupported_config"] != 0 {
+			t.Fatal("normal source/assignment change was mislabeled as unsupported cached configuration")
+		}
+		for i, b := range next.Bindings {
+			if b.Type != "review" || !b.Origin.Imported {
+				continue
+			}
+			var config gates.ReviewConfig
+			must(json.Unmarshal(b.Config, &config))
+			if config.RequirementID == "ordinary/task:missing-review" && next.Results[i].Result.Status != "met" {
+				t.Fatal("normal assignment change suppressed the independently known legacy comparison")
+			}
+		}
 		v = next
 		generation = v.Results[0].Revision
 		if len(diag.History) < 2 {

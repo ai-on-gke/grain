@@ -154,6 +154,7 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 	if head != "" {
 		headRef = &head
 	}
+	legacy := false
 	complete := c.Complete && c.Head != "" && c.PolicyVersion != "" && c.AuthorizationVersion != ""
 	if b.Type == "review" {
 		var cfg ReviewConfig
@@ -161,7 +162,8 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 		scope, ok := c.Reviews[cfg.RequirementID]
 		complete = complete && ok && scope.AssignmentPresent && scope.AssignmentReadable && scope.CollectionsComplete && scope.DiffComplete && scope.BaseOwned && scope.FixesComplete
 		if cfg.Semantics == "legacy_completion_v1" {
-			complete = c.Complete && scope.AssignmentReadable
+			legacy = true
+			complete = scope.AssignmentReadable
 		}
 	}
 	r.Dependencies[0] = Dependency{Key: "change/" + c.Subject.Repository + "/" + c.Subject.ID + "/" + b.ID, Subject: c.Subject, Head: headRef,
@@ -170,15 +172,17 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 	if len(r.Dependencies[0].Key) > 220 {
 		r.Dependencies[0].Key = "change/" + Digest([]any{c.Subject, b.ID})[7:]
 	}
-	for _, version := range []struct{ key, value string }{{"head", c.Head}, {"policy", c.PolicyVersion}, {"authorization", c.AuthorizationVersion}} {
-		dep := r.Dependencies[0]
-		dep.Key += "/" + version.key
-		dep.Version = version.value
-		dep.Complete = version.value != ""
-		if dep.Version == "" {
-			dep.Version = "unavailable:" + version.key
+	if !legacy {
+		for _, version := range []struct{ key, value string }{{"head", c.Head}, {"policy", c.PolicyVersion}, {"authorization", c.AuthorizationVersion}} {
+			dep := r.Dependencies[0]
+			dep.Key += "/" + version.key
+			dep.Version = version.value
+			dep.Complete = version.value != ""
+			if dep.Version == "" {
+				dep.Version = "unavailable:" + version.key
+			}
+			r.Dependencies = append(r.Dependencies, dep)
 		}
-		r.Dependencies = append(r.Dependencies, dep)
 	}
 	if !now.Before(f.ValidUntil) {
 		r.Summary = "Evidence is stale; refresh required."
@@ -210,6 +214,10 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 		if cfg.Semantics == "legacy_completion_v1" {
 			if !b.Origin.Imported || b.Purpose != "monitor" || b.Required || b.Action != nil {
 				r.Summary = prefix + "Legacy completion is admitted only as an explicit imported shadow monitor."
+				return r
+			}
+			if !s.AssignmentReadable {
+				r.Summary = prefix + "Legacy comparison is unavailable: assignment access or bounded collection evidence is missing."
 				return r
 			}
 			if s.LegacyStatus == "met" || s.LegacyStatus == "pending" || s.LegacyStatus == "unmet" {

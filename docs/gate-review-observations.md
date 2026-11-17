@@ -55,6 +55,9 @@ to a later restricted reader. No deployment-wide States/PathTriggers scan or
 external provider call is introduced. Task-read authorization still precedes the
 optional projection, including paged/comments-since/summary reads.
 
+Normal assignment/scope changes evaluate immediately; only unsupported persisted
+profiles use the explained unknown regeneration path. Imported comparisons declare
+only their local predicate dependencies, not unavailable current-head/role proof.
 Source fences include task assignments/links, local findings/questions and
 acceptances, Submit/named approval markers, related review/fix state and relevant
 settlement, comments/events, review tags, base policy contents/commits and
