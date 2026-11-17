@@ -182,6 +182,19 @@ do not pull in an icon font.
   zone, and clears itself on the first answer. It sits in flow above the
   rail and top bar, never over them (`g-root:has(> .conn-banner)` becomes a
   column), is `role="status"`, and has no close button.
+- **Upgrade banner & reload onto a new build:** `shell/upgrade-banner.component.ts`
+  mounts under the top bar, beside the dispatch banner, only while
+  `services/upgrade-watch.service.ts` has something to say. It shows an
+  upgrade in flight ("Upgrading to X · step 2/9 pull image (12s)", with a
+  Details link to Settings → Upgrade, hidden on that page), a failure this
+  tab watched (with its error, dismissible), and "grain was upgraded to
+  vX.Y.Z", which reloads after 5 s unless a page's `beforeunload` guard
+  reports unsaved work. It is loaded eagerly, never `@defer`: after an
+  upgrade the old bundle's lazy chunks are what can no longer be fetched.
+  A router navigation error from a stale chunk reloads the target URL
+  (`app.config.ts`, at most once in 30 s). A page that keeps an unsaved
+  draft must cancel `beforeunload`, because that is how the reload knows
+  to wait.
 
 ### Destinations fill the stage
 

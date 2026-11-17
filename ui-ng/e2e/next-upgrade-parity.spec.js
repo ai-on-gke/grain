@@ -360,3 +360,71 @@ test("an upgrade whose target has not changed says so @phone", async ({
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(page.viewportSize().width);
 });
+
+// Phone layout: the picker's list, the Image source card, the database
+// commands, the step list and the shell banner all stay inside the
+// viewport, and nothing scrolls the page sideways.
+test("the Upgrade pane and its shell banner fit a phone @phone", async ({
+  page,
+}) => {
+  let started = false;
+  await stubUpgrade(page, {
+    start: () => {
+      started = true;
+      return running();
+    },
+    status: () => (started ? running() : STATUS),
+  });
+  function running() {
+    return {
+      ...STATUS,
+      phase: "running",
+      branch: "v2.3.9",
+      steps: steps(["done", "running"], {
+        1: "pulling docker.io/grainai/grain:v2.3.9 layer 3 of 12",
+      }),
+    };
+  }
+  await page.goto("/next/settings/upgrade");
+  const width = page.viewportSize().width;
+  const inside = async (locator) => {
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
+  };
+  const noSideScroll = async () =>
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
+
+  const card = page.getByTestId("card-upgrade");
+  const picker = card.getByTestId("select-upgrade-target");
+  await expect(picker).toHaveValue("v2.3.9");
+  await picker.click();
+  await inside(card.getByTestId("upgrade-target-list"));
+  await page.keyboard.press("Escape");
+  await inside(card.getByTestId("card-upgrade-image"));
+  await inside(card.getByTestId("upgrade-will-pull"));
+  await page.getByTestId("upgrade-database-commands").scrollIntoViewIfNeeded();
+  await inside(page.getByTestId("upgrade-database-commands"));
+  await noSideScroll();
+
+  await card.getByTestId("start-upgrade-btn").click();
+  await page
+    .getByTestId("confirm-dialog")
+    .getByTestId("confirm-accept")
+    .click();
+  await expect(card.getByTestId("upgrade-step-2")).toContainText("running", {
+    timeout: 10_000,
+  });
+  await inside(card.getByTestId("upgrade-step-2"));
+  await noSideScroll();
+
+  await page.goto("/next/inbox");
+  const banner = page.getByTestId("upgrade-progress-banner");
+  await expect(banner).toContainText("step 2/4 pull image");
+  await inside(banner);
+  await inside(banner.getByRole("link", { name: "Details" }));
+  await noSideScroll();
+});
