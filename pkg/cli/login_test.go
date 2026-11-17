@@ -588,3 +588,49 @@ func TestGrainLoginWithGrainIDTokenAndNoExternalAgentAPI(t *testing.T) {
 		t.Errorf("login warned %q; want it to say there is no personal token, and nothing about an access code", errOut)
 	}
 }
+
+// grain logout of one context never sends the -token or --as given for
+// another server to the context's own (#XC-4): the revoke goes with the
+// context's own credential.
+func TestGrainLogoutKeepsAnotherServersTokenToItself(t *testing.T) {
+	useConfigHome(t)
+	t.Setenv("GRAIN_CLI_ENV", "")
+	for _, env := range ui.TokenEnvVars {
+		t.Setenv(env, "")
+	}
+	var gotAuth, gotUser atomic.Value
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/external-agents/tokens/9/revoke" {
+			gotAuth.Store(r.Header.Get("Authorization"))
+			gotUser.Store(r.Header.Get("X-Forwarded-User"))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(remote.Close)
+	secret := "gma_" + strings.Repeat("b", 64)
+	loc, err := (credentialStore{}).store("remote", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveContexts(&contextConfig{
+		Current: "remote",
+		Contexts: map[string]*cliContext{
+			"remote": {Server: remote.URL, Auth: "external-token", Credential: loc, TokenID: "9"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = captureStdout(t, func() {
+		if err := runCLI([]string{"--server", "https://other.example.test", "--token", "secret-for-other", "--as", "someone", "logout", "remote"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if a, _ := gotAuth.Load().(string); a != "Bearer "+secret {
+		t.Errorf("revoke reached %s with Authorization %q; want the context's own token, never --token's", remote.URL, a)
+	}
+	if u, _ := gotUser.Load().(string); u != "" {
+		t.Errorf("revoke reached %s with X-Forwarded-User %q; want none", remote.URL, u)
+	}
+}

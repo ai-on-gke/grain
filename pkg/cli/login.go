@@ -472,7 +472,12 @@ func cmdLogout(ctx context.Context, base *ui.HTTPClient, out *printer, sel selec
 		} else {
 			rc.HTTP = cliHTTPClient(defaultConnectTimeout, defaultCallTimeout)
 		}
-		rc.RetryPolicy, rc.Token, rc.User = base.RetryPolicy, base.Token, base.User
+		rc.RetryPolicy = base.RetryPolicy
+		// -token and --as were given for base's server: the context being
+		// logged out may be another's, which never sees them (#XC-4).
+		if sameOrigin(base.BaseURL, entry.Server) {
+			rc.Token, rc.User = base.Token, base.User
+		}
 		// As every other call sends it: behind IAP that is the gma_ token
 		// with an ID token beside it, which IAP needs to let the revoke by.
 		useContextCredential(rc, selectedContext{name: name, ctx: entry}, tokenSource(rc.Token))
