@@ -1247,6 +1247,75 @@ describe("TaskPageComponent", () => {
     ).toMatchObject({ close_pull_request: false, reason: "superseded by #9" });
   });
 
+  it("lets a queued close take a reason without a warning, offers Undo, and renders the reason in History", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "queued",
+      pullRequest: "",
+      transitions: [
+        { state: "queued", at: "2026-11-15T10:00:00Z" },
+        {
+          state: "closed",
+          at: "2026-11-15T10:05:00Z",
+          actorLabel: "Ana",
+          reason: "duplicate of #19",
+        },
+      ],
+    } as TaskDetail;
+    const f = await render(api, "details");
+    expect(q(f, ".history")!.textContent).toContain("duplicate of #19");
+
+    q<HTMLButtonElement>(f, '[data-testid="act-close"]')!.click();
+    await settle(f);
+    // Reversible closes open the reason row instead of posting immediately,
+    // without showing an irreversible warning alert.
+    expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    const confirm = q(f, '[data-testid="close-confirm"]')!;
+    expect(confirm.querySelector('[role="alert"]')).toBeNull();
+    expect(q(f, '[data-testid="close-keep"]')!.textContent?.trim()).toBe(
+      "Cancel",
+    );
+
+    const reason = q<HTMLInputElement>(f, '[data-testid="close-reason"]')!;
+    reason.value = "  duplicate of #19 ";
+    reason.dispatchEvent(new Event("input"));
+    // Escape cancels cleanly and clears the draft.
+    reason.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')).toBeNull();
+    expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+
+    q<HTMLButtonElement>(f, '[data-testid="act-close"]')!.click();
+    await settle(f);
+    const reopenedReason = q<HTMLInputElement>(
+      f,
+      '[data-testid="close-reason"]',
+    )!;
+    expect(reopenedReason.value).toBe("");
+    reopenedReason.value = "  duplicate of #19 ";
+    reopenedReason.dispatchEvent(new Event("input"));
+    reopenedReason.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await settle(f);
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/close")?.body,
+    ).toEqual({ close_pull_request: false, reason: "duplicate of #19" });
+    const undo = TestBed.inject(SnackbarService).current()?.action;
+    expect(undo?.label).toBe("Undo");
+    await undo!.run();
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/reopen"),
+    ).toMatchObject({
+      route: "POST /api/tasks/{id}/reopen",
+      params: { id: "7" },
+    });
+  });
+
   it("offers Approve for a proposal and Retry for a failed task", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, state: "proposed" };

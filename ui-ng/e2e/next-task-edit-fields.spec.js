@@ -173,7 +173,88 @@ test("Close on a running task takes a reason", async ({
   await page.getByTestId("act-close").click();
   const confirm = page.getByTestId("close-confirm");
   await expect(confirm).toBeVisible();
+  await expect(confirm.locator('[role="alert"]')).toContainText(
+    "stops the run",
+  );
   await confirm.getByTestId("close-reason").fill("superseded by e2e");
   await confirm.getByTestId("close-yes").click();
   await expect.poll(() => sent).toMatchObject({ reason: "superseded by e2e" });
+});
+
+test("Close on a queued task takes a reason and Reopen restores it @phone @dark", async ({
+  page,
+  demoServer,
+  accessCode,
+  axe,
+}) => {
+  const created = await apiJson(demoServer, accessCode, "POST", "/api/tasks", {
+    title: "Queued task for reversible close reason check",
+    description: "Created by next-task-edit-fields to verify reversible Close.",
+    approve: true,
+    no_repo: true,
+  });
+  try {
+    await page.goto(`task/${created.id}`);
+    await page.getByTestId("act-close").click();
+
+    const confirm = page.getByTestId("close-confirm");
+    await expect(confirm).toBeVisible();
+    await expect(confirm.locator('[role="alert"]')).toHaveCount(0);
+
+    // Every control in the inline close row fits within the viewport and aligns on one row when wide enough.
+    const vw = page.viewportSize().width;
+    const reasonInput = confirm.getByTestId("close-reason");
+    const closeYes = confirm.getByTestId("close-yes");
+    const closeKeep = confirm.getByTestId("close-keep");
+    for (const loc of [reasonInput, closeYes, closeKeep]) {
+      const box = await loc.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(vw + 0.5);
+    }
+    if (vw >= 600) {
+      const rBox = await reasonInput.boundingBox();
+      const yBox = await closeYes.boundingBox();
+      expect(
+        Math.abs(rBox.y + rBox.height / 2 - (yBox.y + yBox.height / 2)),
+      ).toBeLessThanOrEqual(2);
+    }
+    expect(await axe()).toEqual([]);
+
+    await reasonInput.fill("duplicate of #19");
+    const [closeReq] = await Promise.all([
+      page.waitForRequest(
+        (r) =>
+          r.method() === "POST" &&
+          r.url().endsWith(`/api/tasks/${created.id}/close`),
+      ),
+      closeYes.click(),
+    ]);
+    expect(closeReq.postDataJSON()).toEqual({
+      close_pull_request: false,
+      reason: "duplicate of #19",
+    });
+
+    await expect(page.getByTestId("act-reopen")).toBeVisible();
+    await expect(page.getByTestId("snackbar-action")).toHaveText("Undo");
+
+    // Reload and verify the recorded close reason persists in History.
+    await page.reload();
+    if (vw < 1080) {
+      await page.getByTestId("task-tab-details").click();
+    }
+    await expect(page.locator(".history:visible")).toContainText(
+      "duplicate of #19",
+    );
+
+    await page.getByTestId("act-reopen").click();
+    await expect(page.getByTestId("act-close")).toBeVisible();
+  } finally {
+    await apiJson(
+      demoServer,
+      accessCode,
+      "POST",
+      `/api/tasks/${created.id}/close`,
+      {},
+    ).catch(() => {});
+  }
 });
