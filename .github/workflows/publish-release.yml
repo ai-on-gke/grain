@@ -22,8 +22,9 @@
 #      it was promoted from (Promoted-From:), sits on that rc's own commit,
 #      the rc is not dropped, the commit is on main or release/vX.Y.0, and
 #      the rc still passes Stage 1 (nightly.yml) and Stage 2
-#      (grain/release-qualification, from vars.RELEASE_QUALIFICATION_APP
-#      only), and none of the guards that make the train stage an rc for a
+#      (grain/release-qualification, from vars.RELEASE_QUALIFICATION_APP or
+#      vars.RELEASE_QUALIFICATION_STATUS_LOGIN / scripts/release.conf only),
+#      and none of the guards that make the train stage an rc for a
 #      person instead applies. Anything else fails the run and publishes
 #      nothing. A tag with no Promoted-From is not the train's: this
 #      workflow publishes nothing for it -- neither images nor a GitHub
@@ -73,6 +74,7 @@ jobs:
       # write, not read: an on-demand build dispatches release.yml.
       actions: write
       checks: read
+      statuses: read
       contents: write
       packages: write
       id-token: write
@@ -110,6 +112,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_CI_SOURCE: github
           RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}
+          RELEASE_QUALIFICATION_STATUS_LOGIN: ${{ vars.RELEASE_QUALIFICATION_STATUS_LOGIN }}
         run: |
           set -euo pipefail
           if ! [[ "${RELEASE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.0$ ]]; then

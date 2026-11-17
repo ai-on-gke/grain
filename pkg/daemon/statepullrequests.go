@@ -39,28 +39,31 @@ type StateRepoPullRequestClient struct {
 }
 
 var (
-	_ github.Client                   = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeQueuer              = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeRulesReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.DiffReader               = (*StateRepoPullRequestClient)(nil)
-	_ github.FileReader               = (*StateRepoPullRequestClient)(nil)
-	_ github.ReviewSubmitter          = (*StateRepoPullRequestClient)(nil)
-	_ github.TagLister                = (*StateRepoPullRequestClient)(nil)
-	_ github.ReleaseTagReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowDispatcher       = (*StateRepoPullRequestClient)(nil)
-	_ github.CollaboratorReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.ReactionPoster           = (*StateRepoPullRequestClient)(nil)
-	_ github.CheckRunWriter           = (*StateRepoPullRequestClient)(nil)
-	_ github.CallerLabeler            = (*StateRepoPullRequestClient)(nil)
-	_ github.JobLogTailer             = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowRunsReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.BranchWorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsReader            = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsJobAttemptsReader = (*StateRepoPullRequestClient)(nil)
-	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
-	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
-	_ github.GitBranchSource          = (*StateRepoPullRequestClient)(nil)
+	_ github.Client                     = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeQueuer                = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeRulesReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.DiffReader                 = (*StateRepoPullRequestClient)(nil)
+	_ github.FileReader                 = (*StateRepoPullRequestClient)(nil)
+	_ github.ReviewSubmitter            = (*StateRepoPullRequestClient)(nil)
+	_ github.TagLister                  = (*StateRepoPullRequestClient)(nil)
+	_ github.ReleaseTagReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowDispatcher         = (*StateRepoPullRequestClient)(nil)
+	_ github.CollaboratorReader         = (*StateRepoPullRequestClient)(nil)
+	_ github.ReactionPoster             = (*StateRepoPullRequestClient)(nil)
+	_ github.CheckRunWriter             = (*StateRepoPullRequestClient)(nil)
+	_ github.CallerLabeler              = (*StateRepoPullRequestClient)(nil)
+	_ github.JobLogTailer               = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunsReader         = (*StateRepoPullRequestClient)(nil)
+	_ github.BranchWorkflowRunsReader   = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsReader              = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsJobAttemptsReader   = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusReader         = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusLister         = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusWriter         = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusIdentityReader = (*StateRepoPullRequestClient)(nil)
+	_ github.PathCommitLister           = (*StateRepoPullRequestClient)(nil)
+	_ github.GitOnlySource              = (*StateRepoPullRequestClient)(nil)
+	_ github.GitBranchSource            = (*StateRepoPullRequestClient)(nil)
 
 	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
@@ -1464,6 +1467,20 @@ func (c *StateRepoPullRequestClient) CheckRunApp(owner, name string) (string, er
 	return src.CheckRunApp(owner, name)
 }
 
+// StatusLogin is the wrapped client's own (github.RESTClient.StatusLogin):
+// the GitHub login grain's commit statuses on owner/name are posted as, or ""
+// for the native config repository and a client that cannot tell.
+func (c *StateRepoPullRequestClient) StatusLogin(owner, name string) (string, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return "", nil
+	}
+	src, ok := c.Client.(github.CommitStatusIdentityReader)
+	if !ok {
+		return "", nil
+	}
+	return src.StatusLogin(owner, name)
+}
+
 // ListTags is the wrapped client's own, for the repositories that have
 // one: the native config repository is not a forge and has no tags here,
 // which is the same answer a repository with none gives.
@@ -1489,6 +1506,33 @@ func (c *StateRepoPullRequestClient) CommitStatuses(owner, name, ref string) ([]
 		return nil, nil
 	}
 	return reader.CommitStatuses(owner, name, ref)
+}
+
+// ListCommitStatuses is the wrapped client's own: every commit status on
+// ref with creator logins, used when Stage 2 / rc-hold is projected as a
+// commit status instead of a check run.
+func (c *StateRepoPullRequestClient) ListCommitStatuses(owner, name, ref string) ([]github.CommitStatus, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	lister, ok := c.Client.(github.CommitStatusLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListCommitStatuses(owner, name, ref)
+}
+
+// CreateCommitStatus is the wrapped client's own: posts a commit status
+// on sha when the repository's forge credential is not a GitHub App.
+func (c *StateRepoPullRequestClient) CreateCommitStatus(owner, name, sha string, status github.CommitStatusWrite) error {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil
+	}
+	writer, ok := c.Client.(github.CommitStatusWriter)
+	if !ok {
+		return fmt.Errorf("%s/%s has no GitHub commit status writer", owner, name)
+	}
+	return writer.CreateCommitStatus(owner, name, sha, status)
 }
 
 // ListPathCommits is the wrapped client's own, as ListTags is: what the

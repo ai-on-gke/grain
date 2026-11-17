@@ -25,13 +25,13 @@
 #   2. the CI verdicts, written unedited from grain's own forge connection
 #      in the GitHub shapes scripts/candidate-gate.sh reads: for the rc in
 #      qualification its nightly.yml jobs (Stage 1), its
-#      grain/release-qualification check runs (Stage 2) and, for a dropped
-#      rc, its grain/rc-hold check runs -- and main's workflow runs only if
-#      the train gets as far as looking for a commit to cut
-#      (RELEASE_RUNS_CMD). Those are up to 500 runs of each required
-#      workflow, most of a tick's reading, and a tick whose rc is still
-#      qualifying or whose rc-hold is still holding never needs them
-#      (grain/task-4393);
+#      grain/release-qualification check runs or commit statuses (Stage 2)
+#      and, for a dropped rc, its grain/rc-hold check runs or commit
+#      statuses -- and main's workflow runs only if the train gets as far as
+#      looking for a commit to cut (RELEASE_RUNS_CMD). Those are up to 500
+#      runs of each required workflow, most of a tick's reading, and a tick
+#      whose rc is still qualifying or whose rc-hold is still holding never
+#      needs them (grain/task-4393);
 #   3. whether main's publishing is held by an open release triage task
 #      (`grain api GET /api/repos/<repo>/release?branch=main`, needing
 #      api#releases:read): while held, the tick runs only Phase 1
@@ -233,6 +233,7 @@ elif [ -n "$train_hold" ]; then
 fi
 
 app=""
+status_login=""
 env_args=()
 if [ -n "$rc" ]; then
   rc_sha="$(git rev-parse "$rc^{commit}")"
@@ -242,6 +243,7 @@ if [ -n "$rc" ]; then
   read_ci "$out/qual-checks.json" "grain ci checks could not read grain/release-qualification on $rc" \
     checks "$rc_sha" --repo "$repo" --name grain/release-qualification --format github
   app="$(jq -r '.grain_app // empty' "$out/qual-checks.json")"
+  status_login="$(jq -r '.grain_status_login // empty' "$out/qual-checks.json")"
   env_args+=(RELEASE_QUALIFICATION_RUNS_JSON="$out/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$out/qual-checks.json")
 fi
 # If $rc fails qualification in Phase 1 of this same tick, Phase 2 checks
@@ -254,13 +256,18 @@ if [ "$cut_enabled" = true ] && [ -n "$hold_rc" ]; then
   read_ci "$out/hold-checks.json" "grain ci checks could not read grain/rc-hold on $hold_rc" \
     checks "$hold_sha" --repo "$repo" --name grain/rc-hold --format github
   app="${app:-$(jq -r '.grain_app // empty' "$out/hold-checks.json")}"
+  status_login="${status_login:-$(jq -r '.grain_status_login // empty' "$out/hold-checks.json")}"
   env_args+=(RELEASE_HOLD_CHECKS_JSON="$out/hold-checks.json")
 fi
 # A forge connection that is no GitHub App (a PAT) reports no grain_app
-# (as does one grain cannot tell). Then the environment, or else
-# scripts/release.conf's RELEASE_QUALIFICATION_APP, decides: "none" there
-# qualifies on Stage 1 alone with nothing holding, and unset fails closed.
+# (as does one grain cannot tell), and reports grain_status_login when it
+# knows the login it posts commit statuses as. Then the environment, or else
+# scripts/release.conf's RELEASE_QUALIFICATION_APP /
+# RELEASE_QUALIFICATION_STATUS_LOGIN, decides: RELEASE_QUALIFICATION_APP=none
+# opts out of Stage 2 and grain/rc-hold even when a status login is reported,
+# and unset in both fails closed.
 app="${app:-${RELEASE_QUALIFICATION_APP:-}}"
+status_login="${status_login:-${RELEASE_QUALIFICATION_STATUS_LOGIN:-}}"
 for f in "$out"/*.json; do
   note="$(jq -r '.grain_note // empty' "$f" 2>/dev/null || true)"
   [ -z "$note" ] || say "grain_note in $(basename "$f"): $note"
@@ -269,7 +276,9 @@ done
 status=0
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 env RELEASE_PUSH_GRANT=train RELEASE_CI_SOURCE=grain GITHUB_TOKEN= GH_TOKEN= \
-  RELEASE_RUNS_JSON= RELEASE_RUNS_CMD="bash $(printf '%q' "$self") main-runs" RELEASE_QUALIFICATION_APP="$app" \
+  RELEASE_RUNS_JSON= RELEASE_RUNS_CMD="bash $(printf '%q' "$self") main-runs" \
+  RELEASE_QUALIFICATION_APP="$app" RELEASE_QUALIFICATION_STATUS_LOGIN="$status_login" \
+  RELEASE_QUALIFICATION_STATUSES_JSON= RELEASE_HOLD_STATUSES_JSON= \
   RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off \
   RELEASE_TRAIN_PHASES="$train_phases" RELEASE_TRAIN_HOLD="$train_hold" RELEASE_TRAIN_HOLD_DETAIL="$train_hold_detail" \
   RELEASE_TRAIN_OUTPUT="$out/train.out" ${env_args[@]+"${env_args[@]}"} \

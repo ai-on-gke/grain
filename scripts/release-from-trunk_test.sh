@@ -1138,6 +1138,95 @@ if [ -n "$api" ]; then
   train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_GITHUB_PAGES=1 GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
   expect "github actions, rc-hold flooded" "exits 1 rather than fail open" eq "$status" 1
   expect "github actions, rc-hold flooded" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+  # Commit-status Stage 2 and grain/rc-hold over GitHub's API (PAT forge, no App).
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+  github_runs "$c2"
+  mkdir -p "$work/www/gh/repos/o/r/actions/workflows/nightly.yml" "$work/www/gh/repos/o/r/actions/runs/8" "$work/www/gh/repos/o/r/commits/$c2"
+  printf '{"total_count":1,"workflow_runs":[{"id":8,"head_sha":"%s"}]}' "$c2" > "$work/www/gh/repos/o/r/actions/workflows/nightly.yml/runs"
+  {
+    printf '{"total_count":18,"jobs":['
+    first=1
+    for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
+      "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
+      "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
+      "pkg/cli stress under load" "upgrade from previous versions" "real KVM sandboxes" "twenty two-VM boots" "real kubernetes"; do
+      [ $first = 1 ] || printf ','
+      first=0
+      printf '{"run_id":8,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"success","created_at":"%s"}' \
+        "$c2" "$name" "$(iso $((now - 3600)))"
+    done
+    printf ']}'
+  } > "$work/www/gh/repos/o/r/actions/runs/8/jobs"
+  rm -f "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  printf '[{"id":31,"context":"grain/release-qualification","state":"success","description":"Stage 2 passed for v2.3.0-rc.1","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}},{"id":32,"context":"grain/release-qualification","state":"failure","description":"spoofed","created_at":"%s","updated_at":"%s","creator":{"login":"intruder"}}]\n' \
+    "$(iso $((now - 600)))" "$(iso $((now - 600)))" "$(iso $((now - 300)))" "$(iso $((now - 300)))" \
+    > "$work/www/gh/repos/o/r/commits/$c2/statuses"
+  : > "$work/images.log"
+  train RELEASE_RUNS_JSON= RELEASE_QUALIFICATION_RUNS_JSON= RELEASE_QUALIFICATION_CHECKS_JSON= RELEASE_HOLD_CHECKS_JSON= \
+    RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+    GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, status qualified" "exits 0" eq "$status" 0
+  expect "github actions, status qualified" "ignores untrusted login" has "IGNORED grain/release-qualification: 1 from intruder, not grain-pat-bot"
+  expect "github actions, status qualified" "stages the release" eq "$(remote_tag v2.3.0-pending)" "$c2"
+
+  # grain/rc-hold commit status over GitHub's API: pending holds, success lifts,
+  # flooded foreign statuses fail closed.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  printf '[{"id":42,"context":"grain/rc-hold","state":"success","description":"v2.3.0-rc.1: spoofed lift","created_at":"%s","updated_at":"%s","creator":{"login":"intruder"}},{"id":41,"context":"grain/rc-hold","state":"pending","description":"v2.3.0-rc.1: waiting on task 55","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}}]\n' \
+    "$(iso $((now - 100)))" "$(iso $((now - 100)))" "$(iso $((now - 300)))" "$(iso $((now - 300)))" \
+    > "$work/www/gh/repos/o/r/commits/$c2/statuses"
+  : > "$work/train.out"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_TRAIN_OUTPUT="$work/train.out" \
+    RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+    GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold status" "exits 0" eq "$status" 0
+  expect "github actions, rc-hold status" "holds rc.2 ignoring intruder" has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: v2.3.0-rc.1: waiting on task 55"
+  expect "github actions, rc-hold status" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+  printf '[{"id":43,"context":"grain/rc-hold","state":"success","description":"v2.3.0-rc.1: cleared","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}},{"id":41,"context":"grain/rc-hold","state":"pending","description":"v2.3.0-rc.1: waiting on task 55","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}}]\n' \
+    "$(iso $((now - 60)))" "$(iso $((now - 60)))" "$(iso $((now - 300)))" "$(iso $((now - 300)))" \
+    > "$work/www/gh/repos/o/r/commits/$c2/statuses"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= \
+    RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+    GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold status lifted" "cuts rc.2 once lifted" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+
+  # Check-run precedence over status on grain/rc-hold when both App and status login are set.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  printf '{"check_runs":[{"id":11,"name":"grain/rc-hold","head_sha":"%s","status":"in_progress","started_at":"%s","output":{"title":"Holding","summary":"app check run holds"},"app":{"id":42,"slug":"grain-test"}}]}' \
+    "$c2" "$(iso $((now - 300)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  printf '[{"id":43,"context":"grain/rc-hold","state":"success","description":"v2.3.0-rc.1: cleared","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}}]\n' \
+    "$(iso $((now - 60)))" "$(iso $((now - 60)))" > "$work/www/gh/repos/o/r/commits/$c2/statuses"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= \
+    RELEASE_QUALIFICATION_APP=grain-test RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+    GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold check-run wins over status" "holds rc.2 via check run" has "app check run holds"
+  expect "github actions, rc-hold check-run wins over status" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+  # Flooded foreign statuses fail closed.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  jq -cn --arg t "$(iso $((now - 60)))" \
+    '[range(1; 101) | {id: ., context: "grain/rc-hold", state: "success", description: "spam", created_at: $t, updated_at: $t, creator: {login: "intruder"}}]' \
+    > "$work/www/gh/repos/o/r/commits/$c2/statuses"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_GITHUB_PAGES=1 \
+    RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+    GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold status flooded" "exits 1 rather than fail open" eq "$status" 1
+  expect "github actions, rc-hold status flooded" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
 fi
 
 # --- the task train (.grain/templates/release-train.yml): no GitHub token,
@@ -1347,6 +1436,17 @@ expect "verify, app none" "skips Stage 2" has "SKIPPED grain/release-qualificati
 verify v2.3.0 RELEASE_QUALIFICATION_APP=
 expect "verify, app empty" "exits 1" eq "$status" 1
 expect "verify, app empty" "is not published" has "does not pass qualification now"
+# Verify with commit-status Stage 2 (PAT forge, RELEASE_QUALIFICATION_STATUS_LOGIN).
+printf '{"total_count":0,"check_runs":[],"statuses":[{"id":51,"context":"grain/release-qualification","state":"success","description":"Stage 2 passed for v2.3.0-rc.1","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}}],"grain_app":"","grain_status_login":"grain-pat-bot"}\n' \
+  "$(iso $((now - 600)))" "$(iso $((now - 600)))" > "$work/qual-status-checks.json"
+verify v2.3.0 RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-status-checks.json" \
+  RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot
+expect "verify, status pass" "exits 0" eq "$status" 0
+expect "verify, status pass" "passes Stage 2 via status" has "PASS grain/release-qualification: passed"
+verify v2.3.0 RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-status-checks.json" \
+  RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=other-bot
+expect "verify, status wrong login" "exits 1" eq "$status" 1
+expect "verify, status wrong login" "ignores untrusted login" has "IGNORED grain/release-qualification: 1 from grain-pat-bot, not other-bot"
 qualification pass "$c2"
 (
   cd "$work/seed"
@@ -1716,6 +1816,41 @@ qualification none
 loop
 expect "loop, still no new commit" "still cuts nothing" eq "$(remote_tag v2.5.0-rc.3)" ""
 expect "loop, several releases" "released twice in one day" eq "$(git -C "$work/remote.git" tag -l 'v2.[34].0' | wc -l | tr -d ' ')" 2
+
+# --- commit-status Stage 2 & grain/rc-hold through train + release.conf ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+runs "$c2" "$c3"
+qualification stage2-fail "$c2"
+# Replace qual-checks with an embedded commit-status error (neutral/infra stall).
+printf '{"total_count":0,"check_runs":[],"statuses":[{"id":61,"context":"grain/release-qualification","state":"error","description":"Stage 2 stalled on infra for v2.3.0-rc.1","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}}],"grain_app":"","grain_status_login":"grain-pat-bot"}\n' \
+  "$(iso $((now - 600)))" "$(iso $((now - 600)))" > "$work/qual-checks.json"
+: > "$work/train.out"
+train RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "status stage 2 neutral" "exits 0" eq "$status" 0
+expect "status stage 2 neutral" "outputs infra" grep -qxF "qualification=infra" "$work/train.out"
+expect "status stage 2 neutral" "marks stalled" grep -qxF "qualification_stalled=v2.3.0-rc.1" "$work/train.out"
+expect "status stage 2 neutral" "names Stage 2 as the re-run" grep -qxF "qualification_rerun=qualification:grain/release-qualification:infra" "$work/train.out"
+expect "status stage 2 neutral" "drops nothing" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
+
+# Failure status drops the rc and embedded rc-hold pending status holds rc.2.
+printf '{"total_count":0,"check_runs":[],"statuses":[{"id":62,"context":"grain/release-qualification","state":"failure","description":"Stage 2 failed for v2.3.0-rc.1","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}}],"grain_app":"","grain_status_login":"grain-pat-bot"}\n' \
+  "$(iso $((now - 300)))" "$(iso $((now - 300)))" > "$work/qual-checks.json"
+printf '{"total_count":0,"check_runs":[],"statuses":[{"id":63,"context":"grain/rc-hold","state":"pending","description":"v2.3.0-rc.1: triage open","created_at":"%s","updated_at":"%s","creator":{"login":"grain-pat-bot"}}],"grain_app":"","grain_status_login":"grain-pat-bot"}\n' \
+  "$(iso $((now - 300)))" "$(iso $((now - 300)))" > "$work/hold-checks.json"
+: > "$work/train.out"
+train RELEASE_QUALIFICATION_APP= RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "status stage 2 red + hold" "exits 0" eq "$status" 0
+expect "status stage 2 red + hold" "drops rc.1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "status stage 2 red + hold" "holds rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "status stage 2 red + hold" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+# RELEASE_QUALIFICATION_APP=none opts out even when status login is set.
+: > "$work/train.out"
+train RELEASE_QUALIFICATION_APP=none RELEASE_QUALIFICATION_STATUS_LOGIN=grain-pat-bot RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "status opt-out none" "exits 0" eq "$status" 0
+expect "status opt-out none" "cuts rc.2 ignoring status hold" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
 
 # --- publishing-held split (RELEASE_TRAIN_PHASES=judge,release, RELEASE_TRAIN_HOLD=publishing) ---
 # While main's publishing is held, a tick still runs Phase 1 (judge / release /

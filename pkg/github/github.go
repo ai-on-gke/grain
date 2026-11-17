@@ -3055,6 +3055,27 @@ func (c *RESTClient) CheckRunApp(owner, repo string) (string, error) {
 	return src.AppSlugFor(owner, repo)
 }
 
+// StatusLoginSource is a TokenSource that can say which GitHub login
+// commit statuses posted with the token it hands out for owner/repo are
+// created by (CommitStatus.Creator), or "" when it cannot tell.
+type StatusLoginSource interface {
+	StatusLoginFor(owner, repo string) (string, error)
+}
+
+// StatusLogin is the GitHub login this client's commit statuses on
+// owner/repo are posted as, or "" when it cannot tell (its TokenSource is
+// no StatusLoginSource, or the token has no forge login). A commit
+// status's context is not an identity -- anything with commit-status write
+// permission on a repository can post one under any context -- so a caller
+// that trusts its own commit status matches it on this.
+func (c *RESTClient) StatusLogin(owner, repo string) (string, error) {
+	src, ok := c.Tokens.(StatusLoginSource)
+	if !ok {
+		return "", nil
+	}
+	return src.StatusLoginFor(owner, repo)
+}
+
 // ListCheckRuns returns the check runs against ref -- a branch name works
 // fine here, GitHub resolves it to that branch's current tip itself, so a
 // caller never needs a commit sha in hand. Paginates the same Link-header

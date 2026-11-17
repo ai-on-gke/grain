@@ -554,6 +554,137 @@ mapfile -t red < <(stage1_run success 100 1 "$recent" "state repository soak=fai
 CHECK_QUALIFICATION_APP=none qualify "$(jobs_file q-none-red "${red[@]}" "$(gh_job "state repository soak" failure 101 1 $((recent + 600)))")"
 check "check-qualification: CHECK_QUALIFICATION_APP=none still needs Stage 1" 1 "Qualification: FAIL"
 
+# Commit-status Stage 2 (PAT forge connection, no GitHub App):
+# statuses_file <name> [<login>:]<state>... writes a commit status array (newest
+# first, as GitHub's GET /commits/{ref}/statuses returns it) where entries are
+# passed in chronological order (oldest first).
+statuses_file() {
+  local f="$work/$1.json" i=1 entry who state ts creator desc
+  shift
+  local items=()
+  for entry in "$@"; do
+    who="grain-pat-bot"
+    state="$entry"
+    if [[ "$entry" == *:* ]]; then
+      who="${entry%%:*}"
+      state="${entry#*:}"
+    fi
+    ts="$(iso $((recent + i * 60)))"
+    case "$who" in
+      nocreator) creator='null' ;;
+      *) creator="$(printf '{"login":"%s"}' "$who")" ;;
+    esac
+    desc="Stage 2 ${state} for ${tag}"
+    items+=("$(printf '{"id":%d,"context":"grain/release-qualification","state":"%s","description":"%s","created_at":"%s","updated_at":"%s","creator":%s}' "$i" "$state" "$desc" "$ts" "$ts" "$creator")")
+    i=$((i + 1))
+  done
+  # Emit newest first to match GitHub's GET /commits/{ref}/statuses ordering.
+  {
+    printf '['
+    local n="${#items[@]}" j
+    for ((j = n - 1; j >= 0; j--)); do
+      [ "$j" = $((n - 1)) ] || printf ','
+      printf '%s' "${items[$j]}"
+    done
+    printf ']\n'
+  } > "$f"
+  echo "$f"
+}
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-pass success)"
+check "check-qualification (status): trusted success passes" 0 \
+  "PASS grain/release-qualification: passed" "Qualification: PASS $tag."
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=Grain-Pat-Bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-case success)"
+check "check-qualification (status): login comparison is case-insensitive" 0 \
+  "PASS grain/release-qualification: passed" "Qualification: PASS $tag."
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-pending pending)"
+check "check-qualification (status): pending status stays pending" 2 \
+  "PENDING grain/release-qualification: still running (pending)" "Qualification: PENDING $tag"
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-fail failure)"
+check "check-qualification (status): failure is confirmed red at once" 1 \
+  "FAIL grain/release-qualification: failed (failure)" "Qualification: FAIL $tag"
+lacks "check-qualification (status): failure asks for no re-run" "RERUN qualification"
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-neutral error)"
+check "check-qualification (status): error status maps to neutral/infra" 3 \
+  "stalled after Stage 2's infra re-runs" \
+  "RERUN qualification grain/release-qualification infra" "Qualification: INFRA $tag"
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-neutral-retry error pending)"
+check "check-qualification (status): fresh pending attempt after error is pending" 2 \
+  "PENDING grain/release-qualification: still running (infra,pending)" "Qualification: PENDING $tag"
+lacks "check-qualification (status): running retry asks for no re-run" "RERUN qualification"
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-neutral-pass error success)"
+check "check-qualification (status): fresh success after error passes" 0 \
+  "PASS grain/release-qualification: passed (infra,success)" "Qualification: PASS $tag."
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-neutral-fail error failure)"
+check "check-qualification (status): fresh failure after error is confirmed red" 1 \
+  "FAIL grain/release-qualification: failed (infra,failure)" "Qualification: FAIL $tag"
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-foreign intruder:success nocreator:success)"
+check "check-qualification (status): untrusted login is ignored" 2 \
+  "IGNORED grain/release-qualification: 2 from intruder, no creator, not grain-pat-bot" \
+  "no grain/release-qualification commit status on ${rc:0:12} yet" "Qualification: PENDING $tag"
+lacks "check-qualification (status): untrusted status never passes" "PASS grain/release-qualification"
+
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-foreign-override pending intruder:success)"
+check "check-qualification (status): untrusted success does not override grain's pending status" 2 \
+  "IGNORED grain/release-qualification: 1 from intruder, not grain-pat-bot" \
+  "PENDING grain/release-qualification: still running"
+
+# Embedded .statuses inside --checks-json (as `grain ci checks --format github` writes).
+embedded="$work/q-st-embedded.json"
+jq -n --slurpfile st "$(statuses_file q-st-emb-src success)" \
+  '{total_count:0, check_runs:[], statuses:$st[0], grain_app:"", grain_status_login:"grain-pat-bot"}' > "$embedded"
+CHECK_QUALIFICATION_APP='' CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "$embedded"
+check "check-qualification (status): reads .statuses embedded in --checks-json" 0 \
+  "PASS grain/release-qualification: passed" "Qualification: PASS $tag."
+
+# Check runs always take precedence where both exist.
+CHECK_QUALIFICATION_APP=grain-test CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "$(checks_file q-prec-cr-fail failure)" --statuses-json "$(statuses_file q-prec-st-pass success)"
+check "check-qualification (precedence): failing check run wins over passing status" 1 \
+  "FAIL grain/release-qualification: failed (failure)" "Qualification: FAIL $tag"
+
+CHECK_QUALIFICATION_APP=grain-test CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "$(checks_file q-prec-cr-pass success)" --statuses-json "$(statuses_file q-prec-st-fail failure)"
+check "check-qualification (precedence): passing check run wins over failing status" 0 \
+  "PASS grain/release-qualification: passed" "Qualification: PASS $tag."
+
+CHECK_QUALIFICATION_APP=grain-test CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "$(checks_file q-prec-cr-pending in_progress)" --statuses-json "$(statuses_file q-prec-st-pass2 success)"
+check "check-qualification (precedence): pending check run wins over passing status" 2 \
+  "PENDING grain/release-qualification: still running" "Qualification: PENDING $tag"
+
+CHECK_QUALIFICATION_APP=grain-test CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "$(checks_file q-prec-cr-foreign actions:failure)" --statuses-json "$(statuses_file q-prec-st-pass3 success)"
+check "check-qualification (precedence): untrusted check run falls back to trusted status" 0 \
+  "IGNORED grain/release-qualification: 1 from github-actions, not grain-test" \
+  "PASS grain/release-qualification: passed" "Qualification: PASS $tag."
+
+# CHECK_QUALIFICATION_APP=none stays an explicit opt-out even when status login is set.
+CHECK_QUALIFICATION_APP=none CHECK_QUALIFICATION_STATUS_LOGIN=grain-pat-bot \
+  qualify "$green1" "" --statuses-json "$(statuses_file q-st-none failure)"
+check "check-qualification (status): CHECK_QUALIFICATION_APP=none skips Stage 2 even with status login" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)" "Qualification: PASS $tag."
+lacks "check-qualification (status): none ignores failing status" "grain/release-qualification: failed"
+
 RELEASE_NEVER_PROMOTE="v1.14.0 v3.1.0" qualify "$green1" "$(checks_file q-never success)"
 check "check-qualification: RELEASE_NEVER_PROMOTE fails an otherwise green RC" 1 "FAIL never: RELEASE_NEVER_PROMOTE (v1.14.0 v3.1.0) names v3.1.0"
 

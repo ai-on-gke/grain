@@ -349,10 +349,11 @@ var errNoGitHubClientYet = errors.New(
 type sandboxExternalCI struct{}
 
 var (
-	_ ci.ExternalRuns        = sandboxExternalCI{}
-	_ ci.ExternalRunsCounter = sandboxExternalCI{}
-	_ ci.ExternalRunsRepos   = sandboxExternalCI{}
-	_ ci.ExternalAttempts    = sandboxExternalCI{}
+	_ ci.ExternalRuns           = sandboxExternalCI{}
+	_ ci.ExternalRunsCounter    = sandboxExternalCI{}
+	_ ci.ExternalRunsRepos      = sandboxExternalCI{}
+	_ ci.ExternalAttempts       = sandboxExternalCI{}
+	_ ci.ExternalCommitStatuses = sandboxExternalCI{}
 )
 
 func (sandboxExternalCI) ServesRepo(ctx context.Context, repo string) bool {
@@ -401,6 +402,18 @@ func (sandboxExternalCI) ExternalCheckRuns(ctx context.Context, repo, sha, name 
 		return nil, "", err
 	}
 	return attempts.ExternalCheckRuns(ctx, repo, sha, name)
+}
+
+func (sandboxExternalCI) ExternalCommitStatuses(ctx context.Context, repo, sha, contextName string) ([]ci.GitHubCommitStatus, string, error) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, "", errSandboxCLIUnwired
+	}
+	reader, ok := client.ExternalCIRuns().(ci.ExternalCommitStatuses)
+	if !ok {
+		return nil, "", errSandboxCLIUnwired
+	}
+	return reader.ExternalCommitStatuses(ctx, repo, sha, contextName)
 }
 
 // sandboxExternalAttempts is liveSandboxCLI's ci.ExternalAttempts.

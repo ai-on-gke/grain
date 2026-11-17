@@ -350,6 +350,106 @@ expect_has "main runs forbidden: names the command" "$out" "\`grain ci list --re
 expect_has "main runs forbidden: names the missing grant" "$out" "api:ci-read@ai-on-gke/grain"
 expect_eq "main runs forbidden: one result line" "$(grep -c '^RELEASE_TRAIN_RESULT=' <<<"$out")" 1
 
+# 9. PAT forge connection (empty grain_app, non-empty grain_status_login):
+#    Stage 2 and grain/rc-hold work through commit statuses from grain's login,
+#    untrusted logins are ignored, and RELEASE_QUALIFICATION_APP=none stays an
+#    explicit opt-out even when grain_status_login is reported.
+setup_repo
+green_workflow main tests.yml "$c1"
+green_workflow main release.yml "$c1"
+run_tick FAKE_APP_JSON='""'
+expect_eq "pat cut rc.1: exit" "$status" 0
+expect_eq "pat cut rc.1: tag commit" "$(remote_tag v2.2.0-rc.1)" "$c1"
+
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+
+# Untrusted success status does not qualify rc.1 when grain's own status is pending.
+stage1_jobs "$c1" success
+jq -cn --arg t1 "$(iso $((now - 600)))" --arg t2 "$(iso $((now - 300)))" \
+  '{total_count:0, check_runs:[], statuses:[
+      {id:2, context:"grain/release-qualification", state:"success", description:"spoofed", created_at:$t2, updated_at:$t2, creator:{login:"intruder"}},
+      {id:1, context:"grain/release-qualification", state:"pending", description:"Stage 2 running for v2.2.0-rc.1", created_at:$t1, updated_at:$t1, creator:{login:"grain-pat-bot"}}
+    ], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+jq -cn '{total_count:0, check_runs:[], statuses:[], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c1-grain_rc-hold.json"
+run_tick FAKE_APP_JSON='""'
+expect_eq "pat pending + spoof: exit" "$status" 0
+expect_has "pat pending + spoof: noop" "$out" "RELEASE_TRAIN_RESULT=noop"
+expect_has "pat pending + spoof: ignores intruder" "$out" "IGNORED grain/release-qualification: 1 from intruder, not grain-pat-bot"
+expect_eq "pat pending + spoof: does not release" "$(remote_tag v2.2.0)" ""
+
+# Trusted failure drops rc.1, and pending grain/rc-hold status holds rc.2.
+jq -cn --arg t "$(iso $((now - 200)))" \
+  '{total_count:0, check_runs:[], statuses:[
+      {id:3, context:"grain/release-qualification", state:"failure", description:"Stage 2 failed for v2.2.0-rc.1", created_at:$t, updated_at:$t, creator:{login:"grain-pat-bot"}}
+    ], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+jq -cn --arg t "$(iso $((now - 200)))" \
+  '{total_count:0, check_runs:[], statuses:[
+      {id:4, context:"grain/rc-hold", state:"pending", description:"v2.2.0-rc.1: 1 open rc-blocker", created_at:$t, updated_at:$t, creator:{login:"grain-pat-bot"}}
+    ], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c1-grain_rc-hold.json"
+run_tick FAKE_APP_JSON='""'
+expect_eq "pat red + hold: exit" "$status" 0
+expect_eq "pat red + hold: drops rc.1" "$(remote_tag v2.2.0-rc.1-discarded)" "$c1"
+expect_eq "pat red + hold: holds rc.2" "$(remote_tag v2.2.0-rc.2)" ""
+expect_has "pat red + hold: reports hold" "$out" "v2.2.0-rc.2 is held by grain/rc-hold"
+expect_not_has "pat red + hold: reads no main runs" "$calls" "--ref main --workflow"
+
+# Once grain/rc-hold status succeeds, rc.2 is cut; trusted Stage 2 success releases v2.2.0.
+jq -cn --arg t "$(iso $((now - 100)))" \
+  '{total_count:0, check_runs:[], statuses:[
+      {id:5, context:"grain/rc-hold", state:"success", description:"v2.2.0-rc.1: cleared", created_at:$t, updated_at:$t, creator:{login:"grain-pat-bot"}}
+    ], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c1-grain_rc-hold.json"
+run_tick FAKE_APP_JSON='""'
+expect_eq "pat hold lifted: exit" "$status" 0
+expect_eq "pat hold lifted: cuts rc.2" "$(remote_tag v2.2.0-rc.2)" "$c2"
+
+stage1_jobs "$c2" success
+jq -cn --arg t "$(iso $((now - 50)))" \
+  '{total_count:0, check_runs:[], statuses:[
+      {id:6, context:"grain/release-qualification", state:"success", description:"Stage 2 passed for v2.2.0-rc.2", created_at:$t, updated_at:$t, creator:{login:"grain-pat-bot"}}
+    ], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c2-grain_release-qualification.json"
+jq -cn '{total_count:0, check_runs:[], statuses:[], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c2-grain_rc-hold.json"
+run_tick FAKE_APP_JSON='""'
+expect_eq "pat stage 2 pass: exit" "$status" 0
+expect_has "pat stage 2 pass: acted" "$out" "RELEASE_TRAIN_RESULT=acted"
+expect_eq "pat stage 2 pass: releases v2.2.0" "$(remote_tag v2.2.0)" "$c2"
+
+# Explicit RELEASE_QUALIFICATION_APP=none in scripts/release.conf still opts out
+# of Stage 2 even when grain ci checks reports grain_status_login.
+setup_repo
+(
+  cd "$work/seed"
+  echo "RELEASE_QUALIFICATION_APP=none" >> scripts/release.conf
+  git add scripts/release.conf
+  GIT_COMMITTER_DATE="@$((now - 500)) +0000" git commit -q -m "chore: opt out of Stage 2"
+  git push -q origin main
+)
+c_none="$(git -C "$work/seed" rev-parse main)"
+green_workflow main tests.yml "$c1" "$c2" "$c_none"
+green_workflow main release.yml "$c1" "$c2" "$c_none"
+run_tick FAKE_APP_JSON='""'
+expect_eq "pat opt-out cut: exit" "$status" 0
+expect_eq "pat opt-out cut: cuts rc.1" "$(remote_tag v2.2.0-rc.1)" "$c_none"
+stage1_jobs "$c_none" success
+jq -cn --arg t "$(iso $((now - 50)))" \
+  '{total_count:0, check_runs:[], statuses:[
+      {id:7, context:"grain/release-qualification", state:"failure", description:"Stage 2 failed for v2.2.0-rc.1", created_at:$t, updated_at:$t, creator:{login:"grain-pat-bot"}}
+    ], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c_none-grain_release-qualification.json"
+jq -cn '{total_count:0, check_runs:[], statuses:[], grain_app:"", grain_status_login:"grain-pat-bot"}' \
+  > "$work/fixtures/checks-$c_none-grain_rc-hold.json"
+run_tick FAKE_APP_JSON='""'
+expect_eq "pat opt-out release: exit" "$status" 0
+expect_has "pat opt-out release: skips Stage 2" "$out" "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none"
+expect_eq "pat opt-out release: releases on Stage 1" "$(remote_tag v2.2.0)" "$c_none"
+
 # 9. Held tick promotes a green rc and does not cut (detected via
 #    `grain api GET /api/repos/<repo>/release?branch=main`).
 setup_repo
