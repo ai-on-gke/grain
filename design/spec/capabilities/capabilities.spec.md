@@ -12,6 +12,8 @@ The design this specifies is [`capabilities.design.md`](../../design/capabilitie
 
 Proposed additive protocol: [MCP gates](../mcp-gates/mcp-gates.spec.md) defines explicitly attached `gate_*` read-only tools alongside capability methods. It does not change `mint_*`/`release_*` discovery or grant authority; gate evaluation has its own bounded request/result and error contracts. Its [v2 snapshot transport](../mcp-gates/mcp-gates.spec.md#MGS-11) uses repeated Grain-to-capability calls: non-final needs_data requests are fulfilled by Grain from retained, authorized snapshot pages. Snapshot IDs are selectors, not fetch URLs/credentials; no callback or new provider network route is introduced. This protocol is not yet implemented.
 
+The proposed [tracked-resource binding](../tracked-resources/implementation.spec.md#TDS-11) also uses the existing Grain-to-capability control-plane calls. Its resource trio, descriptor parser, local registry and controller grants are additive and unimplemented. Watch hints return in bounded pull replies; there is no reverse callback or new Grain webhook. Controller leases are independently approved under [TDS-12](../tracked-resources/implementation.spec.md#TDS-12), never an extension of a released attempt pass.
+
 ## Contents
 
 1. [Terminology, Trust Model & Architecture Overview](#1-terminology-trust-model--architecture-overview)
