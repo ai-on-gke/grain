@@ -16,11 +16,14 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -413,5 +416,76 @@ func TestAConcludedBranchRunStampsItsWebhookJobs(t *testing.T) {
 	}
 	if got, _ = store.GetGitHubCIJob(ctx, repo.String(), 901); got.Event != "push" {
 		t.Fatalf("a redelivered workflow_job cleared the event: %+v", got)
+	}
+}
+
+// failingJobLister is a GitHub client whose job listing fails, as a rate
+// limit or a 5xx does.
+type failingJobLister struct{ github.Client }
+
+func (failingJobLister) CompletedWorkflowRuns(string, string, int) ([]github.WorkflowRun, error) {
+	return nil, nil
+}
+
+func (failingJobLister) ListWorkflowRunJobs(string, string, int64) ([]github.WorkflowRunJob, error) {
+	return nil, errors.New("HTTP 502")
+}
+
+// A concluded branch run is seen once, so a job listing that fails then
+// must not leave its webhook rows unstamped (and out of the default-branch
+// readings for good), nor let the green rows that arrived before a red
+// run's verdict read as a green run.
+func TestAFailedJobListingStillStampsAndJudgesTheRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	g := model.TaskGoal{TaskID: "repair", Kind: model.GoalNightlyGreen, DeclaredAt: now.Add(-time.Hour),
+		Spec: model.GoalSpec{Repo: repo.String(), Workflow: "nightly"}}
+	deps := Deps{Store: store, Client: failingJobLister{}}
+	delivered := func(checkRunID, runID int64, at time.Time) {
+		t.Helper()
+		j, ok := gitHubCIJobFromEvent(repo, ghwebhook.Event{
+			Action: "completed", CheckRunID: checkRunID, CheckName: "go-long", CheckConclusion: "success",
+			HeadRef: "main", WorkflowName: "nightly", WorkflowRun: runID, RunAttempt: 1,
+		}, at)
+		if !ok {
+			t.Fatal("delivery not recorded")
+		}
+		if err := store.PutGitHubCIJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	delivered(901, 9, now)
+	run := ConcludedGitHubWorkflowRun{Repo: repo, WorkflowName: "nightly", RunID: 9, Attempt: 1,
+		Conclusion: "success", Ref: "main", Event: "push", HeadRepo: "acme/widgets"}
+	jobs, err := ensureGitHubWorkflowRunJobs(ctx, deps, run, now)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 502") {
+		t.Fatalf("ensureGitHubWorkflowRunJobs error = %v, want the listing's error", err)
+	}
+	if len(jobs) != 1 || jobs[0].Event != "push" {
+		t.Fatalf("ensureGitHubWorkflowRunJobs jobs = %+v, want the one webhook job stamped push", jobs)
+	}
+	got, err := store.GetGitHubCIJob(ctx, repo.String(), 901)
+	if err != nil || got == nil || got.Event != "push" || got.HeadRepo != "acme/widgets" {
+		t.Fatalf("stored job = %+v, %v; want stamped push from acme/widgets", got, err)
+	}
+	if r, err := nightlyGreenReading(ctx, store, g); err != nil || !r.met {
+		t.Fatalf("a green push on main whose job listing failed read as %+v (%v), want met", r, err)
+	}
+
+	// A failed run of which only a green job's delivery has arrived.
+	later := now.Add(time.Hour)
+	delivered(902, 10, later)
+	run = ConcludedGitHubWorkflowRun{Repo: repo, WorkflowName: "nightly", RunID: 10, Attempt: 1,
+		Conclusion: "failure", Ref: "main", Event: "push", HeadRepo: "acme/widgets"}
+	jobs, _ = ensureGitHubWorkflowRunJobs(ctx, deps, run, later)
+	if !slices.ContainsFunc(jobs, model.GitHubCIJob.Failed) {
+		t.Fatalf("a failed run whose listing failed returned only %+v, want its failure recorded", jobs)
+	}
+	if r, err := nightlyGreenReading(ctx, store, g); err != nil || r.met {
+		t.Fatalf("a failed push on main read off its green webhook job as %+v (%v), want not met", r, err)
 	}
 }
