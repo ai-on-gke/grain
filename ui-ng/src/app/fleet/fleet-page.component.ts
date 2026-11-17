@@ -47,6 +47,7 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
+import { InstallNoticeComponent } from "../shared/install-notice.component";
 import { TipDirective } from "../shared/tip.directive";
 import {
   type ActionsCacheState,
@@ -107,6 +108,7 @@ const PERSISTENT_ACTIONS: readonly {
     StatusIconComponent,
     ActorChipComponent,
     ConfirmDialogComponent,
+    InstallNoticeComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -222,6 +224,12 @@ const PERSISTENT_ACTIONS: readonly {
       }
 
       <div class="ops-scroll">
+        <!-- An unmigrated host-mode install (GET /api/config's
+             installNotice), in full, as on classic System -> Health. -->
+        @if (access.installNotice(); as notice) {
+          <g-install-notice [notice]="notice" testId="fleet-install-notice" />
+        }
+
         <!-- Dispatch Blocked Alert (pkg/ui/dispatch_conditions.go) -->
         @for (blk of sandboxes()?.dispatchBlocked ?? []; track $index) {
           <div
