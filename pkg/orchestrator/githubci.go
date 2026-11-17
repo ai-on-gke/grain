@@ -830,11 +830,15 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) || !isGitHubBranchWorkflowEvent(run.Event) {
 		return nil, nil
 	}
+	// A failed job listing is returned at the end, not here: the run is
+	// already marked seen and is not visited again, so the rows its
+	// webhook deliveries wrote are still read, stamped and judged below.
+	var listErr error
+	listed := false
 	if reader, ok := deps.Client.(github.WorkflowRunsReader); ok && deps.Client != nil {
 		ghJobs, err := reader.ListWorkflowRunJobs(run.Repo.StoredOwner(), run.Repo.Name, run.RunID)
-		if err != nil {
-			return nil, err
-		}
+		listErr = err
+		listed = err == nil
 		tailer, hasTailer := deps.Client.(github.JobLogTailer)
 		for _, gj := range ghJobs {
 			if gj.ID == 0 {
@@ -891,34 +895,35 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 		RunID: run.RunID,
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(listErr, err)
+	}
+	// synth is a run-level job record carrying the run's own conclusion.
+	synth := model.GitHubCIJob{
+		Repo:        run.Repo.String(),
+		CheckRunID:  run.RunID,
+		Source:      model.GitHubCISource,
+		App:         model.GitHubActionsApp,
+		Ref:         run.Ref,
+		Commit:      run.HeadSHA,
+		Workflow:    run.WorkflowName,
+		RunID:       run.RunID,
+		RunAttempt:  run.Attempt,
+		JobName:     firstNonEmpty(run.WorkflowName, "workflow"),
+		Conclusion:  run.Conclusion,
+		StartedAt:   run.StartedAt,
+		CompletedAt: run.CompletedAt,
+		RunURL:      run.HTMLURL,
+		JobURL:      run.HTMLURL,
+		Via:         run.Via,
+		Event:       run.Event,
+		HeadRepo:    run.HeadRepo,
+		UpdatedAt:   now,
 	}
 	if len(jobs) == 0 {
 		// Synthesize a run-level job record when no per-job records were
 		// delivered or fetched (e.g. startup_failure or webhook-only without
 		// a job listing) so grain ci log <run_id> and the review prompt still
 		// have the run's record.
-		synth := model.GitHubCIJob{
-			Repo:        run.Repo.String(),
-			CheckRunID:  run.RunID,
-			Source:      model.GitHubCISource,
-			App:         model.GitHubActionsApp,
-			Ref:         run.Ref,
-			Commit:      run.HeadSHA,
-			Workflow:    run.WorkflowName,
-			RunID:       run.RunID,
-			RunAttempt:  run.Attempt,
-			JobName:     firstNonEmpty(run.WorkflowName, "workflow"),
-			Conclusion:  run.Conclusion,
-			StartedAt:   run.StartedAt,
-			CompletedAt: run.CompletedAt,
-			RunURL:      run.HTMLURL,
-			JobURL:      run.HTMLURL,
-			Via:         run.Via,
-			Event:       run.Event,
-			HeadRepo:    run.HeadRepo,
-			UpdatedAt:   now,
-		}
 		_ = deps.Store.PutGitHubCIJob(ctx, synth)
 		jobs = []model.GitHubCIJob{synth}
 	} else {
@@ -934,10 +939,20 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 			stamp := model.GitHubCIJob{Repo: jobs[i].Repo, CheckRunID: jobs[i].CheckRunID,
 				Event: run.Event, HeadRepo: run.HeadRepo, UpdatedAt: now}
 			if err := deps.Store.PutGitHubCIJob(ctx, stamp); err != nil {
-				return nil, err
+				return nil, errors.Join(listErr, err)
 			}
 			jobs[i].Event = firstNonEmpty(jobs[i].Event, run.Event)
 			jobs[i].HeadRepo = firstNonEmpty(jobs[i].HeadRepo, run.HeadRepo)
+		}
+		// Without a job listing the rows are only the deliveries that have
+		// arrived so far, and the failing or cancelled job's may not be
+		// among them: a red run read off its green jobs alone would close a
+		// repair. The run's own conclusion goes in beside them instead.
+		if !listed && runConclusionUnrecorded(run.Conclusion, jobs) {
+			if err := deps.Store.PutGitHubCIJob(ctx, synth); err != nil {
+				return nil, errors.Join(listErr, err)
+			}
+			jobs = append(jobs, synth)
 		}
 		tailer, hasTailer := deps.Client.(github.JobLogTailer)
 		if hasTailer && deps.Client != nil && !gitHubCIBudgetLow(now) {
@@ -957,7 +972,23 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 			}
 		}
 	}
-	return jobs, nil
+	return jobs, listErr
+}
+
+// runConclusionUnrecorded reports whether a failed or cancelled run's
+// conclusion is missing from the jobs recorded for it: none failed, and for
+// a cancelled run none was cancelled either.
+func runConclusionUnrecorded(conclusion string, jobs []model.GitHubCIJob) bool {
+	cancelled := strings.EqualFold(conclusion, "cancelled")
+	if !model.GitHubCIFailed(conclusion) && !cancelled {
+		return false
+	}
+	for _, j := range jobs {
+		if j.Failed() || (cancelled && strings.EqualFold(j.Conclusion, "cancelled")) {
+			return false
+		}
+	}
+	return true
 }
 
 func firstNonEmpty(vals ...string) string {
