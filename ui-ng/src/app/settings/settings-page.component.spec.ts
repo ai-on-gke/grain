@@ -434,7 +434,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       api.calls.some(
         (c) =>
           c.key === "POST /api/access/principals" &&
-          (c.body as { entry?: string })?.entry === "bob@example.com",
+          (c.body as { entry?: string })?.entry === "user:bob@example.com",
       ),
     ).toBe(true);
 
