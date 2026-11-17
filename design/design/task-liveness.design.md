@@ -1,5 +1,7 @@
 # Task liveness: waiting on a named resource, executing, or needs input
 
+Proposed extension: [MCP gates](mcp-gates.design.md) specifies durable evaluator waits, cursor-fenced wake registration and evaluator-first dispatch. It retains the resource/driver/escalation rule here and permits independent actionable work while another gate waits. No implementation changes are made by that proposal.
+
 ## The rule
 
 At every moment, every task is in exactly one of these:
