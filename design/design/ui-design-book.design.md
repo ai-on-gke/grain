@@ -182,6 +182,19 @@ do not pull in an icon font.
   zone, and clears itself on the first answer. It sits in flow above the
   rail and top bar, never over them (`g-root:has(> .conn-banner)` becomes a
   column), is `role="status"`, and has no close button.
+- **Install notice:** when GET `/api/config` carries `installNotice` (an
+  unmigrated host-mode install, `pkg/daemon/installnotice.go`), the shell
+  shows a standing `error-container` strip at the top of the stage, above
+  the dispatch banner and below the top bar (`shared/install-notice.component.ts`,
+  variant `banner`): the server's message, its `command` in a code span,
+  the affected CLIs by name and the migration docs link. It is
+  `role="status"` with no close button, since only migrating the install
+  clears it. Fleet's health area and Settings → Upgrade show the same
+  notice in full (variant `card`), and Start upgrade is disabled while it
+  stands, described by a reason naming the command. The command is always
+  the notice's own, never written into the UI: editions register theirs
+  (`daemon.RegisterHostModeMigrateCommand`)
+  (`ui-ng/e2e/next-install-notice.spec.ts`).
 
 ### Destinations fill the stage
 

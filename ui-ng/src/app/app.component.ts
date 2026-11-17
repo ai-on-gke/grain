@@ -69,6 +69,7 @@ import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.compon
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
+import { InstallNoticeComponent } from "./shared/install-notice.component";
 import { NavProgressComponent } from "./shell/nav-progress.component";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
@@ -172,6 +173,7 @@ export class DeferErrorDirective implements OnInit {
     NavProgressComponent,
     NextUpComponent,
     DispatchBannerComponent,
+    InstallNoticeComponent,
     HelpDialogComponent,
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
@@ -675,6 +677,14 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
+          <!-- An unmigrated host-mode install (GET /api/config's
+               installNotice): standing, on every page, until the install
+               is migrated and the daemon restarted. -->
+          @defer (when access.installNotice()) {
+            @if (access.installNotice(); as notice) {
+              <g-install-notice variant="banner" [notice]="notice" />
+            }
+          }
           @defer (when dispatchBanner()) {
             @if (dispatchBanner(); as db) {
               <g-dispatch-banner [banner]="db" />

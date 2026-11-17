@@ -549,6 +549,44 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(true);
   });
 
+  it("keeps Start upgrade off on an unmigrated host-mode install and names its own command", async () => {
+    // 2026-11-15 walkthrough, F4: /next/settings/upgrade offered an
+    // enabled Start upgrade that the server then refused. The command is
+    // the notice's, whatever an edition registered, never core's.
+    const api = new FakeSettingsApi();
+    const command = "sudo ./acme-install --migrate";
+    api.configBody.installNotice = {
+      kind: "host-mode",
+      message: "this install is still host mode",
+      command,
+      affectedClis: ["claude: no host binary"],
+      docsUrl: "https://example.com/migrate",
+    };
+    const { el, harness } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    harness.detectChanges();
+    const notice = el.querySelector('[data-testid="upgrade-install-notice"]');
+    expect(
+      notice?.querySelector('[data-testid="install-notice-command"]')
+        ?.textContent,
+    ).toBe(command);
+    expect(notice?.textContent).not.toContain("scripts/setup.sh");
+    const start = el.querySelector<HTMLButtonElement>(
+      '[data-testid="start-upgrade-btn"]',
+    )!;
+    expect(start.disabled).toBe(true);
+    expect(start.getAttribute("aria-describedby")).toBe(
+      "upgrade-blocked-reason",
+    );
+    expect(
+      el.querySelector('[data-testid="upgrade-blocked-reason"]')?.textContent,
+    ).toContain(`run ${command} instead`);
+    start.click();
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(false);
+  });
+
   it("says Not available, offers no Start upgrade and reads no targets when no upgrader is configured", async () => {
     // 2026-11-13 deployment-operations walkthrough: a demo started without
     // -upgrade-image read "dev", drew an enabled Start upgrade and 404ed

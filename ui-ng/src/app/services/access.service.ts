@@ -56,6 +56,9 @@ export class AccessService {
   private readonly clock = signal(Date.now());
   readonly clockNow = this.clock.asReadonly();
 
+  // installNotice is GET /api/config's installNotice: what about how this
+  // deployment is installed its operator has to fix, or null.
+  readonly installNotice = computed(() => this.config()?.installNotice ?? null);
   readonly roleLabel = computed(() => this.config()?.access?.role ?? "");
   readonly roles = computed(() => this.config()?.access?.roles ?? []);
   readonly isFullAccess = computed(() => {

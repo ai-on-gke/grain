@@ -49,6 +49,7 @@ import {
 } from "../shared/pill-select.component";
 import { formatStamp } from "../shared/dispatch-status";
 import { TipDirective } from "../shared/tip.directive";
+import { InstallNoticeComponent } from "../shared/install-notice.component";
 import { errorText } from "../sessions/session-helpers";
 import {
   type SandboxCommitment,
@@ -130,6 +131,7 @@ function formatBytes(bytes: number): string {
     ConfirmDialogComponent,
     TipDirective,
     SandboxCommitmentNoteComponent,
+    InstallNoticeComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -1147,6 +1149,13 @@ function formatBytes(bytes: number): string {
             </span>
           </div>
 
+          @if (installNotice(); as notice) {
+            <g-install-notice
+              [notice]="notice"
+              testId="upgrade-install-notice"
+            />
+          }
+
           @if (selfUpgradeDisabled()) {
             <div
               class="s-banner readonly"
@@ -1272,12 +1281,31 @@ function formatBytes(bytes: number): string {
                 class="btn-primary"
                 data-testid="start-upgrade-btn"
                 [disabled]="
-                  !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
+                  !!installNotice() ||
+                  !selectedUpgradeBranch() ||
+                  !access.can('POST /api/upgrade')
+                "
+                [attr.aria-describedby]="
+                  installNotice() ? 'upgrade-blocked-reason' : null
                 "
                 (click)="confirmStartUpgrade()"
               >
                 Start upgrade
               </button>
+              @if (installNotice(); as notice) {
+                <span
+                  class="s-hint"
+                  id="upgrade-blocked-reason"
+                  data-testid="upgrade-blocked-reason"
+                  >Not upgraded in place:
+                  @if (notice.command) {
+                    run <code class="s-mono">{{ notice.command }}</code>
+                    instead, which also upgrades it.
+                  } @else {
+                    migrate this install first.
+                  }
+                </span>
+              }
               @if (dbBackendLabel()) {
                 <span class="s-hint s-num"
                   >Database: {{ dbBackendLabel() }}</span
@@ -1534,6 +1562,12 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected readonly upgradeUnavailable = signal(false);
   protected readonly selfUpgradeDisabled = signal(false);
   protected readonly managementUrl = signal("");
+  // installNotice is an unmigrated host-mode install: the server refuses
+  // an in-place upgrade of one (pkg/daemon's hostModeUpgradeRefusal), so
+  // Start upgrade is off and says what to run instead.
+  protected readonly installNotice = computed(() =>
+    this.access.installNotice(),
+  );
   protected readonly upgradeControllable = computed(
     () => !this.upgradeUnavailable() && !this.selfUpgradeDisabled(),
   );

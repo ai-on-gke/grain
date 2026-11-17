@@ -116,7 +116,27 @@ export interface GrainConfig {
   reconcilerDown?: boolean;
   timeZone?: string;
   deployment?: Record<string, unknown>;
+  // installNotice is how this deployment is installed, when that is
+  // something its operator has to fix (pkg/ui's InstallNotice); absent
+  // otherwise.
+  installNotice?: InstallNotice | null;
   [key: string]: unknown;
+}
+
+// InstallNotice is GET /api/config's installNotice (pkg/ui's
+// install_notice.go): today an unmigrated host-mode install.
+export interface InstallNotice {
+  // kind names the case: "host-mode".
+  kind: string;
+  // message is the notice itself, the sentence the daemon logs.
+  message: string;
+  // command is what fixes it, verbatim: an edition registers its own.
+  command?: string;
+  signals?: string[];
+  // affectedClis are the agent CLIs that cannot run until it is fixed,
+  // one line each: "claude: no host binary, ...".
+  affectedClis?: string[];
+  docsUrl?: string;
 }
 
 export interface PullRequestRef {
