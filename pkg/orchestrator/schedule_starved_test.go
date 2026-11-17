@@ -283,6 +283,19 @@ func TestStarvedWorkflowScheduleReviewIsRaisedAndNotified(t *testing.T) {
 	if n.TaskID != review.ID || n.RaiseCount != 1 || !strings.Contains(n.Title, "never started") {
 		t.Errorf("notification = %+v, want one raise naming review %s", n, review.ID)
 	}
+	// A review holds the schedule only for workflowReviewHold -- three
+	// mornings after it was filed at 05:58, the 15th's 05:53 occurrence --
+	// so neither the comment nor the Inbox may say the wait is unbounded.
+	const until = "held until this review closes or until 2026-11-15T05:53:00Z, when the schedule fires over it"
+	texts := map[string]string{"notification body": n.Body}
+	if bodies := commentBodies(t, ctx, store, review.ID); len(bodies) > 0 {
+		texts["comment"] = bodies[0]
+	}
+	for what, body := range texts {
+		if !strings.Contains(body, until) || strings.Contains(body, "held until this task closes") {
+			t.Errorf("%s = %q, want it to say occurrences are %s", what, body, until)
+		}
+	}
 
 	// The review closes: the notification clears with it.
 	closedAt := held.Add(90 * time.Minute)

@@ -77,6 +77,14 @@ type StarvedScheduleFiring struct {
 	// filed the task (ScheduleSkip.HeldByScheduleID), empty when the task
 	// is the schedule's own previous firing; Group is that group.
 	HeldBy, Group string
+	// Review is a workflow schedule's review holding it
+	// (SuppressedByOpenReview) rather than a task schedule's previous
+	// firing. Unlike that firing, a review holds the schedule only until
+	// ReviewUntil (workflowReviewHold), after which the schedule fires
+	// over it; ReviewUntil is zero when the review's filing time cannot
+	// be measured (reviewFiledAt), which holds it with no date to give.
+	Review      bool
+	ReviewUntil time.Time
 }
 
 // blocker says whose firing the starved task came from, after "#<id> from".
@@ -160,6 +168,19 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 	out := StarvedScheduleFiring{TaskID: k.TaskID, HeldFor: now.Sub(k.Occurrence), Occurrences: occurrences}
 	if k.HeldByScheduleID != "" && k.HeldByScheduleID != sched.ID {
 		out.HeldBy, out.Group = k.HeldByScheduleID, strings.TrimSpace(sched.OverlapGroup)
+	}
+	if k.Reason == SuppressedByOpenReview {
+		review, err := s.GetTask(ctx, k.TaskID)
+		if err != nil {
+			return StarvedScheduleFiring{}, fmt.Errorf("reading review %s: %w", k.TaskID, err)
+		}
+		if review == nil {
+			return StarvedScheduleFiring{}, fmt.Errorf("review %s not found", k.TaskID)
+		}
+		out.Review = true
+		if filed := reviewFiledAt(*review, sched); !filed.IsZero() {
+			out.ReviewUntil = workflowReviewHold(sched, filed, loc)
+		}
 	}
 	if err := s.UpdateTask(ctx, k.TaskID, func(t *Task) error {
 		out.From, out.To = t.Priority, t.Priority
@@ -246,11 +267,23 @@ func StarvedScheduleComment(sched Schedule, f StarvedScheduleFiring) string {
 		raised = fmt.Sprintf("Grain raised its priority from %d to %d, the highest any other queued task has, "+
 			"so it is dispatched next at that priority.", f.From, f.To)
 	}
+	held := "Every one of them is held until this task closes."
+	stops := "stops for as long as it waits"
+	if f.Review {
+		stops = "skips every occurrence while it waits"
+		// A review holds its schedule only for workflowReviewHold, and
+		// then the schedule fires over it (fireWorkflowSchedule).
+		held = "Every one of them is held until this review closes."
+		if !f.ReviewUntil.IsZero() {
+			held = fmt.Sprintf("Every one of them is held until this review closes or until %s, "+
+				"when the schedule fires over it and leaves it open.", f.ReviewUntil.UTC().Format(time.RFC3339))
+		}
+	}
 	return fmt.Sprintf("Schedule %q (%s) is set to overlap: skip, and this task, from %s, "+
 		"has been queued without ever starting while %d of its occurrences came due (%s since the first). "+
-		"Every one of them is held until this task closes. %s\n\n"+
-		"A schedule whose task cannot get a worker stops for as long as it waits, so this task is kept "+
+		"%s %s\n\n"+
+		"A schedule whose task cannot get a worker %s, so this task is kept "+
 		"and raised rather than replaced by a new firing at the back of the queue. If it should not run "+
 		"at all, close it and the schedule fires again on its next cycle.",
-		scheduleName(sched), sched.ID, f.blocker(), f.Occurrences, f.HeldFor.Round(time.Minute), raised)
+		scheduleName(sched), sched.ID, f.blocker(), f.Occurrences, f.HeldFor.Round(time.Minute), held, raised, stops)
 }
