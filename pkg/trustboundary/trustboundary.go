@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v29"
+const Version = "trust-boundary/v30"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,44 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v30 adds the authorization-bearing, secret-handling, route-registering and
+// release-signing surfaces found unclassified by the structural classification
+// hygiene test (task 5325): pkg/ghwebhook/, pkg/ui/qa_flow_api.go (qa:admin
+// gated flow edits), pkg/ui/verifier_session.go (the
+// verifier's HMAC-signed session binding), Unix-socket SO_PEERCRED / host
+// account and local access-code auth (pkg/ui/hostaccount.go, peercred_linux.go,
+// peercred_other.go, localtoken.go), role-gated handlers and scope-set storage
+// (pkg/ui/accept_findings.go, merge_gates.go, task_config_change.go,
+// relay_comment.go, console.go, events.go, api_scope_sets.go), and the
+// remaining UI route-table, route-scope, cross-task, namespace-FS, PR-filing,
+// sandbox-CLI and repo-reach gates (pkg/ui/deployment_routes.go,
+// tasks_from_template.go, agent_cross_task.go, api_fs.go,
+// pull_requests_api.go, sandbox_cli_actions.go, refs.go, repo_reach.go) to
+// auth-routes; the grant/capability admission predicates, built-in templates,
+// declaration/schedule/standing-task grant propagation, capability UI/API
+// gates, secret readers/writers and daemon key/credential/grant-migration
+// loaders (pkg/model/{canonical_grant_migration,capability,change_target,
+// ci_read_default,console_session,console_session_reach,declaration_acceptance,
+// external_ref,gke_sandbox_cluster_template,hold_for_approval,
+// notification_wake,pipeline_steward_template,priority_dispatch,
+// proposal_seeding,ref_push,repo_declaration_store,runtime_grant_retirement,
+// schedule_fire,scratch_fixture,standing_task,steward_audit_template,
+// system_template,workflow_review_template}.go, pkg/ui/{capability_catalogue,
+// capability_grants,capability_policy,capability_status,
+// capability_servers_figma,change_submit,console_sessions,
+// declaration_acceptance,repo_release_workflows,secrets,secrets_redact,
+// task_secret}.go, pkg/daemon/{ca_store,capability_literals_migrate,
+// localscripts_migrate,loose_credentials,secretsrepo,statemanager,
+// staterepo}.go) to capabilities-secrets; pkg/sandboxaccess/ and
+// pkg/daemon/mcpserver.go to exec-sandbox; pkg/actionscache/,
+// pkg/agent/credcheck/, pkg/daemon/hub.go and pkg/ui/hub.go to
+// credential-proxy; pkg/attest/ and scripts/checkpost-report.sh to merge-gate;
+// the whole pkg/releaseapproval/ prefix (covering keystore.go and kms.go beside
+// releaseapproval.go) to release-promotion; pkg/agentd/release/,
+// scripts/build-agentd.sh and pkg/agentd/update.go (the signed, pinned
+// grain-agentd self-update) to release-machinery; and
+// scripts/migrate-local-to-gke.sh to setup-scripts.
 //
 // v29 adds pkg/ui/access_code_mode.go to auth-routes beside
 // pkg/ui/accesscode.go (task 5973, found in the security review of task
@@ -307,14 +345,17 @@ var Categories = []Category{
 	{
 		ID:          "auth-routes",
 		Description: "authentication, principals, request guards and the UI/API route table",
-		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/", "pkg/hubenv/"},
+		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/", "pkg/hubenv/", "pkg/ghwebhook/"},
 		files: []string{
-			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
+			"pkg/ui/server.go", "pkg/ui/deployment_routes.go",
+			"pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
-			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
+			"pkg/ui/allowlist.go", "pkg/ui/verifier.go", "pkg/ui/verifier_session.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
 			"pkg/ui/team_scope.go",
+			// The QA flow API gates flow edits on the qa:admin scope.
+			"pkg/ui/qa_flow_api.go",
 			// The agent API: which scope each route needs, which scopes
 			// are Dangerous, and the escalation and self-protection rails.
 			"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
@@ -377,6 +418,25 @@ var Categories = []Category{
 			// Which person an agent's call is attributed to
 			// (agentOnBehalfOf): attribution only, kept that way by review.
 			"pkg/ui/on_behalf_of.go",
+			// Route-scope lookup for CI tokens (APIRoute) and narrow
+			// tasks:from-template filing; the cross-task steering rail
+			// (agentSteeringRoutes, agentCrossTaskRail); per-scheme and
+			// per-repo namespace FS gating (/api/fs/*); pull-request
+			// adoption filing/approval gates; sandbox /cli/ route filtering
+			// (SandboxAPIRoutes); and tasks:read / repos:read repo filters.
+			"pkg/ui/tasks_from_template.go", "pkg/ui/agent_cross_task.go",
+			"pkg/ui/api_fs.go", "pkg/ui/pull_requests_api.go",
+			"pkg/ui/sandbox_cli_actions.go", "pkg/ui/refs.go", "pkg/ui/repo_reach.go",
+			// Direct role/operator gates on finding acceptance, force-merge,
+			// config-change approval, comment relay, WebSocket console and
+			// SSE/event streams; API scope-set CRUD (api:<set> expansion
+			// storage); local access-code minting and loopback detection;
+			// and Unix-socket SO_PEERCRED / host-account authentication.
+			"pkg/ui/accept_findings.go", "pkg/ui/merge_gates.go",
+			"pkg/ui/task_config_change.go", "pkg/ui/relay_comment.go",
+			"pkg/ui/console.go", "pkg/ui/events.go", "pkg/ui/api_scope_sets.go",
+			"pkg/ui/localtoken.go", "pkg/ui/hostaccount.go",
+			"pkg/ui/peercred_linux.go", "pkg/ui/peercred_other.go",
 		},
 	},
 	{
@@ -390,7 +450,7 @@ var Categories = []Category{
 			// receives its resolved secrets, and the Settings routes that
 			// write and probe mcpServers entries.
 			"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
-			"pkg/ui/capability_servers.go",
+			"pkg/ui/capability_servers.go", "pkg/ui/capability_servers_figma.go",
 			// What a CI sandbox is handed on other repositories, on which
 			// events, and the refusal of untrusted pull-request runs.
 			"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
@@ -412,12 +472,57 @@ var Categories = []Category{
 			// CapabilityPolicy.Permits and the catalogue all ask it first
 			// -- and SplitRequestGrants, which turns a request's grants:
 			// list into a task's Repo/Base, Reads and Writes.
-			"pkg/model/canonical_grant.go",
+			"pkg/model/canonical_grant.go", "pkg/model/canonical_grant_migration.go",
 			// Which capabilities a proposal asked for beyond its
 			// proposer's (EscalatedCapabilities), the check that holds it
 			// for a person, and the self-approval bounds (SelfApproved,
 			// AutoSubmitLimit) on how far a proposal tree auto-submits.
 			"pkg/model/auto_submit.go",
+			// Capability secret resolution, default CI-read grant
+			// attachment, standing console-session capabilities and reach,
+			// declaration acceptance, external-ref visibility, person-only
+			// hold and priority rails, proposal grant seeding, declared
+			// template ref-push predicates (RefPush.Allows), and scratch
+			// branch grant containment.
+			"pkg/model/capability.go", "pkg/model/ci_read_default.go",
+			"pkg/model/console_session.go", "pkg/model/console_session_reach.go",
+			"pkg/model/declaration_acceptance.go", "pkg/model/external_ref.go",
+			"pkg/model/hold_for_approval.go", "pkg/model/priority_dispatch.go",
+			"pkg/model/proposal_seeding.go", "pkg/model/ref_push.go",
+			"pkg/model/scratch_fixture.go",
+			// Built-in system templates that declare default grants, plus
+			// declared-grant storage, runtime grant-expansion retirement,
+			// change-target grant/approval hooks, and schedule/standing-task
+			// grant propagation.
+			"pkg/model/change_target.go", "pkg/model/repo_declaration_store.go",
+			"pkg/model/runtime_grant_retirement.go", "pkg/model/schedule_fire.go",
+			"pkg/model/standing_task.go", "pkg/model/system_template.go",
+			"pkg/model/pipeline_steward_template.go",
+			"pkg/model/gke_sandbox_cluster_template.go",
+			"pkg/model/steward_audit_template.go",
+			"pkg/model/workflow_review_template.go",
+			"pkg/model/notification_wake.go",
+			// UI/API capability catalogue, grant attachment, policy preview,
+			// status checks, one-shot Submit grant lifecycle, standing
+			// console sessions, declaration acceptance, and secret store
+			// readers/writers (including secret-redaction value loading).
+			"pkg/ui/capability_catalogue.go", "pkg/ui/capability_grants.go",
+			"pkg/ui/capability_policy.go", "pkg/ui/capability_status.go",
+			"pkg/ui/change_submit.go", "pkg/ui/console_sessions.go",
+			"pkg/ui/declaration_acceptance.go",
+			"pkg/ui/secrets.go", "pkg/ui/secrets_redact.go", "pkg/ui/task_secret.go",
+			// Per-repository release secrets: who may list and set the
+			// secrets a repository's release runs are given.
+			"pkg/ui/repo_release_workflows.go",
+			// Daemon CA private-key store, loose-credential and
+			// local-scripts-to-host-script grant migrations (including
+			// typed-in capability-server credentials moved into the secrets
+			// store), and secrets-store / secrets-repo wiring.
+			"pkg/daemon/ca_store.go", "pkg/daemon/loose_credentials.go",
+			"pkg/daemon/capability_literals_migrate.go",
+			"pkg/daemon/localscripts_migrate.go",
+			"pkg/daemon/secretsrepo.go", "pkg/daemon/statemanager.go",
+			"pkg/daemon/staterepo.go",
 		},
 	},
 	{
@@ -426,18 +531,20 @@ var Categories = []Category{
 		prefixes: []string{
 			"pkg/orchestrator/", "pkg/mcp/", "pkg/granule/", "pkg/safepath/",
 			"pkg/k8s/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/", "pkg/sandboximage/",
-			"pkg/hostinit/",
+			"pkg/hostinit/", "pkg/sandboxaccess/",
 			"third_party/granule/",
 		},
 		// What every backend is wired with, what is forwarded into
-		// guests and which git-proxy host sandboxes are told.
-		files: []string{"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go"},
+		// guests, which git-proxy host sandboxes are told, and the
+		// in-process MCP tool and redaction wiring.
+		files: []string{"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go", "pkg/daemon/mcpserver.go"},
 	},
 	{
 		ID:          "credential-proxy",
 		Description: "proxies and relays that hold or forward credentials",
 		prefixes: []string{
-			"pkg/gitproxy/", "pkg/modelproxy/", "pkg/pkgcache/", "pkg/relay/", "pkg/tunnel/",
+			"pkg/gitproxy/", "pkg/modelproxy/", "pkg/pkgcache/", "pkg/actionscache/",
+			"pkg/agent/credcheck/", "pkg/relay/", "pkg/tunnel/",
 			"cmd/grain-relay/", "cmd/grain-connect/",
 			// grain-hub (and its pre-rename grain-registry shim and package path):
 			// the IAP front door, entry visibility and on-behalf-of delegation,
@@ -445,11 +552,13 @@ var Categories = []Category{
 			// and grc_ credentials.
 			"pkg/hub/", "cmd/grain-hub/", "pkg/registry/", "cmd/grain-registry/",
 		},
+		files: []string{"pkg/daemon/hub.go", "pkg/ui/hub.go"},
 	},
 	{
 		ID:          "merge-gate",
 		Description: "what decides a build is green and which checks a change owes: CI planning and execution, check reports, repository declarations",
-		prefixes:    []string{"pkg/ci/", "pkg/workflows/", "pkg/grit/", "cmd/grit/", "pkg/checkpost/", "cmd/checkpost/", "pkg/repodecl/"},
+		prefixes:    []string{"pkg/ci/", "pkg/workflows/", "pkg/grit/", "cmd/grit/", "pkg/attest/", "pkg/checkpost/", "cmd/checkpost/", "pkg/repodecl/"},
+		files:       []string{"scripts/checkpost-report.sh"},
 	},
 	{
 		ID:          "security-tests",
@@ -472,13 +581,15 @@ var Categories = []Category{
 		RequiresHuman: true,
 		// Before github-workflows and grain-config, which would otherwise
 		// take the workflow's two copies and the template.
+		prefixes: []string{"pkg/releaseapproval/"},
 		files: []string{
 			".grain/workflows/promote-release.yml", ".github/workflows/promote-release.yml",
 			"pkg/ui/release_approval.go", ".grain/templates/release-train.yml",
 			// The Inbox approval of a release on GitHub Actions (gap 4):
-			// the signed record, the route that signs and dispatches it,
-			// and the check the workflow verifies it with.
-			"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go",
+			// the route that signs and dispatches it, and the check the
+			// workflow verifies it with (the signed record and its key
+			// stores live under pkg/releaseapproval/ above).
+			"pkg/ui/release_approval_github.go",
 			"scripts/verify-release-approval.sh",
 			// The continuous train's own promotion (playbook section 1):
 			// the script that tags vX.Y.0 and latest on a qualified rc,
@@ -505,9 +616,14 @@ var Categories = []Category{
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
 		// Guest-image cache-key and runtime build helpers invoked by
-		// scripts/release-images.sh.
-		prefixes: []string{"scripts/granule/"},
+		// scripts/release-images.sh, and the signed grain-agentd release
+		// manifest verifier, pinned public key and signer.
+		prefixes: []string{"scripts/granule/", "pkg/agentd/release/"},
 		files: []string{
+			// grain-agentd update: the owner-run self-update that takes a
+			// signed release only inside the allowlist's update.pin and
+			// refuses a downgrade (checkUpdateVersion).
+			"pkg/agentd/update.go",
 			"scripts/release-images.sh",
 			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 			// What the release jobs run besides: the patch-release branch
@@ -526,10 +642,12 @@ var Categories = []Category{
 			// and cancelling a dropped rc's runs.
 			"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 			// Release assets (docs/release-assets.md): the publisher every
-			// assets job runs with contents: write, the CLI archive builder
-			// whose output it publishes on every release, and the workflow
-			// that runs them on the release train's tag pushes.
-			"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
+			// assets job runs with contents: write, the CLI and
+			// grain-agentd builders whose outputs it publishes on every
+			// release, and the workflow that runs them on the release
+			// train's tag pushes.
+			"scripts/release-assets.sh", "scripts/build-cli.sh", "scripts/build-agentd.sh",
+			".github/workflows/release-train-assets.yml",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
@@ -602,8 +720,10 @@ var Categories = []Category{
 			// Loads a release's image and installs the binary out of it.
 			"scripts/install-grain.sh",
 			// Bake the per-release Grain Hub GCE VM image and run at boot as
-			// root on every hosted Grain Hub GCE VM instance.
+			// root on every hosted Grain Hub GCE VM instance, and migrate a
+			// local install (including its secrets and mirrored images) to GKE.
 			"scripts/grain-instance-init.sh", "scripts/bake-gce-release-image.sh",
+			"scripts/migrate-local-to-gke.sh",
 			// Served unauthenticated and run as root on every hostd machine,
 			// and the route that renders it and decides who sees what.
 			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",
