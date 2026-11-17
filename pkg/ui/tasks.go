@@ -227,6 +227,7 @@ type Task struct {
 	// and for every task filed before grain recorded it. A record for
 	// reporting, deciding nothing about the task.
 	TemplateID string `json:"templateId,omitempty"`
+	QAFlowRef  string `json:"qaFlowRef,omitempty"`
 	Owner      string `json:"owner"`
 	Creator    string `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
@@ -317,10 +318,12 @@ type Task struct {
 	Designs       []string         `json:"designs,omitempty"`
 	Context       []ContextRefView `json:"context,omitempty"`
 	GeneratedFrom string           `json:"generatedFrom,omitempty"`
-	// Origin is the pull request, issue or grain task this task's tree of
-	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
-	// empty for a task that has none.
-	Origin string `json:"origin,omitempty"`
+	// WorkOrigin is the pull request, issue or grain task this task's tree
+	// of work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
+	// empty for a task that has none. On the wire it is `origin`, the name
+	// propose_task, `grain create --origin` and the external CLI spec use;
+	// it is never who filed this task (Author*, model.Task.Filing).
+	WorkOrigin string `json:"origin,omitempty"`
 	// Continues is the ID of the task whose conversation this one
 	// carries on, read off model.LinkContinues -- a standing console
 	// session's closed chat, and its replacement. Provenance only, like
@@ -447,7 +450,7 @@ type Task struct {
 	SuiteRun bool `json:"suiteRun,omitempty"`
 	// Imported is true for a task the GitHub issue importer filed
 	// (model.ReasonImported): the row's "imported" chip, kept after the
-	// task is approved so an imported issue stays identifiable. Origin
+	// task is approved so an imported issue stays identifiable. WorkOrigin
 	// names the issue it came from.
 	Imported bool `json:"imported,omitempty"`
 	// AwaitingImportApproval is Imported while nobody has approved the
@@ -519,6 +522,9 @@ type Task struct {
 	DependsOn       []string               `json:"dependsOn,omitempty"`
 	DependsOnStates map[string]model.State `json:"dependsOnStates,omitempty"`
 	Blocked         bool                   `json:"blocked"`
+	GoalMode        *model.GoalModeConfig  `json:"goalMode,omitempty"`
+	GoalAssumptions []model.GoalAssumption `json:"goalAssumptions,omitempty"`
+	GoalScorecard   *model.GoalScorecard   `json:"goalScorecard,omitempty"`
 	// Parked is a blocked task whose last run parked it on those blockers
 	// through wait_for_task (model.ParkedOutcome), which the page words as
 	// "waiting on" rather than "blocked on". Set on a task's own detail.
@@ -1235,10 +1241,10 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		ID:                   t.ID,
 		Title:                t.Title,
 		Description:          t.Body,
-		Author:               t.Origin.Attribution.Actor.ID,
-		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
-		AuthorSource:         string(t.Origin.Attribution.Actor.Source),
-		AuthorLabel:          PrincipalLabel(t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf),
+		Author:               t.Filing.Attribution.Actor.ID,
+		AuthorKind:           string(t.Filing.Attribution.Actor.Kind),
+		AuthorSource:         string(t.Filing.Attribution.Actor.Source),
+		AuthorLabel:          PrincipalLabel(t.Filing.Attribution.Actor, t.Filing.Attribution.OnBehalfOf),
 		State:                state,
 		Base:                 t.Base,
 		Priority:             priority,
@@ -1266,20 +1272,21 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		Skills:               t.Skills.Clone(),
 		ReviewTemplateID:     t.ReviewTemplateID,
 		TemplateID:           t.SourceTemplateID,
+		QAFlowRef:            t.QAFlowRef,
 		ReviewTemplateName:   reviewTemplateName,
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
 		FiledVia:             t.FiledVia,
 		ExternalRef:          t.ExternalRef,
-		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
+		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Filing.Attribution), t.Creator)),
 		Capabilities:         []string{},
 		CustomFields:         customFieldValues(t.CustomFields),
-		Stacked:              t.Origin.Reason == model.ReasonFix || t.Origin.Reason == model.ReasonReview,
-		Review:               t.Origin.Reason == model.ReasonReview,
-		Scheduled:            t.Origin.Reason == model.ReasonSchedule,
-		SuiteRun:             t.Origin.Reason == model.ReasonSuite,
-		Imported:             t.Origin.Reason == model.ReasonImported,
-		AwaitingImportApproval: t.Origin.Reason == model.ReasonImported && t.ApprovedAt == nil &&
+		Stacked:              t.Filing.Reason == model.ReasonFix || t.Filing.Reason == model.ReasonReview,
+		Review:               t.Filing.Reason == model.ReasonReview,
+		Scheduled:            t.Filing.Reason == model.ReasonSchedule,
+		SuiteRun:             t.Filing.Reason == model.ReasonSuite,
+		Imported:             t.Filing.Reason == model.ReasonImported,
+		AwaitingImportApproval: t.Filing.Reason == model.ReasonImported && t.ApprovedAt == nil &&
 			state == model.StateProposed,
 		CreatedAt:           t.CreatedAt,
 		StartedAt:           span.StartedAt,
@@ -1319,10 +1326,10 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		out.ApprovedBy, out.ApprovedByKind, out.ApprovedBySource = a.Actor.ID, string(a.Actor.Kind), string(a.Actor.Source)
 		out.ApprovedByLabel = PrincipalLabel(a.Actor, a.OnBehalfOf)
 	}
-	if model.HeldForApproval(t) && t.Origin.Attribution.OnBehalfOf != nil {
-		out.HeldBy = t.Origin.Attribution.OnBehalfOf.ID
+	if model.HeldForApproval(t) && t.Filing.Attribution.OnBehalfOf != nil {
+		out.HeldBy = t.Filing.Attribution.OnBehalfOf.ID
 	}
-	out.Origin = string(t.WorkOrigin)
+	out.WorkOrigin = string(t.WorkOrigin)
 	if t.ChangeTarget != nil {
 		out.ChangeTargetKind = t.ChangeTarget.Kind
 	}
@@ -1453,6 +1460,15 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
+	if gm, ok := model.GoalModeOf(t); ok {
+		out.GoalMode = &gm
+	}
+	if assumptions := model.GoalAssumptionsOf(t); len(assumptions) > 0 {
+		out.GoalAssumptions = assumptions
+	}
+	if sc, ok := model.GoalScorecardOf(t); ok {
+		out.GoalScorecard = sc
+	}
 	return out
 }
 
@@ -2720,6 +2736,66 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// TaskSummariesResponse is GET /api/tasks/summaries's body.
+type TaskSummariesResponse struct {
+	Tasks map[string]json.RawMessage `json:"tasks"`
+}
+
+func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
+	if !taskSummariesRepoAllowed(r) {
+		writeClientError(w, validationErrorf("%s", errTaskSummariesRepo))
+		return
+	}
+	q, err := parseTaskSummariesQuery(r.URL.Query())
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	tasks := make(map[string]json.RawMessage, len(q.ids))
+	if s.tasks != nil && s.tasks.Store != nil {
+		ctx := r.Context()
+		readable := s.taskReadable(r)
+		for _, id := range q.ids {
+			t, err := s.tasks.Store.GetTask(ctx, id)
+			if err != nil {
+				writeClientError(w, err)
+				return
+			}
+			if t == nil || !readable(taskRepo(t)) {
+				continue
+			}
+			entryBody, _, err := s.taskDetails.responseFor(ctx, s.tasks, id, q.page, q.paged)
+			if err != nil {
+				var nfe *NotFoundError
+				if errors.As(err, &nfe) {
+					continue
+				}
+				log.Printf("ui: task summary %s failed: %v", id, err)
+				continue
+			}
+			tasks[id] = json.RawMessage(entryBody)
+		}
+	}
+	body, err := json.Marshal(TaskSummariesResponse{Tasks: tasks})
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	body = append(body, '\n')
+	etag := etagOf(body)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", etag)
+	w.Header().Add("Vary", "Cookie")
+	w.Header().Add("Vary", "Authorization")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	q := r.URL.Query()
@@ -3766,6 +3842,95 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // maxTaskDetailPage is the most comments or runs one paged task detail
 // read answers.
 const maxTaskDetailPage = 500
+
+// maxTaskSummariesIDs is the most unique task ids one GET /api/tasks/summaries
+// request accepts.
+const maxTaskSummariesIDs = 50
+
+const taskSummariesRoute = "GET /api/tasks/summaries"
+
+func isValidTaskSummaryID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		if i > 0 && (c == '-' || c == '_') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+const (
+	defaultTaskSummariesCommentsLimit = 20
+	defaultTaskSummariesAttemptsLimit = 10
+)
+
+type taskSummariesQuery struct {
+	ids   []string
+	page  TaskPage
+	paged bool
+}
+
+func parseTaskSummariesQuery(q url.Values) (taskSummariesQuery, error) {
+	var out taskSummariesQuery
+	rawValues := q["ids"]
+	if len(rawValues) == 0 {
+		return out, validationErrorf("ids is required")
+	}
+	seen := make(map[string]bool)
+	rawCount := 0
+	for _, raw := range rawValues {
+		for _, part := range strings.Split(raw, ",") {
+			rawCount++
+			if rawCount > maxTaskSummariesIDs*10 {
+				return out, validationErrorf("too many task ids requested; at most %d unique ids are allowed", maxTaskSummariesIDs)
+			}
+			id := strings.TrimSpace(part)
+			if !isValidTaskSummaryID(id) {
+				if id == "" {
+					return out, validationErrorf("ids must not contain empty task ids")
+				}
+				return out, validationErrorf("malformed task id %q", id)
+			}
+			if !seen[id] {
+				seen[id] = true
+				out.ids = append(out.ids, id)
+				if len(out.ids) > maxTaskSummariesIDs {
+					return out, validationErrorf("at most %d task ids may be requested at once", maxTaskSummariesIDs)
+				}
+			}
+		}
+	}
+	if len(out.ids) == 0 {
+		return out, validationErrorf("ids is required")
+	}
+	clampLimit := func(name, raw string, def int) (int, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return def, nil
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return 0, validationErrorf("%s must be a positive integer", name)
+		}
+		return min(n, maxTaskDetailPage), nil
+	}
+	out.paged = true
+	var err error
+	if out.page.CommentsLimit, err = clampLimit("comments_limit", q.Get("comments_limit"), defaultTaskSummariesCommentsLimit); err != nil {
+		return out, err
+	}
+	if out.page.AttemptsLimit, err = clampLimit("attempts_limit", q.Get("attempts_limit"), defaultTaskSummariesAttemptsLimit); err != nil {
+		return out, err
+	}
+	return out, nil
+}
 
 // TaskPage names a bounded slice of a task's conversation and runs on
 // GET /api/tasks/{id} (durable-tasks.design.md#DT-15).

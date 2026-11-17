@@ -19,7 +19,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -98,6 +97,13 @@ type Server struct {
 	fsNamespace func() *namespace.Server
 	// eventsKeepalive overrides defaultEventsKeepalive in tests (events.go).
 	eventsKeepalive time.Duration
+	// ReadRepoFileAtCommit overrides resolve.GetRuntimeHooks().ReadRepoFileAtCommit when non-nil.
+	ReadRepoFileAtCommit func(ctx context.Context, repo, commit, path string) ([]byte, error)
+	// frontend holds the embedded static and static-next filesystems,
+	// their precomputed strong ETags, and the "/" frontendHandler built
+	// over them (spa.go), so serveHashedFrontendBundle and "/" always
+	// read from the same embedded filesystem.
+	frontend atomic.Pointer[frontendAssets]
 }
 
 // NewServer builds a Server over a store.
@@ -212,6 +218,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.serveHashedFrontendBundle(w, r) {
+		return
+	}
 	tunnelReq := isHubTunnelRequest(r)
 	if s.tasks != nil {
 		iapCfg := IAPConfig{
@@ -287,6 +296,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(context.WithValue(r.Context(), accessRoleSlotKey{}, roleSlot))
 	if !s.singleTenantGate(w, r, cfg) {
 		return
+	}
+	if !tunnelReq && !singleTenantOpenRoute(r) {
+		// Admitted, so a SessionBinder's identity may skip Verify for a
+		// while (verifier_session.go).
+		issueVerifierSession(w, r, cv)
 	}
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
@@ -426,6 +440,7 @@ func (s *Server) routes() {
 	s.route("GET /api/registry/status", s.handleGetHubInstanceStatus)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
+	s.route("GET /api/tasks/summaries", s.handleTaskSummaries)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
 	s.route("GET /api/inbox", s.handleInbox)
 	s.route("GET /api/refs/{ref}/summary", s.handleRefSummary)
@@ -503,6 +518,10 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/rollover", s.handleRolloverTask)
 	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
 	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
+	// A person's decision to merge over one review's findings on one gate
+	// (accept_findings.go): between Submit, which never clears findings,
+	// and force-merge, which overrides every gate it names.
+	s.route("POST /api/tasks/{id}/accept-findings", s.handleAcceptFindings)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)
@@ -568,6 +587,22 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/prompt", s.handleGetTaskPrompt)
 	s.route("GET /api/tasks/{id}/diff-preview", s.handleTaskDiffPreview)
 	s.route("GET /api/tasks/{id}/tree", s.handleGetTaskTree)
+	s.route("GET /api/qa/flows", s.handleGetQAFlows)
+	s.route("GET /api/qa/flow-versions", s.handleGetQAFlowVersions)
+	s.route("GET /api/qa/flow-versions/{hash}", s.handleGetQAFlowVersion)
+	s.route("POST /api/qa/flow-versions", s.handlePostQAFlowVersion)
+	s.route("POST /api/qa/flow-versions/adopt", s.handlePostQAFlowVersionAdopt)
+	s.route("POST /api/qa/probe", s.handlePostQAProbe)
+	s.route("GET /api/qa/experiments", s.handleGetQAExperiments)
+	s.route("POST /api/qa/experiments", s.handlePostQAExperiment)
+	s.route("GET /api/qa/experiments/{id}", s.handleGetQAExperiment)
+	s.route("POST /api/qa/experiments/{id}/transition", s.handlePostQAExperimentTransition)
+	s.route("GET /api/qa/experiments/{id}/results", s.handleGetQAExperimentResults)
+	s.route("POST /api/qa/experiments/{id}/readout", s.handlePostQAExperimentReadout)
+	s.route("GET /api/qa/summary", s.handleGetQASummary)
+	s.route("GET /api/tasks/{id}/qa", s.handleGetTaskQA)
+	s.route("POST /api/tasks/{id}/qa/check-runs", s.handleRecordTaskQACheckRuns)
+	s.route("POST /api/tasks/{id}/qa/findings/{finding}/feedback", s.handleVoteTaskQAFinding)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
 	s.route("POST /api/repos/plan", s.handlePlanTargetRepos)
@@ -900,18 +935,15 @@ func (s *Server) routes() {
 	// harnesses and built-in sessions/tasks holding api:* grants.
 	s.route("POST /api/mcp", s.handleControllerMCP)
 
-	static, err := fs.Sub(staticFS, "static")
-	if err != nil {
-		// staticFS is embedded at build time from a directory this package
-		// ships -- its absence is a build-time mistake, not a runtime
-		// condition a caller can do anything about.
-		panic("ui: embedding static/: " + err.Error())
-	}
-	staticNext, err := fs.Sub(staticNextFS, "static-next")
-	if err != nil {
-		panic("ui: embedding static-next/: " + err.Error())
-	}
-	s.mux.Handle("/", s.apiFallback(frontendHandler(static, staticNext)))
+	s.frontend.Store(defaultFrontendAssets())
+	s.mux.Handle("/", s.apiFallback(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fa := s.frontend.Load(); fa != nil && fa.handler != nil {
+			fa.handler.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", cacheControlNoStore)
+		http.NotFound(w, r)
+	})))
 	s.patterns = append(s.patterns, "/")
 }
 

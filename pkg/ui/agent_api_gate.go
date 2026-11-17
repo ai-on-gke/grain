@@ -1141,7 +1141,7 @@ func (c *Client) externalProposalLineage(ctx context.Context, task model.Task, p
 // ("external:<name>") filed t: t's origin names it as the actor, whoever
 // it acted on behalf of.
 func filedByExternal(t model.Task, principal string) bool {
-	a := t.Origin.Attribution.Actor
+	a := t.Filing.Attribution.Actor
 	return principal != "" && a.Kind == model.PrincipalAgent && strings.TrimSpace(a.ID) == principal
 }
 
@@ -1195,12 +1195,12 @@ func proposedByOf(t model.Task) string {
 			return model.NormalizeTaskID(l.Target)
 		}
 	}
-	if t.Origin.Attribution.OnBehalfOf != nil {
-		if id := inGrainAgentTaskID(*t.Origin.Attribution.OnBehalfOf); id != "" {
+	if t.Filing.Attribution.OnBehalfOf != nil {
+		if id := inGrainAgentTaskID(*t.Filing.Attribution.OnBehalfOf); id != "" {
 			return id
 		}
 	}
-	return inGrainAgentTaskID(t.Origin.Attribution.Actor)
+	return inGrainAgentTaskID(t.Filing.Attribution.Actor)
 }
 
 func inGrainAgentTaskID(p model.Principal) string {
@@ -2176,6 +2176,32 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			case opts.external != nil:
 				return errors.New("an external agent cannot turn on keepRunning")
 			}
+		case "goalmode", "goal_mode":
+			var gm model.GoalModeConfig
+			if json.Unmarshal(raw, &gm) != nil {
+				continue
+			}
+			switch {
+			case opts.role != nil:
+				if !set.Allows("tasks:admin", repo) {
+					return fmt.Errorf("%s cannot set %s: configuring autonomous goal mode requires tasks:admin", opts.role.label(), key)
+				}
+			case opts.external != nil:
+				return errors.New("an external agent cannot configure goalMode")
+			case opts.acting != nil:
+				if pattern == "PATCH /api/tasks/{id}" {
+					return errors.New("an agent cannot modify goalMode on an existing task")
+				}
+				if gm.Enabled {
+					actingGM, ok := model.GoalModeOf(*opts.acting)
+					if !ok || !actingGM.Enabled {
+						return errors.New("an agent cannot enable goalMode, which its own task does not have")
+					}
+					if gm.MockMissingSecrets && !actingGM.MockMissingSecrets {
+						return errors.New("an agent cannot enable mockMissingSecrets on goalMode, which its own task does not have")
+					}
+				}
+			}
 		case "priority":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil {
@@ -2244,6 +2270,27 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 					return fmt.Errorf("%s cannot set %s directly", opts.role.label(), key)
 				}
 				return errors.New("an agent cannot set proposalKey directly")
+			}
+		case "tags":
+			var ts []string
+			if json.Unmarshal(raw, &ts) == nil && len(ts) > 0 {
+				if opts.role != nil {
+					if !set.Allows("qa:admin", repo) {
+						return fmt.Errorf("%s cannot set %s: setting task tags needs scope qa:admin", opts.role.label(), key)
+					}
+					continue
+				}
+				return errors.New("an agent cannot set task tags directly")
+			}
+		case "qaflowref", "qa_flow_ref", "qa-flow":
+			if hasQAFlowRefField(pattern, raw) {
+				if opts.role != nil {
+					if !set.Allows("qa:admin", repo) && !set.Allows("settings:write", repo) {
+						return fmt.Errorf("%s cannot set %s: setting qaFlowRef requires an operator", opts.role.label(), key)
+					}
+					continue
+				}
+				return errors.New("an agent cannot set or override qaFlowRef")
 			}
 		case "reviewers":
 			if opts.role == nil && hasReviewersField(pattern, raw) {
@@ -2396,6 +2443,9 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		}
 		if pattern == "POST /api/tasks/{id}/human-review/release" {
 			return fmt.Errorf("%s cannot release human-review hold: releasing a human-review hold requires an unlimited role (grain/operator)", opts.role.label())
+		}
+		if pattern == "POST /api/tasks/{id}/accept-findings" {
+			return fmt.Errorf("%s cannot accept review findings: letting a change merge over a review's findings requires an unlimited role (grain/operator)", opts.role.label())
 		}
 		if pattern == "POST /api/tasks/{id}/force-merge" {
 			return fmt.Errorf("%s cannot force-merge work: forcing a merge requires an unlimited role (grain/operator)", opts.role.label())
@@ -2731,6 +2781,21 @@ func hasReviewersField(pattern string, raw json.RawMessage) bool {
 	return len(strings.TrimSpace(string(raw))) > 0
 }
 
+func hasQAFlowRefField(pattern string, raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return false
+	}
+	if strings.HasPrefix(pattern, "PATCH ") || strings.HasPrefix(pattern, "PUT ") {
+		return true
+	}
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return strings.TrimSpace(one) != ""
+	}
+	return len(trimmed) > 0
+}
+
 // agentMayWrite reports whether the acting task's own runs may push to
 // repo: its target, or a repository its writes name.
 func agentMayWrite(acting *model.Task, repo string) bool {
@@ -2948,6 +3013,9 @@ func routeHasQuery(pattern, param string) bool {
 // repeats or comma-separates values so an unallowed second value cannot
 // ride behind an allowed first one.
 func (s *Server) queryCallRepo(r *http.Request, pattern string, allowed func(string) bool) (string, bool, error) {
+	if pattern == taskSummariesRoute && !taskSummariesRepoAllowed(r) {
+		return "", true, validationErrorf("%s", errTaskSummariesRepo)
+	}
 	if r.Method != http.MethodGet || !routeHasQuery(pattern, "repo") {
 		return "", false, nil
 	}
@@ -2955,7 +3023,7 @@ func (s *Server) queryCallRepo(r *http.Request, pattern string, allowed func(str
 	if len(values) == 0 {
 		return "", false, nil
 	}
-	if pattern == "GET /api/metrics" {
+	if pattern == "GET /api/metrics" || pattern == "GET /api/qa/summary" {
 		var items []string
 		for _, raw := range values {
 			for _, part := range strings.Split(raw, ",") {
@@ -3688,6 +3756,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/notes":                   taskRespNone,
 	"POST /api/tasks/{id}/human-review":            taskRespNone,
 	"POST /api/tasks/{id}/human-review/release":    taskRespNone,
+	"POST /api/tasks/{id}/accept-findings":         taskRespNone,
 	"POST /api/tasks/{id}/agent-messages":          taskRespNone,
 	"POST /api/tasks/{id}/change-publish":          taskRespSingle,
 	"POST /api/tasks/{id}/change-mail":             taskRespSingle,
@@ -3874,7 +3943,7 @@ func createDrawsOnOtherText(body []byte) bool {
 	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 		return true
 	}
-	parsedOrigin, originErr := model.ParseWorkOrigin(req.Origin, nil)
+	parsedOrigin, originErr := model.ParseWorkOrigin(req.WorkOrigin, nil)
 	inheritsExternalRef := strings.TrimSpace(req.ExternalRef) == "" &&
 		(strings.TrimSpace(req.ProposedBy) != "" ||
 			model.NormalizeTaskID(req.Reverts) != "" ||
@@ -3929,6 +3998,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.GoogleChatSpace != nil, "googleChatSpace")
 	add(req.Designs != nil, "designs")
 	add(req.Context != nil, "context")
+	add(req.GoalMode != nil, "goalMode")
 	return keys
 }
 

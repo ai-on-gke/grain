@@ -54,15 +54,7 @@ func writeSyncConfig(t *testing.T, dir string, cfg syncConfig) string {
 // runs, and the HTTP client `grain sync` reaches it with.
 func syncTestServer(t *testing.T) (string, *ui.HTTPClient) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	srv := httptest.NewServer(ui.NewServer(withAccessCode(
 		ui.Config{Actor: ui.DefaultActor("operator"), Capabilities: ui.OfferedCapabilities()}), store))
 	t.Cleanup(srv.Close)
@@ -150,15 +142,7 @@ func TestCmdSyncAppliesSettingsAgainstAnEmbeddedStore(t *testing.T) {
 // command does (task 4496). It used to send nothing and be refused 401.
 func TestCmdSyncPresentsTheLocalAPITokenFromCLIEnvsDataDir(t *testing.T) {
 	const code = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	srv := httptest.NewServer(ui.NewServer(ui.Config{
 		Actor:         ui.DefaultActor("operator"),
 		Capabilities:  ui.OfferedCapabilities(),

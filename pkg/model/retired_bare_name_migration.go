@@ -22,8 +22,8 @@ import (
 	"strings"
 )
 
-// MigrateRetiredBareCapabilityNames is schema migration 148's Up, which an
-// import of a dump from before 148 runs too (ApplyDataMigrations): it takes the
+// MigrateRetiredBareCapabilityNames is schema migration 152's Up, which an
+// import of a dump from before 152 runs too (ApplyDataMigrations): it takes the
 // bare retired capability names out of the capability lists nobody sees
 // them in -- the deployment's default capabilities, each repository's
 // default capabilities and each repository's CI capabilities
@@ -42,9 +42,12 @@ import (
 //     is dropped, and the log line names what it became. Rewriting it to
 //     that grant instead would grant what the row has not granted since
 //     its retirement, which no operator chose;
-//   - anything else, local-scripts:<name> among them, is left: what it
-//     became depends on declarations only the daemon reads after Init
-//     (migrateLocalScripts, SetRuntimeGrantExpansions).
+//   - a runtime retirement (local-scripts:<name>) is rewritten to its
+//     runtime expansion when the daemon has set one
+//     (SetRuntimeGrantExpansions), which it already granted, and left
+//     otherwise: during Init what it became depends on declarations
+//     only the daemon reads afterwards (migrateLocalScripts);
+//   - anything else is left.
 //
 // Task, template and schedule grants are not touched: a retired name
 // there is shown, and refused visibly when the task dispatches.
@@ -78,6 +81,21 @@ func settleRetiredBareNames(where string, key []any, names []string) (out []stri
 			log.Printf("model: %s %v: rewrote the retired capability name %s to %s", where, key, trimmed, to)
 			if !slices.Contains(out, to) {
 				out = append(out, to)
+			}
+			continue
+		}
+		// A runtime retirement (local-scripts:<name>) the daemon has
+		// already worked out -- this Up running from ApplyDataMigrations
+		// on a live daemon, after migrateLocalScripts -- becomes what it
+		// became, as RewriteRetiredGrants writes it at startup; it is
+		// not removed.
+		if tos, ok := runtimeExpansion(trimmed); ok {
+			changed = true
+			log.Printf("model: %s %v: rewrote the retired capability name %s to %s", where, key, trimmed, strings.Join(tos, " and "))
+			for _, to := range tos {
+				if !slices.Contains(out, to) {
+					out = append(out, to)
+				}
 			}
 			continue
 		}

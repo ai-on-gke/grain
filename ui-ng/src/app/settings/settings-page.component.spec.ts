@@ -975,6 +975,220 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBe(true);
   });
 
+  it("offers the Codex subscription mode only for codex and manages a connection's own auth.json", async () => {
+    const api = new FakeSettingsApi();
+    (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
+      { id: "codex-sub", framework: "codex", authMode: "subscription" },
+      { id: "codex-key", framework: "codex", authMode: "api_key" },
+    ];
+    let status: Record<string, unknown> = {
+      enabled: true,
+      set: true,
+      sharedSet: true,
+      refreshError: "refresh token was revoked; upload a new auth.json",
+    };
+    const baseGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/agent-backends/{id}/codex-auth") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve(structuredClone(status));
+      }
+      return baseGet(key, params, query);
+    };
+    const basePut = api.put;
+    api.put = (key: string, params?: RouteParams, body?: unknown) => {
+      if (key === "PUT /api/agent-backends/{id}/codex-auth") {
+        api.calls.push({ method: "PUT", key, params, body });
+        status = { enabled: true, set: true };
+        return Promise.resolve(structuredClone(status));
+      }
+      return basePut(key, params, body);
+    };
+    api.delete = (key: string, params?: RouteParams) => {
+      api.calls.push({ method: "DELETE", key, params });
+      status = { enabled: true, set: false, sharedSet: true };
+      return Promise.resolve(structuredClone(status));
+    };
+    const { el, harness } = await mountSettings("/settings/models", api);
+
+    // The auth mode picker lists the subscription mode only for codex.
+    const optionLabels = () => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-auth"]',
+      )!.click();
+      harness.fixture.detectChanges();
+      const labels = Array.from(
+        document.querySelectorAll(
+          '[data-testid="select-new-backend-auth-menu"] [role="option"]',
+        ),
+      ).map((o) => o.textContent?.trim());
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-auth"]',
+      )!.click();
+      harness.fixture.detectChanges();
+      return labels;
+    };
+    expect(optionLabels()).not.toContain("ChatGPT subscription (auth.json)");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-new-backend-fw"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-fw-opt-codex"]',
+      )!
+      .click();
+    harness.fixture.detectChanges();
+    expect(optionLabels()).toContain("ChatGPT subscription (auth.json)");
+
+    // An api_key Codex connection keeps the ordinary secret field.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-codex-key"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('input[aria-label="Credential for codex-key"]'),
+    ).toBeTruthy();
+    expect(el.querySelector('[data-testid="codex-auth-codex-key"]')).toBeNull();
+
+    // A subscription connection shows its own login status, read from GET.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-codex-sub"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "GET /api/agent-backends/{id}/codex-auth" &&
+          c.params?.["id"] === "codex-sub",
+      ),
+    ).toBe(true);
+    expect(
+      el.querySelector('input[aria-label="Credential for codex-sub"]'),
+    ).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="codex-auth-status-codex-sub"]')
+        ?.textContent?.trim(),
+    ).toBe("Configured");
+    expect(
+      el.querySelector('[data-testid="codex-auth-refresh-error-codex-sub"]')
+        ?.textContent,
+    ).toContain("refresh token was revoked");
+
+    const save = el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-codex-auth-codex-sub"]',
+    )!;
+    expect(save.disabled).toBe(true);
+    setInput(
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-codex-auth-codex-sub"]',
+      )!,
+      '{"tokens":{"refresh_token":"fake"}}',
+    );
+    harness.fixture.detectChanges();
+    expect(save.disabled).toBe(false);
+    save.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    const put = api.calls.find(
+      (c) => c.key === "PUT /api/agent-backends/{id}/codex-auth",
+    );
+    expect(put?.params?.["id"]).toBe("codex-sub");
+    expect(put?.body).toEqual({ value: '{"tokens":{"refresh_token":"fake"}}' });
+    expect(
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-codex-auth-codex-sub"]',
+      )!.value,
+    ).toBe("");
+    expect(
+      el.querySelector('[data-testid="codex-auth-refresh-error-codex-sub"]'),
+    ).toBeNull();
+
+    // Clearing deletes this connection's file; the shared login (sharedSet)
+    // is never shown as covering it.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="clear-codex-auth-codex-sub"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("codex-sub");
+    expect(
+      api.calls.some(
+        (c) => c.key === "DELETE /api/agent-backends/{id}/codex-auth",
+      ),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/agent-backends/{id}/codex-auth" &&
+          c.params?.["id"] === "codex-sub",
+      ),
+    ).toBe(true);
+    expect(
+      el
+        .querySelector('[data-testid="codex-auth-status-codex-sub"]')
+        ?.textContent?.trim(),
+    ).toBe("Not set");
+    expect(
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="clear-codex-auth-codex-sub"]',
+      )!.disabled,
+    ).toBe(true);
+  });
+
+  it("shows each repository's declarations and Git connection with classic's wording, linked to their views", async () => {
+    const api = new FakeSettingsApi();
+    const get = api.get;
+    api.get = ((key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/repos/{owner}/{name}/declarations") {
+        return Promise.resolve({ declarations: true, ciMode: "github" });
+      }
+      if (key === "GET /api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [{ repo: "acme/platform", push: false }],
+          connections: [
+            { credential: "acme-bot", host: "github.com", ok: true },
+            { credential: "broken", host: "github.com", ok: false },
+            { credential: "ghe-bot", host: "ghe.example.com", ok: true },
+          ],
+        });
+      }
+      return get(key, params, query);
+    }) as typeof api.get;
+    const { el } = await mountSettings("/settings/repositories", api);
+
+    const headers = Array.from(el.querySelectorAll("th")).map((th) =>
+      th.textContent?.trim(),
+    );
+    expect(headers).toContain("Declarations");
+    expect(headers).toContain("Git connection");
+
+    const decl = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-declarations-acme/platform"] a',
+    )!;
+    expect(decl.textContent?.trim()).toBe("Read");
+    expect(decl.getAttribute("href")).toBe(
+      "/next/processes/declarations?repo=acme%2Fplatform",
+    );
+
+    const git = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-git-acme/platform"] a',
+    )!;
+    expect(git.textContent?.trim()).toBe("acme-bot (read only)");
+    expect(git.getAttribute("href")).toBe("/next/settings/git");
+  });
+
   it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
     const api = new FakeSettingsApi();
     (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
@@ -1025,15 +1239,33 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       '[data-testid="clear-cred-claude-team"]',
     )!;
     expect(clearBtn).toBeTruthy();
-    clearBtn.click();
-    await harness.fixture.whenStable();
-    expect(
+    const cleared = () =>
       api.calls.some(
         (c) =>
           c.key === "DELETE /api/agent-backends/{id}/credential" &&
           c.params?.["id"] === "claude-team",
-      ),
-    ).toBe(true);
+      );
+    // Clearing a stored secret asks first; dismissing deletes nothing.
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Clear the credential for claude-team?");
+    expect(cleared()).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(cleared()).toBe(false);
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cleared()).toBe(true);
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="remove-backend-claude-team"]',
@@ -1160,6 +1392,124 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         .length,
     ).toBe(1);
   });
+
+  it("pluralizes Broadcast delivery and counts stranded open tasks across repositories on Check stranded tasks", async () => {
+    const api = new FakeSettingsApi();
+    let broadcastDelivered = 1;
+    let strandedEntries: Array<{ repo: string; tasks: string[] }> = [
+      { repo: "acme/legacy", tasks: ["101"] },
+    ];
+    const basePost = api.post;
+    api.post = (key, params, body, query) => {
+      if (key === "POST /api/deployment/broadcast") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ delivered_count: broadcastDelivered });
+      }
+      if (key === "POST /api/repos/plan") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ targetReposStranded: strandedEntries });
+      }
+      return basePost(key, params, body, query);
+    };
+
+    const { el, harness } = await mountSettings("/settings/general", api);
+    const { SnackbarService } = await import("../services/snackbar.service");
+    const snackbar = TestBed.inject(SnackbarService);
+
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Pause merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 1 task");
+
+    broadcastDelivered = 3;
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Resume merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 3 tasks");
+
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("1 open task would be stranded by current repository list.");
+
+    strandedEntries = [{ repo: "acme/legacy", tasks: ["101", "102"] }];
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("2 open tasks would be stranded by current repository list.");
+
+    // A schedules-only entry strands no task, so it is never counted as one.
+    const notice = async () => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="check-repos-plan-btn"]',
+      )!.click();
+      await harness.fixture.whenStable();
+      harness.fixture.detectChanges();
+      return el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim();
+    };
+    strandedEntries = [
+      { repo: "acme/cron", schedules: ["nightly"] } as unknown as {
+        repo: string;
+        tasks: string[];
+      },
+    ];
+    expect(await notice()).toBe(
+      "1 schedule would be stranded by current repository list.",
+    );
+    strandedEntries = [
+      { repo: "acme/legacy", tasks: ["101"] },
+      {
+        repo: "acme/cron",
+        schedules: ["nightly", "weekly"],
+        qualificationPlan: true,
+      } as unknown as { repo: string; tasks: string[] },
+    ];
+    expect(await notice()).toBe(
+      "1 open task, 2 schedules and 1 qualification plan would be stranded by current repository list.",
+    );
+  });
+
   it("labels capability server states in host wording, gives failed the error tone, and titles needs-config with its reason", async () => {
     expect(
       capServerState({ id: "p", status: { state: "needs-hostd:mac-mini" } }),
@@ -1239,6 +1589,16 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     });
   });
 
+  it("opens Models, not the phone section list, for an old /settings/connections link", async () => {
+    const { el } = await mountSettings("/settings/connections");
+    const shell = el.querySelector(".settings-shell")!;
+    expect(shell.classList).toContain("is-mobile-detail");
+    expect(shell.classList).not.toContain("is-mobile-list");
+    expect(
+      el.querySelector('[data-testid="card-model-backends"]'),
+    ).not.toBeNull();
+  });
+
   it("scrolls to an old section name's card on in-app navigation and stops when another section is chosen", async () => {
     const { el, harness } = await mountSettings("/settings/engine");
     const scrolled: string[] = [];
@@ -1268,5 +1628,127 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = orig;
     }
+  });
+
+  it("explains unreadable secret lists and editable secrets when a role holds secrets:write without settings:write or secrets:read", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.access = {
+      role: "grain/secret-writer",
+      roles: ["grain/secret-writer"],
+      full: false,
+      scopes: ["settings:read", "secrets:write"],
+    };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    expect(
+      el.querySelector('[data-testid="settings-role-readonly"]')?.textContent,
+    ).toContain("Secrets and API keys remain editable.");
+    expect(
+      el
+        .querySelector('[data-testid="stored-secrets"] .s-subhead-title')
+        ?.textContent?.trim(),
+    ).toBe("Stored secrets");
+    expect(
+      el.querySelector('[data-testid="secrets-read-restricted"]')?.textContent,
+    ).toContain("Stored secret names cannot be read with your role");
+    expect(el.querySelector('[data-testid="secrets-empty"]')).toBeNull();
+  });
+
+  it("disables capability policy and scope-set inputs under configRepoOnly", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody = { ...api.settingsBody, configRepoOnly: true };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    for (const id of [
+      "input-cap-server-id",
+      "input-cap-server-url",
+      "input-policy-capability",
+      "input-policy-repos",
+      "select-policy-effect",
+      "switch-policy-allow-untrusted",
+      "add-policy-rule-btn",
+      "input-scope-set-name",
+      "input-scope-set-scopes",
+    ]) {
+      const ctrl = el.querySelector<HTMLInputElement | HTMLButtonElement>(
+        `[data-testid="${id}"]`,
+      );
+      expect(ctrl, id).not.toBeNull();
+      expect(ctrl?.disabled, id).toBe(true);
+    }
+    expect(
+      el.querySelector<HTMLInputElement>('[data-testid="input-secret-value"]')
+        ?.disabled,
+    ).toBe(false);
+  });
+
+  it("keeps a replacement typed during an in-flight secret PUT and blocks double submits", async () => {
+    const api = new FakeSettingsApi();
+    const baseGet = api.get;
+    api.get = (key, params, query) => {
+      if (key === "GET /api/secrets") {
+        return Promise.resolve({
+          enabled: true,
+          secrets: [
+            { name: "rv-a", keys: ["token"] },
+            { name: "rv-b", keys: ["token"] },
+          ],
+        });
+      }
+      return baseGet(key, params, query);
+    };
+    let releasePut!: () => void;
+    let putCount = 0;
+    const basePut = api.put;
+    api.put = (key, params, body) => {
+      if (key === "PUT /api/secrets/{secret}/{key}") {
+        putCount += 1;
+        return new Promise((resolve) => {
+          releasePut = () => resolve({});
+        });
+      }
+      return basePut(key, params, body);
+    };
+
+    const { el, harness } = await mountSettings("/settings/capabilities", api);
+    const nameIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-name"]',
+    )!;
+    const keyIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-key"]',
+    )!;
+    const valIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-value"]',
+    )!;
+    const storeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="store-secret-btn"]',
+    )!;
+
+    setInput(nameIn, "rv-a");
+    setInput(keyIn, "token");
+    setInput(valIn, "A-NEW");
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(false);
+    storeBtn.click();
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(true);
+    storeBtn.click();
+    expect(putCount).toBe(1);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="replace-secret-rv-b-token"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    setInput(valIn, "B-NEW");
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(true);
+
+    releasePut();
+    await new Promise((r) => setTimeout(r, 0));
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+
+    expect(nameIn.value).toBe("rv-b");
+    expect(keyIn.value).toBe("token");
+    expect(valIn.value).toBe("B-NEW");
+    expect(storeBtn.disabled).toBe(false);
   });
 });

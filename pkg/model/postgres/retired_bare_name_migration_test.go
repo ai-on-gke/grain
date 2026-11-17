@@ -23,20 +23,20 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Migration 148 on PostgreSQL: the bare retired names written by hand
+// Migration 152 on PostgreSQL: the bare retired names written by hand
 // into the default and CI capability lists, which no page shows
 // (docs/test-runs/2026-11-14-retired-capability-aliases.md, F4), are
 // gone afterwards, a registered alias's rewritten to what it stands for.
 // Not parallel: it registers an alias for the whole process.
-func TestMigration148SettlesBareRetiredNamesOnPostgres(t *testing.T) {
+func TestMigration152SettlesBareRetiredNamesOnPostgres(t *testing.T) {
 	store, db, ctx := openStore(t)
-	migrate148(t, ctx, store, db)
+	migrate152(t, ctx, store, db)
 }
 
-// Migration 148 on SQLite, the same rows.
-func TestMigration148SettlesBareRetiredNamesOnSQLite(t *testing.T) {
+// Migration 152 on SQLite, the same rows.
+func TestMigration152SettlesBareRetiredNamesOnSQLite(t *testing.T) {
 	store, ctx := openStoreIn(t, t.TempDir())
-	migrate148(t, ctx, store, store.DB())
+	migrate152(t, ctx, store, store.DB())
 }
 
 const (
@@ -44,7 +44,7 @@ const (
 	widgetAliasGrant = "https://grain.dev/capabilities/acme-widget#key={}"
 )
 
-func migrate148(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
+func migrate152(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	t.Helper()
 	t.Cleanup(model.RegisterLegacyGrantAlias(widgetAlias, widgetAliasGrant))
 	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
@@ -58,9 +58,9 @@ func migrate148(t *testing.T, ctx context.Context, store *model.Store, db *sql.D
 		"acme", "widgets", widgetAlias+",self-debug", "grain-ci,self-debug,"+model.GrainCIGrant+",grain-log"); err != nil {
 		t.Fatal(err)
 	}
-	rewindSchemaTo(t, ctx, db, 147)
+	rewindSchemaTo(t, ctx, db, 151)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-147 store: %v", err)
+		t.Fatalf("migrating a version-151 store: %v", err)
 	}
 
 	cfg, err := store.GetConfig(ctx)
@@ -99,5 +99,43 @@ func migrate148(t *testing.T, ctx context.Context, store *model.Store, db *sql.D
 	again, err := store.GetRepoConfig(ctx, model.RepoRef{Owner: "acme", Name: "widgets"})
 	if err != nil || !slices.Equal(again.CICapabilities, rc.CICapabilities) || !slices.Equal(again.DefaultCapabilities, rc.DefaultCapabilities) {
 		t.Errorf("acme/widgets after a second run = (%+v, %v), want it unchanged", again, err)
+	}
+}
+
+// On a running daemon -- a grain/config dump stamped before 152 applied
+// after migrateLocalScripts has set the runtime expansions -- a
+// local-scripts:<name> the daemon has worked out is rewritten to the
+// host-script grant it became, not removed with the names that grant
+// nothing.
+func TestMigration152RewritesARuntimeRetirementItKnows(t *testing.T) {
+	store, ctx := openStoreIn(t, t.TempDir())
+	db := store.DB()
+	const deploy = `https://grain.dev/capabilities/host-script#deploy={}`
+	t.Cleanup(model.SetRuntimeGrantExpansions(map[string][]string{"local-scripts:deploy": {deploy}}))
+	if _, err := db.ExecContext(ctx, "INSERT INTO `repo_config` (`owner`, `name`, `default_capabilities`, `ci_capabilities`) VALUES (?, ?, ?, ?)",
+		"acme", "widgets", "local-scripts:deploy,local-scripts:other", "local-scripts:deploy,self-debug,"+deploy); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := model.ApplyDataMigrations(ctx, tx, 151); err != nil {
+		t.Fatalf("migrating: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := store.GetRepoConfig(ctx, model.RepoRef{Owner: "acme", Name: "widgets"})
+	if err != nil || rc == nil {
+		t.Fatalf("reading acme/widgets: (%v, %v)", rc, err)
+	}
+	// local-scripts:other has no expansion: the daemon's to settle.
+	if want := []string{deploy, "local-scripts:other"}; !slices.Equal(rc.DefaultCapabilities, want) {
+		t.Errorf("acme/widgets default capabilities = %v, want %v", rc.DefaultCapabilities, want)
+	}
+	if want := []string{deploy}; !slices.Equal(rc.CICapabilities, want) {
+		t.Errorf("acme/widgets CI capabilities = %v, want %v", rc.CICapabilities, want)
 	}
 }

@@ -72,7 +72,7 @@ func upgradeChecks(t *testing.T, store *model.Store) []model.Task {
 	}
 	var out []model.Task
 	for _, task := range all {
-		if task.Origin.Reason == model.ReasonUpgradeCheck {
+		if task.Filing.Reason == model.ReasonUpgradeCheck {
 			out = append(out, task)
 		}
 	}

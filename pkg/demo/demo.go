@@ -353,6 +353,10 @@ func Run(opts Options) error {
 	// rollback over -github-sim answered 500
 	// (docs/test-runs/2026-11-04-release-approval.md, F3).
 	cfg.ReleaseApprovalDir = dir
+	// Codex subscription logins (/api/agent-backends/{id}/codex-auth)
+	// live beside the throwaway store, where a deployment keeps them in
+	// its data directory: without a path the upload answered 404.
+	cfg.CodexAuthFile = daemon.ManagedCodexAuthFile(dir)
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -1428,7 +1432,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err != nil {
 		return err
 	}
-	st.Origin = model.Origin{
+	st.Filing = model.Filing{
 		Attribution: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "director"},
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "agent-1"},
@@ -1470,7 +1474,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return fmt.Errorf("seeding imported task: %w", err)
 	}
 	if err := store.UpdateTask(ctx, imported.ID, func(t *model.Task) error {
-		t.Origin = model.Origin{
+		t.Filing = model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
 			Reason:      model.ReasonImported,
 		}
@@ -1506,7 +1510,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	dt.Admission = model.AdmissionDurable
 	dt.Tags = append(dt.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 	dt.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
-	dt.Origin = model.Origin{
+	dt.Filing = model.Filing{
 		Attribution: model.Attribution{Actor: cfg.Actor},
 		Reason:      model.ReasonConsoleSession,
 	}
@@ -1841,6 +1845,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	if err := seedDemoRolledOverTask(ctx, store, create, ago); err != nil {
+		return err
+	}
+	if err := seedDemoCIWait(ctx, store, create, ago); err != nil {
 		return err
 	}
 	return nil

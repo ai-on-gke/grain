@@ -58,18 +58,6 @@
   background: var(--md-sys-color-surface-container-low);
 }
 
-.proc-prompt-well {
-  padding: 12px 14px;
-  border-radius: var(--md-sys-shape-corner-small);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-lowest);
-  font-family: var(--grain-font-mono);
-  font-size: 12px;
-  line-height: 18px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .proc-yaml-editor {
   width: 100%;
   min-height: 180px;
@@ -118,16 +106,25 @@
 
 .comp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 6px 12px;
   margin: 0;
   font-size: 12px;
+}
+
+.comp-meta-grid {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
 }
 
 .comp-row {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.comp-row-full {
+  grid-column: 1 / -1;
+  width: 100%;
 }
 
 .comp-row dt {
@@ -142,6 +139,35 @@
   gap: 6px;
   flex-wrap: wrap;
   color: var(--md-sys-color-on-surface);
+}
+
+.comp-body-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.comp-body-well {
+  grid-column: 1 / -1;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comp-body-well.is-clamped {
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .comp-layer {
@@ -174,7 +200,7 @@
 }
 
 .g-dialog.is-drawer {
-  width: min(680px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - 32px));
 }
 
 .proc-field-grid {
@@ -191,8 +217,8 @@
 }
 
 .tmpl-field-editor-row {
-  display: grid;
-  grid-template-columns: auto minmax(110px, 1fr) minmax(110px, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
@@ -201,13 +227,15 @@
 }
 
 .tmpl-field-editor-row input {
+  flex: 1 1 200px;
+  min-width: 180px;
   padding: 6px 8px;
   font-size: 13px;
 }
 
 @media (max-width: 599.95px) {
   .proc-inspector {
-    padding: 14px 12px 24px;
+    padding: 14px 12px calc(var(--grain-bottombar-height, 92px) + 16px);
   }
 
   .g-dialog .segmented {

@@ -1,8 +1,10 @@
-/* Telemetry (D-10 + SPACE D-17/D-18) component styles. Kept lean (< 6 kB)
-   alongside ../shared/ops-surface.css. */
-
 g-telemetry-page {
   display: contents;
+}
+
+g-telemetry-page .ops-toolbar {
+  margin-top: 0;
+  padding: 12px 20px 0;
 }
 
 .tel-chart-svg {
@@ -84,7 +86,6 @@ g-telemetry-page {
   background: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
 }
 
-/* Horizontal stage & tool SVG bars */
 .tel-stage-list {
   display: flex;
   flex-direction: column;
@@ -99,12 +100,17 @@ g-telemetry-page {
   font-size: 12px;
 }
 
-.tel-stage-name {
-  font-weight: 500;
-  color: var(--md-sys-color-on-surface);
+.tel-stage-name,
+.tel-dir-item .row-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tel-stage-name {
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface);
 }
 
 .tel-stage-nums {
@@ -121,7 +127,6 @@ g-telemetry-page {
   display: block;
 }
 
-/* Usage budget editor */
 .tel-budget-editor {
   padding: 14px;
   border-radius: var(--md-sys-shape-corner-medium);
@@ -167,11 +172,17 @@ g-telemetry-page {
   }
 }
 
-/* Team SPACE alphabetical grid */
 .tel-space-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 10px;
+}
+
+.tel-space-card,
+.tel-dir-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .tel-space-card {
@@ -179,9 +190,6 @@ g-telemetry-page {
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-lowest);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .tel-space-meta {
@@ -196,16 +204,17 @@ g-telemetry-page {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
-.tel-dir-item {
+.tel-dir-item,
+.tel-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
+}
+
+.tel-dir-item {
   gap: 4px 10px;
   padding: 6px 10px;
   border-radius: var(--md-sys-shape-corner-small);
@@ -221,24 +230,13 @@ g-telemetry-page {
   gap: 4px;
 }
 
-.tel-dir-item .row-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .tel-dir-repo,
 .tel-dir-metrics {
-  flex: 0 0 auto;
+  flex: none;
   white-space: nowrap;
 }
 
 .tel-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 8px 12px;
   margin-bottom: 8px;
 }
@@ -247,72 +245,6 @@ g-telemetry-page {
   margin: 0;
 }
 
-.tel-notices-banner {
-  margin: 0;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.tel-notices-banner.banner-warn {
-  background: color-mix(in srgb, var(--md-sys-color-warning) 14%, transparent);
-  color: var(--md-sys-color-on-surface);
-  border: 1px solid
-    color-mix(in srgb, var(--md-sys-color-warning) 45%, transparent);
-}
-
-.tel-notices-banner.banner-error {
-  border: 1px solid
-    color-mix(in srgb, var(--md-sys-color-error) 35%, transparent);
-}
-
-.tel-notices-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 13px;
-}
-
-.tel-notices-list {
-  margin: 0;
-  padding-left: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.tel-more-row {
-  display: flex;
-  justify-content: flex-start;
-  margin-top: 8px;
-}
-
-.tel-more-btn {
-  min-height: 32px;
-  padding: 4px 12px;
-  border-radius: var(--md-sys-shape-corner-full);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface);
-  color: var(--md-sys-color-primary);
-  font: 500 12px/16px var(--grain-font-body);
-  cursor: pointer;
-}
-
-.tel-more-btn:hover {
-  background: var(--md-sys-color-surface-container-high);
-}
-
-.tel-more-btn:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 2px;
-}
-
-/* Throughput chart: time axis, hover band and a hover card. */
 .tel-chart-wrap {
   position: relative;
 }
@@ -363,6 +295,10 @@ g-telemetry-page {
   pointer-events: none;
 }
 
+:root[data-theme="dark"] .tel-tip {
+  background: var(--md-sys-color-surface-container-high);
+}
+
 .tel-tip.is-left {
   transform: translateX(calc(-100% - 8px));
 }
@@ -396,15 +332,10 @@ g-telemetry-page {
   color: var(--md-sys-color-on-surface-variant);
 }
 
-:root[data-theme="dark"] .tel-tip {
-  background: var(--md-sys-color-surface-container-high);
-}
-
-.actor-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 0;
+/* A paused scope's local reset, on the line its Paused pill sits on so a
+   table of paused scopes grows no taller. */
+.usage-scope-reset {
+  margin-left: 6px;
   font-size: 12px;
+  white-space: nowrap;
 }

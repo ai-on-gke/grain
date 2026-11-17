@@ -284,7 +284,7 @@ func reviewedWantsAutoMerge(ctx context.Context, store *model.Store, review mode
 //
 // Only for a review task. LinkProposedBy is also what a propose_task
 // proposal carries back to the run that proposed it, and a proposal is
-// not a review of anything -- Origin.Reason is what tells the two apart
+// not a review of anything -- Filing.Reason is what tells the two apart
 // (isReviewTask), the same field syncEntry reads to keep a review out of
 // its repo's merge queue.
 //
@@ -540,8 +540,8 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 			"Reply here (or on task %s) with your decision, and grain sends another run on "+
 			"this task to carry it out -- it fixes what you decided and a clean re-review "+
 			"clears the gate. Pressing Submit records your approval only and will not merge "+
-			"over open findings; merging without fixing them requires a force-merge override "+
-			"with a reason. The same questions are on %s as %s, on the lines they are about.",
+			"over open findings; to merge without fixing them, accept them with **Accept findings** "+
+			"(`grain accept-findings`, a reason required) rather than Force merge. The same questions are on %s as %s, on the lines they are about.",
 		review.ID, countOf(len(findings), "open question"), ref, findingsList(findings),
 		review.ID, ref, kind)
 	commentID, err := store.AddComment(ctx, model.Comment{

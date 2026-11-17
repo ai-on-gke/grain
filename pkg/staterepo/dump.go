@@ -698,7 +698,7 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		}
 	}
 	// A dump from before a migration that rewrites rows (the retired
-	// capability grants, 67 onwards, and 148's settling of the bare retired
+	// capability grants, 67 onwards, and 152's settling of the bare retired
 	// names left in the default and CI capability lists) gets those
 	// rewrites here, keyed by the migration's own number: the rows were
 	// never in a store that ran them. A dump at this schema is restored as

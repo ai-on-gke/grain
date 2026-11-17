@@ -59,6 +59,7 @@ import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import { TaskGoalCardComponent } from "../task/task-goal-card.component";
 
 import {
   type FilterId,
@@ -70,6 +71,13 @@ import {
 import { InboxStore } from "./inbox.store";
 import { replyRefusal, whyGone } from "./departure";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
+
+function qaTriageChip(t: Task): string | null {
+  const hr = t.humanReviewHold?.find((h) => h.source === "qa-triage");
+  if (!hr) return null;
+  const m = hr.reason?.match(/\[(T[0-3])\b/);
+  return m ? `[${m[1]} · Review]` : "[T2 · Review]";
+}
 
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: "all", label: "All" },
@@ -141,6 +149,7 @@ const ONE_KEY = new Set(["approve"]);
     "./inbox-inspector.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   template: `
     <section
@@ -208,7 +217,9 @@ const ONE_KEY = new Set(["approve"]);
           {{ err }}
         </p>
       }
-      @if (store.actionError(); as err) {
+      <!-- Never the same sentence twice: an action refused because the
+           list could not be read says what the banner above already does. -->
+      @if (actionErrorShown(); as err) {
         <p class="banner banner-error" role="alert" data-testid="action-error">
           {{ err }}
           <button
@@ -409,6 +420,15 @@ const ONE_KEY = new Set(["approve"]);
                                     [attr.title]="c.tip"
                                     >{{ c.text }}</span
                                   >
+                                }
+                                @if (e.task && qaTriageChip(e.task); as qc) {
+                                  <span
+                                    class="gate-chip"
+                                    style="margin-left: 6px; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: var(--md-sys-color-surface-container-high);"
+                                    data-testid="row-qa-triage"
+                                  >
+                                    {{ qc }}
+                                  </span>
                                 }
                                 @if (e.gone) {
                                   <span class="muted row-gone"
@@ -718,7 +738,13 @@ const ONE_KEY = new Set(["approve"]);
                 }
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
-                    <p class="resolution-question">{{ pa.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="pa.summary"
+                    />
                     @if (pa.reason) {
                       <g-capped-markdown
                         class="dock-note"
@@ -816,13 +842,25 @@ const ONE_KEY = new Set(["approve"]);
                       </div>
                     </div>
                   } @else {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="sel.summary"
+                    />
                     <p class="muted dock-note">Reading the request…</p>
                   }
                 }
                 @case ("release") {
                   @if (sel.release; as r) {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="release-summary"
+                      noun="summary"
+                      label="Release summary"
+                      [text]="sel.summary"
+                    />
                     @if (r.dispatchFailure; as df) {
                       <div
                         class="banner banner-error"
@@ -832,7 +870,12 @@ const ONE_KEY = new Set(["approve"]);
                         <strong>The last promotion did not start:</strong>
                         {{ df.message }}
                         @if (df.remedy) {
-                          <div>{{ df.remedy }}</div>
+                          <g-capped-markdown
+                            testid="release-remedy"
+                            noun="remedy"
+                            label="Remedy"
+                            [text]="df.remedy"
+                          />
                         }
                         @if (df.runUrl) {
                           <a
@@ -977,6 +1020,16 @@ const ONE_KEY = new Set(["approve"]);
                 <h3 class="section-title">Why this needs a person</h3>
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
               </div>
+
+              @if (store.selectedDetail() ?? sel.task; as inspTask) {
+                <g-task-goal-card
+                  [task]="inspTask"
+                  [attemptsCount]="
+                    store.selectedDetail()?.attempts?.length ?? 0
+                  "
+                  (acted)="store.reloadSelectedDetail()"
+                />
+              }
 
               @if (sel.taskId) {
                 <g-conversation
@@ -1235,10 +1288,17 @@ const ONE_KEY = new Set(["approve"]);
     StatusIconComponent,
     ConversationComponent,
     CappedMarkdownComponent,
+    TaskGoalCardComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
+  protected readonly qaTriageChip = qaTriageChip;
+
   protected readonly store = inject(InboxStore);
+  protected readonly actionErrorShown = computed(() => {
+    const err = this.store.actionError();
+    return err && err !== this.store.loadError() ? err : null;
+  });
   protected readonly wsStore = inject(WorkstreamsStore);
   protected readonly access = inject(AccessService);
   private readonly directorCtx = inject(DirectorContextService);

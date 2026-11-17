@@ -27,14 +27,12 @@ import (
 	"io"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -42,16 +40,8 @@ import (
 // about -- queued, proposed, closed, deferred -- and serves them.
 func hiddenTestServer(t *testing.T) (string, *ui.Client) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	client := ui.NewClient(ui.Config{Actor: ui.DefaultActor("tester"), Capabilities: ui.OfferedCapabilities()}, store)
 	for _, title := range []string{"Live work", "Proposed work", "Closed work", "Deferred work"} {
 		if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{
@@ -242,16 +232,8 @@ func TestListSaysWhatItLeftOutWithoutSpoilingTheListing(t *testing.T) {
 }
 
 func TestListOrdersClosedTasksNewestFirstByDefault(t *testing.T) {
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	client := ui.NewClient(ui.Config{Actor: ui.DefaultActor("tester"), Capabilities: ui.OfferedCapabilities()}, store)
 	for _, title := range []string{"Open task 1", "Closed task 1", "Closed task 2", "Closed task 3"} {
 		if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{

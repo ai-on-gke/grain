@@ -128,7 +128,51 @@ describe("TipDirective", () => {
     const mod = await import("./tip.directive");
     second.focus();
     expect(tip()?.hidden).toBe(false);
-    mod.dismissActiveTooltip();
+    mod.dismissActiveTooltip(250);
     expect(tip()?.hidden).toBe(true);
+
+    // Synthetic hover within the suppression window is ignored.
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_DELAY_MS);
+    expect(tip()?.hidden).toBe(true);
+
+    vi.advanceTimersByTime(300);
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_DELAY_MS);
+    expect(tip()?.hidden).toBe(false);
+  });
+
+  it("shifts the tooltip above an active snackbar when their bounding boxes would overlap", () => {
+    const snack = document.createElement("div");
+    snack.setAttribute("data-testid", "snackbar");
+    snack.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        top: 800,
+        right: 600,
+        bottom: 848,
+        width: 500,
+        height: 48,
+      }) as DOMRect;
+    document.body.appendChild(snack);
+    button.getBoundingClientRect = () =>
+      ({
+        left: 200,
+        top: 860,
+        right: 300,
+        bottom: 892,
+        width: 100,
+        height: 32,
+      }) as DOMRect;
+    try {
+      button.focus();
+      const t = tip()!;
+      expect(t.hidden).toBe(false);
+      expect(Number.parseInt(t.style.top, 10)).toBeLessThanOrEqual(
+        800 - 32 - 8,
+      );
+    } finally {
+      snack.remove();
+    }
   });
 });

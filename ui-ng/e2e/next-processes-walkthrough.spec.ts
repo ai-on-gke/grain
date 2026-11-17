@@ -130,7 +130,9 @@ test("schedule dialog surfaces validation errors inside the modal, enforces 10-m
       page.getByText("· next: suppressed", { exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByText("Next: suppressed", { exact: true }),
+      page.getByTestId("sched-config-pane").getByText("suppressed", {
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(page.getByText("2027-")).toHaveCount(0);
 
@@ -145,7 +147,8 @@ test("schedule dialog surfaces validation errors inside the modal, enforces 10-m
     ).toBeVisible();
 
     // Open New schedule and verify forbidden git_ref error renders inside the dialog.
-    await page.getByRole("button", { name: "New schedule" }).click();
+    await page.getByRole("button", { name: "New ▾" }).click();
+    await page.getByRole("menuitem", { name: "Schedule" }).click();
     const dlg = page.getByRole("dialog", { name: "New schedule or trigger" });
     await expect(dlg).toBeVisible();
 
@@ -267,7 +270,8 @@ test("templates with required parameters preview without 400, workflow Run now c
 
   // Create template with required parameter and no default -> zero 400s on composition preview.
   await page.goto("processes/templates");
-  await page.getByRole("button", { name: "New template" }).click();
+  await page.getByRole("button", { name: "New ▾" }).click();
+  await page.getByRole("menuitem", { name: "Template" }).click();
   const tmplDlg = page.getByRole("dialog", { name: "New task template" });
   await tmplDlg.getByLabel("Template name").fill("e2e-req-param");
   await tmplDlg.getByLabel(/Filed task title/).fill("chore: update {{module}}");
@@ -334,7 +338,8 @@ test(
   { tag: ["@phone"] },
   async ({ page }) => {
     await page.goto("processes/schedules");
-    await page.getByTestId("proc-new-schedule-btn").click();
+    await page.getByTestId("proc-new-menu-btn").click();
+    await page.getByTestId("proc-new-schedule").click();
     const dialog = page.getByRole("dialog");
     await page.getByTestId("sched-title-input").fill("e2e: too often");
     await page.getByTestId("sched-desc-input").fill("Throwaway.");
@@ -357,7 +362,8 @@ test(
     expect(box.y + box.height).toBeLessThanOrEqual(saveBox.y + 0.5);
 
     await dialog.getByRole("button", { name: "Cancel" }).click();
-    await page.getByTestId("proc-new-schedule-btn").click();
+    await page.getByTestId("proc-new-menu-btn").click();
+    await page.getByTestId("proc-new-schedule").click();
     await expect(page.getByTestId("proc-dialog-error")).toHaveCount(0);
   },
 );

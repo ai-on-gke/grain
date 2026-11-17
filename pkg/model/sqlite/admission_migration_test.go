@@ -34,7 +34,7 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 			ID:          "t-session",
 			Intent:      model.IntentImplement,
 			Title:       "Director",
-			Origin:      model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonConsoleSession},
+			Filing:      model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonConsoleSession},
 			Interactive: true,
 			Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 			Approval:    &model.Attribution{Actor: human},
@@ -195,7 +195,7 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 		t.Errorf("Config.DefaultAdmission = %q, want bypass", afterCfg.DefaultAdmission)
 	}
 	// The bare read-issues the admission rewrite left in place is
-	// removed by migration 148, which grants nothing any longer.
+	// removed by migration 152, which grants nothing any longer.
 	if len(afterCfg.DefaultCapabilities) != 0 {
 		t.Errorf("Config.DefaultCapabilities = %v, want none", afterCfg.DefaultCapabilities)
 	}
@@ -223,7 +223,7 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 	if afterRepo.DefaultAdmission != model.AdmissionDurable {
 		t.Errorf("RepoConfig.DefaultAdmission = %q, want durable", afterRepo.DefaultAdmission)
 	}
-	// Likewise the bare self-debug (migration 148).
+	// Likewise the bare self-debug (migration 152).
 	if len(afterRepo.DefaultCapabilities) != 0 {
 		t.Errorf("RepoConfig.DefaultCapabilities = %v, want none", afterRepo.DefaultCapabilities)
 	}

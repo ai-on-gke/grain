@@ -94,6 +94,25 @@ describe("dispatch-status", () => {
     ).toContain("in 2h");
   });
 
+  it("reads the daemon's 12-hour UTC reset clock in the viewer's zone", () => {
+    const out = formatNoticeText(
+      "gemini-x is paused until 8:00 PM UTC",
+      nowMs,
+      "America/Los_Angeles",
+    );
+    expect(out).toContain("PST");
+    expect(out).toContain("in 2h");
+    expect(out).toContain("[8:00 PM UTC]");
+    // A clock already on the viewer's zone is left as it came.
+    expect(
+      formatNoticeText(
+        "paused until 12:00 PM PST",
+        nowMs,
+        "America/Los_Angeles",
+      ),
+    ).toBe("paused until 12:00 PM PST");
+  });
+
   it("filters expired agentPause and scope pauses instead of lingering stale banners", () => {
     const expired = summarizeDispatchStatus(
       {
@@ -173,5 +192,40 @@ describe("dispatch-status", () => {
     expect(res?.tone).toBe("error");
     expect(res?.headline).toContain("no fallback models left");
     expect(res?.subline).toContain("work falls back to nothing");
+  });
+
+  it("names a spent weekly quota and reads a dated weekly reset", () => {
+    const res = summarizeDispatchStatus(
+      {},
+      {
+        warnings: [
+          "default model opus on claude hit its weekly limit and is paused until Nov 16 03:00 UTC; work falls back to sonnet",
+        ],
+        scopes: [
+          {
+            connection: "claude",
+            model: "opus",
+            pausedUntil: "2026-11-16T03:00:00Z",
+            pauseHorizon: "weekly",
+            weeklyPausedUntil: "2026-11-16T03:00:00Z",
+          },
+        ],
+      },
+      nowMs,
+      "UTC",
+    );
+    expect(res?.tone).toBe("warn");
+    expect(res?.headline).toContain("Weekly model quota reached");
+    expect(res?.details.some((d) => d.reason === "Weekly limit reached")).toBe(
+      true,
+    );
+    // Nov 16 03:00 is 2d 9h after Nov 13 18:00, not the next 03:00.
+    const text = formatNoticeText(
+      "paused until Nov 16 03:00 UTC",
+      nowMs,
+      "UTC",
+    );
+    expect(text).toContain("Nov 16");
+    expect(text).toContain("(in 57h)");
   });
 });

@@ -1,0 +1,414 @@
+{
+  "name": "partial-batch",
+  "description": "A response to one needs_data request batch contains both a successful retained page and an unavailable selection; the evaluator concludes unknown.",
+  "declaration": {
+    "protocol_version": "2.0",
+    "snapshot_version": "2",
+    "transport": "grain_rounds",
+    "continuation_version": "1",
+    "evidence_replay_safe": true,
+    "inputs": [
+      {
+        "domain": "context",
+        "kinds": [
+          "evaluation_context"
+        ],
+        "required": true,
+        "prefetch": false
+      },
+      {
+        "domain": "checks",
+        "kinds": [
+          "check"
+        ],
+        "required": true,
+        "prefetch": false
+      }
+    ],
+    "record_schemas": [
+      {
+        "kind": "check",
+        "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd"
+      },
+      {
+        "kind": "evaluation_context",
+        "schema_digest": "sha256:befef31a856926b2cf764dda8f3187bd1e419682fa54c2f35d01040306709de8"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "type": "call",
+      "message": {
+        "protocol_version": "2.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "mode": "evaluate",
+        "task_id": "47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "pin": {
+          "provider": "capability:forge",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "tool": "gate_checks",
+          "gate_version": "1",
+          "args_schema": "sha256:793da71767aae3cdbf090628ee2d6dea491c0d4d6225b1f767d776ad179dfa69",
+          "state_version": "1",
+          "input_declaration": "sha256:9e98d22c2a98d84614c89032824dda197a69cdd1d07a13bb81df35530a1c1deb",
+          "continuation_version": "1"
+        },
+        "args": {
+          "repo": "ai-on-gke/grain",
+          "head": "a1"
+        },
+        "args_digest": "sha256:521c2981b9718e79c4b1cc9a89fe5944d5f2bd1dedc90ae9123c3449c60c5363",
+        "expected_state_revision": 2,
+        "gate_state": {
+          "checks_seen": 0
+        },
+        "deadline": "2026-11-16T20:13:30Z",
+        "now": "2026-11-16T20:13:00Z",
+        "limits": {
+          "elapsed_ms": 30000,
+          "rounds": 8,
+          "inline_bytes": 262144,
+          "page_bytes": 131072,
+          "page_records": 100,
+          "pages": 64,
+          "page_requests_per_round": 8,
+          "page_requests_total": 64,
+          "total_page_bytes": 8388608,
+          "records": 6500,
+          "state_bytes": 16384,
+          "continuation_bytes": 16384,
+          "json_depth": 16,
+          "response_bytes": 262144,
+          "request_bytes": 2097152,
+          "transport_bytes": 25165824,
+          "retries_per_round": 1,
+          "retries_total": 2,
+          "retention_ms": 60000
+        },
+        "snapshot": {
+          "version": "2",
+          "id": "snap-19",
+          "evidence_revision": 19,
+          "cursor": "journal:718",
+          "incoming_message_watermark": 6,
+          "processed_message_watermark": 6,
+          "domains": [
+            "context",
+            "checks"
+          ],
+          "unavailable": [],
+          "records": [
+            {
+              "id": "context:47",
+              "kind": "evaluation_context",
+              "version": "evidence:19",
+              "data": {
+                "task_id": "47",
+                "contract_revision": 4,
+                "authority_epoch": 1,
+                "policy_revision": 2,
+                "permission_revision": 7,
+                "head": "a1",
+                "check_count": 2,
+                "children": [],
+                "operations": [],
+                "waivers": [],
+                "required_suites": [
+                  "unit",
+                  "security"
+                ]
+              }
+            }
+          ],
+          "references": [
+            {
+              "id": "checks:a1",
+              "domain": "checks",
+              "kind": "snapshot_page",
+              "record_kind": "check",
+              "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd",
+              "version": "observed:19",
+              "page_count": 2,
+              "record_count": 2,
+              "expires_at": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "created_at": "2026-11-16T20:13:00Z",
+          "expires_at": "2026-11-16T20:14:00Z"
+        },
+        "round": 0,
+        "phase": "initial",
+        "previous_response_digest": null,
+        "continuation_state": null,
+        "deliveries": [],
+        "request_digest": "sha256:32f05163384dc8bf876e0ada272ea97fed3d12f67f7b7dcf8efb109ffff9e7c8"
+      }
+    },
+    {
+      "type": "reply",
+      "message": {
+        "protocol_version": "2.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "expected_state_revision": 2,
+        "round": 0,
+        "request_digest": "sha256:32f05163384dc8bf876e0ada272ea97fed3d12f67f7b7dcf8efb109ffff9e7c8",
+        "snapshot_id": "snap-19",
+        "evidence_revision": 19,
+        "kind": "needs_data",
+        "summary": "More snapshot evidence is needed.",
+        "requests": [
+          {
+            "protocol_version": "2.0",
+            "evaluation_id": "ev-47",
+            "snapshot_id": "snap-19",
+            "read_id": "read-1",
+            "reference_id": "checks:a1",
+            "cursor": null
+          },
+          {
+            "protocol_version": "2.0",
+            "evaluation_id": "ev-47",
+            "snapshot_id": "snap-19",
+            "read_id": "read-denied",
+            "reference_id": "outside-authorized-catalog",
+            "cursor": null
+          }
+        ],
+        "continuation_state": {
+          "seen": 0,
+          "all_success": true,
+          "evidence": []
+        }
+      }
+    },
+    {
+      "type": "call",
+      "message": {
+        "protocol_version": "2.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "mode": "evaluate",
+        "task_id": "47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "pin": {
+          "provider": "capability:forge",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "tool": "gate_checks",
+          "gate_version": "1",
+          "args_schema": "sha256:793da71767aae3cdbf090628ee2d6dea491c0d4d6225b1f767d776ad179dfa69",
+          "state_version": "1",
+          "input_declaration": "sha256:9e98d22c2a98d84614c89032824dda197a69cdd1d07a13bb81df35530a1c1deb",
+          "continuation_version": "1"
+        },
+        "args": {
+          "repo": "ai-on-gke/grain",
+          "head": "a1"
+        },
+        "args_digest": "sha256:521c2981b9718e79c4b1cc9a89fe5944d5f2bd1dedc90ae9123c3449c60c5363",
+        "expected_state_revision": 2,
+        "gate_state": {
+          "checks_seen": 0
+        },
+        "deadline": "2026-11-16T20:13:30Z",
+        "now": "2026-11-16T20:13:00Z",
+        "limits": {
+          "elapsed_ms": 30000,
+          "rounds": 8,
+          "inline_bytes": 262144,
+          "page_bytes": 131072,
+          "page_records": 100,
+          "pages": 64,
+          "page_requests_per_round": 8,
+          "page_requests_total": 64,
+          "total_page_bytes": 8388608,
+          "records": 6500,
+          "state_bytes": 16384,
+          "continuation_bytes": 16384,
+          "json_depth": 16,
+          "response_bytes": 262144,
+          "request_bytes": 2097152,
+          "transport_bytes": 25165824,
+          "retries_per_round": 1,
+          "retries_total": 2,
+          "retention_ms": 60000
+        },
+        "snapshot": {
+          "version": "2",
+          "id": "snap-19",
+          "evidence_revision": 19,
+          "cursor": "journal:718",
+          "incoming_message_watermark": 6,
+          "processed_message_watermark": 6,
+          "domains": [
+            "context",
+            "checks"
+          ],
+          "unavailable": [],
+          "records": [
+            {
+              "id": "context:47",
+              "kind": "evaluation_context",
+              "version": "evidence:19",
+              "data": {
+                "task_id": "47",
+                "contract_revision": 4,
+                "authority_epoch": 1,
+                "policy_revision": 2,
+                "permission_revision": 7,
+                "head": "a1",
+                "check_count": 2,
+                "children": [],
+                "operations": [],
+                "waivers": [],
+                "required_suites": [
+                  "unit",
+                  "security"
+                ]
+              }
+            }
+          ],
+          "references": [
+            {
+              "id": "checks:a1",
+              "domain": "checks",
+              "kind": "snapshot_page",
+              "record_kind": "check",
+              "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd",
+              "version": "observed:19",
+              "page_count": 2,
+              "record_count": 2,
+              "expires_at": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "created_at": "2026-11-16T20:13:00Z",
+          "expires_at": "2026-11-16T20:14:00Z"
+        },
+        "round": 1,
+        "phase": "continue",
+        "previous_response_digest": "sha256:11357ff049db8b89017a299db6bc2de339d4ab0b5b1cd69865e4b2e39011e083",
+        "continuation_state": {
+          "seen": 0,
+          "all_success": true,
+          "evidence": []
+        },
+        "deliveries": [
+          {
+            "request": {
+              "protocol_version": "2.0",
+              "evaluation_id": "ev-47",
+              "snapshot_id": "snap-19",
+              "read_id": "read-1",
+              "reference_id": "checks:a1",
+              "cursor": null
+            },
+            "status": "ok",
+            "page": {
+              "protocol_version": "2.0",
+              "evaluation_id": "ev-47",
+              "snapshot_id": "snap-19",
+              "evidence_revision": 19,
+              "read_id": "read-1",
+              "reference_id": "checks:a1",
+              "cursor": null,
+              "records": [
+                {
+                  "id": "check:unit",
+                  "kind": "check",
+                  "version": "head:a1/run:1",
+                  "data": {
+                    "head": "a1",
+                    "suite": "unit",
+                    "conclusion": "success",
+                    "observed_at": "2026-11-16T20:12:59Z"
+                  }
+                }
+              ],
+              "next_cursor": "cursor-page-2",
+              "expires_at": "2026-11-16T20:14:00Z"
+            }
+          },
+          {
+            "request": {
+              "protocol_version": "2.0",
+              "evaluation_id": "ev-47",
+              "snapshot_id": "snap-19",
+              "read_id": "read-denied",
+              "reference_id": "outside-authorized-catalog",
+              "cursor": null
+            },
+            "status": "unavailable",
+            "error": {
+              "code": "unauthorized",
+              "retryable": false,
+              "message": "Reference unavailable for this evaluation."
+            }
+          }
+        ],
+        "request_digest": "sha256:639dc665f4ff2ca36fe899ae4d989d1df43f59e013d723badfc72b4bee221cb2"
+      }
+    },
+    {
+      "type": "reply",
+      "message": {
+        "protocol_version": "2.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "expected_state_revision": 2,
+        "round": 1,
+        "request_digest": "sha256:639dc665f4ff2ca36fe899ae4d989d1df43f59e013d723badfc72b4bee221cb2",
+        "snapshot_id": "snap-19",
+        "evidence_revision": 19,
+        "kind": "final",
+        "status": "unknown",
+        "summary": "Evidence is insufficient; the gate remains unknown.",
+        "evidence": [],
+        "gate_state": {
+          "checks_seen": 0
+        },
+        "blockers": [
+          {
+            "key": "missing-evidence",
+            "kind": "permission",
+            "summary": "Required evidence is unavailable; no negative fact is inferred.",
+            "evidence": []
+          }
+        ],
+        "work": [],
+        "action_requests": [],
+        "waits": [],
+        "buttons": [],
+        "human_text": "Repair the provider or restore the declared evidence, then request a fresh evaluation. Missing evidence cannot establish passing checks."
+      }
+    },
+    {
+      "type": "event",
+      "description": "No all-checks conclusion is possible from one delivered page plus denial. Unknown is a final candidate; no action/agent work is inferred from missing evidence."
+    }
+  ]
+}

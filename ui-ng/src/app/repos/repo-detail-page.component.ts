@@ -25,11 +25,13 @@ import {
   inject,
   input,
   signal,
+  viewChild,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import type { RouteKey } from "../api/generated-routes";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
+import type { BaseBranchGate, BaseBranchGatesResponse } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
@@ -42,6 +44,28 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import type { CapabilityOption } from "../api/models";
+import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
+import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
+import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
+
+// CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
+// which an unjudged gate's warning links to: on a repository grain CI is
+// not enabled for, that control is what enrols its watched branch.
+export const CI_MODE_ID = "repo-ci-mode";
+
+// unjudgedGatesFor is the base-branch gates nothing is judging for repo,
+// as the classic Repo page's header and Releases pane pick them out of
+// GET /api/base-branch-gates. A gate that is only late is left to the
+// release settings it sits beside, as on classic.
+export function unjudgedGatesFor(
+  gates: readonly BaseBranchGate[],
+  repo: string,
+): BaseBranchGate[] {
+  const want = repo.toLowerCase();
+  return gates.filter((g) => !g.judged && g.repo.toLowerCase() === want);
+}
 
 export type RepoTabId =
   | "overview"
@@ -148,6 +172,32 @@ interface ImportFields {
   label: string;
   repo: string;
   approved: boolean;
+  // interval is the "Every (minutes)" box's text, empty for the default.
+  interval: string;
+}
+
+// importIntervalText is a stored issue-import interval in the box's own
+// shape: whole minutes, empty for the default (0).
+export function importIntervalText(seconds: number | undefined): string {
+  return seconds ? String(Math.round(seconds / 60)) : "";
+}
+
+// importIntervalSeconds reads the "Every (minutes)" box: 0 for empty (the
+// default), the seconds otherwise, or an error for anything the server
+// would refuse (PUT .../settings: 0 or at least a minute).
+export function importIntervalSeconds(
+  text: string,
+): { seconds: number; error: null } | { seconds: null; error: string } {
+  const t = text.trim();
+  if (t === "") return { seconds: 0, error: null };
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 1) {
+    return {
+      seconds: null,
+      error: "Every (minutes) must be at least 1, or empty for the default.",
+    };
+  }
+  return { seconds: Math.round(n * 60), error: null };
 }
 
 interface AgentFields {
@@ -284,7 +334,15 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    RouterLink,
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    RepoCICapabilitiesComponent,
+    RepoQualificationPlanComponent,
+    RepoWorkOwnershipComponent,
+    StatusIconComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
@@ -371,6 +429,43 @@ interface PendingReleaseRow {
           @if (ready()) {
             @switch (activeTab()) {
               @case ("overview") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
                 <div class="s-card" data-testid="card-repo-config">
                   <div class="s-card-head">
                     <div>
@@ -552,6 +647,49 @@ interface PendingReleaseRow {
                         "
                       />
                     </div>
+                    <div class="s-field">
+                      <label class="s-label" for="imp-interval"
+                        >Every (minutes)</label
+                      >
+                      <input
+                        id="imp-interval"
+                        class="s-input s-num"
+                        type="number"
+                        min="1"
+                        data-testid="input-import-interval"
+                        [placeholder]="importEffectiveMinutes()"
+                        [value]="importInterval()"
+                        [disabled]="!canWriteSettings()"
+                        [attr.aria-invalid]="
+                          importIntervalError() ? 'true' : null
+                        "
+                        [attr.aria-describedby]="
+                          importIntervalError()
+                            ? 'imp-interval-err'
+                            : 'imp-interval-hint'
+                        "
+                        (input)="
+                          importInterval.set($any($event.target).value);
+                          importIntervalError.set(null)
+                        "
+                      />
+                      @if (importIntervalError(); as ivErr) {
+                        <span
+                          id="imp-interval-err"
+                          class="s-field-error"
+                          data-testid="import-interval-error"
+                          >{{ ivErr }}</span
+                        >
+                      } @else {
+                        <span id="imp-interval-hint" class="s-caption">{{
+                          importEffectiveMinutes()
+                            ? "Empty for the default (" +
+                              importEffectiveMinutes() +
+                              " minutes now)."
+                            : "Empty for the default."
+                        }}</span>
+                      }
+                    </div>
                   </div>
 
                   <div class="s-inline">
@@ -619,7 +757,7 @@ interface PendingReleaseRow {
                   </div>
 
                   <div class="s-grid">
-                    <div class="s-field">
+                    <div class="s-field" [id]="ciModeId">
                       <span class="s-label">CI mode</span>
                       <g-pill-select
                         testid="select-repo-ci-mode"
@@ -748,6 +886,12 @@ interface PendingReleaseRow {
                     </div>
                   </div>
                 </div>
+
+                <g-repo-ci-capabilities
+                  [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
+                  [offered]="ciCapabilityOptions()"
+                />
               }
 
               @case ("merge-queue") {
@@ -969,6 +1113,54 @@ interface PendingReleaseRow {
               }
 
               @case ("releases") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
+
+                <!-- Who runs this repository's standing work, directly
+                     above the card that writes one item of it: the release
+                     switch below is the release item's own override, and
+                     this is the default it is an exception to. -->
+                <g-repo-work-ownership
+                  [repo]="repoSlug()"
+                  [refreshKey]="releaseSaves()"
+                  (saved)="onWorkOwnershipSaved()"
+                />
+
                 <div class="s-card" data-testid="card-repo-release-settings">
                   <div class="s-card-head">
                     <div>
@@ -1404,6 +1596,11 @@ interface PendingReleaseRow {
                     </p>
                   }
                 </div>
+
+                <g-repo-qualification-plan
+                  [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
+                />
               }
               @case ("advanced") {
                 <div class="s-card" data-testid="card-repo-declarations">
@@ -1767,6 +1964,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly importLabel = signal("");
   protected readonly importSourceRepo = signal("");
   protected readonly importApproved = signal(false);
+  protected readonly importInterval = signal("");
+  // The interval the importer runs at now, in minutes: the stored one or
+  // the deployment default, shown as the empty box's placeholder.
+  protected readonly importEffectiveMinutes = signal("");
+  protected readonly importIntervalError = signal<string | null>(null);
   protected readonly importing = signal(false);
   protected readonly importOutcome = signal<{
     error: boolean;
@@ -1774,6 +1976,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   } | null>(null);
 
   protected readonly ciMode = signal("grain");
+  protected readonly ciModeId = CI_MODE_ID;
+  protected readonly baseBranchGates = signal<BaseBranchGate[]>([]);
+  protected readonly unjudgedGates = computed(() =>
+    unjudgedGatesFor(this.baseBranchGates(), this.repoSlug()),
+  );
   protected readonly watchDefaultBranch = signal(false);
   protected readonly workflows = signal<RepoWorkflowRow[]>([]);
   protected readonly selectedWorkflowPath = signal(".grain/workflows/ci.yml");
@@ -1795,6 +2002,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     label: "",
     repo: "",
     approved: false,
+    interval: "",
   });
   private readonly agentBaseline = signal<AgentFields>({
     setup: "",
@@ -1810,7 +2018,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       ib.enabled !== this.importEnabled() ||
       ib.label !== this.importLabel() ||
       ib.repo !== this.importSourceRepo() ||
-      ib.approved !== this.importApproved()
+      ib.approved !== this.importApproved() ||
+      ib.interval !== this.importInterval()
     ) {
       out.push("issue import");
     }
@@ -1825,6 +2034,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (this.workflowBaseline() !== workflowKey(this.workflows())) {
       out.push("CI workflows");
     }
+    if (this.planEditor()?.dirty()) {
+      out.push("qualification plan");
+    }
     return out;
   });
 
@@ -1837,6 +2049,17 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly newBranchFrom = signal("main");
 
   protected readonly releaseEnabled = signal(false);
+  // releaseSaves counts saves of the release switch, which is the release
+  // item's own work-ownership override, so the ownership card re-reads.
+  protected readonly releaseSaves = signal(0);
+  // releaseEnabledStored is the release switch as the server last said,
+  // so a re-read after a work-ownership save can tell an unsaved flip of
+  // the switch from a stale value.
+  private releaseEnabledStored = false;
+  private readonly planEditor = viewChild(RepoQualificationPlanComponent);
+  protected readonly ciCapabilityOptions = signal<readonly CapabilityOption[]>(
+    [],
+  );
   protected readonly baseBranchJobsText = signal("");
   protected readonly postMergeJobsText = signal("");
   protected readonly releaseSecrets = signal<RepoReleaseSecretRow[]>([]);
@@ -2000,6 +2223,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.routeTab.set(pm.get("tab"));
         if (this.ready()) {
           void this.loadTabData();
+          // The same page shown for another repository reads that
+          // repository's gates; unjudgedGates already drops the last one's.
+          void this.loadBaseBranchGates();
         }
       }),
     );
@@ -2020,6 +2246,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       label: this.importLabel(),
       repo: this.importSourceRepo(),
       approved: this.importApproved(),
+      interval: this.importInterval(),
     });
   }
 
@@ -2052,6 +2279,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.importLabel.set(ib.label);
     this.importSourceRepo.set(ib.repo);
     this.importApproved.set(ib.approved);
+    this.importInterval.set(ib.interval);
+    this.importIntervalError.set(null);
+    this.planEditor()?.revert();
     const ab = this.agentBaseline();
     this.setupCommand.set(ab.setup);
     this.promptExtension.set(ab.prompt);
@@ -2103,6 +2333,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             rec["settingsLocked"],
           ),
         );
+        // The capabilities CI shells can be given; a server that sends
+        // no list of its own offers the task ones, as the classic page reads.
+        const ciCaps = (rec["ciCapabilities"] ?? rec["capabilities"]) as
+          CapabilityOption[] | undefined;
+        this.ciCapabilityOptions.set(Array.isArray(ciCaps) ? ciCaps : []);
       }
       await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);
@@ -2171,6 +2406,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
                   label?: string;
                   repo?: string;
                   approved?: boolean;
+                  intervalSeconds?: number;
+                  effectiveIntervalSeconds?: number;
                 }
               | undefined;
             if (imp && typeof imp === "object") {
@@ -2178,6 +2415,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               this.importLabel.set(String(imp.label ?? ""));
               this.importSourceRepo.set(String(imp.repo ?? ""));
               this.importApproved.set(Boolean(imp.approved));
+              this.importInterval.set(importIntervalText(imp.intervalSeconds));
+              this.importEffectiveMinutes.set(
+                imp.effectiveIntervalSeconds
+                  ? String(Math.round(imp.effectiveIntervalSeconds / 60))
+                  : "",
+              );
             }
             this.markImportSaved();
             this.agentBaseline.update((b) => ({
@@ -2189,6 +2432,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           .catch(() => undefined),
       );
     }
+    jobs.push(this.loadBaseBranchGates());
     if (this.access.can("GET /api/deployment/git-connections")) {
       jobs.push(
         this.api
@@ -2468,6 +2712,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (!relCfg) return;
     if (relCfg["enabled"] !== undefined) {
       this.releaseEnabled.set(Boolean(relCfg["enabled"]));
+      this.releaseEnabledStored = Boolean(relCfg["enabled"]);
     }
     if (Array.isArray(relCfg["baseBranchJobs"])) {
       this.baseBranchJobsText.set(
@@ -2607,21 +2852,41 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveIssueImportSettings(): Promise<void> {
+    // An untouched box is left out of the save, so a stored interval
+    // that is not a whole number of minutes (set through the API, CLI or
+    // config repo) is not rounded to what the box shows.
+    const intervalEdited =
+      this.importInterval() !== this.importBaseline().interval;
+    const interval = importIntervalSeconds(this.importInterval());
+    if (intervalEdited && interval.error !== null) {
+      this.importIntervalError.set(interval.error);
+      return;
+    }
     try {
-      await this.api.put(
-        "PUT /api/repos/{owner}/{name}/settings",
-        this.params(),
-        {
-          issueImportEnabled: this.importEnabled(),
-          issueImportLabel: this.importLabel().trim(),
-          issueImportRepo: this.importSourceRepo().trim(),
-          issueImportApproved: this.importApproved(),
-        },
-      );
+      const res = await this.api.put<{
+        issueImport?: { effectiveIntervalSeconds?: number };
+      }>("PUT /api/repos/{owner}/{name}/settings", this.params(), {
+        issueImportEnabled: this.importEnabled(),
+        issueImportLabel: this.importLabel().trim(),
+        issueImportRepo: this.importSourceRepo().trim(),
+        issueImportApproved: this.importApproved(),
+        ...(intervalEdited
+          ? { issueImportIntervalSeconds: interval.seconds }
+          : {}),
+      });
+      const eff = res?.issueImport?.effectiveIntervalSeconds;
+      if (eff) this.importEffectiveMinutes.set(String(Math.round(eff / 60)));
       this.markImportSaved();
       this.snackbar.show("Issue importer settings saved");
     } catch (err) {
-      this.error.set(errText(err));
+      const text = errText(err);
+      // The interval is the one field here the server refuses by name;
+      // say so beside it rather than in the page-wide banner.
+      if (/issueImportIntervalSeconds/.test(text)) {
+        this.importIntervalError.set(text);
+      } else {
+        this.error.set(text);
+      }
     }
   }
 
@@ -2649,6 +2914,67 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  // loadBaseBranchGates reads this repository's base-branch gates. It is
+  // asked again after every save that changes whether grain judges the
+  // branch (CI mode, Watch default branch), so the warning comes and goes
+  // with the control rather than on the next reload. A failed reading
+  // keeps the last one, as the server's own contract for it does.
+  //
+  // Readings run one after another: GrainApi.get shares a request still
+  // in flight for the same URL, so a second save's reading started
+  // beside the first's would be answered with the state before it.
+  private gatesReading: Promise<void> = Promise.resolve();
+
+  private loadBaseBranchGates(): Promise<void> {
+    this.gatesReading = this.gatesReading.then(() =>
+      this.readBaseBranchGates(),
+    );
+    return this.gatesReading;
+  }
+
+  private async readBaseBranchGates(): Promise<void> {
+    if (!this.can("GET /api/base-branch-gates")) return;
+    try {
+      const q = new URLSearchParams({
+        repo: this.repoSlug(),
+        fields: "full",
+      });
+      const r = await this.api.get<BaseBranchGatesResponse>(
+        "GET /api/base-branch-gates",
+        undefined,
+        q.toString(),
+      );
+      this.baseBranchGates.set(Array.isArray(r?.gates) ? r.gates : []);
+    } catch {
+      // Keep the previous reading.
+    }
+  }
+
+  protected ciTabLink(): string[] {
+    const h = this.resolvedHost();
+    const o = this.resolvedOwner();
+    const n = this.resolvedName();
+    return h ? ["/repos", h, o, n, "ci"] : ["/repos", o, n, "ci"];
+  }
+
+  // goToCiMode opens the CI & Workflows tab and brings its CI mode
+  // control into view, focused, as classic's "Go to CI Mode" does.
+  protected async goToCiMode(ev: Event): Promise<void> {
+    ev.preventDefault();
+    if (this.activeTab() !== "ci") {
+      if (!(await this.canLeave())) return;
+      this.routeTab.set("ci");
+      void this.router.navigate(this.ciTabLink(), { fragment: CI_MODE_ID });
+      void this.loadTabData("ci");
+    }
+    setTimeout(() => {
+      const root = this.hostEl.nativeElement as HTMLElement;
+      const el = root.querySelector<HTMLElement>(`#${CI_MODE_ID}`);
+      el?.scrollIntoView?.({ block: "center" });
+      el?.querySelector<HTMLElement>("button")?.focus();
+    });
+  }
+
   protected async saveCiMode(ciMode: string): Promise<void> {
     const previous = this.ciMode();
     this.ciMode.set(ciMode);
@@ -2659,6 +2985,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ciMode },
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
+      void this.loadBaseBranchGates();
     } catch (err) {
       // A refused mode is not the repo's mode: put the pill back on
       // what the server still has rather than leave it naming one it
@@ -2677,6 +3004,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { watchDefaultBranch: next },
       );
       this.watchDefaultBranch.set(next);
+      void this.loadBaseBranchGates();
     } catch (err) {
       this.error.set(errText(err));
     }
@@ -2812,9 +3140,38 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       if (res && typeof res === "object") {
         this.applyReleaseSettings(res);
       }
+      this.releaseSaves.update((n) => n + 1);
       this.snackbar.show("Release settings saved");
     } catch (err) {
       this.error.set(errText(err));
+    }
+  }
+
+  // onWorkOwnershipSaved re-reads the release switch, which shows the
+  // release item's override. The rest of the release card is a draft
+  // that waits for its own Save, so only the switch is taken from the
+  // re-read, and only while nobody has flipped it unsaved.
+  protected async onWorkOwnershipSaved(): Promise<void> {
+    // Who runs this repository's standing work decides whether its base
+    // branch is judged here at all (pkg/ui/basebranchgate.go,
+    // baseCheckSwitchedOff), so the unjudged-gate warning is re-read too,
+    // as the classic Repo page does.
+    void this.loadBaseBranchGates();
+    if (!this.can("GET /api/repos/{owner}/{name}/release")) return;
+    try {
+      const rel = await this.api.get<Record<string, unknown>>(
+        "GET /api/repos/{owner}/{name}/release",
+        this.params(),
+      );
+      if (rel?.["enabled"] !== undefined) {
+        const stored = Boolean(rel["enabled"]);
+        if (this.releaseEnabled() === this.releaseEnabledStored) {
+          this.releaseEnabled.set(stored);
+        }
+        this.releaseEnabledStored = stored;
+      }
+    } catch {
+      // Non-fatal: the card itself already says what was stored.
     }
   }
 
