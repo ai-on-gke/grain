@@ -474,10 +474,15 @@ Rules:
   pane beside it say the same time the same way
   (`ui-ng/e2e/next-processes-run-times.spec.ts`).
 - **Task detail container layout, Docs tab, and full-screen document reader.**
-  `.task-page` is an inline-size container (`container: task-page / inline-size`);
-  at `@container task-page (max-width: 1060px)` `.task-layout` collapses its
+  The host around `.task-page` is the `task-detail` size container
+  (`g-task-page > g-task-detail`, `.tasks-detail-pane`);
+  at `@container task-detail (max-width: 1060px)` `.task-layout` collapses its
   right-hand `.task-aside` so opening the coplanar Director drawer automatically
-  gives `.task-main` full width. The `Details` tab stays visible at every width
+  gives `.task-main` full width. Don't make `.task-page` a container of its
+  own: Chromium sometimes builds no layout boxes for children re-inserted into
+  an inline-size container nested directly in a size container, which left the
+  inspector's header 0×0 after switching tasks
+  (`ui-ng/e2e/next-task-switch-layout.spec.ts`). The `Details` tab stays visible at every width
   without redirecting back to `Conversation`. A dedicated `Docs` tab
   (`g-task-docs-tab`, `task/task-docs.ts`) pairs a document picker with a clean
   `surface` Markdown reader (`76ch` measure, independent vertical scrolling)
