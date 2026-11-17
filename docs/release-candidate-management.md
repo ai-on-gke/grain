@@ -246,6 +246,13 @@ which case it is dropped without qualifying):
      `grain ci checks`'s `grain_status_login`, or `scripts/release.conf`),
      ignoring statuses from any other login. Where both exist, trusted check
      runs always take precedence over commit statuses.
+     A login is a weaker identity than an App: **every** token of that
+     account (the PAT grain holds, and any other PAT, `gh` session or tool
+     signed in as it) can post a status that qualifies an rc or lifts a
+     hold. Give grain's forge connection a dedicated account whose tokens
+     nothing else holds, and never set `RELEASE_QUALIFICATION_STATUS_LOGIN`
+     to `github-actions[bot]`: any workflow run with `statuses: write`, on
+     any branch, could then post it on the rc's commit.
    - **Opt-out and fail-closed:** With `RELEASE_QUALIFICATION_APP` set
      explicitly to `none` (in the environment or `scripts/release.conf`), Stage
      2 is skipped (`SKIPPED grain/release-qualification`) and Stage 1 alone
