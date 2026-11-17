@@ -691,7 +691,7 @@ import "strconv"
 // blast/complexity/triage tracking to `task_qa_check_run`.
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
-// 152 records PR feedback receipts against the existing delivery cursor.
+// 152 records PR feedback source receipts and their delivery acknowledgments.
 const SchemaVersion = 152
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (

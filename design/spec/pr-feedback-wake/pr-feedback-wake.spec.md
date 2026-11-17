@@ -110,8 +110,10 @@ does not independently request a repair. Closed/canceled tasks are never revived
 Webhook text retains the existing normalized-envelope size limit (32 KiB per
 body). Without webhook delivery, only the existing root-thread poll fallback is
 available, in its existing task states; conversation comments, review summaries
-and inline replies are not recovered by a new poller. Unknown ownership is
-reported and leaves the webhook unacknowledged for reconciliation.
+and inline replies are not recovered by a new poller. Ambiguous ownership is
+reported and leaves the webhook unacknowledged for reconciliation. An unmapped
+PR retains the existing explicit-mention filing behavior; an unmentioned comment
+without a target task is ignored.
 
 The future gates message/event wake policy should consume these source identities
 and delivery receipts and express this same narrow readiness exception. Feedback
