@@ -28,6 +28,7 @@ import {
   untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
+import { copyToClipboard } from "../shared/clipboard";
 import { type VersionInfo, versionLabel } from "../api/version";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
@@ -185,10 +186,9 @@ function formatBytes(bytes: number): string {
               <span class="s-toggle-name"
                 >Lock settings in UI (require config repo PRs)</span
               >
-              <span class="s-hint"
-                >Makes config-managed sections read-only outside StateRepo pull
-                requests.</span
-              >
+              <span class="s-hint" data-testid="settings-lock-hint">{{
+                settingsLockHint()
+              }}</span>
             </div>
             <button
               type="button"
@@ -196,7 +196,9 @@ function formatBytes(bytes: number): string {
               role="switch"
               data-testid="switch-settings-locked"
               [attr.aria-checked]="Boolean(state.val('settingsLocked', false))"
-              [disabled]="!access.can('POST /api/settings')"
+              [disabled]="
+                !access.can('POST /api/settings') || settingsLockUnavailable()
+              "
               aria-label="Lock settings in UI"
               (click)="
                 state.setField(
@@ -351,6 +353,18 @@ function formatBytes(bytes: number): string {
           <pre class="s-code" data-testid="cli-install-snippet">{{
             cliSnippet()
           }}</pre>
+          <div class="s-inline">
+            @for (line of cliCommands(); track line.id) {
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                [attr.data-testid]="'copy-cli-' + line.id"
+                (click)="copyCliCommand(line.command, line.copied)"
+              >
+                {{ line.label }}
+              </button>
+            }
+          </div>
 
           @for (fw of cliFrameworks; track fw.id) {
             <div class="s-toggle-row">
@@ -1387,6 +1401,29 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly timeZone = signal(readStorage(TZ_STORAGE_KEY) || "local");
   protected readonly broadcastMessage = signal("");
+  // The Settings lock only means something with a config repository to
+  // take the pull requests: without one settings are always edited here,
+  // and an external config repo already holds them read-only (classic
+  // GeneralSection's noConfigRepo and allowInExternalMode).
+  private readonly externalConfigRepo = computed(() => {
+    const c = this.state.config() as Record<string, unknown> | null;
+    return Boolean(
+      this.state.settings()["externalConfigRepo"] ?? c?.["externalConfigRepo"],
+    );
+  });
+  protected readonly settingsLockUnavailable = computed(() => {
+    const c = this.state.config() as Record<string, unknown> | null;
+    return this.externalConfigRepo() || !c?.["configRepo"];
+  });
+  protected readonly settingsLockHint = computed(() => {
+    if (this.externalConfigRepo()) {
+      return "Settings are managed in the external config repository, so they are always changed through its pull requests.";
+    }
+    if (this.settingsLockUnavailable()) {
+      return "Unavailable without a config repository: settings are always edited directly here.";
+    }
+    return "Makes config-managed sections read-only outside config repo pull requests.";
+  });
   protected readonly broadcastRunningOnly = signal(false);
   protected readonly cliRunLocations = signal<Record<string, string>>({});
 
@@ -1605,6 +1642,42 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
   // that one installs a host, wants root and a registered name, and is
   // no way to get the CLI onto a laptop.
+  // cliCommands are cliSnippet's lines one at a time, for their Copy
+  // buttons (Install, Sign in and Agent skills in classic CLISection).
+  protected cliCommands(): readonly {
+    id: string;
+    label: string;
+    command: string;
+    copied: string;
+  }[] {
+    const [install, login, skill] = this.cliSnippet().split("\n");
+    return [
+      {
+        id: "install",
+        label: "Copy install command",
+        command: install,
+        copied: "Install command copied",
+      },
+      {
+        id: "login",
+        label: "Copy sign-in command",
+        command: login,
+        copied: "Sign-in command copied",
+      },
+      {
+        id: "skill",
+        label: "Copy skill command",
+        command: skill.replace(/\s+#.*$/, ""),
+        copied: "Skill install command copied",
+      },
+    ];
+  }
+
+  protected async copyCliCommand(text: string, notice: string): Promise<void> {
+    const ok = await copyToClipboard(this.doc, text);
+    this.snackbar.show(ok ? notice : "Could not copy: select the text instead");
+  }
+
   protected cliSnippet(): string {
     const origin = this.serverOrigin();
     let host = "";

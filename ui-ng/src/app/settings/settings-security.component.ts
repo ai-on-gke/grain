@@ -86,6 +86,58 @@ interface AuditEventRow {
   detail: string;
 }
 
+const SERVICE_ACCOUNT_DOMAIN = /\.gserviceaccount\.com$/;
+
+// checkPrincipalEntry reads what was typed into Grant access as an
+// allowlist entry: user:<email>, group:<email> or serviceAccount:<email>
+// (a *.gserviceaccount.com address), or a bare address, which the server
+// files as user: (serviceAccount: for a service account address). It
+// answers the canonical entry, or why the text is not one -- the same
+// rules as classic Settings → Access (validatePrincipalEntry).
+export function checkPrincipalEntry(raw: string): {
+  canonical: string;
+  error: string;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed) return { canonical: "", error: "" };
+  const colon = trimmed.indexOf(":");
+  let prefix = colon > 0 ? trimmed.slice(0, colon).trim() : "";
+  const value = (colon > 0 ? trimmed.slice(colon + 1) : trimmed)
+    .trim()
+    .toLowerCase();
+  if (
+    colon === 0 ||
+    (prefix && !["user", "group", "serviceAccount"].includes(prefix))
+  ) {
+    return {
+      canonical: "",
+      error: `Start the entry with user:, group: or serviceAccount: (for example, user:alice@example.com).`,
+    };
+  }
+  if (!/^[^\s@/,;'"<>:]+@[^\s@/,;'"<>:]+\.[^\s@/,;'"<>:]+$/.test(value)) {
+    return {
+      canonical: "",
+      error: `${prefix ? prefix + ": entries" : "An entry"} must be an email address.`,
+    };
+  }
+  const isSA = SERVICE_ACCOUNT_DOMAIN.test(value);
+  if (!prefix) prefix = isSA ? "serviceAccount" : "user";
+  if (prefix === "serviceAccount" && !isSA) {
+    return {
+      canonical: "",
+      error:
+        "serviceAccount: entries must name a service account address (*.gserviceaccount.com).",
+    };
+  }
+  if (prefix !== "serviceAccount" && isSA) {
+    return {
+      canonical: "",
+      error: `Add a service account as serviceAccount:${value}.`,
+    };
+  }
+  return { canonical: `${prefix}:${value}`, error: "" };
+}
+
 const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
   { value: "grain/operator", label: "grain/operator (full)" },
   { value: "grain/admin", label: "grain/admin" },
@@ -200,8 +252,23 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                     placeholder="alice@example.com"
                     [value]="newPrincipalEntry()"
                     [disabled]="!access.can('POST /api/access/principals')"
-                    (input)="newPrincipalEntry.set($any($event.target).value)"
+                    [attr.aria-invalid]="
+                      newPrincipalCheck().error ? true : null
+                    "
+                    aria-describedby="pr-entry-error"
+                    (input)="
+                      newPrincipalEntry.set($any($event.target).value);
+                      newPrincipalError.set('')
+                    "
                   />
+                  @if (newPrincipalCheck().error) {
+                    <span
+                      id="pr-entry-error"
+                      class="s-field-error"
+                      data-testid="principal-entry-error"
+                      >{{ newPrincipalCheck().error }}</span
+                    >
+                  }
                 </div>
                 <div class="s-field">
                   <span class="s-label">Role</span>
@@ -231,8 +298,19 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                       !access.can('PATCH /api/access/principals/{entry}') &&
                       !access.can('DELETE /api/access/principals/{entry}')
                     "
-                    (input)="newPrincipalReason.set($any($event.target).value)"
+                    [attr.aria-invalid]="newPrincipalError() ? true : null"
+                    (input)="
+                      newPrincipalReason.set($any($event.target).value);
+                      newPrincipalError.set('')
+                    "
                   />
+                  @if (newPrincipalError()) {
+                    <span
+                      class="s-field-error"
+                      data-testid="principal-reason-error"
+                      >{{ newPrincipalError() }}</span
+                    >
+                  }
                 </div>
               </div>
               <div class="s-inline">
@@ -241,7 +319,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                   class="btn-primary"
                   data-testid="add-principal-btn"
                   [disabled]="
-                    !newPrincipalEntry().trim() ||
+                    !newPrincipalCheck().canonical ||
                     !access.can('POST /api/access/principals')
                   "
                   (click)="addPrincipal()"
@@ -749,6 +827,12 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly newPrincipalEntry = signal("");
   protected readonly newPrincipalRole = signal("grain/developer");
   protected readonly newPrincipalReason = signal("");
+  protected readonly newPrincipalCheck = computed(() =>
+    checkPrincipalEntry(this.newPrincipalEntry()),
+  );
+  // newPrincipalError is a refusal of the last Grant access press that
+  // the entry alone does not explain (a missing reason).
+  protected readonly newPrincipalError = signal("");
 
   protected readonly tokens = signal<ExternalTokenRow[]>([]);
   protected readonly newTokenName = signal("");
@@ -903,9 +987,14 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   }
 
   protected async addPrincipal(): Promise<void> {
-    const entry = this.newPrincipalEntry().trim();
-    if (!entry) return;
+    const { canonical: entry, error } = this.newPrincipalCheck();
+    if (!entry || error) return;
     const reason = this.newPrincipalReason().trim();
+    if (entry.startsWith("serviceAccount:") && !reason) {
+      this.newPrincipalError.set("Give a reason to admit a service account.");
+      return;
+    }
+    this.newPrincipalError.set("");
     try {
       await this.api.post("POST /api/access/principals", undefined, {
         entry,

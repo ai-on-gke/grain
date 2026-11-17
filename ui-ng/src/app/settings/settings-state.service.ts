@@ -24,6 +24,7 @@ import {
   computeSettingsPlan,
   formatSettingValue,
   isConfigRepoSection,
+  labelSettingError,
 } from "./settings-sections";
 
 export interface ConfigFileChange {
@@ -121,7 +122,7 @@ export class SettingsStateService {
     if (changes.length > 0) {
       this.refusedChanges.set(changes);
     }
-    this.error.set(errText(err));
+    this.error.set(labelSettingError(errText(err)));
   }
 
   clearError(): void {
