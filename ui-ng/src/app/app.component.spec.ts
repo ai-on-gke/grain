@@ -587,6 +587,12 @@ describe("AppComponent shell", () => {
     expect(resolveReloadHref(loc, "/tasks")).toBe("/next/tasks");
     expect(resolveReloadHref(loc, "//evil.example.com")).toBeNull();
     expect(resolveReloadHref(loc, "/\\evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\t/evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\n/evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\r/evil.example.com")).toBeNull();
+    const rootLoc = { prepareExternalUrl: (u: string) => u } as typeof loc;
+    expect(resolveReloadHref(rootLoc, "/tasks")).toBe("/tasks");
+    expect(resolveReloadHref(rootLoc, "/\t/evil.example.com")).toBeNull();
   });
 
   it("skips @defer idle prefetch when navigator.connection.saveData is enabled", async () => {

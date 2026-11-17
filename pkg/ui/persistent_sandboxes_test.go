@@ -356,11 +356,18 @@ func TestStagingProxyStripsVerifierAssertionsAndProxyCredentials(t *testing.T) {
 	req.Header.Set(slowHeader, "ok:alice@example.com")
 	req.Header.Set("Proxy-Authorization", "Bearer id-token-secret")
 	req.Header.Set("X-Grain-Tunnel-Token", "tunnel-secret")
+	req.Header.Set("X-Grain-Subject-Token", "subject-secret")
+	req.Header.Set(ui.ActingRunHeader, "run-secret")
+	req.Header.Set(ui.ActingReasonHeader, "reason-secret")
+	req.Header.Set(ui.ChannelHeader, ui.SandboxCLIChannel)
 	req.Header.Set(ui.IAPAssertionHeader, "iap-jwt-secret")
+	req.Header.Set("X-Goog-Iap-Attr-Sub", "iap-attr-secret")
 	req.Header.Set(ui.HubAssertionHeader, "hub-jwt-secret")
 	req.Header.Set(ui.RegistryAssertionHeader, "registry-jwt-secret")
 	req.Header.Set("X-Custom-App-Header", "keep-me")
 	req.AddCookie(&http.Cookie{Name: ui.VerifierSessionCookieName, Value: "session-secret"})
+	req.AddCookie(&http.Cookie{Name: "GCP_IAAP_AUTH_TOKEN_ABC123", Value: "iap-browser-session"})
+	req.AddCookie(&http.Cookie{Name: "__Host-edge_sso", Value: "edge-sso-session"})
 	req.AddCookie(&http.Cookie{Name: "staging_sess", Value: "keep-cookie"})
 
 	resp, err := http.DefaultClient.Do(req)
@@ -377,9 +384,14 @@ func TestStagingProxyStripsVerifierAssertionsAndProxyCredentials(t *testing.T) {
 		"Authorization",
 		"Proxy-Authorization",
 		"X-Grain-Tunnel-Token",
+		"X-Grain-Subject-Token",
 		ui.AccessCodeHeader,
 		ui.ActingTaskHeader,
+		ui.ActingRunHeader,
+		ui.ActingReasonHeader,
+		ui.ChannelHeader,
 		ui.IAPAssertionHeader,
+		"X-Goog-Iap-Attr-Sub",
 		ui.HubAssertionHeader,
 		ui.RegistryAssertionHeader,
 	} {

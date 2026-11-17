@@ -55,15 +55,33 @@ export class IdleRoutePreload implements PreloadingStrategy {
   }
 }
 
+function hasDisallowedHrefChar(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f || code === 0x5c) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function resolveReloadHref(
   location: Location,
   dest?: string,
 ): string | null {
-  if (!dest || !/^\/(?![/\\])/.test(dest) || dest.includes("\\")) {
+  if (!dest || !/^\/(?![/\\])/.test(dest) || hasDisallowedHrefChar(dest)) {
     return null;
   }
   const href = location.prepareExternalUrl(dest);
-  if (!/^\/(?![/\\])/.test(href) || href.includes("\\")) {
+  if (!/^\/(?![/\\])/.test(href) || hasDisallowedHrefChar(href)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(href, "https://grain.invalid");
+    if (parsed.origin !== "https://grain.invalid") {
+      return null;
+    }
+  } catch {
     return null;
   }
   return href;

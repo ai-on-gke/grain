@@ -75,6 +75,8 @@ func TestStagingProxyNeverForwardsSignedIdentityAssertionsOrGrainCookies(t *test
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured = r.Header.Clone()
 		w.Header().Add("Set-Cookie", ui.VerifierSessionCookieName+"=planted; Path=/; Secure; HttpOnly")
+		w.Header().Add("Set-Cookie", "GCP_IAAP_AUTH_TOKEN_ABC=planted-iap; Path=/; Secure; HttpOnly")
+		w.Header().Add("Set-Cookie", "__Host-edge_sso=planted-edge; Path=/; Secure; HttpOnly")
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(upstream.Close)
@@ -109,11 +111,21 @@ func TestStagingProxyNeverForwardsSignedIdentityAssertionsOrGrainCookies(t *test
 	req.Header.Set("X-Custom-SSO-Sig", "alice@example.com")
 	req.Header.Set("Proxy-Authorization", "Bearer oidc-edge-token")
 	req.Header.Set("X-Grain-Tunnel-Token", "tunnel-token")
+	req.Header.Set("X-Grain-Hub-Token", "grc_hub_token")
+	req.Header.Set("X-Grain-Subject-Token", "subject-token")
+	req.Header.Set(ui.ActingRunHeader, "run-123")
+	req.Header.Set(ui.ActingReasonHeader, "audit-reason")
+	req.Header.Set(ui.ChannelHeader, ui.SandboxCLIChannel)
 	req.Header.Set(ui.HubAssertionHeader, "hub-jwt")
 	req.Header.Set(ui.RegistryAssertionHeader, "registry-jwt")
+	req.Header.Set("X-Goog-Iap-Attr-Sub", "iap-attr")
 	req.Header.Set("X-Goog-Authenticated-User-Email", "accounts.google.com:alice@example.com")
 	req.AddCookie(&http.Cookie{Name: ui.VerifierSessionCookieName, Value: "live-session"})
 	req.AddCookie(&http.Cookie{Name: ui.AccessCookieName, Value: "live-access"})
+	req.AddCookie(&http.Cookie{Name: "GCP_IAAP_AUTH_TOKEN_ABC", Value: "live-iap-cookie"})
+	req.AddCookie(&http.Cookie{Name: "__Host-GCP_IAP_AUTH_TOKEN_ABC", Value: "live-host-iap-cookie"})
+	req.AddCookie(&http.Cookie{Name: "GCP_IAPLOGIN", Value: "live-iap-login"})
+	req.AddCookie(&http.Cookie{Name: "__Host-edge_sso", Value: "live-edge-sso"})
 	req.AddCookie(&http.Cookie{Name: "preview_theme", Value: "dark"})
 
 	resp, err := http.DefaultClient.Do(req)
@@ -127,14 +139,20 @@ func TestStagingProxyNeverForwardsSignedIdentityAssertionsOrGrainCookies(t *test
 
 	for _, secretHeader := range []string{
 		ui.IAPAssertionHeader,
+		"X-Goog-Iap-Attr-Sub",
 		ui.HubAssertionHeader,
 		ui.RegistryAssertionHeader,
 		"X-Custom-SSO-Sig",
 		"Authorization",
 		"Proxy-Authorization",
 		"X-Grain-Tunnel-Token",
+		"X-Grain-Hub-Token",
+		"X-Grain-Subject-Token",
 		ui.AccessCodeHeader,
 		ui.ActingTaskHeader,
+		ui.ActingRunHeader,
+		ui.ActingReasonHeader,
+		ui.ChannelHeader,
 		"X-Goog-Authenticated-User-Email",
 	} {
 		if got := captured.Get(secretHeader); got != "" {
@@ -145,8 +163,9 @@ func TestStagingProxyNeverForwardsSignedIdentityAssertionsOrGrainCookies(t *test
 		t.Errorf("staging sandbox Cookie=%q, want only preview_theme=dark", got)
 	}
 	for _, sc := range resp.Header.Values("Set-Cookie") {
-		if strings.Contains(strings.ToLower(sc), "grain_") {
-			t.Errorf("staging response leaked grain Set-Cookie %q", sc)
+		lower := strings.ToLower(sc)
+		if strings.Contains(lower, "grain_") || strings.Contains(lower, "gcp_ia") || strings.Contains(lower, "__host-") {
+			t.Errorf("staging response leaked protected Set-Cookie %q", sc)
 		}
 	}
 }
