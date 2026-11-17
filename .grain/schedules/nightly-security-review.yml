@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Nightly security review
 template: nightly-security-review
 base: main
@@ -8,3 +9,4 @@ overlap: skip
 # Queues only what the template permits: trust-boundary fixes are filed
 # with hold_for_approval and stay held for a person.
 auto-approve-proposals: true
+enabled: false

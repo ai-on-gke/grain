@@ -1,3 +1,4 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: Release process review
 template: release-process-review
 base: main
@@ -6,3 +7,4 @@ weekly:
   day: monday
   at: "07:00"
 overlap: skip
+enabled: false

@@ -1,6 +1,8 @@
+# Disabled 2026-11-17: grain development moved to depot experimental/grain-oss.
 name: UI walkthrough
 suite: release-ui-walkthrough
 base: main
 daily:
   at: "03:00"
 overlap: skip
+enabled: false

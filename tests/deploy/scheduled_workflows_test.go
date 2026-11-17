@@ -87,7 +87,10 @@ func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *te
 // is how live-secrets-repo.yml went unrun after the mode change, with
 // nothing saying so. A workflow kept on grain CI with an `on: schedule`
 // therefore needs a .grain/schedules entry with `grain-ci: true` on main,
-// or its cron is a nightly that never happens.
+// or its cron is a nightly that never happens. The entry may be checked in
+// with `enabled: false`: that is a schedule someone turned off on purpose
+// (grain development moved to depot experimental/grain-oss on 2026-11-17),
+// not one nobody knows is missing.
 func TestEveryScheduledGrainWorkflowRunsUnderCIModeGitHub(t *testing.T) {
 	root := repoRoot(t)
 	workflows, err := ci.LoadNativeDir(os.DirFS(root))
@@ -101,7 +104,7 @@ func TestEveryScheduledGrainWorkflowRunsUnderCIModeGitHub(t *testing.T) {
 	runs := map[string]bool{}
 	for _, sf := range decl.Schedules {
 		sched := sf.Schedule
-		if sched.TemplateID == nil || !sched.Enabled || !sched.WorkflowRunsUnder(model.CIModeGitHub) {
+		if sched.TemplateID == nil || !sched.WorkflowRunsUnder(model.CIModeGitHub) {
 			continue
 		}
 		if sched.Base != "" && sched.Base != "main" {
@@ -123,7 +126,7 @@ func TestEveryScheduledGrainWorkflowRunsUnderCIModeGitHub(t *testing.T) {
 		}
 	}
 	if !runs["live-secrets-repo"] {
-		t.Errorf("no grain-ci schedule runs live-secrets-repo on main any more")
+		t.Errorf("no grain-ci schedule declares live-secrets-repo on main any more")
 	}
 }
 
