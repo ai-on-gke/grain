@@ -275,6 +275,10 @@ test("pausing, resuming, and lifting quota pauses on Fleet update the global dis
       .getByLabel("Pipeline pause reason")
       .fill("walkthrough sync check");
     await page.getByRole("button", { name: "Pause pipeline" }).click();
+    await page
+      .getByTestId("confirm-dialog")
+      .getByRole("button", { name: "Pause pipeline" })
+      .click();
 
     const banner = page.getByTestId("global-dispatch-banner");
     await expect(banner).toBeVisible();
@@ -284,6 +288,10 @@ test("pausing, resuming, and lifting quota pauses on Fleet update the global dis
     );
 
     await page.getByRole("button", { name: "Resume pipeline" }).click();
+    await page
+      .getByTestId("confirm-dialog")
+      .getByRole("button", { name: "Resume pipeline" })
+      .click();
     await expect(banner).toHaveCount(0);
   } finally {
     await page.request.delete("/api/pipeline-pause").catch(() => {});
@@ -543,4 +551,153 @@ test("classic System -> Metrics ?f=repo:any:... links narrow /next/telemetry to 
       ),
     )
     .toBe(true);
+});
+
+// The 2026-11-16 walkthrough (docs/test-runs/2026-11-16-deployment-operations.md):
+// a host that reported no disks showed a "/" disk at "0 MB / 0 MB", and a
+// daemon that reported no start time showed a green "Up —".
+test("Fleet says a disk and an uptime it was not told are not reported", async ({
+  page,
+}) => {
+  const now = Date.now();
+  let withFigures = false;
+  await page.route("**/api/sandboxes*", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        host: {
+          cpus: 4,
+          cpuUtilization: 0.15,
+          memoryUsedMB: 4096,
+          memoryTotalMB: 16384,
+          ...(withFigures
+            ? {
+                disks: [
+                  { path: "/var/lib/grain", usedMB: 2048, totalMB: 8192 },
+                ],
+              }
+            : {}),
+        },
+        ...(withFigures
+          ? {
+              daemon: {
+                startedAt: new Date(now - 3 * 3600_000).toISOString(),
+                starts: 1,
+              },
+            }
+          : {}),
+        sandboxes: [],
+      },
+    }),
+  );
+
+  await page.goto("fleet?tab=controls");
+  const disk = page.getByTestId("meter-disk");
+  await expect(page.getByTestId("meter-disk-none")).toHaveText("Not reported");
+  await expect(disk).not.toContainText("0 MB");
+  await expect(disk).not.toContainText("host volume");
+  const daemon = page.getByTestId("fleet-daemon-card");
+  await expect(page.getByTestId("fleet-daemon-uptime-unknown")).toHaveText(
+    "Uptime not reported",
+  );
+  await expect(daemon).not.toContainText("Up —");
+
+  withFigures = true;
+  await page.reload();
+  await expect(disk).toContainText("/var/lib/grain");
+  await expect(disk).toContainText("2.0 GB / 8.0 GB");
+  await expect(page.getByTestId("meter-disk-none")).toHaveCount(0);
+  await expect(daemon).toContainText(/Up \d/);
+  await expect(page.getByTestId("fleet-daemon-uptime-unknown")).toHaveCount(0);
+});
+
+// Classic System -> Pipeline asks before pausing and resuming, and warns
+// that resuming a pause held for a scheduled upgrade cancels the upgrade;
+// /next/fleet did neither (2026-11-16 walkthrough).
+test("Fleet asks before pausing or resuming the pipeline, and says resuming cancels a scheduled upgrade", async ({
+  page,
+}) => {
+  const writes = [];
+  let held = null;
+  await page.route("**/api/pipeline-pause", async (route) => {
+    const method = route.request().method();
+    if (method === "GET" && held) {
+      return route.fulfill({ json: { pause: held } });
+    }
+    if (method !== "GET") writes.push(method);
+    return route.fallback();
+  });
+  try {
+    await page.goto("fleet?tab=controls");
+    const dialog = page.getByTestId("confirm-dialog");
+    await page.getByTestId("pipeline-pause-btn").click();
+    await expect(dialog).toContainText("Pause the pipeline?");
+    await dialog.getByTestId("confirm-cancel").click();
+    await expect(dialog).toBeHidden();
+    await page.getByTestId("pipeline-pause-btn").click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    expect(writes).toEqual([]);
+    await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+      "Dispatching",
+    );
+
+    held = {
+      paused: true,
+      runNowPasses: true,
+      reason: "upgrading to v9.9.9 at 02:00 UTC",
+      byKind: "automation",
+      byId: "upgrade-schedule",
+    };
+    await page.reload();
+    await page.getByTestId("pipeline-resume-btn").click();
+    await expect(dialog).toContainText(
+      "Resume and cancel the scheduled upgrade?",
+    );
+    await expect(dialog).toContainText("upgrading to v9.9.9 at 02:00 UTC");
+    await expect(dialog).toContainText("Resuming cancels that upgrade");
+    await dialog.getByTestId("confirm-cancel").click();
+    expect(writes).toEqual([]);
+    await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+      "Paused",
+    );
+  } finally {
+    await page.unroute("**/api/pipeline-pause");
+    await page.request.delete("/api/pipeline-pause").catch(() => {});
+  }
+});
+
+// Start CI run put a refusal on the page's action banner, behind the
+// dialog's scrim, and left the dialog open with nothing said (2026-11-16
+// walkthrough: POST /api/ci/runs answers 403 on a repository not in grain
+// CI mode).
+test("CI's Run workflow dialog says why a run was refused", async ({
+  page,
+}) => {
+  const refusal =
+    'grain CI is not enabled for acme/widgets: set its CI Mode to "Use Grain CI"';
+  const posts = [];
+  await page.route("**/api/ci/runs", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posts.push(route.request().postDataJSON());
+    return route.fulfill({ status: 403, json: { error: refusal } });
+  });
+  await page.goto("ci");
+  await page.getByRole("button", { name: "Run workflow" }).first().click();
+  const dialog = page.getByTestId("ci-run-dialog");
+  await dialog.getByTestId("ci-run-repo-input").fill("acme/widgets");
+  await dialog.getByTestId("ci-run-ref-input").fill("main");
+  await dialog.getByRole("button", { name: "Start CI run" }).click();
+  await expect(dialog.getByTestId("ci-dialog-error")).toContainText(refusal);
+  await expect(
+    dialog.getByRole("button", { name: "Start CI run" }),
+  ).toBeEnabled();
+  expect(posts).toHaveLength(1);
+
+  // Closing and opening it again starts clean.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole("button", { name: "Run workflow" }).first().click();
+  await expect(page.getByTestId("ci-dialog-error")).toHaveCount(0);
 });
