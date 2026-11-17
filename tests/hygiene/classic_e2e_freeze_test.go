@@ -131,11 +131,103 @@ func TestNoNewClassicE2ESpecs(t *testing.T) {
 // freezeEntry is the shape ui/e2e/frozen.js accepts.
 var freezeEntry = regexp.MustCompile(`^([^\s:]+\.spec\.js)(?::(\d+))?$`)
 
-// testCallStart and testLiteralTitle mirror frozen.js's own checks.
+// testCallStart and testLiteralTitle mirror frozen.js's own checks: only
+// test(...) and its modifiers declare one test -- a test.describe(...)
+// line would run the whole group in the quarantined lane while
+// grepInvert dropped only its first test, and a hook has no title.
 var (
-	testCallStart    = regexp.MustCompile(`\btest(?:\.\w+)?\(`)
-	testLiteralTitle = regexp.MustCompile("\\btest(?:\\.(?:only|fixme|fail|slow|skip))?\\(\\s*(?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\$])*`)")
+	testCallStart    = regexp.MustCompile(`\btest(?:\.(?:only|fixme|fail|slow|skip))?\(`)
+	testLiteralTitle = regexp.MustCompile("\\btest(?:\\.(?:only|fixme|fail|slow|skip))?\\(\\s*(?:\"((?:\\\\.|[^\"\\\\])*)\"|'((?:\\\\.|[^'\\\\])*)'|`((?:\\\\.|[^`\\\\$])*)`)")
+	jsEscape         = regexp.MustCompile(`\\(.)`)
 )
+
+func literalTitle(m []string) string {
+	s := m[1] + m[2] + m[3]
+	return jsEscape.ReplaceAllStringFunc(s, func(e string) string {
+		switch e[1] {
+		case 'n':
+			return "\n"
+		case 't':
+			return "\t"
+		}
+		return e[1:]
+	})
+}
+
+// checkFreezeLine says what is wrong, if anything, with a file:line entry
+// naming line n (1-based) of a spec whose source is src: the line must
+// start a test(...) call whose title is a literal on that line, and no
+// other test in the file may have a title grep cannot tell from it.
+// grep sees "<describe...> <title>" joined by spaces, so "saves" also
+// matches "auto saves", and "auto saves" matches "saves" inside
+// describe("auto").
+func checkFreezeLine(file string, src string, n int) error {
+	srcLines := strings.Split(src, "\n")
+	if n < 1 || n > len(srcLines) || !testCallStart.MatchString(srcLines[n-1]) {
+		return fmt.Errorf("line %d of %s does not start a test(...) call (the test moved? point the entry at its new line; a test.describe or hook cannot be named by title, so list the whole file instead)", n, file)
+	}
+	lineStart := len(strings.Join(srcLines[:n-1], "\n"))
+	if n > 1 {
+		lineStart++
+	}
+	end := min(n+2, len(srcLines))
+	loc := testLiteralTitle.FindStringSubmatchIndex(strings.Join(srcLines[n-1:end], "\n"))
+	if loc == nil || loc[0] >= len(srcLines[n-1]) {
+		return fmt.Errorf("the test at %s:%d has no literal title, so grepInvert cannot name it; list the whole file instead", file, n)
+	}
+	offset := lineStart + loc[0]
+	title := literalTitle(submatches(strings.Join(srcLines[n-1:end], "\n"), loc))
+	for _, o := range testLiteralTitle.FindAllStringSubmatchIndex(src, -1) {
+		if o[0] == offset {
+			continue
+		}
+		other := literalTitle(submatches(src, o))
+		if other == title || strings.HasSuffix(other, " "+title) || strings.HasSuffix(title, " "+other) {
+			at := strings.Count(src[:o[0]], "\n") + 1
+			return fmt.Errorf("grep cannot tell %q at %s:%d from the test %q at %s:%d, so grepInvert would drop both; list the whole file instead", title, file, n, other, file, at)
+		}
+	}
+	return nil
+}
+
+func submatches(s string, loc []int) []string {
+	m := make([]string, len(loc)/2)
+	for i := range m {
+		if loc[2*i] >= 0 {
+			m[i] = s[loc[2*i]:loc[2*i+1]]
+		}
+	}
+	return m
+}
+
+func TestCheckFreezeLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		line      int
+		wantErr   string // "" for none
+	}{
+		{"plain test", "test(\"one\", async () => {});\ntest(\"two\", async () => {});\n", 2, ""},
+		{"modifier", "test.fixme(\"one\", async () => {});\n", 1, ""},
+		{"title on the next line", "test(\n  \"one\",\n  async () => {},\n);\n", 1, ""},
+		{"describe", "test.describe(\"group\", () => {\n  test(\"inner one\", async () => {});\n  test(\"inner two\", async () => {});\n});\n", 1, "does not start a test(...) call"},
+		{"hook", "test.beforeEach(async () => {\n  test(\"x\", async () => {});\n});\n", 1, "does not start a test(...) call"},
+		{"title from a later call", "test(name, async () => {});\ntest(\"two\", async () => {});\n", 1, "no literal title"},
+		{"same title", "test(\"saves\", async () => {});\ntest.describe(\"g\", () => {\n  test(\"saves\", async () => {});\n});\n", 1, "grep cannot tell"},
+		{"title is a suffix of another", "test(\"saves\", async () => {});\ntest(\"auto saves\", async () => {});\n", 1, "grep cannot tell"},
+		{"another title is a suffix", "test(\"auto saves\", async () => {});\ntest.describe(\"auto\", () => {\n  test(\"saves\", async () => {});\n});\n", 1, "grep cannot tell"},
+		{"suffix without a space", "test(\"saves\", async () => {});\ntest(\"autosaves\", async () => {});\n", 1, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkFreezeLine("a.spec.js", tc.src, tc.line)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("got %v, want no error", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Errorf("got %v, want an error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
 
 func TestClassicE2EFreezeLists(t *testing.T) {
 	dir := filepath.Join(repoRoot(t), classicE2EDir)
@@ -170,14 +262,8 @@ func TestClassicE2EFreezeLists(t *testing.T) {
 			}
 			lineEntries = append(lineEntries, lineEntry{where, file})
 			n, _ := strconv.Atoi(m[2])
-			srcLines := strings.Split(string(src), "\n")
-			if n < 1 || n > len(srcLines) || !testCallStart.MatchString(srcLines[n-1]) {
-				t.Errorf("%s: line %d of %s does not start a test(...) call (the test moved? point the entry at its new line)", where, n, file)
-				continue
-			}
-			end := min(n+2, len(srcLines))
-			if !testLiteralTitle.MatchString(strings.Join(srcLines[n-1:end], "\n")) {
-				t.Errorf("%s: the test at %s:%d has no literal title, so grepInvert cannot name it; list the whole file instead", where, file, n)
+			if err := checkFreezeLine(file, string(src), n); err != nil {
+				t.Errorf("%s: %v", where, err)
 			}
 		}
 	}
