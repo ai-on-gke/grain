@@ -98,3 +98,44 @@ test("Caches refuses a fractional size by name, not with Go's decode error", asy
   await pkg.fill("");
   await pkg.press("Tab");
 });
+
+test("the policy note and its link stay inside the New task sheet on a phone @phone @dark", async ({
+  page,
+  request,
+}) => {
+  const before = await (await request.get("/api/capability-policy")).json();
+  await request.put("/api/capability-policy", {
+    data: {
+      policy: {
+        rules: [
+          { capability: "https://grain.dev/capabilities/github#*", deny: true },
+        ],
+      },
+    },
+  });
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/next/inbox");
+    await page.getByRole("button", { name: /^New/ }).first().click();
+    await page.getByText(/Capabilities & repo context/).click();
+    const picker = page.getByTestId("nt-grants");
+    const notes = picker.getByTestId("nt-grants-policy-notes");
+    await notes.scrollIntoViewIfNeeded();
+    await expect(notes).toBeVisible();
+    const p = await picker.boundingBox();
+    for (const el of [
+      notes,
+      notes.getByTestId("nt-grants-policy-link").first(),
+    ]) {
+      const b = await el.boundingBox();
+      expect(b.x).toBeGreaterThanOrEqual(p.x - 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(p.x + p.width + 0.5);
+    }
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  } finally {
+    await request.put("/api/capability-policy", { data: before });
+  }
+});
