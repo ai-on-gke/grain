@@ -208,15 +208,17 @@ func TestARestartDeletesEachRollbackCopyOnlyOnceTheStoreHoldsItsValue(t *testing
 		}
 	}
 
-	// Copies whose values the store holds: each is deleted. The repo and
-	// relay tokens were stored trimmed, as their moves store them; the
-	// package cache CA was renewed since its move, so the store holds a
-	// newer bundle, which supersedes the copy.
+	// Copies whose values the store holds: each is deleted. The repo
+	// token was stored trimmed, as its move stores it; the package cache
+	// CA was renewed since its move, so the store holds a newer bundle,
+	// which supersedes the copy. The relay token's copy goes too although
+	// the store holds no relay/token (the operator deleted the dead
+	// secret, as its move's log invites): the relay has been removed, so
+	// nothing reads that token or restores it.
 	set(gitproxy.CredentialSecretName("bot"), "token", "ghp_bot\n")
 	set(SandboxAccessCASecretName, caBundleKey, "SANDBOX CA\n")
 	set(PackageCacheCASecretName, caBundleKey, "RENEWED CA\n")
 	set("state-repo-token", repoTokenKey, "ghp_state")
-	set("relay", "token", "relay-tok")
 	set(releaseapproval.KeySecret, releaseapproval.KeySecretKey, "SIGNING KEY\n")
 	held := []string{
 		writeRollbackCopy(t, filepath.Join(ghDir, "bot.token"), "ghp_bot\n"),
@@ -245,8 +247,13 @@ func TestARestartDeletesEachRollbackCopyOnlyOnceTheStoreHoldsItsValue(t *testing
 		}
 	}
 	// Nothing was imported from the orphans either: they stay copies.
-	if has, _ := store.Has("secrets-repo-token", repoTokenKey); has {
-		t.Error("a rollback copy was imported into the store")
+	for _, secret := range []string{"secrets-repo-token", "relay"} {
+		if has, _ := store.Has(secret, "token"); has {
+			t.Errorf("a rollback copy was imported into the store as %s", secret)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(secretsDir, "relay", "token")); err == nil {
+		t.Error("the relay token copy was renamed back rather than deleted")
 	}
 	for secret, key := range map[string]string{
 		gitproxy.CredentialSecretName("bot"): "token",
