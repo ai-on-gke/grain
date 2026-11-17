@@ -9,7 +9,7 @@
 - **Range:** `4ae6438fd..e69d34223` on `main`'s first-parent line: the
   **19** merges since the most recent report's base `4ae6438fd`
   (`2026-11-13.md`, merge of #1435, 2026-11-13 02:22 UTC). 195 files,
-  +13340 −410, of which about 11600 added lines are `docs/test-runs/`
+  +13340 −410, of which about 9500 added lines are `docs/test-runs/`
   and `docs/test-plans/` records. Merge times below are UTC committer
   dates (`TZ=UTC git log --date=format-local`; plain `--date=format:`
   prints the committer's own zone, −08:00 here, which is eight hours
@@ -26,7 +26,7 @@
   tests were run (below). No finding was confirmed, so no throwaway test
   was written and no fix task was filed.
 - **Result:** **no findings; no fix task filed.** It was a quiet range:
-  eleven of the nineteen merges are UI-only or documentation, and the
+  ten of the nineteen merges are UI-only or documentation, and the
   code that did land on a boundary is one tightening (#1457 ships the
   `network: none` fence in `grain.yaml`), two attribution and messaging
   changes (#1467, #1385), a reporting-only task field (#1438), an
