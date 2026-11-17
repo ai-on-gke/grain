@@ -124,6 +124,44 @@ describe("observation-only task display", () => {
       "pending evidence collection",
     );
   });
+  it("labels selected outcomes and preserves every CL evidence row on refresh", async () => {
+    await TestBed.configureTestingModule({
+      imports: [TaskObservationsComponent],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(TaskObservationsComponent);
+    const data = view();
+    data.bindings[0].type = "integration";
+    data.bindings[0].config = {
+      kind: "cl_submitted",
+      semantics: "positive_v1",
+    };
+    data.results[0].result.type = "integration";
+    data.results[0].result.evidence = [
+      {
+        kind: "integration",
+        id: "cl/11=>cl/111 (external)",
+        version: "r11",
+        head: "snapshot/3",
+      },
+      { kind: "integration", id: "cl/12", version: "r12", head: "snapshot/4" },
+    ];
+    fixture.componentRef.setInput("observations", data);
+    fixture.detectChanges();
+    const text = () => fixture.nativeElement.textContent as string;
+    expect(text()).toContain("shadow cl_submitted");
+    expect(text()).toContain("cl/11=>cl/111 (external)");
+    expect(text()).toContain("cl/12");
+    expect(text()).toContain("head snapshot/4");
+    data.results[0].result.evidence[1].version = "r12-new";
+    data.results[0].result.evidence[1].head = "snapshot/5";
+    fixture.componentRef.setInput("observations", structuredClone(data));
+    fixture.detectChanges();
+    expect(text()).toContain("head snapshot/5");
+    expect(
+      fixture.nativeElement.querySelectorAll("button,a,input").length,
+    ).toBe(0);
+    fixture.destroy();
+  });
   it("does not show an unavailable projection as a passing gate", async () => {
     await TestBed.configureTestingModule({
       imports: [TaskObservationsComponent],

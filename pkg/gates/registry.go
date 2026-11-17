@@ -20,16 +20,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 //go:embed delivery.schema.json
 var deliverySchema []byte
 
+//go:embed integration.schema.json
+var integrationSchema []byte
+
+//go:embed children.schema.json
+var childrenSchema []byte
+
 //go:embed acknowledgment.schema.json
 var acknowledgmentSchema []byte
 
-const Implementation = "builtin-report-observer-v2"
+const Implementation = "builtin-outcome-observer-v3"
 
 type Descriptor struct {
 	Type           string
@@ -41,11 +49,10 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}}
+	return []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"integration", 1, Digest(json.RawMessage(integrationSchema)), append([]byte(nil), integrationSchema...), Implementation}, {"children", 1, Digest(json.RawMessage(childrenSchema)), append([]byte(nil), childrenSchema...), Implementation}}
 }
 
-// Validate admits only this observation slice's two supported profiles, even
-// though the future catalogue specifies additional configurations.
+// Validate admits the implemented closed v1 outcome profiles.
 func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	if len(raw) > 64*1024 {
 		return nil, fmt.Errorf("config exceeds 64 KiB")
@@ -57,6 +64,10 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	switch typ {
 	case "delivery":
 		allowedKeys = map[string]bool{"product": true, "semantics": true}
+	case "integration":
+		allowedKeys = map[string]bool{"kind": true, "semantics": true}
+	case "children":
+		allowedKeys = map[string]bool{"tasks": true, "predicate": true}
 	case "acknowledgment":
 		allowedKeys = map[string]bool{"mode": true}
 	default:
@@ -106,7 +117,7 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		if err := decode(&c); err != nil {
 			return nil, err
 		}
-		if c.Product != "report" || c.Semantics != "current_v1" {
+		if !oneOf(c.Product, "report", "change", "review", "nothing_needed", "any") || !oneOf(c.Semantics, "current_v1", "legacy_finish_v1") {
 			return nil, fmt.Errorf("unsupported delivery profile")
 		}
 		b, _ := json.Marshal(c)
@@ -116,8 +127,35 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		if err := decode(&c); err != nil {
 			return nil, err
 		}
-		if c.Mode != "explicit_receipt" {
+		if !oneOf(c.Mode, "explicit_receipt", "legacy_report", "legacy_child_answer", "legacy_nothing_needed_ack") {
 			return nil, fmt.Errorf("unsupported acknowledgment profile")
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
+	case "integration":
+		c := IntegrationConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if !oneOf(c.Kind, "pr_merged", "cl_submitted") || c.Semantics != "positive_v1" {
+			return nil, fmt.Errorf("unsupported integration profile")
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
+	case "children":
+		c := ChildrenConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if !oneOf(c.Predicate, "success", "closed", "merged") || len(c.Tasks) == 0 || len(c.Tasks) > 64 {
+			return nil, fmt.Errorf("invalid children selection")
+		}
+		seen := map[string]bool{}
+		for _, id := range c.Tasks {
+			if strings.TrimSpace(id) == "" || utf8.RuneCountInString(id) > 256 || seen[id] {
+				return nil, fmt.Errorf("invalid child identity")
+			}
+			seen[id] = true
 		}
 		b, _ := json.Marshal(c)
 		return b, nil
@@ -126,9 +164,30 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	}
 }
 
+func oneOf(s string, values ...string) bool {
+	for _, v := range values {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Facts contains only the scoped reader's immutable evidence, never private
 // evaluator state. CompleteEmpty is meaningful: no report is not success.
 type Facts struct {
+	LegacyMet       map[string]bool
+	Bindings        []Binding
+	Product         string
+	ProductEvidence *Evidence
+	ProductUnknown  string
+	Blocked         bool
+	ChildAnswer     bool
+	NothingAck      bool
+	Resources       map[string][]ResourceFact
+	Children        map[string]ChildFact
+	Cycle           bool
+
 	IncompleteReason   string
 	TaskID             string
 	Applicable         bool
@@ -169,6 +228,14 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		r.Summary = "Not applicable: " + f.UnsupportedReason
 		return r
 	}
+	if now.Before(f.ValidUntil) {
+		if b.Type == "integration" {
+			return evaluateIntegration(b, f, r)
+		}
+		if b.Type == "children" {
+			return evaluateChildren(b, f, r)
+		}
+	}
 	if !f.Complete {
 		if f.IncompleteReason != "" {
 			r.Summary = f.IncompleteReason
@@ -184,6 +251,11 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 	}
 	switch b.Type {
 	case "delivery":
+		var c DeliveryConfig
+		_ = json.Unmarshal(b.Config, &c)
+		if c.Product != "report" || f.Product != "" || f.ProductUnknown != "" || f.Blocked {
+			return evaluateDelivery(c, f, r)
+		}
 		switch {
 		case f.Running:
 			r.Status = "pending"
@@ -199,6 +271,11 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 			r.Summary = "No current settled report is recorded."
 		}
 	case "acknowledgment":
+		var c AcknowledgmentConfig
+		_ = json.Unmarshal(b.Config, &c)
+		if c.Mode != "explicit_receipt" {
+			return evaluateLegacyAck(c, f, r)
+		}
 		switch {
 		case f.Report == nil || !f.Settled || f.Running:
 			r.Summary = "No current settled report to acknowledge."
@@ -223,7 +300,12 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 // evidence, waits or accepted metadata from a prior successful collection.
 // SourceRevision is an unavailable build sentinel, not a captured fact version.
 func UnavailableObservation(taskID string, now time.Time) ObservationView {
-	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: Bindings(taskID), Results: []EvaluationState{}, Dirty: true}
+	return UnavailableObservationFor(taskID, now, Bindings(taskID))
+}
+
+// UnavailableObservationFor discards accepted evidence for the validated current projection.
+func UnavailableObservationFor(taskID string, now time.Time, bindings []Binding) ObservationView {
+	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: bindings, Results: []EvaluationState{}, Dirty: true}
 	for _, b := range v.Bindings {
 		r := Evaluate(b, Facts{TaskID: taskID, ObservedAt: now, ValidUntil: now, SourceVersion: Implementation}, now, 0)
 		r.Status = "error"

@@ -21,20 +21,23 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 
 `legacy_*` profiles preserve predicate interpretation, not permission to bypass the new message/child/authority closure fences or credential admission. Complete-set limitations must be displayed. A result used by enforced action admission must meet current-head/current-policy/complete-collection rules even if an older cohort's monitoring uses a legacy reading. No passing check gate can waive a different failing review/approval or outcome.
 
-## Runtime coverage after the initial framework review
+## Runtime observation coverage
 
-The catalogue above remains the full v1 contract, not an implementation claim.
-Task #61's delivered slice and Task #64's independent repairs implement only:
+Task #61 (PR #1739), Task #64 (PR #1803) and Task #65 extend the existing
+registry, preserving the canonical v1 schemas. All attachments remain nonrequired
+monitors with legacy authority and every effect/cutover flag false.
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
-| `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
-| `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
+| `delivery`, all products, `current_v1` / `legacy_finish_v1` | Settled durable report or typed finish provenance; exact-head authenticated changes, owning-change acceptance for in-place fixes, delivered review, validated no-work and actual finish precedence. Body reports retain the 8192-character/attachment limits. |
+| `acknowledgment`, all four modes | Conservative verified human close after the current report/settlement; imported report-only child filing provenance and configured no-work acknowledgment are distinct. No review output becomes a second acknowledgment. |
+| `integration`, `positive_v1` | Current PR from complete links and exact-head merge receipt, or every scoped CL/snapshot with canonical renumbering. Positive landed/empty equivalence requires pinned proof. Missing snapshots, denied/stale/incomplete data are unknown. |
+| `children`, explicit success/closed/merged | Only selected IDs or a labeled existing tasks-closed goal. Missing/private children and unknown legacy success stay unknown; failure/cancel does not satisfy success. Reopen/message/relation revisions invalidate, and bounded cycle diagnostics never modify waits. |
 
-All other profiles and the other ten types remain unsupported by this registry.
-These observations never add obligations, dispatch work, process messages or
-admit actions. See the [compatibility boundary](compatibility.md#implemented-observation-only-subset),
-[operator guide](../../../docs/gate-observations.md) and
-[review/extension guidance](../../../docs/gate-observation-review.md) for the
-implemented reads, regression coverage and source-specific blockers. No rollout,
-cutover or migration is implied by this coverage table.
+The other eight types remain unsupported. Representative read-only selection and
+monitor-only mappings for existing `pr-merged`, `cl-submitted`, `tasks-closed`
+goals are described in the [operator guide](../../../docs/gate-observations.md).
+No stored goal or task is migrated. Success contracts have no exact legacy closure
+parity claim. Body-only receipts, snapshot-less CL providers and cross-scope child
+reads retain explicit limitations. No deployment/configuration/grants change,
+observation window, automatic action or enforcement activation is implied.

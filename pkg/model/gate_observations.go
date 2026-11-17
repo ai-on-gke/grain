@@ -106,8 +106,20 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		f.Applicable = false
 		f.UnsupportedReason = "the latest run declared nothing needed; report delivery and receipt are not equivalent milestones"
 	}
+	settledAt := o.CompletedAt
+	if settledAt == nil && goals > 0 && finished.Valid {
+		var raw string
+		sourceErr := q.QueryRowContext(ctx, "SELECT `data` FROM `gate_outcome_source` WHERE `task_id` = ? AND `resource` = 'goal-rest'", id).Scan(&raw)
+		if sourceErr != nil && !errors.Is(sourceErr, sql.ErrNoRows) {
+			return f, "", sourceErr
+		}
+		var rest GateOutcomeSource
+		if sourceErr == nil && json.Unmarshal([]byte(raw), &rest) == nil && rest.RunID == runID && rest.State == "resting_on_goal" && rest.Policy == GateOutcomePolicy(*t) && !rest.At.Before(started) {
+			settledAt = &rest.At
+		}
+	}
 	f.Running = runID != "" && !finished.Valid
-	f.Settled = o.CompletedAt != nil && o.PendingQuestionCommentID == nil && finished.Valid && !f.Running && !o.CompletedAt.Before(started)
+	f.Settled = settledAt != nil && o.PendingQuestionCommentID == nil && finished.Valid && !f.Running && !settledAt.Before(started)
 	var cid int64
 	var body string
 	var bodyLen int
@@ -116,7 +128,7 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return f, "", err
 	}
-	if cid > 0 && f.Settled && (at.Before(started) || at.After(*o.CompletedAt)) {
+	if cid > 0 && f.Settled && (at.Before(started) || at.After(*settledAt)) {
 		f.Complete = false
 		f.IncompleteReason = "Newest report cannot be correlated with the settled run."
 	}
@@ -137,7 +149,7 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 			f.IncompleteReason = "Attachment-bearing reports are incomplete in this body-only observer."
 		}
 	}
-	if cid > 0 && strings.TrimSpace(body) != "" && f.Settled && !at.Before(started) && !at.After(*o.CompletedAt) {
+	if cid > 0 && strings.TrimSpace(body) != "" && f.Settled && !at.Before(started) && !at.After(*settledAt) {
 		version := gates.Digest(struct {
 			ID   int64
 			Body string
@@ -158,7 +170,7 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		// These legacy close events do not name a report version. Strictly
 		// later timestamps are the only supported ordering proof: equal
 		// timestamps can also mean a revised report arrived after the close.
-		if f.Report != nil && strings.TrimSpace(actor) != "" && kind == string(PrincipalHuman) && p.Verified() && closed.After(at) && closed.After(*o.CompletedAt) {
+		if f.Report != nil && strings.TrimSpace(actor) != "" && kind == string(PrincipalHuman) && p.Verified() && closed.After(at) && closed.After(*settledAt) {
 			version := gates.Digest(struct {
 				Event  int64
 				Report string
@@ -237,7 +249,7 @@ func (s *Store) beginGateObservation(ctx context.Context) (*sql.Tx, func(), erro
 // NOT use Store.write: diagnostic commits must not signal Changed(), wake a
 // dispatcher, append integration events or contribute task-failure accounting.
 // The caller must already have authorized this task read and bounded selection.
-func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time, selected ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
 	var view gates.ObservationView
 	var diag GateObservationDiagnostics
 	var last error
@@ -265,6 +277,9 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 			if err != nil {
 				return err
 			}
+			if err = captureOutcomeFacts(ctx, tx, &f, now, selected); err != nil {
+				return err
+			}
 			var previous, source string
 			var generation, evaluations uint64
 			var started, evaluated, historyAt time.Time
@@ -280,24 +295,29 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 				}
 				evaluations = generation
 			}
-			unsupportedCache, rejectedCache := false, false
+			unsupportedCache, rejectedCache, expiredCache := false, false, false
 			if !missing {
 				var cachedView gates.ObservationView
 				if err = json.Unmarshal([]byte(previous), &cachedView); err != nil {
 					return err
 				}
-				unsupportedCache = !currentShadowBindings(cachedView, id)
+				unsupportedCache = !currentShadowBindings(cachedView, id) || source == f.SourceVersion && gates.Digest(cachedView.Bindings) != gates.Digest(f.Bindings)
 				rejectedCache = cachedView.Dirty
+				for _, entry := range cachedView.Results {
+					if entry.Result.Status != "unknown" && !now.Before(entry.Result.ValidUntil) {
+						expiredCache = true
+					}
+				}
 			}
 			changed := missing || source != f.SourceVersion
-			if !changed && !unsupportedCache && !rejectedCache && now.Before(evaluated.Add(time.Minute)) {
+			if !changed && !unsupportedCache && !rejectedCache && !expiredCache && now.Before(evaluated.Add(time.Minute)) {
 				if err = json.Unmarshal([]byte(previous), &view); err != nil {
 					return err
 				}
 			} else {
 				generation++
 				evaluations++
-				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: gates.Bindings(id), Results: []gates.EvaluationState{}}
+				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: f.Bindings, Results: []gates.EvaluationState{}}
 				for _, b := range view.Bindings {
 					r := gates.Evaluate(b, f, now, generation)
 					if unsupportedCache {
@@ -313,6 +333,9 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 				data, err := json.Marshal(view)
 				if err != nil {
 					return err
+				}
+				if len(data) > 256*1024 {
+					return fmt.Errorf("shadow observation exceeds bounded evidence budget")
 				}
 				if changed || unsupportedCache || !now.Before(historyAt.Add(time.Hour)) {
 					comparison := compareReportMilestones(f, view)
@@ -360,17 +383,43 @@ func compareReportMilestones(f gates.Facts, v gates.ObservationView) string {
 	if !f.Complete {
 		return "unknown_incomplete"
 	}
+	hasOutcomes, successContract := false, false
+	for i, binding := range v.Bindings {
+		if binding.Type != "integration" && binding.Type != "children" {
+			continue
+		}
+		hasOutcomes = true
+		predicted := v.Results[i].Result.Status
+		if predicted == "unknown" || predicted == "error" {
+			return "outcome_evidence_gap"
+		}
+		if legacy, ok := f.LegacyMet[binding.ID]; ok {
+			if (predicted == "met") != legacy {
+				return "outcome_discrepancy"
+			}
+		} else {
+			successContract = true
+		}
+	}
+	if hasOutcomes {
+		if successContract {
+			return "explicit_success_contract_only"
+		}
+		return "equivalent_outcome_milestones"
+	}
+	if f.Product != "" && f.Product != "report" {
+		return "observed_" + f.Product + "_milestone"
+	}
 	if f.Settled && f.Report == nil {
 		return "delivery_evidence_gap"
 	}
 	if f.ReceiptUnversioned && f.Receipt == nil {
 		return "receipt_provenance_gap"
 	}
-	if v.Results[0].Result.Status == "met" && f.Report == nil {
-		return "delivery_discrepancy"
-	}
-	if v.Results[1].Result.Status == "met" && f.Receipt == nil {
-		return "receipt_discrepancy"
+	for _, entry := range v.Results {
+		if entry.Result.Type == "integration" || entry.Result.Type == "children" {
+			return "explicit_outcome_predictions"
+		}
 	}
 	return "equivalent_milestones"
 }
@@ -398,14 +447,16 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 		}
 		evaluations = generation
 	}
+	failureBindings := gates.Bindings(id)
 	delay := time.Second
 	if raw != "" {
 		var old gates.ObservationView
 		if json.Unmarshal([]byte(raw), &old) == nil && currentShadowBindings(old, id) {
+			failureBindings = old.Bindings
 			// now is the collection's start, not its failure completion.
 			// A slower failed request cannot replace a newer accepted read;
 			// bursts of failures share one generation until its retry is due.
-			first := old.Results[0] // currentShadowBindings validated the fixed pair
+			first := old.Results[0] // currentShadowBindings validated a nonempty safe projection
 			backingOff := old.Dirty && first.RetryAt != nil && now.Before(*first.RetryAt)
 			if !now.After(evaluated) || backingOff {
 				*view = old
@@ -420,7 +471,7 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 			}
 		}
 	}
-	*view = gates.UnavailableObservation(id, now)
+	*view = gates.UnavailableObservationFor(id, now, failureBindings)
 	generation++
 	evaluations++
 
@@ -521,10 +572,15 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 	if v.APIVersion != "grain.gates/v1" || v.Mode != "observation_only" || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover {
 		return false
 	}
-	if gates.Digest(v.Bindings) != gates.Digest(gates.Bindings(id)) || len(v.Results) != 2 {
+	if len(v.Bindings) == 0 || len(v.Bindings) > 16 || len(v.Results) != len(v.Bindings) {
 		return false
 	}
+	seen := map[string]bool{}
 	for i, b := range v.Bindings {
+		if seen[b.ID] || b.Purpose != "monitor" || b.Required || b.Action != nil || b.Origin.Revision != gates.Implementation || b.Origin.ID != id {
+			return false
+		}
+		seen[b.ID] = true
 		if _, err := gates.Validate(b.Type, b.Version, b.Config); err != nil {
 			return false
 		}

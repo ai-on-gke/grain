@@ -23,17 +23,17 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 
 ## Implemented observation-only subset
 
-The [runtime observation guide](../../../docs/gate-observations.md) describes the
-first shipped slice: exactly `delivery/report/current_v1` and
-`acknowledgment/explicit_receipt`, both v1 nonrequired monitors. Ordinary authorized
-task reads and the Angular task detail carry the optional closed observation_view
-and bounded sibling diagnostic history. There is no contract/decision authority,
-`?view=gates` implementation, discovery/mutation/action/waiver API or migration.
-Body-only finite analysis tasks are selected by a disabled-by-default deployment
-allowlist; attachment-bearing/unsupported shapes and missing provenance are unknown.
-The [independent framework review](../../../docs/gate-observation-review.md) records
-repair coverage and stable extension rules, including conservative receipt ordering,
-failure/acceptance races and bounded retention on both engines.
+The [runtime observation guide](../../../docs/gate-observations.md) covers four
+implemented v1 types: delivery variants, acknowledgment compatibility profiles,
+positive integration, and explicit child outcome predicates. Ordinary authorized
+reads and Angular task detail carry optional observation-only projections and
+bounded history. Existing goal declarations propose monitor contracts only;
+`tasks-closed` retains its actual closed/merged predicate, never relabeled success.
+No contract, task, goal limit, controller disposition or actual wait is migrated.
+Implementation/review/coordinator comparisons retain exact local source fences,
+head/policy receipts and unknown states for missing/private/stale evidence.
+The [framework review](../../../docs/gate-observation-review.md) and operator guide
+record the inherited receipt/body limits and source-specific coverage.
 All current legacy writers listed below retain authority in this implementation.
 The imports and handoff requirements remain future specifications.
 

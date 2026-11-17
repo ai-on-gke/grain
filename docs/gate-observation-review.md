@@ -127,3 +127,17 @@ independent correctness oracle.
 
 These are explicit extension constraints, not additional tasks or authorization
 to activate enforcement. No production deployment/configuration/grants change.
+
+## Outcome extension (Task #65)
+
+The fixed-pair and unsupported-resource notes above describe the reviewed #61/#64
+baseline. The subsequent outcome port extends the same registry/read/persistence
+path with delivery/acknowledgment variants, integration and selected children;
+see the current [coverage table](../design/spec/gates/catalogue.md#runtime-observation-coverage)
+and [operator guide](gate-observations.md). Cached projections validate every
+monitor rather than assuming two results; failure reconstruction preserves the
+validated current projection while discarding accepted evidence. The original
+body/receipt ordering, retry, contention, retention and legacy-isolation repairs
+remain regression requirements. Compact bounded typed domain provenance stays within ordinary scoped internal
+reads and introduces no provider back-call. Shadow success is not an
+authority/closure decision, and all enforcement and rollout activation stays deferred.
