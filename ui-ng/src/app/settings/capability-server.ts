@@ -554,3 +554,32 @@ export function holderLink(h: CapabilityHolder): HolderLink {
       };
   }
 }
+
+// removeMessage and renameMessage are what the Remove and Rename
+// confirms say. holders is null when grain could not read who holds the
+// server (the usage read was not allowed or failed): then the confirm
+// says that rather than claiming nothing grants it.
+export function removeMessage(
+  id: string,
+  holders: HolderLink[] | null,
+): string {
+  if (holders === null) {
+    return `Remove ${id}? Its own secrets go with it. Who holds a grant on it could not be read; any task, template or schedule that does can no longer use it.`;
+  }
+  return holders.length
+    ? `Remove ${id}? Its own secrets go with it, and these grants can no longer be used:`
+    : `Remove ${id}? Nothing grants it now. Its own secrets go with it.`;
+}
+
+export function renameMessage(
+  from: string,
+  to: string,
+  holders: HolderLink[] | null,
+): string {
+  if (holders === null) {
+    return `Rename ${from} to ${to}? Who holds a grant on it could not be read; any grant naming the old ID will no longer resolve.`;
+  }
+  return holders.length
+    ? `Renaming ${from} to ${to} leaves these grants naming an ID that no longer resolves:`
+    : `Rename ${from} to ${to}? Nothing grants it now; any grant written with the old ID will no longer resolve.`;
+}

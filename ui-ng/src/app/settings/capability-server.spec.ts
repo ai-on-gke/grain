@@ -25,6 +25,8 @@ import {
   hostChoice,
   linesToPairs,
   newItem,
+  removeMessage,
+  renameMessage,
   schemaFields,
   secretFieldState,
 } from "./capability-server";
@@ -201,5 +203,17 @@ describe("holder links", () => {
         grant: "g",
       }),
     ).toMatchObject({ route: ["/repos", "acme", "widgets"] });
+  });
+});
+
+describe("remove and rename confirms", () => {
+  const h = holderLink({ kind: "task", id: "7", grant: "g" });
+  it("never claims nothing grants a server whose usage could not be read", () => {
+    expect(removeMessage("x", null)).toMatch(/could not be read/);
+    expect(removeMessage("x", null)).not.toMatch(/Nothing grants/);
+    expect(renameMessage("x", "y", null)).toMatch(/could not be read/);
+    expect(removeMessage("x", [])).toMatch(/Nothing grants it now/);
+    expect(removeMessage("x", [h])).toMatch(/these grants/);
+    expect(renameMessage("x", "y", [h])).toMatch(/leaves these grants/);
   });
 });

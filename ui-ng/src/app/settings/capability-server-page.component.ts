@@ -59,6 +59,8 @@ import {
   hostChoice,
   isFigmaServer,
   isGcpServer,
+  removeMessage,
+  renameMessage,
   runsAt,
   secretFieldState,
   serverName,
@@ -938,6 +940,14 @@ const STATE_HELP: Record<string, string> = {
               </li>
             }
           </ul>
+        } @else if (usage() === null) {
+          <p class="s-hint" data-testid="capability-usage-unknown">
+            Who holds this server's grants could not be read{{
+              access.can("GET /api/capability-servers/usage")
+                ? ""
+                : ": your role cannot list them"
+            }}.
+          </p>
         } @else {
           <p class="s-hint" data-testid="capability-usage-empty">
             Nothing grants this server's capabilities.
@@ -1051,7 +1061,11 @@ export class CapabilityServerPageComponent {
 
   protected readonly loading = signal(true);
   protected readonly servers = signal<CapabilityServerDetail[]>([]);
-  protected readonly usage = signal<Record<string, CapabilityHolder[]>>({});
+  // Who holds each server's grants, or null when the usage read was
+  // not allowed or failed: unknown, which is not the same as nobody.
+  protected readonly usage = signal<Record<string, CapabilityHolder[]> | null>(
+    null,
+  );
   protected readonly hostEntries = signal<HostEntries | null>(null);
   protected readonly hosts = signal<HostRow[]>([]);
   protected readonly secretsList = signal<SecretRow[]>([]);
@@ -1162,7 +1176,7 @@ export class CapabilityServerPageComponent {
     });
   });
   protected readonly holders = computed<HolderLink[]>(() =>
-    (this.usage()[this.serverId()] ?? []).map(holderLink),
+    (this.usage()?.[this.serverId()] ?? []).map(holderLink),
   );
   protected readonly ownedSecrets = computed(() =>
     this.secretsList().filter((s) =>
@@ -1275,7 +1289,7 @@ export class CapabilityServerPageComponent {
             }
             this.usage.set(by);
           })
-          .catch(() => this.usage.set({})),
+          .catch(() => this.usage.set(null)),
       );
     }
     if (this.access.can("GET /api/capability-servers/host-entries")) {
@@ -1370,13 +1384,11 @@ export class CapabilityServerPageComponent {
     if (!s || !f || !config) return;
     const id = f.id.trim();
     if (id !== s.id) {
-      const items = this.holders();
+      const items = this.usage() ? this.holders() : null;
       this.confirmReq.set({
         title: "Rename this capability server?",
-        message: items.length
-          ? `Renaming ${s.id} to ${id} leaves these grants naming an ID that no longer resolves:`
-          : `Rename ${s.id} to ${id}? Nothing grants it now; any grant written with the old ID will no longer resolve.`,
-        items,
+        message: renameMessage(s.id, id, items),
+        items: items ?? [],
         itemsLabel: "Grants naming the old ID",
         accept: "Rename",
         destructive: true,
@@ -1640,13 +1652,11 @@ export class CapabilityServerPageComponent {
   protected confirmRemove(): void {
     const s = this.server();
     if (!s) return;
-    const items = this.holders();
+    const items = this.usage() ? this.holders() : null;
     this.confirmReq.set({
       title: "Remove capability server?",
-      message: items.length
-        ? `Remove ${s.id}? Its own secrets go with it, and these grants can no longer be used:`
-        : `Remove ${s.id}? Nothing grants it now. Its own secrets go with it.`,
-      items,
+      message: removeMessage(s.id, items),
+      items: items ?? [],
       itemsLabel: "Grants on this server",
       accept: "Remove",
       destructive: true,

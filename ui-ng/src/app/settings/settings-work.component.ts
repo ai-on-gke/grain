@@ -45,6 +45,7 @@ import {
   type CapabilityHolder,
   type HolderLink,
   holderLink,
+  removeMessage,
   serverPath,
 } from "./capability-server";
 import type { SettingsSectionId } from "./settings-sections";
@@ -2218,7 +2219,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   // The confirm lists what holds a grant on the server, each linked to
   // where it is changed, as the server's own page does.
   protected async confirmRemoveCapServer(id: string): Promise<void> {
-    let items: HolderLink[] = [];
+    // null: who holds it could not be read, which the confirm says
+    // rather than claiming nothing grants it.
+    let items: HolderLink[] | null = null;
     if (this.access.can("GET /api/capability-servers/usage")) {
       try {
         const rows = await this.api.get<
@@ -2232,10 +2235,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
     this.confirmReq.set({
       title: "Remove capability server?",
-      message: items.length
-        ? `Remove ${id}? Its own secrets go with it, and these grants can no longer be used:`
-        : `Remove ${id}? Nothing grants it now. Its own secrets go with it.`,
-      items,
+      message: removeMessage(id, items),
+      items: items ?? [],
       itemsLabel: "Grants on this server",
       accept: "Remove",
       destructive: true,

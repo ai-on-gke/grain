@@ -217,8 +217,10 @@ test("gcp's permission sets say keyless or key mode, and key-only fields follow 
     "No credential mode stored",
   );
   // A new set starts keyless, with no key pool to size.
+  const n = await sets.locator("fieldset.cap-item").count();
   await form.getByTestId("add-permission_sets").click();
-  const n = (await sets.locator("fieldset.cap-item").count()) - 1;
+  // The new set is the last one: wait for it to render before reading it.
+  await expect(sets.locator("fieldset.cap-item")).toHaveCount(n + 1);
   const item = form.getByTestId(`cfg-permission_sets-${n}`);
   await expect(form.getByTestId(`gcp-mode-${n}`)).toContainText("Keyless");
   await expect(
@@ -451,4 +453,28 @@ test("connection edits place a server on a host, rename it after a confirm, and 
     }
     await request.delete("/api/secrets/walk-page-token");
   }
+});
+
+test("a usage read that fails says so rather than that nothing grants the server", async ({
+  page,
+}) => {
+  await page.route("**/api/capability-servers/usage**", (r) =>
+    r.fulfill({ status: 500, body: "usage store down" }),
+  );
+  await page.goto(pagePath(CLOUD));
+  await expect(page.getByTestId("capability-usage-unknown")).toContainText(
+    "could not be read",
+  );
+  await expect(page.getByTestId("capability-usage-empty")).toHaveCount(0);
+  // Remove's confirm says the same, from the page and from the table.
+  await page.getByTestId("remove-server-btn").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("could not be read");
+  await expect(dialog).not.toContainText("Nothing grants");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await page.goto("/next/settings/capabilities");
+  await page.getByTestId(`remove-cap-server-${CLOUD}`).click();
+  await expect(dialog).toContainText("could not be read");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
 });
