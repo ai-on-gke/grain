@@ -333,7 +333,7 @@ func (r *AdoptionReport) describe() string {
 	}
 	if unexpected > 0 {
 		which := "Any lost run"
-		if len(expected) > 0 {
+		if len(expected) > 0 || setup > 0 {
 			which = "Any other lost run"
 		}
 		b.WriteString("\n" + which + " is a regression: a CLI whose run location carries it across a " +
