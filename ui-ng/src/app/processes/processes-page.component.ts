@@ -96,6 +96,19 @@ import {
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
 import { MarkdownDirective } from "../shared/code-highlight";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
+
+// A repository a grants picker can ask the capability policy about: a
+// typed owner/name, not one half-typed.
+const OWNER_NAME = /^[^/\s]+\/[^/\s]+$/;
+
+function sameGrants(
+  a: readonly string[],
+  b: readonly string[] | undefined,
+): boolean {
+  const bb = b ?? [];
+  return a.length === bb.length && a.every((g, i) => g === bb[i]);
+}
 
 const DEFAULT_QA_FLOW_REFS = [
   "engineering-workflow-v4@1",
@@ -210,6 +223,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     DialogTrapDirective,
     PillSelectComponent,
     MarkdownDirective,
+    GrantsPickerComponent,
     QaFlowsPanelComponent,
   ],
   encapsulation: ViewEncapsulation.None,
@@ -2255,6 +2269,17 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 (input)="sDraftDesc.set($any($event.target).value)"
               ></textarea>
             </label>
+            <div class="field">
+              <span>Capabilities &amp; grants</span>
+              <g-grants-picker
+                testid="sched-grants"
+                [held]="sDraftCapabilities()"
+                [repo]="sDraftPolicyRepo()"
+                [judgeRun]="!!sDraftPolicyRepo()"
+                [disabled]="submitting()"
+                (heldChange)="sDraftCapabilities.set($event)"
+              />
+            </div>
           }
 
           <div class="proc-field-grid">
@@ -2823,6 +2848,17 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </div>
         }
 
+        <div class="field">
+          <span>Capabilities &amp; grants</span>
+          <g-grants-picker
+            testid="tmpl-grants"
+            [held]="tDraftCapabilities()"
+            [repo]="tDraftPolicyRepo()"
+            [judgeRun]="!!tDraftPolicyRepo()"
+            [disabled]="submitting()"
+            (heldChange)="tDraftCapabilities.set($event)"
+          />
+        </div>
         @if (!editingTemplate()?.declaredIn && !editingTemplate()?.system) {
           <div class="field">
             <span>Software workflow</span>
@@ -3354,6 +3390,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftTemplateId = signal("");
   protected readonly sDraftSuiteId = signal("");
   protected readonly sDraftRepo = signal("");
+  // The grants a prompt schedule files its tasks with; a template or
+  // suite schedule takes the template's own.
+  protected readonly sDraftCapabilities = signal<string[]>([]);
+  protected readonly sDraftPolicyRepo = computed(() => {
+    const r = this.sDraftRepo().trim();
+    return OWNER_NAME.test(r) ? r : undefined;
+  });
   protected readonly schedRepoOptions = computed<PillOption[]>(() => [
     { value: "", label: "Choose configured repository…" },
     ...this.store.knownRepos().map((r) => ({ value: r, label: r })),
@@ -3393,6 +3436,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftParamsCsv = signal("");
   protected readonly tDraftFields = signal<TemplateField[]>([]);
   protected readonly tDraftAutoMerge = signal(false);
+  protected readonly tDraftCapabilities = signal<string[]>([]);
+  // A template with no bound repository serves tasks on any, so its
+  // grants show the policy's verdict for agent tasks at large.
+  protected readonly tDraftPolicyRepo = computed(() => {
+    const r = this.tDraftRepo().trim();
+    return OWNER_NAME.test(r) ? r : undefined;
+  });
   protected readonly tDraftQaFlowRef = signal("");
 
   // Create/Edit suite dialog state
@@ -4490,6 +4540,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftTemplateId.set(existing.templateId || "");
       this.sDraftSuiteId.set(existing.suiteId || "");
       this.sDraftRepo.set(existing.repo || "");
+      this.sDraftCapabilities.set([...(existing.capabilities ?? [])]);
       this.sDraftBase.set(existing.base ?? "");
       this.sDraftKind.set(existing.recurrence?.kind || "daily");
       this.sDraftEveryMin.set(existing.recurrence?.everyNMinutes || 15);
@@ -4522,6 +4573,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftTemplateId.set("");
       this.sDraftSuiteId.set("");
       this.sDraftRepo.set(this.store.knownRepos()[0] || "");
+      this.sDraftCapabilities.set([]);
       this.sDraftBase.set("main");
       this.sDraftKind.set("daily");
       this.sDraftEveryMin.set(15);
@@ -4639,7 +4691,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     } else {
       baseReq.title = this.sDraftTitle().trim();
       baseReq.description = this.sDraftDesc().trim();
-      baseReq.capabilities = [];
+      baseReq.capabilities = this.sDraftCapabilities();
       baseReq.reads = [];
       baseReq.writes = [];
     }
@@ -4679,6 +4731,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     } else {
       patchReq.title = this.sDraftTitle().trim();
       patchReq.description = this.sDraftDesc().trim();
+      // Sent only when edited, so a save that never touched the grants
+      // leaves them exactly as stored.
+      if (!sameGrants(this.sDraftCapabilities(), editing.capabilities)) {
+        patchReq.capabilities = this.sDraftCapabilities();
+      }
       if (editing.templateId) {
         patchReq.templateId = "";
       }
@@ -4797,6 +4854,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set(clonedFields);
       this.tDraftParamsCsv.set(clonedFields.map((f) => f.name).join(", "));
       this.tDraftAutoMerge.set(existing.autoMerge);
+      this.tDraftCapabilities.set([...(existing.capabilities ?? [])]);
       this.tDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.tDraftName.set("");
@@ -4806,6 +4864,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set([]);
       this.tDraftParamsCsv.set("");
       this.tDraftAutoMerge.set(false);
+      this.tDraftCapabilities.set([]);
       this.tDraftQaFlowRef.set("");
     }
     this.tmplDialogOpen.set(true);
@@ -4876,6 +4935,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           repo: this.tDraftRepo().trim(),
           fields,
           autoMerge: this.tDraftAutoMerge(),
+          ...(sameGrants(this.tDraftCapabilities(), editing.capabilities)
+            ? {}
+            : { capabilities: this.tDraftCapabilities() }),
           revision: editing.revision,
         };
         if (qaFlowRef || editing.qaFlowRef) {
@@ -4896,7 +4958,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           repo: this.tDraftRepo().trim(),
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
-          capabilities: [],
+          capabilities: this.tDraftCapabilities(),
           reads: [],
           writes: [],
           customFields: {},

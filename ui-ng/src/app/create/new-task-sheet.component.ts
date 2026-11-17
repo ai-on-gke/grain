@@ -850,6 +850,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
               [offered]="offeredCapabilities()"
               [held]="effectiveCapabilities()"
               [repo]="repoForAccess()"
+              [policyRepo]="policyRepo()"
               [disabled]="busy()"
               (heldChange)="set('capabilities', $event)"
             />
@@ -1410,6 +1411,18 @@ export class NewTaskSheetComponent {
       label: b.name ? `${b.name} (${b.id})` : b.id,
     })),
   ]);
+
+  // policyRepo is the repository the task will be filed to, as submit()
+  // resolves it -- "Deployment default" is the default target, not no
+  // repository -- so the grants picker's verdicts are that run's (classic's
+  // policyTarget in NewTaskOverlay.jsx). null is a task with no repo.
+  protected readonly policyRepo = computed<string | null>(() => {
+    const d = this.draft();
+    const r =
+      this.selectedTemplate()?.repo ||
+      (d.repo === NO_REPO ? "" : d.repo || this.defaultTarget());
+    return r || null;
+  });
 
   protected readonly repoForAccess = computed(() => {
     const r = this.selectedTemplate()?.repo || this.draft().repo;

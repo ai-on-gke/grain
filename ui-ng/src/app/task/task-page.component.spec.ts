@@ -245,6 +245,9 @@ class FakeApi {
         ],
       });
     }
+    if (route === "GET /api/capability-methods") {
+      return Promise.resolve({ items: [] });
+    }
     this.transcripts.push(params?.number ?? "");
     return Promise.resolve({ transcript: `> run ${params?.number}\nok` });
   };

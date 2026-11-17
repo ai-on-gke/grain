@@ -107,3 +107,46 @@
   flex-wrap: wrap;
   max-width: 100%;
 }
+
+/* The capability policy's verdict on a row: a link to the policy card. */
+.grant-verdict {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  font-family: var(--grain-font-body);
+  font-size: 11px;
+  font-weight: 500;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.grant-verdict.is-warning {
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}
+
+.grant-verdict:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.grant-retired {
+  font-family: var(--grain-font-body);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11px;
+}
+
+.grant-verdict-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+.grant-verdict-note a {
+  color: var(--md-sys-color-primary);
+}

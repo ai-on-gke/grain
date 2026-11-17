@@ -17,26 +17,44 @@ import {
   Component,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   output,
   signal,
+  untracked,
 } from "@angular/core";
+import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   APIScopeSetRow,
   APIScopeSetsResponse,
   CapabilityMethod,
   CapabilityOption,
+  CapabilityRunKind,
   GrantCheck,
 } from "../api/models";
+import { RouterLink } from "@angular/router";
 import { AccessService } from "../services/access.service";
+import { RETIRED_IN_PROCESS } from "../settings/capability-retired";
 import {
   errorText,
   grantName,
   isApiCapability,
 } from "../sessions/session-helpers";
+import {
+  CAPABILITY_POLICY_FRAGMENT,
+  CAPABILITY_POLICY_PATH,
+  type CapabilityVerdict,
+  grantRef,
+  methodVerdict,
+} from "./capability-verdict";
 import { type PillOption, PillSelectComponent } from "./pill-select.component";
+
+// RETIRED_GRANT_HINT is what a held capability id this build no longer
+// offers says (classic's RETIRED_CAPABILITY_HINT, ui/src/state.js): the
+// row is kept so the grant can be taken off, which is all it is for.
+export const RETIRED_GRANT_HINT = "No longer offered — remove it";
 
 export interface GrantAttachEvent {
   // Simple capability toggle id (when toggling offered capabilities).
@@ -50,7 +68,7 @@ export interface GrantAttachEvent {
 
 @Component({
   selector: "g-grants-picker",
-  imports: [PillSelectComponent],
+  imports: [NgTemplateOutlet, PillSelectComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./grants-picker.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -70,6 +88,11 @@ export interface GrantAttachEvent {
             >
               {{ on ? "✓ " : "" }}{{ c.name || c.id }}
             </button>
+            @if (verdictFor(c.id); as v) {
+              <ng-container
+                *ngTemplateOutlet="verdictLink; context: { $implicit: v }"
+              />
+            }
           }
         </div>
       }
@@ -85,6 +108,17 @@ export interface GrantAttachEvent {
               [attr.data-testid]="'held-grant-' + $index"
             >
               <span [title]="g">{{ shortGrant(g) }}</span>
+              @if (verdictFor(g); as v) {
+                <ng-container
+                  *ngTemplateOutlet="verdictLink; context: { $implicit: v }"
+                />
+              } @else if (isRetired(g)) {
+                <span
+                  class="grant-retired"
+                  [attr.data-testid]="'retired-grant-' + $index"
+                  >{{ retiredHint }}</span
+                >
+              }
               @if (!disabled()) {
                 <button
                   type="button"
@@ -192,6 +226,19 @@ export interface GrantAttachEvent {
                     (input)="methodArgsJson.set($any($event.target).value)"
                   />
                 </div>
+                @if (verdictFor(selectedMethod()); as v) {
+                  <p
+                    class="grant-verdict-note"
+                    role="status"
+                    [attr.data-testid]="(testid() || 'gp') + '-method-verdict'"
+                    [attr.data-policy-verdict]="v.verdict"
+                  >
+                    This grant is {{ v.badge }}: {{ v.text }}.
+                    <a [routerLink]="policyPath" [fragment]="policyFragment"
+                      >Capability policy</a
+                    >
+                  </p>
+                }
               }
               @case ("raw") {
                 <div class="grants-builder-row">
@@ -240,6 +287,19 @@ export interface GrantAttachEvent {
         }
       }
     </div>
+
+    <ng-template #verdictLink let-v>
+      <a
+        class="grant-verdict"
+        [class.is-warning]="v.verdict === 'may_be_refused'"
+        [attr.data-policy-verdict]="v.verdict"
+        [attr.aria-label]="v.text + ' — open the Capability policy'"
+        [title]="v.text"
+        [routerLink]="policyPath"
+        [fragment]="policyFragment"
+        >{{ v.badge }}</a
+      >
+    </ng-template>
   `,
 })
 export class GrantsPickerComponent {
@@ -249,8 +309,23 @@ export class GrantsPickerComponent {
   readonly offered = input<readonly CapabilityOption[]>([]);
   readonly held = input<readonly string[]>([]);
   readonly repo = input<string | undefined>(undefined);
+  // policyRepo is the repository of the run the verdicts are judged for,
+  // where that is not the one access is checked against: the New task
+  // sheet files a task with no repository chosen to the deployment's
+  // default target, so that is the run to judge. null judges a run with
+  // no repository; left undefined it follows repo.
+  readonly policyRepo = input<string | null | undefined>(undefined);
   readonly disabled = input<boolean>(false);
   readonly testid = input<string>("");
+  // runKind is the kind of run these grants are for; every verdict is the
+  // policy's for that kind.
+  readonly runKind = input<CapabilityRunKind>("task");
+  // judgeRun asks the listing about the one run these grants go to (a
+  // task on repo, or one with no repo) so a verdict is that run's. Turn
+  // it off where the grants serve runs on any repository -- a template
+  // with no repository, the deployment's defaults -- to show the kind's
+  // verdict instead.
+  readonly judgeRun = input<boolean>(true);
 
   // Emits full updated string[] for state-list forms (Sessions, New Task),
   // AND granular attach/detach events for TaskDetail's POST .../capabilities!
@@ -270,6 +345,55 @@ export class GrantsPickerComponent {
   protected readonly checking = signal(false);
   protected readonly checkError = signal<string | null>(null);
   private loadedCatalogue = false;
+  private methodsKey = "";
+
+  protected readonly policyPath = CAPABILITY_POLICY_PATH;
+  protected readonly policyFragment = CAPABILITY_POLICY_FRAGMENT;
+  protected readonly retiredHint = RETIRED_GRANT_HINT;
+
+  constructor() {
+    // The methods (and the policy's verdict on each) are read as soon as
+    // the picker is shown, and again whenever the run they are judged for
+    // changes, so a held grant says it is refused before anybody opens
+    // the builder.
+    effect(() => {
+      const repo = this.repo();
+      const policy = this.policyRepo();
+      const judged = policy === undefined ? repo : policy || undefined;
+      const kind = this.runKind();
+      const judge = this.judgeRun();
+      untracked(() => void this.loadMethods(repo, judged, kind, judge));
+    });
+  }
+
+  protected readonly methodsByRef = computed(
+    () => new Map(this.methods().map((m) => [m.ref, m])),
+  );
+
+  protected verdictFor(grant: string): CapabilityVerdict | null {
+    if (!grant) return null;
+    return methodVerdict(
+      this.methodsByRef().get(grantRef(grant)),
+      this.runKind(),
+      this.judgeRun(),
+    );
+  }
+
+  // isRetired is a held bare capability id this build no longer offers
+  // (classic's capabilityRows): neither a toggle, a method, nor an API
+  // grant, kept as a row only so it can be removed.
+  protected isRetired(grant: string): boolean {
+    if (!grant || isApiCapability(grant) || grant.startsWith("api:")) {
+      return false;
+    }
+    if (grant.includes("#") || grant.includes("://")) return false;
+    if (this.offered().some((c) => c.id === grant)) return false;
+    // Where the picker was handed no offered list, only an id grain is
+    // known to have retired is called one.
+    return (
+      Object.hasOwn(RETIRED_IN_PROCESS, grant) || this.offered().length > 0
+    );
+  }
 
   protected readonly heldSet = computed(() => new Set(this.held()));
 
@@ -304,13 +428,23 @@ export class GrantsPickerComponent {
       }));
   });
 
+  // Every method is listed: one the policy refuses this run (or that only
+  // a CI job may hold) stays in the list, disabled, with the reason under
+  // it, rather than vanishing; one it may refuse says so.
   protected readonly methodOptions = computed<PillOption[]>(() =>
-    this.methods()
-      .filter((m) => !m.policyRefusal)
-      .map((m) => ({
+    this.methods().map((m) => {
+      const v = this.verdictFor(m.ref);
+      return {
         value: m.ref,
         label: m.description ? `${m.ref} — ${m.description}` : m.ref,
-      })),
+        ...(v
+          ? {
+              disabled: v.verdict !== "may_be_refused",
+              hint: `${v.badge}: ${v.text}`,
+            }
+          : {}),
+      };
+    }),
   );
 
   protected canReadCatalogue(): boolean {
@@ -362,20 +496,10 @@ export class GrantsPickerComponent {
     if (this.loadedCatalogue) return;
     this.loadedCatalogue = true;
     const repo = this.repo();
-    const query = repo
-      ? `kind=task&repo=${encodeURIComponent(repo)}`
-      : "kind=task";
-    const [setsRes, methodsRes] = await Promise.allSettled([
+    const [setsRes] = await Promise.allSettled([
       this.access.can("GET /api/api-scope-sets", repo)
         ? this.api.get<APIScopeSetsResponse>("GET /api/api-scope-sets")
         : Promise.resolve({ sets: [] }),
-      this.access.can("GET /api/capability-methods", repo)
-        ? this.api.get<{ items?: CapabilityMethod[] }>(
-            "GET /api/capability-methods",
-            undefined,
-            query,
-          )
-        : Promise.resolve({ items: [] }),
     ]);
     if (setsRes.status === "fulfilled") {
       const sets = setsRes.value?.sets ?? [];
@@ -384,22 +508,58 @@ export class GrantsPickerComponent {
         this.selectedApiSet.set(sets[0].name);
       }
     }
-    if (methodsRes.status === "fulfilled") {
-      const val = methodsRes.value as {
-        items?: CapabilityMethod[];
-        methods?: CapabilityMethod[];
-      };
+    this.pickDefaultMethod();
+    if (!this.selectedApiSet()) {
+      this.selectedApiSet.set(this.apiOptions()[0]?.value ?? "tasks-read");
+    }
+  }
+
+  private async loadMethods(
+    repo: string | undefined,
+    judged: string | undefined,
+    kind: CapabilityRunKind,
+    judge: boolean,
+  ): Promise<void> {
+    if (!this.access.can("GET /api/capability-methods", repo)) return;
+    const query = judge
+      ? judged
+        ? `kind=${kind}&repo=${encodeURIComponent(judged)}`
+        : `kind=${kind}`
+      : undefined;
+    const key = query ?? "";
+    this.methodsKey = key;
+    try {
+      const val = (await this.api.get<unknown>(
+        "GET /api/capability-methods",
+        undefined,
+        query,
+      )) as
+        | CapabilityMethod[]
+        | { items?: CapabilityMethod[]; methods?: CapabilityMethod[] }
+        | null;
+      // A slower answer for a repo since left behind must not overwrite
+      // the verdicts of the one now chosen.
+      if (this.methodsKey !== key) return;
       const list = Array.isArray(val)
         ? val
         : (val?.items ?? val?.methods ?? []);
       this.methods.set(list);
-      if (!this.selectedMethod() && list[0]) {
-        this.selectedMethod.set(list[0].ref);
-      }
+      this.pickDefaultMethod();
+    } catch {
+      // The listing is a nicety here: without it the picker offers raw
+      // grants and the server still judges each one when it is added.
     }
-    if (!this.selectedApiSet()) {
-      this.selectedApiSet.set(this.apiOptions()[0]?.value ?? "tasks-read");
-    }
+  }
+
+  // pickDefaultMethod preselects the first method a grant can name, never
+  // one the builder lists disabled.
+  private pickDefaultMethod(): void {
+    const cur = this.methodOptions().find(
+      (o) => o.value === this.selectedMethod(),
+    );
+    if (cur && !cur.disabled) return;
+    const first = this.methodOptions().find((o) => !o.disabled);
+    if (first) this.selectedMethod.set(first.value);
   }
 
   protected async attachFromBuilder(): Promise<void> {
@@ -430,11 +590,16 @@ export class GrantsPickerComponent {
     } else if (mode === "method") {
       const ref = (
         this.selectedMethod() ||
-        this.methodOptions()[0]?.value ||
+        this.methodOptions().find((o) => !o.disabled)?.value ||
         ""
       ).trim();
       if (!ref) {
         this.checkError.set("Choose a capability method.");
+        return;
+      }
+      const v = this.verdictFor(ref);
+      if (v && v.verdict !== "may_be_refused") {
+        this.checkError.set(`${ref} is ${v.badge}: ${v.text}.`);
         return;
       }
       let parsedWith: Record<string, unknown> | undefined;
