@@ -34,6 +34,38 @@ g-task-detail {
   min-height: min(360px, 60dvh);
 }
 
+/* These hosts already fill a bounded stage/pane. Query its actual size
+   rather than the window, so a docked Director also narrows the layout. */
+g-task-page > g-task-detail,
+.tasks-detail-pane {
+  container: task-detail / size;
+}
+
+.task-page.is-details-view:focus-visible,
+.task-tab-body[role="region"]:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+/* Details is a document with controls at the end. In a short or narrow
+   pane, scroll it with the header instead of nesting a minimum-height tab
+   viewport below the fold. Roomy panes keep their fixed header and tabs. */
+@container task-detail (max-width: 599.95px) or (max-height: 699.95px) {
+  .task-page.is-details-view {
+    overflow-y: auto;
+  }
+
+  .task-page.is-details-view .task-layout {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+
+  .task-page.is-details-view .task-tab-body {
+    flex: none;
+    overflow: visible;
+  }
+}
+
 .task-header {
   padding-bottom: 12px;
 }
