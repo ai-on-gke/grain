@@ -2,10 +2,11 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and limits for later ports. It ships exactly two v1
+records repairs, coverage and limits for later ports. Its first slice shipped two v1
 types: `delivery` with
 `{"product":"report","semantics":"current_v1"}`, and `acknowledgment` with
-`{"mode":"explicit_receipt"}`. Other catalogue profiles/types are unsupported.
+`{"mode":"explicit_receipt"}`. Task #66 also ships the checks profiles and explanatory merge context described in
+[CI checks in shadow](gate-check-observations.md). Other catalogue profiles/types remain unsupported.
 Their closed schemas are pinned to the canonical catalogue and evaluated by pure
 local Go functions. There are no remote evaluator calls or private evaluator state.
 
@@ -14,7 +15,7 @@ acknowledgment, merge and submit operation. There is no authority migration or
 cutover code. Every binding is a nonrequired monitor; all effect flags are false.
 Diagnostic acceptance means the observation was recorded, not task readiness,
 successful completion, or permission to act. Work/actions arrays are always empty.
-Proposed receipt remediation and waits are inert descriptions with no buttons.
+Proposed remediation and waits are inert descriptions with no buttons.
 
 ## Shipped read surfaces
 
@@ -33,12 +34,12 @@ mutation/reevaluation/action/waiver endpoint or MCP evaluator.
 
 Collection/display is disabled by default. A deployment-local explicit allowlist
 selects at most 32 task IDs. There is no automatic cohort expansion or lifecycle
-hook. Choose a small representative set of current finite analysis/report tasks,
-including a report awaiting receipt and a report acknowledged by a verified person.
+hook. Choose a small representative set of current finite analysis/report tasks or
+CI changes; see the checks guide for source coverage and limitations. For reports, include a report awaiting receipt and a report acknowledged by a verified person.
 Optionally include a code/standing task to inspect the explained unknown state;
 never interpret that acknowledgment observation as a code completion requirement.
 
-Only noninteractive `analyze` tasks without changes, goals, standing/keep-running
+The report/receipt monitors apply only to noninteractive `analyze` tasks without changes, goals, standing/keep-running
 behavior, console hosting, or report-only child auto-closure are applicable. A
 successful recorded no-work invocation is excluded. Unsupported shapes return
 unknown with a not-applicable explanation for both monitors.
@@ -61,8 +62,9 @@ fallback or
 automation closes are unknown, not synthetic receipts. A new report/run, question,
 message, attachment, relevant task shape, or registry/config build changes the
 source fence; old receipt observations cannot silently cover a changed report.
-These local immutable body/comment and close-event records are the only supported
-evidence. No permission revisions or complete remote evidence are claimed.
+For report/receipt these local immutable body/comment and close-event records are
+the supported evidence; no receipt permission revisions are claimed. CI uses its
+separate scoped, versioned collector described in the checks guide.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -214,3 +216,6 @@ diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.
+
+CI-specific runtime profiles, source bounds, version fences, comparison differences
+and validation are documented in [CI checks in shadow](gate-check-observations.md).

@@ -24,12 +24,14 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 ## Implemented observation-only subset
 
 The [runtime observation guide](../../../docs/gate-observations.md) describes the
-first shipped slice: exactly `delivery/report/current_v1` and
-`acknowledgment/explicit_receipt`, both v1 nonrequired monitors. Ordinary authorized
+report/receipt slice plus [Task #66's checks port](../../../docs/gate-check-observations.md):
+`delivery/report/current_v1`, `acknowledgment/explicit_receipt`, and current/explicit
+legacy `checks` v1, all nonrequired monitors. Typed CI modes, base-owned definitions,
+complete collection evidence and inert merge context are now projected. Ordinary authorized
 task reads and the Angular task detail carry the optional closed observation_view
 and bounded sibling diagnostic history. There is no contract/decision authority,
 `?view=gates` implementation, discovery/mutation/action/waiver API or migration.
-Body-only finite analysis tasks are selected by a disabled-by-default deployment
+Finite analysis tasks and scoped CI changes are selected by the same disabled-by-default deployment
 allowlist; attachment-bearing/unsupported shapes and missing provenance are unknown.
 The [independent framework review](../../../docs/gate-observation-review.md) records
 repair coverage and stable extension rules, including conservative receipt ordering,

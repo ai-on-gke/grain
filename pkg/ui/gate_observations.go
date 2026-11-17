@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -62,11 +63,57 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 		return nil, nil
 	}
 	// A failed diagnostic never becomes a failed ordinary task read.
-	readCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	collectCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	now := c.now()
-	v, d, err := c.Store.ObserveTaskGates(readCtx, id, now)
+	backoffCtx, stopBackoff := context.WithTimeout(ctx, 50*time.Millisecond)
+	cached, history, cacheErr := c.Store.GateObservationRetry(backoffCtx, id, now)
+	stopBackoff()
+	if cacheErr == nil && cached != nil {
+		if !observationVisible(ctx, cached) {
+			return nil, nil
+		}
+		if history != nil {
+			for _, sample := range history.History {
+				if !observationVisible(ctx, &sample.View) {
+					return nil, nil
+				}
+			}
+		}
+		return cached, history
+	}
+	// Domain reads happen before acquiring the diagnostic writer lock.
+	fence, checks, err := c.collectGateChecks(collectCtx, id, now)
 	if err == nil {
+		for _, f := range checks {
+			for _, source := range f.Sources {
+				if source.Error {
+					err = fmt.Errorf("CI observation source unavailable")
+				}
+			}
+		}
+	}
+	if errors.Is(err, errGateCheckDenied) {
+		return nil, nil
+	}
+	readCtx, stopRead := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer stopRead()
+	var v *gates.ObservationView
+	var d *model.GateObservationDiagnostics
+	if err == nil {
+		v, d, err = c.Store.ObserveTaskGatesWithChecks(readCtx, id, now, fence, checks)
+	}
+	if err == nil {
+		if !observationVisible(ctx, v) {
+			return nil, nil
+		}
+		if d != nil {
+			for _, sample := range d.History {
+				if !observationVisible(ctx, &sample.View) {
+					return nil, nil
+				}
+			}
+		}
 		return v, d
 	}
 	// No raw database errors, comment bodies, principals or credentials escape.
@@ -79,5 +126,22 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v)
 		stop()
 	}
+	if !observationVisible(ctx, v) {
+		return nil, nil
+	}
 	return v, nil
+}
+
+// Recheck every persisted resource's display scope, including retained history.
+// A task's links and a viewer's grants may have changed since collection.
+func observationVisible(ctx context.Context, v *gates.ObservationView) bool {
+	if v == nil {
+		return true
+	}
+	for _, b := range v.Bindings {
+		if b.Type == "checks" && requirePullRequestScopes(ctx, b.Subject.Repository, APIScope("ci:read")) != nil {
+			return false
+		}
+	}
+	return true
 }

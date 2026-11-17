@@ -124,6 +124,12 @@ import type {
               ·
               {{ entry.result.status }}
             </h4>
+            @if (entry.result.type === "checks") {
+              <p class="muted">
+                Shadow CI prediction ·
+                {{ checksLabel(entry.result.binding_id) }}
+              </p>
+            }
             <p>{{ entry.result.summary }}</p>
             @if (entry.result.error; as error) {
               <p>Observation error: {{ error.code }} · {{ error.message }}</p>
@@ -139,7 +145,10 @@ import type {
             @if (entry.result.human_text) {
               <p>{{ entry.result.human_text }}</p>
             }
-            @for (wait of entry.result.waits; track wait.event) {
+            @if (entry.result.agent_text) {
+              <p>{{ entry.result.agent_text }}</p>
+            }
+            @for (wait of entry.result.waits; track wait.key ?? $index) {
               <p>
                 Predicted wait only: {{ wait.event }} · owned by
                 {{ wait.owner }} · evidence expires
@@ -147,7 +156,11 @@ import type {
                 installed.
               </p>
             }
-            @if (!entry.result.human_text && !entry.result.waits.length) {
+            @if (
+              !entry.result.human_text &&
+              !entry.result.agent_text &&
+              !entry.result.waits.length
+            ) {
               <p class="muted">No next action or wait predicted.</p>
             }
             <details>
@@ -166,7 +179,10 @@ import type {
                   <span class="version">{{ dep.version }}</span>
                 </p>
               }
-              @for (evidence of entry.result.evidence; track evidence.kind) {
+              @for (
+                evidence of entry.result.evidence;
+                track evidence.kind + "/" + evidence.id
+              ) {
                 <p>
                   {{ evidence.kind }} #{{ evidence.id }} ·
                   <span class="version">{{ evidence.version }}</span>
@@ -238,6 +254,24 @@ export class TaskObservationsComponent {
   }
   readonly observations = input<GateObservations>();
   readonly diagnostics = input<GateObservationDiagnostics>();
+  checksLabel(id?: string): string {
+    const binding = this.observations()?.bindings.find((b) =>
+      id?.endsWith("/" + b.id),
+    );
+    const profile = binding?.origin?.imported
+      ? "Legacy CI import"
+      : "Current CI policy";
+    const subject = binding?.subject;
+    return subject
+      ? profile +
+          " · " +
+          subject.repository +
+          " · " +
+          subject.change_kind +
+          " " +
+          subject.id
+      : profile;
+  }
   stale(until: string): boolean {
     return Date.parse(until) <= this.now();
   }

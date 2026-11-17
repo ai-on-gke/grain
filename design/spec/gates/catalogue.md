@@ -24,14 +24,15 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 ## Runtime coverage after the initial framework review
 
 The catalogue above remains the full v1 contract, not an implementation claim.
-Task #61's delivered slice and Task #64's independent repairs implement only:
+Task #61's slice, Task #64's repairs, and Task #66's CI port implement:
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
 | `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
 | `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
+| `checks` v1, `current_v1` and explicitly imported `legacy_ci_v1` | Nonrequired change monitors; typed effective/github/grain/both/provider/none modes, inherited/extra required identities, complete bounded exact-head CI collections and base-owned definitions. Legacy empty-clock, recorded Grain status/narrowing and budget-exception comparisons are explicitly labeled. Merge context remains separate and inert. See [CI checks coverage](../../../docs/gate-check-observations.md). |
 
-All other profiles and the other ten types remain unsupported by this registry.
+Other delivery/acknowledgment profiles and the other nine types remain unsupported by this registry.
 These observations never add obligations, dispatch work, process messages or
 admit actions. See the [compatibility boundary](compatibility.md#implemented-observation-only-subset),
 [operator guide](../../../docs/gate-observations.md) and
