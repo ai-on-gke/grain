@@ -413,11 +413,17 @@ func securityHoldNote(ctx context.Context, store *model.Store, client github.Cli
 	return nil
 }
 
-// dropSecurityHoldOnFindings ends the hold on the change review was filed
-// against, when review left findings -- whichever review it was. A
-// declared review's findings hold the change for a human as surely as the
-// security review's do (noteFindingsOnReviewedTask), and a security review
-// finishing clean afterwards must not hand auto-merge back over them.
+// dropSecurityHoldOnFindings ends the security hold on the change review
+// was filed against, when review left findings. Only the change's own
+// security review (LinkSecurityReviewTask) owns that hold and records
+// GateSecurityReview findings. Another review -- the configured code
+// review (LinkReviewTask) or a path-trigger review (gatingTaskIDs) --
+// finishing with findings leaves the security hold alone: its findings
+// hold the change on its own gate (dropPathTriggerHoldOnFindings,
+// noteFindingsOnReviewedTask), and a security review finishing clean
+// afterwards still cannot hand auto-merge back over them. The one
+// exception is an unattributed review on a held change with no security
+// review recorded, which is treated as the security review.
 //
 // Called with the findings in hand, before the review's run is marked
 // completed, so SyncSecurityHolds can never read the review as finished
