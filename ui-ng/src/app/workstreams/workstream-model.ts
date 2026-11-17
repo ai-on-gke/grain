@@ -723,6 +723,7 @@ function resolveLineage(
 function nodeActivityText(t: Task): string {
   if (t.activity) return t.activity;
   if (t.questionSummary) return t.questionSummary;
+  if (t.noteSummary) return t.noteSummary;
   const block = submitBlock(t);
   if (block) return block;
   return "";
