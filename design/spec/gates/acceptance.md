@@ -72,7 +72,7 @@ sequenceDiagram
   G-->>A: Review unmet; remediation
   A-->>U: Blocked, no merge
   Note over A,G: Later authenticated clean review for H1
-  U->>A: Retry same intended action
+  U->>A: Refresh evidence, new request ID/key for same intended action
   A->>G: Revalidate complete current evidence
   G-->>A: Required guards met
   A->>A: Validate boundary, persist intent, dispatch fence
