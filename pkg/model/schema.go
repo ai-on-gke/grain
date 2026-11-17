@@ -691,7 +691,12 @@ import "strconv"
 // blast/complexity/triage tracking to `task_qa_check_run`.
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
-const SchemaVersion = 151
+// 152 adds `github_ci_job`.`event` and `head_repo` (model.GitHubCIJob.Event,
+// HeadRepo): the event that triggered the job's workflow run and the
+// repository its head came from, so the default-branch readings can leave
+// out a pull request's jobs, including one from a fork whose own branch is
+// named main (grain/task-4846).
+const SchemaVersion = 152
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
@@ -1118,6 +1123,8 @@ const gitHubCIJobTable = `CREATE TABLE IF NOT EXISTS ` + "`github_ci_job`" + ` (
   ` + "`via`" + `           TEXT     NOT NULL DEFAULT '',
   ` + "`recorded_at`" + `   DATETIME NOT NULL,
   ` + "`updated_at`" + `    DATETIME NOT NULL,
+  ` + "`event`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`head_repo`" + `     TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`repo`" + `, ` + "`check_run_id`" + `)
 )`
 
