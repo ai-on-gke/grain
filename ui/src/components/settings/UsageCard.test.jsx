@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
 import api from "../../api.js";
+import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 import UsageCard, { formatTokens } from "./UsageCard.jsx";
 
 const report = {
@@ -104,12 +105,20 @@ describe("UsageCard", () => {
           })
         : Promise.reject(new Error(`unexpected ${path}`)),
     );
-    render(<UsageCard showError={vi.fn()} />);
+    render(
+      <TimeZoneProvider zone="America/Los_Angeles">
+        <UsageCard showError={vi.fn()} />
+      </TimeZoneProvider>,
+    );
     const row = await screen.findByTestId("usage-row");
     expect(within(row).getByText("Paused (weekly limit)")).toBeTruthy();
     expect(within(row).getByTestId("usage-weekly").textContent).toBe(
       "9.0M / 9.0M~ · weekly limit reached",
     );
+    // Week reset column uses formatResetMoment (named timezone, no seconds).
+    const cells = within(row).getAllByRole("cell");
+    expect(cells[7].textContent).toContain("PST");
+    expect(cells[7].textContent).not.toMatch(/:\d{2}:\d{2}/);
   });
 
   it("shows each connection's budget, the rollup and the advisory", async () => {

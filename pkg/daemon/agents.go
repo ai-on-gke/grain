@@ -760,7 +760,7 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 		}
 		switch {
 		case !until.IsZero():
-			why = append(why, fmt.Sprintf("%s is paused until %s", m, pauseClock(until, req.pauseClockLocation())))
+			why = append(why, fmt.Sprintf("%s is paused until %s", m, pauseClock(now, until, req.pauseClockLocation())))
 		case onHost:
 			why = append(why, fmt.Sprintf("%s runs on the host, and the host agent is updating", m))
 		default:
@@ -784,9 +784,16 @@ func (r poolRequest) pauseClockLocation() *time.Location {
 }
 
 // pauseClock is at on loc's wall clock with the zone named -- "10:05 AM
-// PDT" -- so a reader need not translate from UTC to their own clock.
-func pauseClock(at time.Time, loc *time.Location) string {
-	return at.In(loc).Format("3:04 PM MST")
+// PDT" when it falls on today in loc, else "Nov 20, 10:05 AM PST" so a
+// multi-day weekly pause or next-day reset does not read as today.
+func pauseClock(now, at time.Time, loc *time.Location) string {
+	atLocal := at.In(loc)
+	ny, nm, nd := now.In(loc).Date()
+	ay, am, ad := atLocal.Date()
+	if ay == ny && am == nm && ad == nd {
+		return atLocal.Format("3:04 PM MST")
+	}
+	return atLocal.Format("Jan 2, 3:04 PM MST")
 }
 
 // addHostdBlocked counts one connection whose hostd cannot take a run.

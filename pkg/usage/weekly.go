@@ -56,14 +56,52 @@ const (
 // limit"), or a 7-day / per-week quota in another provider's words.
 var weeklyLimitPattern = regexp.MustCompile(`(?i)\bweekly\b|\b7[- ]day\b|\bper week\b`)
 
+// IsWeeklyReason reports whether a provider refusal message names a weekly
+// (7-day / per-week) quota rather than a short session interval.
+func IsWeeklyReason(reason string) bool {
+	return weeklyLimitPattern.MatchString(reason)
+}
+
+// providerResetPattern is the reset instant agent.UsageLimitError.Error
+// appends to a pause's reason ("... resets at 2026-11-20T03:00:00Z").
+var providerResetPattern = regexp.MustCompile(`resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))`)
+
+// ProviderResetAt is the reset instant a pause's reason says its provider
+// named, which for a weekly limit lies further out than the pause itself
+// (the orchestrator holds dispatch for a day at most). It is believed
+// only within one weekly cycle (plus a day of skew) after now: the text
+// can be agent-written, and what it teaches is an estimate, never a hold.
+func ProviderResetAt(reason string, now time.Time) (time.Time, bool) {
+	m := providerResetPattern.FindStringSubmatch(reason)
+	if m == nil {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, m[1])
+	if err != nil || !t.After(now) || t.After(now.Add(WeeklyWindow+24*time.Hour)) {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
+}
+
 // PauseHorizon is which of a scope's horizons a usage-limit pause says
 // it met: HorizonWeekly when the provider's refusal names its weekly
 // quota, else HorizonInterval.
 func PauseHorizon(p model.UsageLimitPause) string {
-	if weeklyLimitPattern.MatchString(p.Reason) {
+	if IsWeeklyReason(p.Reason) {
 		return HorizonWeekly
 	}
 	return HorizonInterval
+}
+
+// weeklyCycleBounds advances resetAt on the fixed WeeklyWindow cycle until
+// next is strictly after now, returning the start of the current week
+// (next - WeeklyWindow) and the upcoming reset (next).
+func weeklyCycleBounds(resetAt, now time.Time) (last, next time.Time) {
+	next = resetAt
+	for !next.After(now) {
+		next = next.Add(WeeklyWindow)
+	}
+	return next.Add(-WeeklyWindow), next
 }
 
 // weeklyCapacitySuffix marks a usage_capacity row holding a scope's

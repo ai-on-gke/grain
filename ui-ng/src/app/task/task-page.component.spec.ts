@@ -398,7 +398,12 @@ describe("TaskPageComponent", () => {
     const file = new File(["log-data"], "debug.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
+    await vi.waitFor(() => {
+      f.detectChanges();
+      expect(q(f, '[data-testid="staged-att-0"]')?.textContent).toContain(
+        "debug.txt",
+      );
+    });
 
     box.value = "Yes, fix both";
     box.dispatchEvent(new Event("input"));

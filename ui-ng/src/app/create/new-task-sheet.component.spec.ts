@@ -321,10 +321,12 @@ describe("NewTaskSheetComponent", () => {
     const file = new File(["repro log"], "repro.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
-    expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
-      "repro.txt",
-    );
+    await vi.waitFor(() => {
+      f.detectChanges();
+      expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
+        "repro.txt",
+      );
+    });
 
     // Expand Capabilities & repo context section and toggle capability + read repo.
     q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();

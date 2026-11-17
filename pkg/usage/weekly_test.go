@@ -181,3 +181,29 @@ func TestWeekOldRunsDoNotMoveTheIntervalEstimate(t *testing.T) {
 		t.Fatalf("weekly used = %d, want the old run counted in the week", a.WeeklyUsed)
 	}
 }
+
+// Account-wide learned weekly capacity (Model == "") still fires default-model
+// run-out warnings before the connection hits the wall, just as an account-wide
+// weekly pause already warns on the default model.
+func TestAccountWideWeeklyLimitWarnsOnDefaultModel(t *testing.T) {
+	in := Input{
+		Now: now, MaxWorkers: 4,
+		Runs: []model.RunUsage{
+			run("old", "claude-primary", "claude-opus-4-6", 6*time.Hour, 1900000),
+			run("recent", "claude-primary", "claude-opus-4-6", 30*time.Minute, 400000),
+		},
+		Capacities: []model.UsageCapacity{
+			{Connection: "claude-primary", Model: weeklyCapacitySuffix, Tokens: 2500000, Window: WeeklyWindow, ResetAt: now.Add(12 * time.Hour)},
+		},
+		DefaultModels:   []string{"claude-opus-4-6", "gemini-3.1-pro"},
+		ConnectionNames: map[string]string{"claude-primary": "Claude Primary"},
+	}
+	rep := Compute(in)
+	if len(rep.Warnings) != 1 {
+		t.Fatalf("warnings = %q, want 1 account-wide weekly run-out warning", rep.Warnings)
+	}
+	want := "default model claude-opus-4-6 on Claude Primary runs out of its weekly limit in ~30m, before its weekly reset; next on the default list: gemini-3.1-pro"
+	if rep.Warnings[0] != want {
+		t.Fatalf("warning = %q, want %q", rep.Warnings[0], want)
+	}
+}

@@ -117,8 +117,16 @@ func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLi
 			window, start = c.Window, now.Add(-c.Window)
 		}
 		// The window began no earlier than the last reset grain knows of.
-		if !c.ResetAt.IsZero() && c.ResetAt.After(start) && c.ResetAt.Before(now) {
-			start = c.ResetAt
+		// A weekly quota recurs on a fixed 7-day cycle, so a known reset
+		// from an earlier week still pins the start of this one.
+		if !c.ResetAt.IsZero() {
+			last := c.ResetAt
+			if horizon == HorizonWeekly {
+				last, _ = weeklyCycleBounds(c.ResetAt, now)
+			}
+			if last.After(start) && last.Before(now) {
+				start = last
+			}
 		}
 	}
 	runs, err := store.RunUsagesSince(ctx, start)
@@ -127,6 +135,9 @@ func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLi
 	}
 	var used int64
 	for _, r := range runs {
+		if r.FinishedAt.Before(start) {
+			continue
+		}
 		if r.Connection == pause.Connection && (m == "" || norm(r.Model) == m) {
 			used += r.Billable()
 		}
@@ -134,8 +145,14 @@ func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLi
 	if used <= 0 {
 		return nil
 	}
+	reset := pause.Until
+	if horizon == HorizonWeekly {
+		if named, ok := ProviderResetAt(pause.Reason, now); ok {
+			reset = named
+		}
+	}
 	return store.RecordUsageCapacity(ctx, model.UsageCapacity{
-		Connection: pause.Connection, Model: key, Tokens: used, Window: window, ObservedAt: now, ResetAt: pause.Until,
+		Connection: pause.Connection, Model: key, Tokens: used, Window: window, ObservedAt: now, ResetAt: reset,
 	})
 }
 

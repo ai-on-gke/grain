@@ -970,6 +970,8 @@ describe("FleetPageComponent", () => {
           connection: "gemini-pro",
           model: "gemini-2.5-pro",
           pausedUntil: "2026-11-15T12:00:00Z",
+          pauseHorizon: "weekly",
+          weeklyPausedUntil: "2026-11-15T12:00:00Z",
         },
       ],
     });
@@ -1033,5 +1035,7 @@ describe("FleetPageComponent", () => {
     await settle(fixture);
     expect(access.rawConfig()?.agentPause?.paused).toBe(false);
     expect(access.usage()?.scopes?.[0]?.pausedUntil).toBeUndefined();
+    expect(access.usage()?.scopes?.[0]?.weeklyPausedUntil).toBeUndefined();
+    expect(access.usage()?.scopes?.[0]?.pauseHorizon).toBeUndefined();
   });
 });

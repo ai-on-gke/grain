@@ -480,11 +480,8 @@ func computeScope(in Input, k scopeKey, lim limits) Scope {
 			// The weekly quota resets on a fixed weekly cycle: a reset
 			// already past puts the next one a week after it (or after
 			// the latest one since), and the week began at the last.
-			next := c.ResetAt
-			for !next.After(now) {
-				next = next.Add(WeeklyWindow)
-			}
-			if last := next.Add(-WeeklyWindow); last.After(weeklyStart) {
+			last, next := weeklyCycleBounds(c.ResetAt, now)
+			if last.After(weeklyStart) {
 				weeklyStart = last
 			}
 			weeklyReset, knownWeeklyReset = &next, true
@@ -662,6 +659,12 @@ func messages(in Input, rep Report) (advisories, warnings []string) {
 		}
 		advisories = append(advisories, line)
 	}
+	wholeByConn := map[string]Scope{}
+	for _, s := range rep.Scopes {
+		if s.Model == "" {
+			wholeByConn[s.Connection] = s
+		}
+	}
 	for i, m := range in.DefaultModels {
 		m = norm(m)
 		for _, s := range rep.Scopes {
@@ -672,6 +675,27 @@ func messages(in Input, rep Report) (advisories, warnings []string) {
 			if i+1 < len(in.DefaultModels) {
 				next = in.DefaultModels[i+1]
 			}
+			// Account-wide limits (e.g. Claude's plan weekly or 5h quota)
+			// live on the connection's Model == "" scope; include that
+			// scope's run-out alongside any per-model limit on s so default
+			// model warnings still fire before the connection hits the wall.
+			whole, hasWhole := wholeByConn[s.Connection]
+			var weeklyRunOut *time.Time
+			if weeklyWarns(s) {
+				weeklyRunOut = s.WeeklyRunsOutAt
+			}
+			if hasWhole && weeklyWarns(whole) && (weeklyRunOut == nil || whole.WeeklyRunsOutAt.Before(*weeklyRunOut)) {
+				weeklyRunOut = whole.WeeklyRunsOutAt
+			}
+			var intervalRunOut *time.Time
+			intervalWin := s.window
+			if intervalWarns(s) {
+				intervalRunOut = s.RunsOutAt
+			}
+			if hasWhole && intervalWarns(whole) && (intervalRunOut == nil || whole.RunsOutAt.Before(*intervalRunOut)) {
+				intervalRunOut = whole.RunsOutAt
+				intervalWin = whole.window
+			}
 			switch {
 			case s.WeeklyPausedUntil != nil:
 				warnings = append(warnings, fmt.Sprintf("default model %s on %s hit its weekly limit and is paused until %s; work falls back to %s",
@@ -681,12 +705,12 @@ func messages(in Input, rep Report) (advisories, warnings []string) {
 					s.Model, s.connectionLabel(), shortWindow(s.window), untilText(now, *s.PausedUntil), next))
 			// Each horizon warns when it runs out before its own reset;
 			// where both would, the one that runs out first is said.
-			case weeklyWarns(s) && (!intervalWarns(s) || s.WeeklyRunsOutAt.Before(*s.RunsOutAt)):
+			case weeklyRunOut != nil && (intervalRunOut == nil || weeklyRunOut.Before(*intervalRunOut)):
 				warnings = append(warnings, fmt.Sprintf("default model %s on %s runs out of its weekly limit in %s, before its weekly reset; next on the default list: %s",
-					s.Model, s.connectionLabel(), roughly(s.WeeklyRunsOutAt.Sub(now)), next))
-			case intervalWarns(s):
+					s.Model, s.connectionLabel(), roughly(weeklyRunOut.Sub(now)), next))
+			case intervalRunOut != nil:
 				warnings = append(warnings, fmt.Sprintf("default model %s on %s runs out of its %s interval limit in %s, before its reset; next on the default list: %s",
-					s.Model, s.connectionLabel(), shortWindow(s.window), roughly(s.RunsOutAt.Sub(now)), next))
+					s.Model, s.connectionLabel(), shortWindow(intervalWin), roughly(intervalRunOut.Sub(now)), next))
 			}
 		}
 	}

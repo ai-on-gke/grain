@@ -227,5 +227,132 @@ describe("dispatch-status", () => {
     );
     expect(text).toContain("Nov 16");
     expect(text).toContain("(in 57h)");
+
+    // Dated 12-hour UTC reset with comma (daemon fallback notice format).
+    const dated12h = formatNoticeText(
+      "claude-opus-4-6 is paused until Nov 16, 3:00 AM UTC",
+      nowMs,
+      "America/Los_Angeles",
+    );
+    expect(dated12h).toContain("Nov 15");
+    expect(dated12h).toContain("7:00 PM PST");
+    expect(dated12h).toContain("(in 57h)");
+    expect(dated12h).toContain("[Nov 16, 3:00 AM UTC]");
+  });
+
+  it("names a weekly agentPause headline when both agentPause and usage scopes report a weekly limit", () => {
+    const res = summarizeDispatchStatus(
+      {
+        agentPause: {
+          paused: true,
+          until: "2026-11-16T03:00:00Z",
+          reason: "You've hit your weekly limit · resets Nov 16, 3:00am (UTC)",
+          pauses: [
+            {
+              connection: "claude-primary",
+              connectionName: "Claude Primary",
+              until: "2026-11-16T03:00:00Z",
+              reason:
+                "You've hit your weekly limit · resets Nov 16, 3:00am (UTC)",
+              secondsRemaining: 57 * 3600,
+              canLift: true,
+            },
+          ],
+        },
+      },
+      {
+        warnings: [],
+        scopes: [
+          {
+            connection: "claude-primary",
+            connectionName: "Claude Primary",
+            model: "",
+            pausedUntil: "2026-11-16T03:00:00Z",
+            pauseHorizon: "weekly",
+            weeklyPausedUntil: "2026-11-16T03:00:00Z",
+          },
+        ],
+      },
+      nowMs,
+      "America/Los_Angeles",
+    );
+    expect(res?.tone).toBe("error");
+    expect(res?.headline).toBe(
+      "Weekly model quota exceeded — Claude Primary development paused",
+    );
+    expect(res?.resetText).toContain("Nov 15");
+    expect(res?.resetText).toContain("PST");
+    expect(res?.resetText).toContain("in 57h");
+  });
+
+  it("does not call an interval pause weekly because another connection's scope met its weekly limit", () => {
+    const res = summarizeDispatchStatus(
+      {
+        agentPause: {
+          paused: true,
+          until: "2026-11-14T03:00:00Z",
+          reason: "usage limit reached",
+          pauses: [
+            {
+              connection: "gemini-key",
+              connectionName: "Gemini key",
+              model: "gemini-pro",
+              until: "2026-11-14T03:00:00Z",
+              reason: "usage limit reached",
+              canLift: true,
+            },
+          ],
+        },
+      },
+      {
+        warnings: [],
+        scopes: [
+          {
+            connection: "claude-primary",
+            model: "",
+            pausedUntil: "2026-11-16T03:00:00Z",
+            pauseHorizon: "weekly",
+            weeklyPausedUntil: "2026-11-16T03:00:00Z",
+          },
+          {
+            connection: "gemini-key",
+            model: "gemini-pro",
+            pausedUntil: "2026-11-14T03:00:00Z",
+            pauseHorizon: "interval",
+          },
+        ],
+      },
+      nowMs,
+      "UTC",
+    );
+    expect(res?.headline).toBe(
+      "Model quota exceeded on Gemini key · gemini-pro (fallback active)",
+    );
+  });
+
+  it("formats reset times accurately across spring-forward and fall-back DST transitions", () => {
+    // 2026 US spring forward: Mar 8 at 02:00 PST -> 03:00 PDT (10:00Z).
+    const beforeSpring = Date.parse("2026-03-08T09:00:00Z"); // 1:00 AM PST
+    const afterSpring = "2026-03-08T11:30:00Z"; // 4:30 AM PDT (2h 30m later)
+    const springOut = formatLocalReset(
+      afterSpring,
+      undefined,
+      beforeSpring,
+      "America/Los_Angeles",
+    );
+    expect(springOut).toContain("4:30 AM PDT");
+    expect(springOut).toContain("(in 2h 30m)");
+
+    // 2026 US fall back: Nov 1 at 02:00 PDT -> 01:00 PST (09:00Z).
+    const beforeFall = Date.parse("2026-11-01T08:00:00Z"); // 1:00 AM PDT
+    const afterFall = "2026-11-01T10:30:00Z"; // 2:30 AM PST (2h 30m later)
+    const fallOut = formatLocalReset(
+      afterFall,
+      undefined,
+      beforeFall,
+      "America/Los_Angeles",
+    );
+    expect(fallOut).toContain("2:30 AM PST");
+    expect(fallOut).toContain("(in 2h 30m)");
   });
 });

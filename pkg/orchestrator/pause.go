@@ -44,9 +44,11 @@ var errUsageLimit = errors.New("orchestrator: the agent's usage limit was reache
 //     the deployment is not hammering a provider that just said no,
 //     short enough that a limit which has in fact already lifted costs
 //     one idle quarter of an hour rather than an evening.
+//
 //   - minUsageLimitPause is the floor under a provider that named a very
 //     short delay. The point of pausing is to stop the queue walking
 //     into the same wall run after run, and a few seconds does not.
+//
 //   - maxUsageLimitPause is the ceiling over one that named a very long
 //     one -- or over a reset instant this code misread. A day covers the
 //     longest window a provider has been seen to name (agy's "Resets in
@@ -54,6 +56,14 @@ var errUsageLimit = errors.New("orchestrator: the agent's usage limit was reache
 //     A deployment idling for a wrong day is recoverable; one idling
 //     until 2286 because an epoch was parsed in the wrong unit is not
 //     something anybody would think to look for.
+//
+//     It holds for a weekly refusal too ("You've hit your weekly limit ·
+//     resets Nov 20, 3am"). The refusal's text can be an agent-written
+//     final answer, so trusting its days-away reset would let a run idle
+//     a connection for a week; a day costs one more refused run per day
+//     instead. The provider's named weekly reset still reaches the
+//     scope's learned weekly capacity (usage.LearnFromPause) and so the
+//     usage views, without holding dispatch.
 //
 // Retrying once the pause lifts is not a promise the limit is over: a
 // window that has not actually reset produces one more refusal, one more

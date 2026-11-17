@@ -391,6 +391,11 @@ func TestResumeAtBoundsWhatTheProviderSaid(t *testing.T) {
 		// 6h cap that meets the limit again, nor the 15m default.
 		{"a long provider-named delay", &agent.UsageLimitError{RetryAfter: 17*time.Hour + 32*time.Minute}, 17*time.Hour + 32*time.Minute},
 		{"a delay past a day", &agent.UsageLimitError{RetryAfter: 30 * time.Hour}, maxUsageLimitPause},
+		// A weekly refusal's text can be an agent-written final answer, so
+		// its days-away reset is held to the same day as any other: a forged
+		// one cannot idle a connection for a week (review task 6580).
+		{"a 3-day weekly reset", &agent.UsageLimitError{Message: "You've hit your weekly limit · resets Nov 20, 3am (UTC)", ResetAt: now.Add(72 * time.Hour)}, maxUsageLimitPause},
+		{"an absurd weekly reset", &agent.UsageLimitError{Message: "You've hit your weekly limit", ResetAt: now.Add(4000 * time.Hour)}, maxUsageLimitPause},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := resumeAt(now, tc.limit)

@@ -194,7 +194,7 @@ export function formatNoticeText(
   preferredTz?: string | null,
 ): string {
   const clock =
-    /\b(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}) )?(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?\s*UTC\b/g;
+    /\b(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}),? )?(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?\s*UTC\b/g;
   return text.replace(clock, (raw, mon, day, hh, mm, ampm?: string) => {
     let hour = Number(hh);
     if (ampm) {
@@ -388,17 +388,36 @@ export function summarizeDispatchStatus(
       tzPref,
     );
     if (!primaryHeadline) {
+      const weeklyRe = /\bweekly\b|\b7[- ]day\b|\bper week\b/i;
+      // Weekly only when the pause being headlined is: a weekly limit on
+      // another connection or model says nothing about this one.
+      const weeklyScopes = (usage?.scopes ?? []).filter(
+        (s) => s.pauseHorizon === "weekly" || !!s.weeklyPausedUntil,
+      );
+      const scopeCovers = (s: UsagePauseScope, p: AgentPauseEntry): boolean =>
+        (s.connection || "") === (p.connection || "") &&
+        (!s.model ||
+          (!!p.model && s.model.toLowerCase() === p.model.toLowerCase()));
+      const apWeekly =
+        entries.length > 0
+          ? entries.some(
+              (p) =>
+                weeklyRe.test(p.reason || "") ||
+                weeklyScopes.some((s) => scopeCovers(s, p)),
+            )
+          : weeklyRe.test(ap.reason || "") || weeklyScopes.length > 0;
+      const quotaTitle = apWeekly ? "Weekly model quota" : "Model quota";
       if (entries.length === 1) {
         const p = entries[0];
         primaryHeadline = !p.model
-          ? `Model quota exceeded — ${pauseEntryLabel(p)} development paused`
-          : `Model quota exceeded on ${pauseEntryLabel(p)} (fallback active)`;
+          ? `${quotaTitle} exceeded — ${pauseEntryLabel(p)} development paused`
+          : `${quotaTitle} exceeded on ${pauseEntryLabel(p)} (fallback active)`;
         primarySubline =
           p.reason || ap.reason || "Usage limit pause active for agent runs";
       } else {
         primaryHeadline = wholeConnPaused
-          ? `Model quota exceeded — development paused across ${Math.max(1, entries.length)} targets`
-          : `Model quota exceeded on ${entries.length} models (fallback active)`;
+          ? `${quotaTitle} exceeded — development paused across ${Math.max(1, entries.length)} targets`
+          : `${quotaTitle} exceeded on ${entries.length} models (fallback active)`;
         primarySubline = ap.reason || "Usage limit pause active for agent runs";
       }
       primaryReset = apReset ? `resets ${apReset}` : "";
