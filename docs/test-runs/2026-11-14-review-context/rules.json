@@ -1,0 +1,295 @@
+[
+ {
+  "match": "\\*\\*This is a security review\\.\\*\\*",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "hold": true,
+    "hold_seconds": 900,
+    "response": "S1 done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "reading the PR and its threads",
+       "command": "cd work && grain pr open 2>&1 | head -60; echo '--- grain pr threads'; grain pr threads 2>&1 | head -80"
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "Q1: should Allow also reject a repo with an empty owner, not only evil/x?",
+       "path": "pkg/gitproxy/proxy.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "Q2: does bumping Handler to v2 need a changelog entry for API clients?",
+       "path": "api/handler.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "Q3: is there a test pinning the allow-list behaviour?"
+      }
+     },
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "pushing the review's fix commit",
+       "command": "cd work && printf '\\n// Allow reports whether repo may be proxied (reviewed by task {task}).\\n' >> pkg/gitproxy/proxy.go && git add -A && git -c user.name=Reviewer -c user.email=reviewer@example.com commit -qm 'fix: document Allow\n\nSecurity review fix.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "hold": true,
+    "hold_seconds": 900,
+    "response": "S2 done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "reading the PR and its threads",
+       "command": "cd work && grain pr open 2>&1 | head -60; echo '--- grain pr threads'; grain pr threads 2>&1 | head -80"
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "Q4: V2 is exported from api/handler.go -- is it part of the public API?",
+       "path": "api/handler.go",
+       "line": 4
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C01: the allow-list check in lib/f1.go should say why this constant exists and who reads it; the allow-list check in lib/f1.go should say why this constant exists and who reads it; the allow-list check in lib/f1.go should say why this constant exists and who reads it; ",
+       "path": "lib/f1.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C02: the allow-list check in lib/f2.go should say why this constant exists and who reads it; the allow-list check in lib/f2.go should say why this constant exists and who reads it; the allow-list check in lib/f2.go should say why this constant exists and who reads it; ",
+       "path": "lib/f2.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C03: the allow-list check in lib/f3.go should say why this constant exists and who reads it; the allow-list check in lib/f3.go should say why this constant exists and who reads it; the allow-list check in lib/f3.go should say why this constant exists and who reads it; ",
+       "path": "lib/f3.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C04: the allow-list check in lib/f4.go should say why this constant exists and who reads it; the allow-list check in lib/f4.go should say why this constant exists and who reads it; the allow-list check in lib/f4.go should say why this constant exists and who reads it; ",
+       "path": "lib/f4.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C05: the allow-list check in lib/f5.go should say why this constant exists and who reads it; the allow-list check in lib/f5.go should say why this constant exists and who reads it; the allow-list check in lib/f5.go should say why this constant exists and who reads it; ",
+       "path": "lib/f5.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C06: the allow-list check in lib/f6.go should say why this constant exists and who reads it; the allow-list check in lib/f6.go should say why this constant exists and who reads it; the allow-list check in lib/f6.go should say why this constant exists and who reads it; ",
+       "path": "lib/f6.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C07: the allow-list check in lib/f7.go should say why this constant exists and who reads it; the allow-list check in lib/f7.go should say why this constant exists and who reads it; the allow-list check in lib/f7.go should say why this constant exists and who reads it; ",
+       "path": "lib/f7.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C08: the allow-list check in lib/f8.go should say why this constant exists and who reads it; the allow-list check in lib/f8.go should say why this constant exists and who reads it; the allow-list check in lib/f8.go should say why this constant exists and who reads it; ",
+       "path": "lib/f8.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C09: the allow-list check in lib/f9.go should say why this constant exists and who reads it; the allow-list check in lib/f9.go should say why this constant exists and who reads it; the allow-list check in lib/f9.go should say why this constant exists and who reads it; ",
+       "path": "lib/f9.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C10: the allow-list check in lib/f10.go should say why this constant exists and who reads it; the allow-list check in lib/f10.go should say why this constant exists and who reads it; the allow-list check in lib/f10.go should say why this constant exists and who reads it; ",
+       "path": "lib/f10.go",
+       "line": 3
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "C11: the allow-list check in lib/f11.go should say why this constant exists and who reads it; the allow-list check in lib/f11.go should say why this constant exists and who reads it; the allow-list check in lib/f11.go should say why this constant exists and who reads it; ",
+       "path": "lib/f11.go",
+       "line": 3
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "response": "S3 done",
+    "calls": [
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "Q5: head 3 rewrote history -- was anything from heads 1 and 2 dropped?",
+       "path": "api/handler.go",
+       "line": 4
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "^(?!.*\\*\\*This is a security review\\.\\*\\*).*You are reviewing task",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "hold": true,
+    "hold_seconds": 900,
+    "response": "P1 done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "reading the PR and its threads",
+       "command": "cd work && grain pr open 2>&1 | head -60; echo '--- grain pr threads'; grain pr threads 2>&1 | head -80"
+      }
+     },
+     {
+      "tool": "add_review_comment",
+      "args": {
+       "body": "P1: Handler now returns v2 -- is any caller pinned to v1?",
+       "path": "api/handler.go",
+       "line": 3
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "response": "later pr-review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "reading the PR and its threads",
+       "command": "cd work && grain pr open 2>&1 | head -60; echo '--- grain pr threads'; grain pr threads 2>&1 | head -80"
+      }
+     },
+     {
+      "tool": "nothing_needed",
+      "args": {
+       "reason": "later head: nothing new"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "response": "later pr-review done",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "reading the PR and its threads",
+       "command": "cd work && grain pr open 2>&1 | head -60; echo '--- grain pr threads'; grain pr threads 2>&1 | head -80"
+      }
+     },
+     {
+      "tool": "nothing_needed",
+      "args": {
+       "reason": "later head: nothing new"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "match": "WALK-AUTHOR",
+  "actions": [
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author head 1",
+       "command": "cd work && printf 'package gitproxy\\n\\nfunc Allow(repo string) bool { return repo != \"\" && repo != \"evil/x\" }\\n' > pkg/gitproxy/proxy.go && printf 'package api\\n\\nfunc Handler() string { return \"v2\" }\\n' > api/handler.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: tighten the git proxy allow-list\n\nHead 1.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author head 2 (fast-forward, 4 files)",
+       "command": "cd work && git pull -q --ff-only origin $(git rev-parse --abbrev-ref HEAD) 2>&1; echo 'func V2() {}' >> api/handler.go && for i in 1 2 3; do echo '// h2' >> lib/f$i.go; done && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: head 2\n\nFast-forward.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author head 3 (force-push, rewritten from main)",
+       "command": "cd work && git fetch -q origin && git reset -q --soft origin/main && echo '// rewritten' >> api/handler.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: head 3\n\nOne squashed commit replacing heads 1 and 2.' && git push -q -f origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -1"
+      }
+     }
+    ]
+   },
+   {
+    "kind": "mcp_sequence",
+    "calls": [
+     {
+      "tool": "run_command",
+      "args": {
+       "description": "author head 4 (merge of a base that adds a trust-boundary file)",
+       "command": "cd work && git fetch -q origin && git reset -q --hard origin/$(git rev-parse --abbrev-ref HEAD) && git -c user.name=Walk -c user.email=walk@example.com merge -q --no-edit origin/main && echo '// h4' >> api/handler.go && git add -A && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'feat: head 4\n\nAfter merging main.' && git push -q origin HEAD:$(git rev-parse --abbrev-ref HEAD) 2>&1; git log --oneline -3"
+      }
+     }
+    ]
+   }
+  ]
+ }
+]
