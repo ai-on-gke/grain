@@ -181,6 +181,7 @@ export class SessionsStore {
 
   private readonly fetchedFor = new Map<string, string>();
   private configLoaded = false;
+  private configInFlight: Promise<void> | null = null;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
@@ -238,22 +239,39 @@ export class SessionsStore {
     }
   }
 
-  private async loadConfigModels(): Promise<void> {
-    try {
-      const cfg = (await this.api.config()) as GrainConfig | null;
-      if (cfg && !this.access.configLoaded()) {
-        this.access.setConfig(cfg);
-      }
-      if (Array.isArray(cfg?.models)) this.models.set(cfg.models);
-      if (typeof cfg?.defaultModel === "string") {
-        this.defaultModel.set(cfg.defaultModel);
-      }
-    } catch {
-      // Optional model list read.
+  private ensureConfig(force = false): Promise<void> {
+    if (typeof this.api.config !== "function") {
+      return Promise.resolve();
     }
+    if (!force && this.access.configLoaded()) {
+      return Promise.resolve();
+    }
+    return (this.configInFlight ??= Promise.resolve()
+      .then(() => this.api.config() as Promise<GrainConfig | null>)
+      .then((cfg) => {
+        if (cfg) {
+          if (!this.access.configLoaded()) {
+            this.access.setConfig(cfg);
+          }
+          if (Array.isArray(cfg.models)) this.models.set(cfg.models);
+          if (typeof cfg.defaultModel === "string") {
+            this.defaultModel.set(cfg.defaultModel);
+          }
+        }
+      })
+      .catch(() => {
+        // Optional model list read.
+      })
+      .finally(() => {
+        this.configInFlight = null;
+      }));
+  }
+
+  private async loadConfigModels(): Promise<void> {
+    await this.ensureConfig(true);
     if (
       typeof this.api.get !== "function" ||
-      this.access.repoLimited("GET /api/agent-models")
+      !this.access.canGlobal("GET /api/agent-models")
     ) {
       return;
     }
@@ -308,11 +326,17 @@ export class SessionsStore {
   private async load(): Promise<void> {
     if (
       typeof this.api.get !== "function" ||
-      typeof this.api.getIfChanged !== "function" ||
-      // The session list is deployment-wide: a role holding sessions:read
-      // only on some repositories is refused it.
-      this.access.repoLimited("GET /api/console-sessions")
+      typeof this.api.getIfChanged !== "function"
     ) {
+      this.loaded.set(true);
+      return;
+    }
+    if (!this.access.configLoaded()) {
+      await this.ensureConfig();
+    }
+    // The session list is deployment-wide: a role holding sessions:read
+    // only on some repositories is refused it.
+    if (this.access.repoLimited("GET /api/console-sessions")) {
       this.loaded.set(true);
       return;
     }

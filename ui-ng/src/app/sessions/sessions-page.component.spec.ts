@@ -804,4 +804,87 @@ describe("SessionsPageComponent", () => {
     expect(closedIds).toEqual(["t-2", "t-1"]);
     f.destroy();
   });
+
+  it("awaits /api/config before cold-load session reads so a repo-limited role never fires console-sessions or agent-models", async () => {
+    const api = new FakeApi();
+    let configCalls = 0;
+    let resolveCfg!: (cfg: unknown) => void;
+    api.config = () => {
+      configCalls += 1;
+      return new Promise((r) => {
+        resolveCfg = r;
+      }) as ReturnType<FakeApi["config"]>;
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const access = TestBed.inject(AccessService);
+    const store = TestBed.inject(SessionsStore);
+    expect(access.configLoaded()).toBe(false);
+
+    store.retain("cold-page");
+    await Promise.resolve();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/console-sessions" ||
+          c.route === "GET /api/agent-models",
+      ),
+    ).toBe(false);
+
+    resolveCfg({
+      access: {
+        role: "widgets/viewer",
+        roles: ["widgets/viewer"],
+        full: false,
+        scopes: ["tasks:read", "sessions:read", "settings:read"],
+        repoLimits: {
+          "tasks:read": ["acme/widgets"],
+          "sessions:read": ["acme/widgets"],
+          "settings:read": ["acme/widgets"],
+        },
+      },
+      models: ["gemini-fast", "gemini-pro"],
+      defaultModel: "gemini-pro",
+    });
+    await new Promise((r) => setTimeout(r, 25));
+
+    expect(configCalls).toBe(1);
+    expect(store.loaded()).toBe(true);
+    expect(store.models()).toEqual(["gemini-fast", "gemini-pro"]);
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/console-sessions" ||
+          c.route === "GET /api/agent-models",
+      ),
+    ).toBe(false);
+    store.release("cold-page");
+  });
+
+  it("skips GET /api/agent-models when a limited role lacks settings:read", async () => {
+    const api = new FakeApi();
+    api.config = () =>
+      Promise.resolve({
+        access: {
+          role: "sessions-only",
+          roles: ["sessions-only"],
+          full: false,
+          scopes: ["tasks:read", "sessions:read"],
+        },
+        models: ["gemini-fast"],
+        defaultModel: "gemini-fast",
+      }) as ReturnType<FakeApi["config"]>;
+
+    const f = await render(api);
+    expect(api.calls.some((c) => c.route === "GET /api/agent-models")).toBe(
+      false,
+    );
+    expect(TestBed.inject(SessionsStore).models()).toEqual(["gemini-fast"]);
+    f.destroy();
+  });
 });

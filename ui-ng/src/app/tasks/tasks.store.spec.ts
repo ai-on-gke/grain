@@ -58,4 +58,59 @@ describe("TasksStore", () => {
     expect(tasks.loadError()).toContain("could not be read");
     tasks.stop();
   });
+
+  it("awaits /api/config before loadBoards so a repo-limited viewer never fires GET /api/boards on cold load", async () => {
+    let resolveConfig!: (cfg: Record<string, unknown>) => void;
+    const configPromise = new Promise<Record<string, unknown>>((r) => {
+      resolveConfig = r;
+    });
+    const getRoutes: string[] = [];
+    const fakeApi = {
+      config: () => configPromise,
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: (route: string) => {
+        getRoutes.push(route);
+        return Promise.resolve([]);
+      },
+      getIfChanged: () => Promise.resolve({ body: [], changed: true }),
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+
+    const tasks = TestBed.inject(TasksStore);
+    tasks.start();
+    TestBed.flushEffects();
+    expect(getRoutes).not.toContain("GET /api/boards");
+
+    resolveConfig({
+      access: {
+        role: "widgets/viewer",
+        roles: ["widgets/viewer"],
+        full: false,
+        scopes: ["tasks:read", "boards:read"],
+        repoLimits: {
+          "tasks:read": ["acme/widgets"],
+          "boards:read": ["acme/widgets"],
+        },
+      },
+    });
+    await configPromise;
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      TestBed.flushEffects();
+    }
+
+    expect(getRoutes).not.toContain("GET /api/boards");
+    expect(tasks.boards()).toEqual([]);
+    tasks.stop();
+  });
 });
