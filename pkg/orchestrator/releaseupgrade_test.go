@@ -578,3 +578,68 @@ func TestDebugClockOffsetWalksTheMinimumInterval(t *testing.T) {
 	step(10*time.Hour + 10*time.Minute)
 	wantStarted("with the interval 0", "v3.6.0", "v3.6.2", "v3.6.3", "v3.6.4")
 }
+
+func TestManualUpgradeSuccessClearsSchemaDowngradeNotificationWithAutoUpgradeOff(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  model.NotificationSubject(model.FamilyUpgradeSchemaDowngrade, "latest"),
+		Severity: model.NotificationWarning,
+		Title:    "Upgrade to latest refused: schema downgrade (147 -> 146)",
+		Body:     "refusing schema downgrade",
+		RaisedBy: model.PrincipalString(orchestrator.UpgradePrincipal),
+		RaisedAt: t0,
+	}); err != nil {
+		t.Fatalf("RaiseNotification: %v", err)
+	}
+
+	failedAt := t0
+	curStatus := upgrade.Status{
+		Branch:     "latest",
+		Phase:      upgrade.PhaseFailed,
+		Detail:     "refusing schema downgrade",
+		FinishedAt: &failedAt,
+	}
+	deps := orchestrator.Deps{
+		Store: store,
+		Config: orchestrator.Config{
+			UpgradeStatus: func() (upgrade.Status, error) { return curStatus, nil },
+		},
+	}
+
+	// While the last upgrade is failed, the refusal notification stays open.
+	if err := orchestrator.RunCycle(ctx, deps, t0.Add(time.Minute)); err != nil {
+		t.Fatalf("RunCycle (failed): %v", err)
+	}
+	open, err := store.ListNotifications(ctx, model.NotificationFilter{Open: true, Family: model.FamilyUpgradeSchemaDowngrade})
+	if err != nil {
+		t.Fatalf("ListNotifications: %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open notifications after failed manual upgrade = %d, want 1", len(open))
+	}
+
+	// A subsequent manual upgrade succeeds with auto-upgrade still off: the notification clears.
+	succeededAt := t0.Add(2 * time.Minute)
+	curStatus = upgrade.Status{
+		Branch:     "main",
+		Phase:      upgrade.PhaseOK,
+		Detail:     "installed new build",
+		FinishedAt: &succeededAt,
+	}
+	if err := orchestrator.RunCycle(ctx, deps, succeededAt.Add(time.Second)); err != nil {
+		t.Fatalf("RunCycle (ok): %v", err)
+	}
+	open, err = store.ListNotifications(ctx, model.NotificationFilter{Open: true, Family: model.FamilyUpgradeSchemaDowngrade})
+	if err != nil {
+		t.Fatalf("ListNotifications after success: %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open schema-downgrade notifications after manual upgrade success = %+v, want none", open)
+	}
+}

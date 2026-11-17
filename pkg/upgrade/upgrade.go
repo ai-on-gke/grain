@@ -651,12 +651,9 @@ func ValidBranchName(branch string) (string, error) {
 	return branch, validateBranch(branch)
 }
 
-// ValidateBranch is the same check Start makes, for a caller that is
-// writing a branch name down now and will hand it to Start later -- an
-// upgrade scheduled to happen once this deployment has finished its work
-// (model.ScheduledUpgrade). A name Start would refuse has to be refused
-// while somebody is still there to retype it, rather than hours later in
-// a log line nobody is reading.
+// ValidateBranch checks whether branch is a permitted branch name on this
+// deployment's configured edition, without probing target build schemas
+// (callers starting or scheduling an upgrade also run CheckTargetSchema).
 //
 // It trims for the same reason Start does: a branch pasted with a
 // trailing newline is the branch, and a caller storing what this
@@ -667,9 +664,6 @@ func (u *Upgrader) ValidateBranch(branch string) (string, error) {
 		return branch, err
 	}
 	if err := u.checkConfiguredEdition(); err != nil {
-		return branch, err
-	}
-	if err := u.CheckTargetSchema(context.Background(), branch, ""); err != nil {
 		return branch, err
 	}
 	return branch, nil
@@ -967,6 +961,7 @@ func (u *Upgrader) run(branch string, status Status, graceWindow time.Duration) 
 	}
 	if p.isUnchanged() {
 		release()
+		u.notifyUpgradeSucceeded(branch)
 		p.unchanged(staged.detail)
 		return
 	}
@@ -987,6 +982,7 @@ func (u *Upgrader) run(branch string, status Status, graceWindow time.Duration) 
 		if staged.commit != nil {
 			staged.commit()
 		}
+		u.notifyUpgradeSucceeded(branch)
 		p.succeed(staged.detail, restarting)
 		if !restarting {
 			// Nothing is coming up to release the hold on the far side
@@ -1027,6 +1023,7 @@ func (u *Upgrader) run(branch string, status Status, graceWindow time.Duration) 
 	}
 
 	p.start(stepRestart)
+	u.notifyUpgradeSucceeded(branch)
 	p.succeed(staged.detail, true)
 	if u.cfg.BeforeRestart != nil {
 		u.cfg.BeforeRestart(branch)

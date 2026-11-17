@@ -416,6 +416,10 @@ type cancellableUpgrader interface {
 	GraceWindow() time.Duration
 }
 
+type targetSchemaChecker interface {
+	CheckTargetSchema(ctx context.Context, branch, imageRef string) error
+}
+
 // inFlightRuns is how many runs this deployment has going, for the
 // warning the pane shows above the Upgrade button.
 //
@@ -973,6 +977,11 @@ func (s *Server) scheduleUpgrade(r *http.Request, req startUpgradeRequest) error
 	branch, err := s.tasks.Config.Upgrader.ValidateBranch(req.Branch)
 	if err != nil {
 		return validationErrorf("%v", err)
+	}
+	if sc, ok := s.tasks.Config.Upgrader.(targetSchemaChecker); ok {
+		if err := sc.CheckTargetSchema(r.Context(), branch, ""); err != nil {
+			return validationErrorf("%v", err)
+		}
 	}
 	ctx, err := withAgentRequester(
 		r.Context(), "a scheduled upgrade's requester", req.RequestedBy, req.RequestedByKind)

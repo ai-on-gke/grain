@@ -404,8 +404,51 @@ func upgradeSchemaConfig(cfg Config, db *sql.DB, store *model.Store) *upgrade.Sc
 		sc.OnDowngradeRefused = func(branch string, runningSchema, targetSchema int, refusal error) {
 			raiseSchemaDowngradeNotification(store, branch, runningSchema, targetSchema, refusal)
 		}
+		sc.OnUpgradeSucceeded = func(_ string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			clearSchemaDowngradeNotifications(ctx, store, nil)
+		}
 	}
 	return sc
+}
+
+func clearSchemaDowngradeNotifications(ctx context.Context, store *model.Store, notAfter *time.Time) {
+	if store == nil {
+		return
+	}
+	open, err := store.ListNotifications(ctx, model.NotificationFilter{
+		Open:   true,
+		Family: model.FamilyUpgradeSchemaDowngrade,
+	})
+	if err != nil {
+		log.Printf("grain daemon: listing schema-downgrade notifications to clear: %v", err)
+		return
+	}
+	by := model.PrincipalString(orchestrator.UpgradePrincipal)
+	for _, n := range open {
+		if notAfter != nil && n.LastRaisedAt.After(notAfter.UTC()) {
+			continue
+		}
+		if _, err := store.ClearNotification(ctx, n.Subject, by); err != nil {
+			log.Printf("grain daemon: clearing schema-downgrade notification %s: %v", n.Subject, err)
+		}
+	}
+}
+
+// clearUpgradeSchemaDowngradeAfterRestart clears open FamilyUpgradeSchemaDowngrade
+// notifications on startup when the deployment's last upgrade ended PhaseOK
+// (including upgrades that crossed a forward schema migration, where the old
+// store's open notifications were exported during Prepare before PhaseOK).
+func clearUpgradeSchemaDowngradeAfterRestart(ctx context.Context, store *model.Store, upgrader *upgrade.Upgrader) {
+	if store == nil || upgrader == nil {
+		return
+	}
+	status, err := upgrader.Status()
+	if err != nil || status.Phase != upgrade.PhaseOK || status.FinishedAt == nil {
+		return
+	}
+	clearSchemaDowngradeNotifications(ctx, store, status.FinishedAt)
 }
 
 func raiseSchemaDowngradeNotification(store *model.Store, branch string, runningSchema, targetSchema int, refusal error) {

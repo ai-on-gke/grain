@@ -634,6 +634,10 @@ func TestAnUpgradeRefusesASchemaDowngradeOnAChannelAndOnAPinnedVersion(t *testin
 		if err := u.Start("latest"); !errors.Is(err, ErrSchemaDowngrade) {
 			t.Errorf("second Start(\"latest\") = %v, want ErrSchemaDowngrade", err)
 		}
+		// ValidateBranch checks only the branch name and edition, not the target's schema.
+		if got, err := u.ValidateBranch("latest"); err != nil || got != "latest" {
+			t.Errorf("ValidateBranch(\"latest\") = (%q, %v), want (\"latest\", nil)", got, err)
+		}
 	})
 
 	t.Run("pinned older tag at schema step", func(t *testing.T) {
