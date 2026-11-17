@@ -185,6 +185,8 @@ export function duration(from?: string, to?: string): string {
     <section
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
+      [class.is-details-view]="current() === 'details'"
+      [attr.tabindex]="current() === 'details' ? 0 : null"
       aria-labelledby="task-title"
       [attr.inert]="
         confirming() || forceMergeReq() || acceptFindingsReq() || docModalOpen()
@@ -872,7 +874,14 @@ export function duration(from?: string, to?: string): string {
               }
             </nav>
 
-            <div class="task-tab-body">
+            <div
+              class="task-tab-body"
+              [attr.role]="current() === 'details' ? 'region' : null"
+              [attr.aria-label]="
+                current() === 'details' ? 'Task details' : null
+              "
+              [attr.tabindex]="current() === 'details' ? 0 : null"
+            >
               @switch (current()) {
                 @case ("docs") {
                   <h2 class="sr-only">Documents</h2>

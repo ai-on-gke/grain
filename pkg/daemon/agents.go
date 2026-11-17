@@ -1297,7 +1297,9 @@ func (f *BackendFramework) Run(ctx context.Context, cfg agent.RunConfig) (*agent
 	defer f.Lease.Release()
 	f.HostdLease.start()
 	defer f.HostdLease.Release()
-	f.recordRunHostd(ctx, cfg.TaskID, cfg.RunID)
+	if cfg.TaskID != "" {
+		f.recordRunHostd(ctx, cfg.TaskID, cfg.RunID)
+	}
 	result, err := f.Framework.Run(ctx, cfg)
 	var limit *agent.UsageLimitError
 	if errors.As(err, &limit) {

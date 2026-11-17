@@ -1,0 +1,73 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.quality-v3-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.quality-v3-cards .diff-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.quality-v3-cards .diff-strip strong {
+  margin-right: 8px;
+  color: var(--md-sys-color-on-surface);
+}
+
+.quality-v3-cards .ops-card {
+  background: var(--md-sys-color-surface-container-lowest);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.quality-v3-cards .ops-card h3 {
+  margin-top: 0;
+  font-size: 15px;
+  margin-bottom: 16px;
+  color: var(--md-sys-color-on-surface);
+}
+
+.quality-v3-cards .ops-card table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.quality-v3-cards .ops-card th,
+.quality-v3-cards .ops-card td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.quality-v3-cards .ops-card th {
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  text-transform: uppercase;
+}

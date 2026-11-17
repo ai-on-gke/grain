@@ -2271,6 +2271,27 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				}
 				return errors.New("an agent cannot set proposalKey directly")
 			}
+		case "tags":
+			var ts []string
+			if json.Unmarshal(raw, &ts) == nil && len(ts) > 0 {
+				if opts.role != nil {
+					if !set.Allows("qa:admin", repo) {
+						return fmt.Errorf("%s cannot set %s: setting task tags needs scope qa:admin", opts.role.label(), key)
+					}
+					continue
+				}
+				return errors.New("an agent cannot set task tags directly")
+			}
+		case "qaflowref", "qa_flow_ref", "qa-flow":
+			if hasQAFlowRefField(pattern, raw) {
+				if opts.role != nil {
+					if !set.Allows("qa:admin", repo) && !set.Allows("settings:write", repo) {
+						return fmt.Errorf("%s cannot set %s: setting qaFlowRef requires an operator", opts.role.label(), key)
+					}
+					continue
+				}
+				return errors.New("an agent cannot set or override qaFlowRef")
+			}
 		case "reviewers":
 			if opts.role == nil && hasReviewersField(pattern, raw) {
 				return errAgentReviewers
@@ -2760,6 +2781,21 @@ func hasReviewersField(pattern string, raw json.RawMessage) bool {
 	return len(strings.TrimSpace(string(raw))) > 0
 }
 
+func hasQAFlowRefField(pattern string, raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return false
+	}
+	if strings.HasPrefix(pattern, "PATCH ") || strings.HasPrefix(pattern, "PUT ") {
+		return true
+	}
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return strings.TrimSpace(one) != ""
+	}
+	return len(trimmed) > 0
+}
+
 // agentMayWrite reports whether the acting task's own runs may push to
 // repo: its target, or a repository its writes name.
 func agentMayWrite(acting *model.Task, repo string) bool {
@@ -2987,7 +3023,7 @@ func (s *Server) queryCallRepo(r *http.Request, pattern string, allowed func(str
 	if len(values) == 0 {
 		return "", false, nil
 	}
-	if pattern == "GET /api/metrics" {
+	if pattern == "GET /api/metrics" || pattern == "GET /api/qa/summary" {
 		var items []string
 		for _, raw := range values {
 			for _, part := range strings.Split(raw, ",") {
