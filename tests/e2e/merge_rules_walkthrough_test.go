@@ -441,7 +441,7 @@ func TestMergeRulesWalkthroughQueueOptions(t *testing.T) {
 			t.Fatalf("repairs 0 went to an agent, or the note does not say it did not:\n%s", c)
 		}
 		for _, tk := range w.allTasks() {
-			if tk.Origin.Reason == model.ReasonFix && strings.Contains(tk.Body, model.BranchName(f.ID)) {
+			if tk.Filing.Reason == model.ReasonFix && strings.Contains(tk.Body, model.BranchName(f.ID)) {
 				t.Fatalf("a repair task was filed for %s: %s", f.ID, tk.ID)
 			}
 		}

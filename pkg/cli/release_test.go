@@ -17,13 +17,11 @@ package cli
 import (
 	"context"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -39,15 +37,7 @@ func (r *recordingCIRunner) Start(_ context.Context, req ci.Request) (ci.Run, er
 
 func TestGrainReleaseRollbackCLI(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	store := model.New(db)
-	if err := store.Init(ctx); err != nil {
-		t.Fatal(err)
-	}
+	store := testStore(t)
 
 	cfg := model.DefaultConfig()
 	cfg.TargetRepos = []string{"ai-on-gke/grain", "example/widgets"}

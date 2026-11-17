@@ -37,7 +37,8 @@ function isPhoneViewport(): boolean {
 }
 
 // backFrom reads ?from= into the back link: "inbox" goes back to the
-// Inbox, "tasks:<tab>" to that Tasks tab with this task selected (except on
+// Inbox, "agents" to Agents with this task in its inspector (on desktop),
+// "tasks:<tab>" to that Tasks tab with this task selected (except on
 // phones where the list does not show a side pane), and anything else to
 // Tasks with this task selected.
 export function backFrom(
@@ -46,6 +47,13 @@ export function backFrom(
   phone = isPhoneViewport(),
 ): BackLink {
   if (from === "inbox") return { label: "Inbox", commands: ["/inbox"] };
+  if (from === "agents") {
+    return {
+      label: "Agents",
+      commands: ["/agents"],
+      query: phone ? null : { task: id },
+    };
+  }
   if (from?.startsWith("workstreams:")) {
     return {
       label: "Workstream",

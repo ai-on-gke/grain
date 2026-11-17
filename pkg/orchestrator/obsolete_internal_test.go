@@ -42,7 +42,7 @@ func TestReviewWhoseBaseIsGoneIsClosedAtTheFirstFailure(t *testing.T) {
 	bot := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}
 	review := model.Task{
 		ID: "1753", Title: "Security review: something", Target: &repo, Base: model.BranchName("1736"),
-		Origin:   model.Origin{Attribution: bot, Reason: model.ReasonReview},
+		Filing:   model.Filing{Attribution: bot, Reason: model.ReasonReview},
 		Approval: &bot, Binding: model.BindingDirective,
 		Links: []model.Link{{Kind: model.LinkProposedBy, Target: "1736"}},
 	}
@@ -78,7 +78,7 @@ func TestTaskWhoseBaseIsGoneIsParkedAtTheFirstFailure(t *testing.T) {
 	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
 	task := model.Task{
 		ID: "t1", Title: "stacked work", Target: &repo, Base: "grain/task-9",
-		Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: human, Reason: model.ReasonDirect},
 		Approval: &human, Binding: model.BindingDirective,
 	}
 	if err := store.PutTask(ctx, task); err != nil {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"log"
 	"slices"
 	"sort"
@@ -231,6 +232,21 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err := relayProposedTasks(withRelayingRunID(ctx, runID), store, reach, client, task, result, now); err != nil {
 		return err
 	}
+	if _, ok := model.GoalModeOf(task); ok {
+		if assumptions := extractPassAssumptions(result, 1, now); len(assumptions) > 0 {
+			for _, a := range assumptions {
+				_ = model.AppendGoalAssumption(&task, a)
+			}
+			if store != nil && task.ID != "" {
+				_ = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+					for _, a := range assumptions {
+						_ = model.AppendGoalAssumption(t, a)
+					}
+					return nil
+				})
+			}
+		}
+	}
 
 	// Relayed up front, before either ending that used to return past it.
 	// What a comment_on_issue call means for the task's *state* depends on
@@ -242,9 +258,11 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// each call (mcp.AttachmentFiles) -- the calls' own arguments name
 	// the path and carry no bytes.
 	staged := stagedAttachments(ctx, store, runID)
+	goalSection := goalMarkdownSection(ctx, store, task)
 
 	comment, hasComment := effectiveCommentOnIssue(result)
 	if hasComment {
+		comment = appendGoalMarkdownToComment(comment, goalSection)
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "comment_on_issue"), staged)
 		// The note's own one line, when the run gave one: what the inbox
 		// and the task row show of a task resting on it (ui.Task.NoteSummary).
@@ -435,7 +453,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if !staleBranch && !inPlace {
 		pushedCommit := true
 		if preRunBranchSHA != "" && client != nil && task.Target != nil {
-			if head, herr := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); herr == nil && head != nil {
+			if head, herr := effectiveTaskPushHead(ctx, store, client, task); herr == nil && head != nil {
 				pushedCommit = head.SHA != preRunBranchSHA
 			}
 		}
@@ -498,7 +516,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			}
 			if goal != nil {
 				if finalText {
-					posted := strings.TrimSpace(result.FinalText)
+					posted := appendGoalMarkdownToComment(strings.TrimSpace(result.FinalText), goalSection)
 					if _, err := relayCommentWithAttachments(ctx, store, task, posted, nil, now); err != nil {
 						return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 					}
@@ -556,8 +574,8 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// When comment_on_issue was absent, but the run completed an investigation /
 	// non-code task with a final assistant response (and did not push a branch or
 	// ask a question), use the final assistant text as the closing note.
-	if !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" {
-		comment := strings.TrimSpace(result.FinalText)
+	if !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && (strings.TrimSpace(result.FinalText) != "" || goalSection != "") {
+		comment := appendGoalMarkdownToComment(strings.TrimSpace(result.FinalText), goalSection)
 		if _, err := relayCommentWithAttachments(ctx, store, task, comment, nil, now); err != nil {
 			return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 		}
@@ -797,7 +815,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 	if sha == "" || client == nil || task.Target == nil {
 		return false, nil
 	}
-	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
+	head, err := effectiveTaskPushHead(ctx, store, client, task)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's branch head: %w", task.ID, err)
 	}
@@ -891,6 +909,11 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 		// (recordReviewerHead is this review's ending instead).
 		return false, nil
 	}
+	if !reviewCommentsOnly(task) {
+		if qaHandled, qaErr := salvageQAStageIfPresent(ctx, store, client, task, now); qaErr != nil || qaHandled {
+			return true, qaErr
+		}
+	}
 	pushed, err := targetBranchExists(client, *task.Target, task.BranchName())
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: checking %s's branch: %w", task.ID, err)
@@ -967,6 +990,10 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 			}
 		}
 		return true, err
+	}
+	MaybeRunPostPRQATriage(ctx, store, client, task)
+	if assign, qaCfg, aErr := resolve.ActiveQAResolutionForTask(ctx, store, task.ID); aErr == nil && qaCfg.Enabled && assign != nil && assign.ArmID == model.QAArmControl && (assign.Shadow || qaCfg.ShadowOnControlEnabled()) {
+		maybeRunControlShadowS3(store, client, task, assign)
 	}
 	return true, noteOrphanedIfClosed(ctx, store, client, task.ID, now)
 }
@@ -1167,6 +1194,13 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 	question, _ := firstToolCallArg(result, "ask_question", "question")
 	_, proposed := firstToolCallArg(result, "propose_config_change", "summary")
 	access := accessRequestOf(result, now)
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+		question = ""
+		access = nil
+		if gm.MockMissingSecrets {
+			secret = ""
+		}
+	}
 	if secret == "" && question == "" && !proposed && access == nil {
 		return false, nil
 	}
@@ -2061,6 +2095,15 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				body += reviewOfGrantRefusedNote(cap)
 				continue
 			}
+			// A retired bare name grants nothing: the live call refused
+			// it, and a call recorded before that refusal existed is filed
+			// without it, saying what it became, rather than holding a row
+			// every dispatch would refuse after a person approved it.
+			if why, retired := model.RetiredTaskGrantRefusal(cap); retired {
+				body += fmt.Sprintf("\n\n_grain filed this proposal without `%s`: %s._", cap, why)
+				admissionChanges = append(admissionChanges, fmt.Sprintf("`%s` was left off: %s", cap, why))
+				continue
+			}
 			// grain-ci is passed over, as ui.CreateTask passes it over
 			// for the same call filed live: the target repository's CI
 			// Mode decides it (defaultTaskGrants, above), and naming it
@@ -2273,7 +2316,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Intent: model.IntentImplement,
 			Title:  title,
 			Body:   body,
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{
 					Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 					OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID},
@@ -2315,11 +2358,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		model.SetFoundIn(&proposal, foundIn)
 		model.ApplyDerivedFoundIn(&proposal)
+		if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+			_ = model.SetGoalMode(&proposal, &gm)
+		}
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
 		var proposerBehalf *model.Principal
-		isSession := task.Origin.Reason == model.ReasonConsoleSession
+		isSession := task.Filing.Reason == model.ReasonConsoleSession
 		if isSession {
 			if sender := consoleSessionSender(ctx, store, task.ID); sender != nil {
 				if norm, nerr := model.NormalizeTaskOwner(sender.ID); nerr == nil {
@@ -4010,6 +4056,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 		title = "grain: " + task.ID
 	}
 	body := withLineage(pullRequestBody(describeCommits(commits), task.ID, task.Issue), taskLineage(ctx, store, task))
+	body = withGoalSummary(body, goalMarkdownSection(ctx, store, task))
 	if landed.partial() {
 		body = landed.partialSentence() + "\n\n" + body
 	}
@@ -4374,7 +4421,7 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 // never classifies, because it merges back into the branch it was stacked
 // on rather than into a branch of its own choosing.
 func skipsClassification(task model.Task) bool {
-	return task.Origin.Reason == model.ReasonReview || task.Origin.Reason == model.ReasonFix
+	return task.Filing.Reason == model.ReasonReview || task.Filing.Reason == model.ReasonFix
 }
 
 // noteEmptyBranch is what a task gets instead of a pull request when the

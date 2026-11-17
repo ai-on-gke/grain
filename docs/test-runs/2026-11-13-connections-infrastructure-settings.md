@@ -347,3 +347,60 @@ in `gitproxy` and `pkg/ui`.
 
 The missing `/next/` parity listed under each section is filed as
 follow-up tasks rather than built here.
+
+## Classic parity follow-up (task 5521, 2026-11-15)
+
+Every field listed above as "not on `/next/` yet" for Hub, Sandboxes,
+Engine and CI is now on `/next/`, covered by
+`ui-ng/e2e/next-hub-sandboxes-parity.spec.js` over `grain demo`:
+
+- **Hub:** live state chip, endpoint, last heartbeat (interval, health,
+  active / awaiting-reply counts), a Heartbeat now result in the card,
+  the hub's last error and scope-conflict alerts, advertised scopes with
+  origin chips (`from repo config`, `override`, `added in settings`),
+  OIDC audience, Platform (host kind, auto-detect naming what it resolves
+  to), Purpose, Listed in hub directory, the write-only Registration
+  token (editable under a config-repo lock; disabled with a reason on a
+  daemon with no secret store, which is `grain demo`), and Scope
+  overrides (`#registry-scopes`).
+- **Sandboxes:** a Sandbox budget card (auto bounds, disk floor whose
+  blank minimum saves the default, commitment note), the full Kubernetes
+  card, and a Custom sandbox image card with the contract, the mirror
+  hints and Reset to default.
+- **Engine:** the sandbox commitment note under Max merges per repo
+  branch. `grain demo` reports no `sandboxCommitment` (it has no sandbox
+  host to read), so the e2e adds one to the real settings answer.
+- **CI:** queue age boost, step output MiB/days, output per run,
+  artifacts per run/per file/days, job cache entries/days, each blank
+  with its `<key>Default` placeholder.
+
+## Hosts and Git parity on `/next/` (task 5519, 2026-11-15)
+
+The classic-only controls listed under Hosts and Git above are now on
+`/next/settings/hostds` and `/next/settings/git`, driving the same routes:
+
+- **Hosts:** Edit (owner, labels, capacity in one `PATCH /api/hostds/{name}`;
+  a blanked capacity is sent as `0`, which clears it, as classic does --
+  `null` would leave the old value, since the server reads an absent
+  capacity as "unchanged"), Rename (`POST .../rename`), a resolved error
+  banner taken down by the save that fixed it, New enrollment code
+  options (expiry, max uses, default capacity, default labels, allowed
+  principals) with each code's defaults in its row, pending requests
+  with editable host name / labels / capacity and rekeys marked (their
+  name fixed), the connected host's address, principal and build, a
+  lasting Delete / Delete revoked notice listing cleared pauses and
+  skipped hosts, and the legacy token form's guidance and Owner field.
+  `local` still offers no actions.
+- **Git:** per-connection Test (`POST .../check` with host, credential,
+  scope, listing each repository's push access), Proxy (sent as `proxy`,
+  shown as "via proxy …"), "Reuse authentication from" in Link stored
+  credential mode (each credential named with the hosts and scopes it
+  serves), the refusal banner (a proxy carrying a login is refused with
+  400 and said beside the form; the fixed save takes it down), and a
+  pointer to Settings → Capabilities#credentials.
+- **No git connection:** the notice did not exist on `/next/`; it now
+  shows in the New task sheet and on Settings → Repos, names tokens,
+  GitHub Apps, SSH keys and ambient logins, and links to
+  `/next/settings/git`.
+
+Covered by `ui-ng/e2e/next-hosts-git-parity.spec.js`.

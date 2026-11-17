@@ -349,7 +349,7 @@ func TestBaseRepairBypassReviewFindingsFileFollowUpTaskWithoutBlockingMerge(t *t
 	var followUp *model.Task
 	for i := range allTasks {
 		tk := allTasks[i]
-		if tk.Parent() == task.ID && tk.Origin.Reason == model.ReasonProposal {
+		if tk.Parent() == task.ID && tk.Filing.Reason == model.ReasonProposal {
 			followUp = &tk
 			break
 		}
@@ -405,7 +405,7 @@ func TestBaseRepairBypassReviewFindingsFileFollowUpTaskWithoutBlockingMerge(t *t
 	var postMergeFollowUp *model.Task
 	for i := range allTasks {
 		tk := allTasks[i]
-		if tk.Parent() == task.ID && tk.Origin.Reason == model.ReasonProposal && tk.ID != followUp.ID {
+		if tk.Parent() == task.ID && tk.Filing.Reason == model.ReasonProposal && tk.ID != followUp.ID {
 			postMergeFollowUp = &tk
 			break
 		}

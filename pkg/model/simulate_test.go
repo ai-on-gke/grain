@@ -81,7 +81,7 @@ func TestUserFilingLandsAccordingToActor(t *testing.T) {
 	store, ctx := open(t)
 	filedByHuman := model.Task{
 		ID: "human-filed", Intent: model.IntentImplement, Title: "t",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect,
 		},
 		Binding:  model.BindingDirective,
@@ -89,7 +89,7 @@ func TestUserFilingLandsAccordingToActor(t *testing.T) {
 	}
 	filedByAutomation := model.Task{
 		ID: "automation-filed", Intent: model.IntentImplement, Title: "t",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonProposal,
 		},
 		Binding: model.BindingDirective,
@@ -124,7 +124,7 @@ func TestDispatcherNeverStartsAnUnapprovedOrBlockedTask(t *testing.T) {
 	mk := func(id string, approved bool, links ...model.Link) model.Task {
 		tk := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "t",
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect,
 			},
 			Binding: model.BindingDirective,
@@ -172,7 +172,7 @@ func TestAgentSessionLeasesAreRevokedWhenARunFinishes(t *testing.T) {
 	store, ctx := open(t)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "a1b2", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: human},
 	}); err != nil {
@@ -255,7 +255,7 @@ func TestSandboxTransitionReusesFreedSlotForTheNextRun(t *testing.T) {
 	for _, id := range []string{"t0", "t1"} {
 		if err := store.PutTask(ctx, model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "t",
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Binding:  model.BindingDirective,
 			Approval: &model.Attribution{Actor: human},
 		}); err != nil {
@@ -299,7 +299,7 @@ func TestClosingATaskWhileItsRunIsStillLiveOutranksRunning(t *testing.T) {
 	store, ctx := open(t)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "a1b2", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: human},
 	}); err != nil {
@@ -425,11 +425,11 @@ func fileTask(t *testing.T, store *model.Store, ctx context.Context, rng *rand.R
 	}
 	tk := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "task " + id,
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: reason},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: reason},
 		Binding: model.BindingDirective,
 		Links:   links,
 	}
-	if model.LandsQueued(tk.Origin) {
+	if model.LandsQueued(tk.Filing) {
 		tk.Approval = &model.Attribution{Actor: human}
 	}
 	if err := store.PutTask(ctx, tk); err != nil {

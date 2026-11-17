@@ -48,7 +48,7 @@ func seedReviewed(t *testing.T, client *ui.Client, reviewedID, reviewID, templat
 	seedAPITask(t, client, reviewID, "acme/widgets")
 	approve(t, client, reviewID)
 	if err := client.Store.UpdateTask(ctx, reviewID, func(tk *model.Task) error {
-		tk.Origin.Reason = model.ReasonReview
+		tk.Filing.Reason = model.ReasonReview
 		tk.TemplateID = template
 		tk.Links = append(tk.Links, model.Link{Kind: model.LinkProposedBy, Target: reviewedID})
 		return nil
@@ -316,8 +316,8 @@ func raiseFindings(t *testing.T, client *ui.Client, id, reviewID string) {
 }
 
 // Release hold on a hold of review findings alone is refused as a 409
-// naming why -- the findings need a clean re-review or a merge:force
-// override -- not as an opaque 500, and the findings stay.
+// naming why -- the findings need a clean re-review or a person's Accept
+// findings -- not as an opaque 500, and the findings stay.
 func TestReleaseHumanReviewHoldOfFindingsAloneIsAConflict(t *testing.T) {
 	srv, client := testServer(t)
 	seedReviewed(t, client, "560", "561", "tmpl-security-review")
@@ -332,7 +332,7 @@ func TestReleaseHumanReviewHoldOfFindingsAloneIsAConflict(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Code != "review_findings_hold" || !strings.Contains(body.Error, "merge:force") {
+	if body.Code != "review_findings_hold" || !strings.Contains(body.Error, "grain accept-findings") {
 		t.Errorf("409 body = %+v, want code review_findings_hold and the reason", body)
 	}
 	got := mustTask(t, client, "560")

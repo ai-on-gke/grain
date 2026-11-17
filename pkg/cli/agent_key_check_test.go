@@ -32,6 +32,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/model"
 
 	"github.com/ai-on-gke/grain/pkg/agent/credcheck"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -155,5 +156,61 @@ func TestAgentKeyCheckRefusesAFrameworkGrainDoesNotHave(t *testing.T) {
 
 	if _, err := adapter.CheckAgentKey(context.Background(), "gpt"); err == nil {
 		t.Fatal("expected an unknown framework to be refused")
+	}
+}
+
+func TestBackendKeyChecksUseOnlyTheConnectionsCredential(t *testing.T) {
+	for _, framework := range []string{"antigravity", "claude", "codex"} {
+		t.Run(framework, func(t *testing.T) {
+			creds := testSecrets(t)
+			globalSecret, _ := credcheck.SecretFor(framework)
+			if err := creds.Set(globalSecret, secrets.AgentCredentialKey, []byte("private-global-key")); err != nil {
+				t.Fatal(err)
+			}
+			if err := creds.Set(secrets.AgentBackendCredentialSecret("own"), secrets.AgentCredentialKey, []byte("private-backend-key")); err != nil {
+				t.Fatal(err)
+			}
+			var called bool
+			fail := false
+			vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				if r.URL.Query().Get("key") != "private-backend-key" && !strings.Contains(r.Header.Get("Authorization"), "private-backend-key") && r.Header.Get("x-api-key") != "private-backend-key" {
+					t.Error("wrong credential")
+				}
+				if fail {
+					w.WriteHeader(401)
+					w.Write([]byte(`{"error":{"message":"private-backend-key"}}`))
+					return
+				}
+				w.Write([]byte(`{"data":[{"id":"private-backend-key"}],"models":[{"name":"private-backend-key"}]}`))
+			}))
+			defer vendor.Close()
+			adapter := daemon.AgentKeyCheckAdapter{Live: testLiveConfig(daemon.Config{AgentBackends: []model.AgentBackend{{ID: "own", Framework: framework, AuthMode: "api_key"}, {ID: "missing", Framework: framework}, {ID: "borrowed", Framework: framework, CredentialBackendID: "own"}}}), Creds: creds, Checker: credcheck.Checker{GeminiBaseURL: vendor.URL, AnthropicBaseURL: vendor.URL, OpenAIBaseURL: vendor.URL}}
+			res, err := adapter.CheckBackendKey(context.Background(), "own")
+			if err != nil || !called || strings.Contains(res.Detail, "private-backend-key") {
+				t.Fatalf("unsafe or failed result: %+v %v", res, err)
+			}
+			if _, err := adapter.CheckBackendKey(context.Background(), "borrowed"); err != nil {
+				t.Fatalf("borrowed dispatch credential: %v", err)
+			}
+			fail = true
+			_, err = adapter.CheckBackendKey(context.Background(), "own")
+			if err == nil || strings.Contains(err.Error(), "private-backend-key") {
+				t.Fatal("failure must be safe and unsuccessful")
+			}
+			called = false
+			if _, err = adapter.CheckBackendKey(context.Background(), "missing"); err == nil || called {
+				t.Fatal("missing connection credential must not use deployment credentials")
+			}
+		})
+	}
+}
+
+func TestBackendKeyChecksDoNotClaimLocalCatalogsValidateAuthentication(t *testing.T) {
+	for _, mode := range []string{"subscription", "ambient", "vertex"} {
+		adapter := daemon.AgentKeyCheckAdapter{Live: testLiveConfig(daemon.Config{AgentBackends: []model.AgentBackend{{ID: "own", Framework: "codex", AuthMode: mode}}})}
+		if _, err := adapter.CheckBackendKey(context.Background(), "own"); err == nil {
+			t.Fatalf("%s falsely succeeded", mode)
+		}
 	}
 }

@@ -419,7 +419,9 @@ const maxExploreResultBytes = 10 << 10
 
 // maxExploreSummaryChars bounds the one-line summary the compact view
 // shows per route: the first sentence of the route's doc, cut at a word.
-const maxExploreSummaryChars = 120
+// 100 keeps the largest group (tasks) under maxExploreResultBytes with
+// room for the next route or two.
+const maxExploreSummaryChars = 100
 
 func (s *Server) exploreScopeTool() mcp.Tool {
 	return mcp.Tool{

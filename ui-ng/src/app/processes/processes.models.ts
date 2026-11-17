@@ -18,7 +18,8 @@ import type { Task } from "../api/models";
 // suites.go, composition.go, repo_workflows.go, declarations.go, and
 // declaration_acceptance.go.
 
-export type ProcessTab = "schedules" | "templates" | "suites" | "declarations";
+export type ProcessTab =
+  "schedules" | "templates" | "suites" | "declarations" | "quality";
 
 export interface WriteTarget {
   repo: string;
@@ -104,6 +105,7 @@ export interface Schedule {
   admission?: string;
   hosting?: string;
   model?: string;
+  qaFlowRef?: string;
   templateId?: string;
   templateName?: string;
   system?: boolean;
@@ -142,6 +144,7 @@ export interface CreateScheduleRequest {
   nothingNeededAction?: string;
   keepRunning?: boolean;
   model?: string;
+  qaFlowRef?: string;
   templateId?: string;
   suiteId?: string;
   recurrence: Recurrence;
@@ -159,6 +162,7 @@ export interface UpdateScheduleRequest {
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
   capabilities?: string[];
+  qaFlowRef?: string;
   templateId?: string;
   suiteId?: string;
   recurrence?: Recurrence;
@@ -197,6 +201,7 @@ export interface Template {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   admission?: string;
@@ -221,6 +226,7 @@ export interface CreateTemplateRequest {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   capabilities: string[];
@@ -240,6 +246,7 @@ export interface UpdateTemplateRequest {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   capabilities?: string[];
@@ -261,6 +268,7 @@ export interface Suite {
   requireApproval: boolean;
   autoMerge: boolean;
   autoApproveProposals: boolean;
+  qaFlowRef?: string;
   createdAt?: string;
   declaredIn?: DeclarationRef;
   revision?: string;
@@ -275,6 +283,7 @@ export interface CreateSuiteRequest {
   requireApproval: boolean;
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
+  qaFlowRef?: string;
 }
 
 export interface UpdateSuiteRequest {
@@ -286,6 +295,7 @@ export interface UpdateSuiteRequest {
   requireApproval?: boolean;
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
+  qaFlowRef?: string;
   revision?: string;
 }
 
@@ -371,6 +381,12 @@ export interface RepoDeclarationsStatus {
   pushes?: DeclaredPush[];
   mergeRules?: string;
   warnings?: string[];
+}
+
+// DeclaredTrigger is one .grain/triggers file a repository declares.
+export interface DeclaredTrigger {
+  repo: string;
+  path: string;
 }
 
 export interface RepoDefaultsView {
@@ -507,6 +523,20 @@ export function scheduleStatusBadge(s: Schedule): {
   return { label: "Enabled", tone: "healthy", iconKind: "healthy" };
 }
 
+export function formatScheduleNextRun(s: Schedule): string | null {
+  if (!s.enabled) return null;
+  if (
+    s.suppressed &&
+    (s.suppressed.reason === "watchedRepoOffTarget" || isEventTrigger(s))
+  ) {
+    return "suppressed";
+  }
+  if (isEventTrigger(s)) {
+    return s.recurrence?.kind === "git_ref" ? "on ref move" : "on workflow run";
+  }
+  return s.nextRunAt || null;
+}
+
 export function templateSourceBadge(t: Template): {
   label: string;
   tone: "proposal" | "reply" | "neutral";
@@ -610,4 +640,166 @@ export function isOpenTaskState(state: string): boolean {
     s === "awaiting_reply" ||
     s === "paused"
   );
+}
+
+// A template's or a suite's last and next runs are derived, the way the
+// classic Processes page derives them (ui/src/processes.js): from the
+// schedules that fire it, and for a suite from its own runs as well. The
+// next run is the soonest one an enabled clock schedule has coming; with
+// none, the item runs only when somebody launches it ("on demand").
+export interface DerivedRuns {
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+}
+
+function soonest(stamps: (string | undefined | null)[]): string | null {
+  let best: string | null = null;
+  let bestMs = Infinity;
+  for (const s of stamps) {
+    const ms = s ? Date.parse(s) : NaN;
+    if (!Number.isNaN(ms) && ms < bestMs) {
+      best = s as string;
+      bestMs = ms;
+    }
+  }
+  return best;
+}
+
+function newest(stamps: (string | undefined | null)[]): string | null {
+  let best: string | null = null;
+  let bestMs = -Infinity;
+  for (const s of stamps) {
+    const ms = s ? Date.parse(s) : NaN;
+    if (!Number.isNaN(ms) && ms > bestMs) {
+      best = s as string;
+      bestMs = ms;
+    }
+  }
+  return best;
+}
+
+export function derivedRuns(
+  schedules: readonly Schedule[],
+  field: "templateId" | "suiteId",
+  id: string,
+  suiteRuns: readonly SuiteRun[] = [],
+): DerivedRuns {
+  const firing = schedules.filter((s) => s[field] === id);
+  const next = soonest(
+    firing
+      .filter((s) => s.enabled && !s.suppressed && !isEventTrigger(s))
+      .map((s) => s.nextRunAt),
+  );
+  const last = newest([
+    ...firing.map((s) => s.lastRunAt),
+    ...(field === "suiteId"
+      ? suiteRuns.filter((r) => r.suiteId === id).map((r) => r.createdAt)
+      : []),
+  ]);
+  return { lastRunAt: last, nextRunAt: next };
+}
+
+// ProcessSort is how a Processes list is ordered: the classic page's
+// sorts (Next run, Last run, Name, Kind) and the page's own order, which
+// a person sets by moving rows ("custom").
+export type ProcessSort = "custom" | "next" | "last" | "name" | "kind";
+
+export const PROCESS_SORTS: readonly { id: ProcessSort; label: string }[] = [
+  { id: "custom", label: "Custom order" },
+  { id: "next", label: "Next run" },
+  { id: "last", label: "Last run" },
+  { id: "name", label: "Name" },
+  { id: "kind", label: "Kind" },
+];
+
+export function parseProcessSort(raw: string | undefined | null): ProcessSort {
+  const id = (raw || "").trim().toLowerCase();
+  return PROCESS_SORTS.some((s) => s.id === id)
+    ? (id as ProcessSort)
+    : "custom";
+}
+
+// scheduleKindOf names what a schedules-tab row is, for the Kind sort:
+// a schedule, a repository's workflow schedule, or an event trigger.
+export function scheduleKindOf(s: Schedule): string {
+  if (isEventTrigger(s)) return "trigger";
+  if (s.workflowReview) return "workflow";
+  return "schedule";
+}
+
+export interface SortableRow<T> {
+  key: string;
+  name: string;
+  kind: string;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  item: T;
+}
+
+// sortProcessRows orders rows by `sort`. Rows with no time sort after
+// every row with one, by name; ties break by name so the order is stable
+// across refreshes. "custom" puts the stored keys first, in their stored
+// order, and every row the order has never heard of after them by name,
+// the way the classic page's list order does (ui/src/listOrder.js).
+export function sortProcessRows<T>(
+  rows: readonly SortableRow<T>[],
+  sort: ProcessSort,
+  customOrder: readonly string[] = [],
+): SortableRow<T>[] {
+  const byName = (a: SortableRow<T>, b: SortableRow<T>) =>
+    a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
+  const time = (s: string | null) => (s ? Date.parse(s) : NaN);
+  const out = [...rows];
+  switch (sort) {
+    case "next":
+    case "last": {
+      const dir = sort === "next" ? 1 : -1;
+      const field = sort === "next" ? "nextRunAt" : "lastRunAt";
+      return out.sort((a, b) => {
+        const ta = time(a[field]);
+        const tb = time(b[field]);
+        const na = Number.isNaN(ta);
+        const nb = Number.isNaN(tb);
+        if (na !== nb) return na ? 1 : -1;
+        if (!na && ta !== tb) return (ta - tb) * dir;
+        return byName(a, b);
+      });
+    }
+    case "name":
+      return out.sort(byName);
+    case "kind":
+      return out.sort((a, b) => a.kind.localeCompare(b.kind) || byName(a, b));
+    case "custom": {
+      const at = new Map(customOrder.map((k, i) => [k, i]));
+      return out.sort((a, b) => {
+        const ia = at.get(a.key);
+        const ib = at.get(b.key);
+        if (ia !== undefined && ib !== undefined) return ia - ib;
+        if (ia !== undefined) return -1;
+        if (ib !== undefined) return 1;
+        return byName(a, b);
+      });
+    }
+  }
+}
+
+// movedOrder is the custom order after moving `key` by `delta` places
+// within `visible` (the keys in the order on screen). The stored order
+// keeps every key it held that is not on screen (another tab's rows, or
+// rows the search hides), after the ones that are. Null when the row
+// cannot move that way.
+export function movedOrder(
+  stored: readonly string[],
+  visible: readonly string[],
+  key: string,
+  delta: number,
+): string[] | null {
+  const from = visible.indexOf(key);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= visible.length) return null;
+  const next = [...visible];
+  next.splice(from, 1);
+  next.splice(to, 0, key);
+  const shown = new Set(visible);
+  return [...next, ...stored.filter((k) => !shown.has(k))];
 }

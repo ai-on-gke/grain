@@ -38,7 +38,7 @@ func TestLiveRunSubstratesSaysWhichRunsARestartLoses(t *testing.T) {
 	} {
 		task := model.Task{
 			ID: r.id, Intent: model.IntentImplement, Title: r.id,
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Binding:  model.BindingDirective,
 			Approval: &model.Attribution{Actor: human},
 		}
