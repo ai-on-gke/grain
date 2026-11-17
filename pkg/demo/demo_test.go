@@ -1427,7 +1427,7 @@ func TestDemoForceMergeOnRunningTaskAndStackedBaseRetargeting(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.UpdateTask(ctx, stacked.ID, func(tk *model.Task) error {
-		tk.Origin.Reason = model.ReasonReview
+		tk.Filing.Reason = model.ReasonReview
 		return nil
 	}); err != nil {
 		t.Fatal(err)

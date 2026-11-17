@@ -83,6 +83,7 @@ func PublishedToolNames() []string {
 	add(mcp.NewHostSandboxTools("", nil))
 	add(mcp.NewSSHSandboxTools(nil, ""))
 	add(mcp.NewMockTools(&mcp.MockSink{}, nil))
+	add(mcp.NewGoalTools(&mcp.MockSink{}))
 
 	// The CI loop. pull_request_status, base_branch_status and
 	// wait_for_checks come from the GitHub-backed set; grain CI's own
@@ -198,6 +199,8 @@ var controlTools = map[string]bool{
 	"chat":                  true,
 	"rename_session":        true,
 	"request_human_review":  true,
+	"record_assumption":     true,
+	"complete_goal":         true,
 }
 
 // SandboxToolNames is the four tools that cross from the agent CLI into

@@ -243,6 +243,83 @@ test("Re-run failed follows to the run it starts", async ({ page }) => {
   ]);
 });
 
+// What the 2026-11-14 deployment-operations walkthrough found under /next/
+// (docs/test-runs/2026-11-14-deployment-operations.md): nothing said the
+// deployment had stopped answering.
+
+test("the disconnected banner stands above the shell on a failed or held connection and clears on its own", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.route("**/api/persistent-sandboxes", (r) =>
+    r.fulfill({
+      json: [
+        {
+          name: "docs-preview",
+          repo: "acme/widgets",
+          state: "running",
+          command: "npm run preview",
+          restarts: 0,
+        },
+      ],
+    }),
+  );
+  await page.goto("fleet");
+  await expect(page.locator("#fleet-panel-sandboxes")).toBeVisible();
+  const banner = page.getByTestId("disconnected-banner");
+  await expect(banner).toHaveCount(0);
+
+  // The demo does not supervise persistent sandboxes, so Logs (a
+  // responseType: "text" read) gets the daemon's own JSON 503; that is the
+  // daemon answering, not a gateway saying it is down.
+  await page.getByTestId("persistent-logs-btn-docs-preview").click();
+  await expect(page.getByTestId("persistent-logs-docs-preview")).toContainText(
+    "the service is temporarily unavailable",
+  );
+  await expect(banner).toHaveCount(0);
+  await page.unroute("**/api/persistent-sandboxes");
+
+  // Every request refused: the connection failed.
+  await page.route("**/api/**", (r) => r.abort());
+  try {
+    await expect(banner).toBeVisible({ timeout: 30_000 });
+    await expect(banner).toHaveAttribute("role", "status");
+    await expect(banner).toContainText(
+      "This deployment cannot be reached: the connection to it failed.",
+    );
+    await expect(banner).toContainText("retrying automatically");
+    const b = await banner.boundingBox();
+    const top = await page.locator(".top-bar").boundingBox();
+    const rail = await page.locator(".nav-rail").boundingBox();
+    const bottom = await page.locator(".bottom-bar").boundingBox();
+    const vh = page.viewportSize().height;
+    expect(b.y).toBe(0);
+    expect(top.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(rail.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(bottom.y + bottom.height).toBeLessThanOrEqual(vh + 0.5);
+  } finally {
+    await page.unroute("**/api/**");
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+
+  // Requests accepted and never answered: held without an answer.
+  const held = [];
+  await page.route("**/api/**", (r) => {
+    held.push(r);
+  });
+  try {
+    await expect(banner).toContainText(
+      "it accepted the connection but sent no answer within 10 seconds",
+      { timeout: 45_000 },
+    );
+  } finally {
+    await page.unroute("**/api/**");
+    for (const r of held) await r.abort().catch(() => {});
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+  await expect(page).toHaveURL(/\/next\/fleet$/);
+});
+
 test("a deep link to a later Fleet tab keeps that tab in view on a phone @phone", async ({
   page,
 }) => {
@@ -275,6 +352,10 @@ test("pausing, resuming, and lifting quota pauses on Fleet update the global dis
       .getByLabel("Pipeline pause reason")
       .fill("walkthrough sync check");
     await page.getByRole("button", { name: "Pause pipeline" }).click();
+    await page
+      .getByTestId("confirm-dialog")
+      .getByRole("button", { name: "Pause pipeline" })
+      .click();
 
     const banner = page.getByTestId("global-dispatch-banner");
     await expect(banner).toBeVisible();
@@ -284,6 +365,10 @@ test("pausing, resuming, and lifting quota pauses on Fleet update the global dis
     );
 
     await page.getByRole("button", { name: "Resume pipeline" }).click();
+    await page
+      .getByTestId("confirm-dialog")
+      .getByRole("button", { name: "Resume pipeline" })
+      .click();
     await expect(banner).toHaveCount(0);
   } finally {
     await page.request.delete("/api/pipeline-pause").catch(() => {});
@@ -543,4 +628,153 @@ test("classic System -> Metrics ?f=repo:any:... links narrow /next/telemetry to 
       ),
     )
     .toBe(true);
+});
+
+// The 2026-11-16 walkthrough (docs/test-runs/2026-11-16-deployment-operations.md):
+// a host that reported no disks showed a "/" disk at "0 MB / 0 MB", and a
+// daemon that reported no start time showed a green "Up —".
+test("Fleet says a disk and an uptime it was not told are not reported", async ({
+  page,
+}) => {
+  const now = Date.now();
+  let withFigures = false;
+  await page.route("**/api/sandboxes*", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        host: {
+          cpus: 4,
+          cpuUtilization: 0.15,
+          memoryUsedMB: 4096,
+          memoryTotalMB: 16384,
+          ...(withFigures
+            ? {
+                disks: [
+                  { path: "/var/lib/grain", usedMB: 2048, totalMB: 8192 },
+                ],
+              }
+            : {}),
+        },
+        ...(withFigures
+          ? {
+              daemon: {
+                startedAt: new Date(now - 3 * 3600_000).toISOString(),
+                starts: 1,
+              },
+            }
+          : {}),
+        sandboxes: [],
+      },
+    }),
+  );
+
+  await page.goto("fleet?tab=controls");
+  const disk = page.getByTestId("meter-disk");
+  await expect(page.getByTestId("meter-disk-none")).toHaveText("Not reported");
+  await expect(disk).not.toContainText("0 MB");
+  await expect(disk).not.toContainText("host volume");
+  const daemon = page.getByTestId("fleet-daemon-card");
+  await expect(page.getByTestId("fleet-daemon-uptime-unknown")).toHaveText(
+    "Uptime not reported",
+  );
+  await expect(daemon).not.toContainText("Up —");
+
+  withFigures = true;
+  await page.reload();
+  await expect(disk).toContainText("/var/lib/grain");
+  await expect(disk).toContainText("2.0 GB / 8.0 GB");
+  await expect(page.getByTestId("meter-disk-none")).toHaveCount(0);
+  await expect(daemon).toContainText(/Up \d/);
+  await expect(page.getByTestId("fleet-daemon-uptime-unknown")).toHaveCount(0);
+});
+
+// Classic System -> Pipeline asks before pausing and resuming, and warns
+// that resuming a pause held for a scheduled upgrade cancels the upgrade;
+// /next/fleet did neither (2026-11-16 walkthrough).
+test("Fleet asks before pausing or resuming the pipeline, and says resuming cancels a scheduled upgrade", async ({
+  page,
+}) => {
+  const writes = [];
+  let held = null;
+  await page.route("**/api/pipeline-pause", async (route) => {
+    const method = route.request().method();
+    if (method === "GET" && held) {
+      return route.fulfill({ json: { pause: held } });
+    }
+    if (method !== "GET") writes.push(method);
+    return route.fallback();
+  });
+  try {
+    await page.goto("fleet?tab=controls");
+    const dialog = page.getByTestId("confirm-dialog");
+    await page.getByTestId("pipeline-pause-btn").click();
+    await expect(dialog).toContainText("Pause the pipeline?");
+    await dialog.getByTestId("confirm-cancel").click();
+    await expect(dialog).toBeHidden();
+    await page.getByTestId("pipeline-pause-btn").click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    expect(writes).toEqual([]);
+    await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+      "Dispatching",
+    );
+
+    held = {
+      paused: true,
+      runNowPasses: true,
+      reason: "upgrading to v9.9.9 at 02:00 UTC",
+      byKind: "automation",
+      byId: "upgrade-schedule",
+    };
+    await page.reload();
+    await page.getByTestId("pipeline-resume-btn").click();
+    await expect(dialog).toContainText(
+      "Resume and cancel the scheduled upgrade?",
+    );
+    await expect(dialog).toContainText("upgrading to v9.9.9 at 02:00 UTC");
+    await expect(dialog).toContainText("Resuming cancels that upgrade");
+    await dialog.getByTestId("confirm-cancel").click();
+    expect(writes).toEqual([]);
+    await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+      "Paused",
+    );
+  } finally {
+    await page.unroute("**/api/pipeline-pause");
+    await page.request.delete("/api/pipeline-pause").catch(() => {});
+  }
+});
+
+// Start CI run put a refusal on the page's action banner, behind the
+// dialog's scrim, and left the dialog open with nothing said (2026-11-16
+// walkthrough: POST /api/ci/runs answers 403 on a repository not in grain
+// CI mode).
+test("CI's Run workflow dialog says why a run was refused", async ({
+  page,
+}) => {
+  const refusal =
+    'grain CI is not enabled for acme/widgets: set its CI Mode to "Use Grain CI"';
+  const posts = [];
+  await page.route("**/api/ci/runs", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posts.push(route.request().postDataJSON());
+    return route.fulfill({ status: 403, json: { error: refusal } });
+  });
+  await page.goto("ci");
+  await page.getByRole("button", { name: "Run workflow" }).first().click();
+  const dialog = page.getByTestId("ci-run-dialog");
+  await dialog.getByTestId("ci-run-repo-input").fill("acme/widgets");
+  await dialog.getByTestId("ci-run-ref-input").fill("main");
+  await dialog.getByRole("button", { name: "Start CI run" }).click();
+  await expect(dialog.getByTestId("ci-dialog-error")).toContainText(refusal);
+  await expect(
+    dialog.getByRole("button", { name: "Start CI run" }),
+  ).toBeEnabled();
+  expect(posts).toHaveLength(1);
+
+  // Closing and opening it again starts clean.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole("button", { name: "Run workflow" }).first().click();
+  await expect(page.getByTestId("ci-dialog-error")).toHaveCount(0);
 });

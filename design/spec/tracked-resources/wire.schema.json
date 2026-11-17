@@ -1,0 +1,2461 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:grain:tracked-resources:wire:v1",
+  "title": "Proposed tracked-resource wire records",
+  "description": "Select the named $defs entry for a tool/route. Cross-field, digest, byte, registry, authority and transaction requirements in TDS-1 through TDS-16 are mandatory. Provider schemas validate extensible objects separately; recursive JSON is bounded to depth 16 by semantic validation.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/resolve_request"
+    },
+    {
+      "$ref": "#/$defs/resolve_result"
+    },
+    {
+      "$ref": "#/$defs/observe_request"
+    },
+    {
+      "$ref": "#/$defs/observe_result"
+    },
+    {
+      "$ref": "#/$defs/watch_request"
+    },
+    {
+      "$ref": "#/$defs/watch_result"
+    }
+  ],
+  "$defs": {
+    "token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 71,
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$",
+      "maxLength": 40
+    },
+    "json_value": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 32768
+        },
+        {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/json_value"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/json_value"
+          }
+        }
+      ]
+    },
+    "object": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "maxLength": 128
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
+    },
+    "schema": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "maxLength": 128
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/json_value"
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_id",
+        "method"
+      ],
+      "properties": {
+        "capability_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^https://[^?#]+$"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9_]{0,47}$"
+        }
+      }
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "release",
+        "protocol",
+        "identifier_schema",
+        "fact_schema",
+        "details_schema",
+        "config_revision"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "release": {
+          "$ref": "#/$defs/digest"
+        },
+        "protocol": {
+          "const": "1.0"
+        },
+        "identifier_schema": {
+          "$ref": "#/$defs/digest"
+        },
+        "fact_schema": {
+          "$ref": "#/$defs/digest"
+        },
+        "details_schema": {
+          "$ref": "#/$defs/digest"
+        },
+        "config_revision": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "tracking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "facet",
+        "mode",
+        "selector"
+      ],
+      "properties": {
+        "facet": {
+          "$ref": "#/$defs/id"
+        },
+        "mode": {
+          "enum": [
+            "follow_latest",
+            "pinned"
+          ]
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "pinned"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "selector": {
+                "$ref": "#/$defs/object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "selector": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "provider",
+        "resource_kind",
+        "identifier",
+        "tracking"
+      ],
+      "properties": {
+        "version": {
+          "const": "1"
+        },
+        "provider": {
+          "$ref": "#/$defs/identity"
+        },
+        "resource_kind": {
+          "$ref": "#/$defs/id"
+        },
+        "identifier": {
+          "$ref": "#/$defs/object"
+        },
+        "tracking": {
+          "$ref": "#/$defs/tracking"
+        }
+      }
+    },
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partition_id",
+        "grant_id",
+        "grant_revision",
+        "resource_scope",
+        "fields"
+      ],
+      "properties": {
+        "partition_id": {
+          "$ref": "#/$defs/id"
+        },
+        "grant_id": {
+          "$ref": "#/$defs/id"
+        },
+        "grant_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "resource_scope": {
+          "$ref": "#/$defs/object"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "retryable",
+        "summary",
+        "retry_after_seconds"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "invalid_result",
+            "unsupported_version",
+            "unsupported_kind",
+            "unsupported_selector",
+            "access_unavailable",
+            "cursor_expired",
+            "subscription_expired",
+            "stale_generation",
+            "rate_limited",
+            "unavailable",
+            "resource_limit",
+            "canceled"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "retry_after_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "enum": [
+                  "rate_limited",
+                  "unavailable"
+                ]
+              }
+            }
+          },
+          "then": {},
+          "else": {
+            "properties": {
+              "retryable": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "url"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lifecycle",
+        "disposition",
+        "subject_revision"
+      ],
+      "properties": {
+        "lifecycle": {
+          "enum": [
+            "active",
+            "terminal",
+            "unknown"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "merged",
+            "submitted",
+            "resolved",
+            "closed",
+            "succeeded",
+            "failed",
+            "canceled",
+            "unknown"
+          ]
+        },
+        "subject_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "version",
+        "kind",
+        "schema_digest",
+        "digest",
+        "data"
+      ],
+      "properties": {
+        "evidence_id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "$ref": "#/$defs/id"
+        },
+        "schema_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "data": {
+          "$ref": "#/$defs/object"
+        }
+      }
+    },
+    "resolve_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "pin",
+        "authorization_epoch",
+        "deadline",
+        "access",
+        "candidate",
+        "tracking"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "deadline": {
+          "$ref": "#/$defs/time"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "candidate": {
+          "$ref": "#/$defs/object"
+        },
+        "tracking": {
+          "$ref": "#/$defs/tracking"
+        }
+      }
+    },
+    "resolve_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "status",
+        "reference",
+        "display",
+        "error"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "invalid",
+            "unavailable",
+            "unauthorized",
+            "error"
+          ]
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "display": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/display"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "resolved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reference": {
+                "$ref": "#/$defs/reference"
+              },
+              "display": {
+                "$ref": "#/$defs/display"
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "reference": {
+                "type": "null"
+              },
+              "error": {
+                "$ref": "#/$defs/error"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "observe_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "pin",
+        "authorization_epoch",
+        "deadline",
+        "access",
+        "reference",
+        "observation_generation",
+        "previous_revision"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "deadline": {
+          "$ref": "#/$defs/time"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "observation_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "previous_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "observe_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "reference",
+        "observation_generation",
+        "availability",
+        "revision",
+        "fact_version",
+        "facts",
+        "details",
+        "evidence",
+        "display",
+        "observed_at",
+        "valid_until",
+        "error"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "observation_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "unavailable",
+            "deleted",
+            "unauthorized",
+            "error"
+          ]
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fact_version": {
+          "$ref": "#/$defs/id"
+        },
+        "facts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/facts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "maxItems": 100,
+          "minItems": 0
+        },
+        "display": {
+          "$ref": "#/$defs/display"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/time"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/time"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "availability": {
+                "const": "available"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "revision": {
+                "$ref": "#/$defs/token"
+              },
+              "facts": {
+                "$ref": "#/$defs/facts"
+              },
+              "details": {
+                "$ref": "#/$defs/object"
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "revision": {
+                "type": "null"
+              },
+              "facts": {
+                "type": "null"
+              },
+              "details": {
+                "type": "null"
+              },
+              "evidence": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "availability": {
+                "enum": [
+                  "unavailable",
+                  "unauthorized",
+                  "error"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "$ref": "#/$defs/error"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "watch_describe_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "pin",
+        "authorization_epoch",
+        "deadline",
+        "access",
+        "operation",
+        "reference"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "deadline": {
+          "$ref": "#/$defs/time"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "operation": {
+          "const": "describe"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        }
+      }
+    },
+    "watch_ensure_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "pin",
+        "authorization_epoch",
+        "deadline",
+        "access",
+        "operation",
+        "reference",
+        "subscription_id",
+        "generation",
+        "expires_at",
+        "poll_seconds"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "deadline": {
+          "$ref": "#/$defs/time"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "operation": {
+          "const": "ensure"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "subscription_id": {
+          "$ref": "#/$defs/id"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "$ref": "#/$defs/time"
+        },
+        "poll_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600
+        }
+      }
+    },
+    "watch_read_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "pin",
+        "authorization_epoch",
+        "deadline",
+        "access",
+        "operation",
+        "reference",
+        "subscription_id",
+        "generation",
+        "after_cursor",
+        "limit",
+        "wait_seconds"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "deadline": {
+          "$ref": "#/$defs/time"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "operation": {
+          "const": "read"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "subscription_id": {
+          "$ref": "#/$defs/id"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "after_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "wait_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20
+        }
+      }
+    },
+    "watch_renew_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "pin",
+        "authorization_epoch",
+        "deadline",
+        "access",
+        "operation",
+        "reference",
+        "subscription_id",
+        "generation",
+        "expires_at"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "deadline": {
+          "$ref": "#/$defs/time"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "operation": {
+          "const": "renew"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "subscription_id": {
+          "$ref": "#/$defs/id"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "$ref": "#/$defs/time"
+        }
+      }
+    },
+    "watch_cancel_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "pin",
+        "authorization_epoch",
+        "deadline",
+        "access",
+        "operation",
+        "reference",
+        "subscription_id",
+        "generation"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "deadline": {
+          "$ref": "#/$defs/time"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "operation": {
+          "const": "cancel"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "subscription_id": {
+          "$ref": "#/$defs/id"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "watch_request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/watch_describe_request"
+        },
+        {
+          "$ref": "#/$defs/watch_ensure_request"
+        },
+        {
+          "$ref": "#/$defs/watch_read_request"
+        },
+        {
+          "$ref": "#/$defs/watch_renew_request"
+        },
+        {
+          "$ref": "#/$defs/watch_cancel_request"
+        }
+      ]
+    },
+    "hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subscription_id",
+        "generation",
+        "event_id",
+        "cursor",
+        "reference_key",
+        "emitted_at"
+      ],
+      "properties": {
+        "subscription_id": {
+          "$ref": "#/$defs/id"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "cursor": {
+          "$ref": "#/$defs/token"
+        },
+        "reference_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "emitted_at": {
+          "$ref": "#/$defs/time"
+        }
+      }
+    },
+    "watch_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "request_id",
+        "status",
+        "modes",
+        "subscription_id",
+        "generation",
+        "cursor",
+        "replay",
+        "expires_at",
+        "min_poll_seconds",
+        "max_poll_seconds",
+        "events",
+        "has_more",
+        "error"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "unsupported",
+            "unauthorized",
+            "error"
+          ]
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "cursor",
+              "poll"
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "subscription_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "replay": {
+          "enum": [
+            "gap_free",
+            "gap_possible",
+            "expired"
+          ]
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_poll_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600
+        },
+        "max_poll_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hint"
+          },
+          "maxItems": 100,
+          "minItems": 0
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ready"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "type": "null"
+              },
+              "modes": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "error": {
+                "$ref": "#/$defs/error"
+              },
+              "events": {
+                "maxItems": 0
+              },
+              "cursor": {
+                "type": "null"
+              },
+              "has_more": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "kind_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "identifier_schema",
+        "selector_schema",
+        "candidate_schema",
+        "details_schema",
+        "fact_version",
+        "facets",
+        "supports_pinned"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/id"
+        },
+        "identifier_schema": {
+          "$ref": "#/$defs/schema"
+        },
+        "selector_schema": {
+          "$ref": "#/$defs/schema"
+        },
+        "candidate_schema": {
+          "$ref": "#/$defs/schema"
+        },
+        "details_schema": {
+          "$ref": "#/$defs/schema"
+        },
+        "fact_version": {
+          "$ref": "#/$defs/id"
+        },
+        "facets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "supports_pinned": {
+          "type": "boolean"
+        }
+      }
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "method",
+        "release",
+        "kinds",
+        "detection",
+        "min_poll_seconds",
+        "max_poll_seconds",
+        "cursor_retention_seconds"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "1.0"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9_]{0,47}$"
+        },
+        "release": {
+          "$ref": "#/$defs/digest"
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/kind_descriptor"
+          },
+          "maxItems": 100,
+          "minItems": 1
+        },
+        "detection": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "cursor",
+              "poll"
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "min_poll_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600
+        },
+        "max_poll_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600
+        },
+        "cursor_retention_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 604800
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "evidence_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "version",
+        "schema_digest",
+        "schema"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/id"
+        },
+        "schema_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "schema": {
+          "$ref": "#/$defs/schema"
+        }
+      }
+    },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "pin",
+        "descriptor",
+        "evidence_schemas",
+        "access_scope_schema",
+        "credential_binding",
+        "enabled"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/descriptor"
+        },
+        "evidence_schemas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence_schema"
+          },
+          "maxItems": 100,
+          "minItems": 0
+        },
+        "access_scope_schema": {
+          "$ref": "#/$defs/schema"
+        },
+        "credential_binding": {
+          "$ref": "#/$defs/id"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "relation": {
+      "enum": [
+        "watches",
+        "uses",
+        "produced_by",
+        "spawned_task"
+      ]
+    },
+    "task_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "reference_id",
+        "reference",
+        "pin",
+        "relation",
+        "view_id",
+        "reference_revision"
+      ],
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reference_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "relation": {
+          "$ref": "#/$defs/relation"
+        },
+        "view_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reference_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "child_role": {
+          "enum": [
+            "required",
+            "advisory",
+            "independent"
+          ]
+        },
+        "gate_id": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "relation": {
+                "const": "spawned_task"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "child_role"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "child_role"
+                  ]
+                },
+                {
+                  "required": [
+                    "gate_id"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "child_role"
+            ],
+            "properties": {
+              "child_role": {
+                "const": "required"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "gate_id"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "gate_id"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "attach_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_contract_revision",
+        "idempotency_key",
+        "reason",
+        "candidate",
+        "pin",
+        "tracking",
+        "relation",
+        "unresolved",
+        "grant_id"
+      ],
+      "properties": {
+        "expected_contract_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "candidate": {
+          "$ref": "#/$defs/object"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "tracking": {
+          "$ref": "#/$defs/tracking"
+        },
+        "relation": {
+          "enum": [
+            "watches",
+            "uses",
+            "produced_by"
+          ]
+        },
+        "unresolved": {
+          "type": "boolean"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "unresolved": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "grant_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "edit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_contract_revision",
+        "idempotency_key",
+        "reason",
+        "candidate",
+        "pin",
+        "tracking",
+        "relation",
+        "unresolved",
+        "grant_id",
+        "expected_reference_revision"
+      ],
+      "properties": {
+        "expected_contract_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "candidate": {
+          "$ref": "#/$defs/object"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "tracking": {
+          "$ref": "#/$defs/tracking"
+        },
+        "relation": {
+          "enum": [
+            "watches",
+            "uses",
+            "produced_by"
+          ]
+        },
+        "unresolved": {
+          "type": "boolean"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_reference_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "unresolved": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "grant_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "remove_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_contract_revision",
+        "idempotency_key",
+        "reason",
+        "expected_reference_revision"
+      ],
+      "properties": {
+        "expected_contract_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expected_reference_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "wait_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "after_sequence",
+        "max_wait_seconds",
+        "park",
+        "expected_reference_revision",
+        "idempotency_key"
+      ],
+      "properties": {
+        "after_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_wait_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30
+        },
+        "park": {
+          "type": "boolean"
+        },
+        "expected_reference_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "park": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_wait_seconds": {
+                "const": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "access_grant_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_contract_revision",
+        "idempotency_key",
+        "reason",
+        "registration_pin_digest",
+        "credential_binding",
+        "resource_scope",
+        "fields",
+        "operations",
+        "expires_at",
+        "share_group"
+      ],
+      "properties": {
+        "expected_contract_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "registration_pin_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "credential_binding": {
+          "$ref": "#/$defs/id"
+        },
+        "resource_scope": {
+          "$ref": "#/$defs/object"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "resolve",
+              "observe",
+              "watch"
+            ]
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "expires_at": {
+          "$ref": "#/$defs/time"
+        },
+        "share_group": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "revoke_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected_contract_revision",
+        "idempotency_key",
+        "reason",
+        "expected_grant_revision"
+      ],
+      "properties": {
+        "expected_contract_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expected_grant_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "builtin_task_identifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installation_id",
+        "task_id"
+      ],
+      "properties": {
+        "installation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$",
+          "maxLength": 64
+        }
+      }
+    },
+    "builtin_task_details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "closed_at",
+        "outcome",
+        "successor"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "proposed",
+            "deferred",
+            "queued",
+            "running",
+            "awaiting_reply",
+            "awaiting_submit",
+            "completed",
+            "failed",
+            "closed"
+          ]
+        },
+        "closed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "canceled",
+            "unknown"
+          ]
+        },
+        "successor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/builtin_task_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "builtin_task_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installation_id",
+        "task_id",
+        "task_revision",
+        "closed_at",
+        "outcome",
+        "closure_receipt_id"
+      ],
+      "properties": {
+        "installation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$",
+          "maxLength": 64
+        },
+        "task_revision": {
+          "$ref": "#/$defs/id"
+        },
+        "closed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "canceled",
+            "unknown"
+          ]
+        },
+        "closure_receipt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "resource_projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "reference_id",
+        "reference_revision",
+        "contract_revision",
+        "state",
+        "reference",
+        "candidate",
+        "pin",
+        "relation",
+        "observation_id",
+        "accepted_sequence",
+        "observation",
+        "freshness",
+        "gate_ids",
+        "error",
+        "tracking",
+        "grant_id"
+      ],
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reference_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reference_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "contract_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "resolved",
+            "unresolved",
+            "unavailable",
+            "removed"
+          ]
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "relation": {
+          "$ref": "#/$defs/relation"
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accepted_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/observe_result"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unknown"
+          ]
+        },
+        "gate_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tracking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/tracking"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "resource_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource_projection"
+          },
+          "maxItems": 100
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "mutation_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "idempotency_key",
+        "contract_revision",
+        "record_revision",
+        "removed"
+      ],
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/id"
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        },
+        "contract_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "record_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "removed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "wait_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "accepted_sequence",
+        "wait_id",
+        "parked",
+        "error"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "changed",
+            "unchanged",
+            "unavailable"
+          ]
+        },
+        "accepted_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "wait_id": {
+          "$ref": "#/$defs/id"
+        },
+        "parked": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "grant_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grant_id",
+        "grant_revision",
+        "authorization_epoch",
+        "expires_at",
+        "idempotency_key"
+      ],
+      "properties": {
+        "grant_id": {
+          "$ref": "#/$defs/id"
+        },
+        "grant_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authorization_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "$ref": "#/$defs/time"
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "api_error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "summary",
+        "retry_after_seconds"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "invalid_result",
+            "unsupported_version",
+            "unsupported_kind",
+            "unsupported_selector",
+            "access_unavailable",
+            "cursor_expired",
+            "subscription_expired",
+            "stale_generation",
+            "rate_limited",
+            "unavailable",
+            "resource_limit",
+            "canceled",
+            "revision_conflict",
+            "idempotency_conflict",
+            "idempotency_expired",
+            "required_binding",
+            "cycle",
+            "evidence_expired"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "retry_after_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "list_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "cursor"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "resolve_preview_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "pin",
+        "tracking",
+        "grant_id"
+      ],
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/object"
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "tracking": {
+          "$ref": "#/$defs/tracking"
+        },
+        "grant_id": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    }
+  }
+}

@@ -257,7 +257,7 @@ func (w *holdWorld) proposalsOf(parent string) []model.Task {
 	}
 	var out []model.Task
 	for _, t := range all {
-		if o := t.Origin.Attribution.OnBehalfOf; (o != nil && o.ID == parent) || linkTarget(t, model.LinkProposedBy) == parent {
+		if o := t.Filing.Attribution.OnBehalfOf; (o != nil && o.ID == parent) || linkTarget(t, model.LinkProposedBy) == parent {
 			out = append(out, t)
 		}
 	}
@@ -298,7 +298,7 @@ func (w *holdWorld) workThenReview(subject string, edit string, review func(mode
 		if task.ID == subject {
 			return w.changeScript(task, edit)
 		}
-		if task.Origin.Reason == model.ReasonReview && review != nil {
+		if task.Filing.Reason == model.ReasonReview && review != nil {
 			return review(task)
 		}
 		return []antigravity.Step{finalText("no findings")}
@@ -334,7 +334,7 @@ func (w *holdWorld) heldOn(subject model.Task, path string, releasable bool) str
 		w.t.Fatalf("no security-review-task link: %+v", got.Links)
 	}
 	review := w.task(reviewID)
-	if review.Origin.Reason != model.ReasonReview || review.Base != model.BranchName(subject.ID) ||
+	if review.Filing.Reason != model.ReasonReview || review.Base != model.BranchName(subject.ID) ||
 		!strings.HasPrefix(review.Title, "Security review: ") {
 		w.t.Fatalf("security review is not stacked on the branch: %+v", review)
 	}

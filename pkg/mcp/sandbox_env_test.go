@@ -16,7 +16,11 @@ package mcp
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -132,5 +136,56 @@ func TestSandboxEnvFallbackPath(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected PATH=%s in sandboxEnv when PATH is empty, got: %v", sandboxFallbackPath, env)
+	}
+}
+
+func TestSandboxEnvFallbackTmpDirWhenDefaultTmpUnusable(t *testing.T) {
+	root := t.TempDir()
+	rootNormal := t.TempDir()
+	dataDir := t.TempDir()
+	hiddenTmp := filepath.Join(dataDir, "tmp")
+	if err := os.MkdirAll(hiddenTmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nestedRoot := filepath.Join(dataDir, "sandboxes", "run-1")
+	if err := os.MkdirAll(nestedRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TMPDIR", "")
+	origProbe := probeDefaultTmp
+	t.Cleanup(func() { probeDefaultTmp = origProbe })
+
+	wantTmp := filepath.Join(root, ".t")
+
+	probeDefaultTmp = func() error { return syscall.ENOSPC }
+	env := sandboxEnv(root)
+	if !slices.Contains(env, "TMPDIR="+wantTmp) {
+		t.Fatalf("expected TMPDIR=%s when /tmp returns ENOSPC, got: %v", wantTmp, env)
+	}
+	if info, err := os.Stat(wantTmp); err != nil || !info.IsDir() {
+		t.Fatalf("expected fallback tmp dir %s to exist, stat err=%v", wantTmp, err)
+	}
+
+	probeDefaultTmp = func() error { return nil }
+	envNormal := sandboxEnv(rootNormal)
+	for _, kv := range envNormal {
+		if strings.HasPrefix(kv, "TMPDIR=") {
+			t.Errorf("did not expect fallback TMPDIR when /tmp probe succeeds, got %q", kv)
+		}
+	}
+
+	// An inherited TMPDIR inside a path hidden from the sandbox (such as
+	// <DataDir>/tmp when DataDir is hidden by bubblewrap) or pointing at a
+	// missing directory must be replaced with <root>/.t rather than passed
+	// through into the confined subprocess.
+	t.Setenv("TMPDIR", hiddenTmp)
+	wantNestedTmp := filepath.Join(nestedRoot, ".t")
+	envHidden := sandboxEnvWithHide(nestedRoot, []string{dataDir})
+	if !slices.Contains(envHidden, "TMPDIR="+wantNestedTmp) {
+		t.Fatalf("expected TMPDIR=%s when host TMPDIR is hidden by hide, got: %v", wantNestedTmp, envHidden)
+	}
+	if slices.Contains(envHidden, "TMPDIR="+hiddenTmp) {
+		t.Fatalf("did not expect hidden host TMPDIR=%s to be passed through: %v", hiddenTmp, envHidden)
 	}
 }

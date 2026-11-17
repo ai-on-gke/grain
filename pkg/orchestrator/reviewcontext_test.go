@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -166,6 +168,75 @@ func TestSecurityHoldReReviewNamesEarlierReviewFindingsAndIncrementalDelta(t *te
 	})
 }
 
+// A question answered on GitHub -- its thread resolved, or replied to -- reads
+// as answered in the next review's earlier-reviews section. GitHub's review
+// comments carry their line as a pointer, and a finding was once matched to
+// its comment by formatting that pointer, so no question answered on GitHub
+// ever read as answered (docs/test-runs/2026-11-14-review-context.md).
+func TestEarlierReviewQuestionAnsweredOnGitHubReadsAnswered(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		answer func(sim *githubsim.Sim, number, rootID int)
+	}{
+		{"resolved-thread", func(sim *githubsim.Sim, _, rootID int) {
+			sim.ResolvedThreads = map[string]bool{fmt.Sprintf("thread-%d", rootID): true}
+		}},
+		{"replied", func(sim *githubsim.Sim, number, rootID int) {
+			line := 7
+			sim.ReviewComments[number] = append(sim.ReviewComments[number], github.ReviewComment{
+				ID: rootID + 1, User: "alice", Path: "pkg/ui/server.go", Line: &line,
+				Body: "Remove it.", InReplyTo: rootID,
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+			branch := model.BranchName(task.ID)
+
+			first := reloaded(t, ctx, store, firstID)
+			res := toolResult(
+				reviewFinding("keep legacy endpoint or remove it?", "pkg/ui/server.go", 7),
+				agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Left one question."}},
+			)
+			if err := orchestrator.ProcessResult(ctx, store, client, first, res, firstID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+				t.Fatalf("ProcessResult (first review): %v", err)
+			}
+
+			// A person submits the draft review on GitHub and answers its
+			// one thread there, not in grain.
+			number := sim.PullRequests[0].Number
+			const rootID = 4100
+			line := 7
+			if sim.ReviewComments == nil {
+				sim.ReviewComments = map[int][]github.ReviewComment{}
+			}
+			sim.ReviewComments[number] = append(sim.ReviewComments[number], github.ReviewComment{
+				ID: rootID, User: "grain-agent", Path: "pkg/ui/server.go", Line: &line,
+				Body: "keep legacy endpoint or remove it?",
+			})
+			tc.answer(sim, number, rootID)
+
+			pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "new proxy check\n")
+			run2 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+			if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID), run2, "t1-2", baseTime.Add(30*time.Minute)); err != nil {
+				t.Fatalf("ProcessResult (second push): %v", err)
+			}
+			secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+			if secondID == "" || secondID == firstID {
+				t.Fatalf("expected new security review, got %q (first %q)", secondID, firstID)
+			}
+			body := reloaded(t, ctx, store, secondID).Body
+			if want := "- [answered] `pkg/ui/server.go:7`: keep legacy endpoint or remove it?"; !strings.Contains(body, want) {
+				t.Errorf("second security review body missing %q:\n%s", want, body)
+			}
+		})
+	}
+}
+
 // When an earlier security review pushed fixes onto the branch that touched the
 // trust boundary, the follow-up security review names the earlier review, its
 // clean (pushed fixes) verdict, the commit SHA it pushed, and reviews the delta.
@@ -222,7 +293,7 @@ func TestSecurityHoldReReviewSupersedingUnfinishedReviewReadsInFull(t *testing.T
 // When two review kinds are filed for the same head -- grain's security review
 // beside pr-review, or two distinct gating triggers -- each review's body names
 // the other review task and instructs the reviewer to check existing PR review
-// threads with `grain pr open` rather than re-raising duplicate questions.
+// threads with `grain pr threads` rather than re-raising duplicate questions.
 func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 	t.Parallel()
 
@@ -258,7 +329,7 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 			"## Parallel reviews of this head",
 			fmt.Sprintf("Task %s (`pr-review`)", prReviewID),
 			fmt.Sprintf("Do not re-raise a question or finding that task %s has already posted", prReviewID),
-			"`grain pr open`",
+			"`grain pr threads`",
 		} {
 			if !strings.Contains(secReview.Body, want) {
 				t.Errorf("security review body missing %q:\n%s", want, secReview.Body)
@@ -268,7 +339,7 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 			"## Parallel reviews of this head",
 			fmt.Sprintf("Task %s (`security-review`)", secID),
 			fmt.Sprintf("Do not re-raise a question or finding that task %s has already posted", secID),
-			"`grain pr open`",
+			"`grain pr threads`",
 		} {
 			if !strings.Contains(prReview.Body, want) {
 				t.Errorf("pr-review body missing %q:\n%s", want, prReview.Body)
@@ -310,10 +381,10 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 		}
 		r0 := reloaded(t, ctx, store, ids[0])
 		r1 := reloaded(t, ctx, store, ids[1])
-		if !strings.Contains(r0.Body, fmt.Sprintf("Task %s", r1.ID)) || !strings.Contains(r0.Body, "`grain pr open`") {
+		if !strings.Contains(r0.Body, fmt.Sprintf("Task %s", r1.ID)) || !strings.Contains(r0.Body, "`grain pr threads`") {
 			t.Errorf("first trigger review body does not name sibling %s:\n%s", r1.ID, r0.Body)
 		}
-		if !strings.Contains(r1.Body, fmt.Sprintf("Task %s", r0.ID)) || !strings.Contains(r1.Body, "`grain pr open`") {
+		if !strings.Contains(r1.Body, fmt.Sprintf("Task %s", r0.ID)) || !strings.Contains(r1.Body, "`grain pr threads`") {
 			t.Errorf("second trigger review body does not name sibling %s:\n%s", r0.ID, r1.Body)
 		}
 	})
@@ -374,7 +445,7 @@ func TestEarlierReviewsIncludeAllKindsAndCapQuestionsAtAboutTwoKB(t *testing.T) 
 		if !strings.Contains(review.Body, fmt.Sprintf("Task %s (`pr-review`", pr1ID)) {
 			t.Errorf("%s missing earlier pr-review %s:\n%s", label, pr1ID, review.Body)
 		}
-		if !strings.Contains(review.Body, "omitted; read full threads with `grain pr open`") {
+		if !strings.Contains(review.Body, "omitted; read full threads with `grain pr threads`") {
 			t.Errorf("%s did not cap 20 verbose questions with omitted notice:\n%s", label, review.Body)
 		}
 		_, afterEarlier, ok := strings.Cut(review.Body, "## Earlier reviews of this pull request\n\n")
@@ -442,6 +513,61 @@ func TestQueuedDependentReviewRefreshesOnFinishAndPreservesContextWhenStripped(t
 			if !strings.Contains(refreshed.Body, want) {
 				t.Errorf("queued review body was not refreshed with %q:\n%s", want, refreshed.Body)
 			}
+		}
+	})
+
+	// The cycle closing the finished review refreshes the queued one again,
+	// and reads GitHub doing it: a question resolved on the pull request
+	// since reads as answered, rather than the close rewriting the section
+	// with nothing but the store (docs/test-runs/2026-11-14-review-context.md).
+	t.Run("close-refresh-reads-github", func(t *testing.T) {
+		t.Parallel()
+		ctx, store, sim, client, task := finishGated(t,
+			[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+			"config/secrets/prod.yml")
+		firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+		if err := store.StartRun(ctx, model.Run{
+			ID: firstID + "-1", TaskID: firstID, Sandbox: "sb-1", Attempt: 1, StartedAt: baseTime.Add(time.Minute),
+		}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/staging.yml", "next\n")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(2*time.Minute))
+		secondID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+
+		if err := store.FinishRun(ctx, firstID+"-1", baseTime.Add(3*time.Minute), "succeeded", ""); err != nil {
+			t.Fatal(err)
+		}
+		res := toolResult(
+			reviewFinding("rotate key before deploy", "config/secrets/prod.yml", 1),
+			agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "One finding."}},
+		)
+		if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+			res, firstID+"-1", baseTime.Add(3*time.Minute)); err != nil {
+			t.Fatalf("ProcessResult (first review): %v", err)
+		}
+		const open = "- [open] `config/secrets/prod.yml:1`: rotate key before deploy"
+		if body := reloaded(t, ctx, store, secondID).Body; !strings.Contains(body, open) {
+			t.Fatalf("queued review body missing %q:\n%s", open, body)
+		}
+
+		// A person submits the draft and resolves its thread on GitHub.
+		number := sim.PullRequests[0].Number
+		line := 1
+		sim.ReviewComments = map[int][]github.ReviewComment{number: {{
+			ID: 4200, User: "grain-agent", Path: "config/secrets/prod.yml", Line: &line, Body: "rotate key before deploy",
+		}}}
+		sim.ResolvedThreads = map[string]bool{"thread-4200": true}
+
+		if err := orchestrator.SyncReviewsWithClient(ctx, store, client, baseTime.Add(4*time.Minute)); err != nil {
+			t.Fatalf("SyncReviewsWithClient: %v", err)
+		}
+		if state, err := store.State(ctx, firstID); err != nil || state != model.StateClosed {
+			t.Fatalf("first review state = %v, %v; want closed by the cycle", state, err)
+		}
+		const answered = "- [answered] `config/secrets/prod.yml:1`: rotate key before deploy"
+		if body := reloaded(t, ctx, store, secondID).Body; !strings.Contains(body, answered) {
+			t.Errorf("queued review body after the close missing %q:\n%s", answered, body)
 		}
 	})
 

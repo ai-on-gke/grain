@@ -44,7 +44,7 @@ import (
 // (it is already the older of any task it ties with, so the queue's FIFO
 // order puts it first at that priority), the task is told why, and a
 // FamilyScheduleStarved notification is raised in the Inbox until it
-// closes.
+// closes or the schedule fires again (fireSchedule).
 const (
 	// ScheduleStarvedAfter is how long a held occurrence may wait on a
 	// never-started task before the schedule counts as starved.
@@ -77,6 +77,21 @@ type StarvedScheduleFiring struct {
 	// filed the task (ScheduleSkip.HeldByScheduleID), empty when the task
 	// is the schedule's own previous firing; Group is that group.
 	HeldBy, Group string
+	// Review is a workflow schedule's review holding it
+	// (SuppressedByOpenReview) rather than a task schedule's previous
+	// firing. Unlike that firing, a review holds the schedule only until
+	// ReviewUntil (workflowReviewHold), after which the schedule fires
+	// over it; ReviewUntil is zero when the review's filing time cannot
+	// be measured (reviewFiledAt), which holds it with no date to give.
+	Review      bool
+	ReviewUntil time.Time
+	// DeliberatelyHeld is true when the schedule is held by a declared
+	// condition (HoldReason, such as SuppressedByPublishingHeld) rather than
+	// starved behind a never-started firing: TaskID names the task holding it
+	// (baseBranchPublishing[].triageTaskID), no priority is raised, and no
+	// FamilyScheduleStarved notification is opened.
+	DeliberatelyHeld bool
+	HoldReason       ScheduleSuppressionReason
 }
 
 // blocker says whose firing the starved task came from, after "#<id> from".
@@ -107,17 +122,45 @@ func ScheduleStarved(occurrence, now time.Time, occurrences int) bool {
 // a run, and has been holding the schedule past ScheduleStarvedAfter or
 // ScheduleStarvedOccurrences.
 //
+// The open task may be a task schedule's previous firing
+// (SuppressedByOpenTask) or a workflow schedule's review
+// (SuppressedByOpenReview). A review that has never started is not one a
+// person is reading -- it never got a worker -- so workflowReviewHold
+// would otherwise hold the schedule for days in silence (grain/task-5445:
+// a daily workflow's review sat queued for 30h at priority 5). A review
+// that has run, or finished into awaiting_reply for somebody to read, is
+// left alone by the queued and never-run checks below.
+//
+// A review is held only for workflowReviewHold, though, after which the
+// schedule fires over it and leaves it open; so the notification clears
+// when the schedule fires as well as when its task closes, and one open
+// for a different task than k's is replaced rather than kept.
+//
 // Every cycle may call it: the priority only ever rises, the comment is
 // written only when it does, and the notification is raised only while
-// none is open for the schedule.
+// none is open for the schedule's current blocker.
 func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedule, k ScheduleSkip,
 	now time.Time, loc *time.Location) (StarvedScheduleFiring, error) {
 
-	if k.Outcome != ScheduleSkipHeld || k.Reason != SuppressedByOpenTask || k.TaskID == "" {
+	if k.Outcome != ScheduleSkipHeld || k.TaskID == "" {
 		return StarvedScheduleFiring{}, nil
 	}
 	occurrences := 1 + foldedOccurrences(sched, now, loc)
 	if !ScheduleStarved(k.Occurrence, now, occurrences) {
+		return StarvedScheduleFiring{}, nil
+	}
+	if k.Reason == SuppressedByPublishingHeld {
+		// Deliberately held while base-branch publishing is held: name the
+		// holding triage task rather than staying silent or calling it starved.
+		return StarvedScheduleFiring{
+			TaskID:           k.TaskID,
+			HeldFor:          now.Sub(k.Occurrence),
+			Occurrences:      occurrences,
+			DeliberatelyHeld: true,
+			HoldReason:       k.Reason,
+		}, nil
+	}
+	if k.Reason != SuppressedByOpenTask && k.Reason != SuppressedByOpenReview {
 		return StarvedScheduleFiring{}, nil
 	}
 	st, err := s.State(ctx, k.TaskID)
@@ -144,6 +187,19 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 	if k.HeldByScheduleID != "" && k.HeldByScheduleID != sched.ID {
 		out.HeldBy, out.Group = k.HeldByScheduleID, strings.TrimSpace(sched.OverlapGroup)
 	}
+	if k.Reason == SuppressedByOpenReview {
+		review, err := s.GetTask(ctx, k.TaskID)
+		if err != nil {
+			return StarvedScheduleFiring{}, fmt.Errorf("reading review %s: %w", k.TaskID, err)
+		}
+		if review == nil {
+			return StarvedScheduleFiring{}, fmt.Errorf("review %s not found", k.TaskID)
+		}
+		out.Review = true
+		if filed := reviewFiledAt(*review, sched); !filed.IsZero() {
+			out.ReviewUntil = workflowReviewHold(sched, filed, loc)
+		}
+	}
 	if err := s.UpdateTask(ctx, k.TaskID, func(t *Task) error {
 		out.From, out.To = t.Priority, t.Priority
 		if top > t.Priority {
@@ -163,6 +219,18 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 	open, err := s.OpenNotification(ctx, subject)
 	if err != nil {
 		return out, err
+	}
+	if open != nil && open.TaskID != k.TaskID {
+		// The blocker has changed since it was raised -- another task
+		// in the overlap group, or a later firing's review while an
+		// abandoned one is still open -- with no firing in between to
+		// clear it. RaiseNotification would only re-raise the open row,
+		// keeping the old task and its ClearsWhen, so clear it and raise
+		// one that names (and clears with) the task holding it now.
+		if _, err := s.ClearNotification(ctx, subject, PrincipalString(SchedulePrincipal)); err != nil {
+			return out, err
+		}
+		open = nil
 	}
 	if open == nil {
 		if _, err := s.RaiseNotification(ctx, Notification{
@@ -217,11 +285,23 @@ func StarvedScheduleComment(sched Schedule, f StarvedScheduleFiring) string {
 		raised = fmt.Sprintf("Grain raised its priority from %d to %d, the highest any other queued task has, "+
 			"so it is dispatched next at that priority.", f.From, f.To)
 	}
+	held := "Every one of them is held until this task closes."
+	stops := "stops for as long as it waits"
+	if f.Review {
+		stops = "skips every occurrence while it waits"
+		// A review holds its schedule only for workflowReviewHold, and
+		// then the schedule fires over it (fireWorkflowSchedule).
+		held = "Every one of them is held until this review closes."
+		if !f.ReviewUntil.IsZero() {
+			held = fmt.Sprintf("Every one of them is held until this review closes or until %s, "+
+				"when the schedule fires over it and leaves it open.", f.ReviewUntil.UTC().Format(time.RFC3339))
+		}
+	}
 	return fmt.Sprintf("Schedule %q (%s) is set to overlap: skip, and this task, from %s, "+
 		"has been queued without ever starting while %d of its occurrences came due (%s since the first). "+
-		"Every one of them is held until this task closes. %s\n\n"+
-		"A schedule whose task cannot get a worker stops for as long as it waits, so this task is kept "+
+		"%s %s\n\n"+
+		"A schedule whose task cannot get a worker %s, so this task is kept "+
 		"and raised rather than replaced by a new firing at the back of the queue. If it should not run "+
 		"at all, close it and the schedule fires again on its next cycle.",
-		scheduleName(sched), sched.ID, f.blocker(), f.Occurrences, f.HeldFor.Round(time.Minute), raised)
+		scheduleName(sched), sched.ID, f.blocker(), f.Occurrences, f.HeldFor.Round(time.Minute), held, raised, stops)
 }

@@ -1776,7 +1776,7 @@ func TestGrainCIRetargetedReviewLosesAutoMerge(t *testing.T) {
 		Target:    &repo,
 		Base:      upstream.Branch,
 		AutoMerge: true,
-		Origin:    model.Origin{Reason: model.ReasonReview},
+		Filing:    model.Filing{Reason: model.ReasonReview},
 		Approval:  &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
 		Grants:    []model.Grant{{Capability: grainci.Grant}},
 		Links:     []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#4706"}},

@@ -48,10 +48,13 @@ export type BatchEditResult =
 
 // taskPriority is a Task priority box's value as a number: a whole
 // number from 1 up (default 5, higher runs first), else NaN -- the rule
-// the task pane's own priority box and classic Bulk edit hold to.
+// classic Bulk edit holds to (ui/src/wholeNumber.js). Exponent notation
+// is a whole number too: "1e3" is 1000, as classic reads it, where a
+// digits-only test refused it outright; "2.5", "0", "-1" and "0x10"
+// stay refused.
 export function taskPriority(text: string): number {
   const s = text.trim();
-  if (!/^\d+$/.test(s)) return NaN;
+  if (!/^\+?\d+(\.\d+)?(e\+?\d+)?$/i.test(s)) return NaN;
   const n = Number(s);
   return n >= 1 && Number.isSafeInteger(n) ? n : NaN;
 }
@@ -103,6 +106,7 @@ export function taskPriority(text: string): number {
             [value]="priority()"
             [attr.aria-invalid]="priorityInvalid() ? 'true' : null"
             (input)="priority.set(pri.value); mark('priority')"
+            (blur)="normalizePriority()"
           />
           @if (priorityInvalid()) {
             <span class="field-error" data-testid="bulk-priority-error"
@@ -247,6 +251,13 @@ export class BatchEditDialogComponent implements OnInit {
 
   protected readonly change = signal<ReadonlySet<string>>(new Set());
   protected readonly priority = signal("");
+  // normalizePriority rewrites an accepted box ("1e3", " 12 ") as the
+  // number it files, so what the box shows is what Apply sends.
+  protected normalizePriority(): void {
+    const n = taskPriority(this.priority());
+    if (!Number.isNaN(n) && String(n) !== this.priority())
+      this.priority.set(String(n));
+  }
   protected readonly base = signal("");
   protected readonly autoMerge = signal(false);
   protected readonly capability = signal("");
