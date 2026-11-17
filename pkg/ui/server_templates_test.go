@@ -20,9 +20,12 @@ package ui_test
 // templates_test.go.
 
 import (
+	"context"
 	"net/http"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -224,5 +227,63 @@ func TestCreateTaskFromATemplateOverHTTP(t *testing.T) {
 	}
 	if task.Description != "Deploy payments now." {
 		t.Errorf("description = %q, want the template's, filled in", task.Description)
+	}
+}
+
+// A schedule whose stored row still names its own base (for example after
+// SyncRepoDeclarations writes .grain/schedules/*.yml's `base:` alongside a
+// bound .grain/templates/*.yml) reports the bound template's firing target and
+// base on GET /api/schedules -- including an empty base when the binding asks
+// for the target repository's default branch.
+func TestListSchedulesReportsTheBoundTemplatesFiringBase(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+
+	boundRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	staleRepo := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	explicitID := "tmpl-bound-explicit"
+	defaultID := "tmpl-bound-default"
+	for _, tmpl := range []model.Template{
+		{ID: explicitID, Name: "Release cut", Title: "Cut release", Target: &boundRepo, Base: "release/v1", CreatedAt: now},
+		{ID: defaultID, Name: "Default cut", Title: "Cut default", Target: &boundRepo, Base: "", CreatedAt: now},
+	} {
+		if err := client.Store.PutTemplate(ctx, tmpl); err != nil {
+			t.Fatalf("writing template %s: %v", tmpl.ID, err)
+		}
+	}
+	for _, sched := range []model.Schedule{
+		{
+			ID: "sched-explicit", Title: "Release cut", TemplateID: &explicitID,
+			Target: staleRepo, Base: "schedule-own-branch",
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+			Enabled:    true, NextRunAt: now.Add(time.Hour), CreatedAt: now,
+		},
+		{
+			ID: "sched-default", Title: "Default cut", TemplateID: &defaultID,
+			Target: boundRepo, Base: "schedule-own-branch",
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+			Enabled:    true, NextRunAt: now.Add(time.Hour), CreatedAt: now,
+		},
+	} {
+		if err := client.Store.PutSchedule(ctx, sched); err != nil {
+			t.Fatalf("writing schedule %s: %v", sched.ID, err)
+		}
+	}
+
+	rec := do(t, srv, http.MethodGet, "/api/schedules", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	got := map[string]ui.Schedule{}
+	for _, sc := range decode[[]ui.Schedule](t, rec) {
+		got[sc.ID] = sc
+	}
+	if s := got["sched-explicit"]; s.Repo != "acme/widgets" || s.Base != "release/v1" {
+		t.Errorf("sched-explicit = (%q, %q), want bound template's (\"acme/widgets\", \"release/v1\")", s.Repo, s.Base)
+	}
+	if s := got["sched-default"]; s.Repo != "acme/widgets" || s.Base != "" {
+		t.Errorf("sched-default = (%q, %q), want bound template's default branch (\"acme/widgets\", \"\")", s.Repo, s.Base)
 	}
 }

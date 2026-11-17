@@ -34,12 +34,25 @@ const SIZES = [
 ];
 const THEMES = ["light", "dark"];
 
+const boundTemplate = {
+  id: "tmpl-train-bound",
+  name: "Release train",
+  title: "Run the release train (check, release, cut)",
+  description: "Cut an rc from the newest known-good main.",
+  repo: "acme/grain",
+  base: "main",
+  autoMerge: false,
+  capabilities: [],
+};
+
 const train = {
   id: "sched-train-held",
   title: "Release train",
   description: "Cut an rc from the newest known-good main.",
   repo: "acme/grain",
-  base: "main",
+  base: "stale-schedule-base",
+  templateId: boundTemplate.id,
+  templateName: boundTemplate.name,
   autoMerge: false,
   capabilities: [],
   recurrence: { kind: "every_n_minutes", everyNMinutes: 20 },
@@ -53,14 +66,25 @@ const train = {
   suppressed: {
     reason: "publishingHeld",
     taskId: "2",
-    detail: "skipped: publishing held by task 2",
+    detail:
+      "skipped: publishing held by task 2 (acme/grain main has published nothing since 2026-11-15 06:40 UTC)",
   },
   skips: [
+    {
+      occurrence: "2026-11-15T09:00:00Z",
+      at: "2026-11-15T09:00:00Z",
+      reason: "publishingHeld",
+      summary:
+        "skipped at 2026-11-15 09:00 UTC: publishing held by task 2 (acme/grain main has published nothing since 2026-11-15 06:40 UTC)",
+      taskId: "2",
+      outcome: "",
+    },
     {
       occurrence: "2026-11-15T08:00:00Z",
       at: "2026-11-15T08:00:00Z",
       reason: "publishingHeld",
-      summary: "skipped at 2026-11-15 08:00 UTC: publishing held by task 2",
+      summary:
+        "skipped at 2026-11-15 08:00 UTC: publishing held by task 2 (acme/grain main has published nothing since 2026-11-15 06:40 UTC)",
       taskId: "2",
       outcome: "fired",
       firedTaskId: "5",
@@ -89,6 +113,13 @@ for (const size of SIZES) {
         (t) => localStorage.setItem("grain.themeMode", t),
         theme,
       );
+      await page.route(/\/api\/templates(\?.*)?$/, async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        const res = await route.fetch();
+        const body = await res.json();
+        (Array.isArray(body) ? body : body.templates).unshift(boundTemplate);
+        await route.fulfill({ response: res, json: body });
+      });
       await page.route(/\/api\/schedules(\?.*)?$/, async (route) => {
         if (route.request().method() !== "GET") return route.continue();
         const res = await route.fetch();
@@ -102,10 +133,14 @@ for (const size of SIZES) {
 
       await expect(
         page.getByText(
-          "Suppressed — publishing held: skipped: publishing held by task 2",
+          "Suppressed — publishing held by task 2 (acme/grain main has published nothing since 2026-11-15 06:40 UTC)",
         ),
       ).toBeVisible();
+      await expect(page.getByText("publishing held: skipped:")).toHaveCount(0);
       await expect(page.getByText("(publishingHeld)")).toHaveCount(0);
+      await expect(page.getByTestId("sched-repo")).toHaveText("acme/grain");
+      await expect(page.getByTestId("sched-base")).toHaveText("main");
+      await expect(page.getByText("stale-schedule-base")).toHaveCount(0);
       await expect(page.getByTestId("sched-overlap-group")).toHaveText(
         "release-train",
       );
@@ -116,8 +151,11 @@ for (const size of SIZES) {
       ).toBeVisible();
 
       const skips = page.getByTestId("sched-skip");
-      await expect(skips).toHaveCount(2);
-      const fired = skips.nth(0).getByTestId("sched-skip-outcome");
+      await expect(skips).toHaveCount(3);
+      await expect(skips.nth(0).getByTestId("sched-skip-outcome")).toHaveText(
+        "→ held",
+      );
+      const fired = skips.nth(1).getByTestId("sched-skip-outcome");
       await expect(fired).toHaveText(
         /→ fired\s+#5\s+·\s+3 later occurrences folded in/,
       );
@@ -125,13 +163,13 @@ for (const size of SIZES) {
         "href",
         "/next/task/5",
       );
-      await expect(skips.nth(1).getByTestId("sched-skip-outcome")).toHaveText(
+      await expect(skips.nth(2).getByTestId("sched-skip-outcome")).toHaveText(
         "→ dropped",
       );
 
       // The outcome stays inside its row: beside the summary on a desktop,
       // under it on a phone, never squeezing it into a narrow column.
-      for (let i = 0; i < 2; i++) {
+      for (let i = 0; i < 3; i++) {
         const row = await skips.nth(i).boundingBox();
         const summary = await skips
           .nth(i)
@@ -168,6 +206,9 @@ test("an event trigger says when it runs, not its placeholder nextRunAt", async 
     ...train,
     id: "sched-trigger-next",
     title: "On release workflow",
+    base: "main",
+    templateId: undefined,
+    templateName: undefined,
     recurrence: {
       kind: "github_workflow_run",
       githubWorkflowRun: { workflow: "release.yml", conclusions: ["failure"] },

@@ -546,10 +546,12 @@ Rules:
   Something an operator should fix while the deployment keeps working (a
   base branch publishing nothing, `baseBranchPublishing`) is a
   `warning-container` banner with a warning status icon on its first line
-  and `role="status"`. It sits beside the page's error banners (Dispatch
-  blocked, `role="alert"`), above the content. Use the server's `detail`
-  sentence rather than rewording it, and link the task that holds the
-  finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+  and `role="status"` on its short title (rather than on the whole banner,
+  whose `detail` age ticks over on polls). It sits beside the page's error
+  banners (Dispatch blocked, `role="alert"`), above the content. Use the
+  server's `detail` sentence rather than rewording it, and link the task
+  that holds the finding where there is one
+  (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
 - **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
   ```` ```mermaid ```` fences in the active theme with a Diagram / Source
   toggle, and pairs Before / After fences (named in the info string or by

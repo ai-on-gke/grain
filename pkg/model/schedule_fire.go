@@ -759,13 +759,17 @@ func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.Target, sc.Base = tmpl.FiringTarget(sc.Target, sc.Base)
 }
 
-// WithTemplateSettings is sc's admission, hosting and grants as its
-// firings hold them: tmpl's admission and hosting raised by sc's own, and
-// tmpl's grants with sc's own beside them -- what ComposeScheduleTask
-// files. A template-backed schedule's own columns hold only what it adds
-// to its template (Schedule.Grants), so this is what it is shown as, and
-// what a request resending it is measured against (ui.scheduleFrom).
+// WithTemplateSettings is sc's target, base, admission, hosting and
+// grants as its firings hold them: tmpl's bound target and base when tmpl
+// is bound (Template.FiringTarget), tmpl's admission and hosting raised
+// by sc's own, and tmpl's grants with sc's own beside them -- what
+// ComposeScheduleTask files. A template-backed schedule's own columns
+// hold only what it adds to its template (Schedule.Grants) and can lag a
+// bound template's target or base between declaration syncs and firings,
+// so this is what it is shown as, and what a request resending it is
+// measured against (ui.scheduleFrom).
 func (sc Schedule) WithTemplateSettings(tmpl Template) Schedule {
+	sc.Target, sc.Base = tmpl.FiringTarget(sc.Target, sc.Base)
 	sc.Admission = MaxAdmission(tmpl.Admission, sc.Admission)
 	sc.Hosting = MaxHosting(tmpl.Hosting, sc.Hosting)
 	grants := slices.Clone(tmpl.Grants)

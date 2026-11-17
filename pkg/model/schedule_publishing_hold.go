@@ -126,7 +126,16 @@ func (s *Store) publishingSuppression(ctx context.Context, sched Schedule, now t
 	if sched.SkipWhen != SkipWhenPublishingHeld {
 		return nil, nil
 	}
-	hold, err := s.publishingHold(ctx, sched, s.overlapGroupRepo(ctx, sched), sched.Base, now)
+	repo, base := s.overlapGroupRepo(ctx, sched), sched.Base
+	if sched.TemplateID != nil && !IsSystemTemplateID(*sched.TemplateID) {
+		if tmpl, err := s.GetTemplate(ctx, *sched.TemplateID); err == nil && tmpl != nil && tmpl.Target != nil {
+			repo = *tmpl.Target
+			if tmpl.Base != "" {
+				base = tmpl.Base
+			}
+		}
+	}
+	hold, err := s.publishingHold(ctx, sched, repo, base, now)
 	if err != nil || hold == nil {
 		return nil, err
 	}
