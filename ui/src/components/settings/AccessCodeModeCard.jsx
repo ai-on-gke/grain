@@ -54,7 +54,10 @@ function modeSummary(view) {
 // network cannot switch the code back on (docs/access-code.md).
 export default function AccessCodeModeCard({ view }) {
   if (!view?.mode) return null;
-  const recommend = view.mode === "on" && view.viewerVerified;
+  const recommend =
+    view.mode === "on" &&
+    Boolean(view.viewerVerified) &&
+    Boolean(view.verifiedAdminCanSignIn);
   const command = view.mode === "on" ? view.command : view.onCommand;
   return (
     <SettingsCard title="Access code" anchor="access-code-mode">

@@ -43,7 +43,7 @@ test("the access-code card shows the demo daemon's own mode", async ({
     0,
   );
   await expect(page.getByTestId("access-code-mode-command")).toContainText(
-    /^sudo -u \S+ grain access-code .*mode recovery$/,
+    /^sudo -u \S+ env GRAIN_LOCAL_API_TOKEN_FILE=\S+\/access-code grain access-code mode recovery$/,
   );
 });
 

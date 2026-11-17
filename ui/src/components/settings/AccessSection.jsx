@@ -268,11 +268,13 @@ export default function AccessSection({
       setEntries([]);
       setDroppedFlagEntries([]);
       setHistory(null);
+      setCodeMode(null);
       setLoaded(true);
       return;
     }
     await loadPrincipals();
     await loadHistory();
+    await loadCodeMode();
   };
 
   const people = entries.filter((e) => !isServiceAccountEntry(e.entry));

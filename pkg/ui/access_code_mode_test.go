@@ -307,6 +307,65 @@ func TestAccessCodeModeRouteShowsTheModeAndItsCommand(t *testing.T) {
 		!strings.Contains(v.OnCommand, " -data-dir "+quoted+" mode on") {
 		t.Errorf("commands for metacharacter dir = %q / %q, want quoted -data-dir %s", v.Command, v.OnCommand, quoted)
 	}
+
+	customTok := filepath.Join(spacedDir, "demo-access-code")
+	if err := os.WriteFile(customTok, []byte(testAccessCode+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.LocalAPITokenFile = customTok
+	quotedTok := "'" + strings.ReplaceAll(customTok, "'", `'\''`) + "'"
+	wantPrefix := "env " + ui.LocalAPITokenFileEnv + "=" + quotedTok + " grain access-code mode "
+	if v := read(); !strings.Contains(v.Command, wantPrefix+"recovery") ||
+		!strings.Contains(v.OnCommand, wantPrefix+"on") ||
+		strings.Contains(v.Command, "-data-dir") {
+		t.Errorf("commands for custom token file = %q / %q, want %s...", v.Command, v.OnCommand, wantPrefix)
+	}
+}
+
+// Access-code audit entries and recovery notifications strip terminal
+// escapes, CR/LF and Bidi overrides from percent-decoded request paths.
+func TestAccessCodeHistoryStripsControlAndEscapeSequencesFromPath(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
+	ui.SetIAPAudience(tunnelAudience)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	ui.SetAccessCodeModeForTest(srv, ui.AccessCodeRecovery)
+
+	code := map[string]string{"Authorization": "Bearer " + testAccessCode, ui.AccessNameHeader: "alice@example.com"}
+	craftedPath := "/api/access/principals/%1b%5b31mFORGED%1b%5b0m%0d%0a%1b%5d52;c;dGVzdA==%07%e2%80%aeuser:bob@example.com"
+	_ = serveFrom(srv, networkAddr, http.MethodDelete, craftedPath, "", code)
+
+	audits, err := client.Store.ConfigAudit(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawAccessCode := false
+	for _, a := range audits {
+		if a.Surface == "access-code" {
+			sawAccessCode = true
+		}
+		if strings.ContainsAny(a.Summary, "\r\n\x1b\x07\u202e") {
+			t.Fatalf("audit summary retained control/escape bytes: %q", a.Summary)
+		}
+	}
+	if !sawAccessCode {
+		t.Fatal("expected access-code config_audit row")
+	}
+	notices, err := client.ListNotifications(context.Background(), model.NotificationFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) == 0 {
+		t.Fatal("expected recovery-use notification")
+	}
+	for _, n := range notices {
+		if strings.ContainsAny(n.Body, "\r\n\x1b\x07\u202e") || strings.ContainsAny(n.Subject, "\r\n\x1b\x07\u202e") {
+			t.Fatalf("notification retained control/escape bytes: subject=%q body=%q", n.Subject, n.Body)
+		}
+	}
 }
 
 // Settings -> Access's history lists what a code session changed beside

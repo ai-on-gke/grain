@@ -132,8 +132,25 @@ describe("AccessSection", () => {
     ).toBeInTheDocument();
     unmount();
 
+    // Signed in with a verified identity, but no full-role user: entry can
+    // sign in yet: recovery would not take effect, so do not recommend it.
+    view.verifiedAdminCanSignIn = false;
+    const withoutAdmin = render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:viewer@example.com",
+          authMethod: "iap",
+        },
+      }),
+    );
+    await screen.findByTestId("access-code-mode");
+    expect(screen.queryByTestId("access-code-recommend-recovery")).toBeNull();
+    withoutAdmin.unmount();
+
     // Signed in with the code itself: no recommendation, still the command.
     view.viewerVerified = false;
+    view.verifiedAdminCanSignIn = true;
     const second = render(section({ config: { authenticated: true } }));
     await screen.findByTestId("access-code-mode");
     expect(screen.queryByTestId("access-code-recommend-recovery")).toBeNull();
@@ -150,6 +167,99 @@ describe("AccessSection", () => {
     ).toHaveTextContent("in force");
     expect(screen.getByTestId("access-code-mode-command")).toHaveTextContent(
       view.onCommand,
+    );
+  });
+
+  it("reloads and clears the access-code mode card when principals change", async () => {
+    const user = userEvent.setup();
+    let entries = [
+      {
+        entry: "group:eng@example.com",
+        role: "grain/viewer",
+        addedBy: "the access code",
+        addedAt: "2026-11-10T10:00:00Z",
+      },
+    ];
+    let recoveryInForce = true;
+    let nextScopes = ["access:read", "access:write"];
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/access/principals" && !opts?.method) {
+        return {
+          entries,
+          roles: [
+            { name: "grain/viewer", builtin: true, person: false },
+            { name: "grain/contributor", builtin: true, person: false },
+          ],
+        };
+      }
+      if (path === "/api/access/history") return [];
+      if (path === "/api/access/access-code") {
+        return {
+          mode: "recovery",
+          viewerVerified: true,
+          verifiedAdminCanSignIn: recoveryInForce,
+          recoveryInForce,
+          account: "grain",
+          command: "sudo -u grain grain access-code mode recovery",
+          onCommand: "sudo -u grain grain access-code mode on",
+        };
+      }
+      if (opts?.method === "PATCH") {
+        recoveryInForce = false;
+        return {};
+      }
+      if (opts?.method === "DELETE") {
+        nextScopes = ["tasks:read"];
+        return {};
+      }
+      return {};
+    });
+
+    render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:ops@example.com",
+          authMethod: "iap",
+          access: {
+            role: "grain/operator",
+            roles: ["grain/operator"],
+            full: true,
+            scopes: ["access:read", "access:write"],
+          },
+        },
+        onSaved: async () => ({
+          authenticated: true,
+          actor: "user:ops@example.com",
+          authMethod: "iap",
+          access: {
+            role: "custom",
+            roles: ["custom"],
+            full: false,
+            scopes: nextScopes,
+          },
+        }),
+      }),
+    );
+
+    expect(
+      await screen.findByTestId("access-code-recovery-state"),
+    ).toHaveTextContent("in force");
+
+    await user.click(screen.getByLabelText("Role of group:eng@example.com"));
+    await user.click(screen.getByRole("option", { name: "grain/contributor" }));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("access-code-recovery-state"),
+      ).toHaveTextContent("not yet in force"),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove group:eng@example.com" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Remove anyway" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("access-code-mode-card")).toBeNull(),
     );
   });
 

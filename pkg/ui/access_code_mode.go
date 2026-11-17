@@ -26,6 +26,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -230,6 +232,16 @@ func mutatingMethod(method string) bool {
 	return true
 }
 
+const maxAccessUsePathRunes = 256
+
+func cleanAccessUseField(s string, maxRunes int) string {
+	s = cleanAccessReason(s)
+	if runes := []rune(s); len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "..."
+	}
+	return s
+}
+
 // recordAccessCodeUse writes u to the access history (config audit,
 // surface access-code) when it changed state, and in recovery mode raises
 // the Inbox notification that says the code was used -- at most once a
@@ -240,8 +252,14 @@ func (s *Server) recordAccessCodeUse(ctx context.Context, u accessCodeUse, recov
 		return
 	}
 	at := s.tasks.now()
+	method := cleanAccessUseField(u.Method, 32)
+	path := cleanAccessUseField(u.Path, maxAccessUsePathRunes)
+	if path == "" {
+		path = "/"
+	}
+	source := cleanAccessUseField(u.Source, 128)
 	if mutatingMethod(u.Method) {
-		summary := fmt.Sprintf("access code: %s %s by %s from %s", u.Method, u.Path, u.who(), u.Source)
+		summary := fmt.Sprintf("access code: %s %s by %s from %s", method, path, u.who(), source)
 		by := RequestActor(ctx)
 		if _, err := s.tasks.Store.RecordConfigAudit(context.WithoutCancel(ctx), model.ConfigAuditEntry{
 			At: at, By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: accessCodeAuditSurface, Summary: summary,
@@ -253,11 +271,11 @@ func (s *Server) recordAccessCodeUse(ctx context.Context, u accessCodeUse, recov
 		return
 	}
 	req := RaiseNotificationRequest{
-		Subject:  "access-code:recovery:" + u.Source,
+		Subject:  "access-code:recovery:" + source,
 		Severity: string(model.NotificationWarning),
 		Title:    "The access code was used in recovery mode",
 		Body: fmt.Sprintf("%s used the access code from %s (%s %s). In recovery mode the code only manages access and settings; "+
-			"if this was not you, rotate it on the daemon's host (grain access-code rotate).", u.who(), u.Source, u.Method, u.Path),
+			"if this was not you, rotate it on the daemon's host (grain access-code rotate).", u.who(), source, method, path),
 	}
 	if _, err := s.tasks.raise(context.WithoutCancel(ctx), req, model.PrincipalString(RequestActor(ctx).Actor)); err != nil {
 		log.Printf("grain access: raising the recovery-use notification: %v", err)
@@ -437,7 +455,11 @@ func (s *Server) handleAccessCodeMode(w http.ResponseWriter, r *http.Request) {
 	if s.tasks != nil {
 		if tok := s.tasks.Config.LocalAPITokenFile; tok != "" {
 			view.Account = FileOwner(tok)
-			cmd += " -data-dir " + shellQuoteWord(filepath.Dir(tok))
+			if filepath.Base(tok) == LocalAPITokenFileName {
+				cmd += " -data-dir " + shellQuoteWord(filepath.Dir(tok))
+			} else {
+				cmd = "env " + LocalAPITokenFileEnv + "=" + shellQuoteWord(tok) + " " + cmd
+			}
 		}
 	}
 	prefix := "sudo -u " + shellQuoteWord(view.Account) + " " + cmd + " mode "
@@ -447,9 +469,18 @@ func (s *Server) handleAccessCodeMode(w http.ResponseWriter, r *http.Request) {
 }
 
 // shellQuoteWord quotes s as a single POSIX shell word when it contains
-// whitespace or shell metacharacters, leaving ordinary paths and account
-// names unquoted.
+// whitespace or shell metacharacters, stripping control and format
+// characters so copied commands never carry terminal escapes or newlines,
+// and leaving ordinary paths and account names unquoted.
 func shellQuoteWord(s string) string {
+	var clean strings.Builder
+	for _, r := range s {
+		if r == utf8.RuneError || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			continue
+		}
+		clean.WriteRune(r)
+	}
+	s = clean.String()
 	if s == "" {
 		return "''"
 	}
