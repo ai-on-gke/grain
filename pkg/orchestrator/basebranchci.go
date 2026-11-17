@@ -2102,7 +2102,7 @@ func fileBaseBranchRepair(ctx context.Context, deps Deps, row model.BaseBranchCI
 		Intent: model.IntentImplement,
 		Title:  title,
 		Body:   body,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: baseCIRepairer},
 			Reason:      model.ReasonDirect,
 		},

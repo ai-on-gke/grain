@@ -61,7 +61,7 @@ func TestConsoleSessionsNamesTheTaskHoldingTheConversation(t *testing.T) {
 		ID:     "77",
 		Intent: model.IntentAnalyze,
 		Title:  "Director",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "console-session"}},
 			Reason:      model.ReasonConsoleSession,
 		},
@@ -111,7 +111,7 @@ func sessionTask(id string) model.Task {
 		ID:          id,
 		Intent:      model.IntentAnalyze,
 		Title:       "Director",
-		Origin:      model.Origin{Attribution: principal, Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Attribution: principal, Reason: model.ReasonConsoleSession},
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Interactive: true,
 		CreatedAt:   &baseTime,

@@ -836,6 +836,10 @@ describe("FleetPageComponent", () => {
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-pause-btn"]')!
       .click();
     await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(fixture);
 
     expect(
       root.querySelector('[data-testid="pipeline-pause-state"]')?.textContent,
@@ -851,6 +855,10 @@ describe("FleetPageComponent", () => {
 
     root
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-resume-btn"]')!
+      .click();
+    await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
       .click();
     await settle(fixture);
     expect(
@@ -996,12 +1004,20 @@ describe("FleetPageComponent", () => {
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-pause-btn"]')!
       .click();
     await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(fixture);
     expect(access.rawConfig()?.pipelinePause?.paused).toBe(true);
     expect(access.rawConfig()?.pipelinePause?.reason).toBe("deploy freeze");
 
     // Resume pipeline -> AccessService.rawConfig().pipelinePause clears immediately.
     root
       .querySelector<HTMLButtonElement>('[data-testid="pipeline-resume-btn"]')!
+      .click();
+    await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
       .click();
     await settle(fixture);
     expect(access.rawConfig()?.pipelinePause?.paused).toBe(false);

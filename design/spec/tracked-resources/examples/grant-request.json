@@ -1,0 +1,21 @@
+{
+  "expected_contract_revision": 5,
+  "idempotency_key": "mutation-1",
+  "reason": "Track the task outcome",
+  "registration_pin_digest": "sha256:c83780f080efdbe8f68e80ccf1c3e53a5b4619a8c9ff33c7ed57f43461fdc42b",
+  "credential_binding": "example-controller",
+  "resource_scope": {
+    "installation_id": "instance-a",
+    "task_id": "72"
+  },
+  "fields": [
+    "outcome"
+  ],
+  "operations": [
+    "resolve",
+    "observe",
+    "watch"
+  ],
+  "expires_at": "2026-11-16T22:00:00Z",
+  "share_group": null
+}

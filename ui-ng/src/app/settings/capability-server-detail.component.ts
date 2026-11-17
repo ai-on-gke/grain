@@ -61,8 +61,11 @@ interface ProbeResult {
 // classic CapabilityServersPanel's renderServerDetail): what it gives a
 // task, where it runs, the names it used to answer to, what grants it,
 // and its Enable / Disable, Test and Remove, each saying what it does.
-// The server's Connection and Server settings forms stay on the classic
-// page for now; this page links there.
+// It does not edit a server: its Connection and Server settings forms
+// (Host placement, gcp keyless vs key, figma Test/Connect) are task 6218
+// (PR #1672), and the config-map, secret-map and host-script panels are
+// task 6219 (PR #1671). Until those land this page links to the server
+// in the classic UI for editing.
 @Component({
   selector: "g-capability-server-detail",
   imports: [RouterLink, ConfirmDialogComponent, InfoPopoverComponent],

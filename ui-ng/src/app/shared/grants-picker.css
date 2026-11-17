@@ -108,29 +108,26 @@
   max-width: 100%;
 }
 
-/* A held or offered grant the capability policy denies, may refuse, or
-   that is a retired alias: a badge on the chip and its reason in words,
-   with the policy's Settings card linked. */
-.grant-verdict-badge {
+/* The capability policy's word on a grant (policyVerdicts). */
+.grant-policy-badge {
+  display: inline-flex;
+  align-items: center;
   padding: 0 6px;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-warning-container);
-  color: var(--md-sys-color-on-warning-container);
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
   font-family: var(--grain-font-body);
   font-size: 11px;
-  line-height: 16px;
+  font-weight: 500;
+  line-height: 18px;
   white-space: nowrap;
 }
 
-.grant-verdict-badge.is-denied {
-  background: var(--md-sys-color-error-container);
-  color: var(--md-sys-color-on-error-container);
-}
-
-.grant-verdict-note {
-  margin: 4px 0 0;
-  font-size: 12px;
-  line-height: 16px;
+.grant-policy-notes {
+  margin: 0;
+  padding: 0 0 0 18px;
   color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }

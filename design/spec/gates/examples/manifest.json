@@ -1,0 +1,415 @@
+[
+  {
+    "file": "catalogue-contract.json",
+    "definition": "contract",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "delivery-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "acknowledgment-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "checks-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "review-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "approval-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "integration-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "children-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "base_health-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "nightly_health-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "publishing_health-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "pipeline_health-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "qa_stage-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "repository-policy.json",
+    "definition": "policy",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "evaluation-context.json",
+    "definition": "context",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "checks-met.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "checks-unmet.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "checks-pending.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "checks-unknown.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "checks-error.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "complete-negative-evidence.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "merge-request.json",
+    "definition": "action_request",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "cl-submit-request.json",
+    "definition": "action_request",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "merge-receipt.json",
+    "definition": "action_receipt",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "uncertain-receipt.json",
+    "definition": "action_receipt",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "completion-waiver.json",
+    "definition": "exception",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "action-override.json",
+    "definition": "exception",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "needs-ack-decision.json",
+    "definition": "decision",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "invalid-empty-children.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "empty required child set"
+  },
+  {
+    "file": "invalid-config-command.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "unknown executable config"
+  },
+  {
+    "file": "invalid-integration-guard.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "integration cannot guard producer"
+  },
+  {
+    "file": "invalid-optional-guard.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "guard must remain required"
+  },
+  {
+    "file": "invalid-error-without-error.json",
+    "definition": "result",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "error status requires error details"
+  },
+  {
+    "file": "invalid-terminal-without-outcome.json",
+    "definition": "decision",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "terminal needs outcome"
+  },
+  {
+    "file": "invalid-unbound-action-override.json",
+    "definition": "exception",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "action override requires operation"
+  },
+  {
+    "file": "invalid-unregistered-type.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "unknown evaluator type"
+  },
+  {
+    "file": "invalid-arbitrary-button.json",
+    "definition": "result",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "unregistered action"
+  },
+  {
+    "file": "invalid-check-task-subject.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "checks need a change"
+  },
+  {
+    "file": "invalid-shadow-authority.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "shadow cannot be required"
+  },
+  {
+    "file": "invalid-new-legacy-selection.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "legacy requires imported provenance and cannot enforce current-head guard"
+  },
+  {
+    "file": "invalid-met-incomplete-set.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "met needs complete evidence"
+  },
+  {
+    "file": "invalid-met-dirty-source.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "dirty generation exceeds covered"
+  },
+  {
+    "file": "invalid-mixed-head-evidence.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "mixed heads cannot pass checks"
+  },
+  {
+    "file": "invalid-negative-validity.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "invalid freshness interval"
+  },
+  {
+    "file": "invalid-duplicate-binding.json",
+    "definition": "contract",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "duplicate qualified attachment"
+  },
+  {
+    "file": "invalid-no-completion-contract.json",
+    "definition": "contract",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "no completion requirement"
+  },
+  {
+    "file": "invalid-action-task-target.json",
+    "definition": "action_request",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "effect needs canonical change"
+  },
+  {
+    "file": "invalid-long-action-override.json",
+    "definition": "exception",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "action exception exceeds one hour"
+  },
+  {
+    "file": "report-template-defaults.json",
+    "definition": "template_defaults",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "standing-contract.json",
+    "definition": "contract",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "invalid-standing-auto-close.json",
+    "definition": "contract",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "standing intent must rest"
+  },
+  {
+    "file": "invalid-task-wildcard.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "task cannot broaden resource scope"
+  },
+  {
+    "file": "invalid-template-unguarded.json",
+    "definition": "policy",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "template cannot exempt resource guards"
+  },
+  {
+    "file": "explicit-no-ci-result.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "cl-checks-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "invalid-cl-github-source.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "CL source cannot be GitHub checks"
+  },
+  {
+    "file": "invalid-excessive-freshness.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Existing catalogue bound must not be widened."
+  },
+  {
+    "file": "invalid-excessive-nightly-window.json",
+    "definition": "attachment",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "Existing catalogue bound must not be widened."
+  },
+  {
+    "file": "invalid-long-qualified-binding.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "Source-qualified binding identity must fit the result/action identity bound."
+  }
+]

@@ -370,7 +370,7 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 	sessionTask := model.Task{
 		ID: "sess-task", Title: "Console", Body: "Session",
 		Interactive: true, Tags: []string{model.ConsoleSessionTag("ops")},
-		Origin:     model.Origin{Reason: model.ReasonConsoleSession},
+		Filing:     model.Filing{Reason: model.ReasonConsoleSession},
 		ApprovedAt: &now, CreatedAt: &now,
 	}
 	if err := store.PutTask(ctx, sessionTask); err != nil {

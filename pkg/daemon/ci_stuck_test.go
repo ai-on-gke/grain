@@ -52,7 +52,7 @@ func stuckTask(t *testing.T, ctx context.Context, store *model.Store, id string)
 	who := model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}
 	tk := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: who}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: who}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: who},
 	}

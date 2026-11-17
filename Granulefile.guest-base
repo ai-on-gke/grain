@@ -85,7 +85,9 @@ RUN install -d -m0755 /etc/initramfs-tools/conf.d \
     && echo 'RESUME=none' > /etc/initramfs-tools/conf.d/resume
 
 # Stock Granule Debian VM base packages + Grain's minimal sandbox boundary
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     systemd-sysv \
     udev \
     kmod \

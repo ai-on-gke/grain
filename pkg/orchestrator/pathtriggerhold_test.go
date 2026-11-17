@@ -91,7 +91,7 @@ func TestGatedPathIsHeldAndReleasedByACleanTask(t *testing.T) {
 		t.Fatalf("want one gating task, got %v", ids)
 	}
 	gate := reloaded(t, ctx, store, ids[0])
-	if gate.Origin.Reason != model.ReasonReview || gate.Base != model.BranchName(task.ID) {
+	if gate.Filing.Reason != model.ReasonReview || gate.Base != model.BranchName(task.ID) {
 		t.Fatalf("the gating task is not a review stacked on the change: %+v", gate)
 	}
 	if !strings.HasPrefix(gate.Title, "Check secrets on acme/widgets#") {

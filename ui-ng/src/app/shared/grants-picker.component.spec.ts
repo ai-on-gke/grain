@@ -12,172 +12,215 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { APP_BASE_HREF } from "@angular/common";
-import { TestBed } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
-import { describe, expect, it } from "vitest";
+import { TestBed } from "@angular/core/testing";
 import { GrainApi } from "../api/grain-api.service";
+import type { CapabilityMethod } from "../api/models";
 import { AccessService } from "../services/access.service";
 import {
   GrantsPickerComponent,
-  policyVerdictText,
+  grantRef,
+  policyVerdictFor,
 } from "./grants-picker.component";
 
-const MAYBE = "https://grain.dev/capabilities/github#read-issues";
-const DENIED = "https://grain.dev/capabilities/gcp#gcp-key";
+describe("grantRef", () => {
+  it("strips arguments and reads an api grant as its capability ref", () => {
+    expect(grantRef('github#read-issues={"repo":"a/b"}')).toBe(
+      "github#read-issues",
+    );
+    expect(grantRef("api:tasks-read")).toBe(
+      "https://grain.dev/capabilities/api#tasks-read",
+    );
+    expect(grantRef("api:ci-read@acme/widgets")).toBe(
+      "https://grain.dev/capabilities/api#ci-read",
+    );
+  });
+});
 
-class FakeApi {
-  posts: { key: string; body: unknown }[] = [];
-  gets: { key: string; query?: string }[] = [];
-  methods: unknown[] | null = null;
-  get = (key: string, _p?: unknown, query?: string) => {
-    this.gets.push({ key, query });
-    if (key === "GET /api/capability-methods" && this.methods) {
-      return Promise.resolve({ items: this.methods });
-    }
-    if (key === "GET /api/capability-methods") {
-      return Promise.resolve({
-        items: [
-          {
-            ref: MAYBE,
-            capability: "https://grain.dev/capabilities/github",
-            method: "read-issues",
-            policy: { task: "may_be_refused" },
-          },
-          {
-            ref: DENIED,
-            capability: "https://grain.dev/capabilities/gcp",
-            method: "gcp-key",
-            policy: { task: "denied" },
-          },
-        ],
-      });
-    }
-    return Promise.resolve({ sets: [] });
-  };
-  post = (key: string, _p: unknown, body: unknown) => {
-    this.posts.push({ key, body });
-    if (key === "POST /api/capability-grants/check") {
-      return Promise.resolve([
+describe("policyVerdictFor", () => {
+  const m = (over: Partial<CapabilityMethod>): CapabilityMethod => ({
+    ref: "x#y",
+    capability: "x",
+    method: "y",
+    ...over,
+  });
+
+  it("says may be refused for a repo-scoped rule while no repo is known", () => {
+    const v = policyVerdictFor(
+      m({ policy: { task: "may_be_refused" } }),
+      "task",
+      false,
+    );
+    expect(v?.badge).toBe("may be refused");
+    // Once the run is known the listing has judged it: admitted is silent.
+    expect(
+      policyVerdictFor(m({ policy: { task: "may_be_refused" } }), "task", true),
+    ).toBeNull();
+  });
+
+  it("prefers the run's own refusal, and names CI-only methods", () => {
+    expect(
+      policyVerdictFor(m({ policyRefusal: "denied here" }), "task", true)
+        ?.badge,
+    ).toBe("denied by policy");
+    expect(
+      policyVerdictFor(m({ policy: { task: "ci_only" } }), "task", true)?.badge,
+    ).toBe("CI only");
+  });
+});
+
+describe("GrantsPickerComponent with policyVerdicts", () => {
+  let gets: { route: string; query?: string }[];
+  let posts: unknown[];
+  let methods: CapabilityMethod[];
+
+  beforeEach(() => {
+    gets = [];
+    posts = [];
+    methods = [];
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
         {
-          grant: "gcp-key",
-          recorded: "gcp-key",
-          aliasOf: ["https://grain.dev/capabilities/gcp#gcp-key={}"],
+          provide: GrainApi,
+          useValue: {
+            get: (route: string, _p?: unknown, query?: string) => {
+              gets.push({ route, query });
+              if (route === "GET /api/capability-methods") {
+                return Promise.resolve({ items: structuredClone(methods) });
+              }
+              return Promise.resolve({ sets: [] });
+            },
+            post: (_route: string, _p: unknown, body: unknown) => {
+              posts.push(body);
+              return Promise.resolve([{ recorded: "x" }]);
+            },
+          },
         },
-      ]);
-    }
-    return Promise.resolve({});
-  };
-}
-
-async function mount(held: string[], repo?: string, api = new FakeApi()) {
-  TestBed.configureTestingModule({
-    providers: [
-      provideRouter([]),
-      { provide: APP_BASE_HREF, useValue: "/next/" },
-      { provide: GrainApi, useValue: api },
-    ],
-  });
-  TestBed.inject(AccessService).setConfig({
-    access: { role: "grain/owner", full: true, scopes: [] },
-  });
-  const fixture = TestBed.createComponent(GrantsPickerComponent);
-  fixture.componentRef.setInput("held", held);
-  fixture.componentRef.setInput("testid", "gp");
-  if (repo) fixture.componentRef.setInput("repo", repo);
-  fixture.autoDetectChanges(true);
-  await fixture.whenStable();
-  await new Promise((r) => setTimeout(r, 10));
-  await fixture.whenStable();
-  return { el: fixture.nativeElement as HTMLElement, api, fixture };
-}
-
-describe("GrantsPickerComponent policy verdicts", () => {
-  it("words each verdict for its run kind", () => {
-    expect(policyVerdictText("denied", "task")).toBe(
-      "denied by the capability policy for agent tasks",
-    );
-    expect(policyVerdictText("may_be_refused", "ci")).toBe(
-      "may be refused by the capability policy for CI jobs",
-    );
-    expect(policyVerdictText("", "task")).toBe("");
+      ],
+    });
+    TestBed.inject(AccessService).setConfig({
+      access: { role: "grain/operator", roles: [], full: true, scopes: [] },
+    });
   });
 
-  it("badges held grants the policy denies or may refuse, and retired aliases, linking the policy", async () => {
-    const { el, api } = await mount([`${MAYBE}={}`, `${DENIED}={}`, "gcp-key"]);
-    const verdicts = [
-      ...el.querySelectorAll<HTMLElement>(
-        '[data-testid^="held-grant-verdict-"]',
-      ),
-    ].map((b) => [b.dataset["verdict"], b.textContent?.trim()]);
-    expect(verdicts).toEqual([
-      ["may_be_refused", "may be refused"],
-      ["denied", "denied by policy"],
-      ["retired", "retired alias"],
-    ]);
-    const notes = el.querySelectorAll('[data-testid^="held-grant-note-"]');
-    expect(notes[0].textContent).toContain(
-      "may be refused by the capability policy for agent tasks",
-    );
-    expect(notes[0].querySelector("a")?.getAttribute("href")).toBe(
-      "/next/settings/capabilities#capability-policy",
-    );
-    expect(notes[2].textContent).toContain("retired alias of");
-    // Only the bare name is asked about.
-    expect(api.posts).toEqual([
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function settle(f: {
+    detectChanges(): void;
+    whenStable(): Promise<unknown>;
+  }) {
+    f.detectChanges();
+    await new Promise((r) => setTimeout(r, 300));
+    await f.whenStable();
+    f.detectChanges();
+  }
+
+  it("asks nothing of a run with no whole repository, and the run once it has one", async () => {
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("repo", "acme");
+    await settle(f);
+    const first = gets.filter((g) => g.route === "GET /api/capability-methods");
+    expect(first).toHaveLength(1);
+    expect(first[0].query).toBeUndefined();
+
+    f.componentRef.setInput("repo", "acme/widgets");
+    await settle(f);
+    const all = gets.filter((g) => g.route === "GET /api/capability-methods");
+    expect(all.at(-1)?.query).toBe("kind=task&repo=acme%2Fwidgets");
+  });
+
+  it("badges a held api grant the policy denies, matched through its alias", async () => {
+    methods = [
       {
-        key: "POST /api/capability-grants/check",
-        body: { grants: [{ grant: "gcp-key" }] },
+        ref: "https://grain.dev/capabilities/api#grain/task-admin",
+        capability: "https://grain.dev/capabilities/api",
+        method: "grain/task-admin",
+        aliasOf: ["https://grain.dev/capabilities/api#task-admin"],
+        policyRefusal:
+          "the capability policy denies task-admin to acme/widgets",
       },
-    ]);
+    ];
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("repo", "acme/widgets");
+    f.componentRef.setInput("held", ["api:task-admin@acme/widgets"]);
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="held-grant-policy-0"]')?.textContent,
+    ).toContain("denied by policy");
+    expect(el.textContent).toContain("denies task-admin to acme/widgets");
+    // The note's "Settings → Capabilities" is a link to the policy's card.
+    const link = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="gp-policy-link"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Settings → Capabilities");
+    expect(link?.getAttribute("href")).toBe(
+      "/settings/capabilities#capability-policy",
+    );
   });
 
-  it("shows no kind verdict once a repository has judged the one run", async () => {
-    const { el } = await mount([`${MAYBE}={}`], "acme/widgets");
-    expect(el.querySelector('[data-testid^="held-grant-verdict-"]')).toBeNull();
-  });
-
-  it("asks for the run's verdicts only with a whole owner/name, and again when the repository changes", async () => {
-    const { api, fixture } = await mount([`${MAYBE}={}`], "acme");
-    const listings = () =>
-      api.gets
-        .filter((g) => g.key === "GET /api/capability-methods")
-        .map((g) => g.query ?? "");
-    // A half-typed repository names no run: the plain listing.
-    expect(listings()).toEqual([""]);
-    fixture.componentRef.setInput("repo", "acme/widgets");
-    await fixture.whenStable();
-    expect(listings()).toEqual(["", "kind=task&repo=acme%2Fwidgets"]);
-    fixture.componentRef.setInput("repo", "acme/gadgets");
-    await fixture.whenStable();
-    expect(listings().at(-1)).toBe("kind=task&repo=acme%2Fgadgets");
-  });
-
-  it("never chooses a method that cannot be granted, and links CI-only to no policy", async () => {
-    const api = new FakeApi();
-    api.methods = [
+  it("links no policy for a CI-only grant, whose rule is grain's own", async () => {
+    methods = [
       {
-        ref: "https://grain.dev/capabilities/repo#read",
-        capability: "https://grain.dev/capabilities/repo",
+        ref: "repo#read",
+        capability: "repo",
         method: "read",
         policy: { task: "ci_only" },
       },
-      {
-        ref: MAYBE,
-        capability: "https://grain.dev/capabilities/github",
-        method: "read-issues",
-      },
     ];
-    const { el, fixture } = await mount([], undefined, api);
-    el.querySelector<HTMLButtonElement>('[data-testid="gp-add-open"]')!.click();
-    await fixture.whenStable();
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="gp-mode-method"]',
-    )!.click();
-    await fixture.whenStable();
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("held", ["repo#read"]);
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    expect(el.textContent).toContain("CI only");
+    expect(el.querySelector('[data-testid="gp-policy-link"]')).toBeNull();
+  });
+
+  it("never selects or attaches a method the policy refuses", async () => {
+    methods = [
+      {
+        ref: "repo#read",
+        capability: "repo",
+        method: "read",
+        policy: { task: "ci_only" },
+      },
+      { ref: "notes#write", capability: "notes", method: "write" },
+    ];
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("repo", "acme/widgets");
+    const emitted: string[][] = [];
+    f.componentInstance.heldChange.subscribe((v) => emitted.push(v));
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    el.querySelector<HTMLElement>('[data-testid="gp-add-open"]')!.click();
+    await settle(f);
+    el.querySelector<HTMLElement>('[data-testid="gp-mode-method"]')!.click();
+    await settle(f);
+    // The default is the first method that may be granted, not the CI-only one.
     expect(
       el.querySelector('[data-testid="gp-method-ref"]')?.textContent,
-    ).toContain("read-issues");
-    expect(el.querySelector('[data-testid="gp-method-verdict"]')).toBeNull();
+    ).toContain("notes#write");
+
+    // Even when chosen directly, a refused method is reported, not attached.
+    (
+      f.componentInstance as unknown as {
+        selectedMethod: { set(v: string): void };
+      }
+    ).selectedMethod.set("repo#read");
+    await settle(f);
+    // The selection is moved off the refused method at once...
+    expect(
+      el.querySelector('[data-testid="gp-method-ref"]')?.textContent,
+    ).toContain("notes#write");
+    el.querySelector<HTMLElement>('[data-testid="gp-attach"]')!.click();
+    await settle(f);
+    expect(emitted.at(-1)).toEqual(["x"]);
+    expect(JSON.stringify(posts.at(-1))).toContain("notes#write");
+    expect(JSON.stringify(posts)).not.toContain("repo#read");
   });
 });

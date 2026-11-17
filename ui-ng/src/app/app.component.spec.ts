@@ -249,13 +249,14 @@ describe("AppComponent shell", () => {
     expect(titles.map((e) => e.textContent?.trim())).toEqual([
       "New task",
       "Start a workstream",
+      "Prototype a goal",
       "New session",
       "Task from template",
       "Run a suite",
       "New schedule",
       "New board",
     ]);
-    expect(subs.length).toBe(7);
+    expect(subs.length).toBe(8);
     expect(subs[0].textContent?.trim()).toContain("Describe work");
 
     const links = [

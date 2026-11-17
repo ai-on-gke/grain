@@ -105,19 +105,39 @@ test("state chips say host, not hostd, and their (i) opens on click, Enter and S
     page.getByTestId(`cap-server-state-info-${FIGMA}-panel`),
   ).toBeVisible();
   // Scrolling the pane it sits in keeps it beside its button, or closes
-  // it, rather than leaving it floating over other rows.
-  await page.mouse.wheel(0, 120);
-  await page.waitForTimeout(200);
+  // it, rather than leaving it floating over other rows. The pane the (i)
+  // sits in is scrolled itself (a wheel lands wherever the pointer is);
+  // the poll fails if nothing moved, and checks the gap once the (i) has.
   const otherPanel = page.getByTestId(`cap-server-state-info-${FIGMA}-panel`);
-  if (await otherPanel.count()) {
+  const before = await other.boundingBox();
+  const scrolled = await other.evaluate((el) => {
+    let p = el.parentElement;
+    while (
+      p &&
+      !(
+        p.scrollHeight > p.clientHeight + 120 &&
+        /auto|scroll/.test(getComputedStyle(p).overflowY)
+      )
+    ) {
+      p = p.parentElement;
+    }
+    if (!p) return false;
+    p.scrollBy(0, 120);
+    return true;
+  });
+  expect(scrolled).toBe(true);
+  await expect(async () => {
     const b = await other.boundingBox();
-    const p = await otherPanel.boundingBox();
-    const gap = Math.min(
-      Math.abs(p.y - (b.y + b.height)),
-      Math.abs(b.y - (p.y + p.height)),
-    );
-    expect(gap).toBeLessThanOrEqual(8);
-  }
+    expect(b === null || Math.abs(b.y - before.y) > 1).toBe(true);
+    if (b && (await otherPanel.count())) {
+      const p = await otherPanel.boundingBox();
+      const gap = Math.min(
+        Math.abs(p.y - (b.y + b.height)),
+        Math.abs(b.y - (p.y + p.height)),
+      );
+      expect(gap).toBeLessThanOrEqual(8);
+    }
+  }).toPass({ timeout: 5000 });
 });
 
 test("a server's name opens its own page, which loads directly and goes back", async ({
@@ -306,24 +326,23 @@ test("the server list fits a phone without sideways scroll @phone @dark", async 
 test("the New task grant picker shows the capability policy's verdicts and links the policy", async ({
   page,
 }) => {
-  const DENIED = "https://grain.dev/capabilities/gcp#gcp-key";
-  const MAYBE = "https://grain.dev/capabilities/github#read-issues";
+  const HELD = "https://grain.dev/capabilities/api#self-debug";
   const REFUSED = "https://grain.dev/capabilities/grain#sql";
   await page.route("**/api/capability-methods**", (route) =>
     route.fulfill({
       json: {
         items: [
           {
-            ref: MAYBE,
-            capability: "https://grain.dev/capabilities/github",
-            method: "read-issues",
-            policy: { task: "may_be_refused" },
+            ref: HELD,
+            capability: "https://grain.dev/capabilities/api",
+            method: "self-debug",
+            policyRefusal:
+              "the capability policy denies api#self-debug to acme/widgets",
           },
           {
-            ref: DENIED,
-            capability: "https://grain.dev/capabilities/gcp",
-            method: "gcp-key",
-            policy: { task: "denied" },
+            ref: "https://grain.dev/capabilities/github#read-issues",
+            capability: "https://grain.dev/capabilities/github",
+            method: "read-issues",
           },
           {
             ref: REFUSED,
@@ -340,23 +359,25 @@ test("the New task grant picker shows the capability policy's verdicts and links
   await page.getByTestId("rail-new-task").click();
   await expect(page.getByTestId("new-task-sheet")).toBeVisible();
   await page.getByTestId("caps-options").click();
+
+  // The deployment's default grant the policy refuses this run is
+  // flagged, with the policy's reason and a link to the policy's card.
+  const notes = page.getByTestId("nt-grants-policy-notes");
+  await expect(notes).toContainText("denies api#self-debug");
+  const link = notes.getByRole("link", { name: "Settings → Capabilities" });
+  await expect(link).toHaveAttribute(
+    "href",
+    /\/settings\/capabilities#capability-policy$/,
+  );
+
+  // A refused method stays listed, disabled, with the policy's reason.
   await page.getByTestId("nt-grants-add-open").click();
   await page.getByTestId("nt-grants-mode-method").click();
-  // The sheet has a repository chosen, so the listing judged this one
-  // run: the method the policy refuses it is listed disabled with the
-  // policy's reason, and the builder links the policy.
   await page.getByTestId("nt-grants-method-ref").click();
   const refused = page.getByTestId(`nt-grants-method-ref-opt-${REFUSED}`);
   await expect(refused).toHaveAttribute("aria-disabled", "true");
   await expect(refused).toContainText("denies grain#sql");
   await page.keyboard.press("Escape");
-  const note = page.getByTestId("nt-grants-method-policy");
-  await expect(note).toContainText("1 method is refused or may be refused");
-  const link = note.getByRole("link", { name: "Settings → Capabilities" });
-  await expect(link).toHaveAttribute(
-    "href",
-    /\/settings\/capabilities#capability-policy$/,
-  );
 
   await link.click();
   await expect(page).toHaveURL(

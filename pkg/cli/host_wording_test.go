@@ -15,12 +15,8 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -65,6 +61,7 @@ func hostdLines(text string) []string {
 }
 
 func TestHostdLinesAllowsOnlyWhatAUserTypes(t *testing.T) {
+	t.Parallel()
 	for _, ok := range []string{
 		"the allowlist (default \"/etc/grain/hostd.yaml\")",
 		"run by grain-hostd.service before each start",
@@ -83,6 +80,7 @@ func TestHostdLinesAllowsOnlyWhatAUserTypes(t *testing.T) {
 }
 
 func TestCLIUsageSaysHostNotHostd(t *testing.T) {
+	t.Parallel()
 	for name, text := range map[string]string{"usage": usage, "hostRegistryUsage": hostRegistryUsage} {
 		for _, line := range hostdLines(text) {
 			t.Errorf("%s says hostd: %s", name, line)
@@ -94,38 +92,10 @@ func TestEveryCommandsHelpSaysHostNotHostd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs every command's -h in a child process")
 	}
-	dir := t.TempDir()
-	for _, d := range []string{"home", "data", "config"} {
-		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
-			t.Fatal(err)
+	t.Parallel()
+	for _, path := range hostSpecHelpPaths(t) {
+		for _, line := range hostdLines(hostSpecHelp(t, path)) {
+			t.Errorf("grain %s -h says hostd: %s", strings.Join(path, " "), line)
 		}
 	}
-	var paths [][]string
-	for _, top := range hostSpecTopLevel(t) {
-		if slices.Contains(hostSpecNoHelp, top) {
-			continue
-		}
-		paths = append(paths, []string{top})
-		for _, sub := range hostSpecSubcommands[top] {
-			paths = append(paths, append([]string{top}, strings.Fields(sub)...))
-		}
-	}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	for _, path := range paths {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			lines := hostdLines(hostSpecHelp(t, dir, path))
-			mu.Lock()
-			defer mu.Unlock()
-			for _, line := range lines {
-				t.Errorf("grain %s -h says hostd: %s", strings.Join(path, " "), line)
-			}
-		}()
-	}
-	wg.Wait()
 }

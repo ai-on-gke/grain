@@ -300,6 +300,19 @@ func TestGrainHealthExitsOneWhenACheckIsFailing(t *testing.T) {
 		{"warning only", warning, []string{"health"}, exitOK, "WARNING: reviewed-merge logins", "", "no counters"},
 		{"ci wait warning only", ciWait, []string{"health"}, exitOK, "WARNING: tasks waiting on CI", "", "no counters"},
 		{"publishing held warning only", ui.SandboxHealthResponse{BaseBranchPublishing: []ui.BaseBranchPublishing{{Repo: "acme/grain", Branch: "main", TriageTaskID: "2", Gated: true}}}, []string{"health"}, exitOK, "WARNING: base branches publishing nothing", "", "no counters"},
+		{"deliberately held schedule warning only", ui.SandboxHealthResponse{StaleSchedules: []model.StaleSchedule{{
+			ID: "repo:schedule:acme:grain:release-train", Repo: model.RepoRef{Owner: "acme", Name: "grain"},
+			Cadence: 20 * time.Minute, LastRunAt: &last, Held: true, HeldByTaskID: "4256",
+			Reason: "held: publishing held by task 4256 (acme/grain main has published nothing since 2026-11-08 07:37 UTC)",
+		}}}, []string{"health"}, exitOK, "WARNING: schedules deliberately held:", "", "FAILING:"},
+		{"deliberately held plus unheld stale schedule", ui.SandboxHealthResponse{StaleSchedules: []model.StaleSchedule{
+			stale.StaleSchedules[0],
+			{
+				ID: "repo:schedule:acme:grain:release-train", Repo: model.RepoRef{Owner: "acme", Name: "grain"},
+				Cadence: 20 * time.Minute, LastRunAt: &last, Held: true, HeldByTaskID: "4256",
+				Reason: "held: publishing held by task 4256 (acme/grain main has published nothing since 2026-11-08 07:37 UTC)",
+			},
+		}}, []string{"health"}, exitFailed, "WARNING: schedules deliberately held:", "grain: health: failing: 1 stale schedule(s)", "no counters"},
 		{"ci wait warning -json", ciWait, []string{"health", "-json"}, exitOK, `"gha:acme:widgets:5001"`, "", ""},
 		{"store switch alert only", alert, []string{"health"}, exitOK, "ALERT (since 2026-11-08 07:37:00Z): store switched", "", "no counters"},
 		{"store switch alert -json", alert, []string{"health", "-json"}, exitOK, `"storeSwitch"`, "", ""},

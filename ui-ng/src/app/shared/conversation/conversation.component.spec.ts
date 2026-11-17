@@ -42,7 +42,11 @@ function mk(id: number, body = `message ${id}`): Comment {
         [targetComment]="targetComment()"
         [(mode)]="mode"
         [(draft)]="draft"
-        [config]="{ placeholder: 'Type here', submitLabel: 'Send to #42' }"
+        [config]="{
+          placeholder: 'Type here',
+          submitLabel: 'Send to #42',
+          sendOnEnter: sendOnEnter(),
+        }"
         (send)="sent.push($event.body)"
       />
     </div>
@@ -54,6 +58,7 @@ class HostComponent {
   readonly mode = signal<ConversationMode>("inline");
   readonly draft = signal("");
   readonly sent: string[] = [];
+  readonly sendOnEnter = signal(false);
 }
 
 describe("ConversationComponent", () => {
@@ -177,6 +182,32 @@ describe("ConversationComponent", () => {
         bubbles: true,
       }),
     );
+    expect(f.componentInstance.sent).toEqual(["ship it"]);
+  });
+
+  it("supports Director Enter-to-send without sending Shift+Enter or IME input", () => {
+    f.componentInstance.sendOnEnter.set(true);
+    f.componentInstance.draft.set("ship it");
+    f.detectChanges();
+    const ta = q<HTMLTextAreaElement>('[data-testid="task-composer"]')!;
+    for (const options of [{ shiftKey: true }, { isComposing: true }]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...options,
+      });
+      ta.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(f.componentInstance.sent).toEqual([]);
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    ta.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
     expect(f.componentInstance.sent).toEqual(["ship it"]);
   });
 
