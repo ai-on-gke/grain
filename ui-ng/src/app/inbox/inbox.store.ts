@@ -297,6 +297,15 @@ export class InboxStore implements OnDestroy {
     const id = this.selected()?.taskId;
     return id ? (this.details()[id] ?? null) : null;
   });
+  // The selected alert's whole body: the open list the Inbox polls holds
+  // only each body's first line (?fields=list), and the dock renders the
+  // alert in full.
+  private readonly notificationBodies = signal<Record<string, string>>({});
+  private readonly notificationBodyInFlight = new Set<string>();
+  readonly selectedNotificationBody = computed<string | null>(() => {
+    const n = this.selected()?.notification;
+    return n ? (this.notificationBodies()[String(n.id)] ?? null) : null;
+  });
   readonly selectedTranscript = signal<string | null>(null);
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptKey = "";
@@ -360,6 +369,7 @@ export class InboxStore implements OnDestroy {
       this.ensureDetail(),
       this.ensureQueueDetails(),
       this.ensureDiff(),
+      this.ensureNotificationBody(),
     ]);
     if (this.isInspectorActive()) {
       this.syncSelectedTranscript();
@@ -909,6 +919,32 @@ export class InboxStore implements OnDestroy {
     this.markSeen(key);
     void this.ensureDetail(true);
     void this.ensureDiff();
+    void this.ensureNotificationBody();
+  }
+
+  // ensureNotificationBody reads the selected alert's whole body, once per
+  // time it is raised again (lastRaisedAt), from its own family's list.
+  async ensureNotificationBody(): Promise<void> {
+    const n = this.selected()?.notification;
+    if (!n) return;
+    const key = `${n.id}:${n.lastRaisedAt ?? ""}`;
+    if (this.notificationBodyInFlight.has(key)) return;
+    this.notificationBodyInFlight.add(key);
+    try {
+      const all = await this.api.openNotificationsInFamily(
+        n.family || n.subject,
+      );
+      const full = all.find((x) => String(x.id) === String(n.id))?.body;
+      if (full) {
+        this.notificationBodies.update((m) => ({
+          ...m,
+          [String(n.id)]: full,
+        }));
+      }
+    } catch {
+      // The first line from the list stays; the next selection tries again.
+      this.notificationBodyInFlight.delete(key);
+    }
   }
 
   // next selects the row that now stands where the selected one was (or
