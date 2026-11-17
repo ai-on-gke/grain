@@ -579,6 +579,11 @@ Rules:
   so both UIs show it.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
+  The same holds for configuration an external config repository manages
+  (`GET /api/config`'s `configRepoOnly`, where every write answers 409):
+  each card that writes it takes the page's `configRepoOnly`, disables its
+  controls and names the file to edit instead
+  (`ui-ng/e2e/next-repo-config-managed.spec.js`).
 - **State-aware.** The same goes for an action the item's state refuses.
   Example: Release hold cannot clear review findings, so a hold of findings
   alone shows no Release hold. The gate card says what does clear it and

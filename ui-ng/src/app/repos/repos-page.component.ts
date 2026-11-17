@@ -209,6 +209,13 @@ import {
                 [deployment]="config()?.deployment ?? {}"
               />
             }
+            @if (configRepoOnly()) {
+              <p class="repos-note" data-testid="repos-config-managed">
+                The repos this deployment works in are managed in the config
+                repository (tables/grain_config.json, target_repos); add one
+                there.
+              </p>
+            }
             @if (targets().length === 0) {
               <p class="repos-note" data-testid="repos-allowlist-note">
                 This deployment allows a task to target any repo: an empty
@@ -448,8 +455,15 @@ export class ReposPageComponent implements OnInit, OnDestroy {
       this.sort() === "custom" && !this.q().trim() && this.rows().length > 1,
   );
 
-  protected readonly canAdd = computed(() =>
-    this.access.can("POST /api/repos"),
+  // configRepoOnly: an external config repository holds the allowlist,
+  // so POST /api/repos is refused with 409 whatever the role.
+  protected readonly configRepoOnly = computed(() =>
+    Boolean(
+      (this.config() as Record<string, unknown> | null)?.["configRepoOnly"],
+    ),
+  );
+  protected readonly canAdd = computed(
+    () => this.access.can("POST /api/repos") && !this.configRepoOnly(),
   );
   protected readonly discovered = computed(() => {
     const r = this.reach();

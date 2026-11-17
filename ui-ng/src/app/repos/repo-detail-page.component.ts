@@ -1157,6 +1157,7 @@ interface PendingReleaseRow {
                      this is the default it is an exception to. -->
                 <g-repo-work-ownership
                   [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
                   [refreshKey]="releaseSaves()"
                   (saved)="onWorkOwnershipSaved()"
                 />

@@ -98,13 +98,23 @@ const STATES: readonly { state: WorkOwnershipState; text: string }[] = [
         </div>
       </div>
 
-      @if (denied(); as why) {
+      @if (configRepoOnly()) {
+        <p
+          class="s-hint"
+          id="work-ownership-denied"
+          data-testid="work-ownership-config-managed"
+        >
+          {{ repo() }}'s work ownership is managed in the config repository ({{
+            ownershipPath
+          }}: work_ownership and work_overrides); edit it there.
+        </p>
+      } @else if (denied()) {
         <p
           class="s-hint"
           id="work-ownership-denied"
           data-testid="work-ownership-denied"
         >
-          {{ why }}
+          {{ denied() }}
         </p>
       }
 
@@ -139,7 +149,9 @@ const STATES: readonly { state: WorkOwnershipState; text: string }[] = [
             data-testid="switch-work-ownership-default"
             aria-label="Standing work on this deployment"
             [attr.aria-checked]="!!w.defaultRuns"
-            [attr.aria-describedby]="denied() ? 'work-ownership-denied' : null"
+            [attr.aria-describedby]="
+              explained() ? 'work-ownership-denied' : null
+            "
             [disabled]="readOnly() || busy()"
             (click)="save({ default: w.defaultRuns ? 'off' : 'on' }, '')"
           ></button>
@@ -282,7 +294,7 @@ const STATES: readonly { state: WorkOwnershipState; text: string }[] = [
         [attr.aria-describedby]="
           rowError()[key]
             ? 'work-ownership-err-' + (key || 'default')
-            : denied()
+            : explained()
               ? 'work-ownership-denied'
               : null
         "
@@ -309,6 +321,9 @@ export class RepoWorkOwnershipComponent {
   private readonly access = inject(AccessService);
 
   readonly repo = input.required<string>();
+  // configRepoOnly is the page's: an external config repository holds
+  // repo_config, so every save here would be refused with 409.
+  readonly configRepoOnly = input(false);
   readonly refreshKey = input(0);
   readonly saved = output<void>();
 
@@ -339,11 +354,22 @@ export class RepoWorkOwnershipComponent {
     return "neutral";
   }
 
+  protected readonly ownershipPath = "tables/repo_config.json";
+
   protected readOnly(): boolean {
-    return !this.access.can(
-      "PUT /api/repos/{owner}/{name}/work-ownership",
-      this.repo(),
+    return (
+      this.configRepoOnly() ||
+      !this.access.can(
+        "PUT /api/repos/{owner}/{name}/work-ownership",
+        this.repo(),
+      )
     );
+  }
+
+  // explained is whether a line under the heading says why the controls
+  // are off, for them to point at.
+  protected explained(): boolean {
+    return this.configRepoOnly() || !!this.denied();
   }
 
   protected denied(): string {
