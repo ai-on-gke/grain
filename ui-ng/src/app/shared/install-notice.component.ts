@@ -44,6 +44,10 @@ import { StatusIconComponent } from "./status-icon.component";
   changeDetection: ChangeDetectionStrategy.OnPush,
   styles: [
     `
+      g-install-notice {
+        display: block;
+        flex: none;
+      }
       .install-notice {
         display: flex;
         align-items: flex-start;
@@ -86,12 +90,18 @@ import { StatusIconComponent } from "./status-icon.component";
       .install-notice-command {
         font-family: var(--grain-font-mono);
         font-size: 12px;
-        padding: 1px 6px;
+        line-height: 16px;
+        padding: 0 6px;
         border-radius: var(--md-sys-shape-corner-xs);
         border: 1px solid var(--md-sys-color-outline-variant);
         background: var(--md-sys-color-surface-container-lowest);
         color: var(--md-sys-color-on-surface);
+        /* Whole onto the next line rather than broken across two; only a
+           command longer than the line wraps inside itself. */
+        display: inline-block;
+        max-width: 100%;
         white-space: pre-wrap;
+        vertical-align: baseline;
       }
       .install-notice-clis {
         margin: 2px 0 0;
