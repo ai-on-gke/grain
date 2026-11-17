@@ -27,6 +27,11 @@ def attachment(value):
     expected = ("change" if kind in {"checks", "review", "approval", "integration", "qa_stage"}
                 else "repository" if kind.endswith("_health") else "task")
     require(subject == expected, "gate has incompatible subject")
+    if subject == "change":
+        require(value["subject"]["id"] != "*" or value["origin"]["kind"] in
+                {"deployment", "repository", "resource"}, "task/template cannot broaden resource scope")
+        require(value["subject"]["id"] != "*" or value["purpose"] == "guard",
+                "repository wildcard is only an action-policy selector")
     config = value["config"]
     legacy = any(isinstance(item, str) and item.startswith("legacy_")
                  for item in config.values())
@@ -35,6 +40,8 @@ def attachment(value):
             "legacy review cannot enforce current-head guard")
     require(not (kind == "qa_stage" and config["assignment"] == "shadow" and value["required"]),
             "shadow cannot supply required authority")
+    if kind == "checks" and subject == "change" and value["subject"]["change_kind"] == "cl":
+        require(config["mode"] in {"effective", "provider"}, "CL needs its presubmit source")
     if kind == "checks" and config["mode"] == "none":
         require(config["empty"] == "explicit_none", "no-CI must be explicit")
     if kind == "pipeline_health":
@@ -45,6 +52,9 @@ def semantic(definition, value):
     if definition == "attachment":
         attachment(value)
     elif definition in {"contract", "policy"}:
+        if definition == "policy" and value["unguarded_actions"]:
+            require(value["source"] in {"deployment", "repository", "resource"},
+                    "task/template cannot exempt resource guards")
         qualified = []
         for item in value["attachments"]:
             attachment(item)
@@ -75,7 +85,7 @@ def semantic(definition, value):
         require(value["target"]["kind"] == "change", "action needs canonical change")
         expected = "pr" if value["action"] == "change.merge" else "cl"
         require(value["target"]["change_kind"] == expected, "wrong action adapter")
-        require(value["target"]["id"] != "task_changes", "action needs one resolved resource")
+        require(value["target"]["id"] not in {"task_changes", "*"}, "action needs one resolved resource")
     elif definition == "action_receipt":
         semantic("action_request", value["request"])
         if value["disposition"] == "succeeded":

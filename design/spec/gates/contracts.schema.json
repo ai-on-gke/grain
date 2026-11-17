@@ -63,6 +63,7 @@
             "github",
             "grain",
             "both",
+            "provider",
             "none"
           ]
         },
@@ -418,7 +419,9 @@
       "properties": {
         "kind": {
           "enum": [
+            "deployment",
             "repository",
+            "resource",
             "template",
             "task",
             "legacy"
@@ -1884,7 +1887,9 @@
         },
         "source": {
           "enum": [
+            "deployment",
             "repository",
+            "resource",
             "template",
             "task"
           ]
@@ -1955,7 +1960,25 @@
           "minimum": 60,
           "maximum": 2592000
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "intent": {
+                "const": "person_closes"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "on_met": {
+                "const": "rest"
+              }
+            }
+          }
+        }
+      ]
     },
     "contract": {
       "type": "object",
@@ -2164,7 +2187,8 @@
             "publication",
             "pipeline",
             "qa",
-            "operation"
+            "operation",
+            "policy"
           ]
         },
         "id": {

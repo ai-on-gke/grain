@@ -334,5 +334,61 @@
     "schema_valid": true,
     "semantic_valid": false,
     "reason": "action exception exceeds one hour"
+  },
+  {
+    "file": "report-template-defaults.json",
+    "definition": "policy",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "standing-contract.json",
+    "definition": "contract",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "invalid-standing-auto-close.json",
+    "definition": "contract",
+    "schema_valid": false,
+    "semantic_valid": false,
+    "reason": "standing intent must rest"
+  },
+  {
+    "file": "invalid-task-wildcard.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "task cannot broaden resource scope"
+  },
+  {
+    "file": "invalid-template-unguarded.json",
+    "definition": "policy",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "template cannot exempt resource guards"
+  },
+  {
+    "file": "explicit-no-ci-result.json",
+    "definition": "result",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "cl-checks-attachment.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": true,
+    "reason": null
+  },
+  {
+    "file": "invalid-cl-github-source.json",
+    "definition": "attachment",
+    "schema_valid": true,
+    "semantic_valid": false,
+    "reason": "CL source cannot be GitHub checks"
   }
 ]

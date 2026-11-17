@@ -16,7 +16,7 @@
         "authority": "github.com",
         "repository": "ai-on-gke/grain",
         "change_kind": "pr",
-        "id": "1710"
+        "id": "*"
       },
       "config": {
         "mode": "effective",
@@ -44,7 +44,7 @@
         "authority": "github.com",
         "repository": "ai-on-gke/grain",
         "change_kind": "pr",
-        "id": "1710"
+        "id": "*"
       },
       "config": {
         "category": "security",
@@ -71,7 +71,7 @@
         "authority": "github.com",
         "repository": "ai-on-gke/grain",
         "change_kind": "pr",
-        "id": "1710"
+        "id": "*"
       },
       "config": {
         "requirement_ids": [
