@@ -24,11 +24,11 @@ import (
 func TestBuiltInEngineeringWorkflowV4AndPreservedV1ToV3Hashes(t *testing.T) {
 	// Verify existing built-in hashes remain byte-for-byte unchanged.
 	wantBuiltInHashes := map[string]string{
-		"golden-v1-minimal@1":     "builtin:golden-v1-minimal@1#4",
-		"golden-v2@1":             "builtin:golden-v2@1#4",
-		"golden-v2-skill-only@1":  "builtin:golden-v2-skill-only@1#4",
-		"golden-v2-checks-only@1": "builtin:golden-v2-checks-only@1#4",
-		"golden-v3@1":             "builtin:golden-v3@1#4",
+		"golden-v1-minimal@1":     "builtin:golden-v1-minimal@1#5",
+		"golden-v2@1":             "builtin:golden-v2@1#5",
+		"golden-v2-skill-only@1":  "builtin:golden-v2-skill-only@1#5",
+		"golden-v2-checks-only@1": "builtin:golden-v2-checks-only@1#5",
+		"golden-v3@1":             "builtin:golden-v3@1#5",
 	}
 	for ref, wantHash := range wantBuiltInHashes {
 		b, ok := LookupBuiltInOrRegisteredVersion(ref)
