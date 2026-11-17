@@ -56,14 +56,31 @@ const (
 // limit"), or a 7-day / per-week quota in another provider's words.
 var weeklyLimitPattern = regexp.MustCompile(`(?i)\bweekly\b|\b7[- ]day\b|\bper week\b`)
 
+// IsWeeklyReason reports whether a provider refusal message names a weekly
+// (7-day / per-week) quota rather than a short session interval.
+func IsWeeklyReason(reason string) bool {
+	return weeklyLimitPattern.MatchString(reason)
+}
+
 // PauseHorizon is which of a scope's horizons a usage-limit pause says
 // it met: HorizonWeekly when the provider's refusal names its weekly
 // quota, else HorizonInterval.
 func PauseHorizon(p model.UsageLimitPause) string {
-	if weeklyLimitPattern.MatchString(p.Reason) {
+	if IsWeeklyReason(p.Reason) {
 		return HorizonWeekly
 	}
 	return HorizonInterval
+}
+
+// weeklyCycleBounds advances resetAt on the fixed WeeklyWindow cycle until
+// next is strictly after now, returning the start of the current week
+// (next - WeeklyWindow) and the upcoming reset (next).
+func weeklyCycleBounds(resetAt, now time.Time) (last, next time.Time) {
+	next = resetAt
+	for !next.After(now) {
+		next = next.Add(WeeklyWindow)
+	}
+	return next.Add(-WeeklyWindow), next
 }
 
 // weeklyCapacitySuffix marks a usage_capacity row holding a scope's

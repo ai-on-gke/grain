@@ -391,6 +391,11 @@ func TestResumeAtBoundsWhatTheProviderSaid(t *testing.T) {
 		// 6h cap that meets the limit again, nor the 15m default.
 		{"a long provider-named delay", &agent.UsageLimitError{RetryAfter: 17*time.Hour + 32*time.Minute}, 17*time.Hour + 32*time.Minute},
 		{"a delay past a day", &agent.UsageLimitError{RetryAfter: 30 * time.Hour}, maxUsageLimitPause},
+		// Weekly refusals ("You've hit your weekly limit · resets Nov 20, 3am (UTC)")
+		// reset days away and must not be clamped down to the 24h interval ceiling.
+		{"a 3-day weekly reset", &agent.UsageLimitError{Message: "You've hit your weekly limit · resets Nov 20, 3am (UTC)", ResetAt: now.Add(72 * time.Hour)}, 72 * time.Hour},
+		{"a 7-day weekly reset", &agent.UsageLimitError{Message: "You've hit your weekly limit · resets Nov 24, 3am (UTC)", ResetAt: now.Add(7 * 24 * time.Hour)}, 7 * 24 * time.Hour},
+		{"an absurd weekly reset", &agent.UsageLimitError{Message: "You've hit your weekly limit", ResetAt: now.Add(4000 * time.Hour)}, maxWeeklyUsageLimitPause},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := resumeAt(now, tc.limit)

@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/usage"
 )
 
 // errUsageLimit is context.Cause's own report, by identity, for a run
@@ -47,22 +48,27 @@ var errUsageLimit = errors.New("orchestrator: the agent's usage limit was reache
 //   - minUsageLimitPause is the floor under a provider that named a very
 //     short delay. The point of pausing is to stop the queue walking
 //     into the same wall run after run, and a few seconds does not.
-//   - maxUsageLimitPause is the ceiling over one that named a very long
-//     one -- or over a reset instant this code misread. A day covers the
-//     longest window a provider has been seen to name (agy's "Resets in
-//     17h32m", task 1908, which a 6h cap met two or three times over).
-//     A deployment idling for a wrong day is recoverable; one idling
-//     until 2286 because an epoch was parsed in the wrong unit is not
-//     something anybody would think to look for.
+//   - maxUsageLimitPause is the ceiling over an interval refusal that named
+//     a very long reset -- or over a reset instant this code misread. A day
+//     covers the longest interval window a provider has been seen to name
+//     (agy's "Resets in 17h32m", task 1908, which a 6h cap met two or three
+//     times over).
+//   - maxWeeklyUsageLimitPause is the ceiling when the refusal explicitly
+//     names a weekly / 7-day quota ("You've hit your weekly limit · resets
+//     Nov 20, 3am (UTC)"). Clamping a multi-day weekly pause to 24h both
+//     unblocks dispatch days early and teaches usage_capacity a bogus reset
+//     time. Eight days covers a full 7-day cycle plus clock/rounding skew
+//     while still bounding a misparsed epoch.
 //
 // Retrying once the pause lifts is not a promise the limit is over: a
 // window that has not actually reset produces one more refusal, one more
 // pause, and no further traffic. That is the property these numbers are
 // chosen for, rather than for guessing any particular provider's window.
 const (
-	defaultUsageLimitPause = 15 * time.Minute
-	minUsageLimitPause     = time.Minute
-	maxUsageLimitPause     = 24 * time.Hour
+	defaultUsageLimitPause   = 15 * time.Minute
+	minUsageLimitPause       = time.Minute
+	maxUsageLimitPause       = 24 * time.Hour
+	maxWeeklyUsageLimitPause = usage.WeeklyWindow + 24*time.Hour
 )
 
 // PauseScope is what one usage limit belongs to, and so what the pause it
@@ -1020,7 +1026,11 @@ func resumeAt(now time.Time, limit *agent.UsageLimitError) time.Time {
 	if floor := now.Add(minUsageLimitPause); until.Before(floor) {
 		until = floor
 	}
-	if ceiling := now.Add(maxUsageLimitPause); until.After(ceiling) {
+	maxPause := maxUsageLimitPause
+	if limit != nil && usage.IsWeeklyReason(limit.Message) {
+		maxPause = maxWeeklyUsageLimitPause
+	}
+	if ceiling := now.Add(maxPause); until.After(ceiling) {
 		until = ceiling
 	}
 	return until.UTC()

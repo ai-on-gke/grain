@@ -171,3 +171,39 @@ func TestLearnFromWeeklyPauseKeepsTheIntervalCapacity(t *testing.T) {
 		t.Fatalf("scope = %+v", s)
 	}
 }
+
+// Re-learning a weekly limit more than a week after the last known reset
+// still advances the fixed 7-day cycle so tokens from the previous week
+// are excluded from the new weekly estimate.
+func TestLearnFromWeeklyPauseAdvancesRecurringResetCycle(t *testing.T) {
+	store, ctx := openStore(t)
+	// Previous week reset 10 days ago -> current week began 3 days ago.
+	if err := store.RecordUsageCapacity(ctx, model.UsageCapacity{
+		Connection: "conn", Model: weeklyCapacitySuffix, Tokens: 999,
+		Window: WeeklyWindow, ObservedAt: now.Add(-12 * 24 * time.Hour), ResetAt: now.Add(-10 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Run "prev" is 5 days ago (inside 7d lookback, but BEFORE the 3-day-ago reset).
+	// Run "curr" is 1 day ago (inside the current week).
+	for _, r := range []model.RunUsage{
+		run("prev", "conn", "opus", 5*24*time.Hour, 700000),
+		run("curr", "conn", "opus", 24*time.Hour, 500000),
+	} {
+		if err := store.RecordRunUsage(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	until := now.Add(4 * 24 * time.Hour)
+	pause := model.UsageLimitPause{Connection: "conn", Until: until, Reason: weeklyReason}
+	if err := LearnFromPause(ctx, store, pause, now); err != nil {
+		t.Fatal(err)
+	}
+	caps, err := store.ListUsageCapacities(ctx)
+	if err != nil || len(caps) != 1 {
+		t.Fatalf("capacities = %+v, %v", caps, err)
+	}
+	if caps[0].Tokens != 500000 || !caps[0].ResetAt.Equal(until) {
+		t.Fatalf("weekly capacity = %+v, want Tokens=500000 ResetAt=%v", caps[0], until)
+	}
+}

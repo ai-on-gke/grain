@@ -145,12 +145,48 @@ func TestExplicitChoicesDoNotFallBackAcrossFrameworks(t *testing.T) {
 
 func TestPauseClockNamesTheLocalZone(t *testing.T) {
 	t.Parallel()
+	now := time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC)
 	at := time.Date(2026, 7, 1, 17, 5, 0, 0, time.UTC)
-	if got, want := pauseClock(at, model.LoadLocation("America/Los_Angeles")), "10:05 AM PDT"; got != want {
-		t.Errorf("pauseClock in Los Angeles = %q, want %q", got, want)
+	if got, want := pauseClock(now, at, model.LoadLocation("America/Los_Angeles")), "10:05 AM PDT"; got != want {
+		t.Errorf("pauseClock in Los Angeles (same day) = %q, want %q", got, want)
 	}
-	if got, want := pauseClock(at, time.UTC), "5:05 PM UTC"; got != want {
-		t.Errorf("pauseClock in UTC = %q, want %q", got, want)
+	if got, want := pauseClock(now, at, time.UTC), "5:05 PM UTC"; got != want {
+		t.Errorf("pauseClock in UTC (same day) = %q, want %q", got, want)
+	}
+
+	// Multi-day weekly resets and next-day resets carry the calendar date
+	// in the reader's zone so a pause lifting days away never reads as today.
+	weeklyNow := time.Date(2026, 11, 17, 1, 22, 0, 0, time.UTC)
+	weeklyAt := time.Date(2026, 11, 20, 1, 22, 0, 0, time.UTC)
+	if got, want := pauseClock(weeklyNow, weeklyAt, model.LoadLocation("America/Los_Angeles")), "Nov 19, 5:22 PM PST"; got != want {
+		t.Errorf("pauseClock weekly in Los Angeles = %q, want %q", got, want)
+	}
+	if got, want := pauseClock(weeklyNow, weeklyAt, model.LoadLocation("Asia/Kolkata")), "Nov 20, 6:52 AM IST"; got != want {
+		t.Errorf("pauseClock weekly in Kolkata = %q, want %q", got, want)
+	}
+	if got, want := pauseClock(weeklyNow, weeklyAt, time.UTC), "Nov 20, 1:22 AM UTC"; got != want {
+		t.Errorf("pauseClock weekly in UTC = %q, want %q", got, want)
+	}
+	// Crossing local midnight on an interval pause adds the date even when
+	// UTC is still on the same day.
+	kolkataNow := time.Date(2026, 11, 17, 17, 30, 0, 0, time.UTC) // 11:00 PM IST on Nov 17
+	kolkataAt := time.Date(2026, 11, 17, 19, 30, 0, 0, time.UTC)  // 1:00 AM IST on Nov 18
+	if got, want := pauseClock(kolkataNow, kolkataAt, model.LoadLocation("Asia/Kolkata")), "Nov 18, 1:00 AM IST"; got != want {
+		t.Errorf("pauseClock crossing midnight in Kolkata = %q, want %q", got, want)
+	}
+
+	// DST transitions in America/Los_Angeles (spring-forward Mar 8 2026 and
+	// fall-back Nov 1 2026) name the reset instant's own PST/PDT offset.
+	la := model.LoadLocation("America/Los_Angeles")
+	springNow := time.Date(2026, 3, 8, 9, 0, 0, 0, time.UTC)   // 1:00 AM PST
+	springAt := time.Date(2026, 3, 8, 10, 30, 0, 0, time.UTC)  // 3:30 AM PDT (same day)
+	if got, want := pauseClock(springNow, springAt, la), "3:30 AM PDT"; got != want {
+		t.Errorf("pauseClock across spring-forward = %q, want %q", got, want)
+	}
+	fallNow := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)  // 1:00 AM PDT
+	fallAt := time.Date(2026, 11, 1, 9, 30, 0, 0, time.UTC)  // 1:30 AM PST (same day)
+	if got, want := pauseClock(fallNow, fallAt, la), "1:30 AM PST"; got != want {
+		t.Errorf("pauseClock across fall-back = %q, want %q", got, want)
 	}
 
 	// The task's zone wins; one this build cannot load gives way to the
@@ -161,6 +197,7 @@ func TestPauseClockNamesTheLocalZone(t *testing.T) {
 		want string
 	}{
 		{poolRequest{timeZone: "America/Los_Angeles", settings: deployment}, "America/Los_Angeles"},
+		{poolRequest{timeZone: "Asia/Kolkata", settings: deployment}, "Asia/Kolkata"},
 		{poolRequest{timeZone: "Not/AZone", settings: deployment}, "Europe/Berlin"},
 		{poolRequest{settings: deployment}, "Europe/Berlin"},
 		{poolRequest{}, "UTC"},
