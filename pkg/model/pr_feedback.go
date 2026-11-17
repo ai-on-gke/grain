@@ -82,6 +82,16 @@ func (s *Store) RecordPRFeedbackBatch(ctx context.Context, c Comment, eventKeys 
 		var fresh []string
 		unique := map[string]bool{}
 		for _, eventKey := range eventKeys {
+			// Receipts remain authoritative if a later task update replaces its
+			// provenance links. A replay must still be an idempotent success.
+			var one int
+			err := tx.QueryRowContext(ctx, "SELECT 1 FROM task_pr_feedback WHERE task_id = ? AND event_key = ?", c.TaskID, eventKey).Scan(&one)
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
 			if unique[eventKey] {
 				continue
 			}

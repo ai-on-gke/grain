@@ -238,3 +238,22 @@ func TestPRFeedbackConcurrentRedeliveryCommitsOneReceipt(t *testing.T) {
 	f.finish(d, f.comments()[1].ID)
 	f.cycle(0)
 }
+
+func TestPRFeedbackReceiptSurvivesReplacedProvenanceLinks(t *testing.T) {
+	f := newFeedbackFixture(t)
+	f.question(false)
+	f.event("issue_comment", "created", 1501, "alice")
+	d := f.cycle(1)[0]
+	f.finish(d, f.comments()[1].ID)
+	if err := f.store.UpdateTask(t.Context(), "feedback", func(task *model.Task) error {
+		task.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#12"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.event("issue_comment", "created", 1501, "alice")
+	if len(f.comments()) != 2 {
+		t.Fatal("receipt replay duplicated context after a task update")
+	}
+	f.cycle(0)
+}
