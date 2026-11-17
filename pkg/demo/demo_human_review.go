@@ -61,7 +61,7 @@ func seedHumanReviewDemo(ctx context.Context, store *model.Store, cfg ui.Config,
 		return fmt.Errorf("seeding the held change's review: %w", err)
 	}
 	if err := store.UpdateTask(ctx, review.ID, func(t *model.Task) error {
-		t.Origin.Reason = model.ReasonReview
+		t.Filing.Reason = model.ReasonReview
 		t.Links = append(t.Links, model.Link{Kind: model.LinkProposedBy, Target: held.ID})
 		return nil
 	}); err != nil {

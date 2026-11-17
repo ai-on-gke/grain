@@ -43,17 +43,11 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
-// sameDay reports whether ms falls on the same calendar day in ZONE as
-// now. A reset on a later day is printed with its date ("Nov 16, 12:07
-// AM PST"), so the spec expects one exactly when the 2h 15m lands past
-// midnight on ZONE's clock.
-function sameDay(ms) {
-  const day = (t) =>
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: ZONE,
-      dateStyle: "short",
-    }).format(new Date(t));
-  return day(ms) === day(Date.now());
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
+  const day = (ms) =>
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
 }
 
 for (const size of SIZES) {
@@ -97,9 +91,14 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
       await expect(reset).toContainText(
         new RegExp(
-          `resets ${sameDay(until) ? "" : "[A-Z][a-z]{2} \\d{1,2}, "}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -129,7 +128,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets ${sameDay(until) ? "" : "[A-Z][a-z]{2} \\d{1,2}, "}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });

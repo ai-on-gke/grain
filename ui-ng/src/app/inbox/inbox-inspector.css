@@ -91,6 +91,16 @@
   margin: 0 0 8px;
 }
 
+.resolution-dock .banner .capped-md {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.resolution-dock .banner .capped-md > :last-child {
+  margin-bottom: 0;
+}
+
 .resolution-question {
   margin: 0;
   font-size: 14px;

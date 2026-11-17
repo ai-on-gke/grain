@@ -153,7 +153,8 @@
   text-overflow: ellipsis;
 }
 
-.s-field > g-pill-select .pill-select-btn:disabled {
+.s-field > g-pill-select .pill-select-btn:disabled,
+.s-inline > g-pill-select .pill-select-btn:disabled {
   opacity: 1;
   cursor: not-allowed;
   background: var(--md-sys-color-surface-container-low);
@@ -324,6 +325,7 @@
   border-radius: var(--md-sys-shape-corner-medium);
   font-size: 14px;
   line-height: 20px;
+  overflow-wrap: anywhere;
 }
 
 .s-banner.readonly {
@@ -401,6 +403,22 @@
 .s-card[id],
 .s-anchor {
   scroll-margin-top: 80px;
+}
+
+/* A locked or read-only card is de-emphasised with a colour, never
+   opacity (the book's "Dim with a colour, not opacity"). */
+.s-dimmed,
+.s-dimmed .s-card-title,
+.s-dimmed .s-subhead-title,
+.s-dimmed .s-label,
+.s-dimmed .s-toggle-name,
+.s-dimmed td {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.s-wrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* A table that must never scroll sideways (Settings → Repositories). Wide,
@@ -488,12 +506,6 @@
     flex-wrap: wrap;
     justify-content: flex-end;
   }
-}
-
-/* A secret's value is masked as it is typed (a textarea, so a PEM keeps
-   its newlines), the way the GitHub token field's type="password" is. */
-.s-masked {
-  -webkit-text-security: disc;
 }
 
 /* Settings -> Sandboxes -> Custom sandbox image: the contract versions. */

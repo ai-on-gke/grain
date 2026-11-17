@@ -350,7 +350,7 @@ func TestMergeQueueRefreshesNothingButTheHeadItIsStillDriving(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.UpdateTask(ctx, fix.ID, func(tk *model.Task) error {
-		tk.Origin.Reason = model.ReasonFix
+		tk.Filing.Reason = model.ReasonFix
 		return nil
 	}); err != nil {
 		t.Fatal(err)

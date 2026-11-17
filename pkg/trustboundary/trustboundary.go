@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v28"
+const Version = "trust-boundary/v29"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,14 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v29 adds pkg/ui/access_code_mode.go to auth-routes beside
+// pkg/ui/accesscode.go (task 5973, found in the security review of task
+// 3908): it decides whether the access code is on, in recovery or off
+// (accessCodeModeNow, which serveHTTP consults to disable LocalAPIToken),
+// which routes an access code may reach in recovery mode
+// (accessCodeRecoveryRoute, admitAccessCodeRequest) and which names an
+// access-code sign-in may claim (accessNameAllowed).
 //
 // v28 adds the six sibling surfaces the post-merge security review of v26
 // found unclassified across scripts/ and pkg/ (task 3926, finding 3.1 of
@@ -302,7 +310,7 @@ var Categories = []Category{
 		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/", "pkg/hubenv/"},
 		files: []string{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
-			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
+			"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
 			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",

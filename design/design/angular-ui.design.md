@@ -323,3 +323,16 @@ decision, or any task entry whose task has a pull request.
 6. **Settings** -- many small forms, least urgent to restyle.
 7. **Retire the classic UI** as described in *Migrating one page at a
    time*.
+
+### Model connection setup and tests
+
+Settings → Models keeps credential writes separate from connection metadata.
+Saving a Codex subscription connection opens its existing write-only auth.json
+editor. Validation errors must never include JSON parser excerpts or credential
+contents. A failed upload preserves both the prior stored login and the draft
+for retry; successful upload clears the draft.
+
+Connection tests operate on saved rows, never implicitly save an edit, and use
+the per-backend credential check contract described in
+`docs/connections-and-models.md`. Show pending, accepted, refused and unavailable
+results inline. Catalog-only and local-file checks are not provider successes.

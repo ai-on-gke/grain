@@ -66,7 +66,7 @@ func hasTag(task model.Task, tag string) bool { return slices.Contains(task.Tags
 // base, not a fix or review merging into another task's branch, and not a
 // task a trigger filed itself (which would otherwise judge its own work).
 func pullRequestTriggersApply(task model.Task) bool {
-	return task.Target != nil && task.Origin.Reason != model.ReasonFix && !isReviewTask(task) &&
+	return task.Target != nil && task.Filing.Reason != model.ReasonFix && !isReviewTask(task) &&
 		!hasTag(task, model.PathTriggerMarkerTag)
 }
 

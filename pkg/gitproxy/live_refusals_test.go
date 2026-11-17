@@ -104,7 +104,7 @@ func newRefusalRig(t *testing.T, tokens map[string]githubsim.GitAccess) refusalR
 	store, ctx := openStore(t)
 	task := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "test task",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},
