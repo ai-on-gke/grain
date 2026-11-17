@@ -352,7 +352,9 @@ const AccessCodeActorPrefix = "access-code:"
 // that task's grants -- and, on a daemon issuing run credentials, refuses
 // it outright, since the code alone does not say which task it is
 // (actingTaskCredentialError). It reports whether serveHTTP should go on,
-// with r's context carrying the name.
+// with r's context carrying the name. With the code off nothing reaches
+// it, a run's own requests included: the gate admits no code at all, and
+// runs present their own run credential instead (run_credential.go).
 func (s *Server) admitAccessCodeRequest(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	if strings.TrimSpace(r.Header.Get(ActingTaskHeader)) != "" {
 		return r, true
