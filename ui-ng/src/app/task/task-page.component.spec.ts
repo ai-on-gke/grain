@@ -17,7 +17,7 @@ import { Router, provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { DiffPreview, TaskDetail } from "../api/models";
+import type { DiffPreview, TaskDetail, TaskQAResponse } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
@@ -177,6 +177,11 @@ class FakeApi {
       },
     ],
   };
+  qaResponse: TaskQAResponse = {
+    enabled: false,
+    checkRuns: [],
+    findings: [],
+  };
   calls: Call[] = [];
   transcripts: string[] = [];
   remoteBranches: string[] | null = null;
@@ -226,6 +231,9 @@ class FakeApi {
     if (route === "GET /api/tasks/{id}/context") {
       return Promise.resolve({ brief: "Original brief", summarised: 0 });
     }
+    if (route === "GET /api/tasks/{id}/qa") {
+      return Promise.resolve(structuredClone(this.qaResponse));
+    }
     if (route === "GET /api/tasks/{id}/attempts/{number}/capability-audit") {
       return Promise.resolve({
         records: [
@@ -246,6 +254,19 @@ class FakeApi {
   };
   private rec(method: string, route: string, params?: unknown, body?: unknown) {
     this.calls.push({ method, route, params, body });
+    if (
+      route === "POST /api/tasks/{id}/qa/findings/{finding}/feedback" &&
+      body &&
+      typeof body === "object"
+    ) {
+      const vote = Number((body as { vote?: number }).vote ?? 0);
+      return Promise.resolve({
+        ok: true,
+        findingId: Number((params as { finding?: string })?.finding ?? 0),
+        vote,
+        votedBy: "ana@example.com",
+      });
+    }
     return Promise.resolve({});
   }
   post = (r: string, p?: unknown, b?: unknown) => this.rec("POST", r, p, b);
@@ -1677,6 +1698,141 @@ describe("duration", () => {
     expect(document.activeElement).toBe(openBtn);
   });
 
+  it("hides Pre-PR quality checks when off and supports details + helpful feedback when active", async () => {
+    const offApi = new FakeApi();
+    const offFixture = await render(offApi, "changes");
+    expect(q(offFixture, '[data-testid="task-qa-section"]')).toBeNull();
+
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+
+    const api = new FakeApi();
+    api.qaResponse = {
+      taskId: "7",
+      enabled: true,
+      assignment: {
+        rootOrigin: "task:7",
+        epoch: 1,
+        regimeId: 1,
+        arm: "treatment",
+        flowId: "golden-v1-minimal",
+        rolloutPctAtAssign: 50,
+        complexityTier: "medium",
+        assignedAt: "2026-11-12T10:00:00Z",
+      },
+      checkRuns: [
+        {
+          id: 1,
+          taskId: "7",
+          runId: "7-1",
+          commitSha: "",
+          stage: "S1",
+          checkId: "skill-inject",
+          arm: "treatment",
+          shadow: false,
+          verdict: "pass",
+          durationMs: 0,
+          tokensIn: 270,
+          tokensOut: 0,
+          allocBytes: 0,
+          createdAt: "2026-11-12T10:00:01Z",
+        },
+        {
+          id: 2,
+          taskId: "7",
+          runId: "7-1",
+          stage: "S3",
+          checkId: "go-test-integrity",
+          arm: "treatment",
+          shadow: false,
+          commitSha: "abcdef0123456789",
+          verdict: "fail",
+          durationMs: 18,
+          tokensIn: 0,
+          tokensOut: 0,
+          allocBytes: 4096,
+          createdAt: "2026-11-12T10:01:00Z",
+        },
+      ],
+      findings: [
+        {
+          id: 11,
+          checkRunId: 2,
+          taskId: "7",
+          stage: "S3",
+          ruleId: "golden:test-integrity-guard",
+          severity: "blocking",
+          filePath: "pkg/merge/merge_test.go",
+          line: 14,
+          summary: "TestRetries contains zero assertions.",
+          evidence: "func TestRetries(t *testing.T) { _ = retries }",
+          humanVote: 0,
+          createdAt: "2026-11-12T10:01:00Z",
+        },
+      ],
+    };
+
+    const f = await render(api, "changes");
+    const qaSection = q(f, '[data-testid="task-qa-section"]')!;
+    expect(qaSection).not.toBeNull();
+    expect(q(f, '[data-testid="task-qa-arm"]')!.textContent).toContain(
+      "treatment · golden-v1-minimal",
+    );
+    // skill-inject is internal accounting and hidden; go-test-integrity is visible.
+    expect(q(f, '[data-testid="qa-check-1"]')).toBeNull();
+    expect(q(f, '[data-testid="qa-check-2"]')!.textContent).toContain(
+      "go-test-integrity",
+    );
+
+    const detailsBtn = q<HTMLButtonElement>(
+      f,
+      '[data-testid="qa-evidence-btn-11"]',
+    )!;
+    expect(detailsBtn.textContent?.trim()).toBe("Show details");
+    detailsBtn.click();
+    await settle(f);
+    expect(detailsBtn.textContent?.trim()).toBe("Hide details");
+    expect(qaSection.textContent).toContain(
+      "func TestRetries(t *testing.T) { _ = retries }",
+    );
+
+    const upBtn = q<HTMLButtonElement>(f, '[data-testid="qa-vote-up-11"]')!;
+    expect(upBtn.getAttribute("aria-pressed")).toBe("false");
+    upBtn.click();
+    await settle(f);
+
+    expect(
+      api.calls.find(
+        (c) =>
+          c.route === "POST /api/tasks/{id}/qa/findings/{finding}/feedback",
+      ),
+    ).toEqual({
+      method: "POST",
+      route: "POST /api/tasks/{id}/qa/findings/{finding}/feedback",
+      params: { id: "7", finding: "11" },
+      body: { vote: 1 },
+    });
+    expect(upBtn.getAttribute("aria-pressed")).toBe("true");
+
+    // Clicking Helpful again clears the vote (0).
+    upBtn.click();
+    await settle(f);
+    expect(upBtn.getAttribute("aria-pressed")).toBe("false");
+
+    // Read-only viewer without tasks:write does not see vote controls.
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read", "ci:read"],
+      },
+    });
+    f.detectChanges();
+    await settle(f);
+    expect(q(f, '[data-testid="qa-vote-up-11"]')).toBeNull();
+  });
+
   it("renders actionError once, ignores page Escape when modal is open, skips missing remote branches, and guards close(expectedId)", async () => {
     const api = new FakeApi();
     api.remoteBranches = ["main"]; // excludes grain/task-7
@@ -1714,6 +1870,148 @@ describe("duration", () => {
     );
     expect(navSpy).not.toHaveBeenCalled();
     fakeModal.remove();
+  });
+
+  it("keeps Details tab accessible above 1080px without redirecting to Conversation", async () => {
+    const origMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("min-width: 1080px"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    try {
+      const api = new FakeApi();
+      const f = await render(api, "details");
+      const detailsTab = q(f, '[data-testid="task-tab-details"]')!;
+      expect(detailsTab).toBeTruthy();
+      expect(detailsTab.getAttribute("aria-current")).toBe("page");
+      expect(q(f, '[data-testid="task-details"] .description')).toBeTruthy();
+      expect(q(f, ".task-aside")).toBeNull();
+    } finally {
+      window.matchMedia = origMatchMedia;
+    }
+  });
+
+  it("renders Docs tab with prompt, PR markdown diff, and report comments, and drives doc-reader-modal Prev/Next/backdrop/Escape", async () => {
+    const api = new FakeApi();
+    api.fullDiff = [
+      api.fullDiff,
+      "diff --git a/docs/plan.md b/docs/plan.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/docs/plan.md",
+      "@@ -0,0 +1,4 @@",
+      "+# Rollout Plan",
+      "+",
+      "+- Step 1: Ship Docs tab",
+      "+- Step 2: Verify E2E",
+    ].join("\n");
+    api.detail = {
+      ...api.detail,
+      comments: [
+        ...(api.detail.comments ?? []),
+        {
+          id: 9,
+          author: "agent",
+          authorKind: "agent",
+          summary: "Audit findings",
+          body: "## Audit findings\n\n- Scroll containment checked\n- Modal keyboard trap verified",
+        },
+      ],
+    };
+    const f = await render(api);
+
+    // Open Docs directly from Prompt pane button.
+    q<HTMLButtonElement>(f, '[data-testid="prompt-open-docs"]')!.click();
+    await settle(f);
+    expect(
+      q(f, '[data-testid="task-tab-docs"]')!.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(q(f, '[data-testid="task-docs-shell"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-prompt"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-pr:docs/plan.md"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-comment-9"]')).toBeTruthy();
+    // Short chat comment ("Please fix it") is excluded from Docs picker.
+    expect(q(f, '[data-testid="doc-item-comment-1"]')).toBeNull();
+
+    // Switch active doc inside Docs tab.
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="doc-item-pr:docs/plan.md"]',
+    )!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="docs-reader-title"]')!.textContent).toContain(
+      "plan.md",
+    );
+    expect(q(f, '[data-testid="docs-reader-body"]')!.textContent).toContain(
+      "Rollout Plan",
+    );
+
+    // Open full-screen modal from Docs tab.
+    q<HTMLButtonElement>(f, '[data-testid="docs-fullscreen"]')!.click();
+    await settle(f);
+    const modal = q<HTMLDialogElement>(f, '[data-testid="doc-reader-modal"]')!;
+    expect(modal.getAttribute("aria-modal")).toBe("true");
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Navigate Next -> Comment report, then Prev -> PR plan.md -> Prev -> Prompt.
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "3 / 3",
+    );
+    expect(q(f, '[data-testid="doc-modal-body"]')!.textContent).toContain(
+      "Scroll containment checked",
+    );
+    expect(
+      q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.disabled,
+    ).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Dragging from inside modal body out onto backdrop must NOT dismiss modal.
+    q(f, '[data-testid="doc-modal-body"]')!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-prev"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Backdrop click closes modal.
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
+    expect(modal.getAttribute("aria-modal")).toBeNull();
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(false);
+
+    // Open from Prompt full screen button and dismiss with Escape.
+    q<HTMLButtonElement>(f, '[data-testid="task-tab-details"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="prompt-fullscreen"]')!.click();
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "1 / 3",
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
   });
 });
 

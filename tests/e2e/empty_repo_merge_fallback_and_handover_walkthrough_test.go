@@ -145,7 +145,7 @@ func TestWalkthroughEmptyRepoBootstrapToNormalPRFlow(t *testing.T) {
 			Intent:    model.IntentImplement,
 			Title:     "Bootstrap empty repository",
 			Body:      "Create initial README.md",
-			Origin:    model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+			Filing:    model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 			Approval:  &model.Attribution{Actor: actor},
 			Target:    &repo,
 			Binding:   model.BindingDirective,
@@ -297,7 +297,7 @@ func TestWalkthroughEmptyRepoBootstrapToNormalPRFlow(t *testing.T) {
 			Intent:    model.IntentImplement,
 			Title:     "Bootstrap empty repo with README.md",
 			Body:      "Commit README.md and push origin HEAD.",
-			Origin:    model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+			Filing:    model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 			Approval:  &model.Attribution{Actor: actor},
 			Target:    &repo,
 			Binding:   model.BindingDirective,
@@ -367,7 +367,7 @@ func TestWalkthroughEmptyRepoBootstrapToNormalPRFlow(t *testing.T) {
 			Intent:    model.IntentImplement,
 			Title:     "Add CONTRIBUTING.md on top of main",
 			Body:      "Add CONTRIBUTING.md and open PR #1 against main.",
-			Origin:    model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+			Filing:    model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 			Approval:  &model.Attribution{Actor: actor},
 			Target:    &repo,
 			Binding:   model.BindingDirective,
@@ -542,7 +542,7 @@ func TestWalkthroughMergePullRequestSquashAndRebaseFallback(t *testing.T) {
 				Intent:     model.IntentAnalyze,
 				Title:      "Parent planning task",
 				Body:       "File implementation task.",
-				Origin:     model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+				Filing:     model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 				Approval:   &model.Attribution{Actor: actor},
 				Target:     &repo,
 				Binding:    model.BindingDirective,
@@ -562,7 +562,7 @@ func TestWalkthroughMergePullRequestSquashAndRebaseFallback(t *testing.T) {
 				Intent: model.IntentImplement,
 				Title:  "Add fallback feature",
 				Body:   "Verify MergePullRequestWithMessage squash/rebase fallback.",
-				Origin: model.Origin{
+				Filing: model.Filing{
 					Attribution: model.Attribution{
 						Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 						OnBehalfOf: &proposer,
@@ -670,7 +670,7 @@ func TestWalkthroughMultiAttemptHandoverWindowResetAndSuspendedPrompt(t *testing
 			Intent:   model.IntentAnalyze,
 			Title:    "Investigate multi-attempt handover window reset",
 			Body:     "Drive 3 attempts with >64 KiB pre-H1 and >64 KiB post-H1 comments.",
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: actor},
 			Binding:  model.BindingDirective,
 		}
@@ -857,7 +857,7 @@ func TestWalkthroughMultiAttemptHandoverWindowResetAndSuspendedPrompt(t *testing
 			Intent:   model.IntentImplement,
 			Title:    "Suspended session prompt test",
 			Body:     "INITIAL-TASK-BODY-BEFORE-EDIT",
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: actor},
 			Binding:  model.BindingDirective,
 		}
@@ -1022,7 +1022,7 @@ func TestWalkthroughAntigravityResumedTurnWithPriorStepError(t *testing.T) {
 		Intent:   model.IntentAnalyze,
 		Title:    "Verify Antigravity resumed turn with prior step ERROR",
 		Body:     "Ensure a resumed conversation with an earlier ERROR step and a final DONE agent_response completes on attempt 1.",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: actor},
 		Binding:  model.BindingDirective,
 	}

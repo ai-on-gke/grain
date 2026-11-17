@@ -22,6 +22,7 @@ import {
   matchesFilter,
   matchesQuery,
   pendingReleaseOf,
+  plainMarkdownSummary,
   releaseConfirm,
   waitsOnUser,
 } from "./inbox-classifier";
@@ -59,6 +60,36 @@ describe("inbox classifier", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("reads a task resting on a summarized closing note as that note, not a question", () => {
+    const note = classifyTask(
+      task({
+        id: "5",
+        state: "awaiting_reply",
+        noteSummary: "Report: widgets README needs no change",
+      }),
+    );
+    expect(note?.groupId).toBe("reply");
+    expect(note?.summary).toBe("Report: widgets README needs no change");
+    expect(note?.pillLabel).toBe("Note");
+    expect(note?.pillTone).toBe("neutral");
+    expect(note?.iconKind).toBe("note");
+    expect(note?.actions.map((a) => a.id)).toEqual(["acknowledge"]);
+
+    // A question still wins over a note summary, as the server's own
+    // NoteSummary rule says it never sends both.
+    const asked = classifyTask(
+      task({
+        id: "6",
+        state: "awaiting_reply",
+        questionSummary: "Keep v1?",
+        noteSummary: "Report",
+      }),
+    );
+    expect(asked?.pillLabel).toBe("Needs reply");
+    expect(asked?.summary).toBe("Keep v1?");
+    expect(asked?.iconKind).toBeUndefined();
   });
 
   it("files each task under one group with the actions its group offers", () => {
@@ -503,5 +534,51 @@ describe("inbox classifier", () => {
         }),
       )?.kind,
     ).toBe("stalled");
+  });
+
+  it("strips inline and block Markdown from summaries while keeping refs and snake_case", () => {
+    expect(
+      plainMarkdownSummary(
+        "## **Urgent**: Check [PR #12](https://example.com/12)\n- Run `npm test` and *verify* __foo_bar__ on #582 (2 * 3)",
+      ),
+    ).toBe(
+      "Urgent: Check PR #12 Run npm test and verify foo_bar on #582 (2 * 3)",
+    );
+
+    const reply = classifyTask(
+      task({
+        id: "10",
+        state: "awaiting_reply",
+        questionSummary:
+          "### **Pick** [option A](https://x/a)\n* Use `flag_name` or *skip*",
+      }),
+    );
+    expect(reply?.summary).toBe("Pick option A Use flag_name or skip");
+
+    const access = classifyTask(
+      task({
+        id: "11",
+        state: "awaiting_reply",
+        awaitingAccess: true,
+        questionSummary: "- Need **write** to `sidthe/grain`",
+      }),
+    );
+    expect(access?.summary).toBe("Need write to sidthe/grain");
+
+    const stalled = classifyTask(
+      task({
+        id: "12",
+        state: "queued",
+        stall: "**Blocked** on *review*\n+ Check `ci`",
+      }),
+    );
+    expect(stalled?.summary).toBe("Blocked on review Check ci");
+
+    const note = classifyNotification({
+      id: 99,
+      subject: "ci.red",
+      body: "## **Main** is *red* on [run 1](https://x/1)\nSecond line",
+    });
+    expect(note.summary).toBe("Main is red on run 1");
   });
 });

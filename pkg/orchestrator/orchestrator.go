@@ -49,6 +49,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -1304,7 +1305,7 @@ func (h *HostSandboxes) Acquire(ctx context.Context, name string, shape Shape) (
 	// A directory left behind by a previous process using this same
 	// -sandbox-dir would otherwise be inherited wholesale, which is the
 	// one thing a sandbox per run exists to rule out.
-	if err := os.RemoveAll(root); err != nil {
+	if err := removeSandboxDir(root); err != nil {
 		return nil, fmt.Errorf("orchestrator: clearing sandbox directory %q: %w", root, err)
 	}
 	// 0700: the checkout may be a private repository, and nobody else on
@@ -1394,7 +1395,7 @@ func (h *HostSandboxes) ReapOrphans(ctx context.Context) (int, error) {
 		}
 		path := filepath.Join(h.baseDir, entry.Name())
 		killDetachedStepRunners(path)
-		if err := os.RemoveAll(path); err != nil {
+		if err := removeSandboxDir(path); err != nil {
 			errs = append(errs, fmt.Errorf("removing orphaned sandbox directory %q: %w", path, err))
 			continue
 		}
@@ -1483,7 +1484,7 @@ func (s *hostSandbox) ConfigureGitCredentials(ctx context.Context, remoteURL, to
 // deployment runs. A run that reaches for this on one backend and is
 // refused on the other would be the more surprising outcome.
 func (s *hostSandbox) Rebuild(ctx context.Context) error {
-	if err := os.RemoveAll(s.root); err != nil {
+	if err := removeSandboxDir(s.root); err != nil {
 		return fmt.Errorf("orchestrator: removing sandbox directory %q to rebuild it: %w", s.root, err)
 	}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
@@ -1510,10 +1511,56 @@ func (s *hostSandbox) Release(ctx context.Context) error {
 			return fmt.Errorf("orchestrator: removing sandbox environment file %q: %w", envFile, err)
 		}
 	}
-	if err := os.RemoveAll(s.root); err != nil {
+	if err := removeSandboxDir(s.root); err != nil {
 		return fmt.Errorf("orchestrator: removing sandbox directory %q: %w", s.root, err)
 	}
 	return nil
+}
+
+// removeSandboxDir removes a host sandbox directory tree that may contain
+// read-only directories or files (such as Go module cache entries under
+// GOPATH/pkg/mod created with 0555/0444 permissions). It skips symlinks so
+// targets outside the sandbox are never modified before removing root.
+func removeSandboxDir(root string) error {
+	root = filepath.Clean(root)
+	if _, err := os.Lstat(root); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, fs.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		isDir := d.IsDir()
+		if !isDir && !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		need := fs.FileMode(0o200)
+		if isDir {
+			need = 0o700
+		}
+		if mode := info.Mode(); mode&need != need {
+			if err := os.Chmod(path, mode|need); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return os.RemoveAll(root)
 }
 
 // SandboxReadopter is a Sandboxes backend that can take back a sandbox a

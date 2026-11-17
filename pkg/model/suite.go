@@ -87,6 +87,7 @@ type Suite struct {
 	RequireApproval      bool
 	AutoMerge            bool
 	AutoApproveProposals bool
+	QAFlowRef            string `json:"qaFlowRef,omitempty"`
 	CreatedAt            time.Time
 }
 

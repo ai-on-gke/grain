@@ -27,7 +27,7 @@
 //     did they do it directly?" is answerable from the task rather than
 //     only from an audit log.
 //   - Landing state is decided by the creating actor, never the reason —
-//     see LandsQueued. A new OriginReason therefore cannot queue itself.
+//     see LandsQueued. A new FilingReason therefore cannot queue itself.
 //   - Blocked is not a state. It is derived from links, and a blocked
 //     task is still queued.
 //
@@ -154,20 +154,20 @@ type Attribution struct {
 	OnBehalfOf *Principal
 }
 
-// --- origin ----------------------------------------------------------
+// --- filing ----------------------------------------------------------
 
-// OriginReason is why a task was created -- the half of Origin that is
+// FilingReason is why a task was created -- the half of Filing that is
 // never consulted to decide whether it lands queued (LandsQueued).
-type OriginReason string
+type FilingReason string
 
 const (
-	ReasonDirect        OriginReason = "direct"        // somebody just filed it
-	ReasonSchedule      OriginReason = "schedule"      // a scheduled job fired
-	ReasonFix           OriginReason = "fix"           // filed for a broken PR
-	ReasonReview        OriginReason = "review"        // a review of another task's own work
-	ReasonProposal      OriginReason = "proposal"      // an agent or parent proposed it
-	ReasonQualification OriginReason = "qualification" // a release candidate's qualification plan fired it
-	ReasonSuite         OriginReason = "suite"         // a suite run fired it (bwsalmon/agents#642)
+	ReasonDirect        FilingReason = "direct"        // somebody just filed it
+	ReasonSchedule      FilingReason = "schedule"      // a scheduled job fired
+	ReasonFix           FilingReason = "fix"           // filed for a broken PR
+	ReasonReview        FilingReason = "review"        // a review of another task's own work
+	ReasonProposal      FilingReason = "proposal"      // an agent or parent proposed it
+	ReasonQualification FilingReason = "qualification" // a release candidate's qualification plan fired it
+	ReasonSuite         FilingReason = "suite"         // a suite run fired it (bwsalmon/agents#642)
 	// ReasonUpgradeCheck is grain checking an upgrade of itself: the task
 	// orchestrator files, once, after an in-place upgrade has installed a
 	// new build and restarted the deployment, to have an agent go and
@@ -179,7 +179,7 @@ const (
 	// wants that checked" is a different thing to have happened than
 	// "a cadence came due", and a person reading the task's origin is
 	// entitled to be told which.
-	ReasonUpgradeCheck OriginReason = "upgrade-check"
+	ReasonUpgradeCheck FilingReason = "upgrade-check"
 	// ReasonConsoleSession is the task holding one of this deployment's
 	// standing interactive sessions -- the director, and whatever else
 	// Config.ConsoleSessions names (ConsoleSession, grain/task-415).
@@ -191,7 +191,7 @@ const (
 	// that a completed task is done, that a task nobody approved is
 	// waiting for somebody -- are exactly the ones
 	// orchestrator.reconcileConsoleSessions exempts it from.
-	ReasonConsoleSession OriginReason = "console-session"
+	ReasonConsoleSession FilingReason = "console-session"
 	// ReasonImported is an open GitHub issue the periodic issue importer
 	// turned into a task (orchestrator.reconcileIssueImports, configured
 	// per repository by RepoConfig.IssueImport). The task names the issue
@@ -202,25 +202,30 @@ const (
 	// issue on GitHub and grain picked it up" is not "somebody filed this
 	// here", and the person deciding whether to approve it is entitled to
 	// be told that the words in it came from outside.
-	ReasonImported OriginReason = "imported"
+	ReasonImported FilingReason = "imported"
 )
 
-// Origin is two orthogonal facts kept together: who created a task, and
+// Filing is two orthogonal facts kept together: who created a task, and
 // why. An earlier design fused them into one enum, which hid that two of
 // its cases were identical in who and differed only in why.
-type Origin struct {
+//
+// It was called Origin until the name collided with WorkOrigin, which the
+// API exposes as `origin`: the root of a task's tree of work, not who
+// filed this one task. The store keeps its columns under the old prefix
+// (`task`.`origin_actor_*`, `origin_behalf_*`, `origin_reason`).
+type Filing struct {
 	Attribution Attribution
-	Reason      OriginReason
+	Reason      FilingReason
 }
 
-// LandsQueued reports whether a task with this origin starts approved.
+// LandsQueued reports whether a task filed this way starts approved.
 //
-// The actor decides; the reason does not. An OriginReason added later
+// The actor decides; the reason does not. A FilingReason added later
 // cannot queue itself, because reasons are never consulted — the
 // trust gate as code rather than as a convention each filing path
 // remembers.
-func LandsQueued(o Origin) bool {
-	return o.Attribution.Actor.Kind == PrincipalHuman
+func LandsQueued(f Filing) bool {
+	return f.Attribution.Actor.Kind == PrincipalHuman
 }
 
 // --- repos and folders -----------------------------------------------
@@ -1259,12 +1264,13 @@ func (l Lease) Expired(now time.Time, maxAge time.Duration) bool {
 type LinkKind string
 
 const (
-	LinkDependsOn  LinkKind = "depends-on"  // blocks dispatch
-	LinkChildOf    LinkKind = "child-of"    // blocks the parent
-	LinkFixes      LinkKind = "fixes"       // -> a pull request
-	LinkMergeWith  LinkKind = "merge-with"  // blocks the merge, not the run
-	LinkAddresses  LinkKind = "addresses"   // -> a review thread
-	LinkProposedBy LinkKind = "proposed-by" // provenance only
+	LinkDependsOn    LinkKind = "depends-on"  // blocks dispatch
+	LinkChildOf      LinkKind = "child-of"    // blocks the parent
+	LinkFixes        LinkKind = "fixes"       // -> a pull request
+	LinkMergeWith    LinkKind = "merge-with"  // blocks the merge, not the run
+	LinkAddresses    LinkKind = "addresses"   // -> a review thread
+	LinkProposedBy   LinkKind = "proposed-by" // provenance only
+	LinkQATriageHold LinkKind = "qa-triage-hold"
 	// LinkFixTask recorded the separate task the merge queue used to file
 	// to repair this task's own PR (-> that task's ID). Nothing writes it
 	// any more: a repair now runs as another attempt of the task itself,
@@ -1492,6 +1498,16 @@ const (
 	// LinkHumanSubmitted is consumed so the UI and merge gates know who
 	// approved which commit.
 	LinkHumanApproved LinkKind = "human-approved"
+	// LinkQAHold records that grain withdrew or withheld this task's auto-merge
+	// while a pre-PR quality verification gate (S4) is running or left unresolved
+	// findings after retry caps (-> the head SHA).
+	LinkQAHold LinkKind = "qa-hold"
+	// LinkQAS4Attempted records that the 1-round fresh-context S4 orthogonal
+	// verifier has already executed for this task (-> the staged head SHA).
+	LinkQAS4Attempted LinkKind = "qa-s4-attempted"
+	// LinkQASalvageRetried records that salvagePushedBranch already requeued
+	// one bounded repair turn for deterministic S3 findings (-> the head SHA).
+	LinkQASalvageRetried LinkKind = "qa-salvage-retried"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
@@ -1875,6 +1891,9 @@ type Task struct {
 	// Skills is the per-task repository skill discovery override (nil defers
 	// to the target repository and deployment defaults).
 	Skills *SkillsConfig `json:"skills,omitempty"`
+	// QAFlowRef is the operator-configured quality-control flow reference
+	// bound to this task (`<key>`, `<key>@v<N>`, or `sha256:<hex>`).
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a
@@ -1882,7 +1901,7 @@ type Task struct {
 	// historical grain/task-<id> form.
 	Branch string
 	Intent Intent
-	Origin Origin
+	Filing Filing
 	Title  string
 	Body   string
 
@@ -2451,7 +2470,7 @@ type Observation struct {
 	// and that is the whole of the second chance there is.
 	//
 	// It is also what makes the repair run a *merger*
-	// (OriginReason.Merger's own doc comment): a task being repaired
+	// (FilingReason.Merger's own doc comment): a task being repaired
 	// draws on the capacity Limits.Mergers keeps back, where before this
 	// the repair was a separate ReasonFix task and the reason column
 	// alone answered it.
@@ -2890,6 +2909,10 @@ type TaskSpan struct {
 
 // Run is one attempt. A live run is a Run with no FinishedAt.
 type Run struct {
+	// RequireReady rechecks ordinary dispatch eligibility inside the claim transaction.
+	// Explicit Run now callers leave it false. It is not persisted.
+	RequireReady bool `json:"-"`
+
 	ID     string
 	TaskID string
 	// Sandbox is the sandbox this run was given -- the kontur VM name, or
@@ -3151,7 +3174,7 @@ func (t Task) BranchName() string {
 // reviewed task's instead, so one push to the shared branch is one run.
 // inPlace reports which of the two this is.
 func (t Task) CIOwner() (owner string, inPlace bool) {
-	if t.Origin.Reason == ReasonReview {
+	if t.Filing.Reason == ReasonReview {
 		for _, l := range t.Links {
 			if l.Kind == LinkPushesReviewedBranch && l.Target != "" {
 				return l.Target, true

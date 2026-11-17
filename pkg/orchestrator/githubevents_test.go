@@ -131,8 +131,8 @@ func TestGitHubEventsTrustedMentionQueuesTaskReactsEyesAndDeduplicates(t *testin
 	if st != model.StateQueued {
 		t.Fatalf("state = %q, want %q for trusted collaborator", st, model.StateQueued)
 	}
-	if filed.Origin.Attribution.Actor != (model.Principal{Kind: model.PrincipalHuman, ID: "alice"}) {
-		t.Errorf("origin actor = %+v, want alice human", filed.Origin.Attribution.Actor)
+	if filed.Filing.Attribution.Actor != (model.Principal{Kind: model.PrincipalHuman, ID: "alice"}) {
+		t.Errorf("origin actor = %+v, want alice human", filed.Filing.Attribution.Actor)
 	}
 	if !slices.Contains(sim.CommentReactions, githubsim.CommentReaction{CommentID: 501, Content: "eyes"}) {
 		t.Errorf("reactions = %+v, want eyes on comment 501", sim.CommentReactions)
@@ -309,8 +309,8 @@ func TestExternalPRReviewSubmitsBotReviewAndUpdatesCheckRun(t *testing.T) {
 		t.Fatalf("review tasks filed = %d, want 1", len(tasks))
 	}
 	reviewTask := tasks[0]
-	if reviewTask.Intent != model.IntentReview || reviewTask.Origin.Reason != model.ReasonReview {
-		t.Fatalf("unexpected task shape: intent=%q reason=%q", reviewTask.Intent, reviewTask.Origin.Reason)
+	if reviewTask.Intent != model.IntentReview || reviewTask.Filing.Reason != model.ReasonReview {
+		t.Fatalf("unexpected task shape: intent=%q reason=%q", reviewTask.Intent, reviewTask.Filing.Reason)
 	}
 	if reviewTask.Base != "feat/human-pr" {
 		t.Errorf("review base = %q, want feat/human-pr", reviewTask.Base)

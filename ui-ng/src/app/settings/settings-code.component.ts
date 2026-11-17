@@ -1167,11 +1167,30 @@ interface StateRepoEntryDto {
             </div>
             <div class="s-inline">
               <span
-                class="status-pill neutral s-mono"
+                class="status-pill s-mono"
+                [class.error]="
+                  !!stateRepoError() ||
+                  !!stateRepoLoadError() ||
+                  stateRepoSchemaMismatch()
+                "
+                [class.neutral]="
+                  !stateRepoError() &&
+                  !stateRepoLoadError() &&
+                  !stateRepoSchemaMismatch()
+                "
                 data-testid="state-repo-status"
               >
                 {{ stateRepoSummary() }}
               </span>
+              @if (stateRepoSchemaMismatch()) {
+                <span
+                  class="status-pill error s-mono"
+                  data-testid="state-repo-schema-mismatch"
+                >
+                  schema {{ stateRepoSchemaVersion() }} (build
+                  {{ stateRepoBuildSchemaVersion() }})
+                </span>
+              }
               <button
                 type="button"
                 class="btn-primary s-btn-sm"
@@ -1185,6 +1204,37 @@ interface StateRepoEntryDto {
               </button>
             </div>
           </div>
+
+          @if (stateRepoLoadError()) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="state-repo-load-error"
+            >
+              <span>
+                Could not read config repository status:
+                {{ stateRepoLoadError() }}
+              </span>
+            </div>
+          }
+
+          @if (stateRepoError()) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="state-repo-error"
+            >
+              <span>{{ stateRepoError() }}</span>
+            </div>
+          } @else if (stateRepoSchemaMismatch()) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="state-repo-schema-error"
+            >
+              <span>{{ stateRepoSchemaMismatchMessage() }}</span>
+            </div>
+          }
 
           @if (state.refusedChanges().length > 0) {
             <div
@@ -1639,6 +1689,24 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly ciFaultCount = signal(0);
 
   protected readonly stateRepoSummary = signal("Not initialized");
+  protected readonly stateRepoError = signal("");
+  protected readonly stateRepoLoadError = signal("");
+  protected readonly stateRepoSchemaVersion = signal(0);
+  protected readonly stateRepoBuildSchemaVersion = signal(0);
+  protected readonly stateRepoSchemaMismatch = computed(() => {
+    const repo = this.stateRepoSchemaVersion();
+    const build = this.stateRepoBuildSchemaVersion();
+    return repo > 0 && build > 0 && repo !== build;
+  });
+  protected readonly stateRepoSchemaMismatchMessage = computed(() => {
+    const repo = this.stateRepoSchemaVersion();
+    const build = this.stateRepoBuildSchemaVersion();
+    if (repo <= 0 || build <= 0 || repo === build) return "";
+    if (repo > build) {
+      return `The repository holds schema ${repo} and this build knows ${build}. Upgrade grain before applying changes from this repository.`;
+    }
+    return `The repository holds schema ${repo} and this build knows ${build}. grain does not migrate a dump between schemas; the repository has to be re-seeded.`;
+  });
   protected readonly syncingStateRepo = signal(false);
   protected readonly prTitle = signal("");
   protected readonly remoteUrl = signal("");
@@ -2402,13 +2470,25 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         const branch = String(sr?.["branch"] ?? "main");
         const commit = String(sr?.["head"] ?? sr?.["commit"] ?? "").slice(0, 8);
         const remote = String(sr?.["remote"] ?? "");
+        const error =
+          typeof sr?.["error"] === "string" ? sr["error"].trim() : "";
+        const schemaVersion =
+          typeof sr?.["schemaVersion"] === "number" ? sr["schemaVersion"] : 0;
+        const buildSchemaVersion =
+          typeof sr?.["buildSchemaVersion"] === "number"
+            ? sr["buildSchemaVersion"]
+            : 0;
         this.remoteUrl.set(remote);
         if (branch) this.remoteBranch.set(branch);
         this.stateRepoSummary.set(
           commit ? `${branch} @ ${commit}` : remote ? branch : "Local state",
         );
-      } catch {
-        // Non-fatal
+        this.stateRepoError.set(error);
+        this.stateRepoSchemaVersion.set(schemaVersion);
+        this.stateRepoBuildSchemaVersion.set(buildSchemaVersion);
+        this.stateRepoLoadError.set("");
+      } catch (err) {
+        this.stateRepoLoadError.set(errText(err));
       }
     }
     if (this.access.can("GET /api/state-repo/files")) {
@@ -2446,10 +2526,22 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     this.syncingStateRepo.set(true);
     try {
       await this.api.post("POST /api/state-repo/sync", undefined, {});
+      this.state.error.set(null);
       await this.loadStateRepo();
       this.snackbar.show("StateRepo synced");
     } catch (err) {
-      this.state.recordError(err);
+      const msg = errText(err);
+      await this.loadStateRepo();
+      const shown = this.stateRepoError();
+      if (
+        this.stateRepoLoadError() ||
+        !shown ||
+        (msg && !shown.includes(msg) && !msg.includes(shown))
+      ) {
+        this.state.recordError(err);
+      } else {
+        this.state.error.set(null);
+      }
     } finally {
       this.syncingStateRepo.set(false);
     }
