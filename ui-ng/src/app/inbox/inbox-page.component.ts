@@ -128,6 +128,22 @@ const PAST: Record<string, string> = {
   "retry-merge": "Retried the merge of",
 };
 
+// The ownership tick a bulk confirm asks for names what the batch does
+// ("I am deferring work owned by someone else"); the dialog's own default
+// says "approving work", which is wrong for every other answer.
+const BULK_VERB: Record<string, string> = {
+  approve: "approving work",
+  defer: "deferring work",
+  close: "closing work",
+  decline: "declining work",
+  acknowledge: "acknowledging work",
+  ack: "acknowledging alerts",
+  submit: "submitting changes",
+  retry: "retrying work",
+  resume: "resuming work",
+  "retry-merge": "retrying merges",
+};
+
 // The reply composer's target: the task and question the person was
 // looking at when they started typing.
 interface ReplyTarget {
@@ -1786,6 +1802,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       accept: `${label} (${n})`,
       destructive: id === "close" || id === "decline",
       scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: BULK_VERB[id],
       run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
   }
