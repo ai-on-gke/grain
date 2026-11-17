@@ -350,21 +350,23 @@ function defaultFixturesForEngine(engine: CustomCheckEngine): {
                   </button>
 
                   <ul class="qa-step-list" [hidden]="collapsed">
-                    @for (step of stage.steps; track step.id) {
-                      <li [attr.data-testid]="'qa-rule-card-' + step.id">
+                    @for (
+                      step of stage.steps;
+                      track step.customCheckIndex ?? step.id
+                    ) {
+                      <li
+                        class="qa-step-li"
+                        [attr.data-testid]="'qa-rule-card-' + step.id"
+                      >
                         <button
                           type="button"
                           class="qa-step-node"
-                          [class.is-selected]="
-                            selectedStepId() === step.id && !addingForStageId()
-                          "
+                          [class.is-selected]="isStepSelected(step)"
                           [attr.aria-current]="
-                            selectedStepId() === step.id && !addingForStageId()
-                              ? 'true'
-                              : null
+                            isStepSelected(step) ? 'true' : null
                           "
                           [attr.data-testid]="'qa-step-row-' + step.id"
-                          (click)="selectStep(stage.id, step.id)"
+                          (click)="selectStep(stage.id, step.id, step)"
                         >
                           <div class="qa-step-node-main">
                             <span class="qa-step-label">{{ step.label }}</span>
@@ -384,6 +386,18 @@ function defaultFixturesForEngine(engine: CustomCheckEngine): {
                             }
                           </div>
                         </button>
+                        @if (editing() && step.deletable) {
+                          <button
+                            type="button"
+                            class="qa-row-del-btn"
+                            [attr.data-testid]="'qa-row-delete-step-' + step.id"
+                            [attr.aria-label]="'Delete ' + step.label"
+                            gTip="Delete substep"
+                            (click)="deleteSubstepView(step, $event)"
+                          >
+                            &times;
+                          </button>
+                        }
                       </li>
                     }
 
@@ -440,6 +454,7 @@ function defaultFixturesForEngine(engine: CustomCheckEngine): {
           [stages]="workflowStages()"
           [selectedStage]="activeStage()"
           [selectedStep]="selectedStepView()"
+          [selectedCustomCheckUid]="selectedCustomCheckUid()"
           [addingForStage]="addingStageView()"
           [inspectorTab]="inspectorTab()"
           [editing]="editing()"
@@ -504,6 +519,8 @@ function defaultFixturesForEngine(engine: CustomCheckEngine): {
           (addCheckReq)="addCheck($event.engine, $event.stageId)"
           (addCustomStageReq)="addCustomStage($event)"
           (jumpToStageAddReq)="jumpToStageAdd($event)"
+          (deleteSelectedStepReq)="deleteSelectedSubstep()"
+          (customizeAndDeleteReq)="customizeAndDeleteSelectedSubstep()"
           (s0IntentChange)="s0Intent.set($event)"
           (decomposeEnabledChange)="decomposeEnabled.set($event)"
           (decomposeModeChange)="updateDecomposeMode($event)"
@@ -799,6 +816,7 @@ export class QaV3StudioComponent {
   readonly showSkippedStages = signal(false);
   readonly selectedStageId = signal<string>("s0-decompose");
   readonly selectedStepId = signal<string | null>(null);
+  readonly selectedCustomCheckUid = signal<number | null>(null);
   readonly addingForStageId = signal<string | null>(null);
   readonly inspectorTab = signal<StudioInspectorTab>("definition");
 
@@ -1036,6 +1054,15 @@ export class QaV3StudioComponent {
   });
 
   readonly selectedStepView = computed<WorkflowStepView | null>(() => {
+    const ccUid = this.selectedCustomCheckUid();
+    if (ccUid !== null) {
+      const idx = this.customChecks().findIndex((c) => c.uid === ccUid);
+      if (idx >= 0) {
+        const s3 = this.workflowStages().find((s) => s.id === "s3-checks");
+        const byIdx = s3?.steps.find((s) => s.customCheckIndex === idx);
+        if (byIdx) return byIdx;
+      }
+    }
     const id = this.selectedStepId();
     if (!id) return null;
     for (const st of this.workflowStages()) {
@@ -1115,6 +1142,7 @@ export class QaV3StudioComponent {
           this.collapsedStages.set(createAllCollapsedMap());
           this.showSkippedStages.set(false);
           this.selectedStepId.set(null);
+          this.selectedCustomCheckUid.set(null);
           this.addingForStageId.set(null);
           this.fixtureReport.set(null);
           this.dryRunResult.set(null);
@@ -1153,7 +1181,14 @@ export class QaV3StudioComponent {
       this.codingSkillMode.set(skillOverride.mode);
       this.codingSkillText.set(skillOverride.text);
     }
-    if (!preserveSelection) {
+    if (preserveSelection) {
+      const curStepId = this.selectedStepId();
+      const matchedCc = curStepId
+        ? this.customChecks().find((c) => c.id === curStepId)
+        : undefined;
+      this.selectedCustomCheckUid.set(matchedCc ? matchedCc.uid : null);
+    } else {
+      this.selectedCustomCheckUid.set(null);
       this.addingForStageId.set(null);
     }
     this.fixtureReport.set(null);
@@ -1626,6 +1661,7 @@ export class QaV3StudioComponent {
 
   openGuide(): void {
     this.selectedStepId.set(null);
+    this.selectedCustomCheckUid.set(null);
     this.addingForStageId.set(null);
     this.inspectorTab.set("definition");
   }
@@ -1635,10 +1671,26 @@ export class QaV3StudioComponent {
     this.drawerClosed.emit();
   }
 
-  selectStep(stageId: string, stepId: string): void {
+  protected isStepSelected(step: WorkflowStepView): boolean {
+    if (this.addingForStageId()) return false;
+    const ccUid = this.selectedCustomCheckUid();
+    if (ccUid !== null && step.customCheckIndex !== undefined) {
+      return this.customChecks()[step.customCheckIndex]?.uid === ccUid;
+    }
+    return this.selectedStepId() === step.id;
+  }
+
+  selectStep(stageId: string, stepId: string, step?: WorkflowStepView): void {
     this.addingForStageId.set(null);
     this.selectedStageId.set(stageId);
     this.selectedStepId.set(stepId);
+    if (step?.customCheckIndex !== undefined) {
+      const cc = this.customChecks()[step.customCheckIndex];
+      this.selectedCustomCheckUid.set(cc ? cc.uid : null);
+    } else {
+      const byId = this.customChecks().find((c) => c.id === stepId);
+      this.selectedCustomCheckUid.set(byId ? byId.uid : null);
+    }
     this.inspectorTab.set("definition");
     this.stepSelected.emit(stepId);
   }
@@ -1665,12 +1717,97 @@ export class QaV3StudioComponent {
     this.collapsedStages.update((prev) => ({ ...prev, [stageId]: false }));
     this.selectedStageId.set(stageId);
     this.selectedStepId.set(null);
+    this.selectedCustomCheckUid.set(null);
     this.addingForStageId.set(stageId);
     this.inspectorTab.set("definition");
     if (!this.editing()) {
       this.enterDraftReq.emit();
     }
     this.stepSelected.emit(`add:${stageId}`);
+  }
+
+  deleteSelectedSubstep(): void {
+    const step = this.selectedStepView();
+    if (step) {
+      this.deleteSubstepView(step);
+    }
+  }
+
+  customizeAndDeleteSelectedSubstep(): void {
+    const step = this.selectedStepView();
+    if (!step) return;
+    if (!this.editing()) {
+      this.enterDraftReq.emit();
+    }
+    const hydratedStep = this.selectedStepView() ?? step;
+    this.deleteSubstepView(hydratedStep);
+  }
+
+  deleteSubstepView(step: WorkflowStepView, ev?: Event): void {
+    ev?.stopPropagation();
+    if (step.kind === "skill_step") {
+      const idx = this.skillSteps().findIndex((s) => s.id === step.id);
+      const removed = idx >= 0 ? this.skillSteps()[idx] : undefined;
+      this.removeSkillStep(step.id);
+      if (removed) {
+        this.snackbar.show(`Deleted "${removed.label || removed.id}".`, {
+          label: "Undo",
+          run: () => {
+            this.skillSteps.update((list) => {
+              const copy = [...list];
+              copy.splice(Math.min(idx, copy.length), 0, removed);
+              return copy;
+            });
+            this.selectedStageId.set(step.stageId);
+            this.selectedCustomCheckUid.set(null);
+            this.selectedStepId.set(removed.id);
+          },
+        });
+      }
+      return;
+    }
+    if (step.kind.startsWith("custom_check:")) {
+      const cc =
+        step.customCheckIndex !== undefined
+          ? this.customChecks()[step.customCheckIndex]
+          : this.customChecks().find((c) => c.id === step.id);
+      if (!cc) return;
+      const idx = this.customChecks().findIndex((c) => c.uid === cc.uid);
+      this.removeCheck(cc.uid);
+      this.snackbar.show(`Deleted "${cc.label || cc.id || "custom check"}".`, {
+        label: "Undo",
+        run: () => {
+          this.customChecks.update((list) => {
+            const copy = [...list];
+            copy.splice(Math.min(Math.max(0, idx), copy.length), 0, cc);
+            return copy;
+          });
+          this.selectedStageId.set("s3-checks");
+          this.selectedCustomCheckUid.set(cc.uid);
+          this.selectedStepId.set(cc.id || `custom:check-${Math.max(0, idx)}`);
+        },
+      });
+      return;
+    }
+    if (step.kind.startsWith("custom_stage:")) {
+      const idx = this.customStages().findIndex((s) => s.id === step.id);
+      const cs = idx >= 0 ? this.customStages()[idx] : undefined;
+      if (!cs) return;
+      this.removeCustomStage(cs.uid);
+      this.snackbar.show(`Deleted "${cs.label || cs.id}".`, {
+        label: "Undo",
+        run: () => {
+          this.customStages.update((list) => {
+            const copy = [...list];
+            copy.splice(Math.min(idx, copy.length), 0, cs);
+            return copy;
+          });
+          this.selectedStageId.set(step.stageId);
+          this.selectedCustomCheckUid.set(null);
+          this.selectedStepId.set(cs.id);
+        },
+      });
+    }
   }
 
   protected activeStepsInStage(stage: WorkflowStageView): number {
@@ -1783,6 +1920,7 @@ export class QaV3StudioComponent {
     };
     this.skillSteps.update((prev) => [...prev, newStep]);
     this.addingForStageId.set(null);
+    this.selectedCustomCheckUid.set(null);
     this.collapsedStages.update((prev) => ({
       ...prev,
       [targetStageViewId]: false,
@@ -1880,6 +2018,7 @@ export class QaV3StudioComponent {
       },
     ]);
     this.addingForStageId.set(null);
+    this.selectedCustomCheckUid.set(null);
     this.collapsedStages.update((prev) => ({
       ...prev,
       [targetStageId]: false,
@@ -1928,6 +2067,7 @@ export class QaV3StudioComponent {
       },
     ]);
     this.addingForStageId.set(null);
+    this.selectedCustomCheckUid.set(uid);
     this.collapsedStages.update((prev) => ({
       ...prev,
       [targetStageId]: false,
@@ -1939,7 +2079,10 @@ export class QaV3StudioComponent {
   removeCheck(uid: number): void {
     const target = this.customChecks().find((c) => c.uid === uid);
     this.customChecks.update((c) => c.filter((item) => item.uid !== uid));
-    if (target && this.selectedStepId() === target.id) {
+    if (this.selectedCustomCheckUid() === uid) {
+      this.selectedCustomCheckUid.set(null);
+      this.selectedStepId.set(null);
+    } else if (target && this.selectedStepId() === target.id) {
       this.selectedStepId.set(null);
     }
   }
@@ -1949,12 +2092,17 @@ export class QaV3StudioComponent {
     field: "id" | "label" | "message",
     val: string,
   ): void {
-    const prev = this.customChecks().find((c) => c.uid === uid);
+    const idx = this.customChecks().findIndex((c) => c.uid === uid);
+    const prev = idx >= 0 ? this.customChecks()[idx] : undefined;
     this.customChecks.update((list) =>
       list.map((c) => (c.uid === uid ? { ...c, [field]: val } : c)),
     );
-    if (field === "id" && prev && this.selectedStepId() === prev.id) {
-      this.selectedStepId.set(val);
+    if (field === "id") {
+      if (this.selectedCustomCheckUid() === uid) {
+        this.selectedStepId.set(val || `custom:check-${Math.max(0, idx)}`);
+      } else if (prev && this.selectedStepId() === prev.id) {
+        this.selectedStepId.set(val);
+      }
     }
   }
 

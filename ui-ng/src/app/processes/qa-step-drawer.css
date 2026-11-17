@@ -68,6 +68,7 @@ g-qa-step-drawer {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -335,6 +336,20 @@ pre.skill-text-readonly {
 
 .qa-danger-btn {
   color: var(--md-sys-color-error);
+}
+
+.qa-hdr-del-btn {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.qa-jump-stage-link {
+  white-space: normal;
+  height: auto;
+  padding: 6px 8px;
+  text-align: left;
+  justify-content: flex-start;
 }
 
 .qa-dry-table {

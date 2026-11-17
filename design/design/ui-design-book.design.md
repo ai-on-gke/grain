@@ -424,18 +424,24 @@ items or topbar chrome:
   - **Center stage spine (`g-qa-v3-studio`):** workflow header with version
     switcher (`qa-version-switcher`), honest rollout status pill with
     `<g-status-icon>`, 1-click `Set as default…` (`PUT /api/settings` + Undo),
+    accessible `Guide` reference modal (`qa-guide-dialog`), opaque elevated
+    action/select menus (`qa-action-pop` + smart edge-clamped `g-pill-select`),
     and explicit `Customize as vN` draft mode (zero disabled inputs in read
     mode). All 8 lifecycle stages start collapsed by default so active stages
-    fit above the fold; partial workflows show only active stages plus a single
-    `+ N stages skipped in this workflow — Show all 8` bar
-    (`[data-testid="qa-toggle-skipped-stages"]`).
+    fit above the fold; partial workflows keep skipped stages tucked behind
+    `+ N stages skipped in this workflow — Show all 8`
+    (`[data-testid="qa-toggle-skipped-stages"]`) across read and draft modes,
+    `+ Add substep` appears only on stages that accept custom substeps (scoping
+    the catalog strictly to valid substep types for that stage), and custom
+    substeps offer 1-click inline row and drawer-header deletion with `Undo`.
   - **Right focused drawer (`g-qa-step-drawer`, `clamp(340px, 34%, 440px)`):**
     defaults to the **Workflow guide** (`[data-testid="qa-workflow-guide"]`)
     with `Where is this workflow used?` provenance
     (`[data-testid="qa-flow-detail-card"]`), `Settings → Tasks` link, and live
     stage insights; focuses on a single substep when selected, using zero-JSON
     example test cases (`Caught` / `Allowed` live pills) instead of raw JSON
-    textareas and `[gTip]` explanations across toolbar controls and `?` icons.
+    textareas and both hover `[gTip]` and click-to-toggle inline help callouts
+    (`[data-testid="qa-inline-help"]`) on `?` buttons.
   - **Phone (`< 600px`, `390×844`):** arrives on the single-column workflow
     catalog without opening the mobile inspector unasked; selecting a workflow
     or substep opens the detail view with `← Back`

@@ -385,7 +385,7 @@ function readInputChecked(ev: Event): boolean {
                   @if (targetStage.id !== "s3-checks") {
                     <button
                       type="button"
-                      class="btn-text"
+                      class="btn-text qa-jump-stage-link"
                       data-testid="qa-jump-stage5-checks"
                       (click)="jumpToStageAddReq.emit('s3-checks')"
                     >
@@ -394,7 +394,7 @@ function readInputChecked(ev: Event): boolean {
                   } @else {
                     <button
                       type="button"
-                      class="btn-text"
+                      class="btn-text qa-jump-stage-link"
                       data-testid="qa-jump-stage4-skills"
                       (click)="jumpToStageAddReq.emit('s2-coding')"
                     >
@@ -413,6 +413,17 @@ function readInputChecked(ev: Event): boolean {
                     <h3 class="qa-drawer-title">{{ step.label }}</h3>
                   </div>
                   <div class="qa-drawer-actions">
+                    @if (editing() && step.deletable) {
+                      <button
+                        type="button"
+                        class="btn-tonal qa-danger-btn qa-hdr-del-btn"
+                        data-testid="qa-header-delete-step-btn"
+                        gTip="Delete this custom substep from the draft workflow."
+                        (click)="deleteSelectedStepReq.emit()"
+                      >
+                        Delete substep
+                      </button>
+                    }
                     <span [class]="'status-pill ' + stepPillClass(step)">
                       <g-status-icon [tone]="stepPillClass(step)" />
                       {{ stepPillLabel(step) }}
@@ -575,7 +586,7 @@ function readInputChecked(ev: Event): boolean {
                   }
 
                   @if (canEdit() && !step.lockedFloor) {
-                    <div>
+                    <div class="qa-field-row">
                       <button
                         type="button"
                         class="btn-tonal"
@@ -585,6 +596,17 @@ function readInputChecked(ev: Event): boolean {
                       >
                         Customize workflow to edit…
                       </button>
+                      @if (step.deletable) {
+                        <button
+                          type="button"
+                          class="btn-tonal qa-danger-btn"
+                          data-testid="qa-readonly-delete-step-btn"
+                          gTip="Enter draft mode and delete this custom substep."
+                          (click)="customizeAndDeleteReq.emit()"
+                        >
+                          Customize &amp; delete
+                        </button>
+                      }
                     </div>
                   }
                 } @else {
@@ -2116,6 +2138,7 @@ export class QaStepDrawerComponent {
   readonly stages = input<readonly WorkflowStageView[]>([]);
   readonly selectedStage = input<WorkflowStageView | null>(null);
   readonly selectedStep = input<WorkflowStepView | null>(null);
+  readonly selectedCustomCheckUid = input<number | null>(null);
   readonly addingForStage = input<WorkflowStageView | null>(null);
   readonly inspectorTab = input<StudioInspectorTab>("definition");
   readonly editing = input<boolean>(false);
@@ -2192,6 +2215,8 @@ export class QaStepDrawerComponent {
   }>();
   readonly addCustomStageReq = output<string>();
   readonly jumpToStageAddReq = output<string>();
+  readonly deleteSelectedStepReq = output<void>();
+  readonly customizeAndDeleteReq = output<void>();
 
   readonly s0IntentChange = output<boolean>();
   readonly decomposeEnabledChange = output<boolean>();
@@ -2324,6 +2349,11 @@ export class QaStepDrawerComponent {
   });
 
   protected readonly selectedCustomCheck = computed(() => {
+    const uid = this.selectedCustomCheckUid();
+    if (uid !== null) {
+      const byUid = this.customChecks().find((c) => c.uid === uid);
+      if (byUid) return byUid;
+    }
     const id = this.selectedStep()?.id || "";
     return this.customChecks().find((c) => c.id === id) ?? null;
   });

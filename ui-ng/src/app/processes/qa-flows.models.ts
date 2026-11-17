@@ -82,6 +82,8 @@ export interface WorkflowStepView {
   mode?: string;
   scope?: string;
   lockedFloor?: boolean;
+  deletable?: boolean;
+  customCheckIndex?: number;
   summary?: string;
   text?: string;
   bytes?: number;
@@ -868,6 +870,7 @@ export function buildClientWorkflowStagesView(
         enabled: s.enabled,
         mode: s.enabled ? "active" : "off",
         scope: s.globs?.length ? s.globs.join(", ") : "**/*",
+        deletable: true,
         summary: `Custom ${stageKey} skill substep (${utf8ByteCount(s.text || "")} bytes).`,
         text: s.text || "",
         bytes: utf8ByteCount(s.text || ""),
@@ -892,6 +895,7 @@ export function buildClientWorkflowStagesView(
           enabled: true,
           mode: cs["min-tier"] ?? cs.minTier ?? "T0",
           scope: (cs["when-paths"] ?? cs.whenPaths)?.join(", ") || "**/*",
+          deletable: true,
           summary: `insert-after=${afterKey} kind=${kind} timeout=${tSec}s`,
         };
       });
@@ -1068,6 +1072,8 @@ export function buildClientWorkflowStagesView(
       enabled: true,
       mode: sev,
       scope: scopePaths.length ? scopePaths.join(", ") : "**/*",
+      deletable: true,
+      customCheckIndex: i,
       summary: cc.message || `Custom ${kind} check (${sev}).`,
     });
   }

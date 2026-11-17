@@ -1338,4 +1338,58 @@ describe("QaV3StudioComponent", () => {
     expect(v4Yaml).toContain("stages:");
     expect(v4Yaml).toContain("pr-contract:");
   });
+
+  it("scopes substep creation to target stages, hides + Add substep on fixed stages 2 & 8, and supports inline/header deletion with Undo and UID-stable rename", () => {
+    fixture.componentRef.setInput("editing", true);
+    fixture.detectChanges();
+    const comp = fixture.componentInstance;
+    const root = fixture.nativeElement as HTMLElement;
+
+    expect(comp.stageSupportsAddSubstep("s1-context")).toBe(false);
+    expect(comp.stageSupportsAddSubstep("s5-triage")).toBe(false);
+    expect(comp.stageSupportsAddSubstep("s0-decompose")).toBe(true);
+    expect(comp.stageSupportsAddSubstep("s3-checks")).toBe(true);
+
+    // Stage 1 catalog only offers Markdown skill (not deterministic pattern check)
+    comp.requestAddSubstep("s0-decompose");
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="qa-v3-add-skill"]')).toBeTruthy();
+    expect(root.querySelector('[data-testid="qa-v3-add-pattern"]')).toBeNull();
+
+    // Adding a critic substep in Stage 3 (s2-plan) keeps it in Stage 3
+    comp.addCustomStage("s2-plan");
+    fixture.detectChanges();
+    const s2Stage = comp.workflowStages().find((s) => s.id === "s2-plan");
+    expect(
+      s2Stage?.steps.some((st) => st.kind.startsWith("custom_stage:")),
+    ).toBe(true);
+
+    // Add a custom pattern check in Stage 5, clear & rename its Rule identifier, and delete from drawer header
+    comp.addCheck("pattern", "s3-checks");
+    fixture.detectChanges();
+    const addedUid = comp.customChecks()[0].uid;
+    comp.updateCheckMeta(addedUid, "id", "");
+    fixture.detectChanges();
+    expect(
+      root.querySelector('[data-testid="qa-header-delete-step-btn"]'),
+    ).toBeTruthy();
+    comp.updateCheckMeta(addedUid, "id", "custom:renamed-rule");
+    fixture.detectChanges();
+    mustEl<HTMLButtonElement>(
+      root,
+      '[data-testid="qa-header-delete-step-btn"]',
+    ).click();
+    fixture.detectChanges();
+    expect(comp.customChecks().length).toBe(0);
+
+    // Undo snackbar callback restores the deleted custom check
+    const lastCall = showSpy.mock.calls.at(-1);
+    expect(lastCall?.[0]).toContain("Deleted");
+    const undoAction = lastCall?.[1] as { label: string; run: () => void };
+    expect(undoAction?.label).toBe("Undo");
+    undoAction.run();
+    fixture.detectChanges();
+    expect(comp.customChecks().length).toBe(1);
+    expect(comp.customChecks()[0].id).toBe("custom:renamed-rule");
+  });
 });

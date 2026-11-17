@@ -1415,4 +1415,68 @@ describe("QaFlowsPanelComponent", () => {
     expect(st?.s0Intent()).toBe(true);
     expect(st?.customChecks().length).toBe(0);
   });
+
+  it("opens Guide modal from toolbar and preserves add-substep catalog + tucked skipped stages when entering draft from read-only partial workflow", async () => {
+    const partialDetail = {
+      key: "golden-v1-minimal",
+      version: 1,
+      hash: "sha256:g1min",
+      label: "Recommended baseline",
+      summary: "Partial workflow",
+      builtIn: true,
+      qaEngineRev: 1,
+      resolved: {
+        id: "golden-v1-minimal",
+        label: "Recommended baseline",
+        summary: "Partial workflow",
+        injectSkill: true,
+        skillBytes: 900,
+        stopNudge: true,
+        stagingIsolation: true,
+        enableS4: true,
+        maxS4RepairRounds: 1,
+        rules: [],
+      },
+    };
+    api.get.mockImplementation(async (route: string) => {
+      if (route === "GET /api/qa/flow-versions") {
+        return { versions: [partialDetail] };
+      }
+      if (route === "GET /api/qa/flow-versions/{hash}") {
+        return partialDetail;
+      }
+      return {};
+    });
+
+    const fixture = TestBed.createComponent(QaFlowsPanelComponent);
+    const comp = fixture.componentInstance;
+    await new Promise((r) => setTimeout(r, 0));
+    comp.selectedHash.set(partialDetail.hash);
+    comp.selectedDetail.set(partialDetail);
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const guideBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="qa-open-guide-btn"]',
+    );
+    guideBtn?.click();
+    fixture.detectChanges();
+    expect(comp.guideDialogOpen()).toBe(true);
+    expect(root.querySelector('[data-testid="qa-guide-dialog"]')).toBeTruthy();
+    comp.guideDialogOpen.set(false);
+    fixture.detectChanges();
+
+    const st = comp.studio();
+    expect(st).toBeTruthy();
+    const visibleBefore = st?.visibleStages().map((s) => s.id) ?? [];
+    st?.requestAddSubstep("s2-coding");
+    fixture.detectChanges();
+
+    expect(comp.isEditing()).toBe(true);
+    expect(st?.addingForStageId()).toBe("s2-coding");
+    expect(
+      root.querySelector('[data-testid="qa-add-step-catalog"]'),
+    ).toBeTruthy();
+    expect(st?.visibleStages().map((s) => s.id)).toEqual(visibleBefore);
+  });
 });
