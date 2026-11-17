@@ -276,3 +276,18 @@
   margin: 12px 0 0;
   overflow-wrap: anywhere;
 }
+
+/* A setting's one-line explanation under its control (Admission,
+   Hosting, Model) in the schedule and template forms. */
+.proc-field-help {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.proc-model-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
