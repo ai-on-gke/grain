@@ -21,6 +21,19 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 | [cycle.go](../../../pkg/orchestrator/cycle.go), [dispatch](../../../pkg/dispatch), [capability_pass.go](../../../pkg/orchestrator/capability_pass.go), [standingwork.go](../../../pkg/orchestrator/standingwork.go), [wake.go](../../../pkg/orchestrator/wake.go) | Admission/capacity/pause/budget/standing policies, not completion gates | Model/team/base setup, grants/CI capabilities, fit/repair reserve, usage/capacity/interruption/environment/OOM retries, Run now semantics and manual/standing exceptions remain. Run now cannot override hard authorization/guard holds. A gate outage is not an agent failure; event wake first evaluates useful work. |
 | [releasequalification.go](../../../pkg/orchestrator/releasequalification.go), [releasestage1.go](../../../pkg/orchestrator/releasestage1.go), [release_approval.go](../../../pkg/ui/release_approval.go), [candidate-gate.sh](../../../scripts/candidate-gate.sh) | Existing qualification/publication policy and receipts; separate adapter admission | Preserve RC SHA/provenance, suite/person/soak/breaking/signing/version checks. Gate observation of publication is not authority to promote/publish. Workflow-to-executor exclusion, exact artifact/version conditions and reconciliation are not implemented by this design; do not migrate these effects under generic dispatch. |
 
+## Implemented observation-only subset
+
+The [runtime observation guide](../../../docs/gate-observations.md) describes the
+first shipped slice: exactly `delivery/report/current_v1` and
+`acknowledgment/explicit_receipt`, both v1 nonrequired monitors. Ordinary authorized
+task reads and the Angular task detail carry the optional closed observation_view
+and bounded sibling diagnostic history. There is no contract/decision authority,
+`?view=gates` implementation, discovery/mutation/action/waiver API or migration.
+Body-only finite analysis tasks are selected by a disabled-by-default deployment
+allowlist; attachment-bearing/unsupported shapes and missing provenance are unknown.
+All current legacy writers listed below retain authority in this implementation.
+The imports and handoff requirements remain future specifications.
+
 ## Explicit concrete goal imports
 
 | Existing name (unchanged API) | Materialized gate + controller policy |

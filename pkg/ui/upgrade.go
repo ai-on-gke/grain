@@ -515,10 +515,10 @@ type FrameworkCount struct {
 // frameworkLabel is the name a run is counted under in frameworkCounts.
 func frameworkLabel(framework string, setup bool) string {
 	switch {
-	case framework != "":
-		return framework
 	case setup:
 		return "setup"
+	case framework != "":
+		return framework
 	}
 	return "unknown"
 }
@@ -561,9 +561,9 @@ func (s *Server) atRisk(r *http.Request) *upgradeAtRiskResponse {
 			resp.Survive++
 			continue
 		}
-		// A live run with no framework yet is in setup: its CLI has not
-		// been chosen, let alone started.
-		lost = append(lost, frameworkLabel(run.Framework, run.Framework == ""))
+		// A live run whose CLI has not started is in setup, whatever
+		// framework RunDispatch has already assigned it.
+		lost = append(lost, frameworkLabel(run.Framework, !run.Started))
 	}
 	resp.Lost = len(lost)
 	if len(lost) > 0 {

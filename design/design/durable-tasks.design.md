@@ -384,6 +384,12 @@ any condition in `when` is met. With no `when`, it is re-queued on the
 next cycle, which suits a durable task splitting long work into steps.
 `message: true` adds "or when anybody posts to this task".
 
+Current PR feedback also permits a dispatch despite a CI/message wait or an
+ordinary pending question, retaining its evidence and questions. See the
+[PR feedback wake specification](../spec/pr-feedback-wake/pr-feedback-wake.spec.md)
+for supported events, eligibility and delivery races. This applies to the
+current runtime independently of the future built-in gates protocol.
+
 How it relates to what exists:
 
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.

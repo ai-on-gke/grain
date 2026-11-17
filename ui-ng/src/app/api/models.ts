@@ -707,7 +707,57 @@ export interface Attempt {
   agentFramework?: string;
 }
 
+export interface GateObservationResult {
+  evaluation_id: string;
+  revision: number;
+  disposition: string;
+  invalidation_reason: string | null;
+  retry_at: string | null;
+  result: {
+    type: string;
+    version: number;
+    status: string;
+    summary: string;
+    human_text: string | null;
+    observed_at: string;
+    valid_until: string;
+    context_digest: string;
+    evidence: { kind: string; id: string; version: string }[];
+    dependencies: { key: string; version: string; complete: boolean }[];
+    waits: { event: string; owner: string; deadline: string }[];
+    error: { code: string; message: string } | null;
+  };
+}
+export interface GateObservations {
+  mode: "observation_only";
+  authority: "legacy";
+  source_revision: string;
+  compared_at: string;
+  legacy_state: string;
+  dirty: boolean;
+  bindings: {
+    id: string;
+    type: string;
+    version: number;
+    config: unknown;
+    origin: unknown;
+  }[];
+  results: GateObservationResult[];
+}
+export interface GateObservationDiagnostics {
+  started_at: string;
+  evaluations: number;
+  counts: Record<string, number>;
+  history: {
+    generation: number;
+    at: string;
+    comparison: string;
+    view: GateObservations;
+  }[];
+}
 export interface TaskDetail extends Task {
+  gate_observations?: GateObservations;
+  gate_observation_diagnostics?: GateObservationDiagnostics;
   comments?: Comment[];
   attempts?: Attempt[];
   olderComments?: number;
