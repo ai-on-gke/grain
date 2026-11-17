@@ -1,0 +1,54 @@
+acme/widgets
+repository default: off -- this deployment does not run this repository's standing work unless an item below says otherwise
+
+  runs          release     on here  (Release)
+  does not run  base-ci     follows the default  (Base-branch check (grain CI on new tips, its retries and repairs))
+  does not run  post-merge  follows the default  (Post-merge dispatch jobs (including the guest cache job))
+  does not run  ports       follows the default  (Automatic ports to paired branches)
+  does not run  triage      off here  (Triage and repair tasks grain files on its own)
+
+-set writes the repository default, and -set with -item writes one item's exception to it. "unset" is not "off": an item that says nothing follows the default and moves with it, and one that says "off" stays off when the default is turned back on
+---
+acme/widgets
+CI capabilities: https://grain.dev/capabilities/release#package-publish={}
+---
+usage: grain state -data-dir DIR <command> [args]
+
+-data-dir must name the same root a colocated `grain daemon` was
+started with; it defaults to $GRAIN_DATA_DIR when that is set, which a host
+installed by scripts/setup.sh exports already. This edits files on disk, not
+a running daemon.
+
+Commands:
+  status                    inspect this installation's config repository
+  repo [-branch B] [-token-file T] [URL]
+                            use an external git config repository in read-only IaC
+                            mode (or report the current mode; -none uses internal
+                            grain/config)
+  sync                      export the database and commit it now (or pull and
+                            apply in external config repository mode)
+  resets clear              print the settings-reset notice this host is keeping,
+                            then forget it -- the terminal's half of the button
+                            the State pane has, for a deployment with no browser
+  reformat                  say that this deployment's schema changed, so the next
+                            start replaces the repository's dump -- written before
+repository: grain/config (controller local)
+mode:       internal -- grain/config is hosted on this host.
+            `grain state repo <git-url>` switches to an external config repository
+            (read-only IaC mode).
+backup:     run `grain backup` for Google Drive or GCS; use daemon -backup-interval to schedule it
+branch:     main
+working tree: data/state-repo
+head:       35db6cbe26762df66eda7950873cccf85b39b689
+schema:     151 in the repository, 151 in this build
+secrets:    data/secrets/secrets.enc
+secrets backup: none -- the encrypted file above is on this host alone.
+            `grain secrets repo <git-url>` names a repository to keep a
+            copy of it in. The key that opens the file is never pushed.
+secrets key: data/secrets/secrets.key
+            public key grain-secret-pub-v1:YXiDY19wWWeOIYpH5DXC8muKQNqyCpSek6kE/h4lX1Q=
+            back this file up. It is the one thing here a redeploy cannot
+            rebuild: a host that mints a fresh key cannot read a secrets
+            file restored beside it. Seed it back with GRAIN_SECRETS_KEY
+            (scripts/setup.sh) on a deploy, or install one you are holding
+            with `grain state key import`.
