@@ -18,16 +18,18 @@ import { test, expect } from "./fixtures.js";
 // every deployment-wide read (pkg/ui access_roles.go authorizeRoleCall),
 // so /next/ must not fire them: before this guard every page logged a
 // 403 for the shell's notifications and approvals poll, and Settings,
-// Tasks and the Director drawer more
+// Tasks, Sessions and the Director drawer more
 // (docs/test-runs/2026-11-14-next-heavy-data.md). The demo server answers
 // as the access code, so the role is put on /api/config and the spec
-// asserts on the requests the UI makes.
+// asserts on the requests the UI makes — including cold loads and cached
+// reloads before /api/config has settled.
 const SCOPES = [
   "tasks:read",
   "settings:read",
   "secrets:read",
   "deployment:read",
   "capabilities:read",
+  "sandboxes:read",
   "boards:read",
   "sessions:read",
   "repos:read",
@@ -42,13 +44,12 @@ const DEPLOYMENT_WIDE = [
   "/api/boards",
   "/api/agent-models",
   "/api/console-sessions",
+  "/api/persistent-sandboxes",
+  "/api/hostds",
 ];
 
-test("a repo-limited viewer's pages fire no deployment-wide reads it would be refused", async ({
-  page,
-}) => {
-  test.setTimeout(120_000);
-  await page.route(
+function routeRepoLimitedConfig(page) {
+  return page.route(
     (url) => url.pathname === "/api/config",
     async (route) => {
       const res = await route.fetch();
@@ -65,6 +66,9 @@ test("a repo-limited viewer's pages fire no deployment-wide reads it would be re
       await route.fulfill({ response: res, json: body });
     },
   );
+}
+
+function recordDeploymentWideGets(page) {
   const fired = [];
   page.on("request", (r) => {
     const u = new URL(r.url());
@@ -72,19 +76,71 @@ test("a repo-limited viewer's pages fire no deployment-wide reads it would be re
       fired.push(`${u.pathname}${u.search}`);
     }
   });
+  return fired;
+}
+
+test("a repo-limited viewer's pages fire no deployment-wide reads it would be refused, including cold reload of /next/tasks", async ({
+  page,
+  axe,
+}) => {
+  test.setTimeout(120_000);
+  await routeRepoLimitedConfig(page);
+  const fired = recordDeploymentWideGets(page);
+
+  // Start directly on /next/tasks (cold load before any /api/config is cached),
+  // then reload with cached bundles to cover the fast-reload race on loadBoards().
+  await page.goto("/next/tasks");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(500);
+  await page.reload();
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(500);
 
   for (const p of [
     "/next/inbox",
     "/next/workstreams",
-    "/next/tasks",
     "/next/telemetry",
     "/next/settings",
     "/next/settings/models",
+    "/next/settings/sandboxes",
+    "/next/settings/hostds",
     "/next/context",
   ]) {
     await page.goto(p);
     await page.waitForLoadState("networkidle").catch(() => {});
     await page.waitForTimeout(500);
+    if (p === "/next/settings/hostds") {
+      const card = page.getByTestId("card-hostds-list");
+      const banner = page.getByTestId("hostds-restricted");
+      await expect(banner).toContainText(
+        "holds capabilities:read only on acme/widgets, and this reads the whole deployment",
+      );
+      const cardBox = await card.boundingBox();
+      const bannerBox = await banner.boundingBox();
+      expect(cardBox).not.toBeNull();
+      expect(bannerBox).not.toBeNull();
+      expect(bannerBox.x).toBeGreaterThanOrEqual(cardBox.x);
+      expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(
+        cardBox.x + cardBox.width + 1,
+      );
+      expect(await axe()).toEqual([]);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      const phoneCardBox = await card.boundingBox();
+      const phoneBannerBox = await banner.boundingBox();
+      expect(phoneCardBox).not.toBeNull();
+      expect(phoneBannerBox).not.toBeNull();
+      expect(phoneBannerBox.x + phoneBannerBox.width).toBeLessThanOrEqual(
+        phoneCardBox.x + phoneCardBox.width + 1,
+      );
+      const docOverflow = await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+      expect(docOverflow).toBeLessThanOrEqual(0);
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
   }
   // The Director drawer reads sessions and models.
   await page.getByTestId("director-trigger").click();
@@ -92,4 +148,56 @@ test("a repo-limited viewer's pages fire no deployment-wide reads it would be re
   await expect(page.getByTestId("director-drawer")).toBeVisible();
 
   expect(fired).toEqual([]);
+});
+
+test("cold load and reload of /next/sessions fire no deployment-wide reads for a repo-limited viewer", async ({
+  page,
+}) => {
+  await routeRepoLimitedConfig(page);
+  const fired = recordDeploymentWideGets(page);
+
+  await page.goto("/next/sessions");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(500);
+  await expect(page.getByText("No sessions yet.")).toBeVisible();
+
+  await page.reload();
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(500);
+  await expect(page.getByText("No sessions yet.")).toBeVisible();
+
+  expect(fired).toEqual([]);
+});
+
+test("sessions skips GET /api/agent-models when a limited role lacks settings:read", async ({
+  page,
+}) => {
+  await page.route(
+    (url) => url.pathname === "/api/config",
+    async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      body.access = {
+        role: "sessions-only",
+        roles: ["sessions-only"],
+        full: false,
+        scopes: ["tasks:read", "sessions:read"],
+        repoLimits: {},
+      };
+      await route.fulfill({ response: res, json: body });
+    },
+  );
+  const agentModelGets = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (r.method() === "GET" && u.pathname === "/api/agent-models") {
+      agentModelGets.push(u.pathname);
+    }
+  });
+
+  await page.goto("/next/sessions");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(500);
+
+  expect(agentModelGets).toEqual([]);
 });
