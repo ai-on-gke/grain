@@ -42,6 +42,6 @@
     "prettier": "^3.5.0",
     "puppeteer-core": "25.17.0",
     "typescript-eslint": "^8.24.0",
-    "vitest": "^3.0.0"
+    "vitest": "^5.1.0"
   }
 }
