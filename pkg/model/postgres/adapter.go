@@ -173,6 +173,9 @@ var tablePrimaryKeys = map[string][]string{
 	"task_qa_assignment":             {"root_origin", "epoch"},
 	"task_qa_check_run":              {"id"},
 	"task_qa_finding":                {"id"},
+	"qa_flow_version":                {"hash"},
+	"qa_experiment":                  {"id"},
+	"qa_enrollment":                  {"root_origin"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.

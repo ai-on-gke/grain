@@ -344,7 +344,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                           data-testid="nt-composition-preview"
                         >
                           <strong>Preview: {{ ct.title }}</strong>
-                          @for (cf of ct.fields.slice(0, 5); track cf.name) {
+                          @for (cf of previewFields(ct.fields); track cf.name) {
                             @if (cf.values?.length) {
                               <span class="muted">
                                 {{ cf.name }}: {{ cf.values!.join(", ") }}
@@ -1618,6 +1618,14 @@ export class NewTaskSheetComponent {
 
   protected templateFieldOptions(opts: string[]): PillOption[] {
     return opts.map((o) => ({ value: o, label: o }));
+  }
+
+  protected previewFields(
+    fields: Composition["tasks"][number]["fields"] | undefined,
+  ) {
+    return (fields ?? [])
+      .filter((f) => f.name !== "title" && f.name !== "body")
+      .slice(0, 5);
   }
 
   private async refreshComposition(): Promise<void> {

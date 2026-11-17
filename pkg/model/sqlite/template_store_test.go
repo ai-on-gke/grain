@@ -347,3 +347,80 @@ func TestSchedulesUsingTemplate(t *testing.T) {
 		t.Fatalf("schedules using template-2 = %+v, want none", got)
 	}
 }
+
+func TestMigration150QAFlowRefRoundTrip(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	// Template round-trip.
+	tmpl := template("template-qa-150")
+	tmpl.QAFlowRef = "tmpl-flow-150"
+	if err := store.PutTemplate(ctx, tmpl); err != nil {
+		t.Fatalf("PutTemplate: %v", err)
+	}
+	gotTmpl, err := store.GetTemplate(ctx, tmpl.ID)
+	if err != nil || gotTmpl == nil || gotTmpl.QAFlowRef != "tmpl-flow-150" {
+		t.Fatalf("GetTemplate QAFlowRef = %+v, err=%v", gotTmpl, err)
+	}
+
+	// Suite round-trip.
+	suite := model.Suite{
+		ID:        "suite-qa-150",
+		Name:      "QA Suite 150",
+		Items:     []model.SuiteItem{{TemplateID: tmpl.ID}},
+		Mode:      model.SuiteCount,
+		Count:     1,
+		QAFlowRef: "suite-flow-150",
+		CreatedAt: now,
+	}
+	if err := store.PutSuite(ctx, suite); err != nil {
+		t.Fatalf("PutSuite: %v", err)
+	}
+	gotSuite, err := store.GetSuite(ctx, suite.ID)
+	if err != nil || gotSuite == nil || gotSuite.QAFlowRef != "suite-flow-150" {
+		t.Fatalf("GetSuite QAFlowRef = %+v, err=%v", gotSuite, err)
+	}
+
+	// Schedule round-trip + ScheduleComposition / SuiteComposition precedence.
+	sched := schedule("sched-qa-150", now)
+	sched.SuiteID = &suite.ID
+	sched.QAFlowRef = "sched-flow-150"
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatalf("PutSchedule: %v", err)
+	}
+	gotSched, err := store.GetSchedule(ctx, sched.ID)
+	if err != nil || gotSched == nil || gotSched.QAFlowRef != "sched-flow-150" {
+		t.Fatalf("GetSchedule QAFlowRef = %+v, err=%v", gotSched, err)
+	}
+	comps, err := store.ScheduleComposition(ctx, *gotSched, model.RepoRef{})
+	if err != nil || len(comps) != 1 {
+		t.Fatalf("ScheduleComposition: %v, len=%d", err, len(comps))
+	}
+	if comps[0].QAFlowRef != "suite-flow-150" || comps[0].Sources.QAFlowRef != model.LayerSuite {
+		t.Fatalf("Suite > Schedule > Template precedence failed: got %q from %q", comps[0].QAFlowRef, comps[0].Sources.QAFlowRef)
+	}
+
+	// RepoConfig round-trip via PutRepoConfig / RepoConfig / GetRepoConfig.
+	repo := model.RepoRef{Owner: "acme", Name: "qa150"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:      repo,
+		QAFlowRef: "repo-flow-150",
+	}); err != nil {
+		t.Fatalf("PutRepoConfig: %v", err)
+	}
+	gotRepoCfg, err := store.RepoConfig(ctx, repo)
+	if err != nil || gotRepoCfg.QAFlowRef != "repo-flow-150" {
+		t.Fatalf("RepoConfig QAFlowRef = %+v, err=%v", gotRepoCfg, err)
+	}
+
+	// Task round-trip.
+	tk := task("task-qa-150", true)
+	tk.QAFlowRef = "task-flow-150"
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatalf("PutTask: %v", err)
+	}
+	gotTask, err := store.GetTask(ctx, tk.ID)
+	if err != nil || gotTask == nil || gotTask.QAFlowRef != "task-flow-150" {
+		t.Fatalf("GetTask QAFlowRef = %+v, err=%v", gotTask, err)
+	}
+}

@@ -36,6 +36,10 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import type {
+  QAExperimentArm,
+  QAExperimentSummary,
+} from "../telemetry/qa-experiments.models";
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
@@ -401,51 +405,70 @@ export function listedSecrets(
             ></button>
           </div>
 
-          <div class="s-grid s-grid-qa">
-            <div class="s-field">
-              <span class="s-label">Quality flow package</span>
-              <g-pill-select
-                testid="pill-qa-flow"
-                ariaLabel="Quality flow package"
-                align="left"
-                [attr.title]="qaControlsDisabledReason()"
-                [options]="qaFlowOptions()"
-                [value]="qaFlowValue()"
-                [disabled]="!canEditQAControls()"
-                (valueChange)="setQAFlow($event)"
-              />
+          @if (runningExp()) {
+            <div
+              class="s-grid s-grid-qa"
+              data-testid="qa-running-experiment-notice"
+              style="padding: 12px 16px; background: var(--md-sys-color-surface-container-low); border-radius: var(--md-sys-shape-corner-small);"
+            >
+              <span class="s-toggle-name"
+                >Running: {{ runningExp()!.name }} ({{
+                  armSummary(runningExp()!)
+                }}) &middot;
+                <a
+                  [routerLink]="['/telemetry']"
+                  [queryParams]="{ tab: 'quality', exp: runningExp()!.id }"
+                  >Manage</a
+                ></span
+              >
             </div>
+          } @else {
+            <div class="s-grid s-grid-qa">
+              <div class="s-field">
+                <span class="s-label">Quality flow package</span>
+                <g-pill-select
+                  testid="pill-qa-flow"
+                  ariaLabel="Quality flow package"
+                  align="left"
+                  [attr.title]="qaControlsDisabledReason()"
+                  [options]="qaFlowOptions()"
+                  [value]="qaFlowValue()"
+                  [disabled]="!canEditQAControls()"
+                  (valueChange)="setQAFlow($event)"
+                />
+              </div>
 
-            <div class="s-field">
-              <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
-              <input
-                id="t-qa-rollout"
-                class="s-input s-num"
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                data-testid="input-qa-rollout-pct"
-                [value]="qaRolloutInputValue()"
-                [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
-                [attr.aria-describedby]="
-                  qaRolloutError() ? 't-qa-rollout-err' : null
-                "
-                [attr.title]="qaControlsDisabledReason()"
-                [disabled]="!canEditQAControls()"
-                (input)="onQARolloutInput($event)"
-                (blur)="onQARolloutBlur()"
-              />
-              @if (qaRolloutError(); as rolloutErr) {
-                <span
-                  id="t-qa-rollout-err"
-                  class="s-field-error"
-                  data-testid="error-qa-rollout-pct"
-                  >{{ rolloutErr }}</span
-                >
-              }
+              <div class="s-field">
+                <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
+                <input
+                  id="t-qa-rollout"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  data-testid="input-qa-rollout-pct"
+                  [value]="qaRolloutInputValue()"
+                  [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
+                  [attr.aria-describedby]="
+                    qaRolloutError() ? 't-qa-rollout-err' : null
+                  "
+                  [attr.title]="qaControlsDisabledReason()"
+                  [disabled]="!canEditQAControls()"
+                  (input)="onQARolloutInput($event)"
+                  (blur)="onQARolloutBlur()"
+                />
+                @if (qaRolloutError(); as rolloutErr) {
+                  <span
+                    id="t-qa-rollout-err"
+                    class="s-field-error"
+                    data-testid="error-qa-rollout-pct"
+                    >{{ rolloutErr }}</span
+                  >
+                }
+              </div>
             </div>
-          </div>
+          }
 
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
@@ -471,7 +494,6 @@ export function listedSecrets(
           </div>
         </div>
       }
-
       @case ("agents") {
         <div class="s-card" data-testid="card-agents-runtime">
           <h3 class="s-card-title">Agent turn limits &amp; default grants</h3>
@@ -1741,13 +1763,43 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly memoryBody = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
 
+  readonly runningExp = signal<QAExperimentSummary | null>(null);
+
+  async loadRunningExp(): Promise<void> {
+    if (
+      this.section() !== "tasks" ||
+      !this.access.can("GET /api/qa/experiments")
+    ) {
+      return;
+    }
+    try {
+      const res = (await this.api
+        .get("GET /api/qa/experiments", undefined, "state=running&limit=1")
+        .catch(() => null)) as {
+        experiments?: QAExperimentSummary[];
+      } | null;
+      this.runningExp.set(res?.experiments?.[0] ?? null);
+    } catch {
+      this.runningExp.set(null);
+    }
+  }
+
+  armSummary(exp: QAExperimentSummary): string {
+    if (!exp.arms?.length) return "";
+    return exp.arms
+      .map((a: QAExperimentArm) => `${a.label} ${a.weight}%`)
+      .join(" / ");
+  }
+
   ngOnInit(): void {
     this.loadForSection();
+    this.loadRunningExp();
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes["section"] && !changes["section"].firstChange) {
       this.loadForSection();
+      this.loadRunningExp();
     }
   }
 
@@ -1836,11 +1888,11 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     const defaults: readonly PillOption[] = [
       {
         value: "golden-v1-minimal",
-        label: "golden-v1-minimal (S3 deterministic + S4 probe)",
+        label: "golden-v1-minimal (Recommended)",
       },
       {
         value: "deterministic-s3-only",
-        label: "deterministic-s3-only (local AST & vet only)",
+        label: "deterministic-s3-only (Zero-LLM Ablation)",
       },
       {
         value: "repo-custom",
