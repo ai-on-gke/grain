@@ -68,6 +68,7 @@ import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.component";
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
+import { AlertsBellComponent } from "./shell/alerts-bell.component";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
 import { NavProgressComponent } from "./shell/nav-progress.component";
 import { NextUpComponent } from "./shell/next-up.component";
@@ -171,6 +172,7 @@ export class DeferErrorDirective implements OnInit {
     NewTaskSheetComponent,
     NavProgressComponent,
     NextUpComponent,
+    AlertsBellComponent,
     DispatchBannerComponent,
     HelpDialogComponent,
     AccountPopoverComponent,
@@ -618,6 +620,7 @@ export class DeferErrorDirective implements OnInit {
               >
             }
           </form>
+          <g-alerts-bell />
           <button
             type="button"
             class="icon-btn"
