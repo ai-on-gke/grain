@@ -262,6 +262,20 @@ test("the Agents inspector keeps its floor under a stored wide list share", asyn
     const pane = await page.locator(".inspector-pane").first().boundingBox();
     expect(pane.width).toBeGreaterThanOrEqual(319);
     expect((await prompt.boundingBox()).width).toBeGreaterThan(240);
+    // At that floor the bar's four controls wrap inside the pane rather
+    // than run past its clipped edge, and the bar is laid out on a fresh
+    // /next/agents, not only once Tasks has loaded its CSS (task 6744).
+    const bar = page.locator(".tasks-pane-bar").first();
+    await expect(bar).toHaveCSS("display", "flex");
+    const close = await page.getByTestId("agents-pane-close").boundingBox();
+    expect(close.x).toBeGreaterThanOrEqual(pane.x);
+    expect(close.x + close.width).toBeLessThanOrEqual(pane.x + pane.width);
+    expect(
+      await page
+        .locator(".inspector-pane")
+        .first()
+        .evaluate((el) => el.scrollWidth - el.clientWidth),
+    ).toBeLessThanOrEqual(1);
   } finally {
     await fetch(`${demoServer}/api/tasks/${id}/close`, {
       method: "POST",
