@@ -2555,6 +2555,13 @@ rebuild_release_grain() {
   # does not -- the Makefile's GO_VERSION rule, which says why.
   go_version="$(sed -n 's/^toolchain[[:space:]]\{1,\}go//p' "$work/go.mod")"
   [ -n "$go_version" ] || go_version="$(sed -n 's/^go[[:space:]]\{1,\}//p' "$work/go.mod")"
+  # The schema version the release's own pkg/model declares -- the
+  # Makefile's SCHEMA_VERSION rule -- stamped as io.grain.schema-version
+  # so an upgrading deployment can refuse a schema downgrade from registry
+  # metadata alone (pkg/upgrade/schema.go). Given as a label too, since a
+  # release's Dockerfile may predate ARG SCHEMA_VERSION.
+  local schema_version
+  schema_version="$(sed -n 's/^const SchemaVersion = \([0-9][0-9]*\)$/\1/p' "$work/pkg/model/schema.go" 2>/dev/null || true)"
   local source_label=()
   if [ -n "$source_github_repo" ] && { [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ] || [ "$registry" = "ghcr.io" ]; }; then
     source_label=(--label org.opencontainers.image.source="https://github.com/${source_github_repo}")
@@ -2571,6 +2578,8 @@ rebuild_release_grain() {
       --build-arg GRAIN_IMAGE_REF="$image_ref" \
       --build-arg GIT_REVISION="$promote_commit" \
       "${source_label[@]}" \
+      ${schema_version:+--build-arg SCHEMA_VERSION="$schema_version"} \
+      ${schema_version:+--label io.grain.schema-version="$schema_version"} \
       --build-arg RELEASE="${stamp_tag:-$promote_tag}" \
       --label org.opencontainers.image.version="${stamp_tag:-$promote_tag}" \
       -t "$target" -f Dockerfile .
