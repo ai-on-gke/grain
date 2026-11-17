@@ -148,14 +148,29 @@ async function pickMuiSelect(page, section, selector, wantValue) {
   const current = await hidden.inputValue();
   if (current === wantValue) return;
   const combo = hidden.locator("xpath=..").locator('[role="combobox"]');
+  const option = page.locator(`[role="option"][data-value="${wantValue}"]`);
   // A menu left open by an earlier pick (seen once on the Template editor's
   // gcp#gcp-key permission_set) puts its invisible backdrop over the combo,
   // so a click to open it again never lands: pick from the open one instead.
-  if ((await combo.getAttribute("aria-expanded")) !== "true") {
-    await combo.click();
-  }
-  await page.locator(`[role="option"][data-value="${wantValue}"]`).click();
-  await expect(combo).not.toHaveAttribute("aria-expanded", "true");
+  //
+  // On a page that saves as it goes (a console session), a save landing
+  // while the menu is open re-renders the section, and an option click
+  // in that window can be dropped: the menu stays open on the old value
+  // (session config-map#config-map keys[0] on postgres, task 6257). The
+  // pick is done when the menu has closed and the value is the one asked
+  // for -- both asserted -- and is made again from the still-open menu
+  // until it is.
+  await expect(async () => {
+    if ((await combo.getAttribute("aria-expanded")) !== "true") {
+      if ((await hidden.inputValue()) === wantValue) return;
+      await combo.click({ timeout: 2_000 });
+    }
+    await option.click({ timeout: 2_000 });
+    await expect(combo).not.toHaveAttribute("aria-expanded", "true", {
+      timeout: 1_000,
+    });
+    await expect(hidden).toHaveValue(wantValue, { timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
 }
 
 // fillField sets one schema field inside section (either a draft or a held

@@ -603,7 +603,7 @@ func blockedEntry(e queueEntry) bool {
 // (bwsalmon/agents#283) describes, reusing the directive that already
 // meant "merge me once I'm clean" rather than adding a second field that
 // would mean the same thing. A fix task the queue itself filed
-// (Origin.Reason == ReasonFix) is deliberately excluded too: it merges
+// (Filing.Reason == ReasonFix) is deliberately excluded too: it merges
 // into the task it repairs, not into the repo's own base branch, so it is
 // not a queue entry in its own right -- see syncEntry's own eligibility
 // check for why it still merges unconditionally. A review task
@@ -614,7 +614,7 @@ func blockedEntry(e queueEntry) bool {
 // which is what lets the queue move on to the next task rather than
 // waiting forever on one that needs a human.
 func isQueueMember(e queueEntry) bool {
-	if !e.task.AutoMerge || e.task.Origin.Reason == model.ReasonFix || isReviewTask(e.task) || e.paused {
+	if !e.task.AutoMerge || e.task.Filing.Reason == model.ReasonFix || isReviewTask(e.task) || e.paused {
 		return false
 	}
 	// Nor one waiting on an approval GitHub requires: it waits out of
@@ -1494,7 +1494,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		}
 	}
 
-	isFixTask := task.Origin.Reason == model.ReasonFix
+	isFixTask := task.Filing.Reason == model.ReasonFix
 	// The lane this entry merges in, as this cycle read it: the slot it
 	// takes or closes is its own branch's and no other's (mergeWalk).
 	lane := laneOf(e)
@@ -1570,12 +1570,19 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// anyway tells its agent which of the two it is being sent for.
 	//
 	// Asked only where the answer could change something, since it can
-	// cost a GitHub read: a task the queue is not driving (no
-	// /auto-merge), a stacked one that merges into another task's branch
-	// rather than into the repository's own, a pull request that has
-	// already settled and one the queue has already given up on are each
-	// entries nothing below decides anything about.
-	if e.task.AutoMerge && !stacked && !blocked && !settled {
+	// cost a GitHub read: a stacked one that merges into another task's
+	// branch rather than into the repository's own, a pull request that
+	// has already settled and one the queue has already given up on are
+	// each entries nothing below decides anything about.
+	//
+	// Not gated on auto-merge: the failing arm below repairs a red
+	// change whether or not it is merging itself yet, and a gating
+	// review (.grain/triggers/every-pr.yml) withdraws auto-merge from
+	// every pull request until it passes. Gated on it, those entries had
+	// no reds split, read as all their own, and spent their one repair
+	// on a check the repository had declared unfixable before the queue
+	// gave up (2026-11-13 merge-and-reviews walkthrough, F3).
+	if !stacked && !blocked && !settled {
 		e.reds, e.unfixable = splitReds(e, find)
 	}
 	var review reviewState

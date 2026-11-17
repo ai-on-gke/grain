@@ -93,6 +93,7 @@ func TestComposeScheduleTaskInlineContentIsAllTheSchedules(t *testing.T) {
 		AutoMerge:           model.LayerSchedule, AutoApproveProposals: model.LayerSchedule, Approved: model.LayerSchedule,
 		Interactive: model.LayerSchedule, KeepRunning: model.LayerSchedule,
 		Admission: model.LayerDeployment, Hosting: model.LayerDeployment,
+		QAFlowRef: model.LayerDeployment,
 	}
 	if comp.Sources != want {
 		t.Errorf("sources = %+v, want %+v", comp.Sources, want)
@@ -385,8 +386,8 @@ func TestCompositionTaskCarriesWhatWasComposed(t *testing.T) {
 	if task.Intent != model.IntentImplement || task.Binding != model.BindingDirective {
 		t.Errorf("task = %+v, want an implement/directive task", task)
 	}
-	if task.Origin.Reason != model.ReasonSuite || task.Origin.Attribution.Actor != model.SuitePrincipal {
-		t.Errorf("origin = %+v, want the suite's", task.Origin)
+	if task.Filing.Reason != model.ReasonSuite || task.Filing.Attribution.Actor != model.SuitePrincipal {
+		t.Errorf("origin = %+v, want the suite's", task.Filing)
 	}
 	if task.Approval == nil || task.Approval.Actor != model.SuitePrincipal || task.ApprovedAt == nil {
 		t.Errorf("approval = %+v/%v, want it stamped for the filing actor", task.Approval, task.ApprovedAt)
@@ -405,5 +406,50 @@ func TestCompositionTaskCarriesWhatWasComposed(t *testing.T) {
 	unapproved.Approved = false
 	if task := unapproved.Task("task-10", model.SuitePrincipal, model.ReasonSuite, now); task.Approval != nil {
 		t.Errorf("approval = %+v, want none for an unapproved composition", task.Approval)
+	}
+}
+
+func TestComposeQAFlowRefPrecedenceAndTaskCopy(t *testing.T) {
+	tmpl := composeTemplate()
+	target := composeRepo("bwsalmon", "grain")
+
+	// Empty everywhere falls back to LayerDeployment.
+	emptyComp := model.ComposeTemplateTask(tmpl, nil, target, "main", true)
+	if emptyComp.QAFlowRef != "" || emptyComp.Sources.QAFlowRef != model.LayerDeployment {
+		t.Fatalf("empty QAFlowRef = %q from %q, want empty from deployment", emptyComp.QAFlowRef, emptyComp.Sources.QAFlowRef)
+	}
+
+	// Template sets QAFlowRef.
+	tmpl.QAFlowRef = "qa-flow-template"
+	tmplComp := model.ComposeTemplateTask(tmpl, nil, target, "main", true)
+	if tmplComp.QAFlowRef != "qa-flow-template" || tmplComp.Sources.QAFlowRef != model.LayerTemplate {
+		t.Fatalf("template QAFlowRef = %q from %q, want qa-flow-template from template", tmplComp.QAFlowRef, tmplComp.Sources.QAFlowRef)
+	}
+	tk := tmplComp.Task("task-qa-1", model.SchedulePrincipal, model.ReasonSchedule, time.Now())
+	if tk.QAFlowRef != "qa-flow-template" {
+		t.Fatalf("task.QAFlowRef = %q, want qa-flow-template", tk.QAFlowRef)
+	}
+
+	// Schedule without its own QAFlowRef inherits Template.QAFlowRef.
+	sched := composeSchedule()
+	schedInherits := model.ComposeScheduleTask(sched, &tmpl)
+	if schedInherits.QAFlowRef != "qa-flow-template" || schedInherits.Sources.QAFlowRef != model.LayerTemplate {
+		t.Fatalf("schedule inherits QAFlowRef = %q from %q, want qa-flow-template from template", schedInherits.QAFlowRef, schedInherits.Sources.QAFlowRef)
+	}
+
+	// Schedule.QAFlowRef overrides Template.QAFlowRef.
+	sched.QAFlowRef = "qa-flow-schedule"
+	schedOverrides := model.ComposeScheduleTask(sched, &tmpl)
+	if schedOverrides.QAFlowRef != "qa-flow-schedule" || schedOverrides.Sources.QAFlowRef != model.LayerSchedule {
+		t.Fatalf("schedule override QAFlowRef = %q from %q, want qa-flow-schedule from schedule", schedOverrides.QAFlowRef, schedOverrides.Sources.QAFlowRef)
+	}
+	if gotTask := schedOverrides.Task("task-qa-2", model.SchedulePrincipal, model.ReasonSchedule, time.Now()); gotTask.QAFlowRef != "qa-flow-schedule" {
+		t.Fatalf("scheduled task QAFlowRef = %q, want qa-flow-schedule", gotTask.QAFlowRef)
+	}
+
+	// Inline schedule sets its own QAFlowRef.
+	inlineComp := model.ComposeScheduleTask(sched, nil)
+	if inlineComp.QAFlowRef != "qa-flow-schedule" || inlineComp.Sources.QAFlowRef != model.LayerSchedule {
+		t.Fatalf("inline schedule QAFlowRef = %q from %q, want qa-flow-schedule from schedule", inlineComp.QAFlowRef, inlineComp.Sources.QAFlowRef)
 	}
 }

@@ -67,7 +67,7 @@ func TestGitCredentialMigrationFidelity(t *testing.T) {
 			ID:     "t1",
 			Intent: model.IntentImplement,
 			Title:  "release workflow update",
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: human},
 				Reason:      model.ReasonDirect,
 			},

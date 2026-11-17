@@ -169,12 +169,21 @@ test("Agents: selected card and row look selected, are clickable, and every insp
       .filter((e) => getComputedStyle(e).display !== "none")
       .map((e) => e.dataset.testid.replace("task-tab-", "")),
   );
-  expect(ids).toEqual(["conversation", "runs", "changes", "tree", "details"]);
+  expect(ids).toEqual([
+    "conversation",
+    "docs",
+    "runs",
+    "changes",
+    "tree",
+    "details",
+  ]);
   const panel = {
     conversation: () =>
       expect(pane.locator(".task-tab-body h2").first()).toHaveText(
         "Conversation",
       ),
+    docs: () =>
+      expect(pane.locator(".task-tab-body h2").first()).toHaveText("Documents"),
     runs: () =>
       expect(pane.locator(".task-tab-body h2").first()).toHaveText("Runs"),
     changes: () =>

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -192,6 +193,9 @@ func TestUpdateRefusesABuildThatFailsItsSmokeTest(t *testing.T) {
 	if code, out := f.update(t); code == 0 || !strings.Contains(out, "-build says") {
 		t.Fatalf("update = %d:\n%s", code, out)
 	}
+	if _, err := os.Lstat(f.l.Lib); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed -build smoke test left %s behind (err=%v)", f.l.Lib, err)
+	}
 	bad := []byte("#!/bin/sh\ncase \"$1\" in -build) echo v2.0.0 ;; *) exit 2 ;; esac\n")
 	f.sign(t, "v2.0.0", bad, f.priv)
 	if code, out := f.update(t); code == 0 || !strings.Contains(out, "-check") {
@@ -199,6 +203,26 @@ func TestUpdateRefusesABuildThatFailsItsSmokeTest(t *testing.T) {
 	}
 	if _, err := os.Lstat(f.l.Current); err == nil {
 		t.Fatal("current moved to a build that failed its smoke test")
+	}
+	if _, err := os.Lstat(f.l.Lib); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed -check smoke test left %s behind (err=%v)", f.l.Lib, err)
+	}
+	// When versions/ already holds a prior version, a failed smoke test
+	// leaves neither a versions/<v> directory nor a temp file beside it.
+	writeFile(t, f.l.binary("v1.0.0"), string(fakeBuild("v1.0.0")), 0o755)
+	if code, out := f.update(t); code == 0 || !strings.Contains(out, "-check") {
+		t.Fatalf("update with existing versions/ = %d:\n%s", code, out)
+	}
+	entries, err := os.ReadDir(f.l.Versions)
+	if err != nil {
+		t.Fatalf("reading versions/: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "v1.0.0" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("versions/ after failed smoke test = %v, want [v1.0.0]", names)
 	}
 }
 
@@ -362,6 +386,35 @@ func waitForCond(t *testing.T, ok func() bool) {
 		}
 	}
 	t.Fatal("timed out")
+}
+
+// A unit installed before KillMode=mixed is given it by update, once, and
+// one that sets a KillMode of its own keeps it
+// (docs/test-runs/2026-11-14-host-stop.md, F2).
+func TestWithKillModeAddsKillModeMixedOnce(t *testing.T) {
+	old := "[Service]\nExecStartPre=-/bin/sh /g.sh\nExecStart=/x -server s\nRestart=always\n\n[Install]\nWantedBy=default.target\n"
+	got, changed := withKillMode(old)
+	want := "[Service]\nExecStartPre=-/bin/sh /g.sh\nExecStart=/x -server s\nKillMode=mixed\nRestart=always\n\n[Install]\nWantedBy=default.target\n"
+	if !changed || got != want {
+		t.Fatalf("withKillMode = %q, %v; want %q", got, changed, want)
+	}
+	if _, changed := withKillMode(got); changed {
+		t.Fatal("added twice")
+	}
+	if got, changed := withKillMode("[Service]\nExecStart=/x\nKillMode=process\n"); changed || strings.Count(got, "KillMode=") != 1 {
+		t.Fatalf("withKillMode overrode an operator's KillMode: %q", got)
+	}
+	if got, changed := withKillMode("[Service]\nExecStart=/x"); !changed || got != "[Service]\nExecStart=/x\nKillMode=mixed\n" {
+		t.Fatalf("withKillMode on a unit with no final newline = %q, %v", got, changed)
+	}
+	// What install writes today needs nothing added.
+	unit, err := renderUnit(unitConfig{Bin: "/b", Server: "https://d.example", Token: "/t", Allowlist: "/a", StateDir: "/s", Guard: "/g.sh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed := withKillMode(unit); changed {
+		t.Fatalf("withKillMode changed install's own unit:\n%s", unit)
+	}
 }
 
 func TestWithGuardAddsTheGuardOnce(t *testing.T) {

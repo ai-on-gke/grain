@@ -65,7 +65,7 @@ func task(id string) model.Task {
 	return model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "Rename the endpoint",
 		Body: "with a body\nover two lines",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}},
 			Reason:      model.ReasonDirect,
 		},

@@ -27,7 +27,6 @@ import type {
 import { InboxStore } from "../inbox/inbox.store";
 import { errorText } from "../sessions/session-helpers";
 import { ReadTrouble } from "../services/request-trouble";
-import { ConnectionService } from "../services/connection.service";
 
 export type { TreeNode, WorkTree };
 
@@ -86,15 +85,6 @@ export class TaskStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly zone = inject(NgZone);
-  private readonly connection = inject(ConnectionService);
-  private readonly offOutage = this.connection.whileOutage(
-    () => this.loadError.set(null),
-    () => this.detail() !== null,
-    () => {
-      this.trouble.ok();
-      this.pollAfter = 0;
-    },
-  );
   private readonly inbox = inject(InboxStore);
 
   readonly id = signal<string | null>(null);
@@ -263,7 +253,6 @@ export class TaskStore {
       // nothing; a missing task, a page with nothing to show yet, or
       // failure that lasts says so.
       if (status !== 404 && !sustained && this.detail()) return;
-      if (this.connection.quietsReadError(err, this.detail() !== null)) return;
       this.loadError.set(
         status === 404
           ? `There is no task #${id}.`

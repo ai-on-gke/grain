@@ -1,0 +1,32 @@
+templates:
+  - id: template-1
+    name: widget-sweep
+    title: Sweep widgets
+    body: Sweep the widgets.
+    base: ""
+    auto-merge: false
+    network: ""
+    nothing-needed: ""
+    model: ""
+    goal: ""
+    interactive: false
+    keep-running: false
+    admission: ""
+    hosting: ""
+    skills: ""
+    sandbox: ""
+    target: acme/widgets
+    change-target: ""
+    reviewers: ""
+    priority: 0
+    reads:
+      - ghe.example.com/acme/widgets
+    writes:
+      - repo: ghe.example.com/acme/widgets
+        base: main
+    grants:
+      - https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}
+      - https://grain.dev/capabilities/repo#write={"base":"","repo":"acme/site"}
+      - https://grain.dev/capabilities/repo#write={"base":"release/3.0","repo":"acme/widgets-deploy"}
+    created-at: "2026-11-15T14:24:09.222975443Z"
+

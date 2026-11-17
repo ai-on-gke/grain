@@ -532,11 +532,11 @@ func TestSessionProposalIsQueuedWhenTheDeploymentSaysThatSessionMay(t *testing.T
 			// And the record says who filed it. A proposal attributed to
 			// the operator is a task nobody can tell from one a person
 			// typed in, which is exactly how #308 read.
-			if proposal.Origin.Attribution.Actor.Kind == model.PrincipalHuman {
+			if proposal.Filing.Attribution.Actor.Kind == model.PrincipalHuman {
 				t.Errorf("filed by %+v -- a proposal read back as a human's own filing",
-					proposal.Origin.Attribution.Actor)
+					proposal.Filing.Attribution.Actor)
 			}
-			behalf := proposal.Origin.Attribution.OnBehalfOf
+			behalf := proposal.Filing.Attribution.OnBehalfOf
 			if behalf == nil || behalf.ID != session.ID {
 				t.Errorf("filed on behalf of %+v, want the session that proposed it (%s)",
 					behalf, session.ID)

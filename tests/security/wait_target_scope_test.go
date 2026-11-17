@@ -45,13 +45,13 @@ func TestWaitTargetsKeepToTheWaitersRepositories(t *testing.T) {
 	now := time.Now().UTC()
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	vault := model.RepoRef{Owner: "private", Name: "vault"}
-	origin := model.Origin{
+	origin := model.Filing{
 		Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}},
 		Reason:      model.ReasonDirect,
 	}
 	put := func(task model.Task) model.Task {
 		t.Helper()
-		task.Intent, task.Origin, task.CreatedAt = model.IntentImplement, origin, &now
+		task.Intent, task.Filing, task.CreatedAt = model.IntentImplement, origin, &now
 		if err := store.PutTask(ctx, task); err != nil {
 			t.Fatal(err)
 		}

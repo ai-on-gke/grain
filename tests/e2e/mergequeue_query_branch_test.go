@@ -55,7 +55,7 @@ func TestQueryMergeQueueListsADefaultBranchPullRequestUnderItsBranch(t *testing.
 	const taskID = "mq1"
 	task := model.Task{
 		ID: taskID, Intent: model.IntentImplement, Title: "queued on the default branch",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}

@@ -1,0 +1,54 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "observe-2",
+  "reference": {
+    "version": "1",
+    "provider": {
+      "capability_id": "https://example.org/capabilities/tasks",
+      "method": "tasks"
+    },
+    "resource_kind": "example.task",
+    "identifier": {
+      "installation_id": "instance-a",
+      "task_id": "72"
+    },
+    "tracking": {
+      "facet": "outcome",
+      "mode": "follow_latest",
+      "selector": null
+    }
+  },
+  "observation_generation": 2,
+  "availability": "available",
+  "revision": "opaque:state-A",
+  "fact_version": "1",
+  "facts": {
+    "lifecycle": "terminal",
+    "disposition": "succeeded",
+    "subject_revision": "receipt:closure-72"
+  },
+  "details": {
+    "state": "closed"
+  },
+  "evidence": [
+    {
+      "evidence_id": "receipt-72",
+      "version": "1",
+      "kind": "example.task_outcome",
+      "schema_digest": "sha256:538fc0e1fe99d0c993694e9ea1ddb327b47b43871ef6ab7d5aa309cfcd05812c",
+      "digest": "sha256:00aaff3e5791348cd7c81350dc69e50cae8aaadc4aaee05019ef1f7bac8f6350",
+      "data": {
+        "task_id": "72",
+        "outcome": "succeeded",
+        "receipt_id": "closure-72"
+      }
+    }
+  ],
+  "display": {
+    "summary": "Task 72 succeeded",
+    "url": null
+  },
+  "observed_at": "2026-11-16T21:00:01Z",
+  "valid_until": "2026-11-16T20:00:00Z",
+  "error": null
+}

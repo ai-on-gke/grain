@@ -16,8 +16,10 @@ package ui_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -144,5 +146,61 @@ func TestTaskDetailRebuildsWhenLocalScriptApprovalRequestedOrExpired(t *testing.
 	detailExp := decode[ui.TaskDetail](t, afterExp)
 	if len(detailExp.LocalScriptApprovals) != 1 || detailExp.LocalScriptApprovals[0].Status != ui.LocalScriptExpired {
 		t.Fatalf("detail LocalScriptApprovals after expire = %+v, want expired", detailExp.LocalScriptApprovals)
+	}
+}
+
+// TestTaskSummariesFiftyIDQuietPollDoesNotThrashDetailCache pins that a max-size
+// (50-id) GET /api/tasks/summaries batch -- the chunk size /next/agents and
+// /next/tasks send on every poll -- neither thrashes the detail cache on quiet
+// 304 polls nor evicts open full-detail task panes.
+func TestTaskSummariesFiftyIDQuietPollDoesNotThrashDetailCache(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+
+	ids := make([]string, 0, 50)
+	for i := 1; i <= 50; i++ {
+		created := decode[ui.Task](t, do(t, srv, http.MethodPost, "/api/tasks",
+			fmt.Sprintf(`{"title":"summary batch task %d","approved":true}`, i)))
+		ids = append(ids, created.ID)
+	}
+
+	// Open a full unpaged task detail pane first.
+	paneRec := detailWith(t, srv, ids[0], "")
+	if paneRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks/%s = %d", ids[0], paneRec.Code)
+	}
+	paneETag := paneRec.Header().Get("ETag")
+
+	// Prime the 50-id summary batch.
+	path := "/api/tasks/summaries?ids=" + strings.Join(ids, ",") + "&comments_limit=1&attempts_limit=1"
+	first := do(t, srv, http.MethodGet, path, "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d: %s", path, first.Code, first.Body)
+	}
+	sumETag := first.Header().Get("ETag")
+	if sumETag == "" {
+		t.Fatal("50-id summaries response missing ETag")
+	}
+
+	buildsAfterPrime := ui.TaskDetailBuilds(srv)
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("If-None-Match", sumETag)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotModified {
+			t.Fatalf("quiet summary poll %d = %d, want 304", i, rec.Code)
+		}
+	}
+	if got := ui.TaskDetailBuilds(srv); got != buildsAfterPrime {
+		t.Fatalf("three quiet 50-id summary polls triggered %d detail rebuilds, want 0", got-buildsAfterPrime)
+	}
+
+	// The open full-detail pane must not have been evicted by the 50-id summary batch.
+	if rec := detailWith(t, srv, ids[0], paneETag); rec.Code != http.StatusNotModified {
+		t.Fatalf("open pane 304 after 50-id summary batch = %d, want 304", rec.Code)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != buildsAfterPrime {
+		t.Fatalf("50-id summary batch evicted open pane (%d rebuilds), want 0", got-buildsAfterPrime)
 	}
 }

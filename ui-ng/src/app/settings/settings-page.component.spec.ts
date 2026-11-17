@@ -75,6 +75,12 @@ class FakeSettingsApi {
     agentBackends: [{ id: "vertex-main", framework: "antigravity" }],
   };
 
+  stateRepoBody: Record<string, unknown> = {
+    branch: "main",
+    head: "abcdef123456",
+    remote: "https://github.com/acme/grain-config.git",
+  };
+
   config = () => Promise.resolve(structuredClone(this.configBody));
 
   get = (key: string, params?: RouteParams, query?: string) => {
@@ -111,11 +117,7 @@ class FakeSettingsApi {
       });
     }
     if (key === "GET /api/state-repo") {
-      return Promise.resolve({
-        branch: "main",
-        head: "abcdef123456",
-        remote: "https://github.com/acme/grain-config.git",
-      });
+      return Promise.resolve(structuredClone(this.stateRepoBody));
     }
     if (key === "GET /api/state-repo/files") {
       return Promise.resolve(["tables/grain_config.json"]);
@@ -611,7 +613,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     );
   });
 
-  it("shows a host's available grain-agentd update and the command to take it", async () => {
+  it("shows a host's available grain-agentd update and copies the command to take it", async () => {
     const api = new FakeSettingsApi();
     api.hostdsBody = [
       {
@@ -626,11 +628,28 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       },
       { name: "workstation-1", owner: "bob", state: "connected" },
     ];
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (t: string) => {
+          writes.push(t);
+          return Promise.resolve();
+        },
+      },
+    });
     const { el } = await mountSettings("/settings/hosts", api);
     const line = el.querySelector('[data-testid="hostd-update-laptop"]');
     expect(line?.textContent).toContain("v3.8.0");
     expect(line?.textContent).toContain("v3.9.0");
     expect(line?.textContent).toContain("grain-agentd update -version v3.9.0");
+    const copyBtn = el.querySelector(
+      '[data-testid="copy-hostd-update-laptop"]',
+    ) as HTMLButtonElement | null;
+    expect(copyBtn).not.toBeNull();
+    copyBtn!.click();
+    await Promise.resolve();
+    expect(writes).toEqual(["grain-agentd update -version v3.9.0"]);
     expect(
       el.querySelector('[data-testid="hostd-update-workstation-1"]'),
     ).toBeNull();
@@ -1750,5 +1769,122 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(keyIn.value).toBe("token");
     expect(valIn.value).toBe("B-NEW");
     expect(storeBtn.disabled).toBe(false);
+  });
+
+  it("shows background StateRepo sync error and schema mismatch on load without duplicating after Sync now", async () => {
+    const refusal =
+      "state repository holds changes grain could not apply: state repository was written by a newer build of grain: repository is at schema 152, this build knows 151";
+    const api = new FakeSettingsApi();
+    api.stateRepoBody = {
+      available: true,
+      mode: "external",
+      remote: "https://github.com/acme/grain-config.git",
+      branch: "main",
+      head: "e1042474abcdef",
+      schemaVersion: 152,
+      buildSchemaVersion: 151,
+      error: refusal,
+    };
+
+    const { el, harness } = await mountSettings("/settings/config-repo", api);
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+
+    const statusPill = el.querySelector('[data-testid="state-repo-status"]')!;
+    expect(statusPill.textContent).toContain("main @ e1042474");
+    expect(statusPill.classList.contains("error")).toBe(true);
+    expect(statusPill.classList.contains("neutral")).toBe(false);
+
+    const schemaPill = el.querySelector(
+      '[data-testid="state-repo-schema-mismatch"]',
+    );
+    expect(schemaPill?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "schema 152 (build 151)",
+    );
+
+    const errBanner = el.querySelector('[data-testid="state-repo-error"]');
+    expect(errBanner?.getAttribute("role")).toBe("alert");
+    expect(errBanner?.textContent).toContain(refusal);
+    expect(
+      el.querySelector('[data-testid="state-repo-schema-error"]'),
+    ).toBeNull();
+    expect(el.querySelector('[data-testid="settings-error"]')).toBeNull();
+
+    // Clicking Sync now when POST /api/state-repo/sync fails with the same
+    // error refreshes GET /api/state-repo and keeps the single inline alert.
+    const basePost = api.post;
+    api.post = (key, params, body) => {
+      if (key === "POST /api/state-repo/sync") {
+        return new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(refusal)), 0),
+        );
+      }
+      return basePost(key, params, body);
+    };
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="sync-state-repo-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    harness.detectChanges();
+
+    expect(
+      el.querySelector('[data-testid="state-repo-error"]')?.textContent,
+    ).toContain(refusal);
+    expect(el.querySelector('[data-testid="settings-error"]')).toBeNull();
+
+    // Once the repository recovers and Sync now succeeds, the error and
+    // mismatch pills clear back to neutral.
+    api.post = basePost;
+    api.stateRepoBody = {
+      available: true,
+      mode: "external",
+      remote: "https://github.com/acme/grain-config.git",
+      branch: "main",
+      head: "f9999999abcdef",
+      schemaVersion: 151,
+      buildSchemaVersion: 151,
+      error: "",
+    };
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="sync-state-repo-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    harness.detectChanges();
+
+    expect(el.querySelector('[data-testid="state-repo-error"]')).toBeNull();
+    expect(
+      el.querySelector('[data-testid="state-repo-schema-mismatch"]'),
+    ).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="state-repo-status"]')!
+        .classList.contains("neutral"),
+    ).toBe(true);
+  });
+
+  it("shows schema mismatch guidance when schemaVersion differs without a sync error", async () => {
+    const api = new FakeSettingsApi();
+    api.stateRepoBody = {
+      available: true,
+      mode: "external",
+      remote: "https://github.com/acme/grain-config.git",
+      branch: "main",
+      head: "e1042474abcdef",
+      schemaVersion: 152,
+      buildSchemaVersion: 151,
+      error: "",
+    };
+
+    const { el, harness } = await mountSettings("/settings/config-repo", api);
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+
+    const schemaBanner = el.querySelector(
+      '[data-testid="state-repo-schema-error"]',
+    );
+    expect(schemaBanner?.getAttribute("role")).toBe("alert");
+    expect(schemaBanner?.textContent).toContain(
+      "The repository holds schema 152 and this build knows 151. Upgrade grain before applying changes from this repository.",
+    );
   });
 });

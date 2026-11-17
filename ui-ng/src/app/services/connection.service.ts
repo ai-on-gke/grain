@@ -12,477 +12,138 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT } from "@angular/common";
-import { Injectable, NgZone, OnDestroy, inject, signal } from "@angular/core";
 import {
-  GrainApi,
-  READ_TIMEOUT_MS,
-  isCancelledRead,
-  isVerifierUnavailable,
-} from "../api/grain-api.service";
-import { AccessService } from "./access.service";
+  HttpErrorResponse,
+  type HttpInterceptorFn,
+  HttpResponse,
+} from "@angular/common/http";
+import { Injectable, inject, signal } from "@angular/core";
+import { tap, throwError, timeout } from "rxjs";
 
-export const PROBE_TIMEOUT_MS = 5_000;
-export const CONFIRM_DELAY_MS = 1_000;
-export const HEARTBEAT_IDLE_MS = 10_000;
-export const RECOVERY_POLL_MS = 3_000;
-const PROBE_OK_COOLDOWN_MS = 3_000;
+// HANG_MS bounds how long a polled read (the task feed's GET /api/tasks and
+// the shell's GET /api/config) may go unanswered before the daemon counts as
+// out of reach: one that accepts the connection and then never answers --
+// deadlocked, stopped, or behind a proxy holding the socket open -- is as
+// unreachable as one that refuses it, and without a bound the poll would
+// wait forever and nothing could ever say so. The classic UI uses the same
+// ten seconds (ui/src/api.js).
+export const HANG_MS = 10_000;
 
-export interface DisconnectionNotice {
-  readonly headline: string;
-  readonly detail: string;
-  readonly restarting: boolean;
-  readonly since: number;
+const POLLED_READS = new Set(["/api/tasks", "/api/config"]);
+
+export interface Disconnection {
+  reason: string;
+  since: number;
 }
 
-// isUnreachable reports whether an API rejection means the daemon could not be
-// reached at all -- a timed-out read, a dropped/refused connection (Angular's
-// HttpErrorResponse status 0 or fetch TypeError), or a 502/503/504 from a
-// gateway in front of it (excluding the daemon's own verifier_unavailable 503).
-export function isUnreachable(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  if (isVerifierUnavailable(err)) return false;
-  if ((err as { timedOut?: unknown }).timedOut === true) return true;
-  if (err instanceof TypeError) return true;
-  const status = (err as { status?: unknown }).status;
-  if (typeof status === "number") {
-    return status === 0 || status === 502 || status === 503 || status === 504;
+const NETWORK_REASON =
+  "This deployment cannot be reached: the connection to it failed.";
+
+// daemonAnswered is whether an error response's body is one the daemon
+// itself writes: every handler error goes out through pkg/ui's writeError
+// as a JSON object carrying a string `error` (apierror.Response). The daemon
+// answers 502/503 of its own -- a forge call that failed while reading a CI
+// job's log or a branch, a verifier briefly out of reach, CI not up yet --
+// and those are the daemon answering, not the daemon being out of reach. A
+// gateway in front of a daemon that is not there answers with its own HTML
+// or plain-text page instead.
+//
+// On a `responseType: "text"` read (GrainApi.getText, used for persistent
+// sandbox logs and /api/fs/ reads), HttpClient leaves err.error as the raw
+// string rather than parsing it, so parse a string body first.
+function daemonAnswered(body: unknown): boolean {
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return false;
+    }
   }
-  return false;
+  return (
+    body !== null &&
+    typeof body === "object" &&
+    typeof (body as { error?: unknown }).error === "string"
+  );
 }
 
-function formatSinceTime(ts: number, timeZone?: string): string {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return "";
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      ...(timeZone ? { timeZone } : {}),
-    }).format(d);
-  } catch {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(d);
+// unreachableReason is the sentence for an error that means the daemon could
+// not be reached at all, or "" when the daemon (or something speaking for it)
+// answered. A network failure surfaces as status 0; a 502/503/504 is a
+// gateway in front of the daemon saying it is not there -- unless its body
+// is the daemon's own JSON error (daemonAnswered), which is the daemon
+// answering.
+export function unreachableReason(err: unknown): string {
+  if (!(err instanceof HttpErrorResponse)) return "";
+  if (err.status === 0) return NETWORK_REASON;
+  if (daemonAnswered(err.error)) return "";
+  switch (err.status) {
+    case 502:
+      return "This deployment cannot be reached: a gateway in front of it reports it is down (502 Bad Gateway).";
+    case 503:
+      return "This deployment cannot be reached: a gateway in front of it reports it is unavailable (503 Service Unavailable).";
+    case 504:
+      return "This deployment cannot be reached: a gateway in front of it timed out waiting for an answer (504 Gateway Timeout).";
+    default:
+      return "";
   }
 }
 
-export function describeDisconnection(
-  err: unknown,
-  since: number,
-  restarting: boolean,
-  timeZone?: string,
-): DisconnectionNotice {
-  const at = formatSinceTime(since, timeZone);
-  const sinceText = at ? ` since ${at}` : "";
-  if (restarting) {
-    return {
-      headline: "Grain is restarting",
-      detail: `Unavailable${sinceText} — retrying automatically; this page will pick back up on its own once grain is back.`,
-      restarting: true,
-      since,
-    };
-  }
-  const timedOut = (err as { timedOut?: unknown })?.timedOut === true;
-  if (timedOut) {
-    const ms =
-      typeof (err as { timeoutMs?: unknown })?.timeoutMs === "number"
-        ? ((err as { timeoutMs: number }).timeoutMs ?? READ_TIMEOUT_MS)
-        : READ_TIMEOUT_MS;
-    const secs = Math.max(1, Math.round(ms / 1000));
-    return {
-      headline: "Server is not responding",
-      detail: `It accepted the connection but sent no answer within ${secs}s${sinceText} — retrying automatically; this page will pick back up on its own once it answers again.`,
-      restarting: false,
-      since,
-    };
-  }
-  const status = (err as { status?: unknown })?.status;
-  if (status === 502) {
-    return {
-      headline: "Server cannot be reached",
-      detail: `A gateway in front of it reports it is down (502 Bad Gateway)${sinceText} — retrying automatically; this page will pick back up on its own once it answers again.`,
-      restarting: false,
-      since,
-    };
-  }
-  if (status === 503) {
-    return {
-      headline: "Server cannot be reached",
-      detail: `A gateway in front of it reports it is unavailable (503 Service Unavailable)${sinceText} — retrying automatically; this page will pick back up on its own once it answers again.`,
-      restarting: false,
-      since,
-    };
-  }
-  if (status === 504) {
-    return {
-      headline: "Server cannot be reached",
-      detail: `A gateway in front of it timed out waiting for an answer (504 Gateway Timeout)${sinceText} — retrying automatically; this page will pick back up on its own once it answers again.`,
-      restarting: false,
-      since,
-    };
-  }
-  return {
-    headline: "Server cannot be reached",
-    detail: `The connection to the daemon failed${sinceText} — retrying automatically; this page will pick back up on its own once it answers again.`,
-    restarting: false,
-    since,
-  };
-}
+export const HANG_REASON = `This deployment cannot be reached: it accepted the connection but sent no answer within ${HANG_MS / 1000} seconds.`;
 
-// ConnectionService watches API activity across the /next/ shell, confirms
-// daemon-wide silence or connection refusals against GET /api/config so a
-// single route's 502/503 never masquerades as a dead server, and probes every
-// 3s while disconnected so the notice clears as soon as the daemon answers.
+// ConnectionStatus is whether the daemon is answering. The shell shows a
+// standing banner while `disconnection` is set; any answer at all clears it,
+// so it takes itself down without a reload once the daemon is back.
 @Injectable({ providedIn: "root" })
-export class ConnectionService implements OnDestroy {
-  private readonly api = inject(GrainApi);
-  private readonly access = inject(AccessService);
-  private readonly doc = inject(DOCUMENT);
-  private readonly zone = inject(NgZone);
+export class ConnectionStatus {
+  readonly disconnection = signal<Disconnection | null>(null);
 
-  readonly disconnected = signal<DisconnectionNotice | null>(null);
-
-  private started = false;
-  private unobserve: (() => void) | null = null;
-  private firstFailure: { err: unknown; since: number } | null = null;
-  private lastOkAt = 0;
-  private lastProbeOkAt = 0;
-  private probing = false;
-  private confirmTimer: ReturnType<typeof setTimeout> | null = null;
-  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
-  private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly disconnectListeners = new Set<() => void>();
-  private readonly reconnectListeners = new Set<() => void>();
-
-  private readonly onVisibility = (): void => {
-    if (!this.started) return;
-    if (this.doc.hidden) {
-      this.clearTimers();
-      return;
-    }
-    if (this.disconnected()) {
-      void this.runRecoveryProbe();
-    } else {
-      this.scheduleHeartbeat();
-    }
-  };
-
-  // quietsReadError says whether a page should keep a failed read off its
-  // own banner: a read cancelled on purpose never is news, and an
-  // unreachable read over data the page already shows is the outage the
-  // shell's one disconnected banner reports -- once it is up, or while its
-  // confirmation is in flight -- so the page says nothing of its own.
-  quietsReadError(err: unknown, hasData: boolean): boolean {
-    if (isCancelledRead(err)) return true;
-    if (!hasData || !isUnreachable(err)) return false;
-    if (this.disconnected() !== null) return true;
-    // Before the outage is confirmed, only a read that got no answer at all
-    // (timed out, connection dropped or refused) waits on the confirmation.
-    // A gateway's 502/503/504 for one route while /api/config still answers
-    // is that route's own failure, and the page says so as it always has.
-    const status = (err as { status?: unknown })?.status;
-    const noAnswer =
-      (err as { timedOut?: unknown })?.timedOut === true ||
-      err instanceof TypeError ||
-      status === 0;
-    return (
-      noAnswer &&
-      (this.firstFailure !== null || this.probing || this.confirmTimer !== null)
-    );
+  answered(): void {
+    if (this.disconnection() !== null) this.disconnection.set(null);
   }
 
-  // whileOutage clears a page's banner when the shell's disconnected banner
-  // goes up over data the page already has, and runs onBack (a recovery
-  // refresh) when the server answers again. Root stores call it once.
-  whileOutage(
-    clear: () => void,
-    hasData: () => boolean,
-    onBack?: () => void,
-  ): () => void {
-    const offDown = this.onDisconnect(() => {
-      if (hasData()) clear();
-    });
-    const offUp = onBack ? this.onReconnect(onBack) : () => undefined;
-    return () => {
-      offDown();
-      offUp();
-    };
-  }
-
-  onDisconnect(fn: () => void): () => void {
-    this.disconnectListeners.add(fn);
-    return () => this.disconnectListeners.delete(fn);
-  }
-
-  onReconnect(fn: () => void): () => void {
-    this.reconnectListeners.add(fn);
-    return () => this.reconnectListeners.delete(fn);
-  }
-
-  start(): void {
-    if (
-      this.started ||
-      typeof this.api.observeActivity !== "function" ||
-      typeof this.api.probeConfig !== "function"
-    ) {
-      return;
-    }
-    this.started = true;
-    this.lastOkAt = Date.now();
-    this.unobserve = this.api.observeActivity({
-      onOk: () => this.onDaemonAnswered(),
-      onError: (url, err) => this.onRequestError(url, err),
-    });
-    this.doc.addEventListener("visibilitychange", this.onVisibility);
-    if (!this.doc.hidden) {
-      this.scheduleHeartbeat();
-    }
-  }
-
-  stop(): void {
-    if (!this.started) return;
-    this.started = false;
-    this.unobserve?.();
-    this.unobserve = null;
-    this.doc.removeEventListener("visibilitychange", this.onVisibility);
-    this.clearTimers();
-    this.firstFailure = null;
-    this.probing = false;
-  }
-
-  ngOnDestroy(): void {
-    this.stop();
-    this.disconnectListeners.clear();
-    this.reconnectListeners.clear();
-  }
-
-  private clearTimers(): void {
-    if (this.confirmTimer) {
-      clearTimeout(this.confirmTimer);
-      this.confirmTimer = null;
-    }
-    if (this.heartbeatTimer) {
-      clearTimeout(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
-    if (this.recoveryTimer) {
-      clearTimeout(this.recoveryTimer);
-      this.recoveryTimer = null;
-    }
-  }
-
-  private onDaemonAnswered(): void {
-    if (!this.started) return;
-    this.lastOkAt = Date.now();
-    this.firstFailure = null;
-    if (this.confirmTimer) {
-      clearTimeout(this.confirmTimer);
-      this.confirmTimer = null;
-    }
-    if (this.disconnected()) {
-      this.markRecovered();
-    } else if (!this.doc.hidden) {
-      this.scheduleHeartbeat();
-    }
-  }
-
-  private onRequestError(url: string, err: unknown): void {
-    if (!this.started) return;
-    if (isCancelledRead(err)) return;
-    if (!isUnreachable(err)) {
-      // Any HTTP status from the daemon itself proves it is reachable.
-      this.onDaemonAnswered();
-      return;
-    }
-    if (this.disconnected()) {
-      if (!this.doc.hidden && !this.probing && !this.recoveryTimer) {
-        this.scheduleRecoveryProbe();
-      }
-      return;
-    }
-    const now = Date.now();
-    if (
-      !url.startsWith("/api/config") &&
-      now - this.lastProbeOkAt < PROBE_OK_COOLDOWN_MS
-    ) {
-      return;
-    }
-    const sentAt =
-      typeof (err as { sentAt?: unknown })?.sentAt === "number"
-        ? (err as { sentAt: number }).sentAt
-        : now;
-    this.firstFailure ??= { err, since: sentAt };
-    if (this.heartbeatTimer) {
-      clearTimeout(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
-    if (this.probing || this.confirmTimer) return;
-
-    const immediate =
-      (err as { timedOut?: unknown })?.timedOut === true ||
-      Boolean(this.access.rawConfig()?.["restarting"]);
-    const delay = immediate ? 0 : CONFIRM_DELAY_MS;
-    if (delay === 0) {
-      void this.confirmDisconnection();
-      return;
-    }
-    this.zone.runOutsideAngular(() => {
-      this.confirmTimer = setTimeout(() => {
-        this.confirmTimer = null;
-        this.zone.run(() => void this.confirmDisconnection());
-      }, delay);
-    });
-  }
-
-  private async confirmDisconnection(): Promise<void> {
-    if (!this.started || this.probing || this.disconnected()) return;
-    this.probing = true;
-    try {
-      const cfg = await this.api.probeConfig(PROBE_TIMEOUT_MS);
-      if (!this.started) return;
-      if (cfg) this.access.setConfig(cfg);
-      this.lastProbeOkAt = Date.now();
-      this.onDaemonAnswered();
-    } catch (probeErr) {
-      if (!this.started) return;
-      if (!isUnreachable(probeErr)) {
-        this.lastProbeOkAt = Date.now();
-        this.onDaemonAnswered();
-        return;
-      }
-      const cause = this.firstFailure?.err ?? probeErr;
-      const since = this.firstFailure?.since ?? Date.now();
-      const rawCfg = this.access.rawConfig();
-      const restarting = Boolean(rawCfg?.["restarting"]);
-      const notice = describeDisconnection(
-        cause,
-        since,
-        restarting,
-        rawCfg?.timeZone,
-      );
-      if (this.heartbeatTimer) {
-        clearTimeout(this.heartbeatTimer);
-        this.heartbeatTimer = null;
-      }
-      this.zone.run(() => {
-        this.disconnected.set(notice);
-        for (const fn of this.disconnectListeners) fn();
-      });
-      if (!this.doc.hidden) {
-        this.scheduleRecoveryProbe();
-      }
-    } finally {
-      this.probing = false;
-    }
-  }
-
-  private scheduleHeartbeat(): void {
-    if (
-      this.heartbeatTimer ||
-      !this.started ||
-      this.doc.hidden ||
-      this.probing ||
-      this.firstFailure !== null ||
-      this.disconnected()
-    ) {
-      return;
-    }
-    const elapsed = Date.now() - this.lastOkAt;
-    const wait = Math.max(250, HEARTBEAT_IDLE_MS - elapsed);
-    this.zone.runOutsideAngular(() => {
-      this.heartbeatTimer = setTimeout(() => {
-        this.heartbeatTimer = null;
-        if (
-          !this.started ||
-          this.doc.hidden ||
-          this.probing ||
-          this.firstFailure !== null ||
-          this.disconnected()
-        ) {
-          return;
-        }
-        if (Date.now() - this.lastOkAt < HEARTBEAT_IDLE_MS) {
-          this.scheduleHeartbeat();
-          return;
-        }
-        this.zone.run(() => {
-          void this.api
-            .config()
-            .then((cfg) => {
-              if (cfg && this.started) this.access.setConfig(cfg);
-            })
-            .catch(() => undefined)
-            .finally(() => {
-              if (this.started && !this.doc.hidden && !this.disconnected()) {
-                this.scheduleHeartbeat();
-              }
-            });
-        });
-      }, wait);
-    });
-  }
-
-  private scheduleRecoveryProbe(): void {
-    if (
-      this.recoveryTimer ||
-      !this.started ||
-      this.doc.hidden ||
-      !this.disconnected()
-    ) {
-      return;
-    }
-    this.zone.runOutsideAngular(() => {
-      this.recoveryTimer = setTimeout(() => {
-        this.recoveryTimer = null;
-        this.zone.run(() => void this.runRecoveryProbe());
-      }, RECOVERY_POLL_MS);
-    });
-  }
-
-  private async runRecoveryProbe(): Promise<void> {
-    if (!this.started || this.doc.hidden || !this.disconnected()) return;
-    if (this.probing) {
-      this.scheduleRecoveryProbe();
-      return;
-    }
-    this.probing = true;
-    try {
-      const cfg = await this.api.probeConfig(PROBE_TIMEOUT_MS);
-      if (!this.started) return;
-      this.lastProbeOkAt = Date.now();
-      if (cfg) this.access.setConfig(cfg);
-      this.markRecovered();
-    } catch (err) {
-      if (!this.started) return;
-      if (!isUnreachable(err)) {
-        this.markRecovered();
-        return;
-      }
-      this.scheduleRecoveryProbe();
-    } finally {
-      this.probing = false;
-    }
-  }
-
-  private markRecovered(): void {
-    if (this.recoveryTimer) {
-      clearTimeout(this.recoveryTimer);
-      this.recoveryTimer = null;
-    }
-    this.firstFailure = null;
-    this.lastOkAt = Date.now();
-    this.lastProbeOkAt = this.lastOkAt;
-    if (typeof this.api.abortStaleReads === "function") {
-      this.api.abortStaleReads(1_500);
-    }
-    this.zone.run(() => {
-      this.disconnected.set(null);
-      for (const fn of this.reconnectListeners) fn();
-    });
-    if (!this.doc.hidden) {
-      this.scheduleHeartbeat();
-    }
+  unreachable(reason: string, now = Date.now()): void {
+    const prev = this.disconnection();
+    if (prev?.reason === reason) return;
+    // Keep the outage's start when only the way it fails changes.
+    this.disconnection.set({ reason, since: prev?.since ?? now });
   }
 }
+
+// connectionInterceptor feeds ConnectionStatus from every /api/ request the
+// app makes, and bounds the polled reads by HANG_MS so a held connection
+// both raises the banner and lets the next poll go out.
+export const connectionInterceptor: HttpInterceptorFn = (req, next) => {
+  const path = req.url.split("?")[0] ?? req.url;
+  if (!path.startsWith("/api/")) return next(req);
+  const conn = inject(ConnectionStatus);
+  const out = next(req).pipe(
+    tap({
+      next: (ev) => {
+        if (ev instanceof HttpResponse) conn.answered();
+      },
+      error: (err: unknown) => {
+        const reason = unreachableReason(err);
+        if (reason) conn.unreachable(reason);
+        else if (err instanceof HttpErrorResponse) conn.answered();
+      },
+    }),
+  );
+  if (req.method !== "GET" || !POLLED_READS.has(path)) return out;
+  return out.pipe(
+    timeout({
+      each: HANG_MS,
+      with: () => {
+        conn.unreachable(HANG_REASON);
+        return throwError(
+          () =>
+            new HttpErrorResponse({
+              status: 0,
+              statusText: "No answer",
+              url: req.url,
+              error: { error: HANG_REASON },
+            }),
+        );
+      },
+    }),
+  );
+};

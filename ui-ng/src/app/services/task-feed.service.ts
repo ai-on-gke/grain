@@ -21,23 +21,15 @@ import {
   inject,
   signal,
 } from "@angular/core";
-import { GrainApi, isCancelledRead } from "../api/grain-api.service";
+import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
 import { errorText } from "../sessions/session-helpers";
-import { ConnectionService, isUnreachable } from "./connection.service";
 import { ReadTrouble } from "./request-trouble";
 
 export const FAST_POLL_MS = 3000;
 export const IDLE_POLL_MS = 15000;
 const CLOCK_TICK_MS = 5000;
-
-function extractError(err: unknown): string {
-  if ((err as { status?: unknown })?.status === 0) {
-    return "The server could not be reached.";
-  }
-  return errorText(err);
-}
 
 export function isOpenWorkTask(t: Task): boolean {
   return !t.consoleSession && !t.interactive;
@@ -52,7 +44,6 @@ export function isOpenWorkTask(t: Task): boolean {
 export class TaskFeedStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
-  private readonly connection = inject(ConnectionService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
 
@@ -82,8 +73,6 @@ export class TaskFeedStore implements OnDestroy {
   private fastConsumers = 0;
   private readonly beforeChange = new Set<() => void>();
   private eventSub: { unsubscribe(): void } | null = null;
-  private unDisconnect: (() => void) | null = null;
-  private unReconnect: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private clockTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -108,19 +97,6 @@ export class TaskFeedStore implements OnDestroy {
     if (fast) this.fastConsumers++;
     if (this.consumers === 1) {
       this.doc.addEventListener("visibilitychange", this.onVisibility);
-      this.unDisconnect = this.connection.onDisconnect(() => {
-        if (this.loaded() && isUnreachable(this.lastError())) {
-          this.loadError.set(null);
-        }
-      });
-      this.unReconnect = this.connection.onReconnect(() => {
-        this.trouble.ok();
-        this.loadError.set(null);
-        if (this.consumers > 0 && !this.doc.hidden) {
-          void this.refresh();
-          this.schedulePoll();
-        }
-      });
       this.eventSub = this.events.events().subscribe((ev) => {
         if (!ev.type || ev.type.startsWith("task.")) {
           this.scheduleEventRefresh();
@@ -141,10 +117,6 @@ export class TaskFeedStore implements OnDestroy {
     if (this.consumers > 0) this.consumers--;
     if (this.consumers === 0) {
       this.doc.removeEventListener("visibilitychange", this.onVisibility);
-      this.unDisconnect?.();
-      this.unDisconnect = null;
-      this.unReconnect?.();
-      this.unReconnect = null;
       this.eventSub?.unsubscribe();
       this.eventSub = null;
       if (this.debounceTimer) {
@@ -175,10 +147,6 @@ export class TaskFeedStore implements OnDestroy {
     this.consumers = 0;
     this.fastConsumers = 0;
     this.doc.removeEventListener("visibilitychange", this.onVisibility);
-    this.unDisconnect?.();
-    this.unDisconnect = null;
-    this.unReconnect?.();
-    this.unReconnect = null;
     this.eventSub?.unsubscribe();
     this.eventSub = null;
     if (this.debounceTimer) {
@@ -298,15 +266,9 @@ export class TaskFeedStore implements OnDestroy {
       this.trouble.ok();
       return true;
     } catch (err) {
-      // A read recovery cancelled on purpose is not a failed poll.
-      if (isCancelledRead(err)) return false;
       this.lastError.set(err);
       if (this.trouble.fail(err) || !this.loaded()) {
-        if (this.connection.quietsReadError(err, this.loaded())) {
-          this.loadError.set(null);
-        } else {
-          this.loadError.set(extractError(err));
-        }
+        this.loadError.set(errorText(err));
       }
       this.now.set(Date.now());
       return false;

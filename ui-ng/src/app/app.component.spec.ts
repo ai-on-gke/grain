@@ -23,7 +23,6 @@ import { AppComponent } from "./app.component";
 import { CreateTaskService } from "./create/create-task.service";
 import { DirectorContextService } from "./director/director-context.service";
 import { AccessService } from "./services/access.service";
-import { ConnectionService } from "./services/connection.service";
 import {
   SIDEBAR_HIDDEN_KEY,
   SIDEBAR_ORDER_KEY,
@@ -251,13 +250,14 @@ describe("AppComponent shell", () => {
     expect(titles.map((e) => e.textContent?.trim())).toEqual([
       "New task",
       "Start a workstream",
+      "Prototype a goal",
       "New session",
       "Task from template",
       "Run a suite",
       "New schedule",
       "New board",
     ]);
-    expect(subs.length).toBe(7);
+    expect(subs.length).toBe(8);
     expect(subs[0].textContent?.trim()).toContain("Describe work");
 
     const links = [
@@ -895,34 +895,5 @@ describe("AppComponent shell", () => {
     await f.whenStable();
     expect(router.url).toBe("/settings/upgrade");
     expect(el(f).querySelector('[data-testid="more-sheet"]')).toBeNull();
-  });
-
-  it("renders an announced disconnected banner when ConnectionService reports an outage and clears it on recovery", async () => {
-    const { fixture: f } = await render();
-    const conn = TestBed.inject(ConnectionService);
-    expect(
-      el(f).querySelector('[data-testid="disconnected-banner"]'),
-    ).toBeNull();
-
-    conn.disconnected.set({
-      headline: "Server is not responding",
-      detail:
-        "It accepted the connection but sent no answer within 8s — retrying automatically; this page will pick back up on its own once it answers again.",
-      restarting: false,
-      since: Date.now(),
-    });
-    f.detectChanges();
-
-    const banner = el(f).querySelector('[data-testid="disconnected-banner"]');
-    expect(banner).toBeTruthy();
-    expect(banner?.getAttribute("role")).toBe("status");
-    expect(banner?.textContent).toContain("Server is not responding");
-    expect(banner?.textContent).toContain("within 8s");
-
-    conn.disconnected.set(null);
-    f.detectChanges();
-    expect(
-      el(f).querySelector('[data-testid="disconnected-banner"]'),
-    ).toBeNull();
   });
 });

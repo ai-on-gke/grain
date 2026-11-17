@@ -12,239 +12,212 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { provideHttpClient } from "@angular/common/http";
+import {
+  HttpClient,
+  HttpErrorResponse,
+  provideHttpClient,
+  withInterceptors,
+} from "@angular/common/http";
 import {
   HttpTestingController,
   provideHttpClientTesting,
 } from "@angular/common/http/testing";
 import { TestBed } from "@angular/core/testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NEVER } from "rxjs";
+import { firstValueFrom } from "rxjs";
 import {
-  GrainApi,
-  READ_TIMEOUT_MS,
-  SLOW_READ_TIMEOUT_MS,
-  isCancelledRead,
-} from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
-import { TaskFeedStore } from "./task-feed.service";
-import { AccessService } from "./access.service";
-import {
-  CONFIRM_DELAY_MS,
-  ConnectionService,
-  PROBE_TIMEOUT_MS,
-  RECOVERY_POLL_MS,
-  isUnreachable,
+  ConnectionStatus,
+  HANG_MS,
+  HANG_REASON,
+  connectionInterceptor,
+  unreachableReason,
 } from "./connection.service";
 
-describe("ConnectionService & GrainApi bounded reads", () => {
-  let api: GrainApi;
-  let http: HttpTestingController;
-  let conn: ConnectionService;
-  let access: AccessService;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting()],
-    });
-    api = TestBed.inject(GrainApi);
-    http = TestBed.inject(HttpTestingController);
-    conn = TestBed.inject(ConnectionService);
-    access = TestBed.inject(AccessService);
-    conn.start();
-  });
-
-  afterEach(() => {
-    conn.stop();
-    api.ngOnDestroy();
-    http.verify();
-    TestBed.resetTestingModule();
-    vi.useRealTimers();
-  });
-
-  it("classifies network drops, read timeouts, and non-verifier gateways as unreachable", () => {
-    expect(isUnreachable({ timedOut: true, timeoutMs: 8000 })).toBe(true);
-    expect(isUnreachable({ status: 0 })).toBe(true);
-    expect(isUnreachable(new TypeError("Failed to fetch"))).toBe(true);
-    expect(isUnreachable({ status: 502 })).toBe(true);
-    expect(isUnreachable({ status: 503, error: { error: "busy" } })).toBe(true);
-    expect(isUnreachable({ status: 504 })).toBe(true);
-
+describe("unreachableReason", () => {
+  it("names network failures and gateway answers, and nothing else", () => {
+    const e = (status: number, error: unknown = null) =>
+      new HttpErrorResponse({ status, error });
+    expect(unreachableReason(e(0))).toContain("the connection to it failed");
+    expect(unreachableReason(e(502))).toContain("502 Bad Gateway");
+    expect(unreachableReason(e(503))).toContain("503 Service Unavailable");
+    expect(unreachableReason(e(504))).toContain("504 Gateway Timeout");
+    expect(unreachableReason(e(502, "<html>Bad Gateway</html>"))).toContain(
+      "502 Bad Gateway",
+    );
+    // The daemon's own 5xx answers carry its JSON error body (pkg/ui's
+    // writeError): a verifier briefly out of reach, or a forge call that
+    // failed while reading a CI job log, is the daemon answering.
     expect(
-      isUnreachable({
-        status: 503,
-        error: { code: "verifier_unavailable", error: "verifier down" },
-      }),
-    ).toBe(false);
-    expect(isUnreachable({ status: 500 })).toBe(false);
-    expect(isUnreachable({ status: 403 })).toBe(false);
-    expect(isUnreachable(null)).toBe(false);
-  });
-
-  it("aborts a hung read after READ_TIMEOUT_MS, confirms via /api/config, and clears on recovery", async () => {
-    let reconnected = 0;
-    conn.onReconnect(() => reconnected++);
-
-    let caught: unknown = null;
-    const readP = api.getIfChanged("GET /api/tasks").catch((e) => {
-      caught = e;
-    });
-    const hungTasks = http.expectOne("/api/tasks");
-    expect(hungTasks.cancelled).toBe(false);
-
-    // Advance to the read timeout: the hung request is cancelled and a
-    // confirmation probe goes out to /api/config.
-    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
-    await readP;
-    expect(hungTasks.cancelled).toBe(true);
-    expect(caught).toMatchObject({
-      timedOut: true,
-      timeoutMs: READ_TIMEOUT_MS,
-    });
-    expect(conn.disconnected()).toBeNull();
-
-    const probe1 = http.expectOne("/api/config");
-    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
-    expect(probe1.cancelled).toBe(true);
-
-    expect(conn.disconnected()).not.toBeNull();
-    expect(conn.disconnected()?.headline).toBe("Server is not responding");
-    expect(conn.disconnected()?.detail).toContain("within 8s");
-
-    // Recovery probe fires after RECOVERY_POLL_MS; answering clears the notice.
-    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS);
-    const probe2 = http.expectOne("/api/config");
-    probe2.flush({ version: "v1.2.3" });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(conn.disconnected()).toBeNull();
-    expect(reconnected).toBe(1);
-    expect(access.rawConfig()?.version).toBe("v1.2.3");
-  });
-
-  it("keeps the banner down when a single route returns 503 while /api/config still answers", async () => {
-    const readP = api.get("GET /api/tasks").catch(() => null);
-    http
-      .expectOne("/api/tasks")
-      .flush(
-        { error: "upstream timed out" },
-        { status: 503, statusText: "Unavailable" },
-      );
-    await readP;
-
-    await vi.advanceTimersByTimeAsync(CONFIRM_DELAY_MS);
-    http.expectOne("/api/config").flush({ version: "v1.0.0" });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(conn.disconnected()).toBeNull();
-  });
-
-  it("announces connection refusals and names an expected restart when restarting was set", async () => {
-    access.setConfig({ version: "v1.0.0", restarting: true });
-
-    const readP = api.get("GET /api/tasks").catch(() => null);
-    http.expectOne("/api/tasks").error(new ProgressEvent("error"));
-    await readP;
-
-    // With restarting set on config, confirmation runs immediately.
-    await vi.advanceTimersByTimeAsync(0);
-    http.expectOne("/api/config").error(new ProgressEvent("error"));
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(conn.disconnected()?.restarting).toBe(true);
-    expect(conn.disconnected()?.headline).toBe("Grain is restarting");
-  });
-
-  it("cancels stale reads on recovery without reporting them, and the next ask is a fresh request", async () => {
-    let caught: unknown = null;
-    const stale = api.getIfChanged("GET /api/tasks").catch((e) => {
-      caught = e;
-    });
-    const req1 = http.expectOne("/api/tasks");
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    api.abortStaleReads(1_500);
-    // Asked again in the same tick, as a reconnect listener does: a new
-    // request, not the cancelled one handed back from the in-flight map.
-    const fresh = api.getIfChanged<{ id: string }[]>("GET /api/tasks");
-    await stale;
-    expect(req1.cancelled).toBe(true);
-    expect(isCancelledRead(caught)).toBe(true);
-    http.expectOne("/api/tasks").flush([{ id: "1" }]);
-    expect((await fresh).body).toEqual([{ id: "1" }]);
-
-    // The cancellation is not news about the server: no confirmation probe.
-    await vi.advanceTimersByTimeAsync(CONFIRM_DELAY_MS + 10);
-    http.expectNone("/api/config");
-    expect(conn.disconnected()).toBeNull();
-  });
-
-  it("gives reads that wait on providers, guests or registries the slow timeout", async () => {
-    const p = api.get("GET /api/agent-models").catch((e) => e);
-    const req = http.expectOne("/api/agent-models");
-    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS + 1_000);
-    expect(req.cancelled).toBe(false);
-    req.flush({ models: [] });
-    expect(await p).toEqual({ models: [] });
-    expect(SLOW_READ_TIMEOUT_MS).toBeGreaterThan(60_000);
+      unreachableReason(
+        e(503, {
+          error: "identity check unavailable (ref r1)",
+          code: "verifier_unavailable",
+        }),
+      ),
+    ).toBe("");
+    expect(
+      unreachableReason(
+        e(502, { error: 'reading job "test"\'s log from the forge: 500' }),
+      ),
+    ).toBe("");
+    expect(unreachableReason(e(503, { error: "CI is not up yet" }))).toBe("");
+    // GrainApi.getText uses responseType: "text", so HttpClient leaves
+    // err.error as the raw JSON string rather than parsing it.
+    expect(
+      unreachableReason(
+        e(
+          503,
+          '{"error":"this server has no namespace to serve /api/fs/ from"}\n',
+        ),
+      ),
+    ).toBe("");
+    expect(unreachableReason(e(503, "null"))).toContain(
+      "503 Service Unavailable",
+    );
+    expect(unreachableReason(e(502, '{"message":"upstream error"}'))).toContain(
+      "502 Bad Gateway",
+    );
+    expect(unreachableReason(e(503, '{"error":503}'))).toContain(
+      "503 Service Unavailable",
+    );
+    expect(unreachableReason(e(0, { error: "x" }))).toContain(
+      "the connection to it failed",
+    );
+    expect(unreachableReason(e(500))).toBe("");
+    expect(unreachableReason(e(401))).toBe("");
+    expect(unreachableReason(new Error("x"))).toBe("");
   });
 });
 
-describe("TaskFeedStore under a confirmed outage", () => {
-  afterEach(() => TestBed.resetTestingModule());
-
-  function setup() {
-    let next: () => Promise<unknown> = () =>
-      Promise.resolve({ body: [{ id: "1", state: "queued" }], changed: true });
+describe("connectionInterceptor", () => {
+  let http: HttpClient;
+  let ctl: HttpTestingController;
+  let conn: ConnectionStatus;
+  beforeEach(() => {
     TestBed.configureTestingModule({
       providers: [
-        {
-          provide: GrainApi,
-          useValue: { getIfChanged: () => next(), config: () => NEVER },
-        },
-        { provide: GrainEvents, useValue: { events: () => NEVER } },
+        provideHttpClient(withInterceptors([connectionInterceptor])),
+        provideHttpClientTesting(),
       ],
     });
-    const feed = TestBed.inject(TaskFeedStore);
-    const conn = TestBed.inject(ConnectionService);
-    return {
-      feed,
-      conn,
-      fail: (err: unknown) => {
-        next = () => Promise.reject(err);
-      },
-    };
-  }
+    http = TestBed.inject(HttpClient);
+    ctl = TestBed.inject(HttpTestingController);
+    conn = TestBed.inject(ConnectionStatus);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    TestBed.resetTestingModule();
+  });
 
-  it("keeps a loaded list's banner off past the sustained threshold while the shell reports the outage", async () => {
-    const { feed, conn, fail } = setup();
-    expect(await feed.refresh()).toBe(true);
-    conn.disconnected.set({
-      headline: "Server cannot be reached",
-      detail: "",
-      restarting: false,
-      since: Date.now(),
+  it("does not raise on the daemon's own 502 from a forge-backed read", async () => {
+    const a = firstValueFrom(http.get("/api/ci/runs/7/log")).catch(() => null);
+    ctl
+      .expectOne("/api/ci/runs/7/log")
+      .flush(
+        { error: 'reading job "test"\'s log from the forge: 500' },
+        { status: 502, statusText: "Bad Gateway" },
+      );
+    await a;
+    expect(conn.disconnection()).toBeNull();
+  });
+
+  it("does not raise on the daemon's own JSON 503 from a text read, and clears an existing banner", async () => {
+    const url = "/api/persistent-sandboxes/docs-preview/logs?format=text";
+    const a = firstValueFrom(http.get(url, { responseType: "text" })).catch(
+      () => null,
+    );
+    ctl.expectOne(url).flush(
+      JSON.stringify({
+        error: "this server does not supervise persistent sandboxes",
+      }),
+      { status: 503, statusText: "Service Unavailable" },
+    );
+    await a;
+    expect(conn.disconnection()).toBeNull();
+
+    conn.unreachable("x");
+    const fsUrl = "/api/fs/config/grain.yaml";
+    const b = firstValueFrom(http.get(fsUrl, { responseType: "text" })).catch(
+      () => null,
+    );
+    ctl
+      .expectOne(fsUrl)
+      .flush(
+        '{"error":"this server has no namespace to serve /api/fs/ from"}\n',
+        { status: 503, statusText: "Service Unavailable" },
+      );
+    await b;
+    expect(conn.disconnection()).toBeNull();
+
+    const c = firstValueFrom(http.get(fsUrl, { responseType: "text" })).catch(
+      () => null,
+    );
+    ctl.expectOne(fsUrl).flush("<html>Service Unavailable</html>", {
+      status: 503,
+      statusText: "Service Unavailable",
     });
-    fail({ status: 0 });
-    for (let i = 0; i < 4; i++) await feed.refresh();
-    expect(feed.loadError()).toBeNull();
-    expect(feed.tasks().length).toBe(1);
+    await c;
+    expect(conn.disconnection()?.reason).toContain("503 Service Unavailable");
   });
 
-  it("still says so when one route keeps failing while the server answers", async () => {
-    const { feed, fail } = setup();
-    expect(await feed.refresh()).toBe(true);
-    fail({ status: 503, error: { error: "upstream request timed out" } });
-    for (let i = 0; i < 3; i++) await feed.refresh();
-    expect(feed.loadError()).toBe("upstream request timed out");
+  it("raises on a failed connection and clears on the next answer", async () => {
+    const a = firstValueFrom(http.get("/api/tasks")).catch(() => null);
+    ctl
+      .expectOne("/api/tasks")
+      .error(new ProgressEvent("error"), { status: 0, statusText: "" });
+    await a;
+    expect(conn.disconnection()?.reason).toContain("failed");
+    const since = conn.disconnection()?.since;
+
+    const b = firstValueFrom(http.get("/api/config")).catch(() => null);
+    ctl
+      .expectOne("/api/config")
+      .flush("bad gateway", { status: 502, statusText: "Bad Gateway" });
+    await b;
+    expect(conn.disconnection()?.reason).toContain("502");
+    expect(conn.disconnection()?.since).toBe(since);
+
+    const c = firstValueFrom(http.get("/api/tasks"));
+    ctl.expectOne("/api/tasks").flush([]);
+    await c;
+    expect(conn.disconnection()).toBeNull();
   });
 
-  it("does not count a cancelled read as a failed poll", async () => {
-    const { feed, fail } = setup();
-    fail(Object.assign(new Error("cancelled"), { cancelled: true }));
-    expect(await feed.refresh()).toBe(false);
-    expect(feed.loadError()).toBeNull();
-    expect(feed.lastError()).toBeNull();
+  it("counts a daemon error answer as reachable", async () => {
+    conn.unreachable("x");
+    const a = firstValueFrom(http.post("/api/tasks", {})).catch(() => null);
+    ctl
+      .expectOne("/api/tasks")
+      .flush({ error: "nope" }, { status: 500, statusText: "Server Error" });
+    await a;
+    expect(conn.disconnection()).toBeNull();
+  });
+
+  it("raises when a polled read goes unanswered and fails it so the poll can go on", async () => {
+    vi.useFakeTimers();
+    const p = firstValueFrom(http.get("/api/tasks")).then(
+      () => "answered",
+      (e: HttpErrorResponse) => `failed ${e.status}`,
+    );
+    const req = ctl.expectOne("/api/tasks");
+    vi.advanceTimersByTime(HANG_MS + 1);
+    expect(await p).toBe("failed 0");
+    expect(req.cancelled).toBe(true);
+    expect(conn.disconnection()?.reason).toBe(HANG_REASON);
+  });
+
+  it("leaves other requests unbounded and non-API requests alone", async () => {
+    vi.useFakeTimers();
+    const p = firstValueFrom(http.get("/api/logs"));
+    const req = ctl.expectOne("/api/logs");
+    vi.advanceTimersByTime(HANG_MS * 3);
+    expect(req.cancelled).toBe(false);
+    req.flush({});
+    await p;
+    const q = firstValueFrom(http.get("/next/assets/x.json")).catch(() => null);
+    ctl
+      .expectOne("/next/assets/x.json")
+      .error(new ProgressEvent("error"), { status: 0, statusText: "" });
+    await q;
+    expect(conn.disconnection()).toBeNull();
   });
 });

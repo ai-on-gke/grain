@@ -75,7 +75,7 @@ func TestGrainMCPListToolsPageUnderTheToolBudget(t *testing.T) {
 			Title:  fmt.Sprintf("fix(cli): page the workstation MCP server's list tools so result %d fits the budget", i),
 			Body: strings.Repeat(fmt.Sprintf("Seeded row %d of the paging walkthrough, long enough to read like a real description. ", i), 3) +
 				"\n\nDerived from nothing in particular.",
-			Origin:  model.Origin{Attribution: model.Attribution{Actor: who}, Reason: model.ReasonDirect},
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: who}, Reason: model.ReasonDirect},
 			Binding: model.BindingDirective,
 			Target:  &repo,
 		}
