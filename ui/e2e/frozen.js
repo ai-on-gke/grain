@@ -84,18 +84,35 @@ export function readFrozenEntries(dir = here) {
   return FROZEN_LISTS.flatMap((name) => readFrozenList(name, dir));
 }
 
+// The callees that declare one test: test(...) and its modifiers. Not
+// test.describe(...), whose file:line Playwright runs as the whole group,
+// and not a hook, which no title names.
+const testCallee = String.raw`\btest(?:\.(?:only|fixme|fail|slow|skip))?\(`;
+const testCallRe = new RegExp(testCallee);
+
 // A test(...) call's title, when it is a string literal: "…", '…', or a
 // template with no ${…} in it. The call may break before the title, so
 // the caller hands in a few lines from the one named.
-const titleRe =
-  /\btest(?:\.(?:only|fixme|fail|slow|skip))?\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|`((?:\\.|[^`\\$])*)`)/;
+const titleRe = new RegExp(
+  testCallee +
+    String.raw`\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|\`((?:\\.|[^\`\\$])*)\`)`,
+  "g",
+);
 
 function unescapeJS(s) {
   return s.replace(/\\(.)/g, (_, c) => ({ n: "\n", t: "\t" })[c] ?? c);
 }
 
+const literal = (m) => unescapeJS(m[1] ?? m[2] ?? m[3]);
+
 // testTitleAt returns the literal title of the test(...) call that starts
 // on `line` (1-based) of `file`, or throws saying why it can't.
+//
+// It also refuses a title another test in the file could share. grep
+// sees "<describe…> <title>" joined by spaces, with nothing to tell one
+// segment from the next, so quarantining "saves" would also drop a test
+// titled "auto saves", or "saves" under any describe -- and quarantining
+// "auto saves" would drop "saves" inside describe("auto").
 export function testTitleAt(entry, dir = here) {
   const where = `e2e/${entry.list}:${entry.lineNo}: ${entry.file}:${entry.line}`;
   let src;
@@ -105,25 +122,51 @@ export function testTitleAt(entry, dir = here) {
     throw new Error(`${where}: no such spec in ui/e2e`);
   }
   const first = src[entry.line - 1];
-  if (first === undefined || !/\btest(?:\.\w+)?\(/.test(first)) {
+  if (first === undefined || !testCallRe.test(first)) {
     throw new Error(
-      `${where}: that line does not start a test(...) call (the spec has moved? point it at the new line)`,
+      `${where}: that line does not start a test(...) call (the spec has moved? point it at the new line; a test.describe or hook cannot be named by title, so list the whole file instead)`,
     );
   }
+  // The title must belong to the call on the named line, not to one
+  // the next two lines start.
+  titleRe.lastIndex = 0;
   const m = titleRe.exec(src.slice(entry.line - 1, entry.line + 2).join("\n"));
-  if (!m) {
+  if (!m || m.index >= first.length) {
     throw new Error(
       `${where}: the test's title is not a plain string literal, so grepInvert cannot name it; list the whole file instead`,
     );
   }
-  return unescapeJS(m[1] ?? m[2] ?? m[3]);
+  const title = literal(m);
+  const offset =
+    src.slice(0, entry.line - 1).join("\n").length +
+    (entry.line > 1 ? 1 : 0) +
+    m.index;
+  const whole = src.join("\n");
+  titleRe.lastIndex = 0;
+  for (const o of whole.matchAll(titleRe)) {
+    if (o.index === offset) continue;
+    const other = literal(o);
+    if (
+      other === title ||
+      other.endsWith(` ${title}`) ||
+      title.endsWith(` ${other}`)
+    ) {
+      const at = whole.slice(0, o.index).split("\n").length;
+      throw new Error(
+        `${where}: grep cannot tell ${JSON.stringify(title)} from the test ${JSON.stringify(other)} at ${entry.file}:${at}, so grepInvert would drop both; list the whole file instead`,
+      );
+    }
+  }
+  return title;
 }
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // grepInvertPatterns turns entries into patterns over Playwright's grep
 // title: "<project> <file> <describe…> <title> <@tags…>", the file being
-// its path under testDir.
+// its path under testDir. The segments are joined by spaces, so a title
+// can only be anchored to the end of that path, not to a segment of it;
+// testTitleAt refuses the titles that leaves ambiguous.
 export function grepInvertPatterns(entries, dir = here) {
   return entries.map((entry) => {
     const file = `^\\s*\\S+ ${esc(entry.file)}`;

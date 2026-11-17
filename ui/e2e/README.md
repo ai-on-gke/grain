@@ -50,11 +50,16 @@ inbox.spec.js:72                 # one test; failed 3 of 40 runs 11-07..11-11
 `grepInvert` matches a test's title, not its line. So a `file:line`
 entry is resolved to the title written on that line, and a test whose
 title is not a plain string literal (a loop's template string) has to be
-quarantined as a whole file. Within a file the tests run in order and
+quarantined as a whole file. So does a `test.describe(` or hook line:
+Playwright would run the whole group from it, while `grepInvert` could
+name only one test. grep also sees the describe titles and the test title
+joined by spaces, so a title another test in the file ends with (or that
+ends with another test's title, such as `auto saves` beside a `saves`
+under `describe("auto")`) cannot be told apart and is refused too. Within a file the tests run in order and
 may depend on each other. If skipping one test breaks the ones after
 it, quarantine the file. `TestClassicE2EFreezeLists` checks every entry
 in `go unit`: the spec exists, the line starts a `test(`, the title is
-literal, and nothing is listed twice. When a quarantined test moves to
+literal and no other test's title can be mistaken for it, and nothing is listed twice. When a quarantined test moves to
 another line, its entry has to move with it.
 
 `QUARANTINE`, `NONGATING`, `frozen.js` and `../playwright.config.js`
