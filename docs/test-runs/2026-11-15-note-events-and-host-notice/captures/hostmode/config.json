@@ -1,0 +1,14 @@
+{
+  "kind": "host-mode",
+  "message": "this install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it to container mode plus the host agent (keeps the data directory and unit name)",
+  "command": "sudo ./scripts/setup.sh",
+  "signals": [
+    "the daemon runs on the bare machine (GRAIN_IN_CONTAINER=0)",
+    "started by systemd with GRAIN_INSTALL_MODE=host"
+  ],
+  "affectedClis": [
+    "claude: no host binary, and no container location on a bare-machine daemon",
+    "codex: no host binary, and no container location on a bare-machine daemon"
+  ],
+  "docsUrl": "https://github.com/ai-on-gke/grain/blob/main/design/design/cli-run-location.design.md#migrating-a-host-mode-install"
+}

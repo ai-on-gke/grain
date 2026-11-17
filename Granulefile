@@ -96,7 +96,9 @@ RUN install -d -m0755 /etc/initramfs-tools/conf.d \
     && echo 'RESUME=none' > /etc/initramfs-tools/conf.d/resume
 
 # Stock Granule Debian VM base packages + Grain's minimal sandbox boundary
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     systemd-sysv \
     udev \
     kmod \
@@ -239,7 +241,9 @@ RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\nAcquire::http::Ti
 
 # Developer convenience packages, Python, and OCR/attachment tools (layered on
 # top of the minimal guest-base boundary for the default full sandbox guest)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential \
     python3 \
     python3-venv \

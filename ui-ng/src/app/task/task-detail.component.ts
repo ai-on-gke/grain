@@ -907,6 +907,10 @@ export function duration(from?: string, to?: string): string {
                     <div class="question-card" data-testid="question">
                       <strong>Asked:</strong> {{ t.questionSummary }}
                     </div>
+                  } @else if (t.noteSummary && t.state === "awaiting_reply") {
+                    <div class="note-card" data-testid="note-summary">
+                      <strong>Note:</strong> {{ t.noteSummary }}
+                    </div>
                   }
                   <g-conversation
                     [taskId]="t.id"

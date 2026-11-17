@@ -198,6 +198,16 @@ g-task-page > g-task-detail,
   font-size: 14px;
 }
 
+/* A closing note asked nothing: a hairline card, not the question's
+   filled container. */
+.note-card {
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface);
+  font-size: 14px;
+}
+
 .msg.is-question {
   border-color: var(--md-sys-color-primary);
   border-width: 2px;
