@@ -135,6 +135,34 @@ test("a row moves in the custom order from the keyboard and by dragging", async 
   expect(before.length).toBeGreaterThan(1);
 
   const first = page.locator(".proc-list .proc-row").first();
+  expect(await first.evaluate((el) => getComputedStyle(el).cursor)).toBe(
+    "pointer",
+  );
+  const firstGrip = first.getByTestId("proc-drag-grip");
+  await expect(firstGrip).toBeVisible();
+  expect(await firstGrip.evaluate((el) => getComputedStyle(el).cursor)).toBe(
+    "grab",
+  );
+  const gripBox = (await firstGrip.boundingBox())!;
+  expect(Math.round(gripBox.width)).toBe(24);
+  expect(Math.round(gripBox.height)).toBe(24);
+
+  for (const sub of ["processes/templates", "processes/suites"]) {
+    await page.goto(sub);
+    const subRow = page.locator(".proc-list .proc-row").first();
+    await expect(subRow).toBeVisible();
+    expect(await subRow.evaluate((el) => getComputedStyle(el).cursor)).toBe(
+      "pointer",
+    );
+    const subGrip = subRow.getByTestId("proc-drag-grip");
+    await expect(subGrip).toBeVisible();
+    expect(await subGrip.evaluate((el) => getComputedStyle(el).cursor)).toBe(
+      "grab",
+    );
+  }
+  await page.goto("processes/schedules");
+  await expect(page.locator('[data-testid^="trigger-row-"]')).toHaveCount(1);
+
   await first.focus();
   await page.keyboard.press("Alt+ArrowDown");
   await expect(page.getByTestId("proc-move-note")).toHaveText(
@@ -161,9 +189,14 @@ test("a row moves in the custom order from the keyboard and by dragging", async 
     .poll(() => rowTitles(page))
     .toEqual([moved[moved.length - 1], ...moved.slice(0, -1)]);
 
-  // Under any other sort the rows do not move.
+  // Under any other sort the rows do not move and drag grips disappear.
   await page.goto("processes/schedules?sort=name");
-  await page.locator(".proc-list .proc-row").first().focus();
+  const sortedFirst = page.locator(".proc-list .proc-row").first();
+  await sortedFirst.focus();
+  expect(await sortedFirst.evaluate((el) => getComputedStyle(el).cursor)).toBe(
+    "pointer",
+  );
+  await expect(page.getByTestId("proc-drag-grip")).toHaveCount(0);
   await page.keyboard.press("Alt+ArrowDown");
   await expect(page.getByTestId("proc-move-note")).toHaveText("");
   await expect(rows.first()).not.toHaveAttribute("draggable", "true");
@@ -217,7 +250,7 @@ test(
 );
 
 // -sensitive-hold declares acme/widgets' .grain/triggers/payments.yml.
-test("a repository's declared trigger is a row that opens its Advanced tab", async ({
+test("a repository's declared trigger inspects inline on Schedules and links to repository settings", async ({
   page,
 }) => {
   await page.goto("processes/schedules");
@@ -226,10 +259,22 @@ test("a repository's declared trigger is a row that opens its Advanced tab", asy
   });
   await expect(row).toContainText("acme/widgets");
   await expect(row).toContainText("on change");
+  expect(await row.evaluate((el) => getComputedStyle(el).cursor)).toBe(
+    "pointer",
+  );
   await page.getByTestId("sched-filter-paused").click();
   await expect(row).toHaveCount(0);
   await page.getByTestId("sched-filter-triggers").click();
   await row.click();
+  await expect(page).toHaveURL(/\/next\/processes\/schedules/);
+  await expect(row).toHaveAttribute("aria-current", "true");
+  const insp = page.getByTestId("trigger-inspector");
+  await expect(insp).toBeVisible();
+  await expect(page.getByTestId("trigger-detail-title")).toHaveText(
+    "payments.yml",
+  );
+  await expect(page.getByTestId("trigger-yaml-preview")).toBeVisible();
+  await page.getByTestId("trigger-open-repo-link").click();
   await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets\/advanced/);
 });
 

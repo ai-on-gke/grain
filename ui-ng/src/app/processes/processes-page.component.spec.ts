@@ -263,6 +263,16 @@ class FakeProcessesApi {
       checkedAt: "2026-11-12T00:05:00Z",
       templates: [".grain/templates/release-notes.yml"],
       triggers: [".grain/triggers/docs.yml"],
+      triggerDetails: [
+        {
+          name: "docs",
+          path: ".grain/triggers/docs.yml",
+          on: "pull_request",
+          paths: ["docs/**"],
+          template: "release-notes",
+          gate: true,
+        },
+      ],
       mergeRules: ".grain/merge-rules.yml",
     },
   };
@@ -298,12 +308,6 @@ class FakeProcessesApi {
         ],
       },
     ],
-  };
-
-  yamlFiles: Record<string, string> = {
-    "acme/widgets/.grain/templates/release-notes.yml":
-      "name: release-notes\ntitle: Draft release notes for {{version}}\n",
-    "acme/widgets/.grain/workflows/ci.yml": "name: CI\non: [push]\n",
   };
 
   scheduleRunResult: ScheduleRun = {
@@ -601,12 +605,6 @@ class FakeProcessesApi {
     }
     return Promise.resolve({});
   };
-
-  getText = (route: string, params?: Record<string, unknown>) => {
-    this.calls.push({ method: "GET", route, params });
-    const p = String(params?.["path"] ?? "");
-    return Promise.resolve(this.yamlFiles[p] ?? `# YAML for ${p}\n`);
-  };
 }
 
 async function flush(harness: RouterTestingHarness): Promise<void> {
@@ -637,6 +635,10 @@ describe("ProcessesPageComponent (D-9)", () => {
             {
               matcher: processesRouteMatcher,
               component: ProcessesPageComponent,
+              canDeactivate: [
+                (page: ProcessesPageComponent | null) =>
+                  page?.canDeactivate ? page.canDeactivate() : true,
+              ],
             },
             { path: "task/:id", component: ProcessesPageComponent },
           ],
@@ -1333,7 +1335,7 @@ describe("ProcessesPageComponent (D-9)", () => {
     ).toContain("disabled");
   });
 
-  it("toggles inline read-only YAML preview on Repo Workflows & Declarations via GET /api/fs/repo/{path...} and renders 8-row prompt textareas", async () => {
+  it("toggles inline read-only YAML preview on Repo Workflows & Declarations from declarationsStatus and repoWorkflows without /api/fs/repo calls", async () => {
     const harness = await RouterTestingHarness.create(
       "/processes/declarations",
     );
@@ -1352,14 +1354,7 @@ describe("ProcessesPageComponent (D-9)", () => {
     await flush(harness);
 
     expect(toggleBtn.textContent).toContain("Hide YAML");
-    expect(
-      api.calls.some(
-        (c) =>
-          c.route === "GET /api/fs/repo/{path...}" &&
-          (c.params as { path?: string })?.path ===
-            "acme/widgets/.grain/templates/release-notes.yml",
-      ),
-    ).toBe(true);
+    expect(api.calls.some((c) => c.route.includes("/api/fs/repo"))).toBe(false);
 
     const yamlPre = root.querySelector<HTMLElement>(
       '[data-testid="decl-inline-yaml"]',
@@ -1367,6 +1362,7 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(yamlPre).not.toBeNull();
     expect(yamlPre.tagName).toBe("PRE");
     expect(yamlPre.classList.contains("comp-body-well")).toBe(true);
+    expect(yamlPre.classList.contains("s-mono")).toBe(true);
     expect(yamlPre.textContent).toContain(
       "title: Draft release notes for {{version}}",
     );
@@ -1375,6 +1371,43 @@ describe("ProcessesPageComponent (D-9)", () => {
     await flush(harness);
     expect(toggleBtn.textContent).toContain("View YAML");
     expect(root.querySelector('[data-testid="decl-inline-yaml"]')).toBeNull();
+
+    // Trigger file link in Declarations toggles inline YAML without leaving Processes,
+    // while decl-open-repo-link points to /repos/acme/widgets/advanced.
+    const declRepoLink = root.querySelector<HTMLAnchorElement>(
+      '.decl-inspector .proc-insp-top [data-testid="decl-open-repo-link"]',
+    )!;
+    expect(declRepoLink).not.toBeNull();
+    expect(declRepoLink.getAttribute("href")).toBe(
+      "/repos/acme/widgets/advanced",
+    );
+
+    const declTriggerBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="decl-trigger-link-.grain/triggers/docs.yml"]',
+    )!;
+    expect(declTriggerBtn).not.toBeNull();
+    expect(declTriggerBtn.tagName).toBe("BUTTON");
+    declTriggerBtn.click();
+    await flush(harness);
+    expect(TestBed.inject(Router).url).toBe("/processes/declarations");
+    expect(
+      root.querySelector('[data-testid="decl-inline-yaml"]')?.textContent,
+    ).toContain("on: pull_request");
+    declTriggerBtn.click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="decl-inline-yaml"]')).toBeNull();
+
+    // Deployment-declared workflow inline YAML reads store.repoWorkflows()[repo].
+    const wfToggleBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="decl-workflows-card"] [data-testid="decl-inline-yaml-toggle"]',
+    )!;
+    wfToggleBtn.click();
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="decl-inline-yaml"]')?.textContent,
+    ).toContain("name: CI");
+    wfToggleBtn.click();
+    await flush(harness);
 
     // Verify schedule and template dialogs use rows="8" for prompt textareas
     await harness.navigateByUrl("/processes/schedules?new=1");
@@ -1389,9 +1422,13 @@ describe("ProcessesPageComponent (D-9)", () => {
 
   it("renders Software Workflow & QA tab label and round-trips qaFlowRef across Schedule, Template, and Suite create/edit drawers", async () => {
     const baseGet = api.get;
-    api.get = (route: string, params?: Record<string, unknown>) => {
+    api.get = (
+      route: string,
+      params?: Record<string, unknown>,
+      query?: string,
+    ) => {
       if (route === "GET /api/qa/flow-versions") {
-        api.calls.push({ method: "GET", route, params });
+        api.calls.push({ method: "GET", route, params, query });
         return Promise.resolve({
           versions: [
             {
@@ -1402,16 +1439,51 @@ describe("ProcessesPageComponent (D-9)", () => {
               builtIn: true,
             },
             {
+              hash: "sha256:eng-v4-custom-v1",
+              key: "engineering-workflow-v4",
+              version: 1,
+              label: "Engineering Workflow V4",
+              builtIn: false,
+            },
+            {
+              hash: "custom:engineering-workflow-v4@2#4",
+              key: "engineering-workflow-v4",
+              version: 2,
+              label: "Engineering Workflow V4",
+              builtIn: false,
+            },
+            {
               hash: "builtin:golden-v3-enforced@1#4",
               key: "golden-v3-enforced",
               version: 1,
               label: "Golden V3 Enforced",
               builtIn: true,
             },
+            {
+              hash: "builtin:golden-v2-checks-only@1#2",
+              key: "golden-v2-checks-only",
+              version: 1,
+              label: "golden v2 (S3+S4 checks only — ablation)",
+              builtIn: true,
+            },
+            {
+              hash: "sha256:demo-seed-v1",
+              key: "demo-seed",
+              version: 1,
+              label: "Demo Seed",
+              builtIn: false,
+            },
+            {
+              hash: "sha256:v4-benchmark-v1",
+              key: "v4-benchmark",
+              version: 1,
+              label: "V4 Suite",
+              builtIn: false,
+            },
           ],
         });
       }
-      return baseGet(route, params);
+      return baseGet(route, params, query);
     };
 
     const harness = await RouterTestingHarness.create(
@@ -1420,14 +1492,22 @@ describe("ProcessesPageComponent (D-9)", () => {
     await flush(harness);
     let root = harness.routeNativeElement!;
 
-    // 1. Quality tab displays "Software Workflow & QA"
+    // 1. Quality tab displays "Software Workflow & QA" and deduplicated primary family count
+    // (3: engineering-workflow-v4 + golden-v3-enforced + golden-v1-minimal from store.qaFlows;
+    // excludes deterministic-s3-only, ablation, -seed, and -benchmark variants).
     const qualityTab = root.querySelector('[data-testid="proc-tab-quality"]')!;
     expect(qualityTab.textContent).toContain("Software Workflow & QA");
-    expect(api.calls.some((c) => c.route === "GET /api/qa/flow-versions")).toBe(
-      true,
+    expect(qualityTab.querySelector(".tab-count")?.textContent?.trim()).toBe(
+      "3",
     );
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/qa/flow-versions" && c.query === "limit=500",
+      ),
+    ).toBe(true);
 
-    // 2. Schedule create & edit round-trip for qaFlowRef
+    // 2. Schedule create & edit round-trip for qaFlowRef with humanized label + key@vN hint
     const schedTitleIn = root.querySelector<HTMLInputElement>(
       '[data-testid="sched-title-input"]',
     )!;
@@ -1440,13 +1520,28 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(schedFlowBtn.textContent).toContain("Deployment default");
     schedFlowBtn.click();
     await flush(harness);
-    root
-      .querySelector<HTMLButtonElement>(
-        '[data-testid="process-qa-flow-select-opt-engineering-workflow-v4@1"]',
-      )!
-      .click();
+    const v4Opt = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select-opt-engineering-workflow-v4@1"]',
+    )!;
+    expect(v4Opt.textContent).toContain("Engineering Workflow V4");
+    expect(v4Opt.textContent).toContain("engineering-workflow-v4@v1");
+    // Custom v1 override of a built-in family emits its SHA-256 hash and an explicit override hint
+    // without colliding with engineering-workflow-v4@1, and unreturned DEFAULT_QA_FLOW_REFS are omitted.
+    const v4OverrideOpt = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select-opt-sha256:eng-v4-custom-v1"]',
+    )!;
+    expect(v4OverrideOpt).not.toBeNull();
+    expect(v4OverrideOpt.textContent).toContain(
+      "engineering-workflow-v4@v1 (override)",
+    );
+    expect(
+      root.querySelector(
+        '[data-testid="process-qa-flow-select-opt-golden-v2@1"]',
+      ),
+    ).toBeNull();
+    v4Opt.click();
     await flush(harness);
-    expect(schedFlowBtn.textContent).toContain("engineering-workflow-v4@1");
+    expect(schedFlowBtn.textContent).toContain("Engineering Workflow V4");
 
     root
       .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
@@ -1470,7 +1565,7 @@ describe("ProcessesPageComponent (D-9)", () => {
     const editSchedFlowBtn = root.querySelector<HTMLButtonElement>(
       '[data-testid="process-qa-flow-select"]',
     )!;
-    expect(editSchedFlowBtn.textContent).toContain("engineering-workflow-v4@1");
+    expect(editSchedFlowBtn.textContent).toContain("Engineering Workflow V4");
     editSchedFlowBtn.click();
     await flush(harness);
     root
@@ -1858,19 +1953,63 @@ describe("ProcessesPageComponent (D-9)", () => {
       root.querySelector('[data-testid="proc-inspector"]')!.textContent,
     ).toContain("Target: acme/widgets @ default branch");
   });
-  it("lists a repository's declared triggers beside the schedules, linking its Advanced tab", async () => {
+  it("inspects a repository's declared trigger inline beside schedules, links its template, and renders custom-order drag grips", async () => {
     const harness = await RouterTestingHarness.create("/processes/schedules");
     await flush(harness);
     await flush(harness);
-    const root = harness.routeNativeElement!;
+    let root = harness.routeNativeElement!;
 
-    const row = root.querySelector<HTMLAnchorElement>(
+    // Custom order renders .proc-drag-grip on draggable rows across Schedules, Templates, and Suites.
+    expect(
+      root.querySelectorAll('.proc-row-top > [data-testid="proc-drag-grip"]')
+        .length,
+    ).toBeGreaterThan(0);
+
+    const row = root.querySelector<HTMLButtonElement>(
       '[data-testid="trigger-row-trigger:acme/widgets:.grain/triggers/docs.yml"]',
     )!;
     expect(row).not.toBeNull();
-    expect(row.getAttribute("href")).toBe("/repos/acme/widgets/advanced");
+    expect(row.tagName).toBe("BUTTON");
+    expect(row.getAttribute("href")).toBeNull();
     expect(row.textContent).toContain("docs.yml");
     expect(row.textContent).toContain("on change");
+
+    // Clicking the trigger row stays on /processes/schedules and opens the inline trigger inspector.
+    row.click();
+    await flush(harness);
+    await flush(harness);
+    expect(TestBed.inject(Router).url).toBe("/processes/schedules");
+    expect(row.classList.contains("is-selected")).toBe(true);
+    expect(row.getAttribute("aria-current")).toBe("true");
+
+    const insp = root.querySelector<HTMLElement>(
+      '[data-testid="trigger-inspector"]',
+    )!;
+    expect(insp).not.toBeNull();
+    expect(
+      insp.querySelector('[data-testid="trigger-detail-title"]')?.textContent,
+    ).toContain("docs.yml");
+    expect(
+      insp
+        .querySelector<HTMLAnchorElement>(
+          '[data-testid="trigger-open-repo-link"]',
+        )
+        ?.getAttribute("href"),
+    ).toBe("/repos/acme/widgets/advanced");
+    expect(api.calls.some((c) => c.route.includes("/api/fs/repo"))).toBe(false);
+    const trigYamlPre = insp.querySelector(
+      '[data-testid="trigger-yaml-preview"]',
+    )!;
+    expect(trigYamlPre.classList.contains("s-mono")).toBe(true);
+    expect(trigYamlPre.textContent).toContain('paths: ["docs/**"]');
+    const cfgText =
+      insp.querySelector('[data-testid="trigger-config-pane"]')?.textContent ??
+      "";
+    expect(cfgText).toContain("acme/widgets");
+    expect(cfgText).toContain(".grain/triggers/docs.yml");
+    expect(cfgText).toContain("pull_request");
+    expect(cfgText).toContain("docs/**");
+    expect(cfgText).toContain("true");
 
     // A trigger is never paused, so the Paused chip leaves it out.
     root
@@ -1883,6 +2022,40 @@ describe("ProcessesPageComponent (D-9)", () => {
       .click();
     await flush(harness);
     expect(root.querySelector('[data-testid^="trigger-row-"]')).not.toBeNull();
+
+    // Clicking trigger-template-link navigates to /processes/templates/<id> and selects the template.
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="trigger-template-link"]',
+      )!
+      .click();
+    await flush(harness);
+    await flush(harness);
+    root = harness.routeNativeElement!;
+    expect(TestBed.inject(Router).url).toBe(
+      "/processes/templates/repo:template:acme%2Fwidgets:release-notes",
+    );
+    expect(
+      root.querySelector('[data-testid="tmpl-detail-title"]')?.textContent,
+    ).toContain("release-notes");
+    expect(
+      root.querySelectorAll('.proc-row-top > [data-testid="proc-drag-grip"]')
+        .length,
+    ).toBeGreaterThan(0);
+
+    await harness.navigateByUrl("/processes/suites");
+    await flush(harness);
+    root = harness.routeNativeElement!;
+    expect(
+      root.querySelectorAll('.proc-row-top > [data-testid="proc-drag-grip"]')
+        .length,
+    ).toBeGreaterThan(0);
+
+    // Non-custom sort hides .proc-drag-grip.
+    await harness.navigateByUrl("/processes/schedules?sort=name");
+    await flush(harness);
+    root = harness.routeNativeElement!;
+    expect(root.querySelector('[data-testid="proc-drag-grip"]')).toBeNull();
   });
 
   describe("schedule and template settings (admission, hosting, keep running, grants, model)", () => {
@@ -2343,6 +2516,212 @@ describe("ProcessesPageComponent (D-9)", () => {
     );
     expect(patches).toHaveLength(2);
     expect(patches[1].body).toMatchObject({ mode: "count", maxPasses: 3 });
+  });
+
+  it("preserves non-first template selection and mobile detail across /processes -> /processes/templates/:itemId navigation", async () => {
+    api.templates.push({
+      id: "tmpl-zebra",
+      name: "zz-zebra-check",
+      title: "chore: verify zebra guard",
+      description: "Verify zebra trigger coverage.",
+      autoMerge: false,
+      capabilities: [],
+      revision: "rev-tz",
+    });
+    api.repoDecl.declarationsStatus!.triggerDetails![0].template = "tmpl-zebra";
+
+    const harness = await RouterTestingHarness.create("/processes");
+    await flush(harness);
+    await flush(harness);
+    let root = harness.routeNativeElement!;
+
+    const triggerRow = root.querySelector<HTMLButtonElement>(
+      '[data-testid="trigger-row-trigger:acme/widgets:.grain/triggers/docs.yml"]',
+    )!;
+    expect(triggerRow).not.toBeNull();
+    triggerRow.click();
+    await flush(harness);
+    await flush(harness);
+
+    const tmplBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="trigger-template-link"]',
+    )!;
+    expect(tmplBtn).not.toBeNull();
+    expect(tmplBtn.textContent).toContain("zz-zebra-check");
+
+    tmplBtn.click();
+    await flush(harness);
+    await flush(harness);
+    root = harness.routeNativeElement!;
+
+    expect(TestBed.inject(Router).url).toBe("/processes/templates/tmpl-zebra");
+    expect(
+      root.querySelector('[data-testid="tmpl-detail-title"]')?.textContent,
+    ).toContain("zz-zebra-check");
+    expect(
+      root
+        .querySelector('[data-testid="tmpl-row-tmpl-zebra"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      root
+        .querySelector(".proc-split")
+        ?.classList.contains("has-mobile-detail"),
+    ).toBe(true);
+  });
+
+  it("guards unsaved Software Workflow & QA drafts ([data-qa-unsaved-draft='true']) on .tab-strip switches and canDeactivate route leaves", async () => {
+    const harness = await RouterTestingHarness.create("/processes/quality");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    const draftMarker = document.createElement("div");
+    draftMarker.setAttribute("data-qa-unsaved-draft", "true");
+    root.appendChild(draftMarker);
+
+    try {
+      // 1. Clicking another tab prompts confirmation; Cancel keeps /processes/quality.
+      const schedTab = root.querySelector<HTMLAnchorElement>(
+        '[data-testid="proc-tab-schedules"]',
+      )!;
+      schedTab.click();
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/quality");
+      let dialog = root.querySelector('[role="dialog"]')!;
+      expect(dialog).not.toBeNull();
+      expect(dialog.textContent).toContain(
+        "Discard unpublished workflow draft?",
+      );
+
+      Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+        .find((b) => b.textContent?.trim() === "Cancel")!
+        .click();
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/quality");
+
+      // 2. Navigating away via Router runs canDeactivate; Cancel aborts navigation.
+      const navAttempt = TestBed.inject(Router).navigateByUrl("/task/1");
+      await Promise.resolve();
+      harness.detectChanges();
+      dialog = root.querySelector('[role="dialog"]')!;
+      expect(dialog).not.toBeNull();
+      Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+        .find((b) => b.textContent?.trim() === "Cancel")!
+        .click();
+      expect(await navAttempt).toBe(false);
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/quality");
+
+      // 3. Accepting "Discard draft" on tab click switches tabs without double-prompting.
+      schedTab.click();
+      await flush(harness);
+      dialog = root.querySelector('[role="dialog"]')!;
+      Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+        .find((b) => b.textContent?.trim() === "Discard draft")!
+        .click();
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/schedules");
+    } finally {
+      draftMarker.remove();
+    }
+  });
+
+  it("gates GET /api/qa/flow-versions on qa:read and resets parseTriggerYaml listKey across indented mapping keys", async () => {
+    api.configBody = {
+      ...api.configBody,
+      access: {
+        role: "grain/reader",
+        roles: ["grain/reader"],
+        full: false,
+        scopes: ["tasks:read"],
+      },
+    };
+
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    expect(api.calls.some((c) => c.route === "GET /api/qa/flow-versions")).toBe(
+      false,
+    );
+
+    // Fallback parseTriggerYaml: indented mapping key under on: must reset listKey so nested branches do not bleed into on.
+    const page = harness.routeDebugElement!.componentInstance as unknown as {
+      selectedTrigger: { set: (v: unknown) => void };
+      triggerYamlText: { set: (v: string) => void };
+      parsedSelectedTrigger: () => {
+        on: string;
+        paths: string[];
+        gate: string;
+        template: string;
+      };
+    };
+    page.selectedTrigger.set({
+      repo: "other/repo",
+      path: ".grain/triggers/custom.yml",
+    });
+    page.triggerYamlText.set(
+      [
+        "on:",
+        "  pull_request:",
+        "    branches:",
+        "      - main",
+        "paths:",
+        '  - "pkg/**"',
+        "template: docs-check",
+        "gate: true",
+      ].join("\n"),
+    );
+    expect(page.parsedSelectedTrigger()).toEqual({
+      on: "",
+      paths: ["pkg/**"],
+      gate: "true",
+      template: "docs-check",
+    });
+  });
+
+  it("skips GET /api/qa/flow-versions when qa:read is repo-limited and filters benchmark fallback count", async () => {
+    api.configBody = {
+      ...api.configBody,
+      access: {
+        role: "grain/reader",
+        roles: ["grain/reader"],
+        full: false,
+        scopes: ["tasks:read", "settings:read", "schedules:write", "qa:read"],
+        repoLimits: { "qa:read": ["acme/widgets"] },
+      },
+    };
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?new=1",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    expect(api.calls.some((c) => c.route === "GET /api/qa/flow-versions")).toBe(
+      false,
+    );
+    // Fallback quality tab count excludes deterministic-s3-only from store.qaFlows().
+    const qualityTab = root.querySelector('[data-testid="proc-tab-quality"]')!;
+    expect(qualityTab.querySelector(".tab-count")?.textContent?.trim()).toBe(
+      "1",
+    );
+
+    // Fallback DEFAULT_QA_FLOW_REFS advertises golden-v1-minimal@1, never unseeded golden-v3-enforced@1.
+    const schedFlowBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select"]',
+    );
+    expect(schedFlowBtn).not.toBeNull();
+    schedFlowBtn!.click();
+    await flush(harness);
+    expect(
+      root.querySelector(
+        '[data-testid="process-qa-flow-select-opt-golden-v1-minimal@1"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      root.querySelector(
+        '[data-testid="process-qa-flow-select-opt-golden-v3-enforced@1"]',
+      ),
+    ).toBeNull();
   });
 
   it("writes the selected schedule, template, suite, and suite run into the URL while keeping ?q=, ?sort=, and ?kind=, and supports Back/Forward and delete", async () => {
