@@ -497,7 +497,7 @@ func TestRepoSkillsUnlistedNote(t *testing.T) {
 	if listed >= 50 {
 		t.Fatalf("listed %d skills, want the 8 KiB budget to drop some", listed)
 	}
-	want := fmt.Sprintf("%d more repository skill(s) are not listed above", 50-listed+8)
+	want := fmt.Sprintf("Up to %d more repository skill(s) are not listed above", 50-listed+8)
 	if !strings.Contains(unified, want) {
 		t.Errorf("index missing %q:\n%s", want, unified)
 	}

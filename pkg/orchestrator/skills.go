@@ -415,7 +415,7 @@ func unlistedRepoSkillsNote(unlisted int, folders []string) string {
 		}
 		where = strings.Join(quoted, ", ")
 	}
-	return fmt.Sprintf("\n%d more repository skill(s) are not listed above: the index keeps at most %d skills and %d bytes. "+
+	return fmt.Sprintf("\nUp to %d more repository skill(s) are not listed above (some may turn out malformed or rejected): the index keeps at most %d skills and %d bytes. "+
 		"Look for */SKILL.md under %s in the checkout if none of these fits.",
 		unlisted, intree.MaxRepoSkills, intree.MaxSkillsIndexBytes, where)
 }

@@ -89,7 +89,7 @@ All 32 checks passed. Element shots: `results/agents-skills-{desktop,phone}-{lig
 
 Discovery also kept reading every remaining SKILL.md after it reached the cap. That is one sandbox `run_command` per pair of candidates: 31 calls for 60 skills, and thousands for a repository with thousands of skill directories, all spent before the agent's first turn.
 
-**Fix** (`pkg/orchestrator/skills.go`): discovery stops reading once it holds 50 skills and returns how many candidates it left unlisted, along with the folders it searched. After `</repo-skills>`, in grain's own voice, the index now says "N more repository skill(s) are not listed above: the index keeps at most 50 skills and 8192 bytes. Look for */SKILL.md under <folders> in the checkout if none of these fits." Regressions are covered by `TestRepoSkillsPathEscapeSymlinkMalformedAndCaps` (counts `run_command` calls and the unlisted count) and `TestRepoSkillsUnlistedNote`.
+**Fix** (`pkg/orchestrator/skills.go`): discovery stops reading once it holds 50 skills and returns how many candidates it left unlisted, along with the folders it searched. After `</repo-skills>`, in grain's own voice, the index now says "Up to N more repository skill(s) are not listed above (some may turn out malformed or rejected): the index keeps at most 50 skills and 8192 bytes. Look for */SKILL.md under <folders> in the checkout if none of these fits." Regressions are covered by `TestRepoSkillsPathEscapeSymlinkMalformedAndCaps` (counts `run_command` calls and the unlisted count) and `TestRepoSkillsUnlistedNote`.
 
 ### F2 — a task's `skills` replaced its template's whole instead of composing field by field (fixed)
 
