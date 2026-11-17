@@ -429,6 +429,126 @@ describe("TaskPageComponent", () => {
     expect(TestBed.inject(TaskStore).draft()).toBe("");
   });
 
+  it("shows a reply as sending, queues the next and keeps a refused one as not sent", async () => {
+    const api = new FakeApi();
+    const held: { body: string; settle: (err?: unknown) => void }[] = [];
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise((resolve, reject) =>
+        held.push({
+          body: (b as { body: string }).body,
+          settle: (err) => (err ? reject(err) : resolve({})),
+        }),
+      );
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    const type = async (text: string) => {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      box.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          cancelable: true,
+        }),
+      );
+      await settle(f);
+    };
+    const pill = (i: number) =>
+      q(
+        f,
+        `[data-testid="pending-${i}"] [data-testid="pending-state"]`,
+      )?.textContent?.trim();
+
+    await type("Yes, fix both");
+    expect(box.disabled).toBe(false);
+    expect(box.value).toBe("");
+    expect(pill(0)).toBe("Sending…");
+    expect(q(f, '[data-testid="pending-0"]')!.textContent).toContain(
+      "Yes, fix both",
+    );
+
+    await type("And add a test");
+    expect(pill(1)).toBe("Queued");
+    expect(held.map((h) => h.body)).toEqual(["Yes, fix both"]);
+
+    // The first reply wakes the task; the one queued behind it still goes,
+    // as a follow-up.
+    api.detail = { ...api.detail, state: "running" };
+    held[0].settle();
+    await settle(f);
+    expect(held.map((h) => h.body)).toEqual([
+      "Yes, fix both",
+      "And add a test",
+    ]);
+    expect(pill(0)).toBe("Sending…");
+    expect(q(f, '[data-testid="pending-1"]')).toBeNull();
+
+    held[1].settle(new Error("comment refused: task is closed"));
+    await settle(f);
+    expect(pill(0)).toBe("Not sent");
+    expect(q(f, '[data-testid="pending-0"]')!.textContent).toContain(
+      "comment refused: task is closed",
+    );
+
+    q<HTMLButtonElement>(f, '[data-testid="pending-retry"]')!.click();
+    await settle(f);
+    expect(held.map((h) => h.body)).toEqual([
+      "Yes, fix both",
+      "And add a test",
+      "And add a test",
+    ]);
+    expect(pill(0)).toBe("Sending…");
+    held[2].settle(new Error("still refused"));
+    await settle(f);
+
+    box.value = "draft in progress";
+    box.dispatchEvent(new Event("input"));
+    q<HTMLButtonElement>(f, '[data-testid="pending-edit"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(box.value).toBe("And add a test\n\ndraft in progress");
+  });
+
+  it("returns a reply its pre-send check refuses to the composer with the queue behind it", async () => {
+    const api = new FakeApi();
+    let release!: () => void;
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise((resolve) => (release = () => resolve({})));
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    for (const text of ["First", "Second", "Third"]) {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+      await settle(f);
+    }
+    expect(q(f, '[data-testid="pending-2"]')).toBeTruthy();
+    // The task is closed while "First" is out: the messages behind it are
+    // refused before they post.
+    api.detail = { ...api.detail, state: "closed" };
+    release();
+    await settle(f);
+    const posted = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/comments",
+    );
+    expect(posted.map((c) => (c.body as { body: string }).body)).toEqual([
+      "First",
+    ]);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(TestBed.inject(TaskStore).draft()).toBe("Second\n\nThird");
+    expect(q(f, '[data-testid="task-action-error"]')!.textContent).toContain(
+      "#7 can no longer receive this comment",
+    );
+  });
+
   it("loads earlier comments on demand via ?comments_before=", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, olderComments: 1 };

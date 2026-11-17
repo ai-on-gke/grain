@@ -933,13 +933,15 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled: store.isBusy('send', t.id),
                       hidden:
                         t.state === 'closed' ||
                         (this.parked() && !this.allowWordsOnParked()) ||
                         this.isStopped(),
                     }"
                     (send)="onConversationSend($event)"
+                    [pending]="store.outboxFor(t.id)"
+                    (retryPending)="store.retrySend(t.id, $event)"
+                    (editPending)="store.editSend(t.id, $event)"
                   />
                 }
                 @case ("runs") {
@@ -2895,7 +2897,9 @@ export class TaskDetailComponent implements OnDestroy {
     this.submitComment();
   }
 
-  private async submitComment(): Promise<void> {
+  // submitComment queues the composer's message (TaskStore.send): it shows
+  // in the thread as sending and the composer clears for the next one.
+  private submitComment(): void {
     const t = this.t();
     if (!t || t.id !== this.id() || this.isStopped() || this.replyBlocked())
       return;
@@ -2905,36 +2909,49 @@ export class TaskDetailComponent implements OnDestroy {
       reply: t.state === "awaiting_reply",
     };
     const allowSecretWords = !!(t.pendingSecret && this.allowWordsOnParked());
-    const ok = await this.store.send(tgt.taskId, (fresh) => {
-      if (tgt.reply && !allowSecretWords) {
-        return replyRefusal(fresh, tgt.taskId, tgt.questionCommentId);
-      }
-      if (!fresh) return `#${tgt.taskId} could not be read.`;
-      if (
-        fresh.state === "closed" ||
-        !!fresh.turnStopped ||
-        fresh.reason?.reason === "awaiting_reply/stopped"
-      ) {
-        return `#${tgt.taskId} can no longer receive this comment. Your text is kept.`;
-      }
-      return "";
+    // A message queued behind others follows them up: the task may stop
+    // waiting on a reply because one ahead of it answered, so it is checked
+    // as a comment.
+    const followUp = this.store.outboxFor(tgt.taskId).length > 0;
+    const queued = this.store.send(tgt.taskId, {
+      refuse: (fresh) => {
+        if (tgt.reply && !allowSecretWords && !followUp) {
+          return replyRefusal(fresh, tgt.taskId, tgt.questionCommentId);
+        }
+        if (!fresh) return `#${tgt.taskId} could not be read.`;
+        if (
+          fresh.state === "closed" ||
+          !!fresh.turnStopped ||
+          fresh.reason?.reason === "awaiting_reply/stopped"
+        ) {
+          return `#${tgt.taskId} can no longer receive this comment. Your text is kept.`;
+        }
+        return "";
+      },
+      // A refused message is back in the composer, still aimed where it
+      // was written.
+      refused: () => {
+        if (this.id() !== tgt.taskId) return;
+        this.replyTarget.set(tgt);
+        if (allowSecretWords) this.allowWordsOnParked.set(true);
+      },
+      sent: () => this.acted.emit(),
     });
-    if (ok) {
+    if (queued) {
       this.replyTarget.set(null);
       this.allowWordsOnParked.set(false);
-      this.done("Sent");
     }
   }
 
   protected onEnter(ev: Event): void {
     if ((ev as KeyboardEvent).isComposing) return;
     ev.preventDefault();
-    void this.submitComment();
+    this.submitComment();
   }
 
   protected send(ev: Event): void {
     ev.preventDefault();
-    void this.submitComment();
+    this.submitComment();
   }
 
   protected openDocsTab(docId?: string): void {
