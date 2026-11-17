@@ -364,3 +364,29 @@ func TestAccessCodeSessionRemovesItsOwnLastEntryWithoutConfirming(t *testing.T) 
 		t.Fatalf("DELETE user:alice@example.com, the last person listed: %d %s, want it removed without a confirmation", rec.Code, rec.Body)
 	}
 }
+
+// An explicit deployment owner is on the effective allowlist the access
+// code's sign-in check reads, so removing the session's own entry while
+// only the owner remains still narrows its access and asks to confirm.
+// The removal path seeds the owner's row (MigrateAllowedPrincipals) before
+// checkAccessCodeSelfRemoval reads the stored rows, which is what makes
+// the owner count there.
+func TestAccessCodeSessionConfirmsRemovingItsOwnEntryBesideTheOwner(t *testing.T) {
+	t.Setenv(ui.DeploymentOwnerEnv, "")
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	cookie := signInWithCode(t, srv, "alice@example.com")
+	headers := map[string]string{"Cookie": cookie.String(), "Content-Type": "application/json"}
+	rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/access/principals",
+		`{"entry":"user:alice@example.com","role":"grain/viewer"}`, headers)
+	if rec.Code/100 != 2 {
+		t.Fatalf("POST /api/access/principals user:alice@example.com: %d %s", rec.Code, rec.Body)
+	}
+	client.Config.DeploymentOwner = "owner@example.com"
+	rec = serveFrom(srv, networkAddr, http.MethodDelete, "/api/access/principals/user:alice@example.com", "", headers)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "confirm_self") {
+		t.Fatalf("DELETE user:alice@example.com beside an explicit owner: %d %s, want 403 confirm_self", rec.Code, rec.Body)
+	}
+}
