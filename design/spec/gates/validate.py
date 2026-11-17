@@ -22,6 +22,8 @@ def instant(value):
 
 
 def attachment(value):
+    qualified = value['origin']['kind'] + '/' + value['origin']['id'] + '/' + value['id']
+    require(len(qualified) <= 256, 'qualified binding ID exceeds 256 characters')
     kind = value["type"]
     subject = value["subject"]["kind"]
     expected = ("change" if kind in {"checks", "review", "approval", "integration", "qa_stage"}
@@ -91,6 +93,10 @@ def semantic(definition, value):
         require(value["target"]["id"] not in {"task_changes", "*"}, "action needs one resolved resource")
     elif definition == "action_receipt":
         semantic("action_request", value["request"])
+        require(value['operation_id'] == value['request']['request_id'],
+                'receipt must retain the request operation identity')
+        if value['intent'] == 'approve_and_queue':
+            require(value['disposition'] == 'no_effect', 'approval enrollment is not integration')
         if value["disposition"] == "succeeded":
             require(value["result_version"] is not None and value["evidence"],
                     "success needs authoritative receipt evidence")
@@ -173,6 +179,8 @@ def main():
                 continue
             require((path.parent / target.split("#")[0]).exists(),
                     str(path.relative_to(REPO)) + ": broken local link: " + target)
+    from validate_api import validate as validate_api
+    validate_api(semantic)
     print(f"Validated {len(manifest)} examples, {len(registered)} gate types, "
           f"{structural} structural and {semantic_failures} semantic denials; schemas and local links pass.")
 

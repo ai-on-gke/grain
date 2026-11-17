@@ -6,7 +6,7 @@
 
 **The core rule:** Grain owns task lifecycle and protected actions. Configured, versioned Go evaluators explain whether an obligation or action prerequisite is met. A gate result never grants permission or performs a mutation.
 
-The [gate specification](../spec/gates/gates.spec.md), [catalogue](../spec/gates/catalogue.md), [schemas and examples](../spec/gates/examples/README.md), and [action bindings](../spec/gates/action-bindings.spec.md) are authoritative for the initial design. They supersede the remote evaluator, shared capability broker and snapshot paging recommendations in Tasks #39/#47/#56 and the first Task #57 draft. Those protocols are deferred history, not implementation dependencies. Existing capability mint/release/configure, resource providers and triggers retain their own contracts.
+The [gate specification](../spec/gates/gates.spec.md), [internal registry/evaluator API](../spec/gates/internal-api.spec.md), [HTTP/tool contracts](../spec/gates/http-api.spec.md), [catalogue](../spec/gates/catalogue.md), [schemas and examples](../spec/gates/examples/README.md), and [action bindings](../spec/gates/action-bindings.spec.md) are authoritative for the initial design. The [API audit/readiness matrix](../spec/gates/api-readiness.md) separates specified contracts from remaining implementation and enforcement prerequisites. They supersede the remote evaluator, shared capability broker and snapshot paging recommendations in Tasks #39/#47/#56 and the first Task #57 draft. Those protocols are deferred history, not implementation dependencies. Existing capability mint/release/configure, resource providers and triggers retain their own contracts.
 
 ## Architecture
 

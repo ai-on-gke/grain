@@ -1883,7 +1883,8 @@
         },
         "revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "source": {
           "enum": [
@@ -2004,7 +2005,8 @@
         },
         "revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "authority": {
           "enum": [
@@ -2014,7 +2016,8 @@
         },
         "authority_epoch": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "lifecycle": {
           "$ref": "#/$defs/lifecycle"
@@ -2130,11 +2133,13 @@
         },
         "contract_revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "authority_epoch": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "policy_digest": {
           "type": "string",
@@ -2142,7 +2147,8 @@
         },
         "authorization_revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "implementation": {
           "type": "string",
@@ -2289,15 +2295,18 @@
         },
         "authorization_revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "dirty_generation": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "covered_generation": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       }
     },
@@ -3308,7 +3317,9 @@
         "expected_contract_revision",
         "expected_policy_digest",
         "expected_context_digest",
-        "reason"
+        "reason",
+        "expected_authority_epoch",
+        "expected_evidence_digest"
       ],
       "properties": {
         "request_id": {
@@ -3342,7 +3353,8 @@
         },
         "expected_contract_revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "expected_policy_digest": {
           "type": "string",
@@ -3363,6 +3375,15 @@
               "type": "null"
             }
           ]
+        },
+        "expected_authority_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expected_evidence_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       }
     },
@@ -3384,7 +3405,8 @@
         "reason",
         "issued_at",
         "expires_at",
-        "revoked_at"
+        "revoked_at",
+        "revision"
       ],
       "properties": {
         "id": {
@@ -3430,7 +3452,8 @@
         },
         "contract_revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "policy_digest": {
           "type": "string",
@@ -3483,6 +3506,11 @@
               "type": "null"
             }
           ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "allOf": [
@@ -3529,7 +3557,8 @@
         "result_version",
         "recorded_at",
         "evidence",
-        "exception_ids"
+        "exception_ids",
+        "intent"
       ],
       "properties": {
         "operation_id": {
@@ -3587,6 +3616,12 @@
           "minItems": 0,
           "maxItems": 64,
           "uniqueItems": true
+        },
+        "intent": {
+          "enum": [
+            "approve_and_queue",
+            "execute"
+          ]
         }
       }
     },
@@ -3613,11 +3648,13 @@
         },
         "contract_revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "authority_epoch": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "activity": {
           "enum": [
