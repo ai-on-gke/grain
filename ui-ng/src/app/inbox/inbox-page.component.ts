@@ -82,6 +82,7 @@ function qaTriageChip(t: Task): string | null {
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: "all", label: "All" },
   { id: "asked", label: "Asked" },
+  { id: "reports", label: "Reports" },
   { id: "approvals", label: "Releases & scripts" },
   { id: "merges", label: "Merges" },
   { id: "proposals", label: "Proposals" },
@@ -336,6 +337,20 @@ const ONE_KEY = new Set(["approve"]);
                       Approve all {{ n }}
                     </button>
                   }
+                  @if (acknowledgeable(group.entries); as n) {
+                    <button
+                      type="button"
+                      class="btn-tonal group-approve"
+                      [attr.data-testid]="'group-acknowledge-' + group.id"
+                      [attr.aria-label]="
+                        'Acknowledge all ' + n + ' in ' + group.title
+                      "
+                      [disabled]="!!store.busy()"
+                      (click)="acknowledgeGroup(group)"
+                    >
+                      Acknowledge all {{ n }}
+                    </button>
+                  }
                 </div>
                 <p class="queue-group-note">{{ group.hint }}</p>
                 <ul
@@ -381,7 +396,9 @@ const ONE_KEY = new Set(["approve"]);
                               <span [class]="'status-pill ' + e.pillTone"
                                 ><g-status-icon
                                   [tone]="e.pillTone"
-                                  [kind]="e.kind"
+                                  [kind]="
+                                    e.groupId === 'info' ? 'info' : e.kind
+                                  "
                                 />{{ e.pillLabel }}</span
                               >
                               <span class="row-summary muted">{{
@@ -450,6 +467,26 @@ const ONE_KEY = new Set(["approve"]);
                             </div>
                           }
                         </div>
+                        @if (rowAcknowledge(e); as a) {
+                          <button
+                            type="button"
+                            class="btn-tonal row-ack"
+                            data-testid="row-acknowledge"
+                            [attr.aria-label]="
+                              'Acknowledge ' + e.ref + ' ' + e.title
+                            "
+                            [disabled]="
+                              !!store.busy() || !canAction(a.route, a.repo)
+                            "
+                            [title]="
+                              deniedAction(a.route, a.repo) ||
+                              'You have read it: close the task. Undo or Reopen puts it back.'
+                            "
+                            (click)="acknowledgeRow(e)"
+                          >
+                            Acknowledge
+                          </button>
+                        }
                       </div>
                     </li>
                   }
@@ -542,9 +579,10 @@ const ONE_KEY = new Set(["approve"]);
               <div class="inspector-header-row1">
                 <div class="inspector-meta-cluster">
                   <span [class]="'status-pill ' + sel.pillTone"
-                    ><g-status-icon [tone]="sel.pillTone" [kind]="sel.kind" />{{
-                      sel.pillLabel
-                    }}</span
+                    ><g-status-icon
+                      [tone]="sel.pillTone"
+                      [kind]="sel.groupId === 'info' ? 'info' : sel.kind"
+                    />{{ sel.pillLabel }}</span
                   >
                   @if (sel.taskLink) {
                     <a
@@ -1723,6 +1761,12 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected run(sel: InboxEntry, a: InboxAction): void {
     const key = sel.key;
     const aid = a.id;
+    // A report's Acknowledge asks nothing, so it gets the row button's
+    // Undo instead of a confirm.
+    if (this.rowAcknowledge(sel) === a) {
+      this.acknowledgeRow(sel);
+      return;
+    }
     if (a.confirm) {
       this.confirming.set({
         title: a.label,
@@ -1744,7 +1788,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       .checkedEntries()
       .filter((e) =>
         e.actions.some(
-          (a) => a.id === id && !a.blocked && this.canAction(a.route, a.repo),
+          (a) =>
+            a.id === id &&
+            !!a.bulk &&
+            !a.blocked &&
+            this.canAction(a.route, a.repo),
         ),
       );
     const n = rows.length;
@@ -2082,6 +2130,48 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       destructive: false,
       scope: scopeOf(rows, this.access.viewer()),
       run: () => this.batch("approve", "Approved", keys),
+    });
+  }
+
+  // rowAcknowledge is the Acknowledge an informational row offers on the
+  // row itself, so a report can be closed without opening it: only rows
+  // in the "info" group, where acknowledging is the whole answer.
+  protected rowAcknowledge(e: InboxEntry): InboxAction | null {
+    if (e.gone || e.groupId !== "info") return null;
+    return e.actions.find((a) => a.id === "acknowledge") ?? null;
+  }
+
+  // acknowledgeRow closes one report straight from its row, with Undo.
+  protected acknowledgeRow(e: InboxEntry): void {
+    void this.batch("acknowledge", "Acknowledged", [e.key]);
+  }
+
+  protected acknowledgeable(entries: InboxEntry[]): number {
+    return entries.filter((e) => {
+      const a = this.rowAcknowledge(e);
+      return !!a && this.canAction(a.route, a.repo);
+    }).length;
+  }
+
+  // acknowledgeGroup closes every report in the group as drawn now, after
+  // one confirmation; the snackbar's Undo reopens them.
+  protected acknowledgeGroup(group: {
+    title: string;
+    entries: InboxEntry[];
+  }): void {
+    const rows = group.entries.filter((e) => {
+      const a = this.rowAcknowledge(e);
+      return !!a && this.canAction(a.route, a.repo);
+    });
+    const keys = rows.map((e) => e.key);
+    if (!keys.length) return;
+    this.confirming.set({
+      title: "Acknowledge all",
+      message: `Acknowledge ${keys.length} ${keys.length === 1 ? "report" : "reports"} in \u201c${group.title}\u201d? Each task is closed; Undo or Reopen puts one back.`,
+      accept: `Acknowledge ${keys.length}`,
+      destructive: false,
+      scope: scopeOf(rows, this.access.viewer()),
+      run: () => this.batch("acknowledge", "Acknowledged", keys),
     });
   }
 

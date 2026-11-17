@@ -241,9 +241,10 @@ Alongside its baseline task-creation flags (`-repo`/`-no-repo`, `-base`, `-title
 
 ### 5.4 `grain inbox` {#XC-21}
 
-`grain inbox [--repo <owner/name>] [--kind <question|secret|notification|merge-held|proposal>] [--json]` (backed by `GET /api/inbox`, scope `tasks:read`) **MUST** return the actionable items currently surfaced in the UI Inbox across repositories readable by the caller:
+`grain inbox [--repo <owner/name>] [--kind <question|answer|secret|notification|merge-held|proposal>] [--json]` (backed by `GET /api/inbox`, scope `tasks:read`) **MUST** return the actionable items currently surfaced in the UI Inbox across repositories readable by the caller:
 
 1. Tasks parked on a question (`kind: "question"`) or secret request (`kind: "secret"`), with summary and `/tasks/<id>` path;
+   tasks whose run answered in a comment, asked nothing and opened no pull request (`kind: "answer"`) are listed apart from questions, with the run's note summary, since they wait only to be acknowledged (`POST /api/tasks/{id}/close`) rather than for a reply;
 2. Active `warning` and `critical` operator notifications (`kind: "notification"`), with `severity`, `subject`, `title`, and target UI route;
 3. Tasks whose pull request is held at a merge gate requiring attention (`kind: "merge-held"`), with `task`, `pr`, and `reason`;
 4. Unapproved task proposals (`kind: "proposal"`), with `task`, `title`, `proposer`, and escalation/hold reason.

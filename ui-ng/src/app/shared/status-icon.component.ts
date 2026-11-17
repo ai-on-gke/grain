@@ -32,6 +32,8 @@ const STATUS_SHAPES: Record<string, string> = {
     "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm-.7 3.2h1.4v2.6h2.6v1.4H8.7v2.6H7.3V8.7H4.7V7.3h2.6V4.7Z",
   progress:
     "M8 2a6 6 0 1 0 6 6h-1.8A4.2 4.2 0 1 1 8 3.8V2Zm1.5.4L13.6 6H9.5V2.4Z",
+  // A circled "i": a report to read, not a question to answer.
+  info: "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm-.7 3h1.4v1.4H7.3V4.5Zm0 2.6h1.4v4.4H7.3V7.1Z",
   neutral:
     "M8 2.2a5.8 5.8 0 1 0 0 11.6 5.8 5.8 0 0 0 0-11.6Zm0 1.6a4.2 4.2 0 1 1 0 8.4 4.2 4.2 0 0 1 0-8.4Z",
 };
@@ -39,6 +41,7 @@ const STATUS_SHAPES: Record<string, string> = {
 export function statusShapeFor(tone: string, kind = ""): string {
   const k = kind.toLowerCase();
   if (k === "proposal" || k === "proposed") return STATUS_SHAPES["proposal"];
+  if (k === "info") return STATUS_SHAPES["info"];
   if (k === "reply" || k === "asked" || k === "access" || k === "secret") {
     return STATUS_SHAPES["reply"];
   }

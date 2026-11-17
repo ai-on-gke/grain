@@ -19,6 +19,8 @@ import {
   classifyNotification,
   classifyTask,
   groupEntries,
+  type InboxEntry,
+  isInformational,
   matchesFilter,
   matchesQuery,
   pendingReleaseOf,
@@ -69,6 +71,49 @@ describe("inbox classifier", () => {
     expect(reply?.groupId).toBe("reply");
     expect(reply?.summary).toBe("Fix both?");
     expect(reply?.actions.map((a) => a.id)).toEqual(["acknowledge"]);
+
+    expect(reply?.pillLabel).toBe("Question");
+    expect(reply?.actions[0].bulk).toBeFalsy();
+
+    // A run that asked nothing and answered in a comment is a report:
+    // its own group, its own badge, and Acknowledge as the answer.
+    const info = classifyTask(
+      task({
+        id: "5",
+        state: "awaiting_reply",
+        noteSummary: "Root cause found",
+      }),
+    );
+    expect(info?.groupId).toBe("info");
+    expect(info?.pillLabel).toBe("Info");
+    expect(info?.summary).toBe("Root cause found");
+    expect(info?.actions.map((a) => [a.id, a.variant, !!a.bulk])).toEqual([
+      ["acknowledge", "primary", true],
+    ]);
+    expect(info?.actions[0].route).toBe("POST /api/tasks/{id}/close");
+    expect(matchesFilter(info as InboxEntry, "reports", new Set())).toBe(true);
+    expect(matchesFilter(info as InboxEntry, "asked", new Set())).toBe(false);
+    // The server's own reason wins over the fields it is derived from.
+    expect(
+      isInformational(
+        task({
+          state: "awaiting_reply",
+          reason: { reason: "awaiting_reply/question" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isInformational(
+        task({
+          state: "awaiting_reply",
+          questionCommentId: 7,
+          reason: { reason: "awaiting_reply/answered" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isInformational(task({ state: "awaiting_reply", interactive: true })),
+    ).toBe(false);
 
     const access = classifyTask(
       task({ state: "awaiting_reply", awaitingAccess: true }),
@@ -292,8 +337,8 @@ describe("inbox classifier", () => {
       [{ id: "a1", taskId: "2", script: "deploy.sh", args: ["--prod"] }],
     );
     expect(groupEntries(entries).map((g) => g.id)).toEqual([
-      "reply",
       "host-script",
+      "info",
       "proposal",
       "notification",
     ]);

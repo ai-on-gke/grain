@@ -258,6 +258,7 @@ export class InboxStore implements OnDestroy {
     return {
       all: all.length,
       asked: n("asked"),
+      reports: n("reports"),
       proposals: n("proposals"),
       merges: n("merges"),
       approvals: n("approvals"),
@@ -1067,7 +1068,10 @@ export class InboxStore implements OnDestroy {
         .map((e) => ({ e, a: e.actions.find((x) => x.id === actionId) }))
         .filter(
           (t): t is { e: InboxEntry; a: InboxAction } =>
-            !!t.a && !t.a.blocked && this.canAct(t.a.route, t.a.repo),
+            !!t.a &&
+            !!t.a.bulk &&
+            !t.a.blocked &&
+            this.canAct(t.a.route, t.a.repo),
         );
       // Each call is its own promise, so one that throws at once still
       // leaves the others to finish.

@@ -608,6 +608,124 @@ describe("InboxPageComponent", () => {
     expect(withdrawn).toHaveLength(2);
   });
 
+  it("lists reports apart from questions and acknowledges them from the row or all at once, with Undo", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      {
+        id: "20",
+        title: "Which branch?",
+        state: "awaiting_reply",
+        questionSummary: "Fix both?",
+        questionCommentId: 3,
+      },
+      {
+        id: "21",
+        title: "Why is CI slow",
+        state: "awaiting_reply",
+        noteSummary: "Cache misses",
+      },
+      { id: "22", title: "Audit deps", state: "awaiting_reply" },
+    ];
+    const f = await render(api);
+    const reply = q(f, '[data-testid="inbox-group-reply"]')!;
+    const info = q(f, '[data-testid="inbox-group-info"]')!;
+    expect(reply.textContent).toContain("Which branch?");
+    expect(reply.textContent).toContain("Question");
+    expect(reply.querySelector('[data-testid="row-acknowledge"]')).toBeNull();
+    expect(q(f, '[data-testid="group-acknowledge-reply"]')).toBeNull();
+    expect(info.textContent).toContain("Cache misses");
+    expect(info.textContent).toContain("Info");
+    expect(
+      info.querySelectorAll('[data-testid="row-acknowledge"]'),
+    ).toHaveLength(2);
+
+    // One click on the row closes that report, no composer, no dialog.
+    (
+      info.querySelector('[data-testid="row-acknowledge"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    const closed = () =>
+      api.posts
+        .filter((p) => p.route === "POST /api/tasks/{id}/close")
+        .map((p) => (p.params as { id: string }).id)
+        .sort();
+    expect(closed()).toEqual(["21"]);
+    const snacks = TestBed.inject(SnackbarService);
+    expect(snacks.current()?.message).toBe("Acknowledged 1 item");
+    expect(snacks.current()?.action?.label).toBe("Undo");
+
+    // Acknowledge all asks once and closes every report, never a question.
+    api.posts = [];
+    await f.whenStable();
+    const all = q(
+      f,
+      '[data-testid="group-acknowledge-info"]',
+    ) as HTMLButtonElement;
+    expect(all.textContent).toContain("Acknowledge all 2");
+    all.click();
+    await f.whenStable();
+    const accept = [
+      ...(f.nativeElement as HTMLElement).querySelectorAll("button"),
+    ].find((b) => b.textContent?.trim() === "Acknowledge 2")!;
+    accept.click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    expect(closed()).toEqual(["21", "22"]);
+    await snacks.runAction(snacks.current()!.id);
+    expect(
+      api.posts.filter((p) => p.route === "POST /api/tasks/{id}/reopen"),
+    ).toHaveLength(2);
+
+    // Selecting both a question and a report in the batch bar never closes
+    // the question, nor does row Acknowledge if the report asks a question
+    // before the refresh lands.
+    api.posts = [];
+    const store = TestBed.inject(InboxStore);
+    store.checked.set(new Set(["task:20:reply", "task:21:reply"]));
+    await f.whenStable();
+    const bulkAck = q(
+      f,
+      '[data-testid="bulk-acknowledge"]',
+    ) as HTMLButtonElement;
+    expect(bulkAck.textContent).toContain("Acknowledge all (1)");
+    bulkAck.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
+      "1 selected item",
+    );
+    (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    expect(closed()).toEqual(["21"]);
+
+    api.posts = [];
+    api.taskList = [
+      {
+        id: "20",
+        title: "Which branch?",
+        state: "awaiting_reply",
+        questionSummary: "Fix both?",
+        questionCommentId: 3,
+      },
+      {
+        id: "22",
+        title: "Audit deps",
+        state: "awaiting_reply",
+        questionSummary: "Pin or upgrade?",
+        questionCommentId: 9,
+      },
+    ];
+    (
+      info.querySelectorAll(
+        '[data-testid="row-acknowledge"]',
+      )[1] as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    expect(closed()).toEqual([]);
+  });
+
   it("keeps failed rows selected after a batch", async () => {
     const api = new FakeApi();
     proposals(api);

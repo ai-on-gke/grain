@@ -46,15 +46,15 @@ func statusServer(t *testing.T, status int) string {
 }
 
 // closedServer is a URL nothing listens on.
+//
+// The port stays reserved for the rest of the test (reserveClosedPort):
+// a port merely closed again is the kernel's to hand out, and a test in
+// another package running at the same moment once got it for its own
+// server -- so a "dead" daemon answered, and a `grain hub status` meant
+// to fail landed on that other test's fake upstream instead.
 func closedServer(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	l.Close()
-	return "http://" + addr
+	return "http://" + reserveClosedPort(t)
 }
 
 // runForExit runs the task CLI the way Main does and returns its exit

@@ -356,7 +356,7 @@ The command has two forms:
 
 The external-agent workflow's answering and polling verbs ([external-cli #XC-20..#XC-23](../external-cli/external-cli.spec.md#XC-20)).
 - `reply <id> [<body...> | -body-file <path|->]` answers the question task `<id>`'s run parked on (`POST /api/tasks/{id}/reply`). It is refused with exit `2`, posting nothing, when no `ask_question` is parked and when the task waits on a `request_secret`, which names `/tasks/<id>` and its encrypted input instead; `comment` posts a general note either way.
-- `inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]` lists what needs a person (`GET /api/inbox`) on the repositories the caller reads, one item per line with its root-relative UI path.
+- `inbox [-repo R] [-kind question|answer|secret|notification|merge-held|proposal]` lists what needs a person (`GET /api/inbox`) on the repositories the caller reads, one item per line with its root-relative UI path.
 - `wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,…]] [-timeout 30m]` re-issues `GET /api/tasks/wait` slices of at most 60 s. It exits `0` when a condition is met, `1` when `-until merged` (without `closed`) meets a task that closed unmerged or `-until closed` a failed one, and `5` when `-timeout` (the global flag, written after the verb; `30m` when unset) runs out, printing the `grain wait …` line that carries on.
 - `logs <id> [-attempt N] [-tail N] [-follow]` prints the latest (or `N`th) attempt's activity and transcript; `-follow` streams new lines until the attempt finishes, exiting `1` when it errored.
 
@@ -370,7 +370,7 @@ The external-agent workflow's answering and polling verbs ([external-cli #XC-20.
 <!-- BEGIN GENERATED FLAGS: grain inbox -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-kind` | string |  |  | only items of this kind: question, secret, notification, merge-held, proposal |
+| `-kind` | string |  |  | only items of this kind: question, answer, secret, notification, merge-held, proposal |
 | `-repo` | string |  |  | only this repository's (owner/name) items |
 <!-- END GENERATED FLAGS -->
 
@@ -2792,9 +2792,9 @@ _No flags._
 |---|---|---|---|---|
 | `-admin-account` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
 | `-admin-user` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
-| `-claude-cli-sha256-amd64` | string | `"dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"` |  | expected sha256 of the linux-x64 claude release |
-| `-claude-cli-sha256-arm64` | string | `"a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"` |  | expected sha256 of the linux-arm64 claude release |
-| `-claude-cli-version` | string | `"2.1.319"` |  | claude CLI release to install |
+| `-claude-cli-sha256-amd64` | string | `"0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf"` |  | expected sha256 of the linux-x64 claude release |
+| `-claude-cli-sha256-arm64` | string | `"7b6e484b1989a5a14a4b354709ccc8672518a3ec5b9ccd7981fc6254327fde67"` |  | expected sha256 of the linux-arm64 claude release |
+| `-claude-cli-version` | string | `"2.1.325"` |  | claude CLI release to install |
 | `-claude-home` | string |  |  | $HOME for the claude installer (default <data-dir>/claude) |
 | `-daemon-arg` | value |  |  | extra argument appended to the daemon's own command line, repeatable |
 | `-daemon-group` | string |  |  | run the daemon as this group (systemd Group=) instead of -daemon-user's own name; only meaningful alongside -daemon-user |
