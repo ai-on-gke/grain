@@ -239,7 +239,7 @@ func newSSHProxyRig(t *testing.T, knownHosts func(srv *sshGitServer) string) *ss
 	store, ctx := openStore(t)
 	task := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "test task",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},

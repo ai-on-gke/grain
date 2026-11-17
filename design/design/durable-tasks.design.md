@@ -6,6 +6,8 @@ carry `Design-Item: design/design/durable-tasks.design.md#DT-n` trailers, so the
 design planner (`docs/design-docs.md`) finds them already open when this
 doc merges and files nothing twice.
 
+Proposed extension: [Configurable built-in gates](gates.design.md) and its [normative contract](../spec/gates/gates.spec.md) generalize DT-4 into versioned compiled evaluators while retaining Grain-owned admission, suspension, progress and close/rest policy. They do not change current behavior until an explicit per-task authority handoff.
+
 ## Why
 
 Some work in grain has to keep going until a goal is met or a person stops

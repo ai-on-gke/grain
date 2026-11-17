@@ -352,7 +352,7 @@ func TestANewerReviewSupersedesAStuckOlderOne(t *testing.T) {
 	review := func(id, head string, links ...model.Link) model.Task {
 		t.Helper()
 		r := filedTask(t, ctx, store, id, repo)
-		r.Origin.Reason = model.ReasonReview
+		r.Filing.Reason = model.ReasonReview
 		r.Base = reviewed.BranchName()
 		r.AutoMerge = true
 		r.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:" + head}
@@ -406,14 +406,14 @@ func TestANewerReviewStillWaitsOnARunningOlderOne(t *testing.T) {
 	reviewed := filedTask(t, ctx, store, "t1", repo)
 	kindTag := "path-trigger-review:acme/widgets#1:code"
 	old := filedTask(t, ctx, store, "r1", repo)
-	old.Origin.Reason = model.ReasonReview
+	old.Filing.Reason = model.ReasonReview
 	old.Base = reviewed.BranchName()
 	old.Tags = []string{model.PathTriggerMarkerTag, kindTag}
 	if err := store.PutTask(ctx, old); err != nil {
 		t.Fatal(err)
 	}
 	newer := filedTask(t, ctx, store, "r2", repo)
-	newer.Origin.Reason = model.ReasonReview
+	newer.Filing.Reason = model.ReasonReview
 	newer.Base = reviewed.BranchName()
 	newer.Tags = []string{model.PathTriggerMarkerTag, kindTag}
 	newer.Links = append(newer.Links, model.Link{Kind: model.LinkDependsOn, Target: old.ID})
@@ -445,7 +445,7 @@ func TestSupersedingAStuckReviewWidensAnIncrementalSuccessor(t *testing.T) {
 	kindTag := "path-trigger-review:acme/widgets#1:code"
 
 	old := filedTask(t, ctx, store, "r1", repo)
-	old.Origin.Reason = model.ReasonReview
+	old.Filing.Reason = model.ReasonReview
 	old.Base = reviewed.BranchName()
 	old.AutoMerge = true
 	old.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:08f6232f"}
@@ -463,7 +463,7 @@ func TestSupersedingAStuckReviewWidensAnIncrementalSuccessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	newer := filedTask(t, ctx, store, "r2", repo)
-	newer.Origin.Reason = model.ReasonReview
+	newer.Filing.Reason = model.ReasonReview
 	newer.Base = reviewed.BranchName()
 	newer.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:1234abcd",
 		"path-trigger-since:08f6232f"}

@@ -1029,7 +1029,7 @@ func securityIncrementalBase(ctx context.Context, store *model.Store, task model
 
 func isTrustBoundarySecurityReview(r model.Task, reviewedID string, ref model.PullRequestRef) bool {
 	return r.Parent() == reviewedID &&
-		r.Origin.Attribution.Actor == reviewer &&
+		r.Filing.Attribution.Actor == reviewer &&
 		!hasTag(r, model.PathTriggerMarkerTag) &&
 		linkTarget(r, model.LinkExternalPR) == "" &&
 		(r.SourceTemplateID == model.SecurityReviewTemplateID || strings.HasPrefix(r.Title, "Security review:")) &&

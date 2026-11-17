@@ -183,17 +183,20 @@ g-tasks-page .task-row.is-selected .row-title {
   }
 }
 
-g-tasks-page .tasks-detail-pane {
+g-tasks-page .tasks-detail-pane,
+g-agents-page .tasks-detail-pane {
   overflow: hidden;
 }
 
-g-tasks-page .tasks-detail-pane g-task-detail {
+g-tasks-page .tasks-detail-pane g-task-detail,
+g-agents-page .tasks-detail-pane g-task-detail {
   display: flex;
   flex: 1;
   min-height: 0;
 }
 
-g-tasks-page .tasks-detail-pane .task-page {
+g-tasks-page .tasks-detail-pane .task-page,
+g-agents-page .tasks-detail-pane .task-page {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -202,10 +205,6 @@ g-tasks-page .tasks-detail-pane .task-page {
 /* The pane is the task page narrowed: Details is a tab, not a column. */
 g-task-detail .task-page.is-pane .task-layout {
   grid-template-columns: minmax(0, 1fr);
-}
-
-g-task-detail .task-page.is-pane .task-tabs [data-testid="task-tab-details"] {
-  display: inline-flex;
 }
 
 g-task-detail .task-page.is-pane .task-tabs {

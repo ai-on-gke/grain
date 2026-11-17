@@ -128,6 +128,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
     "./workstream-detail.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:keydown)": "onKey($event)",
@@ -1042,6 +1043,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
     });
     effect(() => {
       const s = this.stream();
+      void this.access.rawConfig();
       untracked(() => {
         if (s.key !== this.lastStreamKey) {
           this.lastStreamKey = s.key;

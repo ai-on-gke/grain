@@ -159,7 +159,7 @@ func newRealPushRig(t *testing.T, grants []model.Grant) *realPushRig {
 	target := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "tw", Intent: model.IntentImplement, Title: "real push boundary",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},

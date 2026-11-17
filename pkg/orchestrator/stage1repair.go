@@ -321,7 +321,7 @@ func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind
 		Intent: model.IntentImplement,
 		Title:  kind.title,
 		Body:   kind.intro + "\n\n" + failures,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: kind.by},
 			Reason:      model.ReasonProposal,
 		},

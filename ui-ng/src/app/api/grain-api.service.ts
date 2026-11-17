@@ -17,7 +17,7 @@ import {
   HttpErrorResponse,
   HttpHeaders,
 } from "@angular/common/http";
-import { Injectable, inject } from "@angular/core";
+import { Injectable, OnDestroy, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
 import type {
@@ -28,6 +28,7 @@ import type {
   Notification,
   Task,
   TaskDetail,
+  TaskSummariesResponse,
   WhoamiResponse,
 } from "./models";
 
@@ -72,6 +73,144 @@ export function splitRepo(repo: string): { owner: string; name: string } {
 
 const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 
+export const TASK_SUMMARIES_BATCH_SIZE = 50;
+
+// Splits unique non-empty task IDs into batches of at most `size`.
+export function chunkTaskIds(
+  ids: readonly string[],
+  size = TASK_SUMMARIES_BATCH_SIZE,
+): string[][] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += size) {
+    chunks.push(unique.slice(i, i + size));
+  }
+  return chunks;
+}
+
+export function taskSummariesQuery(
+  ids: readonly string[],
+  commentsLimit = 1,
+  attemptsLimit = 1,
+): string {
+  return `ids=${ids.map((id) => encodeURIComponent(id)).join(",")}&comments_limit=${commentsLimit}&attempts_limit=${attemptsLimit}`;
+}
+
+export interface TaskSummaryBatchResult {
+  tasks: Record<string, TaskDetail>;
+  failedIds: string[];
+}
+
+// Fetches task summaries in batches of up to 50, preserving partial chunk
+// successes and reporting IDs from failed chunks or omitted entries.
+export async function loadTaskSummaryBatches(
+  ids: readonly string[],
+  commentsLimit: number,
+  attemptsLimit: number,
+  fetchChunk: (
+    query: string,
+  ) => Promise<Record<string, TaskDetail> | undefined>,
+): Promise<TaskSummaryBatchResult> {
+  const chunks = chunkTaskIds(ids);
+  if (chunks.length === 0) return { tasks: {}, failedIds: [] };
+  const tasks: Record<string, TaskDetail> = {};
+  const failedIds: string[] = [];
+  const results = await Promise.allSettled(
+    chunks.map((chunk) =>
+      fetchChunk(taskSummariesQuery(chunk, commentsLimit, attemptsLimit)),
+    ),
+  );
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const res = results[i];
+    if (res.status !== "fulfilled") {
+      failedIds.push(...chunk);
+      continue;
+    }
+    const map = res.value ?? {};
+    for (const id of chunk) {
+      const detail = map[id];
+      if (detail) {
+        tasks[id] = detail;
+      } else {
+        failedIds.push(id);
+      }
+    }
+  }
+  return { tasks, failedIds };
+}
+
+const VERIFIER_UNAVAILABLE_CODE = "verifier_unavailable";
+const DEFAULT_RETRY_AFTER_SEC = 2;
+const MAX_RETRY_AFTER_SEC = 10;
+const RETRY_JITTER_RATIO = 0.3;
+const MAX_VERIFIER_RETRIES = 3;
+const MAX_VERIFIER_RETRY_MS = 20_000;
+
+function routeMethod(key: RouteKey): string {
+  const space = key.indexOf(" ");
+  return space > 0 ? key.slice(0, space).toUpperCase() : "GET";
+}
+
+function isIdempotentReadMethod(method: string): boolean {
+  return method === "GET" || method === "HEAD";
+}
+
+function isVerifierUnavailable(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { status?: unknown; error?: unknown };
+  if (e.status !== 503) return false;
+  let body = e.error;
+  if (typeof body === "string") {
+    const trimmed = body.trim();
+    if (!trimmed.startsWith("{")) return false;
+    try {
+      body = JSON.parse(trimmed);
+    } catch {
+      return false;
+    }
+  }
+  return (
+    Boolean(body) &&
+    typeof body === "object" &&
+    (body as { code?: unknown }).code === VERIFIER_UNAVAILABLE_CODE
+  );
+}
+
+function parseRetryAfterSeconds(err: unknown, nowMs: number): number {
+  const raw = (
+    err as { headers?: { get?(name: string): string | null } }
+  )?.headers?.get?.("Retry-After");
+  if (raw) {
+    const trimmed = raw.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const n = Number(trimmed);
+      if (Number.isFinite(n) && n >= 0) {
+        return Math.min(n, MAX_RETRY_AFTER_SEC);
+      }
+    } else {
+      const at = Date.parse(trimmed);
+      if (Number.isFinite(at)) {
+        return Math.min(Math.max(0, (at - nowMs) / 1000), MAX_RETRY_AFTER_SEC);
+      }
+    }
+  }
+  return DEFAULT_RETRY_AFTER_SEC;
+}
+
+function computeVerifierBackoffMs(err: unknown, nowMs: number): number {
+  const baseMs = parseRetryAfterSeconds(err, nowMs) * 1000;
+  const jitter = 1 + (Math.random() * 2 - 1) * RETRY_JITTER_RATIO;
+  return Math.max(0, Math.round(baseMs * jitter));
+}
+
 // Fresh is one conditional read: the body (the cached copy when the
 // server answered 304 Not Modified) and whether it changed since the
 // last read of the same URL.
@@ -85,7 +224,7 @@ export interface Fresh<T> {
 // Sec-Fetch-Site: same-origin is what pkg/ui/csrf.go checks, exactly as
 // for the React UI.
 @Injectable({ providedIn: "root" })
-export class GrainApi {
+export class GrainApi implements OnDestroy {
   private readonly http = inject(HttpClient);
   // The last ETag and body per URL, for getIfChanged. Unlike the classic
   // UI's per-path ETag map, a 304 hands back the cached body, so any
@@ -96,13 +235,34 @@ export class GrainApi {
   private readonly urlEpochs = new Map<string, number>();
   private condEpoch = 0;
   private configCache: { exp: number; body: GrainConfig } | null = null;
+  // Shared in-flight backoff so concurrent reads hitting the same transient
+  // verifier_unavailable blip wait on one timer instead of storming.
+  private recovery: {
+    promise: Promise<void>;
+    wakeAt: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+  private destroyed = false;
+
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    if (this.recovery) {
+      clearTimeout(this.recovery.timer);
+      this.recovery = null;
+    }
+  }
 
   get<T>(key: RouteKey, params?: RouteParams, query?: string): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
     const pending = this.inflightGet.get(url);
     if (pending) return pending as Promise<T>;
-    const req = firstValueFrom(
-      this.http.get<T>(url, { headers: JSON_HEADERS }),
+    const method = routeMethod(key);
+    const req = this.retryIdempotentRead(method, () =>
+      firstValueFrom(
+        method === "HEAD"
+          ? this.http.head<T>(url, { headers: JSON_HEADERS })
+          : this.http.get<T>(url, { headers: JSON_HEADERS }),
+      ),
     ).finally(() => {
       if (this.inflightGet.get(url) === req) {
         this.inflightGet.delete(url);
@@ -112,13 +272,24 @@ export class GrainApi {
     return req;
   }
 
+  head(key: RouteKey, params?: RouteParams, query?: string): Promise<void> {
+    const url = routePath(key, params) + (query ? `?${query}` : "");
+    const keyMethod = routeMethod(key);
+    const method = isIdempotentReadMethod(keyMethod) ? "HEAD" : keyMethod;
+    return this.retryIdempotentRead(method, () =>
+      firstValueFrom(this.http.head<void>(url, { headers: JSON_HEADERS })),
+    );
+  }
+
   getText(
     key: RouteKey,
     params?: RouteParams,
     query?: string,
   ): Promise<string> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
-    return firstValueFrom(this.http.get(url, { responseType: "text" }));
+    return this.retryIdempotentRead(routeMethod(key), () =>
+      firstValueFrom(this.http.get(url, { responseType: "text" })),
+    );
   }
 
   // getIfChanged reads a URL with If-None-Match, the way the server's
@@ -143,37 +314,99 @@ export class GrainApi {
     return req;
   }
 
-  private async fetchIfChanged<T>(
+  private fetchIfChanged<T>(
     url: string,
     epoch: number,
     urlEpoch: number,
   ): Promise<Fresh<T>> {
-    const cached = this.etags.get(url);
-    let headers = JSON_HEADERS;
-    if (cached) headers = headers.set("If-None-Match", cached.etag);
-    try {
-      const res = await firstValueFrom(
+    return this.retryIdempotentRead("GET", () => {
+      const cached = this.etags.get(url);
+      let headers = JSON_HEADERS;
+      if (cached) headers = headers.set("If-None-Match", cached.etag);
+      return firstValueFrom(
         this.http.get<T>(url, { headers, observe: "response" }),
+      ).then(
+        (res) => {
+          const body = res.body as T;
+          const etag = res.headers.get("ETag");
+          if (
+            this.condEpoch === epoch &&
+            (this.urlEpochs.get(url) ?? 0) === urlEpoch
+          ) {
+            if (etag) this.etags.set(url, { etag, body });
+            else this.etags.delete(url);
+          }
+          return { body, changed: true };
+        },
+        (err) => {
+          if ((err as HttpErrorResponse)?.status === 304) {
+            if (cached) return { body: cached.body as T, changed: false };
+            // A 304 to a request that sent no tag means a cache in between
+            // answered for us; nothing here can stand in for the body.
+            throw new Error(`${url}: 304 Not Modified with no cached copy`);
+          }
+          throw err;
+        },
       );
-      const body = res.body as T;
-      const etag = res.headers.get("ETag");
-      if (
-        this.condEpoch === epoch &&
-        (this.urlEpochs.get(url) ?? 0) === urlEpoch
-      ) {
-        if (etag) this.etags.set(url, { etag, body });
-        else this.etags.delete(url);
-      }
-      return { body, changed: true };
-    } catch (err) {
-      if ((err as HttpErrorResponse)?.status === 304) {
-        if (cached) return { body: cached.body as T, changed: false };
-        // A 304 to a request that sent no tag means a cache in between
-        // answered for us; nothing here can stand in for the body.
-        throw new Error(`${url}: 304 Not Modified with no cached copy`);
-      }
-      throw err;
+    });
+  }
+
+  private retryIdempotentRead<T>(
+    method: string,
+    attempt: () => Promise<T>,
+  ): Promise<T> {
+    if (!isIdempotentReadMethod(method)) return attempt();
+    const startedAt = Date.now();
+    const run = (retries: number): Promise<T> =>
+      attempt().then(undefined, (err) => {
+        if (retries >= MAX_VERIFIER_RETRIES || !isVerifierUnavailable(err)) {
+          throw err;
+        }
+        return this.waitForVerifierRecovery(err, startedAt).then(
+          (shouldRetry) => {
+            if (!shouldRetry) throw err;
+            return run(retries + 1);
+          },
+        );
+      });
+    return run(0);
+  }
+
+  private waitForVerifierRecovery(
+    err: unknown,
+    startedAt: number,
+  ): Promise<boolean> {
+    if (this.destroyed) return Promise.resolve(false);
+    const now = Date.now();
+    const elapsed = now - startedAt;
+    if (elapsed >= MAX_VERIFIER_RETRY_MS) {
+      return Promise.resolve(false);
     }
+    if (this.recovery) {
+      if (this.recovery.wakeAt - startedAt > MAX_VERIFIER_RETRY_MS) {
+        return Promise.resolve(false);
+      }
+      return this.recovery.promise.then(() => !this.destroyed);
+    }
+    const delayMs = computeVerifierBackoffMs(err, now);
+    if (elapsed + delayMs > MAX_VERIFIER_RETRY_MS) {
+      return Promise.resolve(false);
+    }
+    const wakeAt = now + delayMs;
+    let resolveRecovery!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      resolveRecovery = resolve;
+    });
+    const timer = setTimeout(() => {
+      // Clear before resolving so retries that immediately hit 503 again
+      // start a fresh recovery wait rather than awaiting this settled one.
+      if (this.recovery?.promise === promise) {
+        this.recovery = null;
+      }
+      resolveRecovery();
+    }, delayMs);
+    this.recovery = { promise, wakeAt, timer };
+    return promise.then(() => !this.destroyed);
   }
 
   // clearConditionalCache forgets cached ETag bodies (all, or matching prefix)
@@ -235,6 +468,9 @@ export class GrainApi {
       )
     ) {
       this.clearConditionalCache("/api/config");
+    }
+    if (path === "/api/tasks" || path.startsWith("/api/tasks/")) {
+      this.clearConditionalCache("/api/tasks/summaries");
     }
     if (path.startsWith("/api/tasks/")) {
       const taskId = path.slice(11).split("/")[0];
@@ -305,6 +541,29 @@ export class GrainApi {
       { id },
       "comments_limit=1&attempts_limit=1",
     ).then((r) => r.body);
+  }
+
+  async taskSummaries(
+    ids: readonly string[],
+    commentsLimit = 1,
+    attemptsLimit = 1,
+  ): Promise<Record<string, TaskDetail>> {
+    const chunks = chunkTaskIds(ids);
+    if (chunks.length === 0) return {};
+    const responses = await Promise.all(
+      chunks.map((chunk) =>
+        this.getIfChanged<TaskSummariesResponse>(
+          "GET /api/tasks/summaries",
+          undefined,
+          taskSummariesQuery(chunk, commentsLimit, attemptsLimit),
+        ),
+      ),
+    );
+    const out: Record<string, TaskDetail> = {};
+    for (const r of responses) {
+      if (r.body?.tasks) Object.assign(out, r.body.tasks);
+    }
+    return out;
   }
 
   openNotifications(): Promise<Notification[]> {

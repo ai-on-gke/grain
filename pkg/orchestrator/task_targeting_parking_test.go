@@ -112,7 +112,7 @@ func TestInfraReviewRunFilesOnlyItsSourceRepoProposal(t *testing.T) {
 	review := model.Task{
 		ID: "infra", Intent: model.IntentImplement, Title: "Nightly infra review",
 		TemplateID: model.InfraReviewTemplateID,
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "infra-review"}}, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "infra-review"}}, Reason: model.ReasonDirect},
 		Reads:      []model.RepoRef{model.ConfigRepo()},
 		Binding:    model.BindingDirective,
 	}

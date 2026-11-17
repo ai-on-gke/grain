@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -20,9 +21,11 @@ import {
   type SimpleChanges,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
@@ -39,6 +42,7 @@ import {
   modelGroups,
   parseDefaultModels,
 } from "../shared/model-catalog";
+import { copyToClipboard } from "../shared/clipboard";
 import { ModelPickerComponent } from "../shared/model-picker.component";
 import {
   type PillOption,
@@ -48,11 +52,25 @@ import {
   type UsagePauseInput,
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
+import {
+  type SandboxCommitment,
+  SandboxCommitmentNoteComponent,
+} from "./sandbox-commitment-note.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
 // SandboxBackendOptionDto is one entry of GET /api/settings
 // sandboxBackendOptions (model.SandboxBackendOption).
+/** POST /api/sandbox-probe's answer (pkg/ui SandboxProbeResult). */
+interface SandboxProbeResult {
+  sandbox: string;
+  pod: string;
+  access: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
 interface SandboxBackendOptionDto {
   backend: string;
   available?: boolean;
@@ -105,6 +123,16 @@ interface BackendEntry extends ModelBackendLike {
   disabled?: boolean;
 }
 
+// GET/PUT/DELETE /api/agent-backends/{id}/codex-auth: a Codex
+// connection's own ChatGPT-subscription login, reported by presence.
+// A connection never falls back to the deployment-wide login
+// (configuredCodexAuthFile), so sharedSet is not shown here.
+interface BackendCodexAuthStatus {
+  enabled?: boolean;
+  set?: boolean;
+  refreshError?: string;
+}
+
 interface TokenBudgetRow {
   connection: string;
   model?: string;
@@ -135,6 +163,18 @@ interface HostdRow {
   revokedAt?: string | null;
   labels?: Record<string, string> | null;
   capacity?: number;
+  shared?: boolean;
+  key_fingerprint?: string;
+  last_seen_at?: string | null;
+  // connection is what a host that dials in last said when it did
+  // (hostd.RemoteStatus): absent for local and for one that has not
+  // connected since the daemon started.
+  connection?: {
+    connected?: boolean;
+    host?: string;
+    principal?: string;
+    build?: string;
+  } | null;
   // update is a newer signed grain-agentd release the host's owner can
   // take by running command on the host (HostUpdate); absent when there
   // is none, and always for a root-installed `grain host`.
@@ -156,14 +196,53 @@ function deletedHostdLine(d: DeletedHostdRow): string {
   return line;
 }
 
+// EnrollmentCodeRow is one entry of GET /api/hostds/enrollment-codes
+// (HostEnrollmentCodeView): code and install are present only while the
+// code is not revoked.
 interface EnrollmentCodeRow {
   name: string;
   prefix?: string;
   code?: string;
+  install?: HostdInstallDto;
   expires_at?: string | null;
   max_uses?: number;
   uses?: number;
   revoked_at?: string | null;
+  default_labels?: Record<string, string> | null;
+  default_capacity?: number;
+  allowed_principals?: string[] | null;
+}
+
+// pickEnrollmentCode is the code Invite hosts shows: the one the operator
+// chose while it still exists, else the active "default", else the first
+// active code, else the first code at all.
+export function pickEnrollmentCode(
+  codes: EnrollmentCodeRow[],
+  chosen: string,
+): EnrollmentCodeRow | null {
+  const active = codes.filter((c) => !c.revoked_at && c.code);
+  return (
+    codes.find((c) => c.name === chosen) ??
+    active.find((c) => c.name === "default") ??
+    active[0] ??
+    codes[0] ??
+    null
+  );
+}
+
+// inviteLines is the enrollment snippet for one code: the daemon's
+// rendered install lines (RegisterHostdInstall) when it sent them, or the
+// standard /hostd/install --join command.
+export function inviteLines(
+  origin: string,
+  code: EnrollmentCodeRow | null,
+): string[] {
+  if (!code || code.revoked_at) return [];
+  if (Array.isArray(code.install?.lines) && code.install.lines.length > 0) {
+    return code.install.lines;
+  }
+  if (!code.code) return [];
+  return [`curl -fsSL ${origin}/hostd/install | sh -s -- --join ${code.code}`];
 }
 
 interface PendingHostdRow {
@@ -176,8 +255,61 @@ interface PendingHostdRow {
   key_fingerprint?: string;
   default_labels?: Record<string, string> | null;
   default_capacity?: number;
+  // rekey_hostd names the registered host a rekey request moves onto a
+  // new key: accepting it keeps that host's name.
+  rekey_hostd?: string;
+  enrollment_code?: string;
   created_at?: string;
   expires_at?: string;
+}
+
+// PendingDraft is what the owner may change on a join request before
+// accepting it: the host's name, labels and capacity.
+interface PendingDraft {
+  name: string;
+  labels: string;
+  capacity: string;
+}
+
+// HostdEdit is a host row's Edit (owner, labels, capacity) in progress.
+interface HostdEdit {
+  name: string;
+  owner: string;
+  labels: string;
+  capacity: string;
+}
+
+// hostdConnectionLine says where a host connected from, as whom and on
+// what build, as classic Settings → Hosts does: "" when there is nothing
+// more to say than its status pill.
+export function hostdConnectionLine(h: HostdRow): string {
+  if (h.revoked_at || h.revokedAt || h.state === "revoked") return "";
+  if (h.name === "local" && !h.shared) return "Co-located (socket)";
+  const c = h.connection;
+  if (!c) return "Never connected";
+  if (!c.connected) return "";
+  const parts: string[] = [];
+  if (c.host) parts.push(`from ${c.host}`);
+  if (c.principal) parts.push(`as ${c.principal}`);
+  if (c.build) parts.push(c.build);
+  return parts.join(" · ");
+}
+
+// parseHostCapacity reads a capacity field: a whole number of runs, 0
+// (unlimited) when blank, so clearing the field clears the capacity.
+export function parseHostCapacity(
+  raw: string,
+  label: string,
+): { value: number; error?: string } {
+  const s = raw.trim();
+  if (!s) return { value: 0 };
+  if (!/^\d+$/.test(s) || !Number.isSafeInteger(Number(s))) {
+    return {
+      value: 0,
+      error: `${label} "${s}" must be a non-negative whole number`,
+    };
+  }
+  return { value: Number(s) };
 }
 
 export function parseHostdLabels(raw: string): {
@@ -219,10 +351,14 @@ export function formatHostdLabels(
   return entries.map(([k, v]) => `${k}=${v}`).join(", ");
 }
 
+// formatRefreshedAt is "" for a connection whose provider has never
+// answered: the server sends Go's zero time ("0001-01-01T00:00:00Z") for
+// it, which is no time anything was refreshed.
 function formatRefreshedAt(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
+  if (d.getUTCFullYear() <= 1) return "";
   const months = [
     "Jan",
     "Feb",
@@ -242,9 +378,50 @@ function formatRefreshedAt(iso?: string): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${hh}:${mm} UTC`;
 }
 
+interface OvercommitBound {
+  field: string;
+  label: string;
+  fallback: string;
+  step: string;
+  max?: number;
+}
+
+interface K8sField {
+  key: string;
+  label: string;
+  placeholder: string;
+  hint: string;
+}
+
+interface DiskFloorRow {
+  path: string;
+  totalMB: number;
+  floorMB: number;
+  reclaimMB: number;
+}
+
+interface ContractInfo {
+  contract?: number;
+  minimumContract?: number;
+  contractLabel?: string;
+  granuleContract?: number;
+  granuleContractLabel?: string;
+  guestBaseImage?: string;
+  k8sSandboxBaseImage?: string;
+}
+
+function mib(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GiB` : `${mb} MiB`;
+}
+
 @Component({
   selector: "g-settings-compute",
-  imports: [PillSelectComponent, ConfirmDialogComponent, ModelPickerComponent],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    ModelPickerComponent,
+    SandboxCommitmentNoteComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -497,7 +674,7 @@ function formatRefreshedAt(iso?: string): string {
           </div>
 
           @if (backends().length > 0) {
-            <div class="s-table-wrap">
+            <div class="s-table-wrap s-table-pinned">
               <table class="s-table" aria-label="Model connections">
                 <thead>
                   <tr>
@@ -542,7 +719,9 @@ function formatRefreshedAt(iso?: string): string {
                             <summary>
                               {{ b.discovered.models?.length || 0 }} models
                               discovered
-                              @if (b.discovered.refreshedAt) {
+                              @if (
+                                formatRefreshedAt(b.discovered.refreshedAt)
+                              ) {
                                 <span
                                   class="s-meta"
                                   [attr.title]="b.discovered.refreshedAt"
@@ -570,15 +749,32 @@ function formatRefreshedAt(iso?: string): string {
                       </td>
                       <td class="s-actions-cell">
                         <div class="s-row-actions">
-                          @if (discovers(b)) {
+                          <button
+                            type="button"
+                            class="btn-tonal s-btn-sm"
+                            [attr.data-testid]="'test-backend-' + b.id"
+                            [attr.aria-label]="'Test saved connection ' + b.id"
+                            [disabled]="
+                              connectionTests()[b.id]?.pending ||
+                              !access.can(
+                                'POST /api/agent-keys/{framework}/check'
+                              )
+                            "
+                            (click)="testBackend(b)"
+                          >
+                            {{
+                              connectionTests()[b.id]?.pending
+                                ? "Testing…"
+                                : "Test connection"
+                            }}
+                          </button>
+                          @if (discovers(b) && canRefreshModels()) {
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
                               [attr.data-testid]="'refresh-backend-' + b.id"
                               [attr.aria-label]="'Refresh models of ' + b.id"
-                              [disabled]="
-                                !canRefreshModels() || refreshingModels()
-                              "
+                              [disabled]="refreshingModels()"
                               (click)="refreshDiscoveredModels(b.id)"
                             >
                               Refresh
@@ -626,6 +822,22 @@ function formatRefreshedAt(iso?: string): string {
                         </div>
                       </td>
                     </tr>
+                    @if (connectionTests()[b.id]; as result) {
+                      <tr class="s-subrow">
+                        <td colspan="4">
+                          <div
+                            role="status"
+                            [attr.data-testid]="'test-result-' + b.id"
+                            [class]="
+                              's-banner ' +
+                              (result.pending ? '' : result.ok ? 'ok' : 'error')
+                            "
+                          >
+                            {{ result.detail }}
+                          </div>
+                        </td>
+                      </tr>
+                    }
                     @if (
                       openCredBackendId() === b.id && b.authMode !== "ambient"
                     ) {
@@ -634,73 +846,204 @@ function formatRefreshedAt(iso?: string): string {
                         [attr.data-testid]="'backend-cred-row-' + b.id"
                       >
                         <td colspan="4">
-                          <form
-                            class="s-cred-bar"
-                            autocomplete="off"
-                            (submit)="
-                              $event.preventDefault(); saveBackendCred(b.id)
-                            "
-                          >
-                            <span class="s-label"
-                              >Credential for
-                              <span class="s-mono">{{ b.id }}</span></span
+                          @if (isCodexSubscription(b)) {
+                            <div
+                              class="s-field s-subrow-pin"
+                              [attr.data-testid]="'codex-auth-' + b.id"
                             >
-                            <input
-                              class="s-input s-input-inline"
-                              type="password"
-                              [attr.name]="'grain-backend-cred-' + b.id"
-                              autocomplete="new-password"
-                              data-lpignore="true"
-                              data-1p-ignore="true"
-                              [attr.aria-label]="'Credential for ' + b.id"
-                              placeholder="Paste API key or secret…"
-                              [value]="backendCredDrafts()[b.id] || ''"
-                              [disabled]="
-                                !access.can(
-                                  'PUT /api/agent-backends/{id}/credential'
-                                )
-                              "
-                              (input)="
-                                setBackendCredDraft(
-                                  b.id,
-                                  $any($event.target).value
-                                )
-                              "
-                            />
-                            <button
-                              type="submit"
-                              class="btn-primary s-btn-sm"
-                              [disabled]="
-                                !(backendCredDrafts()[b.id] || '').trim() ||
-                                !access.can(
-                                  'PUT /api/agent-backends/{id}/credential'
-                                )
+                              <div class="s-inline">
+                                <label
+                                  class="s-label"
+                                  [attr.for]="'codex-auth-input-' + b.id"
+                                  >ChatGPT subscription login (auth.json) for
+                                  <span class="s-mono">{{ b.id }}</span></label
+                                >
+                                <span
+                                  [class]="
+                                    'status-pill ' +
+                                    (codexAuthStatus()[b.id]?.set
+                                      ? 'healthy'
+                                      : 'neutral')
+                                  "
+                                  role="status"
+                                  [attr.data-testid]="
+                                    'codex-auth-status-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthStatusLabel(b.id) }}
+                                </span>
+                              </div>
+                              @if (codexAuthStatus()[b.id]?.refreshError) {
+                                <div
+                                  class="status-pill error"
+                                  role="alert"
+                                  [attr.data-testid]="
+                                    'codex-auth-refresh-error-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthStatus()[b.id]?.refreshError }}
+                                </div>
+                              }
+                              <p class="s-hint">
+                                Paste the auth.json from a Codex ChatGPT login.
+                                Only this connection uses it, and grain keeps
+                                its tokens refreshed. API keys are ignored in
+                                this mode. JSON is checked here; Codex validates
+                                authentication when it runs.
+                              </p>
+                              <textarea
+                                class="s-textarea s-mono"
+                                rows="3"
+                                autocomplete="off"
+                                spellcheck="false"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                [attr.id]="'codex-auth-input-' + b.id"
+                                [attr.data-testid]="'input-codex-auth-' + b.id"
+                                placeholder='{"tokens": {...}}'
+                                [value]="codexAuthDrafts()[b.id] || ''"
+                                [disabled]="
+                                  codexAuthStatus()[b.id]?.enabled === false ||
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/codex-auth'
+                                  )
+                                "
+                                (input)="
+                                  setCodexAuthDraft(
+                                    b.id,
+                                    $any($event.target).value
+                                  )
+                                "
+                              ></textarea>
+                              @if (codexAuthErrors()[b.id]) {
+                                <p
+                                  role="alert"
+                                  class="s-banner error"
+                                  [attr.data-testid]="
+                                    'codex-auth-error-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthErrors()[b.id] }}
+                                </p>
+                              }
+                              <div class="s-inline">
+                                <button
+                                  type="button"
+                                  class="btn-primary s-btn-sm"
+                                  [attr.data-testid]="'save-codex-auth-' + b.id"
+                                  [disabled]="
+                                    codexAuthBusy() ||
+                                    !(codexAuthDrafts()[b.id] || '').trim() ||
+                                    codexAuthStatus()[b.id]?.enabled ===
+                                      false ||
+                                    !access.can(
+                                      'PUT /api/agent-backends/{id}/codex-auth'
+                                    )
+                                  "
+                                  (click)="saveCodexAuth(b.id)"
+                                >
+                                  Save login
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn-tonal s-btn-sm"
+                                  [attr.data-testid]="
+                                    'clear-codex-auth-' + b.id
+                                  "
+                                  [attr.aria-label]="
+                                    'Clear subscription login for ' + b.id
+                                  "
+                                  [disabled]="
+                                    codexAuthBusy() ||
+                                    !codexAuthStatus()[b.id]?.set ||
+                                    !access.can(
+                                      'DELETE /api/agent-backends/{id}/codex-auth'
+                                    )
+                                  "
+                                  (click)="confirmClearCodexAuth(b.id)"
+                                >
+                                  Clear login
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn-text s-btn-sm"
+                                  (click)="openCredBackendId.set(null)"
+                                >
+                                  Close
+                                </button>
+                              </div>
+                            </div>
+                          } @else {
+                            <form
+                              class="s-cred-bar s-subrow-pin"
+                              autocomplete="off"
+                              (submit)="
+                                $event.preventDefault(); saveBackendCred(b.id)
                               "
                             >
-                              Save secret
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [attr.data-testid]="'clear-cred-' + b.id"
-                              [attr.aria-label]="'Clear credential for ' + b.id"
-                              [disabled]="
-                                !access.can(
-                                  'DELETE /api/agent-backends/{id}/credential'
-                                )
-                              "
-                              (click)="clearBackendCred(b.id)"
-                            >
-                              Clear stored secret
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              (click)="openCredBackendId.set(null)"
-                            >
-                              Close
-                            </button>
-                          </form>
+                              <span class="s-label"
+                                >Credential for
+                                <span class="s-mono">{{ b.id }}</span></span
+                              >
+                              <input
+                                class="s-input s-input-inline"
+                                type="password"
+                                [attr.name]="'grain-backend-cred-' + b.id"
+                                autocomplete="new-password"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                [attr.aria-label]="'Credential for ' + b.id"
+                                placeholder="Paste API key or secret…"
+                                [value]="backendCredDrafts()[b.id] || ''"
+                                [disabled]="
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                                (input)="
+                                  setBackendCredDraft(
+                                    b.id,
+                                    $any($event.target).value
+                                  )
+                                "
+                              />
+                              <button
+                                type="submit"
+                                class="btn-primary s-btn-sm"
+                                [disabled]="
+                                  !(backendCredDrafts()[b.id] || '').trim() ||
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                              >
+                                Save secret
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'clear-cred-' + b.id"
+                                [attr.aria-label]="
+                                  'Clear credential for ' + b.id
+                                "
+                                [disabled]="
+                                  !access.can(
+                                    'DELETE /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                                (click)="confirmClearBackendCred(b.id)"
+                              >
+                                Clear stored secret
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                (click)="openCredBackendId.set(null)"
+                              >
+                                Close
+                              </button>
+                            </form>
+                          }
                         </td>
                       </tr>
                     }
@@ -729,6 +1072,12 @@ function formatRefreshedAt(iso?: string): string {
                 </button>
               }
             </div>
+            <p class="s-hint">
+              Save the connection and its credential first, then use Test
+              connection on its row. Tests use saved settings and never save
+              edits. Ambient, Vertex and Codex subscription authentication
+              cannot be tested here.
+            </p>
             <div class="s-grid">
               <div class="s-field">
                 <label class="s-label" for="nb-id">Connection ID</label>
@@ -762,7 +1111,7 @@ function formatRefreshedAt(iso?: string): string {
                   align="left"
                   [options]="frameworkOptions"
                   [value]="newBackendFw()"
-                  (valueChange)="newBackendFw.set($event)"
+                  (valueChange)="setNewBackendFw($event)"
                 />
               </div>
               <div class="s-field">
@@ -771,7 +1120,7 @@ function formatRefreshedAt(iso?: string): string {
                   testid="select-new-backend-auth"
                   ariaLabel="Backend auth mode"
                   align="left"
-                  [options]="authModeOptions"
+                  [options]="authModeOptions()"
                   [value]="newBackendAuthMode()"
                   (valueChange)="newBackendAuthMode.set($event)"
                 />
@@ -1050,20 +1399,68 @@ function formatRefreshedAt(iso?: string): string {
                 compute limits.
               </p>
             </div>
-            @if (access.can("POST /api/sandbox-probe")) {
+            @if (canProbeSandbox()) {
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="run-sandbox-probe"
+                [disabled]="probing()"
                 (click)="runSandboxProbe()"
               >
-                Probe sandbox runtime
+                {{ probing() ? "Probing…" : "Probe sandbox runtime" }}
               </button>
             }
           </div>
-          @if (probeMessage()) {
-            <div class="s-banner ok" data-testid="sandbox-probe-banner">
-              {{ probeMessage() }}
+          @if (probing()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="sandbox-probe-running"
+            >
+              Building a throwaway sandbox and running
+              <code>true</code> in it. This can take a few minutes.
+            </div>
+          }
+          @if (probeResult(); as res) {
+            <div
+              class="s-banner"
+              [class.ok]="res.exitCode === 0"
+              [class.warn]="res.exitCode !== 0"
+              role="status"
+              data-testid="sandbox-probe-result"
+            >
+              <div class="s-probe-result">
+                <span data-testid="sandbox-probe-summary">
+                  {{
+                    res.exitCode === 0
+                      ? "Sandbox ready:"
+                      : "The probe command failed:"
+                  }}
+                  <code>{{ res.sandbox }}</code>
+                  {{ res.access ? "over " + res.access + " " : "" }}exited
+                  <span class="s-num" data-testid="sandbox-probe-exit">{{
+                    res.exitCode
+                  }}</span>
+                </span>
+                <span class="s-label">stdout</span>
+                <pre class="s-code" data-testid="sandbox-probe-stdout">{{
+                  res.stdout || "(empty)"
+                }}</pre>
+                @if (res.stderr) {
+                  <span class="s-label">stderr</span>
+                  <pre class="s-code" data-testid="sandbox-probe-stderr">{{
+                    res.stderr
+                  }}</pre>
+                }
+              </div>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="sandbox-probe-dismiss"
+                (click)="probeResult.set(null)"
+              >
+                Dismiss
+              </button>
             </div>
           }
           <div class="s-grid">
@@ -1165,26 +1562,23 @@ function formatRefreshedAt(iso?: string): string {
                 "
               />
             </div>
-            <div class="s-field">
-              <label class="s-label" for="sb-image"
-                >Custom OCI sandbox image</label
-              >
-              <input
-                id="sb-image"
-                class="s-input s-mono"
-                type="text"
-                [value]="state.val('sandboxImage', '')"
-                [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('sandboxImage', $any($event.target).value)
-                "
-              />
-            </div>
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-sandbox-overcommit">
-          <h3 class="s-card-title">Overcommit &amp; Kubernetes pod settings</h3>
+        <div
+          class="s-card"
+          id="sandbox-budget"
+          data-testid="card-sandbox-overcommit"
+        >
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Sandbox budget</h3>
+              <p class="s-card-desc">
+                How much of this host agent and CI sandboxes may be promised,
+                and the free disk kept back on every volume.
+              </p>
+            </div>
+          </div>
           <div class="s-grid">
             <div class="s-field">
               <span class="s-label">Overcommit governor</span>
@@ -1197,6 +1591,10 @@ function formatRefreshedAt(iso?: string): string {
                 [disabled]="!canWriteSettings()"
                 (valueChange)="setOvercommitMode($event)"
               />
+              <span class="s-hint"
+                >Fixed holds the ratios here; auto moves them between the bounds
+                below from host CPU and memory pressure.</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="sb-cpu-oc">CPU overcommit (x)</label>
@@ -1206,15 +1604,38 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 step="0.25"
-                [value]="state.val('sandboxCpuOvercommit', 2)"
+                [value]="state.val('sandboxCpuOvercommit', '')"
+                [placeholder]="state.defaultHint('sandboxCpuOvercommit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'sandboxCpuOvercommit',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxCpuOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2)
                   )
                 "
               />
+              @if (overcommitUnbounded("sandboxCpuOvercommit")) {
+                <span
+                  class="s-hint s-hint-warn"
+                  data-testid="cpu-overcommit-unbounded"
+                  >0 leaves vCPU bounded by the run counts alone: no vCPU budget
+                  is enforced.</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >How many times the host's vCPU may be promised to sandboxes.
+                  0 means unbounded.</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="sb-mem-oc"
@@ -1226,30 +1647,314 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 step="0.25"
-                [value]="state.val('sandboxMemoryOvercommit', 1)"
+                [value]="state.val('sandboxMemoryOvercommit', '')"
+                [placeholder]="state.defaultHint('sandboxMemoryOvercommit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'sandboxMemoryOvercommit',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxMemoryOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1)
                   )
                 "
               />
+              @if (overcommitUnbounded("sandboxMemoryOvercommit")) {
+                <span
+                  class="s-hint s-hint-warn"
+                  data-testid="mem-overcommit-unbounded"
+                  >0 leaves memory bounded by the run counts alone: no memory
+                  budget is enforced.</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >How many times the host's memory may be promised to
+                  sandboxes. 0 means unbounded.</span
+                >
+              }
             </div>
+          </div>
+
+          @if (overcommitMode() === "auto") {
+            <div class="s-subsection" data-testid="overcommit-auto-bounds">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">Auto overcommit bounds</h4>
+              </div>
+              <span class="s-hint"
+                >Blank (or 0) uses grain's default, shown greyed in each
+                box.</span
+              >
+              <div class="s-grid">
+                @for (b of overcommitBounds; track b.field) {
+                  <div class="s-field">
+                    <label class="s-label" [attr.for]="'oc-' + b.field">{{
+                      b.label
+                    }}</label>
+                    <input
+                      class="s-input s-num"
+                      type="number"
+                      min="0"
+                      [id]="'oc-' + b.field"
+                      [attr.max]="b.max ?? null"
+                      [step]="b.step"
+                      [attr.data-testid]="'input-overcommit-' + b.field"
+                      [value]="overcommitBound(b.field)"
+                      [placeholder]="b.fallback"
+                      [disabled]="!canWriteSettings()"
+                      (input)="setOvercommitBound(b, $any($event.target).value)"
+                    />
+                    @if (state.fieldErrors()[boundKey(b.field)]; as err) {
+                      <span
+                        class="s-field-error"
+                        [attr.data-testid]="'error-overcommit-' + b.field"
+                        >{{ err }}</span
+                      >
+                    }
+                  </div>
+                }
+              </div>
+            </div>
+          }
+
+          <div class="s-subsection" data-testid="sandbox-disk-floor">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Disk floor</h4>
+            </div>
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="sb-floor-share"
+                  >Disk floor (share of each volume)</label
+                >
+                <input
+                  id="sb-floor-share"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  data-testid="input-disk-floor-share"
+                  [value]="state.val('sandboxDiskFloorShare', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskFloorShare')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskFloorShare',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskFloorShare',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1)
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >Free space kept on each volume: new CI jobs are held and
+                  agent dispatch deferred below it. 0.1 is a tenth; 0 with no
+                  minimum holds nothing back.</span
+                >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="sb-floor-min"
+                  >Disk floor minimum (MiB)</label
+                >
+                <input
+                  id="sb-floor-min"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  step="1024"
+                  data-testid="input-disk-floor-min"
+                  [value]="state.val('sandboxDiskFloorMinMb', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskFloorMinMb')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskFloorMinMb',
+                      $any($event.target).value,
+                      diskFloorMinDefault(),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskFloorMinMb',
+                      $any($event.target).value,
+                      diskFloorMinDefault()
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >The least the floor is ever worth on a small volume. 0 is no
+                  minimum; blank resets to grain's default ({{
+                    diskFloorMinDefault()
+                  }}
+                  MiB).</span
+                >
+              </div>
+            </div>
+            @if (diskFloorSummary()) {
+              <span class="s-hint s-num" data-testid="disk-floor-volumes">{{
+                diskFloorSummary()
+              }}</span>
+            }
+          </div>
+
+          @if (!sandboxCommitment()?.uncapped) {
+            <g-sandbox-commitment-note [commitment]="sandboxCommitment()" />
+          }
+        </div>
+
+        <div class="s-card" id="kubernetes" data-testid="card-kubernetes">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Kubernetes</h3>
+              <p class="s-card-desc">
+                Where and how the kubernetes and kubernetes-granule backends
+                create sandbox pods, and the Deployment self-upgrade repoints.
+                Blank boxes use the default shown greyed in them.
+              </p>
+            </div>
+          </div>
+          @if (k8sImageWarning()) {
+            <div
+              class="s-banner warn"
+              role="alert"
+              data-testid="k8s-image-warning"
+            >
+              <span>{{ k8sImageWarning() }}</span>
+            </div>
+          }
+          <div class="s-grid">
+            @for (f of k8sFields(); track f.key) {
+              <div class="s-field">
+                <label class="s-label" [attr.for]="'k8s-' + f.key">{{
+                  f.label
+                }}</label>
+                <input
+                  class="s-input s-mono"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  [id]="'k8s-' + f.key"
+                  [attr.data-testid]="'input-' + f.key"
+                  [value]="state.val(f.key, '')"
+                  [placeholder]="f.placeholder"
+                  [disabled]="!canWriteSettings()"
+                  (input)="state.setField(f.key, $any($event.target).value)"
+                />
+                <span class="s-hint">{{ f.hint }}{{ restartNote(f.key) }}</span>
+                @if (f.key === "k8sGranuleImage" && k8sGranuleEffective()) {
+                  <span
+                    class="s-hint"
+                    data-testid="k8s-granule-image-effective"
+                    >{{ k8sGranuleEffective() }}</span
+                  >
+                }
+              </div>
+            }
             <div class="s-field">
-              <label class="s-label" for="k8s-ns">Kubernetes namespace</label>
+              <label class="s-label" for="k8s-node-selector"
+                >Node selector</label
+              >
               <input
-                id="k8s-ns"
+                id="k8s-node-selector"
                 class="s-input s-mono"
                 type="text"
-                [value]="state.val('k8sNamespace', '')"
-                [placeholder]="state.defaultHint('k8sNamespace', 'grain')"
+                spellcheck="false"
+                autocomplete="off"
+                data-testid="input-k8sNodeSelector"
+                placeholder="pool=sandboxes"
+                [value]="nodeSelectorText()"
                 [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('k8sNamespace', $any($event.target).value)
-                "
+                (input)="setNodeSelector($any($event.target).value)"
               />
+              @if (state.fieldErrors()["k8sNodeSelector"]; as err) {
+                <span
+                  class="s-field-error"
+                  data-testid="error-k8sNodeSelector"
+                  >{{ err }}</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >Comma-separated key=value nodeSelector entries for sandbox
+                  pods.{{ restartNote("k8sNodeSelector") }}</span
+                >
+              }
             </div>
+          </div>
+
+          <div class="s-subsection" data-testid="k8s-priority-classes">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Pod priority classes</h4>
+            </div>
+            <span class="s-hint"
+              >Empty sets no priority class on those pods. A class the cluster
+              lacks is created if it is grain's own, or else left off the pods
+              with an alert.</span
+            >
+            <div class="s-grid">
+              @for (f of k8sPriorityFields(); track f.key) {
+                <div class="s-field">
+                  <label class="s-label" [attr.for]="'k8s-' + f.key">{{
+                    f.label
+                  }}</label>
+                  <input
+                    class="s-input s-mono"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="none"
+                    [id]="'k8s-' + f.key"
+                    [attr.data-testid]="'input-' + f.key"
+                    [value]="state.val(f.key, '')"
+                    [disabled]="!canWriteSettings()"
+                    (input)="state.setField(f.key, $any($event.target).value)"
+                  />
+                  <span class="s-hint"
+                    >{{ f.hint }}{{ restartNote(f.key) }}</span
+                  >
+                </div>
+              }
+            </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name"
+                >Run Kubernetes sandbox containers privileged</span
+              >
+              <span class="s-hint"
+                >Needed by kubernetes-granule pods that boot a VM over
+                /dev/kvm.{{ restartNote("k8sPrivileged") }}</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-k8s-privileged"
+              [attr.aria-checked]="Boolean(state.val('k8sPrivileged', false))"
+              [disabled]="!canWriteSettings()"
+              aria-label="Run Kubernetes sandbox containers privileged"
+              (click)="
+                state.setField(
+                  'k8sPrivileged',
+                  !state.val('k8sPrivileged', false)
+                )
+              "
+            ></button>
           </div>
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
@@ -1257,7 +1962,9 @@ function formatRefreshedAt(iso?: string): string {
                 >Cluster CNI enforces NetworkPolicy</span
               >
               <span class="s-hint"
-                >Required for network: none isolation on Kubernetes pods.</span
+                >Required for network: none isolation on Kubernetes pods.{{
+                  restartNote("k8sNetworkPolicy")
+                }}</span
               >
             </div>
             <button
@@ -1277,6 +1984,149 @@ function formatRefreshedAt(iso?: string): string {
                 )
               "
             ></button>
+          </div>
+        </div>
+
+        <div
+          class="s-card"
+          id="custom-sandbox-image"
+          data-testid="card-custom-sandbox-image"
+        >
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Custom sandbox image</h3>
+              <p class="s-card-desc">
+                The OCI image new sandboxes are created from in place of the one
+                this build is stamped for. Running sandboxes keep theirs.
+              </p>
+            </div>
+          </div>
+          <div class="s-field">
+            <label class="s-label" for="sb-image"
+              >Custom sandbox image (OCI reference)</label
+            >
+            <div class="s-inline">
+              <input
+                id="sb-image"
+                class="s-input s-input-inline s-mono"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                data-testid="input-sandbox-image"
+                [value]="state.val('sandboxImage', '')"
+                [placeholder]="state.defaultHint('sandboxImage')"
+                [disabled]="!canWriteSettings()"
+                (input)="
+                  state.setField('sandboxImage', $any($event.target).value)
+                "
+              />
+              @if (String(state.val("sandboxImage", "")).trim()) {
+                <button
+                  type="button"
+                  class="btn-text s-btn-sm"
+                  data-testid="sandbox-image-reset"
+                  [disabled]="!canWriteSettings()"
+                  (click)="state.setField('sandboxImage', '')"
+                >
+                  Reset to default
+                </button>
+              }
+            </div>
+            <span class="s-hint"
+              >Empty uses the image this build is stamped for{{
+                state.defaultHint("sandboxImage")
+                  ? " (" + state.defaultHint("sandboxImage") + ")"
+                  : ""
+              }}.</span
+            >
+          </div>
+          @if (sandboxImageStored()) {
+            @if (state.settings()["sandboxImageWarning"]; as warn) {
+              <div
+                class="s-banner warn"
+                role="alert"
+                data-testid="sandbox-image-warning"
+              >
+                <span>{{ warn }}</span>
+              </div>
+            } @else if (sandboxImageVerified()) {
+              <div
+                class="s-banner ok"
+                role="status"
+                data-testid="sandbox-image-contract-ok"
+              >
+                <span>{{ sandboxImageVerified() }}</span>
+              </div>
+            }
+          }
+          @if (sandboxMirrorHint()) {
+            <span class="s-hint" data-testid="sandbox-image-mirror">{{
+              sandboxMirrorHint()
+            }}</span>
+          }
+          @if (granulePinSame()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="sandbox-image-k8s-granule-pin"
+            >
+              <span
+                >The Kubernetes Granule VM pod image (k8s_granule_image) holds
+                the same reference, {{ granulePin() }}. Clearing only the custom
+                image leaves that pin in place.</span
+              >
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="sandbox-image-k8s-granule-pin-clear"
+                [disabled]="!canWriteSettings()"
+                (click)="state.setField('k8sGranuleImage', '')"
+              >
+                Clear it too
+              </button>
+            </div>
+          }
+
+          <div class="s-subsection" data-testid="sandbox-image-contract">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">
+                Build it FROM grain's minimal base image
+              </h4>
+            </div>
+            <span class="s-hint" data-testid="sandbox-image-inherits">{{
+              imageInherits()
+            }}</span>
+            <pre
+              class="s-code"
+              tabindex="0"
+              role="region"
+              aria-label="Example Dockerfile"
+              data-testid="sandbox-image-dockerfile"
+              >{{ dockerfileExample() }}</pre>
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Sandbox contract</h4>
+            </div>
+            <ul
+              class="s-hint s-contract"
+              data-testid="sandbox-contract-versions"
+            >
+              @for (line of contractLines(); track line.code) {
+                <li>
+                  <code>{{ line.code }}</code> {{ line.note }}
+                </li>
+              }
+            </ul>
+            <span class="s-hint"
+              >A custom image needs rebuilding only when the contract version
+              its base stamped falls below what grain supports — when grain
+              changes what it relies on inside a sandbox. This card and the
+              daemon log warn you when it does. Check an image before saving it
+              with <code>grain sandbox-image check &lt;image&gt;</code>;
+              <a [href]="contractDoc" target="_blank" rel="noopener noreferrer"
+                >docs/sandbox-image-contract.md</a
+              >
+              lists everything the base image provides.</span
+            >
           </div>
         </div>
 
@@ -1335,10 +2185,15 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-list">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">Registered workstation hosts</h3>
+              <h3 class="s-card-title">Hosts</h3>
               <p class="s-card-desc">
-                grain-agentd daemons paired with this controller for local CLI
-                tokens and workstation execution.
+                The hosts this deployment runs host work through.
+                <span class="s-mono">local</span> is co-located on this machine
+                without a handshake; every other host joins with an enrollment
+                code below (a 30-day Ed25519 key-bound credential, renewed while
+                connected) or dials in with a legacy per-host token. Revoke cuts
+                a host off; a revoked host can then be deleted, which frees its
+                name.
               </p>
             </div>
             @if (access.can("POST /api/hostds/delete-revoked")) {
@@ -1352,6 +2207,28 @@ function formatRefreshedAt(iso?: string): string {
               </button>
             }
           </div>
+
+          @if (hostdNotice(); as n) {
+            <div
+              class="s-banner"
+              [class.ok]="n.tone === 'ok'"
+              [class.warn]="n.tone === 'warn'"
+              data-testid="hostd-delete-notice"
+            >
+              <div style="flex: 1">
+                @for (l of n.lines; track $index) {
+                  <div>{{ l }}</div>
+                }
+              </div>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="hostdNotice.set(null)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
 
           @if (!access.can("GET /api/hostds")) {
             <div class="s-banner warn">
@@ -1367,7 +2244,7 @@ function formatRefreshedAt(iso?: string): string {
                     <th>Name</th>
                     <th>Owner</th>
                     <th>Status</th>
-                    <th>Labels</th>
+                    <th>Labels &amp; capacity</th>
                     <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
@@ -1376,9 +2253,74 @@ function formatRefreshedAt(iso?: string): string {
                     @let isRevoked =
                       Boolean(h.revokedAt || h.revoked_at) ||
                       h.state === "revoked";
+                    @let edit =
+                      editingHostd()?.name === h.name ? editingHostd() : null;
+                    @let renamingThis = renamingHostd()?.from === h.name;
+                    @let remote = h.name !== "local" && !isRevoked && !h.shared;
+                    @let connLine = connectionLine(h);
                     <tr [attr.data-testid]="'hostd-row-' + h.name">
-                      <td class="s-mono">{{ h.name }}</td>
-                      <td>{{ h.owner || "—" }}</td>
+                      <td class="s-mono">
+                        @if (renamingThis) {
+                          <div class="s-inline">
+                            <input
+                              class="s-input s-input-inline s-mono"
+                              type="text"
+                              aria-label="New host name"
+                              [attr.data-testid]="
+                                'rename-hostd-input-' + h.name
+                              "
+                              [value]="renamingHostd()?.to ?? ''"
+                              (input)="
+                                setRenameDraft($any($event.target).value)
+                              "
+                            />
+                            <button
+                              type="button"
+                              class="btn-primary s-btn-sm"
+                              [attr.data-testid]="'save-rename-hostd-' + h.name"
+                              [disabled]="!(renamingHostd()?.to ?? '').trim()"
+                              (click)="saveRenameHostd()"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              (click)="cancelHostdEdit()"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        } @else {
+                          {{ h.name }}
+                        }
+                      </td>
+                      <td>
+                        @if (edit) {
+                          <input
+                            class="s-input s-input-inline"
+                            type="text"
+                            aria-label="Owner"
+                            [attr.data-testid]="'edit-hostd-owner-' + h.name"
+                            [value]="edit.owner"
+                            (input)="
+                              patchHostdEdit({
+                                owner: $any($event.target).value,
+                              })
+                            "
+                          />
+                        } @else if (h.owner) {
+                          {{ h.owner }}
+                        } @else if (remote || h.shared) {
+                          <span
+                            class="s-meta"
+                            [attr.data-testid]="'hostd-owner-missing-' + h.name"
+                            >None: needed to dial in through IAP</span
+                          >
+                        } @else {
+                          —
+                        }
+                      </td>
                       <td>
                         <span
                           [class]="
@@ -1392,6 +2334,14 @@ function formatRefreshedAt(iso?: string): string {
                         >
                           {{ isRevoked ? "revoked" : h.state || "offline" }}
                         </span>
+                        @if (connLine) {
+                          <div
+                            class="s-meta"
+                            [attr.data-testid]="'hostd-connection-' + h.name"
+                          >
+                            {{ connLine }}
+                          </div>
+                        }
                         @if (h.update && !isRevoked) {
                           <div
                             class="s-meta"
@@ -1406,15 +2356,99 @@ function formatRefreshedAt(iso?: string): string {
                         }
                       </td>
                       <td class="s-mono">
-                        {{ formatLabels(h.labels) }}
+                        @if (edit) {
+                          <div class="s-inline">
+                            <input
+                              class="s-input s-input-inline s-mono"
+                              type="text"
+                              aria-label="Labels"
+                              placeholder="os=linux,gpu=true"
+                              [attr.data-testid]="'edit-hostd-labels-' + h.name"
+                              [value]="edit.labels"
+                              (input)="
+                                patchHostdEdit({
+                                  labels: $any($event.target).value,
+                                })
+                              "
+                            />
+                            <input
+                              class="s-input s-input-inline s-num s-input-narrow"
+                              type="text"
+                              inputmode="numeric"
+                              aria-label="Capacity"
+                              placeholder="Capacity"
+                              [attr.data-testid]="
+                                'edit-hostd-capacity-' + h.name
+                              "
+                              [value]="edit.capacity"
+                              (input)="
+                                patchHostdEdit({
+                                  capacity: $any($event.target).value,
+                                })
+                              "
+                            />
+                          </div>
+                        } @else {
+                          {{ formatLabels(h.labels) }}
+                          @if (h.capacity && h.capacity > 0) {
+                            <div
+                              class="s-meta"
+                              [attr.data-testid]="'hostd-capacity-' + h.name"
+                            >
+                              capacity {{ h.capacity }}
+                            </div>
+                          }
+                        }
                       </td>
                       <td class="s-actions-cell">
                         <!-- local is the co-located host: it holds no
-                             token to rotate and can be neither revoked
-                             nor deleted, so it offers none of the three
-                             (the server refuses each with a 400). -->
-                        @if (h.name !== "local") {
+                             token to rotate and can be neither renamed,
+                             revoked nor deleted, so it offers none of
+                             them (the server refuses each with a 400). -->
+                        @if (edit) {
                           <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-primary s-btn-sm"
+                              [attr.data-testid]="'save-edit-hostd-' + h.name"
+                              (click)="saveHostdEdit()"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              (click)="cancelHostdEdit()"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        } @else if (h.name !== "local") {
+                          <div class="s-row-actions">
+                            @if (remote) {
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'edit-hostd-' + h.name"
+                                [disabled]="
+                                  !access.can('PATCH /api/hostds/{name}')
+                                "
+                                (click)="startHostdEdit(h)"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'rename-hostd-' + h.name"
+                                [disabled]="
+                                  !access.can('POST /api/hostds/{name}/rename')
+                                "
+                                (click)="startRenameHostd(h.name)"
+                              >
+                                Rename
+                              </button>
+                            }
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
@@ -1466,13 +2500,19 @@ function formatRefreshedAt(iso?: string): string {
             </div>
           }
 
-          <div class="s-subsection">
+          <div class="s-subsection" data-testid="hostd-legacy-register">
             <div class="s-subhead">
-              <h4 class="s-subhead-title">Register workstation host</h4>
+              <h4 class="s-subhead-title">Add a host (legacy token)</h4>
             </div>
+            <p class="s-hint" data-testid="hostd-legacy-copy">
+              Prefer an enrollment code below for Ed25519 key-bound enrollment.
+              Use a per-host token only for non-interactive setups that cannot
+              wait for the owner's acceptance. The token is shown once, with the
+              command that installs the host on its machine.
+            </p>
             <div class="s-grid">
               <div class="s-field">
-                <label class="s-label" for="hd-name">New host name</label>
+                <label class="s-label" for="hd-name">Name</label>
                 <input
                   id="hd-name"
                   class="s-input s-mono"
@@ -1483,11 +2523,26 @@ function formatRefreshedAt(iso?: string): string {
                   [disabled]="!access.can('POST /api/hostds')"
                   (input)="newHostdName.set($any($event.target).value)"
                 />
+                <span class="s-hint">Lowercase letters, digits and -</span>
               </div>
               <div class="s-field">
-                <label class="s-label" for="hd-labels"
-                  >Labels (key=value pairs)</label
+                <label class="s-label" for="hd-owner">Owner</label>
+                <input
+                  id="hd-owner"
+                  class="s-input"
+                  type="text"
+                  data-testid="input-new-hostd-owner"
+                  placeholder="alice@example.com"
+                  [value]="newHostdOwner()"
+                  [disabled]="!access.can('POST /api/hostds')"
+                  (input)="newHostdOwner.set($any($event.target).value)"
+                />
+                <span class="s-hint"
+                  >The email or service account it connects as</span
                 >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="hd-labels">Labels</label>
                 <input
                   id="hd-labels"
                   class="s-input s-mono"
@@ -1498,6 +2553,7 @@ function formatRefreshedAt(iso?: string): string {
                   [disabled]="!access.can('POST /api/hostds')"
                   (input)="newHostdLabels.set($any($event.target).value)"
                 />
+                <span class="s-hint">key=value,key2=value2</span>
               </div>
             </div>
             <div class="s-inline">
@@ -1510,7 +2566,7 @@ function formatRefreshedAt(iso?: string): string {
                 "
                 (click)="createHostd()"
               >
-                Register host
+                Add host
               </button>
             </div>
           </div>
@@ -1531,12 +2587,13 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-enrollment">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">
-                Operator enrollment codes &amp; pending joins
-              </h3>
+              <h3 class="s-card-title">Enrollment codes &amp; pending hosts</h3>
               <p class="s-card-desc">
-                Reusable enrollment codes and pending grain-agentd approval
-                queue (operator-only).
+                Share one enrollment command across machines. The code only
+                files a pending join request; each host makes its own Ed25519
+                keypair and waits for the deployment owner to accept it (the
+                request names the verified person who enrolled it) before it
+                gets a 30-day key-bound credential.
               </p>
             </div>
           </div>
@@ -1551,6 +2608,120 @@ function formatRefreshedAt(iso?: string): string {
               }}</span>
             </div>
           } @else {
+            @if (selectedEnrollmentCode(); as sc) {
+              <section
+                class="hd-invite"
+                aria-labelledby="hd-invite-title"
+                data-testid="invite-hosts"
+              >
+                <div class="s-subhead">
+                  <h4 class="s-subhead-title" id="hd-invite-title">
+                    Invite hosts
+                  </h4>
+                  @if (enrollmentCodes().length > 1) {
+                    <g-pill-select
+                      testid="select-invite-code"
+                      ariaLabel="Enrollment code to invite with"
+                      prefix="Code"
+                      [options]="enrollmentCodeOptions()"
+                      [value]="sc.name"
+                      (valueChange)="selectEnrollmentCode($event)"
+                    />
+                  }
+                </div>
+                <p class="s-hint">
+                  Run this on each machine to join. The code only files a
+                  pending join request: each host makes its own key and waits
+                  for you to accept it below.
+                </p>
+                @if (sc.revoked_at) {
+                  <div class="s-banner warn" role="status">
+                    <span
+                      >Enrollment code <strong>{{ sc.name }}</strong> is revoked
+                      and can no longer file join requests. Hosts already
+                      accepted are unaffected.</span
+                    >
+                  </div>
+                } @else if (inviteSnippet()) {
+                  <pre
+                    class="s-code"
+                    data-testid="invite-hosts-snippet"
+                    aria-label="Invite command"
+                    >{{ inviteSnippet() }}</pre>
+                  @if (sc.install?.note) {
+                    <p class="s-hint" data-testid="invite-hosts-note">
+                      {{ sc.install?.note }}
+                    </p>
+                  }
+                  <div class="s-inline">
+                    <button
+                      type="button"
+                      class="btn-primary s-btn-sm"
+                      data-testid="copy-invite-command"
+                      (click)="
+                        copyInvite(inviteSnippet(), 'Copied invite command')
+                      "
+                    >
+                      Copy invite command
+                    </button>
+                    @if (sc.code) {
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        data-testid="toggle-enrollment-secret"
+                        [attr.aria-expanded]="enrollmentSecretShown()"
+                        (click)="
+                          enrollmentSecretShown.set(!enrollmentSecretShown())
+                        "
+                      >
+                        {{
+                          enrollmentSecretShown() ? "Hide code" : "Show code"
+                        }}
+                      </button>
+                    }
+                  </div>
+                  @if (enrollmentSecretShown() && sc.code) {
+                    <div class="s-inline">
+                      <code
+                        class="s-meta-mono hd-invite-secret"
+                        data-testid="enrollment-secret"
+                        >{{ sc.code }}</code
+                      >
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        data-testid="copy-enrollment-secret"
+                        (click)="copyInvite(sc.code, 'Copied enrollment code')"
+                      >
+                        Copy code
+                      </button>
+                    </div>
+                  }
+                }
+                <div class="s-inline" data-testid="invite-hosts-meta">
+                  <span class="status-pill neutral"
+                    >Uses: {{ sc.uses ?? 0
+                    }}{{ sc.max_uses ? " / " + sc.max_uses : "" }}</span
+                  >
+                  @if (sc.default_capacity) {
+                    <span class="status-pill neutral"
+                      >Default capacity: {{ sc.default_capacity }}</span
+                    >
+                  }
+                  @if (formatLabelsInput(sc.default_labels); as lbl) {
+                    <span class="status-pill neutral">Labels: {{ lbl }}</span>
+                  }
+                  @for (p of sc.allowed_principals ?? []; track p) {
+                    <span class="status-pill neutral">Allow: {{ p }}</span>
+                  }
+                  @if (sc.expires_at) {
+                    <span class="status-pill neutral"
+                      >Expires: {{ sc.expires_at.slice(0, 10) }}</span
+                    >
+                  }
+                </div>
+              </section>
+            }
             @if (enrollmentCodes().length > 0) {
               <div class="s-table-wrap">
                 <table class="s-table" aria-label="Enrollment codes">
@@ -1559,12 +2730,14 @@ function formatRefreshedAt(iso?: string): string {
                       <th>Code name</th>
                       <th>Uses</th>
                       <th>Expires</th>
+                      <th>Defaults</th>
                       <th class="s-actions-cell">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     @for (c of enrollmentCodes(); track c.name) {
                       @let codeRevoked = Boolean(c.revoked_at);
+                      @let defaults = codeDefaults(c);
                       <tr [attr.data-testid]="'enrollment-code-row-' + c.name">
                         <td class="s-mono">{{ c.name }}</td>
                         <td class="s-num">
@@ -1572,36 +2745,60 @@ function formatRefreshedAt(iso?: string): string {
                         </td>
                         <td class="s-num">
                           {{
-                            codeRevoked ? "revoked" : c.expires_at || "never"
+                            codeRevoked
+                              ? "revoked"
+                              : c.expires_at
+                                ? c.expires_at.slice(0, 10)
+                                : "never"
                           }}
                         </td>
+                        <td
+                          class="s-mono"
+                          [attr.data-testid]="
+                            'enrollment-code-defaults-' + c.name
+                          "
+                        >
+                          @for (d of defaults; track d) {
+                            <div>{{ d }}</div>
+                          } @empty {
+                            —
+                          }
+                        </td>
                         <td class="s-actions-cell">
-                          <div class="s-row-actions">
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [disabled]="
-                                !access.can(
-                                  'POST /api/hostds/enrollment-codes/{name}/rotate'
-                                ) || codeRevoked
-                              "
-                              (click)="rotateEnrollmentCode(c.name)"
+                          @if (codeRevoked) {
+                            <span
+                              class="s-hint"
+                              data-testid="enrollment-code-revoked"
+                              >No actions</span
                             >
-                              Rotate
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [disabled]="
-                                !access.can(
-                                  'POST /api/hostds/enrollment-codes/{name}/revoke'
-                                ) || codeRevoked
-                              "
-                              (click)="revokeEnrollmentCode(c.name)"
-                            >
-                              Revoke
-                            </button>
-                          </div>
+                          } @else {
+                            <div class="s-row-actions">
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/enrollment-codes/{name}/rotate'
+                                  )
+                                "
+                                (click)="rotateEnrollmentCode(c.name)"
+                              >
+                                Rotate
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/enrollment-codes/{name}/revoke'
+                                  )
+                                "
+                                (click)="revokeEnrollmentCode(c.name)"
+                              >
+                                Revoke
+                              </button>
+                            </div>
+                          }
                         </td>
                       </tr>
                     }
@@ -1609,30 +2806,118 @@ function formatRefreshedAt(iso?: string): string {
                 </table>
               </div>
             }
-            <div class="s-inline">
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Enrollment code name"
-                data-testid="input-enrollment-code-name"
-                placeholder="team-workstations"
-                [value]="newCodeName()"
-                [disabled]="!access.can('POST /api/hostds/enrollment-codes')"
-                (input)="newCodeName.set($any($event.target).value)"
-              />
-              <button
-                type="button"
-                class="btn-tonal"
-                data-testid="create-enrollment-code-btn"
-                [disabled]="
-                  !newCodeName().trim() ||
-                  !access.can('POST /api/hostds/enrollment-codes')
-                "
-                (click)="createEnrollmentCode()"
-              >
-                Create enrollment code
-              </button>
-            </div>
+            <form
+              class="s-subsection"
+              autocomplete="off"
+              data-testid="new-enrollment-code-form"
+              (submit)="$event.preventDefault(); createEnrollmentCode()"
+            >
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">New enrollment code</h4>
+              </div>
+              <div class="s-grid">
+                <div class="s-field">
+                  <label class="s-label" for="ec-name">Code name</label>
+                  <input
+                    id="ec-name"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-name"
+                    placeholder="team-linux"
+                    [value]="newCodeName()"
+                    [disabled]="
+                      !access.can('POST /api/hostds/enrollment-codes')
+                    "
+                    (input)="newCodeName.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-expires">Expires in</label>
+                  <input
+                    id="ec-expires"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-expires"
+                    placeholder="7d or 24h"
+                    [value]="newCodeExpiresIn()"
+                    (input)="newCodeExpiresIn.set($any($event.target).value)"
+                  />
+                  <span class="s-hint">Optional; blank never expires</span>
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-max-uses">Max uses</label>
+                  <input
+                    id="ec-max-uses"
+                    class="s-input s-num"
+                    type="text"
+                    inputmode="numeric"
+                    data-testid="input-enrollment-code-max-uses"
+                    placeholder="Unlimited"
+                    [value]="newCodeMaxUses()"
+                    (input)="newCodeMaxUses.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-capacity"
+                    >Default capacity</label
+                  >
+                  <input
+                    id="ec-capacity"
+                    class="s-input s-num"
+                    type="text"
+                    inputmode="numeric"
+                    data-testid="input-enrollment-code-capacity"
+                    placeholder="Unlimited"
+                    [value]="newCodeCapacity()"
+                    (input)="newCodeCapacity.set($any($event.target).value)"
+                  />
+                  <span class="s-hint">Optional max runs on each host</span>
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-labels">Default labels</label>
+                  <input
+                    id="ec-labels"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-labels"
+                    placeholder="os=linux,gpu=true"
+                    [value]="newCodeLabels()"
+                    (input)="newCodeLabels.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-principals"
+                    >Allowed principals</label
+                  >
+                  <input
+                    id="ec-principals"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-principals"
+                    placeholder="user:a@example.com, org:acme"
+                    [value]="newCodePrincipals()"
+                    (input)="newCodePrincipals.set($any($event.target).value)"
+                  />
+                  <span class="s-hint"
+                    >Optional user:, group:, github: or org: rules, comma
+                    separated</span
+                  >
+                </div>
+              </div>
+              <div class="s-inline">
+                <button
+                  type="submit"
+                  class="btn-tonal"
+                  data-testid="create-enrollment-code-btn"
+                  [disabled]="
+                    !newCodeName().trim() ||
+                    !access.can('POST /api/hostds/enrollment-codes')
+                  "
+                >
+                  Create enrollment code
+                </button>
+              </div>
+            </form>
           }
 
           @if (!access.can("GET /api/hostds/pending")) {
@@ -1643,22 +2928,42 @@ function formatRefreshedAt(iso?: string): string {
               <span>{{ access.deniedReason("GET /api/hostds/pending") }}</span>
             </div>
           } @else if (pendingHostds().length > 0) {
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">
+                Pending host requests ({{ pendingHostds().length }})
+              </h4>
+            </div>
             <div class="s-table-wrap" data-testid="hostds-pending-table">
               <table class="s-table" aria-label="Pending host requests">
                 <thead>
                   <tr>
-                    <th>ID / Hostname</th>
+                    <th>Request</th>
                     <th>Key fingerprint</th>
                     <th>Enrolled by</th>
-                    <th>Platform</th>
-                    <th>Approve / Reject</th>
+                    <th>Accept as</th>
+                    <th class="s-actions-cell">Approve / Reject</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (p of pendingHostds(); track p.id) {
+                    @let d = pendingDraft(p);
+                    @let label = p.hostname || p.id;
                     <tr [attr.data-testid]="'pending-hostd-row-' + p.id">
                       <td class="s-mono">
-                        {{ p.suggested_name || p.hostname || p.id }}
+                        {{ label }}
+                        <div class="s-meta">
+                          {{ p.os || "?" }}/{{ p.arch || "?" }}
+                          @if (p.enrollment_code) {
+                            · code {{ p.enrollment_code }}
+                          }
+                        </div>
+                        @if (p.rekey_hostd) {
+                          <span
+                            class="status-pill reply"
+                            [attr.data-testid]="'pending-rekey-' + p.id"
+                            >rekey: {{ p.rekey_hostd }}</span
+                          >
+                        }
                       </td>
                       <!-- There is no pairing code to compare: the owner
                            checks who enrolled the host and the key it
@@ -1670,30 +2975,58 @@ function formatRefreshedAt(iso?: string): string {
                         {{ p.key_fingerprint || "—" }}
                       </td>
                       <td>{{ p.enrolled_by || "—" }}</td>
-                      <td class="s-mono">
-                        {{ p.os || "?" }}/{{ p.arch || "?" }}
-                      </td>
                       <td>
                         <div class="s-inline">
                           <input
                             class="s-input s-input-inline s-mono"
                             type="text"
-                            [attr.aria-label]="
-                              'Labels for ' + (p.hostname || p.id)
+                            [attr.aria-label]="'Host name for ' + label"
+                            [attr.data-testid]="'pending-name-' + p.id"
+                            [attr.title]="
+                              p.rekey_hostd
+                                ? 'A rekey keeps the host it moves onto a new key'
+                                : null
                             "
-                            [attr.data-testid]="'pending-labels-' + p.id"
-                            placeholder="k=v (optional)"
-                            [value]="
-                              pendingLabelDrafts()[p.id] ||
-                              formatLabelsInput(p.default_labels)
-                            "
+                            placeholder="Host name"
+                            [disabled]="Boolean(p.rekey_hostd)"
+                            [value]="d.name"
                             (input)="
-                              setPendingLabelDraft(
-                                p.id,
-                                $any($event.target).value
-                              )
+                              patchPendingDraft(p, {
+                                name: $any($event.target).value,
+                              })
                             "
                           />
+                          <input
+                            class="s-input s-input-inline s-mono"
+                            type="text"
+                            [attr.aria-label]="'Host labels for ' + label"
+                            [attr.data-testid]="'pending-labels-' + p.id"
+                            placeholder="k=v (optional)"
+                            [value]="d.labels"
+                            (input)="
+                              patchPendingDraft(p, {
+                                labels: $any($event.target).value,
+                              })
+                            "
+                          />
+                          <input
+                            class="s-input s-input-inline s-num s-input-narrow"
+                            type="text"
+                            inputmode="numeric"
+                            [attr.aria-label]="'Host capacity for ' + label"
+                            [attr.data-testid]="'pending-capacity-' + p.id"
+                            placeholder="Capacity"
+                            [value]="d.capacity"
+                            (input)="
+                              patchPendingDraft(p, {
+                                capacity: $any($event.target).value,
+                              })
+                            "
+                          />
+                        </div>
+                      </td>
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           <button
                             type="button"
                             class="btn-primary s-btn-sm"
@@ -1701,7 +3034,7 @@ function formatRefreshedAt(iso?: string): string {
                             [disabled]="
                               !access.can(
                                 'POST /api/hostds/pending/{id}/accept'
-                              )
+                              ) || !d.name.trim()
                             "
                             (click)="acceptPendingHostd(p)"
                           >
@@ -1727,6 +3060,11 @@ function formatRefreshedAt(iso?: string): string {
                 </tbody>
               </table>
             </div>
+          } @else {
+            <p class="s-card-desc" data-testid="hostds-pending-empty">
+              No hosts are waiting for approval. Pending requests expire after
+              24 hours.
+            </p>
           }
         </div>
       }
@@ -1742,11 +3080,402 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly doc = inject(DOCUMENT);
 
   readonly section = input.required<SettingsSectionId>();
 
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
+  protected readonly String = String;
+
+  protected readonly contractDoc =
+    "https://github.com/ai-on-gke/grain/blob/main/docs/sandbox-image-contract.md";
+
+  // The auto controller's bounds (model.OvercommitSettings). GET
+  // /api/settings reports them resolved, so a stored 0 already reads as
+  // grain's default; fallback is that default (model.DefaultOvercommit*)
+  // for the placeholder of a box somebody clears.
+  protected readonly overcommitBounds: readonly OvercommitBound[] = [
+    {
+      field: "cpuMin",
+      label: "Auto CPU minimum (x)",
+      fallback: "1",
+      step: "0.25",
+    },
+    {
+      field: "cpuMax",
+      label: "Auto CPU maximum (x)",
+      fallback: "6",
+      step: "0.25",
+    },
+    {
+      field: "memoryMin",
+      label: "Auto memory minimum (x)",
+      fallback: "1",
+      step: "0.05",
+    },
+    {
+      field: "memoryMax",
+      label: "Auto memory maximum (x)",
+      fallback: "2",
+      step: "0.05",
+    },
+    {
+      field: "cpuPressureTarget",
+      label: "CPU pressure target (%)",
+      fallback: "25",
+      step: "1",
+      max: 100,
+    },
+    {
+      field: "memoryPressureTarget",
+      label: "Memory pressure target (%)",
+      fallback: "5",
+      step: "1",
+      max: 100,
+    },
+  ];
+
+  protected boundKey(field: string): string {
+    return `sandboxOvercommit${field[0].toUpperCase()}${field.slice(1)}`;
+  }
+
+  private overcommitObject(): Record<string, unknown> {
+    const v = this.state.val<unknown>("sandboxOvercommit", null);
+    if (v && typeof v === "object") return v as Record<string, unknown>;
+    return { mode: typeof v === "string" && v ? v : "fixed" };
+  }
+
+  protected overcommitBound(field: string): string {
+    const v = Number(this.overcommitObject()[field] ?? 0);
+    return Number.isFinite(v) && v !== 0 ? String(v) : "";
+  }
+
+  // setOvercommitBound stages one bound into the sandboxOvercommit object
+  // the server saves whole. A refused bound is reported against its own
+  // box by name, and holds the Save bar, rather than reaching the server
+  // as a bad object or quietly turning into the default.
+  protected setOvercommitBound(b: OvercommitBound, raw: string): void {
+    const key = this.boundKey(b.field);
+    const t = String(raw ?? "").trim();
+    const n = t === "" ? 0 : Number(t);
+    if (!Number.isFinite(n) || n < 0) {
+      this.state.setFieldError(
+        key,
+        `${b.label} must be 0 (grain's default) or more, not ${t || "that"}.`,
+      );
+      return;
+    }
+    if (b.max !== undefined && n > b.max) {
+      this.state.setFieldError(
+        key,
+        `${b.label} is a percentage, at most ${b.max}.`,
+      );
+      return;
+    }
+    this.state.setFieldError(key, null);
+    this.state.setField("sandboxOvercommit", {
+      ...this.overcommitObject(),
+      [b.field]: n,
+    });
+  }
+
+  // reportedDefault is `<key>Default` as a number, for a box whose stored
+  // 0 is a value of its own (an unbounded overcommit, a floor share that
+  // holds nothing back): a cleared box saves that default, so the greyed
+  // placeholder it shows is what Save really stores, and 0 typed on
+  // purpose stays 0.
+  protected reportedDefault(key: string, fallback: number): number {
+    const d = Number(this.state.settings()[`${key}Default`]);
+    return Number.isFinite(d) && d > 0 ? d : fallback;
+  }
+
+  protected diskFloorMinDefault(): number {
+    return (
+      Number(this.state.settings()["sandboxDiskFloorMinMbDefault"]) || 5120
+    );
+  }
+
+  protected readonly diskFloorSummary = computed(() => {
+    const floors = this.state.settings()["sandboxDiskFloors"];
+    if (!Array.isArray(floors)) return "";
+    return (floors as DiskFloorRow[])
+      .filter((d) => Number(d.totalMB) > 0)
+      .map(
+        (d) =>
+          `${d.path} (${mib(d.totalMB)}) holds ${mib(d.floorMB)} free, sweeping back to ${mib(d.reclaimMB)}.`,
+      )
+      .join(" ");
+  });
+
+  protected readonly sandboxCommitment = computed(
+    () =>
+      (this.state.settings()["sandboxCommitment"] as
+        SandboxCommitment | undefined) ?? null,
+  );
+
+  // restartNote is said after a field's hint when the daemon reads it
+  // only at startup (settings.restartRequired), and louder once a saved
+  // value is waiting on that restart (settings.pendingRestart).
+  protected restartNote(key: string): string {
+    const s = this.state.settings();
+    const pending = s["pendingRestart"];
+    if (Array.isArray(pending) && pending.includes(key)) {
+      return " Saved; takes effect after a daemon restart.";
+    }
+    const req = s["restartRequired"];
+    if (Array.isArray(req) && req.includes(key)) {
+      return " Read at daemon startup.";
+    }
+    return "";
+  }
+
+  protected readonly k8sImageWarning = computed(() => {
+    const s = this.state.settings();
+    return [s["k8sSandboxImageWarning"], s["k8sGranuleImageWarning"]]
+      .filter((w) => typeof w === "string" && w)
+      .join(" ");
+  });
+
+  protected readonly k8sFields = computed<readonly K8sField[]>(() => {
+    const d = (k: string, fb = "") => this.state.defaultHint(k, fb);
+    const build = String(this.state.settings()["daemonBuildVersion"] || "dev");
+    return [
+      {
+        key: "k8sNamespace",
+        label: "Namespace",
+        placeholder: d("k8sNamespace", "grain"),
+        hint: "Namespace sandbox pods are created in.",
+      },
+      {
+        key: "k8sSandboxImage",
+        label: "Sandbox pod image",
+        placeholder: d("k8sSandboxImage"),
+        hint: `Container image every plain Kubernetes sandbox pod runs (matches this daemon's build ${build}).`,
+      },
+      {
+        key: "k8sGranuleImage",
+        label: "Granule VM pod image",
+        placeholder: d("k8sGranuleImage"),
+        hint: `Packed guest image every Kubernetes Granule VM pod boots (matches this daemon's build ${build}).`,
+      },
+      {
+        key: "k8sWorkspace",
+        label: "Workspace directory",
+        placeholder: d("k8sWorkspace"),
+        hint: "Working directory inside each sandbox pod or VM; an absolute path.",
+      },
+      {
+        key: "k8sGitProxyHost",
+        label: "Git & model proxy host",
+        placeholder: "$GRAIN_POD_IP",
+        hint: "Host (no port) sandbox pods reach this daemon's git and model proxies at; in-cluster it defaults to the pod IP.",
+      },
+      {
+        key: "k8sSandboxService",
+        label: "Sandbox Service",
+        placeholder: "none",
+        hint: "Optional ClusterIP Service fronting the proxies, so sandboxes survive a daemon rollout.",
+      },
+      {
+        key: "k8sServiceAccount",
+        label: "Sandbox ServiceAccount",
+        placeholder: "default",
+        hint: "Optional ServiceAccount for sandbox pods.",
+      },
+      {
+        key: "k8sDeployment",
+        label: "grain Deployment",
+        placeholder: d("k8sDeployment", "grain"),
+        hint: "The Deployment running grain itself, repointed on self-upgrade.",
+      },
+      {
+        key: "k8sContainer",
+        label: "grain container",
+        placeholder: d("k8sContainer", "grain"),
+        hint: "Container within that Deployment that self-upgrade repoints.",
+      },
+      {
+        key: "k8sKubectl",
+        label: "kubectl binary",
+        placeholder: d("k8sKubectl", "kubectl"),
+        hint: "Path to kubectl; blank finds kubectl on PATH.",
+      },
+    ];
+  });
+
+  protected readonly k8sPriorityFields = computed<readonly K8sField[]>(() => {
+    const def = (k: string) =>
+      this.state.defaultHint(k)
+        ? ` deploy/kubernetes/ defines ${this.state.defaultHint(k)}.`
+        : "";
+    return [
+      {
+        key: "k8sPriorityClassInteractive",
+        label: "Interactive sessions",
+        placeholder: "none",
+        hint: `Highest: may preempt CI pods on a full cluster.${def("k8sPriorityClassInteractive")}`,
+      },
+      {
+        key: "k8sPriorityClassAgent",
+        label: "Agent runs",
+        placeholder: "none",
+        hint: `Agent runs, base-branch repairs and persistent sandboxes.${def("k8sPriorityClassAgent")}`,
+      },
+      {
+        key: "k8sPriorityClassCi",
+        label: "CI jobs",
+        placeholder: "none",
+        hint: `Lowest: a preempted CI job is retried, not failed.${def("k8sPriorityClassCi")}`,
+      },
+    ];
+  });
+
+  protected readonly k8sGranuleEffective = computed(() => {
+    const s = this.state.settings();
+    const effective = String(s["k8sGranuleImageEffective"] || "");
+    const stored = String(s["k8sGranuleImage"] || "").trim();
+    const hint = String(s["k8sGranuleImageMirror"] || "");
+    const mirror = String(s["sandboxImageMirrorEffective"] || "");
+    const onGranule =
+      (s["sandboxBackend"] || s["sandboxImageBackend"]) ===
+      "kubernetes-granule";
+    if (!effective || (!onGranule && !hint)) return "";
+    if (hint) {
+      return `Treated as mirror repository ${hint}, not booted; sandboxes boot ${effective}. Clearing it keeps that mirror as sandbox_image_mirror.`;
+    }
+    if (effective === stored && !mirror) return "";
+    const derived = s["sandboxImageMirrorDerivedFrom"];
+    return `Sandboxes boot ${effective}${mirror ? `, mirrored into ${mirror} (${derived ? `derived from ${derived}` : "sandbox_image_mirror"})` : ""}.`;
+  });
+
+  // The node selector box is text while somebody types; it stages the
+  // list the server stores, and refuses an entry that is not key=value
+  // by name (the server's own check, k8sNodeSelector "x" must be
+  // key=value) before Save rather than after.
+  protected readonly nodeSelectorDraft = signal<string | null>(null);
+  // Save and Discard both bump discardEpoch: the box reads the stored
+  // list again rather than keep what was typed.
+  private readonly nodeSelectorReset = effect(() => {
+    this.state.discardEpoch();
+    untracked(() => this.nodeSelectorDraft.set(null));
+  });
+
+  protected nodeSelectorText(): string {
+    const d = this.nodeSelectorDraft();
+    if (d !== null) return d;
+    const v = this.state.val<unknown>("k8sNodeSelector", []);
+    return Array.isArray(v) ? v.join(", ") : "";
+  }
+
+  protected setNodeSelector(raw: string): void {
+    this.nodeSelectorDraft.set(raw);
+    const entries = raw
+      .split(",")
+      .map((e) => e.trim())
+      .filter(Boolean);
+    const bad = entries.find((e) => !/^[^=\s]+=[^=\s]*$/.test(e));
+    if (bad) {
+      this.state.setFieldError(
+        "k8sNodeSelector",
+        `Node selector entry "${bad}" must be key=value.`,
+      );
+      return;
+    }
+    this.state.setFieldError("k8sNodeSelector", null);
+    this.state.setField("k8sNodeSelector", entries);
+  }
+
+  protected readonly sandboxImageStored = computed(() =>
+    String(this.state.settings()["sandboxImage"] || "").trim(),
+  );
+
+  protected readonly sandboxImageVerified = computed(() => {
+    const s = this.state.settings();
+    const check = s["sandboxImageCheck"] as
+      | {
+          verified?: boolean;
+          contract?: { summary?: string; imageContract?: number };
+        }
+      | null
+      | undefined;
+    if (!check?.verified) return "";
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    return (
+      check.contract?.summary ||
+      `${c.contractLabel || "dev.grain.sandbox.contract"} = ${check.contract?.imageContract ?? s["sandboxContractVersion"] ?? ""} (current)`
+    );
+  });
+
+  protected readonly sandboxMirrorHint = computed(() => {
+    const s = this.state.settings();
+    const mirror = String(s["sandboxImageMirrorEffective"] || "");
+    if (!mirror) return "";
+    const from = s["sandboxImageMirrorDerivedFrom"];
+    return `Granule guest images are pulled through mirror ${mirror}${from ? ` (derived from ${from})` : " (sandbox_image_mirror)"}.`;
+  });
+
+  protected readonly granulePin = computed(() =>
+    String(this.state.settings()["k8sGranuleImage"] || "").trim(),
+  );
+
+  protected readonly granulePinSame = computed(() => {
+    const s = this.state.settings();
+    const backend = s["sandboxImageBackend"] || s["sandboxBackend"];
+    const pin = this.granulePin();
+    return (
+      backend === "kubernetes-granule" &&
+      pin !== "" &&
+      pin === this.sandboxImageStored()
+    );
+  });
+
+  private imageIsVm(): boolean {
+    const s = this.state.settings();
+    const b = String(s["sandboxImageBackend"] || s["sandboxBackend"] || "");
+    return b === "granule" || b === "kubernetes-granule";
+  }
+
+  protected readonly imageInherits = computed(() =>
+    this.imageIsVm()
+      ? "Granule VM backends boot a packed guest. sandbox-base already satisfies the whole sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps. Start FROM it and add only what your tasks need."
+      : "Container and Kubernetes pod backends run a container image. sandbox-k8s-base already satisfies the whole sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps. Start FROM it and add only what your tasks need.",
+  );
+
+  protected readonly dockerfileExample = computed(() => {
+    const s = this.state.settings();
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    const base =
+      String(s["sandboxBaseImage"] || "") ||
+      (this.imageIsVm()
+        ? c.guestBaseImage || "docker.io/grainai/sandbox-base:latest"
+        : c.k8sSandboxBaseImage || "docker.io/grainai/sandbox-k8s-base:latest");
+    return `FROM ${base}\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends <your packages> \\\n && rm -rf /var/lib/apt/lists/*`;
+  });
+
+  protected readonly contractLines = computed(() => {
+    const s = this.state.settings();
+    const c = (s["sandboxContract"] as ContractInfo | undefined) ?? {};
+    const current = Number(s["sandboxContractVersion"] ?? c.contract ?? 1);
+    const minimum = Number(
+      s["sandboxMinimumContractVersion"] ?? c.minimumContract ?? 1,
+    );
+    const range =
+      minimum === current ? `v${current}` : `v${minimum}–v${current}`;
+    const lines = [
+      {
+        code: `${c.contractLabel || "dev.grain.sandbox.contract"} = ${current}`,
+        note: `(this grain drives images at ${range})`,
+      },
+    ];
+    if (this.imageIsVm()) {
+      lines.push({
+        code: `${c.granuleContractLabel || "dev.granule.guest.contract"} = ${s["sandboxGranuleContractVersion"] ?? c.granuleContract ?? 1}`,
+        note: "(Granule's own guest contract, carried by sandbox-base)",
+      });
+    }
+    return lines;
+  });
   protected readonly formatLabels = formatHostdLabels;
   protected readonly formatRefreshedAt = formatRefreshedAt;
 
@@ -1761,12 +3490,17 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ];
-  protected readonly authModeOptions: readonly PillOption[] = [
+  // "subscription" (model.CodexAuthSubscription) is a Codex-only mode:
+  // the server refuses it for any other framework.
+  protected readonly authModeOptions = computed<PillOption[]>(() => [
     { value: "", label: "Provider default" },
     { value: "api_key", label: "API key / OAuth secret" },
+    ...(this.newBackendFw() === "codex"
+      ? [{ value: "subscription", label: "ChatGPT subscription (auth.json)" }]
+      : []),
     { value: "ambient", label: "Host ambient login" },
     { value: "vertex", label: "Vertex AI" },
-  ];
+  ]);
   protected readonly usageModeOptions: readonly PillOption[] = [
     { value: "advisory", label: "Advisory" },
     { value: "auto", label: "Auto throttle" },
@@ -1823,6 +3557,54 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly backends = signal<BackendEntry[]>([]);
   protected readonly backendCredDrafts = signal<Record<string, string>>({});
   protected readonly openCredBackendId = signal<string | null>(null);
+  protected readonly codexAuthDrafts = signal<Record<string, string>>({});
+  protected readonly codexAuthStatus = signal<
+    Partial<Record<string, BackendCodexAuthStatus>>
+  >({});
+  protected readonly codexAuthBusy = signal(false);
+  protected readonly codexAuthErrors = signal<Record<string, string>>({});
+  protected readonly connectionTests = signal<
+    Partial<Record<string, { pending: boolean; ok?: boolean; detail: string }>>
+  >({});
+
+  private clearConnectionTest(id: string): void {
+    this.connectionTests.update((m) => {
+      const next = { ...m };
+      delete next[id];
+      return next;
+    });
+  }
+
+  protected async testBackend(b: BackendEntry): Promise<void> {
+    if (this.connectionTests()[b.id]?.pending) return;
+    const pending = { pending: true, detail: "Testing saved connection…" };
+    this.connectionTests.update((m) => ({ ...m, [b.id]: pending }));
+    const finish = (ok: boolean, detail: string) => {
+      // A credential/configuration save invalidates an in-flight result too.
+      this.connectionTests.update((m) =>
+        m[b.id] === pending
+          ? { ...m, [b.id]: { pending: false, ok, detail } }
+          : m,
+      );
+    };
+    try {
+      const result = await this.api.post<{ ok: boolean; detail: string }>(
+        "POST /api/agent-keys/{framework}/check",
+        { framework: b.framework || "antigravity" },
+        undefined,
+        `backend=${encodeURIComponent(b.id)}`,
+      );
+      finish(
+        result?.ok === true,
+        result?.detail || "Connection test unavailable on this daemon.",
+      );
+    } catch {
+      finish(
+        false,
+        "Could not test the saved connection. Check your access, daemon connectivity and test support, then retry.",
+      );
+    }
+  }
   protected readonly newBackendId = signal("");
   protected readonly newBackendName = signal("");
   protected readonly newBackendFw = signal("antigravity");
@@ -1861,17 +3643,58 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly persistentSandboxes = signal<
     { name: string; state?: string }[]
   >([]);
-  protected readonly probeMessage = signal("");
+  protected readonly probing = signal(false);
+  protected readonly probeResult = signal<SandboxProbeResult | null>(null);
 
   protected readonly hostds = signal<HostdRow[]>([]);
   protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
   protected readonly newHostdName = signal("");
   protected readonly newHostdLabels = signal("");
+  protected readonly newHostdOwner = signal("");
   protected readonly mintedHostdToken = signal<string | null>(null);
   protected readonly enrollmentCodes = signal<EnrollmentCodeRow[]>([]);
   protected readonly newCodeName = signal("");
+  protected readonly newCodeExpiresIn = signal("");
+  protected readonly newCodeMaxUses = signal("");
+  protected readonly newCodeCapacity = signal("");
+  protected readonly newCodeLabels = signal("");
+  protected readonly newCodePrincipals = signal("");
+  protected readonly chosenEnrollmentCode = signal("");
+  protected readonly enrollmentSecretShown = signal(false);
+  protected readonly selectedEnrollmentCode = computed(() =>
+    pickEnrollmentCode(this.enrollmentCodes(), this.chosenEnrollmentCode()),
+  );
+  protected readonly enrollmentCodeOptions = computed<PillOption[]>(() =>
+    this.enrollmentCodes().map((c) => ({
+      value: c.name,
+      label: c.revoked_at ? `${c.name} (revoked)` : c.name,
+    })),
+  );
+  protected readonly inviteSnippet = computed(() =>
+    inviteLines(
+      this.doc.defaultView?.location.origin ?? "",
+      this.selectedEnrollmentCode(),
+    ).join("\n"),
+  );
   protected readonly pendingHostds = signal<PendingHostdRow[]>([]);
-  protected readonly pendingLabelDrafts = signal<Record<string, string>>({});
+  protected readonly pendingDrafts = signal<Record<string, PendingDraft>>({});
+  protected readonly editingHostd = signal<HostdEdit | null>(null);
+  protected readonly renamingHostd = signal<{
+    from: string;
+    to: string;
+  } | null>(null);
+  // hostdNotice is what the last Delete or Delete revoked did: each host
+  // deleted, with the usage-limit pauses cleared with it, and each one
+  // skipped and why. A toast went before anyone could read a list.
+  protected readonly hostdNotice = signal<{
+    tone: "ok" | "warn";
+    lines: string[];
+  } | null>(null);
+  protected readonly connectionLine = hostdConnectionLine;
+  // raisedHostError is the error banner the last refused host action put
+  // up, so the save that fixes it takes it down -- and leaves a later,
+  // unrelated one alone.
+  private raisedHostError: string | null = null;
 
   // The deployment's default model list (model.Config.DefaultModels):
   // the default first, then its fallbacks, tried in that order. Settings
@@ -2183,6 +4006,19 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.editingBackendId.set("");
       await this.state.loadCore();
       this.syncBackendsFromState();
+      // An open Credential row that now holds a subscription login reads
+      // its status, as opening it would have.
+      const saved = this.backends().find((b) => b.id === backendId);
+      if (saved && this.isCodexSubscription(saved))
+        this.openCredBackendId.set(backendId);
+      this.clearConnectionTest(backendId);
+      if (
+        this.openCredBackendId() === backendId &&
+        saved &&
+        this.isCodexSubscription(saved)
+      ) {
+        void this.loadCodexAuth(backendId);
+      }
       this.snackbar.show(`Saved model connection ${backendId}`);
     } catch (err) {
       this.state.recordError(err);
@@ -2199,10 +4035,23 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         { value },
       );
       this.setBackendCredDraft(id, "");
+      this.clearConnectionTest(id);
       this.snackbar.show(`Updated credential for ${id}`);
     } catch (err) {
       this.state.recordError(err);
     }
+  }
+
+  // Clearing a connection's secret cannot be undone short of pasting the
+  // key again, so it asks first, as removing the connection does.
+  protected confirmClearBackendCred(id: string): void {
+    this.confirmRequest.set({
+      title: `Clear the credential for ${id}?`,
+      message: `The secret stored for ${id} is deleted. Runs and model discovery on ${id} no longer use it, and only saving the key again brings it back.`,
+      accept: "Clear secret",
+      destructive: true,
+      run: () => this.clearBackendCred(id),
+    });
   }
 
   protected async clearBackendCred(id: string): Promise<void> {
@@ -2211,6 +4060,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         id,
       });
       this.setBackendCredDraft(id, "");
+      this.clearConnectionTest(id);
       this.snackbar.show(`Cleared credential for ${id}`);
     } catch (err) {
       this.state.recordError(err);
@@ -2229,6 +4079,123 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected toggleCredEditor(id: string): void {
     this.openCredBackendId.update((cur) => (cur === id ? null : id));
+    const b = this.backends().find((x) => x.id === id);
+    if (this.openCredBackendId() === id && b && this.isCodexSubscription(b)) {
+      void this.loadCodexAuth(id);
+    }
+  }
+
+  protected setNewBackendFw(fw: string): void {
+    this.newBackendFw.set(fw);
+    if (fw !== "codex" && this.newBackendAuthMode() === "subscription") {
+      this.newBackendAuthMode.set("");
+    }
+  }
+
+  protected isCodexSubscription(b: BackendEntry): boolean {
+    return (
+      (b.framework || "").trim().toLowerCase() === "codex" &&
+      b.authMode === "subscription"
+    );
+  }
+
+  protected codexAuthStatusLabel(id: string): string {
+    const status = this.codexAuthStatus()[id];
+    if (!status) return "Checking…";
+    if (status.enabled === false) return "Unavailable on this daemon";
+    return status.set ? "Configured" : "Not set";
+  }
+
+  protected setCodexAuthDraft(id: string, value: string): void {
+    this.codexAuthDrafts.update((d) => ({ ...d, [id]: value }));
+    this.codexAuthErrors.update((d) => ({ ...d, [id]: "" }));
+  }
+
+  private setCodexAuthStatus(id: string, res: unknown): void {
+    const r = (res ?? {}) as BackendCodexAuthStatus;
+    this.codexAuthStatus.update((m) => ({
+      ...m,
+      [id]: {
+        enabled: r.enabled,
+        set: Boolean(r.set),
+        refreshError: r.refreshError || "",
+      },
+    }));
+  }
+
+  protected async loadCodexAuth(id: string): Promise<void> {
+    try {
+      const res = await this.api.get(
+        "GET /api/agent-backends/{id}/codex-auth",
+        { id },
+      );
+      this.setCodexAuthStatus(id, res);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected async saveCodexAuth(id: string): Promise<void> {
+    const value = (this.codexAuthDrafts()[id] ?? "").trim();
+    if (!value) return;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        throw new Error();
+    } catch {
+      this.codexAuthErrors.update((d) => ({
+        ...d,
+        [id]: "auth.json must contain a JSON object. Paste the contents of the Codex login file.",
+      }));
+      return;
+    }
+    this.codexAuthBusy.set(true);
+    try {
+      const res = await this.api.put(
+        "PUT /api/agent-backends/{id}/codex-auth",
+        { id },
+        { value },
+      );
+      this.setCodexAuthStatus(id, res);
+      this.setCodexAuthDraft(id, "");
+      this.clearConnectionTest(id);
+      this.snackbar.show(`Saved subscription login for ${id}`);
+    } catch {
+      this.codexAuthErrors.update((d) => ({
+        ...d,
+        [id]: "Could not save auth.json. Check your access and daemon credential storage, then retry.",
+      }));
+    } finally {
+      this.codexAuthBusy.set(false);
+    }
+  }
+
+  protected confirmClearCodexAuth(id: string): void {
+    this.confirmRequest.set({
+      title: `Clear the subscription login for ${id}?`,
+      message: `The auth.json stored for ${id} is deleted. Runs on ${id} stop until a new login is uploaded: the connection never falls back to the deployment's shared login.`,
+      accept: "Clear login",
+      destructive: true,
+      run: () => this.clearCodexAuth(id),
+    });
+  }
+
+  protected async clearCodexAuth(id: string): Promise<void> {
+    this.codexAuthBusy.set(true);
+    try {
+      const res = await this.api.delete(
+        "DELETE /api/agent-backends/{id}/codex-auth",
+        { id },
+      );
+      this.setCodexAuthStatus(id, res);
+      this.setCodexAuthDraft(id, "");
+      this.clearConnectionTest(id);
+      this.snackbar.show(`Cleared subscription login for ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    } finally {
+      this.codexAuthBusy.set(false);
+    }
   }
 
   protected cancelEditBackend(): void {
@@ -2336,6 +4303,15 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  /** A fixed ratio of 0 is accepted (pkg/ui settings.go: "leave this
+   * dimension to the run counts alone"), so the box says what it means
+   * rather than storing it silently. */
+  protected overcommitUnbounded(key: string): boolean {
+    if (this.overcommitMode() !== "fixed") return false;
+    const raw = this.state.val<unknown>(key, null);
+    return raw !== null && raw !== "" && Number(raw) === 0;
+  }
+
   protected overcommitMode(): string {
     const v = this.state.val<unknown>("sandboxOvercommit", "fixed");
     if (v && typeof v === "object" && "mode" in v) {
@@ -2345,6 +4321,13 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   protected setOvercommitMode(mode: string): void {
+    // Fixed mode hides the auto bounds, so a refusal of one must not go
+    // on holding the Save bar out of sight.
+    if (mode !== "auto") {
+      for (const b of this.overcommitBounds) {
+        this.state.setFieldError(this.boundKey(b.field), null);
+      }
+    }
     const cur = this.state.val<unknown>("sandboxOvercommit", null);
     if (cur && typeof cur === "object") {
       this.state.setField("sandboxOvercommit", {
@@ -2356,18 +4339,43 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  /** The probe is offered only where the server can build one:
+   * GET /api/settings says so in sandboxProbe (pkg/ui/sandbox_probe.go). */
+  protected canProbeSandbox(): boolean {
+    return (
+      this.access.can("POST /api/sandbox-probe") &&
+      this.state.val<boolean>("sandboxProbe", false) === true
+    );
+  }
+
+  /** POST /api/sandbox-probe as `grain sandbox probe -id <id> -- true`
+   * does: a fresh id names the throwaway sandbox, and `true` is the
+   * least a sandbox that booted can run. */
   protected async runSandboxProbe(): Promise<void> {
+    if (this.probing()) return;
+    this.probing.set(true);
+    this.probeResult.set(null);
     try {
-      const res = await this.api.post<{ ok?: boolean; detail?: string }>(
+      const id = `ui-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`;
+      const res = await this.api.post<SandboxProbeResult>(
         "POST /api/sandbox-probe",
         undefined,
-        {},
+        { id, argv: ["true"] },
       );
-      this.probeMessage.set(
-        res?.detail || (res?.ok === false ? "Probe failed" : "Sandbox ready"),
-      );
+      this.probeResult.set({
+        sandbox: res?.sandbox ?? `probe-${id}`,
+        pod: res?.pod ?? "",
+        access: res?.access ?? "",
+        stdout: res?.stdout ?? "",
+        stderr: res?.stderr ?? "",
+        exitCode: Number(res?.exitCode ?? 0),
+      });
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.probing.set(false);
     }
   }
 
@@ -2465,12 +4473,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         hostd?: HostdRow;
       }>("POST /api/hostds", undefined, {
         name,
+        ...(this.newHostdOwner().trim()
+          ? { owner: this.newHostdOwner().trim() }
+          : {}),
         ...(Object.keys(parsed.labels).length > 0
           ? { labels: parsed.labels }
           : {}),
       });
       this.newHostdName.set("");
       this.newHostdLabels.set("");
+      this.newHostdOwner.set("");
       const msg = this.formatIssuedHostdSecret(`Host token (${name})`, res);
       if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
@@ -2535,12 +4547,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       destructive: true,
       run: async () => {
         try {
+          this.hostdNotice.set(null);
           const out = await this.api.delete<DeletedHostdRow>(
             "DELETE /api/hostds/{name}",
             { name },
           );
           await this.loadHostds();
-          this.snackbar.show(deletedHostdLine(out ?? { name }));
+          this.hostdNotice.set({
+            tone: "ok",
+            lines: [deletedHostdLine(out ?? { name })],
+          });
         } catch (err) {
           this.state.recordError(err);
         }
@@ -2563,12 +4579,15 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           }>("POST /api/hostds/delete-revoked", undefined, {});
           await this.loadHostds();
           const lines = (out?.deleted ?? []).map(deletedHostdLine);
-          for (const sk of out?.skipped ?? []) {
+          const skipped = out?.skipped ?? [];
+          for (const sk of skipped) {
             lines.push(`Skipped ${sk.name}: ${sk.reason}`);
           }
-          this.snackbar.show(
-            lines.length ? lines.join(" ") : "No revoked hosts to delete.",
-          );
+          if (lines.length === 0) lines.push("No revoked hosts to delete.");
+          this.hostdNotice.set({
+            tone: skipped.length > 0 ? "warn" : "ok",
+            lines,
+          });
         } catch (err) {
           this.state.recordError(err);
         }
@@ -2576,16 +4595,58 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     });
   }
 
+  protected selectEnrollmentCode(name: string): void {
+    this.chosenEnrollmentCode.set(name);
+    this.enrollmentSecretShown.set(false);
+  }
+
+  protected async copyInvite(text: string, notice: string): Promise<void> {
+    const ok = await copyToClipboard(this.doc, text);
+    this.snackbar.show(ok ? notice : "Could not copy: select the text instead");
+  }
+
   protected async createEnrollmentCode(): Promise<void> {
     const name = this.newCodeName().trim();
     if (!name) return;
+    const labels = parseHostdLabels(this.newCodeLabels());
+    const maxUses = parseHostCapacity(this.newCodeMaxUses(), "Max uses");
+    const capacity = parseHostCapacity(
+      this.newCodeCapacity(),
+      "Default capacity",
+    );
+    const invalid = labels.error || maxUses.error || capacity.error;
+    if (invalid) {
+      this.raiseHostMessage(invalid);
+      return;
+    }
+    const principals = this.newCodePrincipals()
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const expiresIn = this.newCodeExpiresIn().trim();
     try {
       const res = await this.api.post<{
         code?: string;
         token?: string;
         install?: HostdInstallDto | string;
-      }>("POST /api/hostds/enrollment-codes", undefined, { name });
+      }>("POST /api/hostds/enrollment-codes", undefined, {
+        name,
+        ...(expiresIn ? { expires_in: expiresIn } : {}),
+        ...(maxUses.value > 0 ? { max_uses: maxUses.value } : {}),
+        ...(capacity.value > 0 ? { default_capacity: capacity.value } : {}),
+        ...(Object.keys(labels.labels).length > 0
+          ? { default_labels: labels.labels }
+          : {}),
+        ...(principals.length > 0 ? { allowed_principals: principals } : {}),
+      });
+      this.settleHostError();
       this.newCodeName.set("");
+      this.newCodeExpiresIn.set("");
+      this.newCodeMaxUses.set("");
+      this.newCodeCapacity.set("");
+      this.newCodeLabels.set("");
+      this.newCodePrincipals.set("");
+      this.selectEnrollmentCode(name);
       const secret = res?.code ?? res?.token;
       const msg = this.formatIssuedHostdSecret(`Enrollment code (${name})`, {
         token: secret,
@@ -2595,8 +4656,20 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       await this.loadHostds();
       this.snackbar.show(`Created enrollment code ${name}`);
     } catch (err) {
-      this.state.recordError(err);
+      this.raiseHostError(err);
     }
+  }
+
+  // codeDefaults is what a code gives each host it enrolls, one line each.
+  protected codeDefaults(c: EnrollmentCodeRow): string[] {
+    const out: string[] = [];
+    if (c.default_capacity && c.default_capacity > 0) {
+      out.push(`capacity ${c.default_capacity}`);
+    }
+    const labels = this.formatLabelsInput(c.default_labels);
+    if (labels) out.push(labels);
+    for (const p of c.allowed_principals ?? []) out.push(`allow ${p}`);
+    return out;
   }
 
   protected rotateEnrollmentCode(name: string): void {
@@ -2656,39 +4729,163 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     return formatted === "—" ? "" : formatted;
   }
 
-  protected setPendingLabelDraft(id: string, value: string): void {
-    this.pendingLabelDrafts.update((prev) => ({ ...prev, [id]: value }));
+  protected pendingDraft(p: PendingHostdRow): PendingDraft {
+    return (
+      this.pendingDrafts()[p.id] ?? {
+        name: p.rekey_hostd || p.suggested_name || p.hostname || "",
+        labels: this.formatLabelsInput(p.default_labels),
+        capacity: p.default_capacity ? String(p.default_capacity) : "",
+      }
+    );
+  }
+
+  protected patchPendingDraft(
+    p: PendingHostdRow,
+    patch: Partial<PendingDraft>,
+  ): void {
+    const cur = this.pendingDraft(p);
+    this.pendingDrafts.update((all) => ({
+      ...all,
+      [p.id]: { ...cur, ...patch },
+    }));
   }
 
   protected async acceptPendingHostd(p: PendingHostdRow): Promise<void> {
-    const rawLabels =
-      this.pendingLabelDrafts()[p.id] ||
-      this.formatLabelsInput(p.default_labels);
-    const parsed = parseHostdLabels(rawLabels);
-    if (parsed.error) {
-      this.state.error.set(parsed.error);
+    const d = this.pendingDraft(p);
+    const labels = parseHostdLabels(d.labels);
+    const capacity = parseHostCapacity(d.capacity, "Host capacity");
+    const invalid = labels.error || capacity.error;
+    if (invalid) {
+      this.raiseHostMessage(invalid);
       return;
     }
-    const hostName = p.suggested_name || p.hostname || p.id;
+    const hostName = d.name.trim();
+    if (!hostName) return;
     try {
+      // labels and capacity are always sent: a field the owner cleared
+      // overrides the code's defaults rather than inheriting them.
       await this.api.post(
         "POST /api/hostds/pending/{id}/accept",
         { id: p.id },
+        { name: hostName, labels: labels.labels, capacity: capacity.value },
+      );
+      this.settleHostError();
+      this.pendingDrafts.update((all) => {
+        const next = { ...all };
+        delete next[p.id];
+        return next;
+      });
+      await this.loadHostds();
+      this.snackbar.show(
+        p.rekey_hostd
+          ? `Accepted the new key for ${hostName}`
+          : `Approved host ${hostName}`,
+      );
+    } catch (err) {
+      this.raiseHostError(err);
+    }
+  }
+
+  protected startHostdEdit(h: HostdRow): void {
+    this.settleHostError();
+    this.renamingHostd.set(null);
+    this.editingHostd.set({
+      name: h.name,
+      owner: h.owner ?? "",
+      labels: this.formatLabelsInput(h.labels),
+      capacity: h.capacity ? String(h.capacity) : "",
+    });
+  }
+
+  protected patchHostdEdit(patch: Partial<HostdEdit>): void {
+    this.editingHostd.update((e) => (e ? { ...e, ...patch } : e));
+  }
+
+  protected cancelHostdEdit(): void {
+    this.settleHostError();
+    this.editingHostd.set(null);
+    this.renamingHostd.set(null);
+  }
+
+  // saveHostdEdit sends owner, labels and capacity together; a blank
+  // capacity is 0, which clears it (unlimited), where leaving it out
+  // would keep the old one.
+  protected async saveHostdEdit(): Promise<void> {
+    const e = this.editingHostd();
+    if (!e) return;
+    const labels = parseHostdLabels(e.labels);
+    const capacity = parseHostCapacity(e.capacity, "Capacity");
+    const invalid = labels.error || capacity.error;
+    if (invalid) {
+      this.raiseHostMessage(invalid);
+      return;
+    }
+    try {
+      await this.api.patch(
+        "PATCH /api/hostds/{name}",
+        { name: e.name },
         {
-          name: hostName,
-          ...(Object.keys(parsed.labels).length > 0
-            ? { labels: parsed.labels }
-            : {}),
-          ...(p.default_capacity && p.default_capacity > 0
-            ? { capacity: p.default_capacity }
-            : {}),
+          owner: e.owner.trim(),
+          labels: labels.labels,
+          capacity: capacity.value,
         },
       );
+      this.settleHostError();
+      this.editingHostd.set(null);
       await this.loadHostds();
-      this.snackbar.show(`Approved host ${hostName}`);
+      this.snackbar.show(`Saved host ${e.name}`);
     } catch (err) {
-      this.state.recordError(err);
+      this.raiseHostError(err);
     }
+  }
+
+  protected startRenameHostd(name: string): void {
+    this.settleHostError();
+    this.editingHostd.set(null);
+    this.renamingHostd.set({ from: name, to: name });
+  }
+
+  protected setRenameDraft(to: string): void {
+    this.renamingHostd.update((r) => (r ? { ...r, to } : r));
+  }
+
+  protected async saveRenameHostd(): Promise<void> {
+    const r = this.renamingHostd();
+    const to = r?.to.trim() ?? "";
+    if (!r || !to) return;
+    if (to === r.from) {
+      this.renamingHostd.set(null);
+      return;
+    }
+    try {
+      await this.api.post(
+        "POST /api/hostds/{name}/rename",
+        { name: r.from },
+        { name: to },
+      );
+      this.settleHostError();
+      this.renamingHostd.set(null);
+      await this.loadHostds();
+      this.snackbar.show(`Renamed host ${r.from} to ${to}`);
+    } catch (err) {
+      this.raiseHostError(err);
+    }
+  }
+
+  private raiseHostError(err: unknown): void {
+    this.state.recordError(err);
+    this.raisedHostError = this.state.error();
+  }
+
+  private raiseHostMessage(message: string): void {
+    this.state.error.set(message);
+    this.raisedHostError = message;
+  }
+
+  private settleHostError(): void {
+    if (this.raisedHostError === null) return;
+    if (this.state.error() === this.raisedHostError) this.state.clearError();
+    this.raisedHostError = null;
   }
 
   protected rejectPendingHostd(p: PendingHostdRow): void {

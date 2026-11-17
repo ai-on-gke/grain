@@ -6,6 +6,14 @@
   backdrop-filter: blur(1px);
 }
 
+/* The shell stretches this host to its grid row. Keep a definite flex
+   height through the host, drawer and body so only the thread scrolls. */
+g-director-drawer {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
 .director-drawer {
   display: flex;
   flex-direction: column;
@@ -120,6 +128,13 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* The shared expanded view has a 240px thread floor for page panes.
+   A drawer must instead yield space to its header and composer, including
+   short windows and the reduced viewport above a mobile keyboard. */
+.director-drawer .convo-host.is-expanded .convo-thread {
+  min-height: 0;
 }
 
 .drawer-draft-callout {

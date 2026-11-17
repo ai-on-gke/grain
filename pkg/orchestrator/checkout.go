@@ -298,6 +298,11 @@ func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase,
 
 func prepareCheckoutWithUpstream(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, upstream model.RepoRef, task model.Task,
 	setup string, reused bool, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
+	return prepareCheckoutWithBranch(ctx, tools, remoteBase, cloneURL, upstream, task, task.BranchName(), setup, reused, notes, settingsRepos...)
+}
+
+func prepareCheckoutWithBranch(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, upstream model.RepoRef, task model.Task,
+	pushBranch, setup string, reused bool, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
 
 	var settings model.RepoRef
 	if len(settingsRepos) != 0 {
@@ -322,10 +327,24 @@ func prepareCheckoutWithUpstream(ctx context.Context, tools []mcp.Tool, remoteBa
 		}
 		return out, nil
 	}
+	branch := task.BranchName()
+	if branch == "" {
+		branch = task.BranchName()
+	}
+	prBranch := task.BranchName()
+	for _, v := range []string{task.Target.Owner, task.Target.Name, branch, prBranch} {
+		if !gitSafe.MatchString(v) {
+			return checkout{}, fmt.Errorf("orchestrator: %q is not a usable git name", v)
+		}
+	}
 	if reused {
 		if run, ok := runCommandTool(tools); ok {
-			checkExisting := fmt.Sprintf("set -e\n%s\nif [ -d '%s/.git' ]; then\n  cd '%s'\n  echo 'grain-reused-checkout:yes'\n  %s\nfi",
-				sandboxRootEcho(), CheckoutDir, CheckoutDir, stateRepoCheck())
+			switchBranch := ""
+			if branch != prBranch {
+				switchBranch = fmt.Sprintf("  cur=$(git symbolic-ref --short -q HEAD || true)\n  if [ \"$cur\" != '%s' ]; then\n    git checkout -B '%s'\n  fi\n", branch, branch)
+			}
+			checkExisting := fmt.Sprintf("set -e\n%s\nif [ -d '%s/.git' ]; then\n  cd '%s'\n%s  echo 'grain-reused-checkout:yes'\n  %s\nfi",
+				sandboxRootEcho(), CheckoutDir, CheckoutDir, switchBranch, stateRepoCheck())
 			res := run(ctx, map[string]any{"command": checkExisting})
 			if !res.IsError && strings.Contains(res.Text, "grain-reused-checkout:yes") {
 				out := checkout{
@@ -338,12 +357,6 @@ func prepareCheckoutWithUpstream(ctx context.Context, tools []mcp.Tool, remoteBa
 				}
 				return out, nil
 			}
-		}
-	}
-	branch := task.BranchName()
-	for _, v := range []string{task.Target.Owner, task.Target.Name, branch} {
-		if !gitSafe.MatchString(v) {
-			return checkout{}, fmt.Errorf("orchestrator: %q is not a usable git name", v)
 		}
 	}
 	if task.Base != "" && !gitSafe.MatchString(task.Base) {
@@ -399,6 +412,11 @@ fi
 	// the task's branch is started unborn, so the run's first commit is
 	// the repository's first and its push creates the branch, rather than
 	// the clone failing on a base that "may have been merged and deleted".
+	existingFallback := ""
+	if branch != prBranch {
+		existingFallback = fmt.Sprintf("elif git rev-parse --verify --quiet 'refs/remotes/origin/%s' >/dev/null; then\n  git checkout --quiet -b '%s' 'origin/%s'\n",
+			prBranch, branch, prBranch)
+	}
 	script := fmt.Sprintf(`set -e
 %[7]s
 rm -rf '%[1]s'
@@ -410,14 +428,14 @@ cd '%[1]s'
 else
 %[4]sif git rev-parse --verify --quiet 'refs/remotes/origin/%[3]s' >/dev/null; then
   git checkout --quiet -b '%[3]s' 'origin/%[3]s'
-else
+%[12]selse
   %[5]sgit checkout --quiet -b '%[3]s'
 fi
 fi
-%[6]s`, CheckoutDir, shellQuote(checkoutURL(remoteBase, cloneURL, *task.Target)), branch, baseCheck(task, branch), rootOnBase,
+%[6]s`, CheckoutDir, shellQuote(checkoutURL(remoteBase, cloneURL, *task.Target)), branch, baseCheck(task, prBranch), rootOnBase,
 		stateRepoCheck(), sandboxRootEcho(), task.Target, baseGoneMarker,
 		RetryingCloneScript(shellQuote(checkoutURL(remoteBase, cloneURL, *task.Target)), shellQuote(CheckoutDir)),
-		upstreamSync)
+		upstreamSync, existingFallback)
 
 	run, ok := runCommandTool(tools)
 	if !ok {
