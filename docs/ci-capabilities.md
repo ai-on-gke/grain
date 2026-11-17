@@ -171,9 +171,10 @@ The arguments, the environment each built-in reads its credential from, and
 what each mint places are in
 [docs/capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name).
 Core registers no in-process provider any more: the last, the
-`release-gate-read` alias, was retired by unified-grants slice 4, and the
-bare name is now read as the `https://grain.dev/capabilities/api#release-gate-read`
-preset it stood for (below). (`github-sandbox` was the other until schema
+`release-gate-read` alias, was retired by unified-grants slice 4 onto the
+`https://grain.dev/capabilities/api#release-gate-read` preset it stood for
+(below); schema migration 152 rewrote stored bare names, and a job declaring
+the bare name is now refused. (`github-sandbox` was the other until schema
 migration 124 made it `https://grain.dev/capabilities/github#sandbox-repo`.)
 A job naming a reference has it minted before its sandbox is
 built, through the server attached for it in `mcpServers`: the reference
@@ -543,7 +544,7 @@ Materialized leases are revoked on success, failure, cancellation, and partial
 setup failure. Providers retain their existing expiry/reaping backstops for a
 controller crash; cleanup errors are recorded in the daemon log.
 
-## Grain's API: `api:<scope>`, `api:<preset>` and `release-gate-read`
+## Grain's API: `api:<scope>`, `api:<preset>` and `api#release-gate-read`
 
 A job can hold agent API grants (`api:ci:read`, `api:tasks:read`,
 `api:release-gate-read`, ...). [docs/agent-api.md](agent-api.md#ci-jobs)
@@ -556,10 +557,12 @@ holds and to the job's own repository.
 §6) the deployment state it needs to choose a commit and judge a soak.
 It is the built-in preset `api:release-gate-read` (`ci:read`,
 `tasks:read`, `sandboxes:read`, and `tasks:from-template` limited to
-`release-notes`), and its bare name is an alias for it. A job may declare
-it as `release-gate-read`, `api:release-gate-read` or
-`https://grain.dev/capabilities/api#release-gate-read`; all three resolve
-through the same CI api provider (`ciapi.DynamicProvider`), since slice 4 of
+`release-notes`). A job declares it as
+`https://grain.dev/capabilities/api#release-gate-read` (or
+`api:release-gate-read`); both resolve through the same CI api provider
+(`ciapi.DynamicProvider`). The former bare `release-gate-read` alias is
+retired: a job declaring it is refused naming the reference, and schema
+migration 152 rewrote stored bare entries. Slice 4 of
 [unified-grants.design.md](../design/design/unified-grants.design.md) retired
 the separate `release-gate-read` provider `daemon.CapabilityProviders` used to
 register:
@@ -687,7 +690,7 @@ workflow's `on: schedule` cron (`ci.Request.TrustedSchedule`, set only by
 declares. A provider opts in to trusted schedules with
 `model.TrustedScheduleCapability`. Repository write access is no
 provider's: its gate, `model.RepoAccessAdmitsCIEvent`, admits trusted
-schedules itself. `release-gate-read` and `package-publish` have opted in, so the daily `release-train` cron
+schedules itself. `api#release-gate-read` and `package-publish` have opted in, so the daily `release-train` cron
 publishes its rc and pending images itself; `registry-push` has not, so a
 cron still can't publish with it. Once a `release-train` schedule's run on
 the default branch finishes, the orchestrator also starts
