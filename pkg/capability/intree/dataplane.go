@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -27,9 +28,12 @@ import (
 // on it until the server closes. Data-plane ports are reached only through
 // Grain's forwarders (§5.3.3), so anything but loopback is refused.
 func (s *Server) listen(addr string, h http.Handler) (*net.TCPAddr, error) {
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen address %q: %v", addr, err)
+	}
+	if !validPort(port) {
+		return nil, fmt.Errorf("listen address %q: port %q is not a TCP port number (0-65535)", addr, port)
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		return nil, fmt.Errorf("listen address %q is not a loopback IP address", addr)
@@ -55,10 +59,19 @@ func listenAddr(env Env, addr string) string {
 	if env == nil || env(protocol.ProbeEnv) != "1" {
 		return addr
 	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || !validPort(port) {
 		// listen refuses it with the reason.
 		return addr
 	}
 	return net.JoinHostPort(host, "0")
+}
+
+// validPort reports whether port, the port half of a listen address, is
+// a TCP port number. net.Listen refuses anything else too, but as a bind
+// error, which listen would report as a runtime start failure rather than
+// the flag mistake it is.
+func validPort(port string) bool {
+	p, err := strconv.Atoi(port)
+	return err == nil && p >= 0 && p <= 65535
 }

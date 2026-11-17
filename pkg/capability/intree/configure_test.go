@@ -132,7 +132,9 @@ func TestAnUnconfiguredGitHoldsNoPort(t *testing.T) {
 	// A malformed or non-loopback -listen address is also a configuration
 	// refusal rather than a transient runtime start failure, so Settings
 	// refuses to save it and the registry does not retry it every minute.
-	for _, badAddr := range []string{"0.0.0.0:4254", "not-host-port"} {
+	// So is a loopback address whose port is not a TCP port number:
+	// net.Listen refuses it too, but as a bind error.
+	for _, badAddr := range []string{"0.0.0.0:4254", "not-host-port", "127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:", "127.0.0.1:-1"} {
 		badSrv, err := newConfigurableGit(GitConfig{Listen: badAddr})
 		if err != nil {
 			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
@@ -140,6 +142,35 @@ func TestAnUnconfiguredGitHoldsNoPort(t *testing.T) {
 		_, listenErr := attachConfigured(t, badSrv, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
 		if listenErr == nil || protocol.IsStartError(listenErr) {
 			t.Errorf("configuring with -listen %q: %v (IsStartError=%v), want a configuration refusal", badAddr, listenErr, protocol.IsStartError(listenErr))
+		}
+	}
+}
+
+// TestAProbeKeepsAnInvalidListenPort: a probe rebinds -listen onto an
+// ephemeral port, but only a valid one -- rewriting 127.0.0.1:99999 to
+// 127.0.0.1:0 would let the probe pass and Settings save a flag every
+// real start refuses.
+func TestAProbeKeepsAnInvalidListenPort(t *testing.T) {
+	probe := Env(func(name string) string {
+		if name == protocol.ProbeEnv {
+			return "1"
+		}
+		return ""
+	})
+	if got := listenAddr(probe, "127.0.0.1:4254"); got != "127.0.0.1:0" {
+		t.Errorf("listenAddr(probe, 127.0.0.1:4254) = %q, want 127.0.0.1:0", got)
+	}
+	for _, badAddr := range []string{"127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:", "127.0.0.1:-1", "not-host-port"} {
+		if got := listenAddr(probe, badAddr); got != badAddr {
+			t.Errorf("listenAddr(probe, %q) = %q, want it unchanged", badAddr, got)
+		}
+		s, err := newConfigurableGit(GitConfig{Listen: listenAddr(probe, badAddr)})
+		if err != nil {
+			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
+		}
+		_, err = attachConfigured(t, s, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+		if err == nil || protocol.IsStartError(err) {
+			t.Errorf("probing with -listen %q: %v (IsStartError=%v), want a configuration refusal", badAddr, err, protocol.IsStartError(err))
 		}
 	}
 }

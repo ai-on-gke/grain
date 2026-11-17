@@ -677,3 +677,138 @@ func (c *startFailCaller) CallTool(_ context.Context, name string, _ map[string]
 	}
 	return []byte(`{"status":"ok"}`), nil
 }
+
+// scriptedAttach answers each attach with the next of results: an error,
+// or nil for a server offering methods (none when methods is empty).
+type scriptedAttach struct {
+	mu      sync.Mutex
+	results []error
+	methods []string
+	calls   int
+}
+
+func (s *scriptedAttach) attach(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
+	s.mu.Lock()
+	var err error
+	if s.calls < len(s.results) {
+		err = s.results[s.calls]
+	}
+	s.calls++
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return protocol.AttachCaller(ctx, id, cfg, secrets, &fakeCaller{methods: s.methods})
+}
+
+// An unconfigured built-in that could not start raises an alert
+// (Options.OnDrop); when a later retry comes up into the needs-config an
+// unconfigured built-in rests in -- which nothing raises and Sync no
+// longer retries -- that alert is cleared (Options.OnClear), not left open
+// with `grain health` clean.
+func TestAStartFailureAlertClearsWhenAnUnconfiguredBuiltinSettlesIntoNeedsConfig(t *testing.T) {
+	const gitID = "https://grain.dev/capabilities/git"
+	for name, settle := range map[string]error{
+		// configure refusing an empty config (the attach error path)
+		"configure refuses": &protocol.ConfigureError{ID: gitID, Err: errors.New("no repositories are configured")},
+		// a server offering no methods until configured
+		"no methods": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sa := &scriptedAttach{results: []error{fmt.Errorf("attach: %w", protocol.ErrClosedOutput), settle}}
+			now := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+			var drops []Status
+			var cleared, attaches []string
+			r := New(Options{
+				Attach:        sa.attach,
+				Now:           func() time.Time { return now },
+				RetryInterval: time.Minute,
+				OnDrop:        func(st Status) { drops = append(drops, st) },
+				OnClear:       func(id string) { cleared = append(cleared, id) },
+				OnAttach:      func(id string) { attaches = append(attaches, id) },
+			})
+			t.Cleanup(r.Close)
+			ctx := context.Background()
+			servers := map[string]protocol.ServerConfig{gitID: {Command: "grain", Args: []string{"capability", "git"}, Builtin: "git"}}
+
+			r.Sync(ctx, servers)
+			if st := r.Statuses()[0]; st.State != Failed || st.StartError == "" {
+				t.Fatalf("after the exit status = %+v, want failed with a start error", st)
+			}
+			if len(drops) != 1 || len(cleared) != 0 {
+				t.Fatalf("drops = %+v, cleared = %v, want one start-failure drop", drops, cleared)
+			}
+
+			now = now.Add(time.Minute)
+			r.Sync(ctx, servers)
+			if st := r.Statuses()[0]; st.State != NeedsConfig || st.StartError != "" || st.ConfigRefused || st.Waiting != "" {
+				t.Fatalf("after the retry status = %+v, want an unalerted needs-config", st)
+			}
+			if len(drops) != 1 || len(cleared) != 1 || cleared[0] != gitID || len(attaches) != 0 {
+				t.Errorf("drops = %d, cleared = %v, attaches = %v, want the start-failure alert cleared once", len(drops), cleared, attaches)
+			}
+
+			// Resting there clears nothing again.
+			now = now.Add(time.Hour)
+			r.Sync(ctx, servers)
+			if len(cleared) != 1 || sa.calls != 2 {
+				t.Errorf("cleared = %v after %d attaches, want one clear and no retry", cleared, sa.calls)
+			}
+		})
+	}
+}
+
+// A configured built-in that never attached and could not start raises
+// an alert; clearing its config back to {} -- which replaces the entry
+// rather than removing it -- leaves it in an unalerted needs-config, so
+// the alert is cleared there too.
+func TestAStartFailureAlertClearsWhenABuiltinsConfigIsCleared(t *testing.T) {
+	const gitID = "https://grain.dev/capabilities/git"
+	sa := &scriptedAttach{results: []error{
+		&protocol.ConfigureError{ID: gitID, Err: protocol.StartFailure(errors.New("listen tcp 127.0.0.1:4254: bind: address already in use"))},
+		&protocol.ConfigureError{ID: gitID, Err: errors.New("no repositories are configured")},
+	}}
+	var drops []Status
+	var cleared []string
+	r := New(Options{
+		Attach:  sa.attach,
+		Secrets: func(name string) (string, bool) { return secretValue, true },
+		OnDrop:  func(st Status) { drops = append(drops, st) },
+		OnClear: func(id string) { cleared = append(cleared, id) },
+	})
+	t.Cleanup(r.Close)
+	ctx := context.Background()
+	configured := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "git"}, Builtin: "git", Config: map[string]any{"repos": []any{"acme/widgets"}, "token": "$secret:tok"}}
+
+	r.Sync(ctx, map[string]protocol.ServerConfig{gitID: configured})
+	if st := r.Statuses()[0]; st.State != Failed || st.StartError != "could not start: port 4254 in use" {
+		t.Fatalf("with the port held status = %+v, want failed on the port", st)
+	}
+	if len(drops) != 1 {
+		t.Fatalf("drops = %+v, want one start-failure drop", drops)
+	}
+
+	unconfigured := configured
+	unconfigured.Config = map[string]any{}
+	r.Sync(ctx, map[string]protocol.ServerConfig{gitID: unconfigured})
+	if st := r.Statuses()[0]; st.State != NeedsConfig || st.StartError != "" || st.ConfigRefused {
+		t.Fatalf("after clearing its config status = %+v, want an unalerted needs-config", st)
+	}
+	if len(drops) != 1 || len(cleared) != 1 || cleared[0] != gitID {
+		t.Errorf("drops = %d, cleared = %v, want the start-failure alert cleared", len(drops), cleared)
+	}
+}
+
+// An unconfigured built-in resting in needs-config with no alert open
+// clears nothing: OnClear is for an alert some drop raised.
+func TestAnUnconfiguredBuiltinWithNoAlertClearsNothing(t *testing.T) {
+	const gitID = "https://grain.dev/capabilities/git"
+	sa := &scriptedAttach{}
+	var cleared []string
+	r := New(Options{Attach: sa.attach, OnDrop: func(Status) {}, OnClear: func(id string) { cleared = append(cleared, id) }})
+	t.Cleanup(r.Close)
+	r.Sync(context.Background(), map[string]protocol.ServerConfig{gitID: {Command: "grain", Args: []string{"capability", "git"}, Builtin: "git"}})
+	if st := r.Statuses()[0]; st.State != NeedsConfig || len(cleared) != 0 {
+		t.Errorf("status = %+v, cleared = %v, want needs-config and nothing cleared", st, cleared)
+	}
+}
