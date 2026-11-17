@@ -215,7 +215,9 @@ describe("taskPriority", () => {
   it("takes whole numbers from 1 up and refuses the rest", () => {
     expect(taskPriority("7")).toBe(7);
     expect(taskPriority(" 12 ")).toBe(12);
-    for (const bad of ["0", "-1", "1e3", "2.5", "", "abc"])
+    expect(taskPriority("1e3")).toBe(1000);
+    expect(taskPriority("1.5E3")).toBe(1500);
+    for (const bad of ["0", "-1", "2.5", "1e-3", "0x10", "", "abc", "1e400"])
       expect(taskPriority(bad)).toBeNaN();
   });
 });

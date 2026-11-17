@@ -64,7 +64,7 @@ func openReviews(t *testing.T, ctx context.Context, store *model.Store, reviewed
 	}
 	var out []model.Task
 	for _, task := range tasks {
-		if task.Origin.Reason != model.ReasonReview || task.Parent() != reviewedID ||
+		if task.Filing.Reason != model.ReasonReview || task.Parent() != reviewedID ||
 			!slices.Contains(task.Tags, model.PathTriggerMarkerTag) {
 			continue
 		}

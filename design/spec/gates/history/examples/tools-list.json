@@ -1,0 +1,876 @@
+{
+  "tools": [
+    {
+      "name": "gate_checks",
+      "description": "Evaluate the declared current-head check predicate from retained Grain evidence.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": "#/$defs/request",
+        "$defs": {
+          "request": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "protocol_version",
+              "evaluation_id",
+              "mode",
+              "task_id",
+              "gate_id",
+              "contract_revision",
+              "authority_epoch",
+              "policy_revision",
+              "pin",
+              "args",
+              "args_digest",
+              "expected_state_revision",
+              "gate_state",
+              "deadline",
+              "now",
+              "limits",
+              "snapshot",
+              "bundle_id",
+              "permission_revision",
+              "read_scope_digest",
+              "round",
+              "phase",
+              "request_digest",
+              "previous_response_digest",
+              "continuation_state",
+              "deliveries"
+            ],
+            "properties": {
+              "protocol_version": {
+                "const": "2.0"
+              },
+              "evaluation_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "mode": {
+                "enum": [
+                  "evaluate",
+                  "migrate",
+                  "recover"
+                ]
+              },
+              "task_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "gate_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "contract_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "authority_epoch": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "policy_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pin": {
+                "$ref": "#/$defs/pin"
+              },
+              "args": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "repo",
+                  "head"
+                ],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "enum": [
+                      "ai-on-gke/grain"
+                    ]
+                  },
+                  "head": {
+                    "type": "string",
+                    "enum": [
+                      "a1"
+                    ]
+                  }
+                }
+              },
+              "args_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "expected_state_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "gate_state": {
+                "description": "Bounded opaque JSON; byte/depth limits and secret exclusion are normative in MGS-2."
+              },
+              "deadline": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "now": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "limits": {
+                "$ref": "#/$defs/limits"
+              },
+              "snapshot": {
+                "$ref": "#/$defs/snapshot"
+              },
+              "previous_pin": {
+                "$ref": "#/$defs/pin"
+              },
+              "recovery_reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "bundle_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "permission_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "read_scope_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "round": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 7
+              },
+              "phase": {
+                "enum": [
+                  "initial",
+                  "continue"
+                ]
+              },
+              "request_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "previous_response_digest": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "continuation_state": {
+                "description": "Request-carried transient provider JSON, <=16 KiB/depth 16; initial null. Never durable gate_state."
+              },
+              "deliveries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/delivery"
+                },
+                "minItems": 0,
+                "maxItems": 8
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "mode": {
+                      "const": "migrate"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "previous_pin"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "mode": {
+                      "const": "recover"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "recovery_reason"
+                  ],
+                  "properties": {
+                    "gate_state": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "round": {
+                      "const": 0
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "phase": {
+                      "const": "initial"
+                    },
+                    "previous_response_digest": {
+                      "type": "null"
+                    },
+                    "continuation_state": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "phase": {
+                      "const": "continue"
+                    },
+                    "previous_response_digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "delivery": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "request",
+                  "status",
+                  "page"
+                ],
+                "properties": {
+                  "request": {
+                    "$ref": "#/$defs/page_request"
+                  },
+                  "status": {
+                    "const": "ok"
+                  },
+                  "page": {
+                    "$ref": "#/$defs/page"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "request",
+                  "status",
+                  "error"
+                ],
+                "properties": {
+                  "request": {
+                    "$ref": "#/$defs/page_request"
+                  },
+                  "status": {
+                    "const": "unavailable"
+                  },
+                  "error": {
+                    "$ref": "#/$defs/read_error"
+                  }
+                }
+              }
+            ]
+          },
+          "read_error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "retryable",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "unauthorized",
+                  "unsupported_version",
+                  "resource_limit",
+                  "request_loop",
+                  "unavailable"
+                ]
+              },
+              "retryable": {
+                "const": false
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            }
+          },
+          "page_request": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "protocol_version",
+              "evaluation_id",
+              "snapshot_id",
+              "read_id",
+              "reference_id",
+              "cursor"
+            ],
+            "properties": {
+              "protocol_version": {
+                "const": "2.0"
+              },
+              "evaluation_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "snapshot_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "read_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "reference_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          },
+          "page": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "protocol_version",
+              "evaluation_id",
+              "snapshot_id",
+              "evidence_revision",
+              "read_id",
+              "reference_id",
+              "cursor",
+              "records",
+              "next_cursor",
+              "expires_at"
+            ],
+            "properties": {
+              "protocol_version": {
+                "const": "2.0"
+              },
+              "evaluation_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "snapshot_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "evidence_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "read_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "reference_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "records": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/record"
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "record": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "kind",
+              "version",
+              "data"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "data": {
+                "type": "object",
+                "description": "Validated against the Grain-registered schema for kind before delivery."
+              }
+            }
+          },
+          "pin": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "provider",
+              "release",
+              "tool",
+              "gate_version",
+              "args_schema",
+              "state_version",
+              "input_declaration",
+              "continuation_version"
+            ],
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "release": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "tool": {
+                "type": "string",
+                "pattern": "^gate_[a-z0-9][a-z0-9_-]{0,62}$"
+              },
+              "gate_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "args_schema": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "state_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "input_declaration": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "continuation_version": {
+                "const": "1"
+              }
+            }
+          },
+          "snapshot": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "id",
+              "evidence_revision",
+              "cursor",
+              "incoming_message_watermark",
+              "processed_message_watermark",
+              "domains",
+              "unavailable",
+              "records",
+              "references",
+              "created_at",
+              "expires_at"
+            ],
+            "properties": {
+              "version": {
+                "const": "2"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "evidence_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "incoming_message_watermark": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "processed_message_watermark": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "minItems": 1,
+                "maxItems": 32
+              },
+              "unavailable": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/unavailable"
+                },
+                "minItems": 0,
+                "maxItems": 64
+              },
+              "records": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/record"
+                },
+                "minItems": 0,
+                "maxItems": 100
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/snapshot_reference"
+                },
+                "minItems": 0,
+                "maxItems": 64
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "snapshot_reference": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "domain",
+              "kind",
+              "record_kind",
+              "schema_digest",
+              "version",
+              "page_count",
+              "record_count",
+              "expires_at"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "domain": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "kind": {
+                "const": "snapshot_page"
+              },
+              "record_kind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "schema_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "page_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "record_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 6400
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "unavailable": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "domain",
+              "reference_id",
+              "code",
+              "reason"
+            ],
+            "properties": {
+              "domain": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "reference_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "code": {
+                "enum": [
+                  "unavailable",
+                  "unauthorized",
+                  "unsupported_version",
+                  "resource_limit",
+                  "reference_expired"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "elapsed_ms",
+              "rounds",
+              "inline_bytes",
+              "page_bytes",
+              "page_records",
+              "pages",
+              "page_requests_per_round",
+              "page_requests_total",
+              "total_page_bytes",
+              "records",
+              "state_bytes",
+              "continuation_bytes",
+              "json_depth",
+              "response_bytes",
+              "request_bytes",
+              "transport_bytes",
+              "retries_per_round",
+              "retries_total",
+              "retention_ms"
+            ],
+            "properties": {
+              "elapsed_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              },
+              "rounds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8
+              },
+              "inline_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 262144
+              },
+              "page_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 131072
+              },
+              "page_records": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "pages": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "page_requests_per_round": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8
+              },
+              "page_requests_total": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "total_page_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8388608
+              },
+              "records": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 6500
+              },
+              "state_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16384
+              },
+              "continuation_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16384
+              },
+              "json_depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "response_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 262144
+              },
+              "request_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2097152
+              },
+              "transport_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 25165824
+              },
+              "retries_per_round": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "retries_total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "retention_ms": {
+                "const": 60000
+              }
+            }
+          }
+        },
+        "x-grain-gate": {
+          "protocol_version": "2.0",
+          "snapshot_version": "2",
+          "transport": "grain_rounds",
+          "continuation_version": "1",
+          "evidence_replay_safe": true,
+          "inputs": [
+            {
+              "domain": "context",
+              "kinds": [
+                "evaluation_context"
+              ],
+              "required": true,
+              "prefetch": false
+            },
+            {
+              "domain": "checks",
+              "kinds": [
+                "check"
+              ],
+              "required": true,
+              "prefetch": false
+            }
+          ],
+          "record_schemas": [
+            {
+              "kind": "check",
+              "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd"
+            },
+            {
+              "kind": "evaluation_context",
+              "schema_digest": "sha256:befef31a856926b2cf764dda8f3187bd1e419682fa54c2f35d01040306709de8"
+            }
+          ]
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    }
+  ]
+}

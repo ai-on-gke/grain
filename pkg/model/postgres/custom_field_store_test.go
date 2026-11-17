@@ -120,7 +120,7 @@ func TestTaskCustomFieldValuesRoundTrip(t *testing.T) {
 		ID:     "1",
 		Intent: model.IntentImplement,
 		Title:  "Fix the thing",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},
@@ -178,7 +178,7 @@ func TestTaskMultiValuedCustomFieldRoundTrips(t *testing.T) {
 		ID:     "1",
 		Intent: model.IntentImplement,
 		Title:  "Fix the thing",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},
@@ -213,7 +213,7 @@ func TestLegacyCustomFieldUsesFindsWhatADeclarationStranded(t *testing.T) {
 			ID:     id,
 			Intent: model.IntentImplement,
 			Title:  "task " + id,
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: human},
 				Reason:      model.ReasonDirect,
 			},

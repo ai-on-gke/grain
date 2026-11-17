@@ -14,6 +14,7 @@
 
 import type {
   AttachmentUpload,
+  GoalModeConfig,
   GrainConfig,
   Task,
   Template,
@@ -381,6 +382,7 @@ export interface NewTaskDraft {
   generatedFrom?: string;
   workstream?: boolean;
   autoApproveProposals?: boolean;
+  goalMode: GoalModeConfig | null;
 }
 
 export function emptyDraft(
@@ -429,6 +431,7 @@ export function emptyDraft(
     sandboxDiskGb: 0,
     approved: !!f.approved.default,
     atFront: !!f.atFront.default,
+    goalMode: null,
     ...prefill,
   };
 }
@@ -490,6 +493,18 @@ export function buildPayload(
     ...(d.parentId ? { parentId: d.parentId } : {}),
     ...(d.autoApproveProposals !== undefined
       ? { autoApproveProposals: d.autoApproveProposals }
+      : {}),
+    ...(d.goalMode?.enabled
+      ? {
+          goalMode: {
+            enabled: true,
+            maxPasses: d.goalMode.maxPasses ?? 8,
+            wallClockMinutes: d.goalMode.wallClockMinutes ?? 120,
+            ...(d.goalMode.mockMissingSecrets
+              ? { mockMissingSecrets: true }
+              : {}),
+          },
+        }
       : {}),
   };
 }
