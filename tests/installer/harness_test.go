@@ -59,7 +59,6 @@ package installer
 import (
 	"bytes"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,15 +215,6 @@ func repoRootFromCaller() (string, error) {
 		return "", fmt.Errorf("%s does not look like the repository root: %w", root, err)
 	}
 	return root, nil
-}
-
-func freePort() (int, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
 // waitFor polls until check returns nil, or fails saying what never
