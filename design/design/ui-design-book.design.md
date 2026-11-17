@@ -253,6 +253,19 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   nothing is selected (no agents running), drop the split and show one
   centred empty state: what this place is for, and one or two ways onward.
   An empty list beside an empty inspector looks broken.
+- **A page of several kinds of thing is tabs, not one list with kind
+  chips.** Processes shows Schedules & Triggers, Templates, Suites & Runs
+  and Repo Workflows & Declarations as tabs (`?kind=` / the path), each
+  with its count. The classic `/processes` page drew one mixed list with
+  kind chips (All, Schedules, Workflow schedules, Templates, Suites,
+  Triggers). `/next/` deliberately has no All view: each kind has its own
+  row fields, filters, actions and detail pane, and a mixed list either
+  hides those or shows rows whose actions differ by row. Workflow
+  schedules and declared triggers are rows of Schedules & Triggers and
+  count there. Its own chips (Active, Paused, Event triggers, Suppressed)
+  narrow within the tab. Finding one item across kinds is the
+  "Filter this view" box on each tab, and the header New menu creates any
+  kind from any tab (task 6180).
 
 ### Workstream detail
 
@@ -521,6 +534,22 @@ Rules:
 - **Say a wire code in words.** A reason or state code from the API
   (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
   A code nobody has mapped yet shows as itself, which beats showing nothing.
+- **A form that files tasks offers every setting a task carries.** The
+  schedule and template forms carry Admission and Hosting (pill selects
+  whose one-line help says what the choice means and that it "applies to
+  every task this … files"), Keep running (a switch), Grants
+  (`g-grants-picker` with `[policyVerdicts]="true"`, so a grant the
+  capability policy denies, may refuse or reserves for CI is badged and
+  explained, and a refused method is listed disabled with the policy's
+  reason) and Model (`g-model-picker` plus *Use default*). Where
+  something else decides a setting (a template behind a schedule, a suite),
+  the form says so instead of offering a box the server would ignore.
+- **An edit sends only what changed.** A PATCH from a form leaves out each
+  setting still equal to the saved row: absent means "leave alone", and
+  resending an unchanged admission would ask a limited role's grant gate
+  for a raise nobody made. A draft composition preview is the other way
+  round: it always sends what is in force, because the preview endpoint
+  has no saved row to fall back on (`ui-ng/e2e/next-processes-forms.spec.ts`).
 - **A dialog fits the screen.** `.g-dialog` (and its `.is-drawer` width) is
   `box-sizing: border-box`, so its `min(520px, 100vw - 32px)` width
   includes its padding and border. That leaves a 16px margin either side
