@@ -419,10 +419,35 @@ items or topbar chrome:
 
 - **Settings → Tasks:** opt-in rollout switch, flow package `<g-pill-select>`,
   rollout percentage, and control shadow-measurement toggle inside `.s-card`.
-- **Processes → Quality checks (`/processes/quality`):** standard 30/70 split
-  listing built-in and `.grain/qa-flow.yml` flow packages on the left and stage
-  checks, path scopes, and isolation settings in `.proc-card` panels on the
-  right, with a `Configure rollout` link to `/settings/tasks`.
+- **Processes → Software Workflow & QA (`/processes/quality`):** viewport-bounded
+  3-column progressive studio (`container: wf-studio / inline-size`, never
+  `overflow-x: auto` on toolbars hosting `<g-pill-select>` popovers):
+  - **Left catalog (`g-qa-workflow-catalog`, `260px..320px`, collapsible):**
+    groups `@vN` versions by human-readable workflow family in
+    `[data-testid="quality-flows-list"]`, tucks benchmark/ablation seeds and
+    retired-only families behind `Show benchmark & archived variants (N)`
+    (`[data-testid="qa-toggle-archived-flows"]`, auto-expanding on deep links),
+    and hides via `@container wf-studio (max-width: 1179.95px)` in favor of an
+    unclipped header `<g-pill-select testid="qa-flow-switcher">`.
+  - **Center stage spine (`g-qa-v3-studio`):** workflow header with version
+    switcher (`qa-version-switcher`), honest rollout status pill with
+    `<g-status-icon>`, 1-click `Set as default…` (`PUT /api/settings` + Undo),
+    and explicit `Customize as vN` draft mode (zero disabled inputs in read
+    mode). All 8 lifecycle stages start collapsed by default so active stages
+    fit above the fold; partial workflows show only active stages plus a single
+    `+ N stages skipped in this workflow — Show all 8` bar
+    (`[data-testid="qa-toggle-skipped-stages"]`).
+  - **Right focused drawer (`g-qa-step-drawer`, `clamp(340px, 34%, 440px)`):**
+    defaults to the **Workflow guide** (`[data-testid="qa-workflow-guide"]`)
+    with `Where is this workflow used?` provenance
+    (`[data-testid="qa-flow-detail-card"]`), `Settings → Tasks` link, and live
+    stage insights; focuses on a single substep when selected, using zero-JSON
+    example test cases (`Caught` / `Allowed` live pills) instead of raw JSON
+    textareas and `[gTip]` explanations across toolbar controls and `?` icons.
+  - **Phone (`< 600px`, `390×844`):** arrives on the single-column workflow
+    catalog without opening the mobile inspector unasked; selecting a workflow
+    or substep opens the detail view with `← Back`
+    (`[data-testid="qa-mobile-back"]`) and bottom-bar clearance.
 - **Task Detail → Changes & CI:** a `.ci-runs-card` (`Pre-PR quality checks`)
   shown above `CI checks & runs` only when quality control is active or
   recorded on that task. Each check run uses `<g-status-icon>` inside
@@ -827,12 +852,11 @@ The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage c
    - In `g-composition-view` (`[data-testid="composition-preview"]`), scalar metadata fields flow in `.comp-meta-grid` (`grid-template-columns: repeat(auto-fill, minmax(170px, 1fr))`), while list fields (`reads`, `writes`, `capabilities`, `customFields`) and the `body` prompt row use `.comp-row-full` (`grid-column: 1 / -1; width: 100%`).
    - `.comp-body-well` (`[data-testid="composition-body-well"]`) spans `grid-column: 1 / -1; width: 100%; box-sizing: border-box` (`>= 85%` of `.comp-task` `clientWidth`, never crushed into a narrow `~220px` single grid column), with a `320px` max-height scroll clamp (`.is-clamped`) and an `Expand full prompt` / `Collapse prompt` toggle (`[data-testid="composition-body-toggle"]`) for long task prompts.
 
-3. **`30/70` 8-Stage `Software Workflow & QA` Studio Layout & Operator `qaFlowRef` Pickers:**
-   - Under `/next/processes/quality`, the tab is titled **`Software Workflow & QA`** (`[data-testid="proc-tab-quality"]`) and renders a full-bleed workbench (`g-qa-flows-panel` + `g-qa-v3-studio`) without the narrow master-detail list pane.
-   - A top sub-header toolbar (`[data-testid="qa-studio-toolbar"]`) houses the flow package switcher (`<g-pill-select testid="qa-flow-switcher">`), active/schema badges (`v2`, `v3`, `v4`), live prompt-budget meter (`[data-testid="qa-prompt-budget"]`, `<= 8,192 B`), flow version quick-select strip (`[data-testid="quality-flows-list"]`), and studio actions (`What-if probe`, `Dry run`, `Adopt from commit`, `Fork flow`, `New version`).
-   - Below the toolbar, `.qa-workbench-split` uses a `30/70` split (`grid-template-columns: clamp(300px, 30%, 440px) minmax(0, 1fr)`) on desktop (`>= 900px`) and collapses cleanly to a single-column vertical stack (`grid-template-columns: 1fr`, with `.qa-stage-tree` switching its right border to a bottom border and `.qa-ordered-steps` scrolling horizontally inside its card) on viewports `< 900px` (`390×844`) with zero horizontal page overflow:
-     - **Left `30%` Stage & Step Tree (`[data-testid="qa-stage-tree"]`):** search input (`[data-testid="qa-step-search"]`), step-kind filter chips (`All`, `Skills`, `Checks`, `Agents`), and the collapsible 8-stage software lifecycle tree (`1. Decompose & Contract` through `8. Merge & Post-Merge`, plus custom stages).
-     - **Right `70%` Full-Width Stage / Step Inspector & Live Editor (`[data-testid="qa-step-inspector"]`):** stage summary bar (`[data-testid="qa-flow-detail-card"]`) and three inspector tabs (`Definition & fixtures`, `Empirical stats & dry-run`, `Lineage & YAML`).
+3. **Software Workflows v5 Calm Progressive Studio (`/next/processes/quality`) & Operator `qaFlowRef` Pickers:**
+   - Under `/next/processes/quality`, the tab is titled **`Software Workflow & QA`** (`[data-testid="proc-tab-quality"]`) and renders a viewport-bounded 3-column studio (`g-qa-flows-panel`, `g-qa-workflow-catalog`, `g-qa-v3-studio`, `g-qa-step-drawer`) where each column owns its own `overflow-y: auto; min-height: 0` scroller and each component stylesheet stays strictly under `8,000` bytes.
+   - At `@container wf-studio (max-width: 1179.95px)` (covering `1024×860` and `1280px` when the Director drawer is open), the left catalog collapses into the center header's `<g-pill-select align="left" testid="qa-flow-switcher">`, leaving 2 columns (`Stage Spine | Focused Drawer`) with compact `padding-inline: 8px; font-size: 13px` inspector tabs that never clip on `340px` panes. At `@media (max-width: 599.95px)` (`390×844`), navigation uses a 3-step progressive view: Step 1 single-column catalog (`Workflows (N)`), Step 2 stage spine with `← Back` (`[data-testid="qa-mobile-back"]`), and Step 3 full-screen substep/guide drawer with `← Back to stages` (`[data-testid="qa-mobile-back-stages"]`).
+   - Published workflow versions open in **Read-Only Inspect Mode** with zero disabled form controls, `[gMarkdown]` rendering on read-only prompt guidance, an explicit **`Customize as v1 override`** (when only a built-in `@v1` exists) or **`Customize as vN`** CTA (`[data-testid="qa-new-version-btn"]`), and version/hash-aware **`Set as default…`** (`[data-testid="qa-set-default-btn"]`). Entering Draft Mode enables unsaved-draft navigation guards (`[data-qa-unsaved-draft="true"]`, `beforeunload`, and `<g-confirm-dialog>`) and swaps header actions to `Test on recent PRs ▾` (`qa-dry-run-btn`, `qa-v3-open-probe`), `Discard draft` (`qa-cancel-edit-btn`), `Publish vN` (`qa-publish-version-btn`), and `⋯` (`qa-more-actions-btn`).
+   - All 8 lifecycle stages start collapsed by default (`[data-testid="qa-expand-all-stages"]`), partial read-only workflows summarize skipped stages in `[data-testid="qa-toggle-skipped-stages"]`, and custom checks validate via zero-JSON single-line examples (`pattern`) or auto-synthesized fixtures (`companion`, `diff-budget`) with live `Caught` / `Allowed` status pills.
    - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus active/built-in flows such as `engineering-workflow-v4@1`, `golden-v3-enforced@1`, `golden-v3@1`, `golden-v2@1`), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
 
 ## 14. Autonomous Goal Mode
