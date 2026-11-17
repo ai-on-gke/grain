@@ -17,17 +17,24 @@ import {
   withFetch,
   withInterceptors,
 } from "@angular/common/http";
+import { DOCUMENT, LocationStrategy } from "@angular/common";
 import {
   type ApplicationConfig,
+  inject,
   provideZoneChangeDetection,
 } from "@angular/core";
 import {
   provideRouter,
   withComponentInputBinding,
+  withNavigationErrorHandler,
   withPreloading,
 } from "@angular/router";
 import { routes } from "./app.routes";
 import { connectionInterceptor } from "./services/connection.service";
+import {
+  isChunkLoadError,
+  reloadForStaleChunk,
+} from "./services/upgrade-watch.service";
 import { IdleRoutePreload } from "./shell/route-preload";
 
 export const appConfig: ApplicationConfig = {
@@ -37,6 +44,16 @@ export const appConfig: ApplicationConfig = {
       routes,
       withComponentInputBinding(),
       withPreloading(IdleRoutePreload),
+      // A page whose lazy chunk will not load is one this bundle no
+      // longer matches -- the daemon was upgraded underneath it -- so
+      // the page is loaded afresh from the new build instead.
+      withNavigationErrorHandler((e) => {
+        if (!isChunkLoadError(e.error)) return;
+        reloadForStaleChunk(
+          inject(DOCUMENT).defaultView,
+          inject(LocationStrategy).prepareExternalUrl(e.url),
+        );
+      }),
     ),
     provideHttpClient(withFetch(), withInterceptors([connectionInterceptor])),
   ],

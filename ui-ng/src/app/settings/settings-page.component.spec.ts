@@ -55,8 +55,9 @@ class FakeSettingsApi {
 
   upgradeBody: Record<string, unknown> = {
     currentVersion: "v3.6.0",
-    phase: "downloading",
-    cancellable: true,
+    enabled: true,
+    phase: "",
+    database: { driver: "sqlite", dsn: "/var/lib/grain/data/grain.db" },
   };
 
   settingsBody: Record<string, unknown> = {
@@ -508,21 +509,18 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       true,
     );
 
-    // Navigate to Upgrade -> release notes, cancel active upgrade, start upgrade
+    // Navigate to Upgrade -> release notes, the offline database move,
+    // start upgrade, then cancel it once it runs.
     await harness.navigateByUrl("/settings/upgrade");
-    await new Promise((r) => setTimeout(r, 15));
+    await new Promise((r) => setTimeout(r, 30));
     harness.detectChanges();
     expect(
       el.querySelector('[data-testid="upgrade-release-notes"]')?.textContent,
     ).toContain("Faster microVM boot");
-
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="cancel-upgrade-btn"]',
-    )!.click();
-    await new Promise((r) => setTimeout(r, 200));
     expect(
-      api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled"),
-    ).toBe(true);
+      el.querySelector('[data-testid="upgrade-database-commands"]')
+        ?.textContent,
+    ).toContain("sudo ./scripts/setup.sh --db-driver postgres");
 
     // Start upgrade asks first (2026-11-13 deployment-operations
     // walkthrough, task 5390): Cancel sends nothing, the accept starts it.
@@ -547,6 +545,34 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(true);
+
+    // Running: the pane numbers its steps and cancels the current one.
+    api.upgradeBody = {
+      currentVersion: "v3.6.0",
+      enabled: true,
+      phase: "running",
+      branch: "stable",
+      cancellable: true,
+      steps: [
+        { name: "check target", state: "done" },
+        { name: "pull image", state: "running" },
+        { name: "restart", state: "pending" },
+      ],
+    };
+    await harness.navigateByUrl("/settings/general");
+    await harness.navigateByUrl("/settings/upgrade");
+    await new Promise((r) => setTimeout(r, 30));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="upgrade-current-step"]')?.textContent,
+    ).toContain("Step 2 of 3: pull image");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="cancel-upgrade-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(api.calls.some((c) => c.key === "DELETE /api/upgrade/current")).toBe(
+      true,
+    );
   });
 
   it("says Not available, offers no Start upgrade and reads no targets when no upgrader is configured", async () => {

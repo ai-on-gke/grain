@@ -69,6 +69,7 @@ import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.compon
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
+import { UpgradeBannerComponent } from "./shell/upgrade-banner.component";
 import { NavProgressComponent } from "./shell/nav-progress.component";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
@@ -172,6 +173,7 @@ export class DeferErrorDirective implements OnInit {
     NavProgressComponent,
     NextUpComponent,
     DispatchBannerComponent,
+    UpgradeBannerComponent,
     HelpDialogComponent,
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
@@ -675,6 +677,7 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
+          <g-upgrade-banner />
           @defer (when dispatchBanner()) {
             @if (dispatchBanner(); as db) {
               <g-dispatch-banner [banner]="db" />
