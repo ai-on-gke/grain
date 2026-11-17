@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { Location } from "@angular/common";
+import { provideLocationMocks } from "@angular/common/testing";
 import { TestBed } from "@angular/core/testing";
-import { provideRouter, withComponentInputBinding } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withComponentInputBinding,
+} from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { NEVER } from "rxjs";
+import { processesRouteMatcher } from "../app.routes";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig, Task } from "../api/models";
@@ -620,12 +627,15 @@ describe("ProcessesPageComponent (D-9)", () => {
       providers: [
         provideRouter(
           [
-            { path: "processes", component: ProcessesPageComponent },
-            { path: "processes/:tab", component: ProcessesPageComponent },
+            {
+              matcher: processesRouteMatcher,
+              component: ProcessesPageComponent,
+            },
             { path: "task/:id", component: ProcessesPageComponent },
           ],
           withComponentInputBinding(),
         ),
+        provideLocationMocks(),
         { provide: GrainApi, useValue: api },
         { provide: GrainEvents, useValue: { events: () => NEVER } },
       ],
@@ -1171,7 +1181,12 @@ describe("ProcessesPageComponent (D-9)", () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter(
-          [{ path: "processes/:tab", component: ProcessesPageComponent }],
+          [
+            {
+              matcher: processesRouteMatcher,
+              component: ProcessesPageComponent,
+            },
+          ],
           withComponentInputBinding(),
         ),
         { provide: GrainApi, useValue: api },
@@ -1989,5 +2004,223 @@ describe("ProcessesPageComponent (D-9)", () => {
     );
     expect(patches).toHaveLength(2);
     expect(patches[1].body).toMatchObject({ mode: "count", maxPasses: 3 });
+  });
+
+  it("writes the selected schedule, template, suite, and suite run into the URL while keeping ?q=, ?sort=, and ?kind=, and supports Back/Forward and delete", async () => {
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?q=a&sort=name&kind=schedule",
+    );
+    await flush(harness);
+    const router = TestBed.inject(Router);
+    router.setUpLocationChangeListener();
+    const location = TestBed.inject(Location);
+    const root = harness.routeNativeElement!;
+
+    // Auto-select on desktop picks the first row without rewriting the URL.
+    expect(router.url).toBe("/processes/schedules?q=a&sort=name&kind=schedule");
+
+    // Clicking a schedule writes its item path and preserves query params without
+    // fetching its composition twice.
+    api.calls = [];
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-row-sched-gitref"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-gitref?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Sync upstream tag");
+    expect(
+      api.calls.filter(
+        (c) =>
+          c.route === "GET /api/schedules/{id}/composition" &&
+          (c.params as { id?: string } | undefined)?.id === "sched-gitref",
+      ),
+    ).toHaveLength(1);
+
+    // Keyboard Space selects another schedule and pushes a history entry.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-row-sched-1"]')!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-1?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Audit deps");
+
+    // Clicking the already-addressed row again does not push a duplicate history entry.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-row-sched-1"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-1?q=a&sort=name&kind=schedule",
+    );
+
+    // Back lands on the previous schedule; a second Back returns to the bare
+    // tab route and restores desktop auto-select; Forward returns step by step.
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-gitref?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Sync upstream tag");
+
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?q=a&sort=name&kind=schedule");
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Audit deps");
+
+    location.forward();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-gitref?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Sync upstream tag");
+
+    location.forward();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-1?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Audit deps");
+
+    // Deleting the addressed schedule strips its ID from the URL while keeping query params.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-delete-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?q=a&sort=name&kind=schedule");
+
+    // Templates: repo-declared IDs containing ":" and "/" encode cleanly into the URL.
+    await harness.navigateByUrl("/processes/templates?q=release&sort=name");
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-row-repo:template:acme/widgets:release-notes"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/templates/repo:template:acme%2Fwidgets:release-notes?q=release&sort=name",
+    );
+
+    // Suites and Suite runs: switching between suite and run updates the path cleanly.
+    await harness.navigateByUrl("/processes/suites?sort=name");
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-row-suite-1"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/suite-1?sort=name");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suites-subview-runs"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-run-row-7"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/runs/7?sort=name");
+
+    // Back from a suite run returns to the suite definition.
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/suite-1?sort=name");
+    expect(
+      root
+        .querySelector('[data-testid="suite-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Hardening sweep");
+
+    // Forward back to the suite run, then click "Inspect suite definition".
+    location.forward();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/runs/7?sort=name");
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+      .find((b) => b.textContent?.trim() === "Inspect suite definition")!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/suite-1?sort=name");
+    expect(
+      root
+        .querySelector('[data-testid="suite-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Hardening sweep");
+  });
+
+  it("closes mobile detail on Back and ← Back at phone width", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      value: 390,
+      configurable: true,
+      writable: true,
+    });
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?sort=name",
+    );
+    await flush(harness);
+    const router = TestBed.inject(Router);
+    router.setUpLocationChangeListener();
+    const location = TestBed.inject(Location);
+    const root = harness.routeNativeElement!;
+
+    expect(root.querySelector(".proc-split.has-mobile-detail")).toBeNull();
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-row-sched-gitref"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules/sched-gitref?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).not.toBeNull();
+
+    // Browser Back closes the mobile detail sheet and returns to the list URL.
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).toBeNull();
+
+    // Opening again and tapping ← Back also strips the item ID and closes detail.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-row-sched-1"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules/sched-1?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).not.toBeNull();
+    root.querySelector<HTMLButtonElement>(".proc-mobile-back")!.click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).toBeNull();
   });
 });
