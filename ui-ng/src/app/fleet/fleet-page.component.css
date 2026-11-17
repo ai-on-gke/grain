@@ -216,3 +216,79 @@ g-fleet-page {
     text-align: left;
   }
 }
+
+/* The live table's folded CI rows: one summary row, a toggle and the
+   group's one-line shape, as classic System -> Sandboxes has it. */
+.fleet-ci-fold-row td {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.fleet-ci-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px 0 4px;
+  margin-right: 8px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font: 500 13px/18px var(--grain-font-body);
+  cursor: pointer;
+}
+
+.fleet-ci-fold:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.fleet-ci-fold:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.fleet-ci-fold-chevron {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  transform: rotate(-90deg);
+  transition: transform 150ms;
+}
+
+.fleet-ci-fold-chevron.is-open {
+  transform: rotate(0deg);
+}
+
+.fleet-ci-fold-summary {
+  font-size: 12px;
+}
+
+.fleet-power-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fleet-power-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.fleet-power-action p {
+  margin: 0;
+  flex: 1 1 260px;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.fleet-power-requested {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-size: 13px;
+}

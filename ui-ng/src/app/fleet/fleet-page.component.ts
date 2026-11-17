@@ -69,11 +69,15 @@ import {
   type SandboxHealthResponse,
   type SandboxProbeResult,
   type SandboxSnapshot,
+  ciSandboxesSummary,
   extractTaskIdFromSandbox,
   formatBytes,
+  isCISandboxRow,
   formatMB,
   formatRelativeAge,
   parseArgv,
+  readCISandboxesExpanded,
+  writeCISandboxesExpanded,
 } from "./fleet.models";
 
 // How often GET /api/sandboxes is read again while the page is visible,
@@ -97,6 +101,43 @@ const PERSISTENT_ACTIONS: readonly {
   { action: "restart", label: "Restart" },
   { action: "rebuild", label: "Rebuild" },
   { action: "stop", label: "Stop" },
+];
+
+// HostPowerAction is one of the host power card's buttons, worded as
+// classic System → Power words it (ui/src/components/SystemPage.jsx).
+interface HostPowerAction {
+  id: "reboot" | "shutdown";
+  label: string;
+  route: "POST /api/host/reboot" | "POST /api/host/shutdown";
+  hint: string;
+  confirmTitle: string;
+  confirm: string;
+  requested: string;
+}
+
+const HOST_POWER_ACTIONS: readonly HostPowerAction[] = [
+  {
+    id: "reboot",
+    label: "Reboot host",
+    route: "POST /api/host/reboot",
+    hint: "Reboots the machine grain itself is running on.",
+    confirmTitle: "Reboot the host machine?",
+    confirm:
+      "Every task currently running is interrupted, and this UI will be unreachable until the machine comes back up.",
+    requested:
+      "Reboot requested. This UI is unreachable until the host machine comes back up.",
+  },
+  {
+    id: "shutdown",
+    label: "Shut down host",
+    route: "POST /api/host/shutdown",
+    hint: "Powers the machine off and leaves it off. Nothing here can start it again — that takes whatever runs the machine.",
+    confirmTitle: "Shut down the host machine?",
+    confirm:
+      "Every task currently running is interrupted, and grain stays down until somebody powers the machine back on by some other means.",
+    requested:
+      "Shutdown requested. grain stays down until somebody powers the machine back on.",
+  },
 ];
 
 @Component({
@@ -548,69 +589,127 @@ const PERSISTENT_ACTIONS: readonly {
                         </tr>
                       </thead>
                       <tbody>
-                        @for (sb of filteredSandboxes(); track sb.sandbox) {
-                          @let tid = taskIdOf(sb);
-                          <tr [attr.data-testid]="'sandbox-row-' + sb.sandbox">
-                            <td class="tabular">
-                              <strong>{{ sb.name || sb.sandbox }}</strong>
-                              @if (sb.networkAccess) {
-                                <span class="muted">
-                                  · {{ sb.networkAccess }}</span
-                                >
-                              }
-                            </td>
-                            <td>
-                              <span
-                                [class]="
-                                  sb.ready && !sb.error
-                                    ? 'status-pill healthy'
-                                    : 'status-pill error'
-                                "
-                              >
-                                <g-status-icon
-                                  [tone]="
-                                    sb.ready && !sb.error ? 'healthy' : 'error'
-                                  "
-                                  [kind]="
-                                    sb.ready && !sb.error ? 'healthy' : 'error'
-                                  "
-                                />
-                                {{
-                                  sb.ready && !sb.error
-                                    ? "Ready"
-                                    : sb.error ||
-                                      sb.terminationReason ||
-                                      "Not ready"
-                                }}
-                              </span>
-                            </td>
-                            <td class="tabular">
-                              @if (tid) {
-                                <a [routerLink]="['/task', tid]">#{{ tid }}</a>
-                              } @else {
-                                <span class="muted">{{ sb.kind || "—" }}</span>
-                              }
-                            </td>
-                            <td class="tabular">{{ sb.backend }}</td>
-                            <td class="tabular">
-                              {{ sb.cpus ?? "—" }} vCPU ·
-                              {{ fmtMB(sb.memoryUsedMB ?? sb.memoryMB) }}
-                            </td>
-                            <td class="tabular">{{ sb.loadAverage || "—" }}</td>
-                            <td class="tabular">{{ fmtAge(sb.startedAt) }}</td>
-                            <td>
-                              @if (tid && canRecreateTaskSandbox()) {
+                        @for (item of sandboxRowItems(); track item.key) {
+                          @if (item.sb === null) {
+                            <!-- CI sandboxes fold behind one summary row,
+                                 below the agent and standing ones, as on
+                                 classic System → Sandboxes. -->
+                            <tr
+                              class="fleet-ci-fold-row"
+                              data-testid="ci-sandboxes-summary-row"
+                            >
+                              <td colspan="8">
                                 <button
                                   type="button"
-                                  class="btn-text"
-                                  [attr.data-testid]="'sandbox-recreate-' + tid"
-                                  (click)="recreateTaskSandbox(tid)"
+                                  class="fleet-ci-fold"
+                                  data-testid="ci-sandboxes-toggle"
+                                  [attr.aria-expanded]="ciSandboxesExpanded()"
+                                  [attr.aria-controls]="
+                                    ciSandboxesExpanded()
+                                      ? ciSandboxRowIds()
+                                      : null
+                                  "
+                                  aria-describedby="fleet-ci-sandboxes-summary"
+                                  (click)="toggleCISandboxes()"
                                 >
-                                  Recreate
+                                  <span
+                                    class="fleet-ci-fold-chevron"
+                                    [class.is-open]="ciSandboxesExpanded()"
+                                    aria-hidden="true"
+                                    >▾</span
+                                  >
+                                  CI sandboxes ({{ ciSandboxRows().length }})
                                 </button>
-                              }
-                            </td>
-                          </tr>
+                                <span
+                                  id="fleet-ci-sandboxes-summary"
+                                  class="muted tabular fleet-ci-fold-summary"
+                                  data-testid="ci-sandboxes-summary"
+                                  >{{ ciSandboxesSummaryLine() }}</span
+                                >
+                              </td>
+                            </tr>
+                          } @else {
+                            @let sb = item.sb;
+                            @let tid = taskIdOf(sb);
+                            <tr
+                              [attr.id]="'live-sandbox-' + sb.sandbox"
+                              [attr.data-testid]="'sandbox-row-' + sb.sandbox"
+                            >
+                              <td class="tabular">
+                                <strong>{{ sb.name || sb.sandbox }}</strong>
+                                @if (sb.networkAccess) {
+                                  <span class="muted">
+                                    · {{ sb.networkAccess }}</span
+                                  >
+                                }
+                              </td>
+                              <td>
+                                <span
+                                  [class]="
+                                    sb.ready && !sb.error
+                                      ? 'status-pill healthy'
+                                      : 'status-pill error'
+                                  "
+                                >
+                                  <g-status-icon
+                                    [tone]="
+                                      sb.ready && !sb.error
+                                        ? 'healthy'
+                                        : 'error'
+                                    "
+                                    [kind]="
+                                      sb.ready && !sb.error
+                                        ? 'healthy'
+                                        : 'error'
+                                    "
+                                  />
+                                  {{
+                                    sb.ready && !sb.error
+                                      ? "Ready"
+                                      : sb.error ||
+                                        sb.terminationReason ||
+                                        "Not ready"
+                                  }}
+                                </span>
+                              </td>
+                              <td class="tabular">
+                                @if (tid) {
+                                  <a [routerLink]="['/task', tid]"
+                                    >#{{ tid }}</a
+                                  >
+                                } @else {
+                                  <span class="muted">{{
+                                    sb.kind || "—"
+                                  }}</span>
+                                }
+                              </td>
+                              <td class="tabular">{{ sb.backend }}</td>
+                              <td class="tabular">
+                                {{ sb.cpus ?? "—" }} vCPU ·
+                                {{ fmtMB(sb.memoryUsedMB ?? sb.memoryMB) }}
+                              </td>
+                              <td class="tabular">
+                                {{ sb.loadAverage || "—" }}
+                              </td>
+                              <td class="tabular">
+                                {{ fmtAge(sb.startedAt) }}
+                              </td>
+                              <td>
+                                @if (tid && canRecreateTaskSandbox()) {
+                                  <button
+                                    type="button"
+                                    class="btn-text"
+                                    [attr.data-testid]="
+                                      'sandbox-recreate-' + tid
+                                    "
+                                    (click)="recreateTaskSandbox(tid)"
+                                  >
+                                    Recreate
+                                  </button>
+                                }
+                              </td>
+                            </tr>
+                          }
                         }
                       </tbody>
                     </table>
@@ -1169,7 +1268,8 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
               !canReadDispatch() &&
               !canReadCaches() &&
               !canReadSandboxes() &&
-              !canRestartDaemon()
+              !canRestartDaemon() &&
+              !canPowerHost()
             ) {
               <p class="empty-state" data-testid="fleet-controls-denied">
                 {{
@@ -1530,6 +1630,61 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                     </button>
                   </div>
                 </article>
+
+                <!-- Host power: reboot or shut down the machine grain runs
+                     on, offered only where /api/config says this
+                     deployment can (classic System → Power). -->
+                <article class="ops-card" data-testid="fleet-host-power-card">
+                  <div class="ops-card-head">
+                    <div>
+                      <h2 class="ops-card-title">Host Power</h2>
+                      <p class="ops-card-sub">
+                        Reboot or power off the machine grain itself runs on
+                      </p>
+                    </div>
+                  </div>
+                  @if (powerRequested(); as req) {
+                    <p
+                      class="fleet-power-requested"
+                      role="status"
+                      data-testid="host-power-requested"
+                    >
+                      {{ req }}
+                    </p>
+                  }
+                  @if (availablePowerActions().length === 0) {
+                    <p
+                      class="muted"
+                      style="margin: 0"
+                      data-testid="host-power-unavailable"
+                    >
+                      Rebooting and shutting down the host are not enabled for
+                      this deployment.
+                    </p>
+                  } @else {
+                    <div class="fleet-power-actions">
+                      @for (a of availablePowerActions(); track a.id) {
+                        <div class="fleet-power-action">
+                          <p>{{ a.hint }}</p>
+                          <button
+                            type="button"
+                            class="btn-primary is-destructive"
+                            [attr.data-testid]="'host-' + a.id + '-btn'"
+                            [disabled]="!canPowerHost()"
+                            [gTip]="
+                              canPowerHost()
+                                ? a.label + ' (asks confirmation first)'
+                                : powerDeniedReason()
+                            "
+                            (click)="confirmHostPower(a)"
+                          >
+                            {{ a.label }}
+                          </button>
+                        </div>
+                      }
+                    </div>
+                  }
+                </article>
               </div>
             }
           </div>
@@ -1830,6 +1985,29 @@ export class FleetPageComponent implements OnInit {
       ? this.access.deniedReason("POST /api/host/restart")
       : "Restarting grain is not enabled for this deployment.",
   );
+  // Which host power actions /api/config says this deployment has
+  // (rebootEnabled, shutdownEnabled): a daemon started without the
+  // command answers 404, so an action it lacks is not offered at all.
+  protected readonly rebootEnabled = signal(false);
+  protected readonly shutdownEnabled = signal(false);
+  protected readonly availablePowerActions = computed(() =>
+    HOST_POWER_ACTIONS.filter((a) =>
+      a.id === "reboot" ? this.rebootEnabled() : this.shutdownEnabled(),
+    ),
+  );
+  // Both routes are deployment:reboot.
+  protected readonly canPowerHost = computed(
+    () =>
+      this.access.can("POST /api/host/reboot") &&
+      !this.isScopeRepoLimited("deployment:reboot"),
+  );
+  protected readonly powerDeniedReason = computed(
+    () =>
+      this.access.deniedReason("POST /api/host/reboot") ||
+      this.deniedScopeFallback("deployment:reboot"),
+  );
+  // The line the host power card shows once the host accepted a request.
+  protected readonly powerRequested = signal<string | null>(null);
   protected readonly canRecreateTaskSandbox = computed(() =>
     this.access.can("POST /api/tasks/{id}/sandbox/recreate"),
   );
@@ -1960,6 +2138,62 @@ export class FleetPageComponent implements OnInit {
     );
   });
 
+  // The live table's CI rows apart from the rest: a busy deployment holds
+  // dozens of CI sandboxes beside the handful of agent and standing ones
+  // an operator usually came for, so they fold behind one summary row,
+  // collapsed by default and remembered per browser.
+  protected readonly ciSandboxesExpanded = signal(readCISandboxesExpanded());
+  private readonly standingSandboxNames = computed(
+    () =>
+      new Set(
+        (this.sandboxes()?.standingSandboxes ?? [])
+          .map((s) => s.sandbox)
+          .filter((s): s is string => !!s),
+      ),
+  );
+  protected readonly ciSandboxRows = computed<SandboxSnapshot[]>(() =>
+    this.filteredSandboxes().filter((s) =>
+      isCISandboxRow(s, this.standingSandboxNames()),
+    ),
+  );
+  protected readonly ciSandboxRowIds = computed(() =>
+    this.ciSandboxRows()
+      .map((s) => `live-sandbox-${s.sandbox}`)
+      .join(" "),
+  );
+  protected readonly ciSandboxesSummaryLine = computed(() =>
+    ciSandboxesSummary(
+      this.ciSandboxRows(),
+      this.sandboxes()?.budget?.pools,
+      this.access.clockNow(),
+    ),
+  );
+  // What the live table renders, in order: every other row, then the CI
+  // summary row (sb null) and, when it is open, the CI rows beneath it.
+  protected readonly sandboxRowItems = computed<
+    { key: string; sb: SandboxSnapshot | null }[]
+  >(() => {
+    const standing = this.standingSandboxNames();
+    const items: { key: string; sb: SandboxSnapshot | null }[] =
+      this.filteredSandboxes()
+        .filter((s) => !isCISandboxRow(s, standing))
+        .map((sb) => ({ key: sb.sandbox, sb }));
+    const ci = this.ciSandboxRows();
+    if (ci.length) {
+      items.push({ key: " ci-summary", sb: null });
+      if (this.ciSandboxesExpanded()) {
+        for (const sb of ci) items.push({ key: sb.sandbox, sb });
+      }
+    }
+    return items;
+  });
+
+  protected toggleCISandboxes(): void {
+    const next = !this.ciSandboxesExpanded();
+    this.ciSandboxesExpanded.set(next);
+    writeCISandboxesExpanded(next);
+  }
+
   protected readonly filteredHostds = computed<HostdView[]>(() => {
     const q = this.viewFilter.query().trim().toLowerCase();
     const list = this.hostds();
@@ -2052,6 +2286,8 @@ export class FleetPageComponent implements OnInit {
         this.access.setConfig(cfg);
         this.hostSandboxes.set(Boolean(cfg["hostSandboxes"]));
         this.restartEnabled.set(cfg["restartEnabled"] !== false);
+        this.rebootEnabled.set(cfg["rebootEnabled"] === true);
+        this.shutdownEnabled.set(cfg["shutdownEnabled"] === true);
       }
     } catch {
       // Non-fatal.
@@ -2650,6 +2886,30 @@ export class FleetPageComponent implements OnInit {
         } catch {
           // Will clear on next refresh once reachable.
         }
+      },
+    });
+  }
+
+  protected confirmHostPower(a: HostPowerAction): void {
+    this.confirmReq.set({
+      title: a.confirmTitle,
+      message: a.confirm,
+      accept: a.label,
+      destructive: true,
+      run: async () => {
+        this.powerRequested.set(null);
+        try {
+          await this.api.post(a.route, undefined, {});
+        } catch (err) {
+          // A dropped connection (status 0) is what a host going down
+          // looks like from here; an answer is the host refusing.
+          if ((err as { status?: number })?.status !== 0) {
+            this.snackbar.show(`${a.label} failed: ${errorText(err)}`);
+            return;
+          }
+        }
+        this.powerRequested.set(a.requested);
+        this.snackbar.show(a.requested);
       },
     });
   }
