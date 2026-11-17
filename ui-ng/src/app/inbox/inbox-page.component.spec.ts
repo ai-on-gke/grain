@@ -409,6 +409,85 @@ describe("InboxPageComponent", () => {
     ).toBe(true);
   });
 
+  function accessTask(api: FakeApi, id: string, title: string): Task {
+    api.details[id] = {
+      id,
+      title,
+      state: "awaiting_reply",
+      pendingAccess: {
+        summary: "Read acme/lib",
+        reason: "to vendor it",
+        createdAt: "",
+        items: [{ kind: "read", repo: "acme/lib" }],
+      },
+    };
+    return { id, title, state: "awaiting_reply", awaitingAccess: true };
+  }
+
+  function refRow(f: ComponentFixture<unknown>, ref: string): HTMLElement {
+    return [
+      ...(f.nativeElement as HTMLElement).querySelectorAll<HTMLElement>(
+        ".queue-row",
+      ),
+    ].find((r) => r.querySelector(".row-ref")?.textContent?.trim() === ref)!;
+  }
+
+  async function settle(f: ComponentFixture<unknown>): Promise<void> {
+    await new Promise((r) => setTimeout(r));
+    await f.whenStable();
+  }
+
+  it("grants on one task while another task's grant is still applying", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      accessTask(api, "3", "Needs lib"),
+      accessTask(api, "4", "Needs lib too"),
+    ];
+    const pending: (() => void)[] = [];
+    api.post = (route, params, body) => {
+      api.posts.push({ route, params, body });
+      return new Promise((resolve) => pending.push(() => resolve({})));
+    };
+    const f = await render(api);
+    const grant = () =>
+      q(f, '[data-testid="grant-access"]') as HTMLButtonElement;
+
+    refRow(f, "#3").querySelector<HTMLButtonElement>(".row-main")!.click();
+    await settle(f);
+    grant().click();
+    await settle(f);
+    // The grant is posted at once, and only its own row is locked.
+    expect(api.posts.map((p) => p.params)).toEqual([{ id: "3" }]);
+    expect(grant().disabled).toBe(true);
+    expect(
+      refRow(f, "#3").querySelector('[data-testid="row-applying"]'),
+    ).not.toBeNull();
+    expect(
+      refRow(f, "#4").querySelector('[data-testid="row-applying"]'),
+    ).toBeNull();
+
+    refRow(f, "#4").querySelector<HTMLButtonElement>(".row-main")!.click();
+    await settle(f);
+    expect(grant().disabled).toBe(false);
+    grant().click();
+    await settle(f);
+    expect(api.posts.map((p) => p.params)).toEqual([{ id: "3" }, { id: "4" }]);
+    expect(
+      (f.nativeElement as HTMLElement).querySelectorAll(
+        '[data-testid="row-applying"]',
+      ),
+    ).toHaveLength(2);
+
+    // Both land; the queue read after them shows neither.
+    api.taskList = [];
+    pending.splice(0).forEach((r) => r());
+    await settle(f);
+    await settle(f);
+    expect(TestBed.inject(InboxStore).inFlight().size).toBe(0);
+    expect(q(f, '[data-testid="row-applying"]')).toBeNull();
+    expect(q(f, '[data-testid="action-error"]')).toBeNull();
+  });
+
   it("disables what a viewer cannot do and says why", async () => {
     const api = new FakeApi();
     api.cfg = {
@@ -1179,6 +1258,46 @@ describe("inbox page helpers", () => {
           .filter((p) => p.route === "POST /api/tasks/{id}/submit")
           .map((p) => (p.params as { id: string }).id),
       ).toEqual(["35"]);
+    });
+
+    it("reads the queue again before Submit and refuses once CI has turned red", async () => {
+      const api = new FakeApi();
+      const pr = (ci: string): Task => ({
+        id: "35",
+        title: "Makefile",
+        state: "awaiting_submit",
+        pullRequest: "acme/web#5",
+        updatedAt:
+          ci === "passed" ? "2026-11-15T10:00:00Z" : "2026-11-15T10:05:00Z",
+        mergeGates: [
+          { id: "ci", label: "CI", state: ci },
+          { id: "approval", label: "Approval", state: "needed" },
+        ],
+      });
+      api.taskList = [pr("passed")];
+      // The detail carries no gates of its own, so the list's decide.
+      api.details["35"] = {
+        id: "35",
+        title: "Makefile",
+        state: "awaiting_submit",
+      };
+      const f = await render(api);
+      rowByRef(f, "#35").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      const submit = q(f, '[data-testid="action-submit"]') as HTMLButtonElement;
+      expect(submit.disabled).toBe(false);
+
+      // CI goes red after the list was last read; the click re-reads it.
+      api.taskList = [pr("failing")];
+      submit.click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      expect(
+        api.posts.filter((p) => p.route === "POST /api/tasks/{id}/submit"),
+      ).toEqual([]);
+      expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+        "CI is failing",
+      );
     });
 
     it("puts a stopped turn in Paused, names who stopped it, and offers Resume and Close only", async () => {

@@ -138,7 +138,12 @@ export class InboxStore implements OnDestroy {
   );
   private lastReadFailed = false;
   readonly actionError = signal<string | null>(null);
+  // busy is the reply, talk or undo call in flight, if any.
   readonly busy = signal<string | null>(null);
+  // inFlight holds the keys of the rows whose answer (a grant, an
+  // approval, a batch) is still being applied. Each row is locked on its
+  // own, so a slow grant on one task leaves every other row answerable.
+  readonly inFlight = signal<ReadonlySet<string>>(new Set());
   readonly filter = signal<FilterId>("all");
   readonly query = inject(ViewFilter).query;
   readonly wsTaskIds = signal<ReadonlySet<string> | null>(null);
@@ -970,25 +975,52 @@ export class InboxStore implements OnDestroy {
     this.checked.set(new Set());
   }
 
-  // Re-reads the queue and verifies the entry, action, merge gates, and
-  // access still hold before posting (server 409 preconditions close the
-  // remaining TOCTOU window).
+  isInFlight(key: string | null | undefined): boolean {
+    return !!key && this.inFlight().has(key);
+  }
+
+  private markInFlight(keys: Iterable<string>, on: boolean): void {
+    this.inFlight.update((cur) => {
+      const next = new Set(cur);
+      for (const k of keys) {
+        if (on) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }
+
+  // actByKey answers one row. By default it reads the queue again first
+  // and checks the entry, the action, its gate (blocked) and access still
+  // hold before posting; server 409 preconditions close the remaining
+  // window. skipVerify posts at once against the queue as last read, for
+  // the slow access-request answers (Grant, Deny) whose server refuses a
+  // request already answered, so one never waits on a refresh. Only this
+  // row is locked while the answer applies: answers to other rows may be
+  // in flight beside it. The queue is read again once it lands;
+  // concurrent reads coalesce in refresh, so answers landing together
+  // never clobber each other.
   async actByKey(
     entryKey: string,
     actionOrId: string | InboxAction,
     body?: unknown,
+    opts: { skipVerify?: boolean } = {},
   ): Promise<boolean> {
     if (typeof actionOrId !== "string" && actionOrId.blocked) {
       this.actionError.set(actionOrId.blocked);
       return false;
     }
-    this.busy.set(typeof actionOrId === "string" ? actionOrId : actionOrId.id);
+    if (this.isInFlight(entryKey)) return false;
+    this.markInFlight([entryKey], true);
     this.actionError.set(null);
+    let label = "";
     try {
-      await this.refresh();
-      if (this.lastReadFailed) {
-        this.actionError.set(READ_FAILED);
-        return false;
+      if (!opts.skipVerify) {
+        await this.refresh();
+        if (this.lastReadFailed) {
+          this.actionError.set(READ_FAILED);
+          return false;
+        }
       }
       const entry = this.liveEntries().find((e) => e.key === entryKey);
       const action =
@@ -1007,6 +1039,8 @@ export class InboxStore implements OnDestroy {
         this.actionError.set("No permission for this action.");
         return false;
       }
+      // Several answers may be in flight; a failure names its own task.
+      label = entry.taskId ? `#${entry.taskId}: ` : "";
       await this.api.post(action.route, action.params, body ?? action.body);
       this.noteAnswered(action);
       await this.refresh();
@@ -1015,10 +1049,10 @@ export class InboxStore implements OnDestroy {
       this.applyUpdates();
       return true;
     } catch (err) {
-      this.actionError.set(errorText(err));
+      this.actionError.set(label + errorText(err));
       return false;
     } finally {
-      this.busy.set(null);
+      this.markInFlight([entryKey], false);
     }
   }
 
@@ -1042,9 +1076,9 @@ export class InboxStore implements OnDestroy {
   }
 
   // actAll gives every checked row (or the given keys) that offers it the
-  // same answer after reading the queue fresh. Keys that moved on or
-  // turned blocked are skipped, never replaced by another. Rows that
-  // failed stay selected.
+  // same answer after reading the queue fresh. Keys that moved on, turned blocked or are already being
+  // answered are skipped, never replaced by another. Only the rows in the
+  // batch are locked while it applies. Rows that failed stay selected.
   async actAll(
     actionId: string,
     keys?: readonly string[],
@@ -1053,8 +1087,14 @@ export class InboxStore implements OnDestroy {
     failed: number;
     undo: { route: RouteKey; ids: string[] } | null;
   }> {
-    const wantKeys = new Set(keys ?? [...this.checked()]);
-    this.busy.set(actionId);
+    // The batch's rows are locked first, so the rest of the list stays
+    // answerable while it reads the queue again (the confirm dialog was
+    // open a while) and applies.
+    const lockKeys = [...new Set(keys ?? [...this.checked()])].filter(
+      (k) => !this.isInFlight(k),
+    );
+    const locked = new Set(lockKeys);
+    this.markInFlight(lockKeys, true);
     this.actionError.set(null);
     try {
       await this.refresh();
@@ -1062,7 +1102,7 @@ export class InboxStore implements OnDestroy {
         this.actionError.set(READ_FAILED);
         return { count: 0, failed: 0, undo: null };
       }
-      const pool = this.scopedLiveEntries().filter((e) => wantKeys.has(e.key));
+      const pool = this.scopedLiveEntries().filter((e) => locked.has(e.key));
       const targets = pool
         .map((e) => ({ e, a: e.actions.find((x) => x.id === actionId) }))
         .filter(
@@ -1108,7 +1148,7 @@ export class InboxStore implements OnDestroy {
         undo: route && undoIds.length ? { route, ids: undoIds } : null,
       };
     } finally {
-      this.busy.set(null);
+      this.markInFlight(lockKeys, false);
     }
   }
 

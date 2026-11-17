@@ -559,6 +559,14 @@ Rules:
     Afterwards only the rows that failed or were never sent stay ticked
     (`ui-ng/e2e/next-tasks-batch-actions.spec.js`).
   - Undo for reversible actions.
+  - An answer locks only its own row. While a slow answer (a grant, an
+    approval) applies, that row shows *Applying…* and its buttons are off;
+    every other row stays answerable, so a person can grant one task and
+    move straight on to the next. Grant and Deny post at once
+    against the queue as last read (the server refuses a request already
+    answered); every other answer reads the queue again first, so a gate
+    that has just turned red still stops it. Focus follows the reader
+    rather than the answer that just landed (`InboxStore.inFlight`).
   - An action that moves a branch, opens a pull request on someone's
     behalf or drops a record (promote, merge back, delete) asks first in
     the confirm dialog, naming what it touches.
