@@ -1,7 +1,9 @@
 # Built-in gate observations
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
-contracts. It ships exactly two v1 types: `delivery` with
+contracts. The independent [framework review and extension guidance](gate-observation-review.md)
+records repairs, coverage and limits for later ports. It ships exactly two v1
+types: `delivery` with
 `{"product":"report","semantics":"current_v1"}`, and `acknowledgment` with
 `{"mode":"explicit_receipt"}`. Other catalogue profiles/types are unsupported.
 Their closed schemas are pinned to the canonical catalogue and evaluated by pure
@@ -51,13 +53,17 @@ reasons. They cannot silently pass. An ordinary person's reply is not a report o
 receipt. A complete empty report collection is unmet for delivery and unknown for
 receipt. Live producers are pending for delivery.
 
-Receipt requires a verified human close event at the current closure timestamp,
-after both the current report and settlement. Legacy unattributed, fallback or
+Receipt requires a nonempty verified human identity on the close event at the
+current closure timestamp, strictly after both the current report and settlement.
+Equal timestamps cannot prove ordering and remain unknown, including a revised
+report written after a close with the same timestamp. Legacy unattributed,
+fallback or
 automation closes are unknown, not synthetic receipts. A new report/run, question,
 message, attachment, relevant task shape, or registry/config build changes the
 source fence; old receipt observations cannot silently cover a changed report.
 These local immutable body/comment and close-event records are the only supported
 evidence. No permission revisions or complete remote evidence are claimed.
+The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
 
@@ -81,8 +87,16 @@ Controller generations, accepted observations, rejected errors and retry deadlin
 persist in separate local diagnostic tables. Restart reuses accepted versions and
 retry backoff. Infrastructure failures are rejected safe diagnostics, never agent
 failures; persisted exponential retry is 1, 2, 4 … 60 seconds plus up to 20% jitter.
-The next authorized read after retry collects again. Collection has a 250ms budget,
-plus up to 50ms to retain a safe failure; a totally unavailable database can prevent
+Failure bursts within backoff share one generation/retry. An older failed read
+cannot overwrite a newer accepted read; acceptance wins a timestamp tie. Errors
+are reconstructed without accepted evidence or predictions and have no positive
+evidence freshness lease. The next authorized read after retry collects again,
+even if the last source fence is unchanged. Collection has a 250ms budget,
+plus up to 50ms to retain a safe failure. SQLite diagnostic lock acquisition caps
+its leased connection's busy timeout to the remaining budget, then restores it
+before reuse (or discards the connection if restoration fails); ordinary writer
+settings are preserved. Postgres retains its context-aware advisory writer lock.
+A totally unavailable database can prevent
 error persistence, in which case the response still shows an unavailable error.
 A malformed/unregistered/old cached profile becomes an explained unknown under
 the regenerated observation profile before any fresh supported result is shown.
@@ -99,8 +113,10 @@ evidence identities/versions, status/reasons and legacy state), evidence changes
 rejected errors and an hourly sample during reads. Stable minute refreshes update
 current results/evaluation totals without flooding history. Retention is at most
 72 hours and 1024 samples per task, 32 current caches and 32768 samples globally.
-Pruning runs during diagnostic writes, including failure writes. Idle/disabled
-records are not swept until collection resumes. Rotation or unusually frequent
+Pruning runs during diagnostic writes, including failure writes. Indexed time/key
+cutoffs bound per-task/global overflow work without a large retained-key anti-join.
+The composite history index is installed by idempotent Init on both engines and
+replaces the original expiry-only index. Idle/disabled records are not swept until collection resumes. Rotation or unusually frequent
 changes can shorten the retained window; counts describe retained samples, not
 all evaluations or time-weighted reliability. If cohort rotation evicts a current cache while history remains, accepted/error
 replay resumes above retained generations and restores the first retained
@@ -186,10 +202,15 @@ Review after a day or two of separately enabled operation:
 
 Shared SQLite and real Postgres integration tests exercise durable report/close
 records, changed attachments/messages/reports, restart/replay, concurrent event and
-read coalescing, unsupported persisted type/version/config, errors/backoff and
+read coalescing, unsupported persisted type/version/config, stale failure
+completion, coalesced
+failure bursts, canonical error reconstruction, retry expiry, ambiguous receipt
+ordering, contended lock deadlines/restoration, retention at full capacity and
 unchanged legacy tables/views/wake signals. Pure tests cover malformed configs,
 complete-empty/incomplete/stale reads and inert output. Ordinary API tests cover
-report/receipt/reply behavior, additive JSON, authorization and diagnostic redaction.
+report/receipt/reply behavior, complete evidence across paged/comments-since reads,
+additive JSON, authorization, missing tasks,
+diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.

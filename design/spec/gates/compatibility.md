@@ -31,6 +31,9 @@ and bounded sibling diagnostic history. There is no contract/decision authority,
 `?view=gates` implementation, discovery/mutation/action/waiver API or migration.
 Body-only finite analysis tasks are selected by a disabled-by-default deployment
 allowlist; attachment-bearing/unsupported shapes and missing provenance are unknown.
+The [independent framework review](../../../docs/gate-observation-review.md) records
+repair coverage and stable extension rules, including conservative receipt ordering,
+failure/acceptance races and bounded retention on both engines.
 All current legacy writers listed below retain authority in this implementation.
 The imports and handoff requirements remain future specifications.
 

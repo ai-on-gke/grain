@@ -4666,12 +4666,16 @@ var Tables = []string{
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
 
-	// Every close and reopen of a task somebody asked for, with who, when
-	// and why (model.TaskEvent).
+	// Local shadow diagnostics, separate from lifecycle and event outboxes.
 	gateObservationTable,
 	gateObservationHistoryTable,
-	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_at` ON `gate_observation_shadow_history` (`at`)",
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_order` ON `gate_observation_shadow_history` (`at`,`task_id`,`generation`)",
+	// The composite index also covers expiry; retire the original prefix.
+	"DROP INDEX IF EXISTS `gate_shadow_history_at`",
 	"CREATE INDEX IF NOT EXISTS `gate_shadow_current_at` ON `gate_observation_shadow` (`evaluated_at`)",
+
+	// Every close and reopen of a task somebody asked for, with who, when
+	// and why (model.TaskEvent).
 	taskEventTable,
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
