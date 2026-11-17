@@ -38,20 +38,20 @@ type upstream struct {
 }
 
 var upstreamScopes = map[string]model.APIScope{
-	"GET /api/ci/runs":                                "ci:read",
-	"GET /api/ci/runs/{id}":                           "ci:read",
-	"GET /api/ci/runs/{id}/artifacts/{job}/{name}":    "ci:read",
-	"GET /api/fs/ci/{path...}":                        "ci:read",
-	"GET /api/fs/task/{path...}":                      "tasks:read",
-	"POST /api/ci/runs":                               "ci:write",
-	"DELETE /api/ci/runs/{id}":                        "ci:write",
-	"GET /api/persistent-sandboxes":                   "sandboxes:read",
-	"GET /api/tasks":                                  "tasks:read",
-	"POST /api/tasks":                                 "tasks:write",
-	"POST /api/tasks/from-template":                   "tasks:from-template",
-	"GET /api/settings":                               "settings:read",
-	"GET /api/repos/{owner}/{name}/config":            "repos:read",
-	"GET /api/auth/status":                            "internal",
+	"GET /api/ci/runs":                             "ci:read",
+	"GET /api/ci/runs/{id}":                        "ci:read",
+	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": "ci:read",
+	"GET /api/fs/ci/{path...}":                     "ci:read",
+	"GET /api/fs/task/{path...}":                   "tasks:read",
+	"POST /api/ci/runs":                            "ci:write",
+	"DELETE /api/ci/runs/{id}":                     "ci:write",
+	"GET /api/persistent-sandboxes":                "sandboxes:read",
+	"GET /api/tasks":                               "tasks:read",
+	"POST /api/tasks":                              "tasks:write",
+	"POST /api/tasks/from-template":                "tasks:from-template",
+	"GET /api/settings":                            "settings:read",
+	"GET /api/repos/{owner}/{name}/config":         "repos:read",
+	"GET /api/auth/status":                         "internal",
 }
 
 func newUpstream() *upstream {

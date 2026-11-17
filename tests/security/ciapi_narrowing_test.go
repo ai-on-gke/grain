@@ -81,8 +81,10 @@ type securityStubPersistentSandboxes struct {
 func (s *securityStubPersistentSandboxes) List(context.Context) ([]model.PersistentSandboxStatus, error) {
 	return append([]model.PersistentSandboxStatus(nil), s.list...), nil
 }
-func (*securityStubPersistentSandboxes) Logs(string) (string, bool)                   { return "", false }
-func (*securityStubPersistentSandboxes) Control(context.Context, string, string) error { return errors.New("unused") }
+func (*securityStubPersistentSandboxes) Logs(string) (string, bool) { return "", false }
+func (*securityStubPersistentSandboxes) Control(context.Context, string, string) error {
+	return errors.New("unused")
+}
 func (*securityStubPersistentSandboxes) Dial(context.Context, string) (net.Conn, error) {
 	return nil, errors.New("unused")
 }
