@@ -227,6 +227,7 @@ type Task struct {
 	// and for every task filed before grain recorded it. A record for
 	// reporting, deciding nothing about the task.
 	TemplateID string `json:"templateId,omitempty"`
+	QAFlowRef  string `json:"qaFlowRef,omitempty"`
 	Owner      string `json:"owner"`
 	Creator    string `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
@@ -1271,6 +1272,7 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		Skills:               t.Skills.Clone(),
 		ReviewTemplateID:     t.ReviewTemplateID,
 		TemplateID:           t.SourceTemplateID,
+		QAFlowRef:            t.QAFlowRef,
 		ReviewTemplateName:   reviewTemplateName,
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,

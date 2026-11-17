@@ -64,6 +64,7 @@ const FOLLOW_SLACK_PX = 48;
 
 export interface ComposerConfig {
   placeholder?: string;
+  sendOnEnter?: boolean;
   submitLabel?: string;
   secondaryLabel?: string;
   disabled?: boolean;
@@ -255,8 +256,7 @@ export interface ComposerConfig {
             [disabled]="config()?.disabled"
             (input)="draft.set($any($event.target).value)"
             (paste)="onPaste($event)"
-            (keydown.control.enter)="onEnter($event)"
-            (keydown.meta.enter)="onEnter($event)"
+            (keydown)="onEnter($event)"
           ></textarea>
           <g-attachment-picker
             testid="task-attach"
@@ -266,7 +266,12 @@ export interface ComposerConfig {
           />
           <div class="action-bar convo-actions">
             <span class="muted composer-hint"
-              >Ctrl+Enter sends &middot; paste or drop files</span
+              >{{
+                config()?.sendOnEnter
+                  ? "Enter sends · Shift+Enter adds a line"
+                  : "Ctrl+Enter sends"
+              }}
+              &middot; paste or drop files</span
             >
             @if (config()?.secondaryLabel) {
               <button
@@ -578,7 +583,9 @@ export class ConversationComponent implements OnDestroy {
   }
 
   protected onEnter(ev: Event): void {
-    if ((ev as KeyboardEvent).isComposing) return;
+    const k = ev as KeyboardEvent;
+    if (k.key !== "Enter" || k.isComposing || k.shiftKey) return;
+    if (!this.config()?.sendOnEnter && !k.ctrlKey && !k.metaKey) return;
     ev.preventDefault();
     this.submit();
   }

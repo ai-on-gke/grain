@@ -118,6 +118,7 @@ var notSettings = []string{
 	"task_filed_template",
 	"task_source_template",
 	"task_grant",
+	"qa_flow_version",
 	"task_link",
 	"task_tag",
 	// Which comment grain keeps on a work tree's GitHub origin, and what it
@@ -487,6 +488,8 @@ var notSettings = []string{
 	"task_qa_assignment",
 	"task_qa_check_run",
 	"task_qa_finding",
+	"qa_experiment",
+	"qa_enrollment",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a
