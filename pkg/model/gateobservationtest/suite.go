@@ -213,6 +213,9 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 		t.Fatal("observation heartbeat flooded history")
 	}
 	// Concurrent message arrival cannot be lost by an older completing read.
+	// Compare against the version after the earlier human message, so that
+	// message cannot satisfy the assertion for this concurrent arrival.
+	source = v.SourceRevision
 	raceErrs := make(chan error, 9)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
