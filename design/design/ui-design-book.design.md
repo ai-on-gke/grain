@@ -725,12 +725,15 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
-  Save-Data), so navigation does not stall behind a slow origin. A
+  Save-Data alongside idle `@defer` prefetches), so navigation does not stall behind a slow origin. A
   navigation still pending after 120 ms shows the shell's top progress bar
-  (`shell/nav-progress.component.ts`), which takes no pointer events. Routes
+  (`shell/nav-progress.component.ts`), which takes no pointer events. If a lazy
+  route or `@defer` chunk cannot load (such as a 404 on an open tab after a
+  daemon upgrade), the shell surfaces a snackbar with a **Reload** action onto
+  the requested destination rather than leaving the click silent. Routes
   have no resolvers or guards that wait on polled reads; a page loads its own
-  data and shows its loading state. `e2e/next-task-page-stall.spec.js`
-  covers this.
+  data and shows its loading state. `e2e/next-task-page-stall.spec.js` and
+  `e2e/next-stale-chunk-upgrade.spec.ts` cover this.
 
 ## 10. How to test a UI change
 

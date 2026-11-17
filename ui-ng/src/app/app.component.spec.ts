@@ -14,7 +14,11 @@
 
 import { APP_BASE_HREF } from "@angular/common";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { Router, provideRouter } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withNavigationErrorHandler,
+} from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "./api/grain-api.service";
 import { GrainEvents } from "./api/grain-events.service";
@@ -34,6 +38,10 @@ import { ThemeService } from "./services/theme.service";
 import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { DESTINATIONS, SETTINGS } from "./shell/nav";
+import {
+  resolveReloadHref,
+  staleChunkErrorHandler,
+} from "./shell/route-preload";
 
 class FakeShellApi {
   configBody: GrainConfig = {
@@ -495,6 +503,7 @@ describe("AppComponent shell", () => {
     expect(help.isOpen()).toBe(false);
     expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
     expect(snacks.current()?.message).toContain("Help could not load");
+    expect(snacks.current()?.action?.label).toBe("Reload");
 
     // Safety net: if modalOpen() is true before any [aria-modal="true"] mounts, Escape clears it.
     TestBed.inject(CreateTaskService).open();
@@ -506,6 +515,113 @@ describe("AppComponent shell", () => {
     await f.whenStable();
     expect(TestBed.inject(CreateTaskService).isOpen()).toBe(false);
     expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("shows a Reload snackbar when a lazy route chunk fails to load (stale tab after upgrade) and guards open-redirect paths", async () => {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      imports: [AppComponent],
+      providers: [
+        provideRouter(
+          [
+            { path: "inbox", children: [] },
+            {
+              path: "tasks",
+              loadComponent: () =>
+                Promise.reject(
+                  new TypeError(
+                    "Failed to fetch dynamically imported module: /next/chunk-OLD12345.js",
+                  ),
+                ),
+            },
+          ],
+          withNavigationErrorHandler(staleChunkErrorHandler),
+        ),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: new FakeShellApi() },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const f = TestBed.createComponent(AppComponent);
+    f.autoDetectChanges();
+    await f.whenStable();
+
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl("/inbox");
+    await f.whenStable();
+
+    // Drive via a real rail link click: must not throw an unhandled rejection!
+    el(f)
+      .querySelector<HTMLAnchorElement>('[data-testid="rail-tasks"]')!
+      .click();
+    await f.whenStable();
+    f.detectChanges();
+    expect(router.url).toBe("/inbox");
+
+    const snackEl = el(f).querySelector('[data-testid="snackbar"]');
+    expect(snackEl).not.toBeNull();
+    expect(snackEl?.textContent).toContain("Page could not load");
+    const actionBtn = el(f).querySelector<HTMLButtonElement>(
+      '[data-testid="snackbar-action"]',
+    );
+    expect(actionBtn?.textContent?.trim()).toBe("Reload");
+
+    const navSpy = vi
+      .spyOn(f.componentInstance, "navigateTo")
+      .mockImplementation(() => undefined);
+    try {
+      f.componentInstance.reloadApp("/tasks?tab=closed");
+      expect(navSpy).toHaveBeenCalledWith("/next/tasks?tab=closed");
+      navSpy.mockClear();
+
+      f.componentInstance.reloadApp("//evil.example.com/phish");
+      expect(navSpy).toHaveBeenLastCalledWith();
+
+      f.componentInstance.reloadApp("/\\evil.example.com/phish");
+      expect(navSpy).toHaveBeenLastCalledWith();
+    } finally {
+      navSpy.mockRestore();
+    }
+
+    const loc = router.parseUrl("/inbox") && f.componentInstance["location"];
+    expect(resolveReloadHref(loc, "/tasks")).toBe("/next/tasks");
+    expect(resolveReloadHref(loc, "//evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\\evil.example.com")).toBeNull();
+  });
+
+  it("skips @defer idle prefetch when navigator.connection.saveData is enabled", async () => {
+    vi.useFakeTimers();
+    const prevConn = Object.getOwnPropertyDescriptor(navigator, "connection");
+    Object.defineProperty(navigator, "connection", {
+      configurable: true,
+      get: () => ({ saveData: true }),
+    });
+    try {
+      localStorage.clear();
+      TestBed.configureTestingModule({
+        imports: [AppComponent],
+        providers: [
+          provideRouter([{ path: "inbox", children: [] }]),
+          { provide: APP_BASE_HREF, useValue: "/next/" },
+          { provide: GrainApi, useValue: new FakeShellApi() },
+          { provide: GrainEvents, useValue: { events: () => NEVER } },
+        ],
+      });
+      const f = TestBed.createComponent(AppComponent);
+      f.detectChanges();
+      await vi.advanceTimersByTimeAsync(5000);
+      const comp = f.componentInstance as unknown as {
+        idlePrefetch: () => boolean;
+      };
+      expect(comp.idlePrefetch()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      if (prevConn) {
+        Object.defineProperty(navigator, "connection", prevConn);
+      } else {
+        delete (navigator as { connection?: unknown }).connection;
+      }
+    }
   });
 
   it("customizes rail destinations (hide/reorder/reset) persisted in localStorage while keeping Inbox first and Settings last", async () => {

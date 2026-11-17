@@ -186,9 +186,7 @@ func (s *Server) handleStagingProxy(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Set("X-Forwarded-Prefix", prefix)
 			// The UI's own credentials are for the UI: the service behind
 			// it is somebody's staging build, not something to hand them to.
-			pr.Out.Header.Del("Authorization")
-			pr.Out.Header.Del(AccessCodeHeader)
-			stripGrainCookies(pr.Out)
+			stripStagingCredentials(pr.Out)
 		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -269,6 +267,31 @@ func isGrainCookie(name string) bool {
 		}
 	}
 	return strings.HasPrefix(name, grainCookiePrefix)
+}
+
+// stripStagingCredentials drops grain's own request credentials, signed
+// proxy identity assertions, and grain_* cookies before forwarding a
+// request to a staging environment, so an untrusted staging build never
+// receives tokens or replayable assertions valid against grain itself.
+func stripStagingCredentials(r *http.Request) {
+	r.Header.Del("Authorization")
+	r.Header.Del("Proxy-Authorization")
+	r.Header.Del("X-Grain-Tunnel-Token")
+	r.Header.Del(AccessCodeHeader)
+	r.Header.Del(AccessNameHeader)
+	r.Header.Del(ActingTaskHeader)
+	for _, h := range proxyIdentityHeaders {
+		r.Header.Del(h)
+	}
+	for _, h := range PlaintextIdentityHeaders {
+		r.Header.Del(h)
+	}
+	for _, v := range registeredVerifiersSnapshot() {
+		for _, h := range v.Headers() {
+			r.Header.Del(h)
+		}
+	}
+	stripGrainCookies(r)
 }
 
 // stripGrainCookies drops grain's own cookies (isGrainCookie) from a
