@@ -345,7 +345,10 @@ A settings picker offers the server's own vocabulary (for example
 hand-written list: a choice the daemon cannot use stays listed as a `disabled`
 `PillOption` with the server's reason as its `hint`. A number whose stored `0`
 means grain's default shows blank with the server's `<key>Default` as its
-placeholder, and a cleared box saves that default again. A card a link points
+placeholder, and a cleared box saves that default again. Where `0` is a value
+of its own (Sandboxes → Disk overcommit, the disk floor), the box shows the
+stored `0`, keeps the default as its placeholder, and a box left blank goes back
+to the default on `change`, never under the cursor on `input`. A card a link points
 at carries an `id` (`#capability-policy`, `#credentials`, `#other-secrets`), and the page
 scrolls to the URL's fragment once the section has rendered.
 

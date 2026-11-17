@@ -1463,6 +1463,18 @@ function mib(mb: number): string {
               </button>
             </div>
           }
+          @if (state.val("sandboxShapeIgnored", false)) {
+            <div
+              class="s-banner warn"
+              role="status"
+              data-testid="sandbox-shape-ignored"
+            >
+              Not in effect on this deployment: its sandboxes are directories on
+              the daemon's own machine, which have no CPU, memory or disk shape
+              of their own. These are still saved, and would size a
+              granule-managed sandbox VM.
+            </div>
+          }
           <div class="s-grid">
             <div class="s-field">
               <span class="s-label">Sandbox backend</span>
@@ -1616,9 +1628,9 @@ function mib(mb: number): string {
                   )
                 "
                 (change)="
-                  state.setNumber(
+                  commitDefaulted(
+                    $any($event.target),
                     'sandboxCpuOvercommit',
-                    $any($event.target).value,
                     reportedDefault('sandboxCpuOvercommit', 2)
                   )
                 "
@@ -1659,9 +1671,9 @@ function mib(mb: number): string {
                   )
                 "
                 (change)="
-                  state.setNumber(
+                  commitDefaulted(
+                    $any($event.target),
                     'sandboxMemoryOvercommit',
-                    $any($event.target).value,
                     reportedDefault('sandboxMemoryOvercommit', 1)
                   )
                 "
@@ -1687,6 +1699,15 @@ function mib(mb: number): string {
               <div class="s-subhead">
                 <h4 class="s-subhead-title">Auto overcommit bounds</h4>
               </div>
+              @if (autoOvercommitLive(); as live) {
+                <div
+                  class="s-banner readonly"
+                  role="status"
+                  data-testid="auto-overcommit-effective"
+                >
+                  {{ live }}
+                </div>
+              }
               <span class="s-hint"
                 >Blank (or 0) uses grain's default, shown greyed in each
                 box.</span
@@ -1729,6 +1750,45 @@ function mib(mb: number): string {
             </div>
             <div class="s-grid">
               <div class="s-field">
+                <label class="s-label" for="sb-disk-oc"
+                  >Disk overcommit (x)</label
+                >
+                <input
+                  id="sb-disk-oc"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  data-testid="input-disk-overcommit"
+                  [value]="state.val('sandboxDiskOvercommit', '')"
+                  [placeholder]="state.defaultHint('sandboxDiskOvercommit')"
+                  [disabled]="!canWriteSettings()"
+                  (input)="
+                    state.setNumber(
+                      'sandboxDiskOvercommit',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskOvercommit', 2),
+                      true
+                    )
+                  "
+                  (change)="
+                    commitDefaulted(
+                      $any($event.target),
+                      'sandboxDiskOvercommit',
+                      reportedDefault('sandboxDiskOvercommit', 2)
+                    )
+                  "
+                />
+                <span class="s-hint"
+                  >How many times the volume (on Kubernetes, the cluster's
+                  allocatable ephemeral storage), less the floor, sandbox disks
+                  may be promised. 0 leaves disk held by the floor alone; blank
+                  resets to grain's default ({{
+                    reportedDefault("sandboxDiskOvercommit", 2)
+                  }}).</span
+                >
+              </div>
+              <div class="s-field">
                 <label class="s-label" for="sb-floor-share"
                   >Disk floor (share of each volume)</label
                 >
@@ -1752,9 +1812,9 @@ function mib(mb: number): string {
                     )
                   "
                   (change)="
-                    state.setNumber(
+                    commitDefaulted(
+                      $any($event.target),
                       'sandboxDiskFloorShare',
-                      $any($event.target).value,
                       reportedDefault('sandboxDiskFloorShare', 0.1)
                     )
                   "
@@ -1788,9 +1848,9 @@ function mib(mb: number): string {
                     )
                   "
                   (change)="
-                    state.setNumber(
+                    commitDefaulted(
+                      $any($event.target),
                       'sandboxDiskFloorMinMb',
-                      $any($event.target).value,
                       diskFloorMinDefault()
                     )
                   "
@@ -3185,6 +3245,60 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   // holds nothing back): a cleared box saves that default, so the greyed
   // placeholder it shows is what Save really stores, and 0 typed on
   // purpose stays 0.
+  // autoOvercommitLive is what the auto overcommit controller has set the
+  // ratios to (GET /api/settings sandboxCommitment.budget.overcommit, as
+  // classic SandboxesSection shows it), or "" outside auto mode or where
+  // the server reports none.
+  protected readonly autoOvercommitLive = computed(() => {
+    if (this.overcommitMode() !== "auto") return "";
+    const budget = this.sandboxCommitment()?.budget as
+      | {
+          cpuOvercommit?: number;
+          memoryOvercommit?: number;
+          overcommit?: {
+            cpuOvercommit?: number;
+            memoryOvercommit?: number;
+            last?: {
+              cpuSome?: number;
+              cpuPressure?: number;
+              memorySome?: number;
+              memoryPressure?: number;
+            };
+          };
+        }
+      | undefined;
+    const live = budget?.overcommit;
+    const cpu = live?.cpuOvercommit ?? budget?.cpuOvercommit;
+    const mem = live?.memoryOvercommit ?? budget?.memoryOvercommit;
+    if (cpu == null && mem == null) return "";
+    const parts: string[] = [];
+    if (cpu != null) parts.push(`CPU ${Number(cpu).toFixed(2)}×`);
+    if (mem != null) parts.push(`memory ${Number(mem).toFixed(2)}×`);
+    let psi = "";
+    if (live?.last) {
+      const c = live.last.cpuSome ?? live.last.cpuPressure ?? 0;
+      const m = live.last.memorySome ?? live.last.memoryPressure ?? 0;
+      psi = ` (PSI: CPU ${Number(c).toFixed(1)}%, memory ${Number(m).toFixed(1)}%)`;
+    }
+    return `Auto overcommit is active — live effective factors: ${parts.join(", ")}${psi}.`;
+  });
+
+  // commitDefaulted is a defaulted number box's (change): blank saves
+  // grain's default, and the box shows that default again. Writing it
+  // back by hand matters when the stored value already is the default:
+  // nothing is drafted then, so the [value] binding does not change and
+  // Angular would leave the cleared box blank.
+  protected commitDefaulted(
+    el: HTMLInputElement,
+    key: string,
+    fallback: number,
+  ): void {
+    this.state.setNumber(key, el.value, fallback);
+    if (String(el.value ?? "").trim() === "" && !el.validity?.badInput) {
+      el.value = String(this.state.val(key, fallback));
+    }
+  }
+
   protected reportedDefault(key: string, fallback: number): number {
     const d = Number(this.state.settings()[`${key}Default`]);
     return Number.isFinite(d) && d > 0 ? d : fallback;
