@@ -230,87 +230,94 @@ export interface ComposerConfig {
             >{{ transcript() }}</pre>
         }
       </div>
-      @if (unseen() > 0) {
-        <button
-          type="button"
-          class="convo-jump"
-          data-testid="convo-jump"
-          (click)="jumpToLatest()"
-        >
-          New messages ↓
-        </button>
-      }
+      <!-- The pill, any note and the composer travel together: one box
+           the Inbox pins to its pane (inbox-inspector.css); elsewhere
+           display: contents leaves the layout as it was. -->
+      <div class="convo-dock">
+        @if (unseen() > 0) {
+          <button
+            type="button"
+            class="convo-jump"
+            data-testid="convo-jump"
+            (click)="jumpToLatest()"
+          >
+            New messages ↓
+          </button>
+        }
 
-      @if (config()?.deniedReason) {
-        <div data-testid="reply-blocked" class="convo-denied" role="note">
-          {{ config()?.deniedReason }}
-        </div>
-      }
-      @if (!config()?.hidden) {
-        <form
-          class="chat-composer convo-composer"
-          (submit)="onSubmit($event)"
-          (dragover)="$event.preventDefault()"
-          (drop)="onDrop($event)"
-        >
-          <textarea
-            #composer
-            class="reply-textarea"
-            rows="2"
-            data-testid="task-composer"
-            [attr.aria-label]="config()?.placeholder || 'Comment on this task'"
-            [placeholder]="config()?.placeholder || 'Comment on this task'"
-            [value]="draft()"
-            [disabled]="config()?.disabled"
-            (input)="draft.set($any($event.target).value)"
-            (paste)="onPaste($event)"
-            (keydown)="onEnter($event)"
-          ></textarea>
-          <g-attachment-picker
-            testid="task-attach"
-            [staged]="stagedAttachments()"
-            [disabled]="config()?.disabled || false"
-            (stagedChange)="stagedAttachments.set($event)"
-          />
-          <div class="action-bar convo-actions">
-            <span class="muted composer-hint"
-              >{{
-                config()?.sendOnEnter
-                  ? "Enter sends · Shift+Enter adds a line"
-                  : "Ctrl+Enter sends"
-              }}
-              &middot; paste or drop files</span
-            >
-            @if (config()?.secondaryLabel) {
+        @if (config()?.deniedReason) {
+          <div data-testid="reply-blocked" class="convo-denied" role="note">
+            {{ config()?.deniedReason }}
+          </div>
+        }
+        @if (!config()?.hidden) {
+          <form
+            class="chat-composer convo-composer"
+            (submit)="onSubmit($event)"
+            (dragover)="$event.preventDefault()"
+            (drop)="onDrop($event)"
+          >
+            <textarea
+              #composer
+              class="reply-textarea"
+              rows="2"
+              data-testid="task-composer"
+              [attr.aria-label]="
+                config()?.placeholder || 'Comment on this task'
+              "
+              [placeholder]="config()?.placeholder || 'Comment on this task'"
+              [value]="draft()"
+              [disabled]="config()?.disabled"
+              (input)="draft.set($any($event.target).value)"
+              (paste)="onPaste($event)"
+              (keydown)="onEnter($event)"
+            ></textarea>
+            <g-attachment-picker
+              testid="task-attach"
+              [staged]="stagedAttachments()"
+              [disabled]="config()?.disabled || false"
+              (stagedChange)="stagedAttachments.set($event)"
+            />
+            <div class="action-bar convo-actions">
+              <span class="muted composer-hint"
+                >{{
+                  config()?.sendOnEnter
+                    ? "Enter sends · Shift+Enter adds a line"
+                    : "Ctrl+Enter sends"
+                }}
+                &middot; paste or drop files</span
+              >
+              @if (config()?.secondaryLabel) {
+                <button
+                  type="button"
+                  class="btn-tonal"
+                  data-testid="act-send-secondary"
+                  [disabled]="
+                    config()?.disabled ||
+                    (!draft().trim() && !stagedAttachments().length)
+                  "
+                  (click)="submit('secondary')"
+                >
+                  {{ config()?.secondaryLabel }}
+                </button>
+              }
               <button
-                type="button"
-                class="btn-tonal"
-                data-testid="act-send-secondary"
+                type="submit"
+                class="btn-primary"
+                data-testid="act-send"
+                [title]="config()?.deniedReason || config()?.submitTitle || ''"
                 [disabled]="
                   config()?.disabled ||
+                  config()?.submitDisabled ||
                   (!draft().trim() && !stagedAttachments().length)
                 "
-                (click)="submit('secondary')"
               >
-                {{ config()?.secondaryLabel }}
+                {{ config()?.submitLabel || "Send" }}
               </button>
-            }
-            <button
-              type="submit"
-              class="btn-primary"
-              data-testid="act-send"
-              [title]="config()?.deniedReason || config()?.submitTitle || ''"
-              [disabled]="
-                config()?.disabled ||
-                config()?.submitDisabled ||
-                (!draft().trim() && !stagedAttachments().length)
-              "
-            >
-              {{ config()?.submitLabel || "Send" }}
-            </button>
-          </div>
-        </form>
-      }
+            </div>
+          </form>
+        }
+      </div>
     </ng-template>
 
     @if (mode() !== "fullscreen") {

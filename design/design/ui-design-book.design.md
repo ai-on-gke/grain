@@ -297,7 +297,9 @@ inspector and Task Detail. Sessions shares its message styles.
   inspector, whose body already scrolls, the inline thread is not a scroller
   at all: it grows to its full length and `.inspector-body` is the one
   scroller (one pane, one scroller), with the composer sticky at the body's
-  bottom while the thread is on screen. `g-conversation` follows the end of
+  bottom while the thread is on screen. The composer, any note and the "New
+  messages" pill sit in one `.convo-dock` (`display: contents` elsewhere),
+  so the pill rides just above the pinned composer. `g-conversation` follows the end of
   the thread in whichever element scrolls (the thread, or the pane around
   it when the thread is not a scroller), so opening a task still lands on
   the newest message (`e2e/next-inbox-inspector-scroll.spec.js`).

@@ -146,6 +146,12 @@
   align-self: flex-start;
 }
 
+/* The pill, any note and the composer, as one box only where a page pins
+   them (inbox-inspector.css); everywhere else they lay out as before. */
+.convo-dock {
+  display: contents;
+}
+
 .convo-jump {
   position: absolute;
   left: 50%;

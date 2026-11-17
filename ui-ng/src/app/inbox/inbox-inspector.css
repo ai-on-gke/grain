@@ -150,7 +150,8 @@
    and .inspector-body is the only thing that scrolls, rather than a short
    thread window scrolling beside it on the same edge. Expand and full screen
    still give the thread its own scroller, with nothing else beside it. The
-   composer sticks to the bottom of the body while the thread is on screen,
+   composer (with any note and the "New messages" pill: .convo-dock) sticks
+   to the bottom of the body while the thread is on screen,
    so a long thread never puts the reply box out of reach; the host clips
    rather than hides its overflow so that it is not the sticky container. */
 .inspector-body > .g-conversation > .convo-host:not(.is-expanded) {
@@ -165,15 +166,23 @@
   overflow-y: visible;
 }
 
-.inspector-body
-  > .g-conversation
-  > .convo-host:not(.is-expanded)
-  .convo-composer {
+.inspector-body > .g-conversation > .convo-host:not(.is-expanded) .convo-dock {
+  display: block;
   position: sticky;
   /* Flush with the pane's edge, not its 24px bottom padding, so the thread
      does not show through below the pinned composer. */
   bottom: -24px;
   z-index: 1;
+  background: var(
+    --md-sys-color-surface-container-lowest,
+    var(--md-sys-color-surface)
+  );
+}
+
+/* "New messages" rides just above the pinned composer, so a reader scrolled
+   up the pane sees it, rather than at the far end of the whole thread. */
+.inspector-body > .g-conversation > .convo-host:not(.is-expanded) .convo-jump {
+  bottom: calc(100% + 12px);
 }
 
 .evidence-card {

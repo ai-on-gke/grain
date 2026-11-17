@@ -108,6 +108,36 @@ for (const viewport of [
         ),
       ).toBeLessThanOrEqual(2);
 
+      // Scrolled up to the top of the pane, a message that arrives (read
+      // again when the row is chosen again) raises "New messages" on
+      // screen, above the pinned composer, and the pill takes the reader to
+      // it. Narrower, the inspector is a sheet over the queue and the row
+      // cannot be chosen again; the rules that place the pill do not depend
+      // on the width.
+      if (viewport.width >= 1440) {
+        await body.evaluate((el) => (el.scrollTop = 0));
+        await page.evaluate(
+          () =>
+            new Promise((r) =>
+              requestAnimationFrame(() => requestAnimationFrame(r)),
+            ),
+        );
+        await apiPost(demoServer, accessCode, `/api/tasks/${id}/comments`, {
+          body: "A note that arrived while reading the top.",
+        });
+        await row.locator(".row-main").click();
+        const pill = convo.getByTestId("convo-jump");
+        await expect(pill).toBeInViewport({ ratio: 1 });
+        const pillBox = await pill.boundingBox();
+        const dockBox = await convo.locator(".convo-composer").boundingBox();
+        expect(pillBox.y + pillBox.height).toBeLessThanOrEqual(dockBox.y);
+        await pill.click();
+        await expect(pill).toHaveCount(0);
+        await expect(
+          convo.getByText("A note that arrived while reading the top."),
+        ).toBeInViewport();
+      }
+
       // Back at the end, content that renders late (an image loading in the
       // last message, say) is followed: the body stays on the end.
       await body.evaluate((el) => (el.scrollTop = el.scrollHeight));
