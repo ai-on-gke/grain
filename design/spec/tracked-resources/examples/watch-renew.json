@@ -1,0 +1,51 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "watch-5",
+  "pin": {
+    "identity": {
+      "capability_id": "https://example.org/capabilities/tasks",
+      "method": "tasks"
+    },
+    "release": "sha256:5aeb16bd928816cf2fb9314f0f934de935c4ed565e395b29366b17fb39b9cfa9",
+    "protocol": "1.0",
+    "identifier_schema": "sha256:b4e64084bdeb95f183d279f3093a7fe63d4efdada0ad9cf910992bfdef104ae3",
+    "details_schema": "sha256:1035c1eec52e201cfe0a7346c05d969cb11d74c980f1c2275ccfdc24d959e979",
+    "fact_schema": "sha256:6ca7f5c18e244b8f43c4831f2b8b432602f3d343fb8da08cecd6b00363e23a9c",
+    "config_revision": "sha256:06b44967aff35f69acd2dc806dcac506064eba89eb870b319e4068a27d09a9ca"
+  },
+  "authorization_epoch": 4,
+  "deadline": "2026-11-16T21:00:30Z",
+  "access": {
+    "partition_id": "partition-A",
+    "grant_id": "grant-A",
+    "grant_revision": 4,
+    "resource_scope": {
+      "installation_id": "instance-a",
+      "task_id": "72"
+    },
+    "fields": [
+      "outcome"
+    ]
+  },
+  "reference": {
+    "version": "1",
+    "provider": {
+      "capability_id": "https://example.org/capabilities/tasks",
+      "method": "tasks"
+    },
+    "resource_kind": "example.task",
+    "identifier": {
+      "installation_id": "instance-a",
+      "task_id": "72"
+    },
+    "tracking": {
+      "facet": "outcome",
+      "mode": "follow_latest",
+      "selector": null
+    }
+  },
+  "operation": "renew",
+  "subscription_id": "sub-A",
+  "generation": 1,
+  "expires_at": "2026-11-16T21:25:00Z"
+}

@@ -102,7 +102,7 @@ func (f *takeoverFixture) shepherd() model.Task {
 	}
 	var found []model.Task
 	for _, task := range tasks {
-		if task.Origin.Reason != model.ReasonReview {
+		if task.Filing.Reason != model.ReasonReview {
 			found = append(found, task)
 		}
 	}
@@ -397,7 +397,7 @@ func TestTakeoverReleaseHandsPRBack(t *testing.T) {
 	tasks, _ := f.store.TasksWithOrigin(f.ctx, model.GitHubOrigin(f.repo, f.pr))
 	shepherds := 0
 	for _, task := range tasks {
-		if task.Origin.Reason != model.ReasonReview {
+		if task.Filing.Reason != model.ReasonReview {
 			shepherds++
 		}
 	}

@@ -63,12 +63,28 @@ class FakeApi {
   detailReads: string[] = [];
   failDetail = new Set<string>();
 
-  getIfChanged = (route: string, p?: { id?: string }) => {
+  getIfChanged = (route: string, p?: { id?: string }, query?: string) => {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
         body: structuredClone(this.live),
         changed: !this.listUnchanged,
       });
+    }
+    if (route === "GET /api/tasks/summaries") {
+      const ids =
+        new URLSearchParams(query ?? "")
+          .get("ids")
+          ?.split(",")
+          .filter(Boolean) ?? [];
+      const tasks: Record<string, TaskDetail> = {};
+      for (const id of ids) {
+        this.detailReads.push(id);
+        if (this.failDetail.has(id)) continue;
+        tasks[id] =
+          this.details[id] ??
+          ({ state: "running", attempts: [] } as unknown as TaskDetail);
+      }
+      return Promise.resolve({ body: { tasks }, changed: true });
     }
     this.detailReads.push(p?.id ?? "");
     if (this.failDetail.has(p?.id ?? "")) {
@@ -1234,5 +1250,38 @@ describe("AgentsPageComponent CPU", () => {
     const el = harness.routeNativeElement as HTMLElement;
     const current = el.querySelector("g-task-detail .task-tabs [aria-current]");
     expect(current?.getAttribute("data-testid")).toBe("task-tab-runs");
+  });
+
+  it("renders the embedded g-task-detail containment hierarchy inside .tasks-detail-pane", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    api.details = {
+      "123": {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        attempts: [{ number: 1, startedAt: iso(60_000), outcome: "" }],
+        comments: [],
+      } as unknown as TaskDetail,
+    };
+    const { harness } = await renderRouted(api, "/agents?task=123");
+    const el = harness.routeNativeElement as HTMLElement;
+    const pane = el.querySelector<HTMLElement>(".tasks-detail-pane");
+    const detail = pane?.querySelector<HTMLElement>("g-task-detail");
+    const taskPage = detail?.querySelector<HTMLElement>(".task-page.is-pane");
+    const taskMain = taskPage?.querySelector<HTMLElement>(
+      ".task-layout > .task-main",
+    );
+    const tabBody = taskMain?.querySelector<HTMLElement>(".task-tab-body");
+    const convo = tabBody?.querySelector<HTMLElement>(
+      "g-conversation .convo-thread",
+    );
+
+    expect(pane).not.toBeNull();
+    expect(detail).not.toBeNull();
+    expect(taskPage).not.toBeNull();
+    expect(taskMain).not.toBeNull();
+    expect(tabBody).not.toBeNull();
+    expect(convo).not.toBeNull();
   });
 });

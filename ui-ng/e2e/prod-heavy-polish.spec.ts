@@ -298,7 +298,9 @@ test("production-heavy flows: zero API/console errors, quota banner, Workstreams
     const detailGate = new Promise<void>((r) => {
       releaseDetail = r;
     });
-    const detailPattern = (url: URL) => url.pathname === `/api/tasks/${wsId}`;
+    const detailPattern = (url: URL) =>
+      url.pathname === "/api/tasks/summaries" &&
+      (url.searchParams.get("ids")?.split(",").includes(wsId) ?? false);
     await page.route(detailPattern, async (route) => {
       if (released) {
         await route.continue();

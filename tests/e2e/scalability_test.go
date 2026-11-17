@@ -251,7 +251,7 @@ func benchmarkConcurrentAgents(t *testing.T, ctx context.Context, store *model.S
 					Intent:    model.IntentImplement,
 					Binding:   model.BindingDirective,
 					CreatedAt: &now,
-					Origin: model.Origin{
+					Filing: model.Filing{
 						Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 						Reason:      model.ReasonDirect,
 					},
@@ -440,7 +440,7 @@ func benchmarkConcurrentAPI(t *testing.T, ctx context.Context, store *model.Stor
 						Intent:    model.IntentImplement,
 						Binding:   model.BindingDirective,
 						CreatedAt: &now,
-						Origin: model.Origin{
+						Filing: model.Filing{
 							Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 							Reason:      model.ReasonDirect,
 						},
@@ -520,7 +520,7 @@ func benchmarkOrchestratorScaling(t *testing.T, ctx context.Context, store *mode
 			Intent:    model.IntentImplement,
 			Binding:   model.BindingDirective,
 			CreatedAt: &now,
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 				Reason:      model.ReasonDirect,
 			},

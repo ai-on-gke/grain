@@ -121,6 +121,21 @@ func taskHeldForHumanReview(t *testing.T, client *ui.Client, _ sender) string {
 	return id
 }
 
+// taskWithReviewFindings is a task whose pull request review r1 left
+// findings on: what POST /api/tasks/{id}/accept-findings acts on.
+func taskWithReviewFindings(t *testing.T, client *ui.Client, send sender) string {
+	t.Helper()
+	id := taskWithPullRequest(t, client, send)
+	if err := client.Store.UpdateTask(context.Background(), id, func(tk *model.Task) error {
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "r1",
+			Summary: "review left findings", At: baseTime})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // taskWithPullRequest is a task whose pull request the merge queue has
 // given up on: what retry-merge and force-merge act on.
 func taskWithPullRequest(t *testing.T, client *ui.Client, _ sender) string {
@@ -256,6 +271,25 @@ func consoleSession(t *testing.T, client *ui.Client, _ sender) string {
 		t.Fatalf("creating a console session: %v", err)
 	}
 	return "ops-director"
+}
+
+func qaExperimentDraft(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	if err := client.Store.CreateQAExperiment(context.Background(), model.QAExperiment{
+		ID:              "exp-attr",
+		Name:            "Attribution Check",
+		State:           model.QAExpStateDraft,
+		Arms:            []model.QAExperimentArm{{ID: "control", Label: "Control", FlowHash: "control", Weight: 50}, {ID: "treatment", Label: "Treatment", FlowHash: "golden-v2@1", Weight: 50}},
+		Allocation:      model.QAExperimentAllocation{Mode: "hash"},
+		Salt:            "0123456789abcdef0123456789abcdef",
+		PrimaryMetric:   "review.findings_sev.per_pr",
+		PrimaryContrast: "treatment:control",
+		Plan:            model.QAExperimentPlan{PlannedOriginsPerArm: 30, MaxDays: 14, Alpha: 0.05},
+		Options:         model.QAExperimentOptions{ShadowOnControl: true, Memory: "record"},
+	}); err != nil {
+		t.Fatalf("creating draft QA experiment: %v", err)
+	}
+	return "exp-attr"
 }
 
 // noted is who the newest note of kind on the task says took that action
@@ -416,7 +450,7 @@ var attributedRoutes = map[string]attributedRoute{
 			if err != nil || task == nil {
 				t.Fatalf("the filed task %q: %v, %v", created, task, err)
 			}
-			return task.Origin.Attribution.Actor
+			return task.Filing.Attribution.Actor
 		},
 	},
 	"PATCH /api/tasks/{id}": {
@@ -509,6 +543,11 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/submit": {
 		setup:    taskWithPullRequest,
 		recorded: noted(model.TaskEventSubmitted),
+	},
+	"POST /api/tasks/{id}/accept-findings": {
+		setup:    taskWithReviewFindings,
+		body:     `{"gate":"security-review","reviewTask":"r1","reason":"out of scope; follow-up filed"}`,
+		recorded: noted(model.TaskEventReviewFindingsAccepted),
 	},
 	"POST /api/tasks/{id}/human-review/release": {
 		setup:    taskHeldForHumanReview,
@@ -790,6 +829,34 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:settings:write"},
 		recorded:    lastConfigAudit,
 	},
+	"POST /api/qa/flow-versions": {
+		body:        `{"yaml":"schema: grain.dev/qa-flow/v2\nkey: custom-flow\nlabel: Custom\nskill:\n  mode: replace\n  max-bytes: 1800\n  text: test\n"}`,
+		agentGrants: []string{"api:qa:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/qa/flow-versions/adopt": {
+		body:     `{"repo":"acme/widgets","path":".grain/qa/flow.yml","commit":"1234567890abcdef1234567890abcdef12345678"}`,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/qa/experiments": {
+		body:        `{"name":"Test Exp","arms":[{"id":"control","label":"Control","flowHash":"control","weight":50},{"id":"treatment","label":"Treatment","flowHash":"golden-v2@1","weight":50}],"plan":{"plannedOriginsPerArm":10,"maxDays":7}}`,
+		agentGrants: []string{"api:qa:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/qa/experiments/{id}/transition": {
+		setup:       qaExperimentDraft,
+		path:        "/api/qa/experiments/{id}/transition",
+		body:        `{"action":"edit","name":"Edited Exp"}`,
+		agentGrants: []string{"api:qa:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/qa/experiments/{id}/readout": {
+		setup:       qaExperimentDraft,
+		path:        "/api/qa/experiments/{id}/readout",
+		body:        `{"action":"import","humanLabelsCount":20,"raterMatrix":[[8,8,8],[5,5,5]]}`,
+		agentGrants: []string{"api:qa:admin"},
+		recorded:    lastConfigAudit,
+	},
 	"PUT /api/repos/{owner}/{name}/merge-on-green": {
 		path:        "/api/repos/acme/widgets/merge-on-green",
 		body:        `{"enabled":true}`,
@@ -855,6 +922,39 @@ var attributedRoutes = map[string]attributedRoute{
 		body:     `{"id":"ci:acme/widgets:publish"}`,
 		recorded: lastConfigAudit,
 	},
+	"POST /api/tasks/{id}/qa/findings/{finding}/feedback": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			ctx := context.Background()
+			id := fileTask(true)(t, client, nil)
+			if _, err := client.Store.RecordQACheckRun(ctx, model.QACheckRun{
+				TaskID:  id,
+				Stage:   "S3",
+				CheckID: "golden:strict-config-decoder",
+				Arm:     model.QAArmTreatment,
+				Verdict: "fail",
+			}, []model.QAFinding{{
+				TaskID:   id,
+				Stage:    "S3",
+				RuleID:   "golden:strict-config-decoder",
+				Severity: "blocking",
+				Summary:  "missing KnownFields",
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			return id
+		},
+		path:   "/api/tasks/{id}/qa/findings/1/feedback",
+		body:   `{"vote":1}`,
+		bareID: true,
+		recorded: func(t *testing.T, ctx context.Context, client *ui.Client, id, _ string) model.Principal {
+			findings, err := client.Store.ListQAFindingsForTask(ctx, id)
+			if err != nil || len(findings) == 0 {
+				t.Fatalf("qa findings for %s: %v, %v", id, findings, err)
+			}
+			return model.Principal{ID: findings[0].VotedBy}
+		},
+	},
 }
 
 // neverAttributedRoutes are non-GET routes that write nothing a person
@@ -897,6 +997,11 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
 	"POST /api/repos/plan":                               true,
+	"POST /api/qa/probe":                                 true,
+	// Daemon-internal S3 check telemetry plumbing from `grain mcpserver`
+	// (refused to agent principals; writes machine check-run metrics, not
+	// an operator action).
+	"POST /api/tasks/{id}/qa/check-runs": true,
 	// Refreshing a connection's discovered models writes only grain's
 	// cache of what the provider said (model.AgentBackend.Discovered),
 	// which RunModelDiscovery rewrites on its own tick with no actor;
@@ -1225,6 +1330,9 @@ func TestEveryMutatingRouteIsAttributed(t *testing.T) {
 				client.Config.LocalAPIToken = testAccessCode
 				client.Config.AllowedPrincipals = []string{"user:alice@example.com", "user:bob@example.com"}
 				srv := ui.NewServerWithClient(client)
+				srv.ReadRepoFileAtCommit = func(_ context.Context, _, _, _ string) ([]byte, error) {
+					return []byte("schema: grain.dev/qa-flow/v2\nkey: adopted-flow\nlabel: Adopted\nskill:\n  mode: replace\n  max-bytes: 1800\n  text: test\n"), nil
+				}
 				ctx := context.Background()
 				if way.agent {
 					seedAPITask(t, client, matrixAgent, "acme/widgets", route.agentGrants...)

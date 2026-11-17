@@ -253,26 +253,57 @@ func (u *updater) run(ctx context.Context, want, server, iapAudience, from strin
 		return fmt.Errorf("refusing the release: %w", err)
 	}
 
-	// Stage, then smoke-test, before anything the running unit uses moves.
+	// Smoke-test the binary from a temporary file before placing it under
+	// versions/<v>/, so a build that fails -build or -check leaves nothing
+	// half-staged on disk.
 	staged := u.l.binary(m.Version)
+	if err := os.MkdirAll(u.l.Versions, 0o755); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(u.l.Versions, "."+Program+"-stage-*")
+	if err != nil {
+		return fmt.Errorf("staging %s: %w", m.Version, err)
+	}
+	probePath := probe.Name()
+	kept := false
+	defer func() {
+		if !kept {
+			_ = os.Remove(probePath)
+			_ = os.Remove(filepath.Dir(staged))
+			_ = os.Remove(u.l.Versions)
+			_ = os.Remove(u.l.Lib)
+		}
+	}()
+	if err := probe.Chmod(0o755); err != nil {
+		probe.Close()
+		return fmt.Errorf("staging %s: %w", m.Version, err)
+	}
+	if _, err := probe.Write(binary); err != nil {
+		probe.Close()
+		return fmt.Errorf("staging %s: %w", m.Version, err)
+	}
+	if err := probe.Close(); err != nil {
+		return fmt.Errorf("staging %s: %w", m.Version, err)
+	}
+	out, err := runStaged(ctx, probePath, "-build")
+	if err != nil {
+		return fmt.Errorf("%s -build: %v\n%s", m.Version, err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != m.Version {
+		return fmt.Errorf("%s -build says %q, but its manifest says %q", m.Version, got, m.Version)
+	}
+	if out, err := runStaged(ctx, probePath, "-check", "-allowlist", u.allowlist); err != nil {
+		return fmt.Errorf("%s -check -allowlist %s: %v\n%s", m.Version, u.allowlist, err, out)
+	}
+	u.step("%s -build and -check pass", m.Version)
 	if err := os.MkdirAll(filepath.Dir(staged), 0o755); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(staged, binary, 0o755); err != nil {
+	if err := os.Rename(probePath, staged); err != nil {
 		return fmt.Errorf("staging %s: %w", staged, err)
 	}
+	kept = true
 	u.step("staged %s", staged)
-	out, err := runStaged(ctx, staged, "-build")
-	if err != nil {
-		return fmt.Errorf("%s -build: %v\n%s", staged, err, out)
-	}
-	if got := strings.TrimSpace(string(out)); got != m.Version {
-		return fmt.Errorf("%s -build says %q, but its manifest says %q", staged, got, m.Version)
-	}
-	if out, err := runStaged(ctx, staged, "-check", "-allowlist", u.allowlist); err != nil {
-		return fmt.Errorf("%s -check -allowlist %s: %v\n%s", staged, u.allowlist, err, out)
-	}
-	u.step("%s -build and -check pass", m.Version)
 
 	previous, err := u.adoptLayout(ctx, running, m.Version)
 	if err != nil {

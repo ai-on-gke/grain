@@ -107,3 +107,27 @@
   flex-wrap: wrap;
   max-width: 100%;
 }
+
+/* The capability policy's word on a grant (policyVerdicts). */
+.grant-policy-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  font-family: var(--grain-font-body);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.grant-policy-notes {
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}

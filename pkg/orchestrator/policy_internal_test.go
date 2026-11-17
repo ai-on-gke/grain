@@ -106,8 +106,8 @@ func TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator(t *testing.T) {
 	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
 	bob := model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: "fake"}
 	operator := model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}
-	filedBy := func(p model.Principal) model.Origin {
-		return model.Origin{Attribution: model.Attribution{Actor: p}}
+	filedBy := func(p model.Principal) model.Filing {
+		return model.Filing{Attribution: model.Attribution{Actor: p}}
 	}
 	for _, c := range []struct {
 		name string
@@ -115,21 +115,21 @@ func TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator(t *testing.T) {
 		want string
 	}{
 		{"a verified creator and approver", model.Task{
-			Creator: "alice@example.com", Origin: filedBy(alice), Approval: &model.Attribution{Actor: bob},
+			Creator: "alice@example.com", Filing: filedBy(alice), Approval: &model.Attribution{Actor: bob},
 		}, "Requested-by: alice@example.com\nApproved-by: bob@example.com"},
 		{"the operator fallback", model.Task{
-			Creator: "operator", Origin: filedBy(operator), Approval: &model.Attribution{Actor: operator},
+			Creator: "operator", Filing: filedBy(operator), Approval: &model.Attribution{Actor: operator},
 		}, "Requested-by: operator\nApproved-by: operator"},
 		{"an unverified grain create -author creator", model.Task{
-			Creator: "carol@example.com", Origin: filedBy(model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceInProcess}),
+			Creator: "carol@example.com", Filing: filedBy(model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceInProcess}),
 			Approval: &model.Attribution{Actor: alice},
 		}, "Approved-by: alice@example.com"},
 		{"an agent approver", model.Task{
-			Creator: "alice@example.com", Origin: filedBy(alice),
+			Creator: "alice@example.com", Filing: filedBy(alice),
 			Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSession}},
 		}, "Requested-by: alice@example.com"},
 		{"a task an agent filed for alice", model.Task{
-			Creator: "alice@example.com", Origin: filedBy(model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSandbox}),
+			Creator: "alice@example.com", Filing: filedBy(model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSandbox}),
 		}, "Requested-by: alice@example.com"},
 		// docs/test-runs/2026-11-08-attribution-external-rails.md F1: a
 		// gma_ credential the access code minted naming owner alice
@@ -137,14 +137,14 @@ func TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator(t *testing.T) {
 		// unverified on-behalf-of: nobody verified alice asked for it.
 		{"an external credential whose owner the access code only named", model.Task{
 			Creator: "alice@example.com",
-			Origin: model.Origin{Attribution: model.Attribution{
+			Filing: model.Filing{Attribution: model.Attribution{
 				Actor:      model.Principal{Kind: model.PrincipalAgent, ID: "external:t3-named", Source: model.SourceExternalToken},
 				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceAccessCode},
 			}},
 		}, ""},
 		{"an external credential a verified alice owns", model.Task{
 			Creator: "alice@example.com",
-			Origin: model.Origin{Attribution: model.Attribution{
+			Filing: model.Filing{Attribution: model.Attribution{
 				Actor:      model.Principal{Kind: model.PrincipalAgent, ID: "external:t1-alice", Source: model.SourceExternalToken},
 				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceToken},
 			}},

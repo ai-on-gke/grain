@@ -257,6 +257,104 @@ describe("GrainApi.getIfChanged", () => {
     taskNextReq.flush({ id: "42", stale: false });
     await taskNext;
   });
+
+  it("taskSummaries deduplicates, chunks by 50, caches ETags, and invalidates on task mutations", async () => {
+    const ids = [
+      ...Array.from({ length: 75 }, (_, i) => `t${i + 1}`),
+      "t1",
+      "t75",
+    ];
+    const p1 = api.taskSummaries(ids, 1, 3);
+    const reqs = http.match((r) => r.url.startsWith("/api/tasks/summaries?"));
+    expect(reqs.length).toBe(2);
+
+    const q1 = new URLSearchParams(reqs[0].request.url.split("?")[1]);
+    const q2 = new URLSearchParams(reqs[1].request.url.split("?")[1]);
+    expect(q1.get("ids")!.split(",").length).toBe(50);
+    expect(q2.get("ids")!.split(",").length).toBe(25);
+    expect(q1.get("comments_limit")).toBe("1");
+    expect(q1.get("attempts_limit")).toBe("3");
+
+    reqs[0].flush(
+      { tasks: { t1: { id: "t1", title: "First" } } },
+      { headers: { ETag: '"sum-1"' } },
+    );
+    reqs[1].flush(
+      { tasks: { t75: { id: "t75", title: "Last" } } },
+      { headers: { ETag: '"sum-2"' } },
+    );
+    const merged = await p1;
+    expect(Object.keys(merged)).toEqual(["t1", "t75"]);
+
+    // Subsequent identical batch sends If-None-Match.
+    const p2 = api.taskSummaries(["t1", "t2"], 1, 1);
+    const cReq = http.expectOne(
+      "/api/tasks/summaries?ids=t1,t2&comments_limit=1&attempts_limit=1",
+    );
+    cReq.flush(
+      { tasks: { t1: { id: "t1", title: "First" } } },
+      { headers: { ETag: '"sum-small"' } },
+    );
+    await p2;
+
+    const p3 = api.taskSummaries(["t1", "t2"], 1, 1);
+    const cReq2 = http.expectOne(
+      "/api/tasks/summaries?ids=t1,t2&comments_limit=1&attempts_limit=1",
+    );
+    expect(cReq2.request.headers.get("If-None-Match")).toBe('"sum-small"');
+    cReq2.flush(null, { status: 304, statusText: "Not Modified" });
+    await p3;
+
+    // A task mutation clears /api/tasks/summaries conditional cache too.
+    const postComment = api.post(
+      "POST /api/tasks/{id}/comments",
+      { id: "t1" },
+      { body: "hello" },
+    );
+    http.expectOne("/api/tasks/t1/comments").flush({ id: 99 });
+    await postComment;
+
+    const p4 = api.taskSummaries(["t1", "t2"], 1, 1);
+    const cReq3 = http.expectOne(
+      "/api/tasks/summaries?ids=t1,t2&comments_limit=1&attempts_limit=1",
+    );
+    expect(cReq3.request.headers.has("If-None-Match")).toBe(false);
+    cReq3.flush({ tasks: { t1: { id: "t1", title: "Updated" } } });
+    const afterMutation = await p4;
+    expect(afterMutation["t1"].title).toBe("Updated");
+  });
+
+  it("taskSummaries preserves fulfilled chunks when another chunk fails and rejects if all chunks fail", async () => {
+    const ids = Array.from({ length: 75 }, (_, i) => `p${i + 1}`);
+    const partial = api.taskSummaries(ids, 1, 1);
+    const reqs = http.match((r) => r.url.startsWith("/api/tasks/summaries?"));
+    expect(reqs.length).toBe(2);
+
+    reqs[0].flush({ tasks: { p1: { id: "p1", title: "Kept" } } });
+    reqs[1].flush("upstream failure", {
+      status: 500,
+      statusText: "Internal Server Error",
+    });
+    const merged = await partial;
+    expect(Object.keys(merged)).toEqual(["p1"]);
+    expect(merged["p1"].title).toBe("Kept");
+
+    // When every chunk fails, taskSummaries still rejects with the error.
+    const allFail = api.taskSummaries(ids, 1, 1);
+    const failReqs = http.match((r) =>
+      r.url.startsWith("/api/tasks/summaries?"),
+    );
+    expect(failReqs.length).toBe(2);
+    failReqs[0].flush("boom-1", {
+      status: 500,
+      statusText: "Internal Server Error",
+    });
+    failReqs[1].flush("boom-2", {
+      status: 502,
+      statusText: "Bad Gateway",
+    });
+    await expect(allFail).rejects.toMatchObject({ status: 500 });
+  });
 });
 
 function verifierUnavailableOpts(retryAfter?: string) {
@@ -405,6 +503,24 @@ describe("GrainApi verifier_unavailable retry", () => {
     expect(hj1.request.method).toBe("HEAD");
     hj1.flush(null);
     await expect(hJson).resolves.toBeNull();
+
+    // taskSummaries batch GET retries on 503 verifier_unavailable too.
+    const batch = api.taskSummaries(["10", "11"], 1, 1);
+    const b0 = http.expectOne(
+      "/api/tasks/summaries?ids=10,11&comments_limit=1&attempts_limit=1",
+    );
+    expect(b0.request.method).toBe("GET");
+    b0.flush(verifierUnavailableBody("bs0"), verifierUnavailableOpts("2"));
+    await vi.advanceTimersByTimeAsync(2600);
+    const b1 = http.expectOne(
+      "/api/tasks/summaries?ids=10,11&comments_limit=1&attempts_limit=1",
+    );
+    expect(b1.request.method).toBe("GET");
+    b1.flush(
+      { tasks: { "10": { id: "10", title: "Ten" } } },
+      { headers: { ETag: '"bs1"' } },
+    );
+    expect((await batch)["10"].title).toBe("Ten");
   });
 
   it("stops after at most 3 retries and surfaces the original error", async () => {

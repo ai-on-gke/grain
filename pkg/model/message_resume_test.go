@@ -30,7 +30,7 @@ func stoppedOnMessage(t *testing.T, store *model.Store, id string) time.Time {
 	ctx := t.Context()
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -154,7 +154,7 @@ func TestClosedTasksDoNotStayInHeldResumes(t *testing.T) {
 	t1 := model.Task{
 		ID: "ci-susp", Intent: model.IntentImplement, Title: "ci wait",
 		Target:   &target,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 	}
 	if err := store.PutTask(ctx, t1); err != nil {
@@ -185,7 +185,7 @@ func TestClosedTasksDoNotStayInHeldResumes(t *testing.T) {
 	t2 := model.Task{
 		ID: "ci-rec", Intent: model.IntentImplement, Title: "recovered ci wait",
 		Target:   &target,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 	}
 	if err := store.PutTask(ctx, t2); err != nil {

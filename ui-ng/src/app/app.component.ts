@@ -132,6 +132,7 @@ type CreateItem =
       gate?: RouteKey;
       route: string;
       query?: Record<string, unknown>;
+      mergeQueryOnSameRoute?: boolean;
     }
   | {
       kind: "href";
@@ -902,6 +903,7 @@ export class DeferErrorDirective implements OnInit {
             [class]="cls"
             [routerLink]="item.route"
             [queryParams]="item.query"
+            [queryParamsHandling]="queryHandlingFor(item)"
             [gTip]="item.tip"
             gTipPlacement="right"
             (click)="closeMenus()"
@@ -1022,6 +1024,24 @@ export class AppComponent implements OnInit, OnDestroy {
       prefill: { workstream: true, origin: "" },
     },
     {
+      kind: "task",
+      icon: "agents",
+      label: "Prototype a goal",
+      sub: "Hammer through autonomously — logs assumptions, verifies deliverables, opens a PR",
+      gate: "POST /api/tasks",
+      testid: "create-prototype-goal",
+      tip: "Run autonomously across bounded passes without stopping for questions.",
+      prefill: {
+        goalMode: {
+          enabled: true,
+          maxPasses: 8,
+          wallClockMinutes: 120,
+          mockMissingSecrets: true,
+        },
+        autoApproveProposals: true,
+      },
+    },
+    {
       kind: "route",
       icon: "sessions",
       label: "New session",
@@ -1069,6 +1089,7 @@ export class AppComponent implements OnInit, OnDestroy {
       gate: "POST /api/boards",
       route: "/tasks",
       query: { newBoard: 1 },
+      mergeQueryOnSameRoute: true,
       tip: "Save a filtered view of tasks as a reusable board.",
     },
   ];
@@ -1080,6 +1101,7 @@ export class AppComponent implements OnInit, OnDestroy {
       this.access.can("POST /api/tasks/from-template"),
   );
   protected readonly onSessions = signal(false);
+  protected readonly currentPath = signal("");
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
     () => this.inboxRef()?.decisions().length ?? 0,
@@ -1295,6 +1317,7 @@ export class AppComponent implements OnInit, OnDestroy {
       });
     });
 
+    this.currentPath.set(this.router.url.split(/[?#]/, 1)[0]);
     this.directorCtx.setRoute(this.router.url);
     void this.refreshDispatchStatus(true);
     this.dispatchEventSub = this.events.events().subscribe(() => {
@@ -1310,6 +1333,7 @@ export class AppComponent implements OnInit, OnDestroy {
       }
       if (e instanceof NavigationEnd) {
         const url = e.urlAfterRedirects;
+        this.currentPath.set(url.split(/[?#]/, 1)[0]);
         this.directorCtx.setRoute(url);
         this.onSessions.set(
           url.startsWith("/sessions") || url.startsWith("/task/"),
@@ -1569,6 +1593,14 @@ export class AppComponent implements OnInit, OnDestroy {
         applyTop(Math.max(12, Math.round(winH - rect.height - 12)));
       }
     });
+  }
+
+  protected queryHandlingFor(
+    item: Extract<CreateItem, { kind: "route" }>,
+  ): "merge" | "" {
+    return item.mergeQueryOnSameRoute && this.currentPath() === item.route
+      ? "merge"
+      : "";
   }
 
   protected toggleMore(ev: Event): void {

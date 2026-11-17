@@ -69,7 +69,7 @@ func TestDemoBaseBranchHookDrivesARedAndGreenBranch(t *testing.T) {
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "feature", Intent: model.IntentImplement, Title: "feature", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &repo, Base: "main", Binding: model.BindingDirective,
 	}); err != nil {

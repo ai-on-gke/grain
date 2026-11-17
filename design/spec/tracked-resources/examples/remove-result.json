@@ -1,0 +1,7 @@
+{
+  "task_id": "48",
+  "idempotency_key": "mutation-1",
+  "contract_revision": 7,
+  "record_revision": 2,
+  "removed": true
+}

@@ -77,6 +77,9 @@ export const DIFF_PREVIEW_HUNKS = 6;
 // DIFF_TTL_MS is how long a preview is shown before selecting its row
 // reads it again.
 const DIFF_TTL_MS = 60000;
+// READ_FAILED is the Inbox's one sentence for a task list it could not
+// read: the banner's, and an action's that refused for the same reason.
+export const READ_FAILED = "Could not read tasks; retrying.";
 
 export function wantsDiff(e: InboxEntry | null): boolean {
   if (!e?.taskId || Boolean(e.task?.prMergedAt)) return false;
@@ -127,7 +130,15 @@ export class InboxStore implements OnDestroy {
   readonly notifications = signal<Notification[]>([]);
   readonly localScripts = signal<LocalScriptApproval[]>([]);
   readonly loaded = signal(false);
-  readonly loadError = signal<string | null>(null);
+  // loadError is the Inbox's banner, and follows the shared feed's own
+  // rule (request-trouble.ts): one failed poll keeps the last good list
+  // on screen and says nothing; failure before the list was ever read,
+  // or failure that lasts, says so once -- the moment the feed decides
+  // it, not at this store's next 60s refresh.
+  readonly loadError = computed(() =>
+    this.feed.loadError() ? READ_FAILED : null,
+  );
+  private lastReadFailed = false;
   readonly actionError = signal<string | null>(null);
   readonly busy = signal<string | null>(null);
   readonly filter = signal<FilterId>("all");
@@ -427,6 +438,12 @@ export class InboxStore implements OnDestroy {
     });
   }
 
+  // reloadSelectedDetail forces a fresh task detail fetch for the active selection.
+  async reloadSelectedDetail(): Promise<void> {
+    await this.refresh();
+    await this.ensureDetail(true);
+  }
+
   // refresh reads everything again. Concurrent calls wait on a fresh read
   // started after the active one finishes so callers never observe stale
   // pre-mutation state.
@@ -473,11 +490,9 @@ export class InboxStore implements OnDestroy {
     if (who.status === "fulfilled" && who.value) {
       this.access.setWhoami(who.value);
     }
-    if (feedOk.status === "fulfilled" && feedOk.value) {
-      this.loadError.set(null);
-    } else {
-      this.loadError.set("Could not read tasks; retrying.");
-    }
+    // lastReadFailed is the strict answer the banner (loadError) is not:
+    // an action must not act on a list this very read could not refresh.
+    this.lastReadFailed = !(feedOk.status === "fulfilled" && feedOk.value);
     if (notifications.status === "fulfilled") {
       this.notifications.set(notifications.value);
     }
@@ -680,6 +695,10 @@ export class InboxStore implements OnDestroy {
       if (targets.length >= 20) break;
     }
     if (targets.length === 0) return;
+    if (typeof this.api.taskSummaries === "function") {
+      await this.readSummariesBatch(targets);
+      return;
+    }
     const concurrency = Math.min(4, targets.length);
     let cursor = 0;
     const worker = async () => {
@@ -689,6 +708,41 @@ export class InboxStore implements OnDestroy {
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
+  }
+
+  private async readSummariesBatch(
+    targets: readonly { id: string; updatedAt: string }[],
+  ): Promise<void> {
+    const allowed = targets.filter((t) => this.canReadTask(t.id));
+    if (allowed.length === 0) return;
+    for (const t of allowed) this.summaryInFlight.add(t.id);
+    const expected = new Map(allowed.map((t) => [t.id, t.updatedAt]));
+    try {
+      const batch = await this.api.taskSummaries(
+        allowed.map((t) => t.id),
+        1,
+        1,
+      );
+      const updated: Record<string, TaskDetail> = {};
+      for (const [id, d] of Object.entries(batch)) {
+        if (
+          this.fullDetailLoaded.has(id) ||
+          this.detailInFlight.has(id) ||
+          this.selected()?.taskId === id
+        ) {
+          continue;
+        }
+        this.summaryUpdatedAt.set(id, expected.get(id) || d.updatedAt || "");
+        updated[id] = d;
+      }
+      if (Object.keys(updated).length > 0) {
+        this.details.update((m) => ({ ...m, ...updated }));
+      }
+    } catch {
+      // The row still shows its summary; the inspector says less.
+    } finally {
+      for (const t of allowed) this.summaryInFlight.delete(t.id);
+    }
   }
 
   private canReadTask(id: string): boolean {
@@ -934,9 +988,8 @@ export class InboxStore implements OnDestroy {
     this.actionError.set(null);
     try {
       await this.refresh();
-      const loadErr = this.loadError();
-      if (loadErr) {
-        this.actionError.set(loadErr);
+      if (this.lastReadFailed) {
+        this.actionError.set(READ_FAILED);
         return false;
       }
       const entry = this.liveEntries().find((e) => e.key === entryKey);
@@ -1030,9 +1083,8 @@ export class InboxStore implements OnDestroy {
     this.actionError.set(null);
     try {
       await this.refresh();
-      const loadErr = this.loadError();
-      if (loadErr) {
-        this.actionError.set(loadErr);
+      if (this.lastReadFailed) {
+        this.actionError.set(READ_FAILED);
         return { count: 0, failed: 0, undo: null };
       }
       const pool = this.scopedLiveEntries().filter((e) => wantKeys.has(e.key));

@@ -120,7 +120,7 @@ func TestIntegrationEventExternalRefResolutionOrder(t *testing.T) {
 		tk.ID = tc.id
 		tk.Title = tc.id
 		tk.CreatedAt = &now
-		tk.Origin = model.Origin{
+		tk.Filing = model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
 		}
 		if err := store.PutTask(ctx, tk); err != nil {

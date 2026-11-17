@@ -30,6 +30,7 @@ import type {
   Notification,
   Task,
   TaskDetail,
+  TaskSummariesResponse,
   WhoamiResponse,
 } from "./models";
 
@@ -73,6 +74,80 @@ export function splitRepo(repo: string): { owner: string; name: string } {
 }
 
 const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
+
+export const TASK_SUMMARIES_BATCH_SIZE = 50;
+
+// Splits unique non-empty task IDs into batches of at most `size`.
+export function chunkTaskIds(
+  ids: readonly string[],
+  size = TASK_SUMMARIES_BATCH_SIZE,
+): string[][] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += size) {
+    chunks.push(unique.slice(i, i + size));
+  }
+  return chunks;
+}
+
+export function taskSummariesQuery(
+  ids: readonly string[],
+  commentsLimit = 1,
+  attemptsLimit = 1,
+): string {
+  return `ids=${ids.map((id) => encodeURIComponent(id)).join(",")}&comments_limit=${commentsLimit}&attempts_limit=${attemptsLimit}`;
+}
+
+export interface TaskSummaryBatchResult {
+  tasks: Record<string, TaskDetail>;
+  failedIds: string[];
+}
+
+// Fetches task summaries in batches of up to 50, preserving partial chunk
+// successes and reporting IDs from failed chunks or omitted entries.
+export async function loadTaskSummaryBatches(
+  ids: readonly string[],
+  commentsLimit: number,
+  attemptsLimit: number,
+  fetchChunk: (
+    query: string,
+  ) => Promise<Record<string, TaskDetail> | undefined>,
+): Promise<TaskSummaryBatchResult> {
+  const chunks = chunkTaskIds(ids);
+  if (chunks.length === 0) return { tasks: {}, failedIds: [] };
+  const tasks: Record<string, TaskDetail> = {};
+  const failedIds: string[] = [];
+  const results = await Promise.allSettled(
+    chunks.map((chunk) =>
+      fetchChunk(taskSummariesQuery(chunk, commentsLimit, attemptsLimit)),
+    ),
+  );
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const res = results[i];
+    if (res.status !== "fulfilled") {
+      failedIds.push(...chunk);
+      continue;
+    }
+    const map = res.value ?? {};
+    for (const id of chunk) {
+      const detail = map[id];
+      if (detail) {
+        tasks[id] = detail;
+      } else {
+        failedIds.push(id);
+      }
+    }
+  }
+  return { tasks, failedIds };
+}
 
 const VERIFIER_UNAVAILABLE_CODE = "verifier_unavailable";
 const DEFAULT_RETRY_AFTER_SEC = 2;
@@ -396,6 +471,9 @@ export class GrainApi implements OnDestroy {
     ) {
       this.clearConditionalCache("/api/config");
     }
+    if (path === "/api/tasks" || path.startsWith("/api/tasks/")) {
+      this.clearConditionalCache("/api/tasks/summaries");
+    }
     if (path.startsWith("/api/tasks/")) {
       const taskId = path.slice(11).split("/")[0];
       if (taskId) this.clearConditionalCache(`/api/tasks/${taskId}`);
@@ -465,6 +543,39 @@ export class GrainApi implements OnDestroy {
       { id },
       "comments_limit=1&attempts_limit=1",
     ).then((r) => r.body);
+  }
+
+  async taskSummaries(
+    ids: readonly string[],
+    commentsLimit = 1,
+    attemptsLimit = 1,
+  ): Promise<Record<string, TaskDetail>> {
+    const chunks = chunkTaskIds(ids);
+    if (chunks.length === 0) return {};
+    const settled = await Promise.allSettled(
+      chunks.map((chunk) =>
+        this.getIfChanged<TaskSummariesResponse>(
+          "GET /api/tasks/summaries",
+          undefined,
+          taskSummariesQuery(chunk, commentsLimit, attemptsLimit),
+        ),
+      ),
+    );
+    const out: Record<string, TaskDetail> = {};
+    let succeeded = 0;
+    let firstError: unknown;
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        succeeded++;
+        if (r.value.body?.tasks) Object.assign(out, r.value.body.tasks);
+      } else if (firstError === undefined) {
+        firstError = r.reason;
+      }
+    }
+    if (succeeded === 0 && firstError !== undefined) {
+      throw firstError;
+    }
+    return out;
   }
 
   openNotifications(): Promise<Notification[]> {

@@ -546,10 +546,10 @@ func TestDelegatedWriteRecordsAppAndPerson(t *testing.T) {
 	}
 	wantActor := model.Principal{Kind: model.PrincipalService, ID: slackSA, Source: "registry"}
 	wantBehalf := model.Principal{Kind: model.PrincipalHuman, ID: alice, Source: "registry"}
-	if storedTask.Origin.Attribution.Actor != wantActor || storedTask.Origin.Attribution.OnBehalfOf == nil || *storedTask.Origin.Attribution.OnBehalfOf != wantBehalf {
-		t.Fatalf("storedTask.Origin.Attribution = %+v, want Actor=%+v OnBehalfOf=%+v", storedTask.Origin.Attribution, wantActor, wantBehalf)
+	if storedTask.Filing.Attribution.Actor != wantActor || storedTask.Filing.Attribution.OnBehalfOf == nil || *storedTask.Filing.Attribution.OnBehalfOf != wantBehalf {
+		t.Fatalf("storedTask.Filing.Attribution = %+v, want Actor=%+v OnBehalfOf=%+v", storedTask.Filing.Attribution, wantActor, wantBehalf)
 	}
-	if gotLabel := ui.PrincipalLabel(storedTask.Origin.Attribution.Actor, storedTask.Origin.Attribution.OnBehalfOf); gotLabel != "alice@example.com (via slack-bot)" {
+	if gotLabel := ui.PrincipalLabel(storedTask.Filing.Attribution.Actor, storedTask.Filing.Attribution.OnBehalfOf); gotLabel != "alice@example.com (via slack-bot)" {
 		t.Fatalf("PrincipalLabel = %q, want %q", gotLabel, "alice@example.com (via slack-bot)")
 	}
 
