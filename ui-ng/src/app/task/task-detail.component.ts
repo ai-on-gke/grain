@@ -939,7 +939,12 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled: store.isBusy('send', t.id),
+                      disabled:
+                        store.isBusy('send', t.id) ||
+                        !can('POST /api/tasks/{id}/comments'),
+                      deniedReason: deniedReason(
+                        'POST /api/tasks/{id}/comments'
+                      ),
                       hidden:
                         t.state === 'closed' ||
                         (this.parked() && !this.allowWordsOnParked()) ||
@@ -2248,6 +2253,13 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
     return this.access.canAccessTask(route, this.t()?.repo ?? null);
+  }
+
+  // deniedReason is why the caller may not use route on this task, or ""
+  // when they may: a viewer's composer is disabled with this beside it
+  // rather than accepting a reply the server would refuse.
+  protected deniedReason(route: Parameters<AccessService["can"]>[0]): string {
+    return this.access.deniedReasonForTask(route, this.t()?.repo ?? null);
   }
 
   protected val(ev: Event): string {
