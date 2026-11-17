@@ -240,6 +240,10 @@ export function capabilityServerRouteMatcher(
 const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
   page?.canLeave ? page.canLeave() : true;
 
+const processesLeaveGuard = (
+  page: { canDeactivate?: () => boolean | Promise<boolean> } | null,
+) => (page?.canDeactivate ? page.canDeactivate() : true);
+
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
 // have yet goes to the Inbox; the shell's links take the reader to the
@@ -349,6 +353,7 @@ export const routes: Routes = [
     matcher: processesRouteMatcher,
     title: (route) =>
       route.params["runId"] ? "Suite run · grain" : "Processes · grain",
+    canDeactivate: [processesLeaveGuard],
     loadComponent: () =>
       import("./processes/processes-page.component").then(
         (m) => m.ProcessesPageComponent,
