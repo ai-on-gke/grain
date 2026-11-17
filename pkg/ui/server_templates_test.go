@@ -286,4 +286,33 @@ func TestListSchedulesReportsTheBoundTemplatesFiringBase(t *testing.T) {
 	if s := got["sched-default"]; s.Repo != "acme/widgets" || s.Base != "" {
 		t.Errorf("sched-default = (%q, %q), want bound template's default branch (\"acme/widgets\", \"\")", s.Repo, s.Base)
 	}
+
+	// Suppression follows the bound template's repository (acme/widgets), not
+	// the stale Target (acme/gadgets) still on sched-explicit's stored row.
+	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo: staleRepo,
+		Work: model.WorkOwnership{Default: model.OwnershipOff},
+	}); err != nil {
+		t.Fatalf("turning off staleRepo standing work: %v", err)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/schedules", "")
+	for _, sc := range decode[[]ui.Schedule](t, rec) {
+		got[sc.ID] = sc
+	}
+	if s := got["sched-explicit"]; s.Suppressed != nil {
+		t.Errorf("sched-explicit suppressed = %+v when only staleRepo's standing work is off, want nil", s.Suppressed)
+	}
+	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo: boundRepo,
+		Work: model.WorkOwnership{Default: model.OwnershipOff},
+	}); err != nil {
+		t.Fatalf("turning off boundRepo standing work: %v", err)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/schedules", "")
+	for _, sc := range decode[[]ui.Schedule](t, rec) {
+		got[sc.ID] = sc
+	}
+	if s := got["sched-explicit"]; s.Suppressed == nil || s.Suppressed.Reason != "standingWork" {
+		t.Errorf("sched-explicit suppressed = %+v when boundRepo's standing work is off, want standingWork", s.Suppressed)
+	}
 }

@@ -201,6 +201,19 @@ func (s *Store) FireSchedule(ctx context.Context, sched Schedule, now time.Time,
 	return s.fireSchedule(ctx, sched, now, loc, stateRepo, true, "")
 }
 
+// FireScheduleUnderPublishingHold fires sched as FireSchedule does --
+// advancing its cadence and keeping overlap and overlap-group holds in force
+// -- while bypassing SkipWhenPublishingHeld for this occurrence. The
+// orchestrator uses this when a release candidate is currently in
+// qualification so the release train can still judge, release or drop that rc
+// while main's publishing is held (skipping only cut).
+func (s *Store) FireScheduleUnderPublishingHold(ctx context.Context, sched Schedule, now time.Time,
+	loc *time.Location, stateRepo RepoRef) (ScheduleFiring, error) {
+
+	sched.SkipWhen = SkipWhenNever
+	return s.fireSchedule(ctx, sched, now, loc, stateRepo, true, "")
+}
+
 // resolveTemplate is the template id means whatever it means: this
 // build's own for a "system:" id (SystemTemplate), and this
 // deployment's `template` row for every other.
@@ -680,11 +693,11 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	}
 	// A condition the schedule declared (Schedule.SkipWhen), after both:
 	// a previous firing still going is the more useful thing to name.
-	base := comp.Base
-	if base == "" {
-		base = sched.Base
-	}
-	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, base, now, advance); err != nil || held != nil {
+	// ComposeScheduleTask has already resolved comp.Base via
+	// Template.FiringTarget, so a bound template's empty Base (meaning the
+	// target repository's default branch) stays empty rather than falling
+	// back to a stale sched.Base.
+	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, comp.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}

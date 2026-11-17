@@ -665,7 +665,6 @@ func (c *Client) ListSchedules(ctx context.Context) ([]Schedule, error) {
 				suiteNames[id] = suiteName
 			}
 		}
-		raw := s
 		if s.TemplateID != nil {
 			tmpl, ok := templates[*s.TemplateID]
 			if !ok {
@@ -681,7 +680,7 @@ func (c *Client) ListSchedules(ctx context.Context) ([]Schedule, error) {
 		// (whether that repository's standing work is off), and a read
 		// or two more only for one that is already overdue and set to
 		// skip (model.Store.SuppressedFiring's own conditions).
-		suppressed, err := c.Store.SuppressedFiring(ctx, raw, now, loc)
+		suppressed, err := c.Store.SuppressedFiring(ctx, s, now, loc)
 		if err != nil {
 			return nil, err
 		}
