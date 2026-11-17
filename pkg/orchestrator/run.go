@@ -4187,6 +4187,11 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if err := store.AdvanceDeliveredFrom(finishCtx, task.ID, lastCommentID(comments), cfg.now()); err != nil {
 			log.Printf("orchestrator: run %s: recording the conversation it was dispatched for: %v", d.RunID, err)
 		}
+		// Only this prompt path carries pending PR feedback in full. Shared
+		// conversation/chat cursors cannot acknowledge that separate delivery.
+		if err := store.AcknowledgePRFeedback(finishCtx, task.ID, lastCommentID(comments)); err != nil {
+			log.Printf("orchestrator: run %s: acknowledging its PR feedback: %v", d.RunID, err)
+		}
 	}
 	finishErr := recordRunEnd(ctx, finishCtx, store, cfg, task, d.RunID, obs, result,
 		runEnding{outcome: outcome, detail: detail, runErr: runErr, unmatched: unmatched, burstRuns: burstRuns, burstDetail: burstDetail,

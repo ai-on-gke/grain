@@ -57,7 +57,7 @@ func TestPRFeedbackClaimRechecksAfterAdmission(t *testing.T) {
 				case "paused":
 					_, err = f.store.Pause(ctx, model.TaskPause{TaskID: "feedback", PausedAt: f.now, PausedBy: model.Principal{Kind: model.PrincipalHuman, ID: "owner"}})
 				case "delivered":
-					err = f.store.AdvanceDelivered(ctx, "feedback", through, f.now)
+					err = f.store.AcknowledgePRFeedback(ctx, "feedback", through)
 				case "rescheduled":
 					later := f.now.Add(24 * time.Hour)
 					err = f.store.SetDeferred(ctx, "feedback", &f.now, &later, f.now)
@@ -117,7 +117,7 @@ func TestPRFeedbackPendingBodySurvivesConversationWindow(t *testing.T) {
 	if strings.Contains(commentThreadSection(cs), "FINAL FEEDBACK DETAIL") {
 		t.Fatal("fixture did not exercise automation truncation")
 	}
-	if err := f.store.AdvanceDeliveredFrom(t.Context(), "feedback", lastCommentID(cs), f.now); err != nil {
+	if err := f.store.AcknowledgePRFeedback(t.Context(), "feedback", lastCommentID(cs)); err != nil {
 		t.Fatal(err)
 	}
 	pending, err = f.store.PendingPRFeedback(t.Context(), "feedback", lastCommentID(cs))
@@ -256,4 +256,80 @@ func TestPRFeedbackReceiptSurvivesReplacedProvenanceLinks(t *testing.T) {
 		t.Fatal("receipt replay duplicated context after a task update")
 	}
 	f.cycle(0)
+}
+
+func TestPRFeedbackConversationCursorCannotConsumeUnseenFeedback(t *testing.T) {
+	f := newFeedbackFixture(t)
+	f.question(false)
+	f.event("issue_comment", "created", 1601, "alice")
+	cs := f.comments()
+	// Human-only chat delivery can move the shared conversation cursor even
+	// though it never fetched the intervening external feedback.
+	if err := f.store.AdvanceDelivered(t.Context(), "feedback", cs[len(cs)-1].ID, f.now); err != nil {
+		t.Fatal(err)
+	}
+	d := f.cycle(1)[0]
+	pending, err := f.store.PendingPRFeedback(t.Context(), "feedback", cs[len(cs)-1].ID)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("feedback lost behind conversation cursor: %+v, %v", pending, err)
+	}
+	f.finish(d, cs[len(cs)-1].ID)
+	f.cycle(0)
+}
+
+func TestPRFeedbackEnclosingDescriptionDoesNotSuppressExternalComments(t *testing.T) {
+	for _, kind := range []string{"issue_comment", "pull_request_review", "pull_request_review_comment"} {
+		for _, description := range []string{github.SignCommentBody("quoted Grain note", "Alice"), treeMarker, lineageStart} {
+			t.Run(kind+description, func(t *testing.T) {
+				f := newFeedbackFixture(t)
+				f.question(false)
+				action := "created"
+				if kind == "pull_request_review" {
+					action = "submitted"
+				}
+				ev := ghwebhook.Event{Event: kind, Action: action, Repo: f.repo.String(), Number: 12, IsPullRequest: true,
+					SenderLogin: "alice", CommentID: 1701, ReviewID: 1701,
+					CommentBody: "new external feedback", ReviewBody: "new external feedback", Body: description}
+				if err := processGitHubEvent(t.Context(), Deps{Store: f.store, Client: feedbackClient{}}, []string{f.repo.String()}, map[string]bool{}, ev, f.now); err != nil {
+					t.Fatal(err)
+				}
+				f.cycle(1)
+			})
+		}
+	}
+}
+
+func TestPRFeedbackInlineDraftRootsDoNotEchoButHumanRepliesDeliver(t *testing.T) {
+	f := newFeedbackFixture(t)
+	f.question(false)
+	if err := f.store.UpdateTask(t.Context(), "feedback", func(task *model.Task) error {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkDraftReview, Target: "1801"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Use the real normalized GitHub envelope, not a synthetic ReviewID.
+	ev, err := ghwebhook.ParsePayload("pull_request_review_comment", "draft-root", []byte(`{
+		"action":"created", "repository":{"full_name":"acme/widgets"},
+		"pull_request":{"number":12}, "sender":{"login":"alice","type":"User"},
+		"comment":{"id":1802,"pull_request_review_id":1801,"body":"@grain-bot take over"}
+	}`))
+	if err != nil || ev.ReviewID != 1801 {
+		t.Fatalf("inline review provenance = %+v, %v", ev, err)
+	}
+	deps := Deps{Store: f.store, Client: feedbackClient{}, AppBotIdentity: func(context.Context, model.RepoRef) (string, bool) {
+		return "grain-bot[bot]", true
+	}}
+	if err := processGitHubEvent(t.Context(), deps, []string{f.repo.String()}, map[string]bool{}, ev, f.now); err != nil {
+		t.Fatal(err)
+	}
+	f.cycle(0)
+	if len(f.comments()) != 1 {
+		t.Fatal("Grain draft root echoed into task context")
+	}
+	ev.CommentID, ev.InReplyToID, ev.CommentBody = 1803, 1802, "human reply to the finding"
+	if err := processGitHubEvent(t.Context(), deps, []string{f.repo.String()}, map[string]bool{}, ev, f.now); err != nil {
+		t.Fatal(err)
+	}
+	f.cycle(1)
 }

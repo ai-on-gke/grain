@@ -126,6 +126,9 @@ func (f *feedbackFixture) finish(d dispatch.Dispatch, through int64) {
 	if err := f.store.AdvanceDeliveredFrom(f.t.Context(), "feedback", through, f.now.Add(2*time.Hour)); err != nil {
 		f.t.Fatal(err)
 	}
+	if err := f.store.AcknowledgePRFeedback(f.t.Context(), "feedback", through); err != nil {
+		f.t.Fatal(err)
+	}
 	if err := f.store.FinishRun(f.t.Context(), d.RunID, f.now.Add(2*time.Hour), "succeeded", ""); err != nil {
 		f.t.Fatal(err)
 	}

@@ -22,11 +22,12 @@ import (
 	"strings"
 )
 
-// A receipt joins source identity to the existing conversation delivery cursor.
+// A receipt joins source identity to its own delivery acknowledgment.
+// Chat replies can advance the conversation cursor without showing PR feedback.
 // It is deliberately not a schedule: several comments owe one feedback run,
 // and a comment arriving during a run is pending until actually shown.
 const prFeedbackTable = "CREATE TABLE IF NOT EXISTS `task_pr_feedback` (" +
-	"`task_id` TEXT NOT NULL, `event_key` TEXT NOT NULL, `comment_id` INTEGER NOT NULL, `received_run_id` TEXT NOT NULL DEFAULT ''," +
+	"`task_id` TEXT NOT NULL, `event_key` TEXT NOT NULL, `comment_id` INTEGER NOT NULL, `received_run_id` TEXT NOT NULL DEFAULT '', `delivered` INTEGER NOT NULL DEFAULT 0," +
 	"PRIMARY KEY (`task_id`, `event_key`))"
 
 // prFeedbackWaitSQL is a narrow exception to task_ready's queued-state test.
@@ -35,7 +36,7 @@ const prFeedbackTable = "CREATE TABLE IF NOT EXISTS `task_pr_feedback` (" +
 // scheduling are not feedback wakes. Requested suspensions use ResumeOn.JSON.
 var prFeedbackWaitSQL = `
  EXISTS (SELECT 1 FROM task_pr_feedback f
-         WHERE f.task_id = t.id AND f.comment_id > COALESCE(o.delivered_comment_id, 0))
+         WHERE f.task_id = t.id AND f.delivered = 0)
  AND t.approval_actor_kind IS NOT NULL
  AND o.closed_at IS NULL
  AND o.pr_closed_at IS NULL
@@ -51,7 +52,7 @@ var prFeedbackWaitSQL = `
    (t.deferred_at IS NULL AND t.deferred_until IS NULL AND o.pending_question_comment_id IS NOT NULL AND o.completed_at IS NULL)
    OR (t.deferred_at IS NULL AND t.deferred_until IS NULL AND o.completed_at IS NOT NULL AND EXISTS (
      SELECT 1 FROM task_pr_feedback late JOIN task_run ended ON ended.id = late.received_run_id
-     WHERE late.task_id = t.id AND late.comment_id > COALESCE(o.delivered_comment_id, 0) AND ended.finished_at IS NOT NULL
+     WHERE late.task_id = t.id AND late.delivered = 0 AND ended.finished_at IS NOT NULL
    ))
    OR EXISTS (
      SELECT 1 FROM task_suspension su JOIN task_run sr ON sr.id = su.run_id
@@ -192,13 +193,22 @@ func prFeedbackWait(ctx context.Context, q querier, taskID string) (bool, error)
 	return ready, err
 }
 
-// PendingPRFeedback returns the unread feedback within a dispatch's conversation
-// snapshot. Its full bodies are carried outside the history window, so moving
-// the existing delivered cursor cannot acknowledge text elided by that window.
+// AcknowledgePRFeedback records only feedback actually shown in full, either in
+// a dispatch prompt or an acknowledged addendum. Human-only chat delivery must
+// never consume intervening PR feedback by advancing the conversation cursor.
+func (s *Store) AcknowledgePRFeedback(ctx context.Context, taskID string, through int64) error {
+	return s.write(ctx, "acknowledge PR feedback on "+taskID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE task_pr_feedback SET delivered = 1 WHERE task_id = ? AND comment_id <= ?", taskID, through)
+		return err
+	})
+}
+
+// PendingPRFeedback returns unread feedback within a conversation snapshot.
+// Full bodies are carried outside the bounded history window.
 func (s *Store) PendingPRFeedback(ctx context.Context, taskID string, through int64) ([]Comment, error) {
 	return s.queryComments(ctx, taskID, "SELECT "+commentColumns+
 		"FROM task_comment WHERE task_id = ? AND id IN ("+
-		"SELECT f.comment_id FROM task_pr_feedback f LEFT JOIN task_observation o ON o.task_id = f.task_id "+
-		"WHERE f.task_id = ? AND f.comment_id > COALESCE(o.delivered_comment_id, 0) AND f.comment_id <= ?) ORDER BY id",
+		"SELECT f.comment_id FROM task_pr_feedback f "+
+		"WHERE f.task_id = ? AND f.delivered = 0 AND f.comment_id <= ?) ORDER BY id",
 		taskID, taskID, through)
 }

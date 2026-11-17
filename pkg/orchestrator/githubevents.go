@@ -176,12 +176,16 @@ func isSelfBotEvent(ev ghwebhook.Event, botLogin, botSlug string) bool {
 		strings.EqualFold(ev.SenderLogin, botSlug+"[bot]") {
 		return true
 	}
-	for _, text := range []string{ev.CommentBody, ev.ReviewBody, ev.Body} {
-		if github.IsGrainSignedComment(text) || strings.Contains(text, treeMarker) || strings.Contains(text, lineageStart) {
-			return true
-		}
+	// Comment/review envelopes also carry the enclosing PR description. Its
+	// provenance says nothing about who authored this new piece of feedback.
+	text := ev.Body
+	switch ev.Event {
+	case "issue_comment", "pull_request_review_comment":
+		text = ev.CommentBody
+	case "pull_request_review":
+		text = ev.ReviewBody
 	}
-	return false
+	return github.IsGrainSignedComment(text) || strings.Contains(text, treeMarker) || strings.Contains(text, lineageStart)
 }
 
 func senderTrusted(client github.Client, cache map[string]bool, repo model.RepoRef, login string) (bool, error) {
@@ -343,6 +347,21 @@ func handleCommentEvent(ctx context.Context, deps Deps, repo model.RepoRef,
 	eventKey := kindPrefix + strconv.FormatInt(ev.CommentID, 10)
 	mentioned := botSlug != "" && mentionsBot(ev.CommentBody, botSlug)
 
+	var target *model.Task
+	if ev.IsPullRequest || inlineReview {
+		var err error
+		target, err = feedbackTaskForPR(ctx, deps.Store, model.PullRequestRef{Repo: repo, Number: ev.Number})
+		if err != nil {
+			return err
+		}
+		// Grain's own draft roots are not commands or external feedback.
+		// Their inline bodies need not carry the summary's signature.
+		if target != nil && inlineReview && ev.InReplyToID == 0 && ev.ReviewID > 0 &&
+			hasLinkTarget(*target, model.LinkDraftReview, strconv.FormatInt(ev.ReviewID, 10)) {
+			return nil
+		}
+	}
+
 	// The takeover commands come first: on a pull request grain already
 	// owns, "take over" is answered with who owns it rather than relayed.
 	if mentioned && (ev.IsPullRequest || inlineReview) {
@@ -358,10 +377,7 @@ func handleCommentEvent(ctx context.Context, deps Deps, repo model.RepoRef,
 	}
 
 	if ev.IsPullRequest || inlineReview {
-		target, err := feedbackTaskForPR(ctx, deps.Store, model.PullRequestRef{Repo: repo, Number: ev.Number})
-		if err != nil {
-			return err
-		}
+
 		if target != nil {
 			if hasLinkTarget(*target, model.LinkGitHubEvent, eventKey) {
 				return nil

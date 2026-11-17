@@ -21,7 +21,11 @@ review-submission backfill. Replies require webhook delivery.
 Webhook feedback requires the existing trusted-collaborator permission check.
 The configured App's own login, existing delegated-author signature footers,
 work-tree/lineage markers, draft reviews
-and relayed review roots are filtered using existing provenance. Polling retains
+and relayed review roots are filtered using existing provenance. Self filtering
+inspects the event's own comment or review, never the enclosing PR description.
+Inline root events retain `pull_request_review_id` to exclude Grain draft-review
+findings even when their inline bodies have no delegated-author footer; human
+replies to those roots remain eligible feedback. Polling retains
 its existing reviewer/bot policy and resolved/draft/relayed-thread filtering;
 this feature does not broaden collaborator permissions.
 
@@ -47,9 +51,12 @@ External feedback is attributed to the webhook automation, not to a human postin
 instructions in Grain. Thus it cannot automatically answer a question, settle
 review questions, supply a secret, grant access, or constitute a CI verdict.
 
-A receipt is pending while its comment ID exceeds the existing
-`Observation.DeliveredCommentID` (zero before any delivery). Multiple pending
-receipts confer one readiness exception, not one schedule per comment.
+A receipt is pending until its own `delivered` bit is acknowledged. The shared
+`Observation.DeliveredCommentID` cannot acknowledge PR feedback: a human-only
+chat reply can advance it past external feedback that chat never fetched.
+Multiple pending receipts confer one readiness exception, not one schedule per
+comment. Live addenda include receipt-backed feedback with automation attribution;
+chat replies continue to include only human messages.
 
 An approved, open task may dispatch despite:
 
@@ -79,9 +86,14 @@ queue claiming protect competing dispatchers and changes during admission.
 
 Unread feedback is included in full in a dedicated dispatch prompt section,
 outside the bounded conversation-history window, and in suspended-session
-prompts. A successful run advances the delivery cursor only through its prompt
-snapshot; normal addenda acknowledgments can advance it through feedback actually
-shown mid-run. Setup/execution failures do not acknowledge the prompt. Feedback
+prompts. A successful run acknowledges feedback only through its prompt snapshot.
+Fully rendered addenda acknowledge feedback through the validated comment ID
+using `prFeedback: true` on the existing task-scoped delivered endpoint; chat
+acknowledgments omit that flag. A truncated addenda batch and later batches that
+would cross its unseen text leave receipts pending for the next dispatch's full
+feedback section. Older relay clients that omit the flag conservatively leave
+feedback pending until prompt delivery. Setup/execution failures do not acknowledge
+the prompt. Feedback
 arriving after the snapshot remains pending, even if a new question was written
 later. Feedback received during a live run (or its queued result-processing window) also retains that
 run's identity: if
