@@ -34,6 +34,9 @@ describe("retired in-process capabilities", () => {
     expect(retiredGrant("memory")?.grant).toBe(
       "https://grain.dev/capabilities/api#memory",
     );
+    expect(retiredGrant("release-gate-read")?.grant).toBe(
+      "https://grain.dev/capabilities/api#release-gate-read",
+    );
     expect(retiredGrant("self-debug")?.grant).toBe(
       "https://grain.dev/capabilities/api#self-debug + https://grain.dev/capabilities/grain#source={}",
     );

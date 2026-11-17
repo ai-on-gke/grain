@@ -691,7 +691,13 @@ import "strconv"
 // blast/complexity/triage tracking to `task_qa_check_run`.
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
-const SchemaVersion = 151
+// 152 changes no table: it retires the bare `release-gate-read` CI alias onto
+// `https://grain.dev/capabilities/api#release-gate-read` across the grant
+// tables, `task_grant_wait`, deployment and repository default and CI
+// capability lists, standing console sessions, and `capability_policy`
+// (folding `in_process.release-gate-read` into
+// `api_scopes.presets.release-gate-read`).
+const SchemaVersion = 152
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,

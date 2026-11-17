@@ -359,7 +359,7 @@ func TestARevokedOrExpiredTokenIsWorthNothing(t *testing.T) {
 }
 
 func TestTheProviderIsCIOnlyAndAdmitsTrustedEventsOnly(t *testing.T) {
-	for _, name := range []string{model.ReleaseGateReadCapability, "api:ci:read", "api:release-gate-read"} {
+	for _, name := range []string{model.APIRef(model.ReleaseGateReadCapability), "api:ci:read", "api:release-gate-read"} {
 		p, ok := DynamicProvider(NewEndpoint(), Config{})(name)
 		if !ok {
 			t.Fatalf("%s has no CI provider", name)
@@ -380,8 +380,10 @@ func TestTheProviderIsCIOnlyAndAdmitsTrustedEventsOnly(t *testing.T) {
 			t.Errorf("%s does not admit grain's own cron, which release-train.yml runs on", name)
 		}
 	}
-	if _, ok := DynamicProvider(NewEndpoint(), Config{})("gemini-key"); ok {
-		t.Error("a name that is no api grant resolved to a CI api provider")
+	for _, retiredOrOther := range []string{model.ReleaseGateReadCapability, "gemini-key"} {
+		if _, ok := DynamicProvider(NewEndpoint(), Config{})(retiredOrOther); ok {
+			t.Errorf("%q resolved to a CI api provider, want it rejected", retiredOrOther)
+		}
 	}
 }
 
@@ -423,12 +425,13 @@ func TestTheProviderMintsOneTokenForAllOfAJobsGrantsForAllowedReposOnly(t *testi
 	ctx := context.Background()
 	e := NewEndpoint()
 	resolve := DynamicProvider(e, Config{})
-	p, _ := resolve(model.ReleaseGateReadCapability)
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
+	p, _ := resolve(releaseGateRef)
 	extra, _ := resolve("api:repos:read")
 	refused, _ := resolve("api:settings:write")
 	cc := model.CapabilityContext{
 		Task: model.Task{Target: &grain, Grants: []model.Grant{
-			{Capability: model.ReleaseGateReadCapability}, {Capability: "api:repos:read"},
+			{Capability: releaseGateRef}, {Capability: "api:repos:read"},
 			{Capability: "api:settings:write"}, {Capability: "gemini-key"},
 		}},
 		Run: model.Run{ID: "ci-job"}, Now: time.Now(), CI: true,
@@ -453,7 +456,7 @@ func TestTheProviderMintsOneTokenForAllOfAJobsGrantsForAllowedReposOnly(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Lease == nil || m.Lease.Capability != model.ReleaseGateReadCapability || e.Tokens.Len() != 1 {
+	if m.Lease == nil || m.Lease.Capability != releaseGateRef || e.Tokens.Len() != 1 {
 		t.Fatalf("lease = %+v with %d tokens, want one lease and one token", m.Lease, e.Tokens.Len())
 	}
 	placed := map[string]string{}
@@ -503,7 +506,7 @@ func TestTheProviderMintsOneTokenForAllOfAJobsGrantsForAllowedReposOnly(t *testi
 		t.Error("the token outlived its lease's revocation")
 	}
 
-	widgets, _ := DynamicProvider(e, Config{Repos: []model.RepoRef{other}})(model.ReleaseGateReadCapability)
+	widgets, _ := DynamicProvider(e, Config{Repos: []model.RepoRef{other}})(releaseGateRef)
 	if res, _ := widgets.Resolve(ctx, model.CapabilityContext{Task: model.Task{Target: &other}, CI: true}); res.Refused {
 		t.Errorf("a provider configured for acme/widgets refused it: %s", res.Reason)
 	}

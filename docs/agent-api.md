@@ -543,10 +543,13 @@ boundary: anyone who can merge to that repository's default branch, or
 cut a release from it, can then read its tasks and CI and file its
 templates through grain's API.
 
-`release-gate-read`, the release train's capability
-(`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
-`https://grain.dev/capabilities/api#release-gate-read`. A job may still declare it by its retired names,
-`release-gate-read` or `api:release-gate-read`, for one release.
+The release train's preset
+(`design/design/release-from-trunk.design.md`, RFT-3) is the built-in
+`https://grain.dev/capabilities/api#release-gate-read` (or `api:release-gate-read`).
+The former bare `release-gate-read` alias is retired and rejected — a CI job
+declaring it is refused naming `https://grain.dev/capabilities/api#release-gate-read`.
+Schema migration 152 rewrites stored bare `release-gate-read` entries onto that
+reference, and `grain/config` imports upgrade it automatically.
 
 ## GitHub Actions runs
 

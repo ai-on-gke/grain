@@ -30,6 +30,7 @@ func TestMigration100RewritesModelProxyPolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := testConfig()
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -38,11 +39,11 @@ func TestMigration100RewritesModelProxyPolicy(t *testing.T) {
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"release-gate-read", "openai-proxy"},
+				Task: []string{releaseGateRef, "openai-proxy"},
 				CI:   []string{"gemini-proxy"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {Task: []string{"claude-proxy", model.ModelProxyGrant("claude")}},
-					"acme/tools":   {Task: []string{"release-gate-read"}},
+					"acme/tools":   {Task: []string{releaseGateRef}},
 				},
 			},
 		},
@@ -69,7 +70,7 @@ func TestMigration100RewritesModelProxyPolicy(t *testing.T) {
 	if cat == nil {
 		t.Fatal("catalogue lost")
 	}
-	if want := []string{"release-gate-read", model.ModelProxyGrant("openai")}; !slices.Equal(cat.Defaults.Task, want) {
+	if want := []string{releaseGateRef, model.ModelProxyGrant("openai")}; !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	if want := []string{model.ModelProxyGrant("gemini")}; !slices.Equal(cat.Defaults.CI, want) {
@@ -78,7 +79,7 @@ func TestMigration100RewritesModelProxyPolicy(t *testing.T) {
 	if want := []string{model.ModelProxyGrant("claude")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 		t.Errorf("acme/widgets task defaults = %v, want %v once", cat.Defaults.Repos["acme/widgets"].Task, want)
 	}
-	if want := []string{"release-gate-read"}; !slices.Equal(cat.Defaults.Repos["acme/tools"].Task, want) {
+	if want := []string{releaseGateRef}; !slices.Equal(cat.Defaults.Repos["acme/tools"].Task, want) {
 		t.Errorf("acme/tools task defaults = %v, want %v", cat.Defaults.Repos["acme/tools"].Task, want)
 	}
 
@@ -111,8 +112,9 @@ func TestMigration100RewritesModelProxyPolicy(t *testing.T) {
 func TestStateRepoImportRewritesModelProxyGrants(t *testing.T) {
 	t.Parallel()
 	src, srcDB, ctx := openStore(t)
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{"claude-proxy", "release-gate-read"}
+	cfg.DefaultCapabilities = []string{"claude-proxy", releaseGateRef}
 	if err := src.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +142,7 @@ func TestStateRepoImportRewritesModelProxyGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{model.ModelProxyGrant("claude"), "release-gate-read"}; !slices.Equal(got.DefaultCapabilities, want) {
+	if want := []string{model.ModelProxyGrant("claude"), releaseGateRef}; !slices.Equal(got.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", got.DefaultCapabilities, want)
 	}
 	repo, err := dst.GetRepoConfig(ctx, widgets)

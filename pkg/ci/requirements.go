@@ -39,14 +39,14 @@ func JobSecrets(job Job, provided []string) []string { return jobSecrets(job, pr
 // declaredOnly reports whether id is granted by a job declaring it,
 // subject to an authority other than the repository's CI capabilities
 // list: repository access, capability references (jobCapabilities), and
-// api grants (`api:<scope>`, `api:<preset>`) with release-gate-read, the
-// alias for the api:release-gate-read preset, whose provider admits only
+// api grants (`api:<scope>`, `api:<preset>`,
+// `https://grain.dev/capabilities/api#<scope>`), whose provider admits only
 // trusted events of the repositories it was configured for, and only
 // the scopes a CI job may hold (pkg/capability/ciapi) -- the release
 // workflow that declares it runs on grain's own repository whether or
 // not an operator has listed anything for it.
 func declaredOnly(id string) bool {
-	return IsRepoAccessCapability(id) || (model.IsCapabilityRef(id) && !model.IsRepoGrantedCIGrant(id)) || id == model.ReleaseGateReadCapability ||
+	return IsRepoAccessCapability(id) || (model.IsCapabilityRef(id) && !model.IsRepoGrantedCIGrant(id)) ||
 		strings.HasPrefix(strings.TrimSpace(id), model.APIGrantPrefix)
 }
 

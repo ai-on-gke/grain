@@ -445,8 +445,21 @@ func TestRetiredGrainServerCapabilitiesAndPresets(t *testing.T) {
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GrainSQLWriteGrant}}); err == nil || !strings.Contains(err.Error(), "in_process.db-write") {
 		t.Errorf("GrainSQLWriteGrant = %v, want disabled refusal from in_process.db-write", err)
 	}
-	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{model.ReleaseGateReadCapability}}); err == nil || !strings.Contains(err.Error(), "disabled") {
-		t.Errorf("bare release-gate-read = %v, want disabled refusal from api_scopes.presets.release-gate-read", err)
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{model.APIRef(model.ReleaseGateReadCapability)}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("api#release-gate-read = %v, want disabled refusal from api_scopes.presets.release-gate-read", err)
+	}
+	// Bare release-gate-read is retired and no longer aliases api_scopes.presets.release-gate-read,
+	// whereas an in_process.release-gate-read entry still binds api#release-gate-read.
+	if reason, ok := cat.DisabledReason(model.ReleaseGateReadCapability); ok {
+		t.Errorf("DisabledReason(bare release-gate-read) = %q, want none: it is retired and no longer aliases the preset", reason)
+	}
+	inProcessRG := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			model.ReleaseGateReadCapability: {Enabled: boolp(false)},
+		},
+	}
+	if _, err := inProcessRG.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{model.APIRef(model.ReleaseGateReadCapability)}}); err == nil || !strings.Contains(err.Error(), "in_process.release-gate-read") {
+		t.Errorf("api#release-gate-read with disabled in_process.release-gate-read = %v, want disabled refusal", err)
 	}
 	if _, err := cat.ValidateGrants(model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{"api:self-debug"}}); err == nil || !strings.Contains(err.Error(), "other/repo") {
 		t.Errorf("api:self-debug on other/repo = %v, want repo refusal from api_scopes.presets.self-debug", err)

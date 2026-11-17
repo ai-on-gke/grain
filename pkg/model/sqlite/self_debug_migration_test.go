@@ -27,11 +27,12 @@ import (
 func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := testConfig()
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"release-gate-read", "self-debug"},
+				Task: []string{releaseGateRef, "self-debug"},
 				CI:   []string{"self-debug"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/tools": {Task: []string{"self-debug", "api:self-debug"}},
@@ -60,7 +61,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 		t.Fatal("the catalogue was dropped")
 	}
 	became := []string{model.APIRef("self-debug"), model.GrainSourceGrant}
-	if want := append([]string{"release-gate-read"}, became...); !slices.Equal(cat.Defaults.Task, want) {
+	if want := append([]string{releaseGateRef}, became...); !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	if !slices.Equal(cat.Defaults.CI, became) {
@@ -87,6 +88,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
 	cfg := testConfig()
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -95,7 +97,7 @@ func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"release-gate-read", "bootstrap-playbooks"},
+				Task: []string{releaseGateRef, "bootstrap-playbooks"},
 				CI:   []string{"bootstrap-playbooks"},
 			},
 			InProcess: map[string]model.CatalogueInProcess{
@@ -133,7 +135,7 @@ func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted
 		t.Fatal("Permits admitted config-map secrets on an untrusted run after migration 118")
 	}
 	cat := pol.Catalogue
-	if cat == nil || !slices.Equal(cat.Defaults.Task, []string{"release-gate-read", model.BootstrapPlaybooksGrant}) ||
+	if cat == nil || !slices.Equal(cat.Defaults.Task, []string{releaseGateRef, model.BootstrapPlaybooksGrant}) ||
 		!slices.Equal(cat.Defaults.CI, []string{model.BootstrapPlaybooksGrant}) {
 		t.Errorf("catalogue defaults after migration 118 = %+v", cat)
 	}

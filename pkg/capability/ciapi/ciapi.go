@@ -38,10 +38,9 @@
 //     files a task from the job's own repository's template, optionally
 //     only the templates its grant names (model.APIPreset.Templates).
 //
-// release-gate-read, the release train's capability
-// (design/design/release-from-trunk.design.md, RFT-3), is the built-in preset
-// api:release-gate-read, and the bare name a workflow declares is an
-// alias for it (NewAlias).
+// The release train's preset (design/design/release-from-trunk.design.md,
+// RFT-3) is the built-in https://grain.dev/capabilities/api#release-gate-read
+// preset; its former bare release-gate-read alias has been retired.
 //
 // Like repo-write, a job is given these only on a post-merge `release`,
 // an operator's `workflow_dispatch`, and a cron grain itself fired
@@ -361,13 +360,6 @@ func New(endpoint *Endpoint, cfg Config, name string) (*Provider, bool) {
 	return newProvider(endpoint, cfg, name, g, err), true
 }
 
-// NewAlias returns the provider for a bare capability name standing for
-// the api grant target -- release-gate-read for api:release-gate-read.
-func NewAlias(endpoint *Endpoint, cfg Config, name, target string) *Provider {
-	g, _, err := model.ParseAPIGrant(target)
-	return newProvider(endpoint, cfg, name, g, err)
-}
-
 func newProvider(endpoint *Endpoint, cfg Config, name string, g model.APIGrant, err error) *Provider {
 	repos := cfg.Repos
 	if len(repos) == 0 {
@@ -376,19 +368,10 @@ func newProvider(endpoint *Endpoint, cfg Config, name string, g model.APIGrant, 
 	return &Provider{endpoint: endpoint, repos: repos, name: name, grant: g, err: err}
 }
 
-// Aliases are the bare capability names that stand for an api grant in
-// a CI job's `capabilities:`.
-var Aliases = map[string]string{
-	model.ReleaseGateReadCapability: model.APIGrantPrefix + model.ReleaseGateReadCapability,
-}
-
-// DynamicProvider resolves every api grant name, and every alias, to its
-// CI provider (model.CapabilityRegistry.RegisterCIDynamic).
+// DynamicProvider resolves every api grant name to its CI provider
+// (model.CapabilityRegistry.RegisterCIDynamic).
 func DynamicProvider(endpoint *Endpoint, cfg Config) model.DynamicProvider {
 	return func(name string) (model.CapabilityProvider, bool) {
-		if target, ok := Aliases[name]; ok {
-			return NewAlias(endpoint, cfg, name, target), true
-		}
 		p, ok := New(endpoint, cfg, name)
 		if !ok {
 			return nil, false
@@ -402,7 +385,7 @@ func (p *Provider) Spec() model.CapabilitySpec {
 	label := "Grain API (CI): " + strings.TrimPrefix(strings.TrimPrefix(p.grant.Name, model.APIGrantPrefix), model.APICapabilityServerID+"#")
 	description := "Let a trusted CI job call grain's API for its own repository, through a per-job token " +
 		"worth the routes of " + p.grant.Name + " only"
-	if p.name == model.ReleaseGateReadCapability || p.grant.Preset == model.ReleaseGateReadCapability {
+	if p.grant.Preset == model.ReleaseGateReadCapability {
 		label = "Release gate (read)"
 		description = "Let a release workflow's job read this deployment's CI runs, persistent sandboxes and tasks " +
 			"for its own repository, and file its release-notes task: the https://grain.dev/capabilities/api#release-gate-read preset, held through a per-job token"
@@ -492,12 +475,8 @@ func (p *Provider) jobGrant(cc model.CapabilityContext, repo model.RepoRef, expi
 	out := Grant{Repo: repo, RunID: cc.Run.ID, Expires: expires}
 	for _, g := range cc.Task.Grants {
 		name := g.Capability
-		var held *Provider
-		if target, ok := Aliases[name]; ok {
-			held = NewAlias(p.endpoint, Config{Repos: p.repos}, name, target)
-		} else if q, ok := New(p.endpoint, Config{Repos: p.repos}, name); ok {
-			held = q
-		} else {
+		held, ok := New(p.endpoint, Config{Repos: p.repos}, name)
+		if !ok {
 			continue
 		}
 		if held.refusal(repo) != "" {

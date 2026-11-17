@@ -95,7 +95,7 @@ capability references, as grain's own `.grain/workflows` do:
 | sign images | `https://grain.dev/capabilities/release#image-signing` | `image-signing` (one release) |
 | push to a registry | `https://grain.dev/capabilities/release#registry-push` | `registry-push` (one release) |
 | temporary GitHub repository | `https://grain.dev/capabilities/github#sandbox-repo` | `github-sandbox` (one release) |
-| the release gate's API reads | `https://grain.dev/capabilities/api#release-gate-read` | `release-gate-read`, `api:release-gate-read` (one release) |
+| the release gate's API reads | `https://grain.dev/capabilities/api#release-gate-read` | `api:release-gate-read` (bare `release-gate-read` is retired and refused) |
 | an agent API scope or preset | `https://grain.dev/capabilities/api#<scope>` | `api:<scope>` (one release) |
 | repository access | `{capability: https://grain.dev/capabilities/repo#write, with: {repo: <owner>/<repo>}}` (or `#read`) | `repo-write:<owner>/<repo>`, `repo-read:<owner>/<repo>` |
 | a GCP key | `https://grain.dev/capabilities/gcp#gcp-key` (`with: {permission_set: <name>}`) |

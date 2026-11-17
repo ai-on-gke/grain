@@ -128,6 +128,7 @@ export const RETIRED_IN_PROCESS: Readonly<Record<string, RetiredGrant>> = {
     `${SERVER}/github#sandbox-repo={}`,
     `${SERVER}/github#sandbox-repo`,
   ),
+  "release-gate-read": preset("release-gate-read"),
 };
 
 // retiredGrant is what a bare in-process name was retired onto, or null

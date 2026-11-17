@@ -111,8 +111,9 @@ func TestCheckMigrationAccepts108DumpWithDisabledCatalogueGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(gotCfg.DefaultCapabilities, []string{"release-gate-read"}) {
-		t.Errorf("migrated default_capabilities = %v, want [release-gate-read]", gotCfg.DefaultCapabilities)
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
+	if !slices.Equal(gotCfg.DefaultCapabilities, []string{releaseGateRef}) {
+		t.Errorf("migrated default_capabilities = %v, want [%s]", gotCfg.DefaultCapabilities, releaseGateRef)
 	}
 	tmpl, err := dstStore.GetTemplate(ctx, "template-1")
 	if err != nil || tmpl == nil {
@@ -142,7 +143,7 @@ func TestCheckMigrationAccepts108DumpWithDisabledCatalogueGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited := strings.Replace(string(rawCap), "  task: [release-gate-read]\n", "  task: [release-gate-read, https://grain.dev/capabilities/github#read-issues]\n", 1)
+	edited := strings.Replace(string(rawCap), "  task: ['"+releaseGateRef+"']\n", "  task: ['"+releaseGateRef+"', 'https://grain.dev/capabilities/github#read-issues']\n", 1)
 	if edited == string(rawCap) {
 		t.Fatalf("expected task defaults block in %s:\n%s", capPath, rawCap)
 	}

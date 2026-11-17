@@ -113,6 +113,7 @@ var legacyNameExempt = []string{
 	"pkg/model/self_debug_migration.go",
 	"pkg/model/read_issues_migration.go",
 	"pkg/model/bootstrap_playbooks_migration.go",
+	"pkg/model/release_gate_read_migration.go",
 	"pkg/model/priority_dispatch.go",
 	"pkg/capability/localscripts/",
 	"pkg/daemon/localscripts_migrate.go",

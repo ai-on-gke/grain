@@ -117,26 +117,27 @@ func TestMigration121And128DropCatalogueDisabledGrantsFrom108Store(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(gotCfg.DefaultCapabilities, []string{"release-gate-read"}) {
-		t.Errorf("grain_config.default_capabilities = %v, want [release-gate-read]", gotCfg.DefaultCapabilities)
+	releaseGateRef := model.APIRef(model.ReleaseGateReadCapability)
+	if !slices.Equal(gotCfg.DefaultCapabilities, []string{releaseGateRef}) {
+		t.Errorf("grain_config.default_capabilities = %v, want [%s]", gotCfg.DefaultCapabilities, releaseGateRef)
 	}
 	cat := gotCfg.CapabilityPolicy.Catalogue
 	if cat == nil {
 		t.Fatal("catalogue nil after migration")
 	}
-	if !slices.Equal(cat.Defaults.Task, []string{"release-gate-read"}) {
-		t.Errorf("catalogue.defaults.task = %v, want [release-gate-read]", cat.Defaults.Task)
+	if !slices.Equal(cat.Defaults.Task, []string{releaseGateRef}) {
+		t.Errorf("catalogue.defaults.task = %v, want [%s]", cat.Defaults.Task, releaseGateRef)
 	}
 	if len(cat.Defaults.CI) != 0 {
 		t.Errorf("catalogue.defaults.ci = %v, want empty", cat.Defaults.CI)
 	}
-	if got := cat.Defaults.Repos["acme/widgets"]; !slices.Equal(got.Task, []string{"release-gate-read"}) || len(got.CI) != 0 {
-		t.Errorf("catalogue.defaults.repos[acme/widgets] = %+v, want task=[release-gate-read] ci=[]", got)
+	if got := cat.Defaults.Repos["acme/widgets"]; !slices.Equal(got.Task, []string{releaseGateRef}) || len(got.CI) != 0 {
+		t.Errorf("catalogue.defaults.repos[acme/widgets] = %+v, want task=[%s] ci=[]", got, releaseGateRef)
 	}
 	if len(gotCfg.CapabilityPolicy.Rules) != 1 || gotCfg.CapabilityPolicy.Rules[0].Capability != model.GitHubReadIssuesRef || !gotCfg.CapabilityPolicy.Rules[0].Deny {
 		t.Errorf("capability_policy.rules = %+v, want deny on %s", gotCfg.CapabilityPolicy.Rules, model.GitHubReadIssuesRef)
 	}
-	if len(gotCfg.ConsoleSessions) != 1 || !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, []string{model.GitHubReadIssuesGrant, "release-gate-read"}) {
+	if len(gotCfg.ConsoleSessions) != 1 || !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, []string{model.GitHubReadIssuesGrant, releaseGateRef}) {
 		t.Errorf("console_sessions = %+v, want migrated grant preserved", gotCfg.ConsoleSessions)
 	}
 
@@ -144,21 +145,21 @@ func TestMigration121And128DropCatalogueDisabledGrantsFrom108Store(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(gotRepo.DefaultCapabilities, []string{"release-gate-read"}) || !slices.Equal(gotRepo.CICapabilities, []string{"release-gate-read"}) {
-		t.Errorf("repo_config = default:%v ci:%v, want [release-gate-read] on both", gotRepo.DefaultCapabilities, gotRepo.CICapabilities)
+	if !slices.Equal(gotRepo.DefaultCapabilities, []string{releaseGateRef}) || !slices.Equal(gotRepo.CICapabilities, []string{releaseGateRef}) {
+		t.Errorf("repo_config = default:%v ci:%v, want [%s] on both", gotRepo.DefaultCapabilities, gotRepo.CICapabilities, releaseGateRef)
 	}
 
 	// Task grant is rewritten and kept (dispatch holds disabled task grants).
-	if got := grantRows(t, ctx, db, "task_grant", "task_id")["task-2"]; !slices.Equal(got, []string{model.GitHubReadIssuesGrant, "release-gate-read"}) {
-		t.Errorf("task-2 grants = %v, want [%s release-gate-read]", got, model.GitHubReadIssuesGrant)
+	if got := grantRows(t, ctx, db, "task_grant", "task_id")["task-2"]; !slices.Equal(got, []string{releaseGateRef, model.GitHubReadIssuesGrant}) {
+		t.Errorf("task-2 grants = %v, want [%s %s]", got, releaseGateRef, model.GitHubReadIssuesGrant)
 	}
 
 	// Template and schedule grants drop the disabled grant and record an idempotent note.
-	if got := grantRows(t, ctx, db, "template_grant", "template_id")["template-1"]; !slices.Equal(got, []string{"release-gate-read"}) {
-		t.Errorf("template-1 grants = %v, want [release-gate-read]", got)
+	if got := grantRows(t, ctx, db, "template_grant", "template_id")["template-1"]; !slices.Equal(got, []string{releaseGateRef}) {
+		t.Errorf("template-1 grants = %v, want [%s]", got, releaseGateRef)
 	}
-	if got := grantRows(t, ctx, db, "schedule_grant", "schedule_id")["sched-1"]; !slices.Equal(got, []string{"release-gate-read"}) {
-		t.Errorf("sched-1 grants = %v, want [release-gate-read]", got)
+	if got := grantRows(t, ctx, db, "schedule_grant", "schedule_id")["sched-1"]; !slices.Equal(got, []string{releaseGateRef}) {
+		t.Errorf("sched-1 grants = %v, want [%s]", got, releaseGateRef)
 	}
 
 	wantReason := "capability " + model.GitHubReadIssuesGrant + " is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced)"

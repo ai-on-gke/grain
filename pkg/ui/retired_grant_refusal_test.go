@@ -41,7 +41,7 @@ func TestRetiredBareNamesAreRefusedNamingWhatTheyBecame(t *testing.T) {
 	for _, name := range []string{
 		"self-debug", "grain-log", "read-issues", "github-sandbox", "bootstrap-playbooks",
 		"github-credential:bot", "claude-proxy", "gemini-key", "gcp-key", "gcp-key:ops",
-		"grain-ci", "image-signing", "registry-push",
+		"grain-ci", "image-signing", "registry-push", model.ReleaseGateReadCapability,
 	} {
 		became := model.RetiredGrantsBecame(name)
 		if len(became) == 0 || became[0] == name {

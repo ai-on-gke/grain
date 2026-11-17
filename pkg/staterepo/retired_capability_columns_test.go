@@ -61,7 +61,7 @@ func TestAnImportUpgradesRetiredNamesInCapabilityColumns(t *testing.T) {
 	})
 	editTable(t, dir, "repo_config", func(row map[string]any) {
 		row["default_capabilities"] = "github-sandbox"
-		row["ci_capabilities"] = "grain-log,github-credential:bot"
+		row["ci_capabilities"] = "grain-log,github-credential:bot,release-gate-read"
 	})
 	store, db := openDB(t)
 	if err := staterepo.Import(ctx, db, dir); err != nil {
@@ -84,7 +84,7 @@ func TestAnImportUpgradesRetiredNamesInCapabilityColumns(t *testing.T) {
 	if !slices.Equal(rc.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Errorf("repo DefaultCapabilities = %v, want [%s]", rc.DefaultCapabilities, model.GitHubSandboxRepoGrant)
 	}
-	if want := []string{model.GrainJournalGrant, model.RepoCredentialGrant("bot")}; !slices.Equal(rc.CICapabilities, want) {
+	if want := []string{model.GrainJournalGrant, model.RepoCredentialGrant("bot"), model.APIRef(model.ReleaseGateReadCapability)}; !slices.Equal(rc.CICapabilities, want) {
 		t.Errorf("repo CICapabilities = %v, want %v", rc.CICapabilities, want)
 	}
 
@@ -97,7 +97,7 @@ func TestAnImportUpgradesRetiredNamesInCapabilityColumns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, bare := range []string{"self-debug", "read-issues", "github-sandbox", "grain-log", "github-credential:bot"} {
+		for _, bare := range []string{"self-debug", "read-issues", "github-sandbox", "grain-log", "github-credential:bot", "release-gate-read"} {
 			if strings.Contains(string(data), `"`+bare) || strings.Contains(string(data), ","+bare) {
 				t.Errorf("the re-exported %s still names %s:\n%s", table, bare, data)
 			}
