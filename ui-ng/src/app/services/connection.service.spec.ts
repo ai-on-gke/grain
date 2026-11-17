@@ -60,6 +60,25 @@ describe("unreachableReason", () => {
       ),
     ).toBe("");
     expect(unreachableReason(e(503, { error: "CI is not up yet" }))).toBe("");
+    // GrainApi.getText uses responseType: "text", so HttpClient leaves
+    // err.error as the raw JSON string rather than parsing it.
+    expect(
+      unreachableReason(
+        e(
+          503,
+          '{"error":"this server has no namespace to serve /api/fs/ from"}\n',
+        ),
+      ),
+    ).toBe("");
+    expect(unreachableReason(e(503, "null"))).toContain(
+      "503 Service Unavailable",
+    );
+    expect(unreachableReason(e(502, '{"message":"upstream error"}'))).toContain(
+      "502 Bad Gateway",
+    );
+    expect(unreachableReason(e(503, '{"error":503}'))).toContain(
+      "503 Service Unavailable",
+    );
     expect(unreachableReason(e(0, { error: "x" }))).toContain(
       "the connection to it failed",
     );
@@ -99,6 +118,45 @@ describe("connectionInterceptor", () => {
       );
     await a;
     expect(conn.disconnection()).toBeNull();
+  });
+
+  it("does not raise on the daemon's own JSON 503 from a text read, and clears an existing banner", async () => {
+    const url = "/api/persistent-sandboxes/docs-preview/logs?format=text";
+    const a = firstValueFrom(http.get(url, { responseType: "text" })).catch(
+      () => null,
+    );
+    ctl.expectOne(url).flush(
+      JSON.stringify({
+        error: "this server does not supervise persistent sandboxes",
+      }),
+      { status: 503, statusText: "Service Unavailable" },
+    );
+    await a;
+    expect(conn.disconnection()).toBeNull();
+
+    conn.unreachable("x");
+    const fsUrl = "/api/fs/config/grain.yaml";
+    const b = firstValueFrom(http.get(fsUrl, { responseType: "text" })).catch(
+      () => null,
+    );
+    ctl
+      .expectOne(fsUrl)
+      .flush(
+        '{"error":"this server has no namespace to serve /api/fs/ from"}\n',
+        { status: 503, statusText: "Service Unavailable" },
+      );
+    await b;
+    expect(conn.disconnection()).toBeNull();
+
+    const c = firstValueFrom(http.get(fsUrl, { responseType: "text" })).catch(
+      () => null,
+    );
+    ctl.expectOne(fsUrl).flush("<html>Service Unavailable</html>", {
+      status: 503,
+      statusText: "Service Unavailable",
+    });
+    await c;
+    expect(conn.disconnection()?.reason).toContain("503 Service Unavailable");
   });
 
   it("raises on a failed connection and clears on the next answer", async () => {

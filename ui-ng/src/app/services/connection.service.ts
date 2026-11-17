@@ -47,7 +47,18 @@ const NETWORK_REASON =
 // and those are the daemon answering, not the daemon being out of reach. A
 // gateway in front of a daemon that is not there answers with its own HTML
 // or plain-text page instead.
+//
+// On a `responseType: "text"` read (GrainApi.getText, used for persistent
+// sandbox logs and /api/fs/ reads), HttpClient leaves err.error as the raw
+// string rather than parsing it, so parse a string body first.
 function daemonAnswered(body: unknown): boolean {
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return false;
+    }
+  }
   return (
     body !== null &&
     typeof body === "object" &&
