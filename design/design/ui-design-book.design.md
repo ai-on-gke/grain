@@ -423,7 +423,9 @@ items or topbar chrome:
     unclipped header `<g-pill-select testid="qa-flow-switcher">`.
   - **Center stage spine (`g-qa-v3-studio`):** workflow header with version
     switcher (`qa-version-switcher`), honest rollout status pill with
-    `<g-status-icon>`, 1-click `Set as default…` (`PUT /api/settings` + Undo),
+    `<g-status-icon>`, 1-click `Set as default…` / `Turn off default…`
+    (`PUT /api/settings` + Undo, clearing all cards to `Available` when no
+    default workflow is active),
     accessible `Guide` reference modal (`qa-guide-dialog`), opaque elevated
     action/select menus (`qa-action-pop` + smart edge-clamped `g-pill-select`),
     and explicit `Customize as vN` draft mode (zero disabled inputs in read

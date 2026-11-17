@@ -2366,11 +2366,14 @@ export class QaStepDrawerComponent {
   protected readonly rolloutProvenanceTitle = computed(() => {
     const d = this.detail();
     if (!d) return "Available workflow";
+    if (!this.qaEnabled()) {
+      return "No default workflow active";
+    }
     const versionActive =
       this.isVersionActiveDefault() ||
       (!this.isFamilyActiveDefault() && this.activeFlowId() === d.key);
     if (versionActive) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
+      if (this.activeRolloutPct() > 0) {
         return `Default workflow (${this.activeRolloutPct()}% of new tasks)`;
       }
       return "Selected default · Rollout paused (0%)";
@@ -2384,12 +2387,15 @@ export class QaStepDrawerComponent {
   protected readonly rolloutProvenanceBody = computed(() => {
     const d = this.detail();
     if (!d) return "";
+    if (!this.qaEnabled()) {
+      return "New tasks currently run with no automatic workflow. Pin this workflow on specific schedules or suites, compare it in an A/B experiment, or click Set as default… above.";
+    }
     const versionActive =
       this.isVersionActiveDefault() ||
       (!this.isFamilyActiveDefault() && this.activeFlowId() === d.key);
     if (versionActive) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
-        return `Runs automatically on ${this.activeRolloutPct()}% of eligible tasks across repositories, and can be pinned on individual schedules or suites.`;
+      if (this.activeRolloutPct() > 0) {
+        return `Runs automatically on ${this.activeRolloutPct()}% of eligible tasks across repositories. Click Turn off default… above to run new tasks with no automatic workflow.`;
       }
       return "Configured as the default workflow in Settings → Tasks, but quality rollout is currently paused at 0%.";
     }

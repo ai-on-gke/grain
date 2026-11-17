@@ -305,6 +305,17 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
                         Set as default…
                       </button>
                     }
+                    @if (canShowClearDefault(detail)) {
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="qa-clear-default-btn"
+                        gTip="Turn off the default workflow so new tasks run with no automatic workflow."
+                        (click)="confirmClearDefault()"
+                      >
+                        Turn off default…
+                      </button>
+                    }
 
                     @if (canAdmin()) {
                       <button
@@ -432,6 +443,20 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
                               (click)="closeMenus(); dryRun()"
                             >
                               Test on recent PRs
+                            </button>
+                          </li>
+                        }
+                        @if (
+                          !isEditing() && canWriteSettings() && qaEnabled()
+                        ) {
+                          <li role="none">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              data-testid="qa-menu-clear-default-btn"
+                              (click)="closeMenus(); confirmClearDefault()"
+                            >
+                              Turn off default workflow…
                             </button>
                           </li>
                         }
@@ -1461,8 +1486,8 @@ export class QaFlowsPanelComponent {
   }
 
   protected rolloutStatusTone(detail: QAFlowVersionDetail): string {
-    if (this.isVersionActiveDefault(detail)) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
+    if (this.qaEnabled() && this.isVersionActiveDefault(detail)) {
+      if (this.activeRolloutPct() > 0) {
         return "healthy";
       }
       return "warn";
@@ -1471,8 +1496,8 @@ export class QaFlowsPanelComponent {
   }
 
   protected rolloutStatusLabel(detail: QAFlowVersionDetail): string {
-    if (this.isVersionActiveDefault(detail)) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
+    if (this.qaEnabled() && this.isVersionActiveDefault(detail)) {
+      if (this.activeRolloutPct() > 0) {
         return `Active (${this.activeRolloutPct()}%)`;
       }
       return "Default · Paused (0%)";
@@ -1481,9 +1506,12 @@ export class QaFlowsPanelComponent {
   }
 
   protected rolloutStatusTip(detail: QAFlowVersionDetail): string {
+    if (!this.qaEnabled()) {
+      return "No default workflow is active. Use Set as default… to run this workflow on new tasks, or pin it on individual schedules and suites.";
+    }
     if (this.isVersionActiveDefault(detail)) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
-        return `Active default workflow for ${this.activeRolloutPct()}% of eligible new tasks.`;
+      if (this.activeRolloutPct() > 0) {
+        return `Active default workflow for ${this.activeRolloutPct()}% of eligible new tasks. Click Turn off default… to run with no automatic workflow.`;
       }
       return "Selected as default in Settings → Tasks, but rollout is currently paused at 0%.";
     }
@@ -1500,6 +1528,58 @@ export class QaFlowsPanelComponent {
       this.isVersionActiveDefault(detail) &&
       this.activeRolloutPct() > 0;
     return !alreadyActive;
+  }
+
+  protected canShowClearDefault(detail: QAFlowVersionDetail): boolean {
+    if (!this.canWriteSettings()) return false;
+    return this.qaEnabled() && this.isVersionActiveDefault(detail);
+  }
+
+  confirmClearDefault(): void {
+    const prev = {
+      qaEnabled: this.qaEnabled(),
+      qaFlowId: this.activeFlowId() || "golden-v1-minimal",
+      qaRolloutPct: this.activeRolloutPct(),
+      qaShadowOnControl: this.qaShadowOnControl(),
+    };
+    this.confirmRequest.set({
+      title: "Turn off default workflow",
+      message:
+        "Disable the global default workflow so new tasks run with no automatic workflow unless pinned on a schedule or suite?",
+      accept: "Turn off default",
+      destructive: false,
+      run: async () => {
+        try {
+          await this.api.put("PUT /api/settings", undefined, {
+            qaEnabled: false,
+            qaRolloutPct: 0,
+            qaShadowOnControl: false,
+          });
+          this.qaEnabled.set(false);
+          this.activeRolloutPct.set(0);
+          this.qaShadowOnControl.set(false);
+          this.snackbar.show(
+            "Default workflow turned off (no automatic workflow on new tasks).",
+            {
+              label: "Undo",
+              run: async () => {
+                try {
+                  await this.api.put("PUT /api/settings", undefined, prev);
+                  this.qaEnabled.set(prev.qaEnabled);
+                  this.activeFlowId.set(prev.qaFlowId);
+                  this.activeRolloutPct.set(prev.qaRolloutPct);
+                  this.qaShadowOnControl.set(prev.qaShadowOnControl);
+                } catch {
+                  this.snackbar.show("Failed to undo default workflow change");
+                }
+              },
+            },
+          );
+        } catch {
+          this.snackbar.show("Failed to turn off default workflow");
+        }
+      },
+    });
   }
 
   confirmSetAsDefault(): void {

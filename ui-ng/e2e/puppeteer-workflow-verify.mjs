@@ -359,6 +359,78 @@ async function run() {
         inlineHelpVisible,
       });
 
+      // 1C-bis (isolated demo only): Set workflow as default -> verify "Turn off default…" -> turn off default -> verify no workflow active
+      if (!externalUrl) {
+        await page.click('[data-testid="qa-set-default-btn"]');
+        await new Promise((r) => setTimeout(r, 150));
+        await page.click('[data-testid="confirm-accept"]');
+        await new Promise((r) => setTimeout(r, 250));
+        await snap(page, "s1-default-active-with-turn-off");
+        const activeState = await page.evaluate(() => ({
+          pill:
+            document
+              .querySelector('[data-testid="qa-rollout-status-pill"]')
+              ?.textContent?.trim() || "",
+          hasClearBtn: Boolean(
+            document.querySelector('[data-testid="qa-clear-default-btn"]'),
+          ),
+        }));
+        if (activeState.hasClearBtn) {
+          await page.click('[data-testid="qa-clear-default-btn"]');
+          await new Promise((r) => setTimeout(r, 150));
+          await page.click('[data-testid="confirm-accept"]');
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        await snap(page, "s1-default-turned-off");
+        await page.evaluate(() => {
+          const closeBtns = Array.from(
+            document.querySelectorAll("button[aria-label], .snackbar button"),
+          );
+          const dismiss = closeBtns.find(
+            (b) =>
+              b.textContent?.trim() === "×" ||
+              /dismiss/i.test(b.getAttribute("aria-label") || ""),
+          );
+          if (dismiss instanceof HTMLElement) dismiss.click();
+        });
+        await new Promise((r) => setTimeout(r, 100));
+        const clearedState = await page.evaluate(() => {
+          const catalogPills = Array.from(
+            document.querySelectorAll(".qa-flow-family-card .status-pill"),
+          ).map((el) => el.textContent?.trim() || "");
+          return {
+            pill:
+              document
+                .querySelector('[data-testid="qa-rollout-status-pill"]')
+                ?.textContent?.trim() || "",
+            hasSetBtn: Boolean(
+              document.querySelector('[data-testid="qa-set-default-btn"]'),
+            ),
+            hasClearBtn: Boolean(
+              document.querySelector('[data-testid="qa-clear-default-btn"]'),
+            ),
+            provenanceTitle:
+              document
+                .querySelector(
+                  '[data-testid="qa-flow-detail-card"] .qa-drawer-title',
+                )
+                ?.textContent?.trim() || "",
+            allCatalogAvailable: catalogPills.every((t) => t === "Available"),
+          };
+        });
+        record(
+          "s1.set_and_clear_default_workflow",
+          activeState.pill.includes("Active") &&
+            activeState.hasClearBtn &&
+            clearedState.pill === "Available" &&
+            clearedState.hasSetBtn &&
+            !clearedState.hasClearBtn &&
+            clearedState.provenanceTitle === "No default workflow active" &&
+            clearedState.allCatalogAvailable,
+          { activeState, clearedState },
+        );
+      }
+
       // 1D. Enter Customize mode -> check "Test on recent PRs" menu + right-drawer <g-pill-select> bounds
       await page.click('[data-testid="qa-new-version-btn"]');
       await new Promise((r) => setTimeout(r, 200));
@@ -379,7 +451,7 @@ async function run() {
           testPop.rect.right <= testPop.viewport.width,
         testPop,
       );
-      await page.keyboard.press("Escape");
+      await page.click('[data-testid="qa-test-menu-btn"]');
       await new Promise((r) => setTimeout(r, 100));
 
       // Open Stage 5 -> click a built-in non-floor check -> open right-column "Enforcement" pill-select
