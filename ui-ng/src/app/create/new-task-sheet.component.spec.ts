@@ -837,6 +837,40 @@ describe("NewTaskSheetComponent", () => {
     expect(q('[data-testid="nt-fork-head-error"]')).toBeNull();
   });
 
+  it("says a malformed Base branch beside Create when settings put it in a collapsed More options", async () => {
+    const api = new FakeApi();
+    api.cfg = {
+      ...api.cfg,
+      newTaskForm: {
+        default: { fields: { base: { visibility: "more" } } },
+      },
+    };
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Hidden fork head");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    type('[data-testid="nt-base"]', "bad:label:here");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+
+    expect(q('[data-testid="nt-base"]')).toBeNull();
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+    expect(submit.disabled).toBe(true);
+    expect(q('[data-testid="nt-submit-blocker"]')!.textContent).toContain(
+      `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
+    );
+
+    q<HTMLButtonElement>('[data-testid="nt-submit-blocker-show"]')!.click();
+    await settle(f);
+    await new Promise((r) => setTimeout(r));
+    expect(
+      q('[data-testid="more-options"]')!.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(document.activeElement).toBe(q('[data-testid="nt-base"]'));
+    expect(q('[data-testid="nt-submit-blocker"]')).toBeNull();
+  });
+
   it("keeps a template's priority on Task priority until it is edited", async () => {
     const api = new FakeApi();
     api.templates = [{ ...api.templates[0], priority: 8 }];

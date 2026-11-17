@@ -1344,12 +1344,24 @@ export class NewTaskSheetComponent {
   // be seen (design book, section 5).
   protected readonly hiddenBlocker = computed(() => {
     const p = this.submitBlocker();
-    return p?.field === "priority" && !this.moreOpen() ? p.message : "";
+    if (!p || this.moreOpen()) return "";
+    // Task priority always sits in More options; Base branch does when
+    // settings/new-task-form.yml places it there.
+    const tucked =
+      p.field === "priority" ||
+      (p.field === "base" && this.fields().base.visibility === "more");
+    return tucked ? p.message : "";
   });
 
   protected showBlocker(): void {
+    const field = this.submitBlocker()?.field;
     this.moreOpen.set(true);
-    setTimeout(() => this.priorityInput()?.nativeElement.focus());
+    setTimeout(() =>
+      (field === "base"
+        ? this.baseInput()
+        : this.priorityInput()
+      )?.nativeElement.focus(),
+    );
   }
 
   // What holds Create disabled while the form is filled in: a malformed
@@ -2133,7 +2145,10 @@ export class NewTaskSheetComponent {
         this.moreOpen.set(true);
         setTimeout(() => this.priorityInput()?.nativeElement.focus());
       } else if (problem.field === "base") {
-        this.baseInput()?.nativeElement.focus();
+        if (this.fields().base.visibility === "more") {
+          this.moreOpen.set(true);
+        }
+        setTimeout(() => this.baseInput()?.nativeElement.focus());
       } else if (problem.field === "repo") {
         this.repoSelect()?.focus();
       } else if (problem.field === "title") {
