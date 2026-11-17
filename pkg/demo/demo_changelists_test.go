@@ -67,10 +67,7 @@ func demoCLs(t *testing.T) (*ui.Client, *model.Store, context.Context, map[strin
 	// What a Submit, Sync or poll here remembers is forgotten afterwards,
 	// so the next seedDemo starts from its own seed.
 	t.Cleanup(func() {
-		for _, cl := range []string{"cl/612400001", "cl/612400017", "cl/612400101", "cl/612400102",
-			"cl/612400103", "cl/612400104", "cl/612400105"} {
-			change.Forget(cl)
-		}
+		demoCLState.reset()
 		change.Unregister(model.LinkChangelist)
 	})
 	client := ui.NewClient(cfg, store)

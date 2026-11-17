@@ -21,7 +21,16 @@
 // Start runs demo.Start -- the same store, seed, fake CI, GitHub sim and
 // access code `grain demo` runs, from the same flags -- on 127.0.0.1:0
 // over the test's own temp directory, so every test gets a freshly seeded
-// store of its own rather than a worker's shared one:
+// store of its own rather than a worker's shared one. One piece of the
+// seed is the process's, not the store's: the demo's changelist state
+// (its CLs' presubmit and review observations, the drafts waiting on
+// them, and their provider), which lives in pkg/change's process-wide
+// registry. Demos alive at the same time share it -- the first seeds it,
+// and one demo's Submit, Sync, Mail or Publish replies is seen by every
+// other -- and it is reset when the last of them closes, so a demo started
+// after that sees the seed afresh. A test that changes or asserts on CL
+// state exactly must therefore not call t.Parallel: Go runs it before any
+// parallel test resumes, so its demo is the only one alive.
 //
 //	srv := demotest.Start(t, demotest.Options{Args: []string{"-github-sim"}})
 //	res := srv.Do(t, "POST", "/api/tasks", map[string]any{"title": "x"})
@@ -133,7 +142,9 @@ func Start(t testing.TB, opts Options) *Server {
 // and store but the same access code: a classic spec's change of
 // test.use({demoArgs}), or a check that a client survives the daemon
 // going away. A demo's store is throwaway, so nothing written before a
-// Restart survives it. Every field of s is updated.
+// Restart survives it -- nor does its changelist state, unless another
+// demo still alive shares it (see the package doc). Every field of s is
+// updated.
 func (s *Server) Restart(args ...string) {
 	s.t.Helper()
 	s.stop()
