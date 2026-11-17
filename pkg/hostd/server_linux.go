@@ -1271,9 +1271,11 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	s.mu.Lock()
 	killed := entry.killKind
 	s.mu.Unlock()
-	// runCtx is Serve's: hostd stopping can kill the process through it
-	// before stopOnCancel has said why, and that kill is the host's, not
-	// the run's (Serve's stopOnCancel).
+	// ctx is Serve's connCtx, cancelled by closeConns after stopped() has
+	// run cancelRunning(killStopping): a start that passed the s.closing
+	// check before stopped() and added entry after it (or a caller of
+	// serveRemote directly) is killed through runCtx with killKind unset,
+	// and that kill is still the host stopping, not the run's.
 	if killed == killNone && ctx.Err() != nil && !errors.Is(runCtx.Err(), context.DeadlineExceeded) &&
 		cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
 		killed = killStopping
