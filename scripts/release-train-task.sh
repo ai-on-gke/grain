@@ -189,8 +189,13 @@ if [ -z "$train_phases" ] && [ -z "$train_hold" ]; then
   fi
   api_status=0
   "$grain" api GET "/api/repos/$api_repo/release?branch=main" >"$out/release.json" 2>"$out/release.err" || api_status=$?
-  if [ "$api_status" = 0 ] && [ -s "$out/release.json" ]; then
-    pub_gated="$(jq -r '.baseBranchPublishing.gated // false' "$out/release.json" 2>/dev/null || echo false)"
+  # An answer that is not a JSON object is no answer: it falls to the
+  # fail-closed branch below rather than reading as "not held".
+  if [ "$api_status" = 0 ] && ! jq -e 'type == "object"' "$out/release.json" >/dev/null 2>&1; then
+    api_status=unparseable
+  fi
+  if [ "$api_status" = 0 ]; then
+    pub_gated="$(jq -r '.baseBranchPublishing.gated // false' "$out/release.json")"
     pub_triage="$(jq -r '.baseBranchPublishing.triageTaskID // empty' "$out/release.json" 2>/dev/null || true)"
     pub_branch="$(jq -r '.baseBranchPublishing.branch // empty' "$out/release.json" 2>/dev/null || true)"
     if [ "$pub_gated" = true ] && [ -n "$pub_triage" ] && { [ -z "$pub_branch" ] || [ "$pub_branch" = main ]; }; then

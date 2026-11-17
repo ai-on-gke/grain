@@ -88,7 +88,9 @@ case "$sub $sub2" in
     fi
     ;;
   "api GET")
-    if [ -n "${FAKE_RELEASE_API_FAIL:-}" ]; then
+    if [ -n "${FAKE_RELEASE_API_GARBLED:-}" ]; then
+      echo '<html>bad gateway</html>'
+    elif [ -n "${FAKE_RELEASE_API_FAIL:-}" ]; then
       echo "grain: forbidden: GET /api/repos/ai-on-gke/grain/release" >&2
       exit 3
     elif [ -f "$FAKE_DIR/release.json" ]; then
@@ -451,6 +453,26 @@ expect_eq "hold probe fails: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
 expect_eq "hold probe fails: does not cut v2.3.0-rc.1" "$(remote_tag v2.3.0-rc.1)" ""
 expect_has "hold probe fails: says cut skipped" "$out" "held=publishing-unknown (cut skipped)"
 expect_has "hold probe fails: warns" "$out" "WARNING: could not check publishing hold"
+
+# 14. An answer that is not JSON fails closed on cut the same way, rather
+#     than reading as "not held".
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" success
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:23, name:"grain/release-qualification", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+run_tick RELEASE_MAX_PER_DAY=0 FAKE_RELEASE_API_GARBLED=1
+expect_eq "garbled hold probe: exit 0" "$status" 0
+expect_eq "garbled hold probe: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
+expect_eq "garbled hold probe: does not cut v2.3.0-rc.1" "$(remote_tag v2.3.0-rc.1)" ""
+expect_has "garbled hold probe: says cut skipped" "$out" "held=publishing-unknown (cut skipped)"
 
 echo
 echo "$((cases - failures))/$cases passed"
