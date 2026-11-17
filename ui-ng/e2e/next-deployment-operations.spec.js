@@ -251,10 +251,33 @@ test("the disconnected banner stands above the shell on a failed or held connect
   page,
 }) => {
   test.setTimeout(120_000);
+  await page.route("**/api/persistent-sandboxes", (r) =>
+    r.fulfill({
+      json: [
+        {
+          name: "docs-preview",
+          repo: "acme/widgets",
+          state: "running",
+          command: "npm run preview",
+          restarts: 0,
+        },
+      ],
+    }),
+  );
   await page.goto("fleet");
   await expect(page.locator("#fleet-panel-sandboxes")).toBeVisible();
   const banner = page.getByTestId("disconnected-banner");
   await expect(banner).toHaveCount(0);
+
+  // The demo does not supervise persistent sandboxes, so Logs (a
+  // responseType: "text" read) gets the daemon's own JSON 503; that is the
+  // daemon answering, not a gateway saying it is down.
+  await page.getByTestId("persistent-logs-btn-docs-preview").click();
+  await expect(page.getByTestId("persistent-logs-docs-preview")).toContainText(
+    "the service is temporarily unavailable",
+  );
+  await expect(banner).toHaveCount(0);
+  await page.unroute("**/api/persistent-sandboxes");
 
   // Every request refused: the connection failed.
   await page.route("**/api/**", (r) => r.abort());
