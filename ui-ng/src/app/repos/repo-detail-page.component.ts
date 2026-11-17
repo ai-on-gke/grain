@@ -1384,6 +1384,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly routeName = signal("");
   private readonly routeTab = signal<string | null>(null);
   private readonly routeRelease = signal<string | null>(null);
+  // Classic /repos/<o>/<n>/releases/<rel> links supply an initial selection
+  // once; after loadReleasesTab applies it (or the user picks a release or
+  // switches tab), subsequent tab reloads keep the user's current selection
+  // instead of snapping back to the bound `release` input.
+  private initialReleaseConsumed = false;
 
   protected readonly ready = signal(false);
   protected readonly configRepoOnly = signal(false);
@@ -1633,6 +1638,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           if (this.repoSlug() !== prevSlug) {
             this.error.set(null);
             this.importOutcome.set(null);
+            this.staleReleaseNotice.set(null);
+            this.selectedRelease.set("");
             void this.loadCoreRepo();
           }
           void this.loadTabData();
@@ -1718,6 +1725,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.error.set(null);
     this.routeTab.set(tab);
     this.routeRelease.set(null);
+    this.initialReleaseConsumed = true;
     const h = this.resolvedHost();
     const o = this.resolvedOwner();
     const n = this.resolvedName();
@@ -1987,7 +1995,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ? list
           : (list?.releases ?? list?.items ?? []);
         this.releases.set(rows);
-        const requested = (this.routeRelease() ?? this.release() ?? "").trim();
+        const fromInput = this.initialReleaseConsumed
+          ? ""
+          : (this.release() ?? "");
+        const requested = (this.routeRelease() ?? fromInput).trim();
+        this.routeRelease.set(null);
+        this.initialReleaseConsumed = true;
         let target: string;
         if (requested) {
           const found = rows.find((r) => r.name === requested);
@@ -2021,6 +2034,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async selectReleaseForCandidates(release: string): Promise<void> {
+    this.routeRelease.set(null);
+    this.initialReleaseConsumed = true;
     this.staleReleaseNotice.set(null);
     this.selectedRelease.set(release);
     await this.loadCandidatesFor(release);
