@@ -20,7 +20,6 @@
 
 import { test as base, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
-import net from "node:net";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,18 +29,7 @@ import { signInContext, writeAccessCode } from "./accesscode.js";
 const test = base.extend(pageErrors);
 test.setTimeout(90_000);
 
-async function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
-
-async function startDemo(addr, tmpDir) {
+async function startDemo(tmpDir) {
   const bin = process.env.GRAIN_E2E_DEMO_BIN;
   if (!bin)
     throw new Error(
@@ -51,33 +39,42 @@ async function startDemo(addr, tmpDir) {
   await writeAccessCode(codeFile);
   const proc = spawn(
     bin,
-    ["demo", "-addr", addr, "-open=false", "-access-code-file", codeFile],
+    [
+      "demo",
+      "-addr",
+      "127.0.0.1:0",
+      "-open=false",
+      "-access-code-file",
+      codeFile,
+    ],
     {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, TMPDIR: tmpDir },
     },
   );
   let output = "";
-  await new Promise((resolve, reject) => {
+  const url = await new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`grain demo did not start:\n${output}`)),
-      30_000,
+      60_000,
     );
+    const done = (fn, arg) => {
+      clearTimeout(timer);
+      fn(arg);
+    };
     const read = (chunk) => {
       output += chunk;
-      if (/at http:\/\/127\.0\.0\.1:\d+/.test(output)) {
-        clearTimeout(timer);
-        resolve();
-      }
+      const at = output.match(/at http:\/\/127\.0\.0\.1:(\d+)/);
+      if (at) done(resolve, `http://127.0.0.1:${at[1]}`);
     };
     proc.stdout.on("data", read);
     proc.stderr.on("data", read);
-    proc.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`grain demo exited (${code}):\n${output}`));
-    });
+    proc.on("error", (err) => done(reject, err));
+    proc.on("exit", (code) =>
+      done(reject, new Error(`grain demo exited (${code}):\n${output}`)),
+    );
   });
-  return proc;
+  return { proc, url };
 }
 
 async function stopDemo(proc) {
@@ -96,12 +93,11 @@ async function taskID(page, url, title) {
 test("Mail and Publish replies record the press and go disabled", async ({
   page,
 }) => {
-  const addr = `127.0.0.1:${await freePort()}`;
-  const url = `http://${addr}`;
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "grain-e2e-cl-mail-"));
   let proc;
   try {
-    proc = await startDemo(addr, tmpDir);
+    let url;
+    ({ proc, url } = await startDemo(tmpDir));
     await signInContext(page.context(), url);
 
     // The draft CL needs mailing: Mail is offered, and pressing it

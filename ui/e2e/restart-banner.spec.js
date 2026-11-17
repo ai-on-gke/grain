@@ -15,11 +15,11 @@
 import { test as base, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pageErrors } from "./pageerrors.js";
 import { signInContext, writeAccessCode } from "./accesscode.js";
+import { withFreePort } from "./freeport.js";
 
 // grain/task-3543 (docs/test-runs/2026-10-12-upgrade-interruption-restart.md,
 // finding 1): a plain SIGTERM -- what `systemctl restart` sends -- has to
@@ -35,20 +35,6 @@ const test = base.extend(pageErrors);
 test.setTimeout(120_000);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// freePort, as disconnection.spec.js has it: the daemon that replaces
-// the stopped one listens on the very same address, so the page only
-// ever learns that its origin answers again.
-async function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
 
 async function startDaemon(root, addr) {
   const bin = process.env.GRAIN_E2E_DEMO_BIN;
@@ -117,12 +103,14 @@ test("a SIGTERM'd daemon reads as grain restarting, and the page picks back up w
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "grain-e2e-restart-"));
   await fs.mkdir(path.join(root, "data"));
   await fs.mkdir(path.join(root, "sandboxes"));
-  const addr = `127.0.0.1:${await freePort()}`;
-  const url = `http://${addr}`;
   const banner = page.getByTestId("disconnected-banner");
   let daemon;
   try {
-    daemon = await startDaemon(root, addr);
+    let addr;
+    ({ addr, value: daemon } = await withFreePort((candidate) =>
+      startDaemon(root, candidate),
+    ));
+    const url = `http://${addr}`;
     await signInContext(page.context(), url);
 
     // The page has to be holding its watch when the signal lands: that
