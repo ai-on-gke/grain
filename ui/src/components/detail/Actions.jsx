@@ -499,29 +499,30 @@ export default function Actions({ t, config, act, onOpenTask }) {
               </li>
             ))}
           </ul>
-          {t.humanReviewHold.some((r) => r.source !== "security-findings") && (
-            <AccessGate scope="tasks:write" repo={t.repo}>
-              <Button
-                variant="outlined"
-                color="inherit"
-                size="small"
-                sx={{ mt: 1, whiteSpace: "nowrap" }}
-                data-testid="release-human-review"
-                title="Release the hold without merging: recorded with your name. It merges itself again only once every required review gate has passed."
-                onClick={() =>
-                  act(
-                    () =>
-                      api(`/api/tasks/${t.id}/human-review/release`, {
-                        method: "POST",
-                      }),
-                    t.id,
-                  )
-                }
-              >
-                Release hold
-              </Button>
-            </AccessGate>
-          )}
+          {t.humanReviewHold.some((r) => r.source !== "security-findings") &&
+            (!config?.access || Boolean(config.access.full)) && (
+              <AccessGate scope="tasks:write" repo={t.repo}>
+                <Button
+                  variant="outlined"
+                  color="inherit"
+                  size="small"
+                  sx={{ mt: 1, whiteSpace: "nowrap" }}
+                  data-testid="release-human-review"
+                  title="Release the hold without merging: recorded with your name. It merges itself again only once every required review gate has passed."
+                  onClick={() =>
+                    act(
+                      () =>
+                        api(`/api/tasks/${t.id}/human-review/release`, {
+                          method: "POST",
+                        }),
+                      t.id,
+                    )
+                  }
+                >
+                  Release hold
+                </Button>
+              </AccessGate>
+            )}
         </Alert>
       )}
       {t.pullRequest &&

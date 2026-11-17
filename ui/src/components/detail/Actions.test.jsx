@@ -122,6 +122,47 @@ describe("DetailOverlay actions", () => {
     expect(screen.queryByRole("button", { name: "Release hold" })).toBeNull();
   });
 
+  it("hides Release hold from a repo-scoped writer even when the hold has a requested reason", () => {
+    const limitedConfig = {
+      ...config,
+      access: {
+        role: "widgets-writer",
+        roles: ["widgets-writer"],
+        full: false,
+        scopes: ["tasks:read", "tasks:write"],
+        repoLimits: { "tasks:write": ["acme/widgets"] },
+      },
+    };
+    render(
+      <AccessConfigProvider config={limitedConfig}>
+        <DetailOverlay
+          task={{
+            ...baseTask,
+            repo: "acme/widgets",
+            state: "awaiting_submit",
+            pullRequest: "acme/widgets#42",
+            autoMerge: false,
+            humanReviewHold: [
+              {
+                source: "requested",
+                category: "product-decision",
+                reason: "Needs operator sign-off",
+                reviewTask: "77",
+              },
+            ],
+          }}
+          tasks={[]}
+          config={limitedConfig}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={vi.fn()}
+        />
+      </AccessConfigProvider>,
+    );
+    expect(screen.getByTestId("human-review-hold")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Release hold" })).toBeNull();
+  });
+
   it("shows a Withdraw approval button for a queued task, wired to the withdraw endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();

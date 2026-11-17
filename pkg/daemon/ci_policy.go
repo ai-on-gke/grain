@@ -205,7 +205,11 @@ func ciDeclarationRefusal(ctx context.Context, declarations func(context.Context
 			declared = append(declared, id)
 		}
 	}
-	accepted, items, err := declarations(ctx, repo, req.Name, req.Commit, declared, now)
+	job := strings.TrimSpace(req.Job)
+	if job == "" {
+		job = req.Name
+	}
+	accepted, items, err := declarations(ctx, repo, job, req.Commit, declared, now)
 	if err != nil {
 		return fmt.Errorf("checking whether a person accepted this CI job's capabilities: %w", err)
 	}
@@ -213,9 +217,9 @@ func ciDeclarationRefusal(ctx context.Context, declarations func(context.Context
 		return nil
 	}
 	if logf != nil {
-		logf("grain ci: %s: %s job %s held: its declared %s await a person's acceptance", req.Repo, req.Event, req.Name, strings.Join(items, ", "))
+		logf("grain ci: %s: %s job %s held: its declared %s await a person's acceptance", req.Repo, req.Event, job, strings.Join(items, ", "))
 	}
 	return fmt.Errorf("this job declares %s, which only a person may grant, and no person has accepted that for it: "+
 		"a person holding the scope each needs can accept it on Settings -> Capabilities -> Repository declarations (%s)",
-		strings.Join(items, ", "), model.CIJobDeclarationID(repo, req.Name))
+		strings.Join(items, ", "), model.CIJobDeclarationID(repo, job))
 }

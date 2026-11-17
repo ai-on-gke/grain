@@ -258,3 +258,65 @@ func TestMergeGatesMarkAcceptableFindings(t *testing.T) {
 		t.Error("a review that could not be filed is offered for acceptance")
 	}
 }
+
+// A targeted review (LinkTargetedReviewTrigger) holds its own
+// targeted-review gate: ComputeMergeGates marks it acceptable, accepting
+// "review" does not clear it, and accepting "targeted-review" clears its
+// findings and questions without touching code-review findings.
+func TestTargetedReviewFindingsAcceptableAndSeparateFromCodeReview(t *testing.T) {
+	task := model.Task{
+		ID: "70",
+		Links: []model.Link{
+			{Kind: model.LinkFixes, Target: "acme/widgets#70"},
+			{Kind: model.LinkPathTriggerTask, Target: "every-pr=71"},
+			{Kind: model.LinkPathTriggerTask, Target: "payments=72"},
+			{Kind: model.LinkTargetedReviewTrigger, Target: "payments"},
+			{Kind: model.LinkReviewQuestions, Target: model.ReviewQuestions{ReviewTaskID: "72", AfterCommentID: 9}.Target()},
+		},
+	}
+	model.AddReviewFindings(&task, model.ReviewFindingsRecord{
+		Gate: "trigger:every-pr", ReviewTask: "71", Summary: "code review finding", At: acceptAt,
+	})
+	model.AddReviewFindings(&task, model.ReviewFindingsRecord{
+		Gate: "trigger:payments", ReviewTask: "72", Summary: "payments finding", At: acceptAt,
+	})
+
+	byID := map[string]model.MergeGate{}
+	for _, g := range model.ComputeMergeGates(task, nil, nil) {
+		byID[g.ID] = g
+	}
+	if g := byID[model.GateTargetedReview]; g.State != model.GateStateFindings || !g.Acceptable || g.ReviewTask != "72" {
+		t.Fatalf("targeted-review gate = %+v, want findings + acceptable + reviewTask=72", g)
+	}
+	if g := byID[model.GateReview]; g.State != model.GateStateFindings || !g.Acceptable || g.ReviewTask != "71" {
+		t.Fatalf("review gate = %+v, want findings + acceptable + reviewTask=71", g)
+	}
+
+	// Accepting code review ("review") must not sweep targeted-review findings or questions.
+	if model.AcceptReviewFindings(&task, accept(model.GateReview, "72", "aaa111")) {
+		t.Fatal("targeted review 72 was wrongly accepted under the code-review gate")
+	}
+	if !model.AcceptReviewFindings(&task, accept(model.GateReview, "71", "aaa111")) {
+		t.Fatal("code review 71 findings were not accepted")
+	}
+	if got := model.ReviewFindingsForGate(task, "trigger:payments"); len(got) != 1 {
+		t.Fatalf("targeted-review findings were cleared by accepting review: %+v", got)
+	}
+	if _, hasQ := model.ReviewQuestionsOf(task); !hasQ {
+		t.Fatal("targeted review 72's questions were cleared by accepting code review 71")
+	}
+
+	// Accepting targeted-review clears its findings and questions.
+	if !model.AcceptReviewFindings(&task, accept(model.GateTargetedReview, "72", "aaa111")) {
+		t.Fatal("targeted-review findings were not accepted")
+	}
+	if model.HasReviewFindings(task) {
+		t.Errorf("findings remain after accepting targeted-review: %+v", task.Links)
+	}
+	if _, hasQ := model.ReviewQuestionsOf(task); hasQ {
+		t.Errorf("targeted review 72's questions remain: %+v", task.Links)
+	}
+	if got := gateState(t, task, model.GateTargetedReview); got != model.GateStatePassed {
+		t.Errorf("targeted-review gate after acceptance = %s, want passed", got)
+	}
+}

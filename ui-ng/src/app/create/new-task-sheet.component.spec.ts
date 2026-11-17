@@ -322,6 +322,11 @@ describe("NewTaskSheetComponent", () => {
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
     await settle(f);
+    // Staging reads the file asynchronously; on a loaded CI runner that
+    // can outlast settle's fixed pause, so wait for the row to appear.
+    for (let i = 0; i < 100 && !q('[data-testid="staged-att-0"]'); i++) {
+      await settle(f);
+    }
     expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
       "repro.txt",
     );

@@ -1296,3 +1296,147 @@ func TestSecurityHoldReleaseLeavesAnExplicitNoAlone(t *testing.T) {
 		}
 	}
 }
+
+// When a code or path-trigger review finishes with findings while a
+// security hold is active for a separate security review task, it must
+// not drop LinkSecurityHold, record GateSecurityReview findings under its
+// own ID, or raise HumanReviewSecurityFindings. Symmetrically, a security
+// review finishing with findings while LinkPathTriggerHold is active must
+// not write a GateReview findings record under its own ID.
+func TestNonSecurityReviewFindingsDoNotHijackSecurityHold(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	client, task, secReviewID := heldTask(t, ctx, store)
+	repo := *task.Target
+
+	// File a separate path-trigger code review on the same held PR.
+	codeReview := model.Task{
+		ID:      "code-rev-1",
+		Intent:  model.IntentReview,
+		Title:   "Code review",
+		Body:    "review",
+		Target:  &repo,
+		Binding: model.BindingDirective,
+		Filing:  model.Filing{Reason: model.ReasonReview},
+		Tags:    []string{model.PathTriggerMarkerTag, "trigger:every-pr"},
+		Links:   []model.Link{{Kind: model.LinkProposedBy, Target: task.ID}},
+	}
+	if err := store.PutTask(ctx, codeReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkPathTriggerHold, Target: string(model.TriggerHumanOnFindings)},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "every-pr=" + codeReview.ID},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Code review finishes first with findings while the security hold is still active.
+	res := toolResult(reviewFinding("missing usage example", "README.md", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, codeReview, res, "code-rev-1-1", baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("ProcessResult(codeReview): %v", err)
+	}
+
+	got := reloaded(t, ctx, store, task.ID)
+	if linkOf(got, model.LinkSecurityHold) == "" {
+		t.Errorf("code review dropped LinkSecurityHold while security review %s was still running", secReviewID)
+	}
+	if secFindings := model.ReviewFindingsForGate(got, model.GateSecurityReview); len(secFindings) != 0 {
+		t.Errorf("code review recorded GateSecurityReview findings: %+v", secFindings)
+	}
+	if reasons := model.HumanReviewReasons(got); len(reasons) != 0 {
+		t.Errorf("code review raised HumanReviewSecurityFindings: %+v", reasons)
+	}
+
+	// Now re-arm LinkPathTriggerHold and let the security review finish with findings:
+	// it must record GateSecurityReview findings, NOT GateReview findings.
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkPathTriggerHold, Target: string(model.TriggerHumanOnFindings)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secTask, err := store.GetTask(ctx, secReviewID)
+	if err != nil || secTask == nil {
+		t.Fatalf("GetTask(%s): %v", secReviewID, err)
+	}
+	secRes := toolResult(reviewFinding("unvalidated shell input", "pkg/ci/ci.go", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, *secTask, secRes, secReviewID+"-1", baseTime.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult(secReview): %v", err)
+	}
+	got = reloaded(t, ctx, store, task.ID)
+	if secFindings := model.ReviewFindingsForGate(got, model.GateSecurityReview); len(secFindings) != 1 || secFindings[0].ReviewTask != secReviewID {
+		t.Errorf("GateSecurityReview findings = %+v, want only %s", secFindings, secReviewID)
+	}
+	for _, rf := range model.ReviewFindings(got) {
+		if rf.Gate == model.GateReview && rf.ReviewTask == secReviewID {
+			t.Errorf("security review %s polluted GateReview findings: %+v", secReviewID, rf)
+		}
+	}
+}
+
+// failingReviewPoster is a GitHub client whose review posting fails, so a
+// review's findings are relayed to its own conversation and never recorded
+// on the reviewed change's gates.
+type failingReviewPoster struct{ github.Client }
+
+func (failingReviewPoster) CreateReview(string, string, int, string, []github.NewReviewComment) (int, error) {
+	return 0, errors.New("simulated review posting failure")
+}
+
+// A code review whose findings could not be posted while the security hold
+// is still pending must leave auto-merge off for a person, so the security
+// review finishing clean afterwards cannot hand it back over findings that
+// never reached the code-review gate.
+func TestUnpostedCodeReviewFindingsKeepAutoMergeOffUnderSecurityHold(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	client, task, secReviewID := heldTask(t, ctx, store)
+	repo := *task.Target
+
+	codeReview := model.Task{
+		ID:      "code-rev-unposted",
+		Intent:  model.IntentReview,
+		Title:   "Code review",
+		Body:    "review",
+		Target:  &repo,
+		Binding: model.BindingDirective,
+		Filing:  model.Filing{Reason: model.ReasonReview},
+		Links:   []model.Link{{Kind: model.LinkProposedBy, Target: task.ID}},
+	}
+	if err := store.PutTask(ctx, codeReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkReviewTask, Target: codeReview.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := toolResult(reviewFinding("missing usage example", "README.md", 1))
+	if err := orchestrator.ProcessResult(ctx, store, failingReviewPoster{client}, codeReview, res, codeReview.ID+"-1", baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("ProcessResult(codeReview): %v", err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	if linkOf(got, model.LinkSecurityHold) == "" {
+		t.Errorf("code review dropped LinkSecurityHold while security review %s was still running", secReviewID)
+	}
+	if !model.AutoMergeAwaitsPerson(got) {
+		t.Fatalf("unposted code review findings left no await-person mark: links %+v", got.Links)
+	}
+
+	completeReview(t, ctx, store, secReviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncHumanReviewHolds(ctx, store, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded(t, ctx, store, task.ID); got.AutoMerge {
+		t.Errorf("a clean security review handed auto-merge back over unposted code review findings")
+	}
+}

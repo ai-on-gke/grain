@@ -779,19 +779,34 @@ export class TaskChangesTabComponent {
   // A person's decision to merge over one review's findings on one gate
   // (accept-findings-dialog.component.ts). Offered only where the server
   // says the findings are a review's to accept (MergeGate.acceptable), on
-  // an open task, to a caller the route lets through.
+  // an open task, to a full-access caller the route lets through
+  // (ui.Client.AcceptReviewFindings requires full access).
   protected offersAcceptFindings(g: MergeGate): boolean {
     return (
       g.state === "findings" &&
       !!g.acceptable &&
       this.task().state !== "closed" &&
+      this.access.isFullAccess() &&
       this.can("POST /api/tasks/{id}/accept-findings")
     );
   }
 
+  // Commit SHA to pin on POST /accept-findings and /force-merge.
+  // DiffPreview.head is a branch name (e.g. "grain/c419f5") on real pull
+  // requests, not a commit SHA; sending a branch name makes the server
+  // refuse with 400 ("has moved since you looked").
+  private commitHead(): string | undefined {
+    const ci = this.task().ci?.commit?.trim();
+    if (ci) return ci;
+    const previewHead = this.preview()?.head?.trim();
+    return previewHead && /^[0-9a-f]{7,40}$/i.test(previewHead)
+      ? previewHead
+      : undefined;
+  }
+
   protected emitAcceptFindings(g: MergeGate): void {
     const t = this.task();
-    const head = this.preview()?.head || t.ci?.commit;
+    const head = this.commitHead();
     this.acceptFindings.emit({
       task: t,
       gate: g,
@@ -830,7 +845,7 @@ export class TaskChangesTabComponent {
     this.forceMerge.emit({
       task: t,
       unsatisfiedGates: this.unsatisfiedGates(),
-      head: this.preview()?.head || t.ci?.commit,
+      head: this.commitHead(),
       run: (reason, overrideGates, head) =>
         this.store
           .act(

@@ -25,6 +25,7 @@ import { test, expect } from "./fixtures.js";
 const FINDINGS = {
   autoMerge: false,
   state: "awaiting_submit",
+  ci: { status: "passed", commit: "763a7dbc6e2c" },
   mergeGates: [
     { id: "ci", label: "CI", state: "passed", detail: "passed" },
     {
@@ -42,6 +43,15 @@ const FINDINGS = {
       state: "findings",
       detail: "every-pr review left findings",
       reviewTask: "4",
+      overridable: true,
+      acceptable: true,
+    },
+    {
+      id: "targeted-review",
+      label: "Targeted review",
+      state: "findings",
+      detail: "security-paths review left findings",
+      reviewTask: "6",
       overridable: true,
       acceptable: true,
     },
@@ -71,6 +81,23 @@ for (const viewport of [
       }
       await route.fulfill({ status: 200, json: last }).catch(() => {});
     });
+    // Diff previews report the branch ref name as `head`; Accept findings
+    // must pin the commit SHA from ci.commit rather than sending the branch
+    // name to POST /api/tasks/{id}/accept-findings.
+    await page.route("**/api/tasks/5/diff-preview", async (route) => {
+      await route.fulfill({
+        status: 200,
+        json: {
+          repo: "acme/widgets",
+          base: "main",
+          head: "grain/task-5",
+          totalFiles: 0,
+          totalHunks: 0,
+          truncated: false,
+          files: [],
+        },
+      });
+    });
     let posted = null;
     await page.route("**/api/tasks/5/accept-findings", async (route) => {
       posted = route.request().postDataJSON();
@@ -81,7 +108,7 @@ for (const viewport of [
 
     const row = page.getByTestId("merge-gates-list");
     await expect(row).toBeVisible();
-    for (const gate of ["security-review", "review"]) {
+    for (const gate of ["security-review", "review", "targeted-review"]) {
       const pill = row.getByTestId(`merge-gate-${gate}`);
       const button = row.getByTestId(`accept-findings-${gate}`);
       await expect(button).toBeVisible();
@@ -103,7 +130,7 @@ for (const viewport of [
     }
     await expect(row.getByTestId("accept-findings-ci")).toHaveCount(0);
 
-    await row.getByTestId("accept-findings-security-review").click();
+    await row.getByTestId("accept-findings-targeted-review").click();
     const dialog = page.getByTestId("accept-findings-dialog");
     await expect(dialog).toBeVisible();
     const box = await dialog.boundingBox();
@@ -118,10 +145,60 @@ for (const viewport of [
     await expect
       .poll(() => posted)
       .toMatchObject({
-        gate: "security-review",
-        reviewTask: "4",
+        gate: "targeted-review",
+        reviewTask: "6",
+        head: "763a7dbc6e2c",
         reason: "merge as-is; follow-up filed",
       });
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 }
+
+test("repo-scoped writer is not offered Accept findings", async ({ page }) => {
+  let last = null;
+  await page.route(/\/api\/tasks\/5(\?.*)?$/, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    try {
+      const response = await route.fetch();
+      last = { ...(await response.json()), ...FINDINGS };
+    } catch {
+      if (!last) return route.fallback().catch(() => {});
+    }
+    await route.fulfill({ status: 200, json: last }).catch(() => {});
+  });
+  let lastConfig = null;
+  await page.route("**/api/config", async (route) => {
+    try {
+      const response = await route.fetch();
+      const body = await response.json();
+      lastConfig = {
+        ...body,
+        access: {
+          full: false,
+          role: "widgets/writer",
+          scopes: ["tasks:read", "tasks:write"],
+          repoLimits: { "tasks:write": [body.defaultRepo || "acme/widgets"] },
+        },
+      };
+    } catch {
+      if (!lastConfig) return route.fallback().catch(() => {});
+    }
+    await route.fulfill({ status: 200, json: lastConfig }).catch(() => {});
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/next/task/5?tab=changes");
+
+  const row = page.getByTestId("merge-gates-list");
+  await expect(row).toBeVisible();
+  await expect(row.getByTestId("merge-gate-security-review")).toBeVisible();
+  await expect(row.getByTestId("merge-gate-targeted-review")).toBeVisible();
+  await expect(row.getByTestId("accept-findings-security-review")).toHaveCount(
+    0,
+  );
+  await expect(row.getByTestId("accept-findings-review")).toHaveCount(0);
+  await expect(row.getByTestId("accept-findings-targeted-review")).toHaveCount(
+    0,
+  );
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});

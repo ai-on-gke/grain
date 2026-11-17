@@ -489,11 +489,11 @@ func filePorts(ctx context.Context, store *model.Store, client github.Client, pi
 	}
 	var ported []model.Link
 	for _, target := range decision.targets {
-		port, err := newPortTask(ctx, store, task, ref, detail, target, now)
+		port, droppedGrants, err := newPortTaskWithDropped(ctx, store, task, ref, detail, target, now)
 		if err != nil {
 			return err
 		}
-		mech := portMechanically(ctx, store, picker, task, ref, detail, target, &port, decision.pending[target])
+		mech := portMechanically(ctx, store, picker, task, ref, detail, target, &port, decision.pending[target], droppedGrants)
 		if mech.outcome == portpick.NothingToPort {
 			if _, err := store.AddComment(ctx, model.Comment{
 				TaskID: task.ID,
@@ -629,7 +629,7 @@ func (m mechanicalPort) kind() string {
 // trail beside the comments it leaves on both tasks.
 func portMechanically(ctx context.Context, store *model.Store, picker Porter, source model.Task,
 	ref model.PullRequestRef, detail github.PullRequestDetail, target string, port *model.Task,
-	pending []github.Commit) mechanicalPort {
+	pending []github.Commit, droppedGrants []string) mechanicalPort {
 
 	if picker == nil || len(pending) == 0 || detail.HeadSHA == "" {
 		return mechanicalPort{}
@@ -670,7 +670,7 @@ func portMechanically(ctx context.Context, store *model.Store, picker Porter, so
 	case err != nil:
 		port.Body = portBody(source, ref, detail, target, fmt.Sprintf(
 			"grain tried this port as a plain cherry-pick first and could not finish it (%v); nothing was pushed "+
-				"to `%s`. Port it as above.", err, branch))
+				"to `%s`. Port it as above.", err, branch), droppedGrants)
 	case res.Outcome == portpick.Picked:
 		m.outcome = res.Outcome
 		port.Tags = append(port.Tags, model.TagMechanicalPort)
@@ -678,12 +678,12 @@ func portMechanically(ctx context.Context, store *model.Store, picker Porter, so
 			"grain has already made this port itself, with no agent: it %s, pushed the result as `%s`, and opened "+
 				"the pull request from it. If you are reading this, the merge queue has sent that pull request back "+
 				"to an agent: work on `%s` as it is, do not start the port over.",
-			res.Summary(target), branch, branch))
+			res.Summary(target), branch, branch), droppedGrants)
 	case res.Outcome == portpick.Conflicted:
 		m.outcome = res.Outcome
 		port.Body = portBody(source, ref, detail, target, fmt.Sprintf(
 			"grain tried this port as a plain cherry-pick first and stopped on a conflict: %s. Nothing was pushed. "+
-				"Resolve that conflict in step 3.", res.Summary(target)))
+				"Resolve that conflict in step 3.", res.Summary(target)), droppedGrants)
 	default:
 		m.outcome = res.Outcome
 	}
@@ -727,14 +727,20 @@ func fileMechanicalPort(ctx context.Context, store *model.Store, client github.C
 
 func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref model.PullRequestRef,
 	detail github.PullRequestDetail, target string, now time.Time) (model.Task, error) {
+	port, _, err := newPortTaskWithDropped(ctx, store, source, ref, detail, target, now)
+	return port, err
+}
+
+func newPortTaskWithDropped(ctx context.Context, store *model.Store, source model.Task, ref model.PullRequestRef,
+	detail github.PullRequestDetail, target string, now time.Time) (model.Task, []string, error) {
 
 	id, err := store.NewTaskID(ctx)
 	if err != nil {
-		return model.Task{}, fmt.Errorf("orchestrator: allocating an id for the port of %s: %w", ref, err)
+		return model.Task{}, nil, fmt.Errorf("orchestrator: allocating an id for the port of %s: %w", ref, err)
 	}
 	orderKey, err := store.OrderKeyForNewTask(ctx, true)
 	if err != nil {
-		return model.Task{}, fmt.Errorf("orchestrator: allocating order key for the port of %s: %w", ref, err)
+		return model.Task{}, nil, fmt.Errorf("orchestrator: allocating order key for the port of %s: %w", ref, err)
 	}
 	repo := ref.Repo
 	grants := slices.Clone(source.Grants)
@@ -749,18 +755,13 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	// runs without the template's authority.
 	grants, droppedGrants, err := portCatalogueGrants(ctx, store, repo, source.TemplateID, grants)
 	if err != nil {
-		return model.Task{}, fmt.Errorf("orchestrator: judging the port of %s against the capability catalogue: %w", ref, err)
+		return model.Task{}, nil, fmt.Errorf("orchestrator: judging the port of %s against the capability catalogue: %w", ref, err)
 	}
 	title := source.Title
 	if title == "" {
 		title = detail.Title
 	}
-	body := portBody(source, ref, detail, target, "")
-	if len(droppedGrants) > 0 {
-		body += fmt.Sprintf("\n\n_grain filed this port without what settings/capabilities.yml refuses it -- a port is "+
-			"filed by grain, not from task %s's template, so it holds none of that template's authority: %s._",
-			source.ID, strings.Join(droppedGrants, "; "))
-	}
+	body := portBody(source, ref, detail, target, "", droppedGrants)
 	port := model.Task{
 		ID:     id,
 		Intent: model.IntentImplement,
@@ -804,7 +805,7 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	} else if v := model.FoundIn(source); v != "" {
 		model.SetFoundIn(&port, v)
 	}
-	return port, nil
+	return port, droppedGrants, nil
 }
 
 // portBody is what the agent porting a change is told: which pull
@@ -813,8 +814,10 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 // (decidePort's footers, the nightly triage's `git cherry`).
 //
 // note, when there is one, is what grain's own mechanical attempt at the
-// port found (portMechanically).
-func portBody(source model.Task, ref model.PullRequestRef, detail github.PullRequestDetail, target, note string) string {
+// port found (portMechanically). droppedGrants lists any template-restricted
+// grants dropped by portCatalogueGrants so the explanation survives when
+// portMechanically rebuilds the body.
+func portBody(source model.Task, ref model.PullRequestRef, detail github.PullRequestDetail, target, note string, droppedGrants []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task %s's pull request %s (%q) merged onto `%s`. `%s` keeps `%s` and `%s` paired, "+
 		"so the same change belongs on `%s` too. Port it there.\n\n",
@@ -851,6 +854,11 @@ func portBody(source model.Task, ref model.PullRequestRef, detail github.PullReq
 		for _, line := range strings.Split(body, "\n") {
 			b.WriteString(strings.TrimRight("> "+line, " ") + "\n")
 		}
+	}
+	if len(droppedGrants) > 0 {
+		fmt.Fprintf(&b, "\n\n_grain filed this port without what settings/capabilities.yml refuses it -- a port is "+
+			"filed by grain, not from task %s's template, so it holds none of that template's authority: %s._",
+			source.ID, strings.Join(droppedGrants, "; "))
 	}
 	return b.String()
 }
