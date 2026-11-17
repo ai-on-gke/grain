@@ -663,6 +663,25 @@ func reviewPushedCommits(client github.Client, r model.Task) []string {
 		if from != "" && strings.EqualFold(from, reviewerHead) {
 			return nil
 		}
+		// Only the commits the review's own runs pushed are its
+		// (model.LinkReviewerPush): one a person pushed to the branch
+		// from outside grain while it ran, under or among them, is not.
+		// A review recorded before the git proxy kept its pushes has none,
+		// and is read from..reviewerHead as it always was.
+		pushes := reviewerPushes(r)
+		if len(pushes) > 0 {
+			if client != nil && r.Target != nil && from != "" {
+				if commits, ok := reviewOwnCommits(client, r, pushes, from, reviewerHead); ok {
+					return formatGitHubCommits(commits)
+				}
+			}
+			ranges := make([]string, 0, len(pushes))
+			for _, p := range pushes {
+				ranges = append(ranges, fmt.Sprintf("`%s..%s`", shortCommit(p.old), shortCommit(p.new)))
+			}
+			slices.Sort(ranges)
+			return ranges
+		}
 		if client != nil && r.Target != nil && from != "" {
 			if cmp, err := client.CompareRefs(r.Target.StoredOwner(), r.Target.Name, from, reviewerHead); err == nil && len(cmp.Commits) > 0 {
 				return formatGitHubCommits(cmp.Commits)
@@ -686,6 +705,34 @@ func reviewPushedCommits(client github.Client, r model.Task) []string {
 		}
 	}
 	return []string{rRef.String()}
+}
+
+// reviewOwnCommits are the commits from..reviewerHead that one of
+// pushes carried, in the branch's own order; ok is false when GitHub
+// could not say, or none of them is one.
+func reviewOwnCommits(client github.Client, r model.Task, pushes []reviewerPush, from, reviewerHead string) ([]github.Commit, bool) {
+	owner, name := r.Target.StoredOwner(), r.Target.Name
+	cmp, err := client.CompareRefs(owner, name, from, reviewerHead)
+	if err != nil || len(cmp.Commits) == 0 {
+		return nil, false
+	}
+	own := map[string]bool{}
+	for _, p := range pushes {
+		pushed, err := client.CompareRefs(owner, name, p.old, p.new)
+		if err != nil {
+			continue
+		}
+		for _, c := range pushed.Commits {
+			own[strings.ToLower(c.SHA)] = true
+		}
+	}
+	var out []github.Commit
+	for _, c := range cmp.Commits {
+		if own[strings.ToLower(c.SHA)] {
+			out = append(out, c)
+		}
+	}
+	return out, len(out) > 0
 }
 
 func formatGitHubCommits(commits []github.Commit) []string {
