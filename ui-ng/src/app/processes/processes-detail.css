@@ -1,6 +1,7 @@
 /* Processes right-pane detail inspector, composition table, and GM3 drawer/dialogs. */
 
 .proc-inspector {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -9,6 +10,13 @@
   overflow-y: auto;
   padding: 20px 24px 32px;
   background: var(--md-sys-color-surface);
+}
+
+.trigger-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
 
 .proc-insp-head {
@@ -63,9 +71,9 @@
   min-height: 180px;
   padding: 12px;
   border-radius: var(--md-sys-shape-corner-small);
-  border: 1px solid #2e3340;
-  background: var(--grain-well-bg, #13151a);
-  color: var(--grain-well-fg, #e4e6eb);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
   font-family: var(--grain-font-mono);
   font-size: 12px;
   line-height: 18px;
