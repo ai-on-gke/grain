@@ -1,0 +1,20 @@
+# Issue-tracker agents: grain tasks as issues, MCP over comments
+
+**Owner:** @bwsalmon
+
+**Status:** draft for review, nothing implemented (task 5799, from task 5606)
+
+**Spec:** [`design/spec/issue-tracker-agents/README.md`](../spec/issue-tracker-agents/README.md)
+
+**The core rule:** external agents grain does not run (such as IDE sessions or workstation agents) work grain tasks by reading task projections in an issue tracker and posting JSON-RPC 2.0 MCP calls as `/grain` comments, while grain keeps ownership of the sandbox, credentials, git, CI and the merge queue and executes every call against the run's own `grain mcpserver`.
+
+## Overview
+
+Grain runs its own agents today on hosts or in run hosts beside `grain mcpserver`. Issue-tracker agents let an external agent work a grain task without direct network access to the deployment or any grain-issued credential beyond its existing issue-tracker account:
+
+- **Three core pieces** ([spec §1](../spec/issue-tracker-agents/README.md#1-architecture)): `pkg/issuetracker` (`IssueTracker` and `Notifier` interfaces, an in-memory fake, and the GitHub Issues reference adapter, with downstream adapters registered via `capability.Register`), `pkg/trackerbridge` (task-to-issue projection, leases, `/grain` comment parsing, execution against `grain mcpserver`, redaction and sidecar encryption), and `cmd/grain-tracker-sidecar` (the optional local MCP bridge on the agent's machine).
+- **Task projection and lease** ([spec §2](../spec/issue-tracker-agents/README.md#2-source-of-truth-and-projection), [§5](../spec/issue-tracker-agents/README.md#5-leases-identity-and-permissions)): grain's database remains the source of truth. Dispatching a task to a `tracker` model connection ([spec §9](../spec/issue-tracker-agents/README.md#9-fit-with-dispatch)) projects the task to an issue with a single editable card comment (`grain-card v1`) and starts a one-attempt lease by assigning the issue to an allowlisted principal holding `tasks:lease`. Only the current assignee's `/grain` comments execute; turn-ending tools (`comment_on_issue`, `nothing_needed`, `ask_question`, `request_access`, `request_secret`, `resume_later`, `wait_for_task` parks, and `grain/pause`) release the lease.
+- **Comment protocol** ([spec §3](../spec/issue-tracker-agents/README.md#3-protocol-json-rpc-20-mcp-in-comments), [§4](../spec/issue-tracker-agents/README.md#4-tool-surface)): `/grain` comments carry single JSON-RPC 2.0 MCP requests or sequential batches of up to 32 elements, exposing the sandbox agent's unchanged tool surface. Replies cut oversized text with `grain/page` cursors, switch calls exceeding 10 seconds to `accepted` placeholders with later async result comments, and queue batch elements across the per-lease in-flight cap without racing sequential steps.
+- **Confidentiality and sidecar recovery** ([spec §7](../spec/issue-tracker-agents/README.md#7-secrets-and-confidentiality), [§8](../spec/issue-tracker-agents/README.md#8-agent-side)): every result passes `pkg/redact`, and credential-bearing reads are refused. In `sidecar` mode, results are AES-256-GCM sealed under an ephemeral X25519 session key (`grain/session.open`) kept only in memory and zeroed at lease end so historical copies crypto-shred; a restarted sidecar uses session-scoped request IDs (`s<pub8>-<n>`), re-keys with `grain/session.open`, and re-seals missed replies via `grain/replay` without re-running tools. Plaintext `loop` mode is restricted to scopes explicitly marked `loop_ok`.
+
+**Non-goals:** replacing host or run-host dispatch today, moving task source-of-truth ownership into the tracker today, shipping adapters in core beyond the in-memory fake and GitHub Issues reference (plus a Jira sketch), or adding new agent tools beyond `grain/pause` and the transport methods. All normative requirements (`ITA-1`–`ITA-26`), wire formats, failure modes, UI additions (`ui-ng/`), rollout stages, and open questions are in [`design/spec/issue-tracker-agents/README.md`](../spec/issue-tracker-agents/README.md).
