@@ -224,6 +224,7 @@ export class QaWorkflowCatalogComponent {
   }
 
   private isFamilyActiveDefault(flowKey: string): boolean {
+    if (!this.qaEnabled()) return false;
     const familyKey = this.activeFlowFamilyKey() || this.activeFlowId();
     return Boolean(familyKey) && familyKey === flowKey;
   }

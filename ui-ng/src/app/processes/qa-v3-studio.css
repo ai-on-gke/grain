@@ -25,9 +25,31 @@ g-qa-v3-studio,
 .qa-kind-chips,
 .qa-stage-header-btn,
 .qa-stage-title-wrap,
+.qa-stage-meta,
+.qa-step-li,
+.qa-step-node-main,
+.qa-step-node-sub,
 .dialog-actions {
   display: flex;
   align-items: center;
+}
+
+.qa-tree-controls,
+.qa-expand-all-btn,
+.qa-stage-group,
+.qa-stage-chevron,
+.qa-stage-meta,
+.qa-row-del-btn,
+.qa-skipped-stages-bar {
+  flex-shrink: 0;
+}
+
+.qa-kind-chip,
+.qa-stage-header-btn,
+.qa-step-node,
+.qa-row-del-btn,
+.qa-skipped-stages-bar {
+  cursor: pointer;
 }
 
 g-qa-v3-studio,
@@ -53,7 +75,6 @@ g-qa-v3-studio,
 
 .qa-stage-tree {
   flex: 1;
-  background: var(--md-sys-color-surface);
 }
 
 .qa-tree-controls {
@@ -61,7 +82,6 @@ g-qa-v3-studio,
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-lowest);
   gap: 8px;
-  flex-shrink: 0;
 }
 
 .qa-spine-search-form {
@@ -90,7 +110,6 @@ g-qa-v3-studio,
   min-height: 32px;
   padding: 0 12px;
   font-size: 12px;
-  flex-shrink: 0;
 }
 
 .qa-kind-chips {
@@ -107,7 +126,6 @@ g-qa-v3-studio,
   color: var(--md-sys-color-on-surface-variant);
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
 }
 
 .qa-kind-chip[aria-pressed="true"] {
@@ -130,7 +148,6 @@ g-qa-v3-studio,
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-lowest);
   overflow: hidden;
-  flex-shrink: 0;
 }
 
 .qa-stage-group.is-skipped {
@@ -148,10 +165,11 @@ g-qa-v3-studio,
   background: transparent;
   color: var(--md-sys-color-on-surface);
   text-align: left;
-  cursor: pointer;
 }
 
-.qa-stage-header-btn:hover {
+.qa-stage-header-btn:hover,
+.qa-step-node:hover,
+.qa-skipped-stages-bar:hover {
   background: var(--md-sys-color-surface-container-low);
 }
 
@@ -160,10 +178,16 @@ g-qa-v3-studio,
   min-width: 0;
 }
 
+.qa-stage-chevron,
+.qa-stage-group.is-skipped .qa-stage-title,
+.qa-step-count,
+.qa-step-node-sub,
+.modal-fields label {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
 .qa-stage-chevron {
   font-size: 12px;
-  color: var(--md-sys-color-on-surface-variant);
-  flex-shrink: 0;
 }
 
 .qa-stage-title {
@@ -176,20 +200,15 @@ g-qa-v3-studio,
 }
 
 .qa-stage-group.is-skipped .qa-stage-title {
-  color: var(--md-sys-color-on-surface-variant);
   font-weight: 500;
 }
 
 .qa-stage-meta {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
-  flex-shrink: 0;
 }
 
 .qa-step-count {
   font-size: 11.5px;
-  color: var(--md-sys-color-on-surface-variant);
   font-variant-numeric: tabular-nums;
 }
 
@@ -206,8 +225,13 @@ g-qa-v3-studio,
   display: none;
 }
 
+.qa-step-li {
+  gap: 6px;
+}
+
 .qa-step-node {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 8px 10px;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid var(--md-sys-color-outline-variant);
@@ -215,11 +239,25 @@ g-qa-v3-studio,
   color: var(--md-sys-color-on-surface);
   gap: 4px;
   text-align: left;
-  cursor: pointer;
+}
+
+.qa-row-del-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--md-sys-shape-corner-full);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-error);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.qa-row-del-btn:hover {
+  background: var(--md-sys-color-error-container);
 }
 
 .qa-step-node:hover {
-  background: var(--md-sys-color-surface-container-low);
   border-color: var(--md-sys-color-outline);
 }
 
@@ -231,8 +269,6 @@ g-qa-v3-studio,
 
 .qa-step-node-main,
 .qa-step-node-sub {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
@@ -245,7 +281,6 @@ g-qa-v3-studio,
 
 .qa-step-node-sub {
   font-size: 11px;
-  color: var(--md-sys-color-on-surface-variant);
 }
 
 .qa-step-node.is-selected .qa-step-node-sub {
@@ -270,12 +305,9 @@ g-qa-v3-studio,
   font-size: 12.5px;
   font-weight: 500;
   text-align: center;
-  cursor: pointer;
-  flex-shrink: 0;
 }
 
 .qa-skipped-stages-bar:hover {
-  background: var(--md-sys-color-surface-container-low);
   color: var(--md-sys-color-on-surface);
 }
 
@@ -306,18 +338,17 @@ g-qa-v3-studio,
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-on-surface);
+  overflow-y: auto;
   gap: 12px;
 }
 
 .modal-content-full {
   max-height: calc(100dvh - 32px);
-  overflow-y: auto;
 }
 
 .probe-drawer-full {
   height: 100%;
   border-radius: 0;
-  overflow-y: auto;
 }
 
 .modal-fields {
@@ -327,7 +358,6 @@ g-qa-v3-studio,
 .modal-fields label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--md-sys-color-on-surface-variant);
 }
 
 .modal-fields input,
@@ -344,19 +374,13 @@ g-qa-v3-studio,
   gap: 8px;
 }
 
-.qa-stage-header-btn:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: -2px;
-}
-
-.qa-kind-chip:focus-visible,
-.qa-step-node:focus-visible,
-.qa-skipped-stages-bar:focus-visible,
-.qa-spine-search-form input:focus-visible,
-.modal-fields input:focus-visible,
-.modal-fields textarea:focus-visible {
+g-qa-v3-studio :focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
+}
+
+.qa-stage-header-btn:focus-visible {
+  outline-offset: -2px;
 }
 
 @media (max-width: 599.95px) {
