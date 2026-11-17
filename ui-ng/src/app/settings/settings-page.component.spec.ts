@@ -613,7 +613,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     );
   });
 
-  it("shows a host's available grain-agentd update and the command to take it", async () => {
+  it("shows a host's available grain-agentd update and copies the command to take it", async () => {
     const api = new FakeSettingsApi();
     api.hostdsBody = [
       {
@@ -628,11 +628,28 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       },
       { name: "workstation-1", owner: "bob", state: "connected" },
     ];
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (t: string) => {
+          writes.push(t);
+          return Promise.resolve();
+        },
+      },
+    });
     const { el } = await mountSettings("/settings/hosts", api);
     const line = el.querySelector('[data-testid="hostd-update-laptop"]');
     expect(line?.textContent).toContain("v3.8.0");
     expect(line?.textContent).toContain("v3.9.0");
     expect(line?.textContent).toContain("grain-agentd update -version v3.9.0");
+    const copyBtn = el.querySelector(
+      '[data-testid="copy-hostd-update-laptop"]',
+    ) as HTMLButtonElement | null;
+    expect(copyBtn).not.toBeNull();
+    copyBtn!.click();
+    await Promise.resolve();
+    expect(writes).toEqual(["grain-agentd update -version v3.9.0"]);
     expect(
       el.querySelector('[data-testid="hostd-update-workstation-1"]'),
     ).toBeNull();
