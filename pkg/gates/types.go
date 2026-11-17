@@ -25,8 +25,10 @@ import (
 )
 
 type Subject struct {
-	Kind   string `json:"kind"`
-	TaskID string `json:"task_id"`
+	Kind       string `json:"kind"`
+	TaskID     string `json:"task_id,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Ref        string `json:"ref,omitempty"`
 }
 type Origin struct {
 	Kind     string `json:"kind"`

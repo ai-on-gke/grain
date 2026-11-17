@@ -20,6 +20,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,11 +62,42 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 	if !c.observesGates(id) {
 		return nil, nil
 	}
+	// Apply resource scopes independently of task visibility, including for
+	// cached/history evidence collected by a more privileged reader.
+	allows := func(scope APIScope, repo string) bool {
+		if call, ok := agentCallFromContext(ctx); ok {
+			return call.grants.Allows(scope, repo)
+		}
+		if role := accessRoleFromContext(ctx); role != nil {
+			return role.allows(scope, repo)
+		}
+		return true // existing trusted in-process/loopback/access-code ceiling
+	}
+	authorizationFence := gates.Digest("trusted internal health read ceiling")
+	if call, ok := agentCallFromContext(ctx); ok {
+		authorizationFence = gates.Digest(grantListFromSet(call.grants))
+	}
+	if role := accessRoleFromContext(ctx); role != nil {
+		authorizationFence = gates.Digest(struct {
+			Grants []string
+			Deny   map[APIScope]bool
+			Full   bool
+		}{role.grants, role.deny, role.Full})
+	}
+	authorizationRevision, _ := strconv.ParseUint(authorizationFence[7:23], 16, 64)
+	authorizationRevision &= (1 << 53) - 1 // canonical JSON-safe opaque scope fence
+
+	resource := func(repo string) bool { return allows("ci:read", repo) && allows("repos:read", repo) }
+	access := model.GateHealthAccess{AuthorizationRevision: authorizationRevision, Repository: resource,
+		PublicationRepository: func(repo string) bool { return resource(repo) && allows("releases:read", repo) },
+		PipelineRepository:    func(repo string) bool { return resource(repo) && allows("tasks:read", repo) },
+		DeploymentWide:        allows("deployment:read", "") && allows("tasks:read", "") && allows("ci:read", "") && allows("repos:read", "")}
+	access.ScopeLimited = !(access.DeploymentWide && access.PublicationRepository(""))
 	// A failed diagnostic never becomes a failed ordinary task read.
 	readCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
 	now := c.now()
-	v, d, err := c.Store.ObserveTaskGates(readCtx, id, now)
+	v, d, err := c.Store.ObserveTaskGates(readCtx, id, now, access)
 	if err == nil {
 		return v, d
 	}
@@ -76,7 +108,7 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 	// own 250ms budget expired. Never delay an already canceled request.
 	if ctx.Err() == nil {
 		failureCtx, stop := context.WithTimeout(ctx, 50*time.Millisecond)
-		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v)
+		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v, access)
 		stop()
 	}
 	return v, nil

@@ -4076,6 +4076,13 @@ type WorkflowRunsReader interface {
 	ListWorkflowRunJobs(owner, repo string, runID int64) ([]WorkflowRunJob, error)
 }
 
+// WorkflowRunAttemptJobsReader pins a complete job listing to an exact run
+// attempt. Older clients can still supply legacy rows, but cannot prove this
+// stronger source contract.
+type WorkflowRunAttemptJobsReader interface {
+	ListWorkflowRunAttemptJobs(owner, repo string, runID int64, attempt int) ([]WorkflowRunJob, error)
+}
+
 var _ WorkflowRunsReader = (*RESTClient)(nil)
 
 // BranchWorkflowRunsReader is the optional WorkflowRunsReader extension for
@@ -4247,9 +4254,24 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 	if runID <= 0 {
 		return nil, nil
 	}
+	return c.workflowRunJobs(owner, repo, runID, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100", owner, repo, runID))
+}
+func (c *RESTClient) ListWorkflowRunAttemptJobs(owner, repo string, runID int64, attempt int) ([]WorkflowRunJob, error) {
+	if runID <= 0 || attempt < 1 {
+		return nil, fmt.Errorf("run ID and attempt are required")
+	}
+	return c.workflowRunJobs(owner, repo, runID, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/attempts/%d/jobs?per_page=100", owner, repo, runID, attempt), 513)
+}
+func (c *RESTClient) workflowRunJobs(owner, repo string, runID int64, path string, limit ...int) ([]WorkflowRunJob, error) {
 	var out []WorkflowRunJob
-	path := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100", owner, repo, runID)
+	expected := -1
+	pages := 0
 	for path != "" {
+		pages++
+		if len(limit) > 0 && pages > 6 {
+			return nil, fmt.Errorf("exact workflow job pagination is incomplete or oversized")
+		}
+
 		resp, err := c.get(owner, repo, path)
 		if err != nil {
 			return nil, err
@@ -4261,7 +4283,8 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 		}
 		var data struct {
-			Jobs []struct {
+			TotalCount *int `json:"total_count"`
+			Jobs       []struct {
 				ID          int64      `json:"id"`
 				RunID       int64      `json:"run_id"`
 				Name        string     `json:"name"`
@@ -4280,6 +4303,16 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 		if err := json.Unmarshal(resp.Body, &data); err != nil {
 			return nil, err
 		}
+		if len(limit) > 0 {
+			if data.TotalCount == nil || *data.TotalCount < 0 || *data.TotalCount >= limit[0] {
+				return nil, fmt.Errorf("exact workflow job count is missing or exceeds the observation bound")
+			}
+			if expected < 0 {
+				expected = *data.TotalCount
+			} else if expected != *data.TotalCount {
+				return nil, fmt.Errorf("exact workflow job collection changed during pagination")
+			}
+		}
 		for _, job := range data.Jobs {
 			j := WorkflowRunJob{
 				ID:          job.ID,
@@ -4291,7 +4324,7 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 				CompletedAt: job.CompletedAt,
 				HTMLURL:     job.HTMLURL,
 			}
-			if j.RunID == 0 {
+			if j.RunID == 0 && len(limit) == 0 {
 				j.RunID = runID
 			}
 			for _, step := range job.Steps {
@@ -4301,8 +4334,14 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 				}
 			}
 			out = append(out, j)
+			if len(limit) > 0 && len(out) >= limit[0] {
+				return out, nil
+			}
 		}
 		path = nextPagePath(resp.Headers["Link"])
+	}
+	if len(limit) > 0 && len(out) != expected {
+		return nil, fmt.Errorf("exact workflow job listing is incomplete")
 	}
 	return out, nil
 }

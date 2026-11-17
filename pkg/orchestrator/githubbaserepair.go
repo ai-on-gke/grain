@@ -166,6 +166,11 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 	if ok, err := gitHubActionsJudges(ctx, deps.Store, run.Repo); err != nil || !ok {
 		return err
 	}
+	if healthObservationEnabled() && run.Event == "push" {
+		diag, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		_ = deps.Store.MarkGateWorkflowDefaultPush(diag, run.Repo, run.RunID, run.Attempt, strings.TrimPrefix(run.Ref, "refs/heads/"), run.HeadSHA, now)
+		cancel()
+	}
 	if stage1JobsGreen(run.Conclusion, jobs) {
 		return errors.Join(
 			meetGitHubBaseGoals(ctx, deps, run, now),

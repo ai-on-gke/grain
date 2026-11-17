@@ -2,19 +2,21 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and limits for later ports. It ships exactly two v1
-types: `delivery` with
-`{"product":"report","semantics":"current_v1"}`, and `acknowledgment` with
-`{"mode":"explicit_receipt"}`. Other catalogue profiles/types are unsupported.
-Their closed schemas are pinned to the canonical catalogue and evaluated by pure
-local Go functions. There are no remote evaluator calls or private evaluator state.
+records repairs, coverage and extension rules. The runtime supports the two
+report/receipt monitors and four health types: `base_health`, `nightly_health`,
+`publishing_health` and `pipeline_health`. Health observations compare explicit
+legacy profiles with the canonical stronger current profiles on selected existing
+health goals; they do not materialize a task contract or add completion obligations.
+Other catalogue types/profiles remain unsupported. Closed schemas are pinned to
+the canonical catalogue and evaluated by pure local Go functions. There are no
+remote evaluator calls or private evaluator state. See [health coverage and limits](gate-health-observations.md).
 
 Legacy services still own every task lifecycle, queue/run/wait, approval, report,
 acknowledgment, merge and submit operation. There is no authority migration or
 cutover code. Every binding is a nonrequired monitor; all effect flags are false.
 Diagnostic acceptance means the observation was recorded, not task readiness,
 successful completion, or permission to act. Work/actions arrays are always empty.
-Proposed receipt remediation and waits are inert descriptions with no buttons.
+Proposed remediation and waits are inert descriptions with no buttons.
 
 ## Shipped read surfaces
 
@@ -35,10 +37,13 @@ Collection/display is disabled by default. A deployment-local explicit allowlist
 selects at most 32 task IDs. There is no automatic cohort expansion or lifecycle
 hook. Choose a small representative set of current finite analysis/report tasks,
 including a report awaiting receipt and a report acknowledged by a verified person.
+Existing base/nightly repair and pipeline steward tasks with the corresponding
+health goals can also be selected explicitly; health profiles replace the
+report/receipt pair on those tasks only.
 Optionally include a code/standing task to inspect the explained unknown state;
 never interpret that acknowledgment observation as a code completion requirement.
 
-Only noninteractive `analyze` tasks without changes, goals, standing/keep-running
+For the report/receipt pair, only noninteractive `analyze` tasks without changes, goals, standing/keep-running
 behavior, console hosting, or report-only child auto-closure are applicable. A
 successful recorded no-work invocation is excluded. Unsupported shapes return
 unknown with a not-applicable explanation for both monitors.
@@ -61,8 +66,9 @@ fallback or
 automation closes are unknown, not synthetic receipts. A new report/run, question,
 message, attachment, relevant task shape, or registry/config build changes the
 source fence; old receipt observations cannot silently cover a changed report.
-These local immutable body/comment and close-event records are the only supported
-evidence. No permission revisions or complete remote evidence are claimed.
+These local immutable body/comment and close-event records are the supported
+report/receipt evidence. Health uses its own scoped source records and permissions
+as described in the health guide; no enforcement authorization is claimed.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -70,7 +76,8 @@ values; internal task/evidence source versions are local opaque SHA-256 identiti
 ## Collection, replay and isolation
 
 Reads collect current local evidence and evaluate only a changed source fence or
-an expired 60-second diagnostic lease. Selected task reads bypass the ordinary
+an expired diagnostic lease (at most 60 seconds, shortened by source, threshold
+and window expiry). Selected task reads bypass the ordinary
 body cache so expiry/errors cannot be hidden by 304 responses. Bursts of events
 between reads coalesce into one current collection; many concurrent readers reuse
 the accepted generation. This is display/poll-driven level collection, not a

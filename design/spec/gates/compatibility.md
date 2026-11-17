@@ -24,8 +24,10 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 ## Implemented observation-only subset
 
 The [runtime observation guide](../../../docs/gate-observations.md) describes the
-first shipped slice: exactly `delivery/report/current_v1` and
-`acknowledgment/explicit_receipt`, both v1 nonrequired monitors. Ordinary authorized
+report/receipt slice and the [health port](../../../docs/gate-health-observations.md):
+`delivery/report/current_v1`, `acknowledgment/explicit_receipt` and the four health
+types, all v1 nonrequired monitors. Selected existing health goals receive labeled
+legacy/current comparison profiles; unrelated tasks receive no health obligations. Ordinary authorized
 task reads and the Angular task detail carry the optional closed observation_view
 and bounded sibling diagnostic history. There is no contract/decision authority,
 `?view=gates` implementation, discovery/mutation/action/waiver API or migration.
@@ -35,6 +37,11 @@ The [independent framework review](../../../docs/gate-observation-review.md) rec
 repair coverage and stable extension rules, including conservative receipt ordering,
 failure/acceptance races and bounded retention on both engines.
 All current legacy writers listed below retain authority in this implementation.
+The health port preserves actual legacy predicates and declaration timestamps,
+including saved verified-push goal dispositions, newest-500 workflow selection,
+concrete publishing thresholds/supersession and broad steward exclusions. Current
+positive publication remains unknown without authentic complete publication
+receipts. Scope/capture gaps never upgrade weak legacy evidence into current proof.
 The imports and handoff requirements remain future specifications.
 
 ## Explicit concrete goal imports

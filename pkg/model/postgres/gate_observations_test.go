@@ -28,3 +28,13 @@ func TestGateObservationReviewRegressions(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.RunReviewRegressions(t, s, db)
 }
+
+func TestHealthGateObservations(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunHealth(t, s, db)
+}
+
+func TestHealthGateSourceBounds(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunHealthSourceBounds(t, s, db)
+}

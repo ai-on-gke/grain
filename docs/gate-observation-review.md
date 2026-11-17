@@ -101,8 +101,10 @@ independent correctness oracle.
 
 ## Material limits for later ports
 
-- The controller, failure builder and milestone comparison intentionally project
-  a fixed report/receipt pair. Comparisons and cache validation assume that pair
+- At this review revision, the controller, failure builder and milestone comparison
+  intentionally projected a fixed report/receipt pair. Task #68 extends those paths
+  together for selected health goals; see [health port](gate-health-observations.md).
+  The original extension constraint was: Comparisons and cache validation assume that pair
   and result order. Adding a descriptor alone is not a gate port: explicitly
   extend the relevant reader, binding projection, failure/comparison logic and
   tests together. Do not invent an execution platform around this slice.

@@ -722,7 +722,12 @@ export interface GateObservationResult {
     observed_at: string;
     valid_until: string;
     context_digest: string;
-    evidence: { kind: string; id: string; version: string }[];
+    evidence: {
+      kind: string;
+      id: string;
+      version: string;
+      head?: string | null;
+    }[];
     dependencies: { key: string; version: string; complete: boolean }[];
     waits: { event: string; owner: string; deadline: string }[];
     error: { code: string; message: string } | null;
@@ -741,6 +746,12 @@ export interface GateObservations {
     version: number;
     config: unknown;
     origin: unknown;
+    subject?: {
+      kind: string;
+      repository?: string;
+      ref?: string;
+      task_id?: string;
+    };
   }[];
   results: GateObservationResult[];
 }

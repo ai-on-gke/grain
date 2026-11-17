@@ -102,7 +102,7 @@ import type {
   template: `
     @if (observations(); as view) {
       <section aria-label="Gate observations" data-testid="gate-observations">
-        <h3>Built-in gates · Observation only</h3>
+        <h3>Built-in gates · Observation only · Shadow predictions</h3>
         <p class="muted">
           Legacy services remain authoritative. These observations do not
           establish readiness or successful completion and cannot change task
@@ -117,6 +117,7 @@ import type {
         }
         @for (entry of view.results; track entry.evaluation_id) {
           <article>
+            <p class="muted">Shadow prediction · no operational effects</p>
             <h4>
               <span class="version"
                 >{{ entry.result.type }} v{{ entry.result.version }}</span
@@ -166,10 +167,16 @@ import type {
                   <span class="version">{{ dep.version }}</span>
                 </p>
               }
-              @for (evidence of entry.result.evidence; track evidence.kind) {
+              @for (
+                evidence of entry.result.evidence;
+                track evidence.kind + evidence.id
+              ) {
                 <p>
                   {{ evidence.kind }} #{{ evidence.id }} ·
                   <span class="version">{{ evidence.version }}</span>
+                  @if (evidence.head) {
+                    · head <span class="version">{{ evidence.head }}</span>
+                  }
                 </p>
               }
             </details>
@@ -183,16 +190,29 @@ import type {
           <p class="version">Source revision: {{ view.source_revision }}</p>
           @for (binding of view.bindings; track binding.id) {
             <p>{{ binding.type }} v{{ binding.version }}</p>
+            @if (binding.subject?.repository) {
+              <p>
+                Repository {{ binding.subject?.repository }} · ref
+                {{ binding.subject?.ref }}
+              </p>
+            }
             <pre
               >{{ binding.config | json }}
 {{ binding.origin | json }}</pre>
           }
           @if (diagnostics(); as diag) {
-            <p>
-              First observation collected
-              {{ diag.started_at | date: "medium" }} ·
-              {{ diag.evaluations }} evaluations
-            </p>
+            @if (diag.evaluations) {
+              <p>
+                First retained visible observation collected
+                {{ diag.started_at | date: "medium" }} ·
+                {{ diag.evaluations }} recorded evaluations
+              </p>
+            } @else {
+              <p>
+                History counts cover only the visible returned samples;
+                aggregate metadata is restricted.
+              </p>
+            }
             <p class="muted">
               Counts cover retained evidence changes and hourly samples, not all
               evaluations. Up to 72 hours / 1024 samples per task; newest 20
