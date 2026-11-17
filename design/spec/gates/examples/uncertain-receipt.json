@@ -1,0 +1,30 @@
+{
+  "operation_id": "merge-1",
+  "request": {
+    "request_id": "merge-1",
+    "idempotency_key": "merge/pr1710/H1",
+    "action": "change.merge",
+    "target": {
+      "kind": "change",
+      "authority": "github.com",
+      "repository": "ai-on-gke/grain",
+      "change_kind": "pr",
+      "id": "1710"
+    },
+    "expected_head": "H1",
+    "expected_resource_version": "pr-v3",
+    "expected_contract_revision": 1,
+    "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reason": null,
+    "expected_authority_epoch": 1,
+    "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "actor": "automation/merge-queue",
+  "disposition": "outcome_unknown",
+  "result_version": null,
+  "recorded_at": "2026-11-17T00:20:00Z",
+  "evidence": [],
+  "exception_ids": [],
+  "intent": "execute"
+}

@@ -259,6 +259,25 @@ describe("new task form", () => {
     expect(
       fromTemplateStem("sidthe/grain", { ...repoTmpl, system: true }),
     ).toBe("");
+    // The server's own declared id, with no declaredIn beside it.
+    expect(
+      fromTemplateStem("sidthe/grain", {
+        ...repoTmpl,
+        id: "repo:template:sidthe:grain:triage",
+        declaredIn: undefined,
+      }),
+    ).toBe("triage");
+    // A stored template (POST /api/templates) is not the repository's:
+    // it files through POST /api/tasks { templateId }, never from-template.
+    expect(
+      fromTemplateStem("sidthe/grain", {
+        id: "template-3",
+        name: "Urgent fix",
+        title: "Urgent: ",
+        description: "",
+        priority: 8,
+      }),
+    ).toBe("");
   });
 
   it("says what stops filing, including required template fields", () => {
@@ -300,6 +319,36 @@ describe("new task form", () => {
       },
     });
     expect(validate({ ...d, title: "t", newBranch: true }, hidden)).toBeNull();
+
+    // Missing repository when the deployment has no defaultTarget:
+    const noDefaultCfg: GrainConfig = { access: null };
+    const noRepoChosen = emptyDraft(noDefaultCfg, tasks, { title: "t" });
+    expect(validate(noRepoChosen, undefined, null, {}, noDefaultCfg)).toEqual({
+      field: "repo",
+      message: "Pick a repository, or choose No repository.",
+    });
+    const disallowNoRepo = resolveFields({
+      access: null,
+      newTaskForm: {
+        default: { fields: { repo: { allow_no_repo: false } } },
+      },
+    });
+    expect(
+      validate(noRepoChosen, disallowNoRepo, null, {}, noDefaultCfg),
+    ).toEqual({
+      field: "repo",
+      message: "Pick a repository.",
+    });
+    expect(
+      validate(
+        { ...noRepoChosen, repo: NO_REPO },
+        undefined,
+        null,
+        {},
+        noDefaultCfg,
+      ),
+    ).toBeNull();
+    expect(validate(noRepoChosen, undefined, null, {}, config)).toBeNull();
   });
 
   it("phrases the draft as a request to the Director", () => {
@@ -339,5 +388,51 @@ describe("new task form", () => {
     );
     expect(childPayload).toMatchObject({ origin: "task:12" });
     expect(childPayload).not.toHaveProperty("autoApproveProposals");
+  });
+
+  it("omits goalMode on supervised drafts and emits normalized goalMode on autonomous goal drafts", () => {
+    const supervised = emptyDraft(config, tasks);
+    expect(supervised.goalMode).toBeNull();
+    expect(buildPayload(supervised, config)).not.toHaveProperty("goalMode");
+
+    const disabledGoal = emptyDraft(config, tasks, {
+      goalMode: { enabled: false },
+    });
+    expect(buildPayload(disabledGoal, config)).not.toHaveProperty("goalMode");
+
+    const goalDefault = emptyDraft(config, tasks, {
+      goalMode: { enabled: true },
+    });
+    expect(buildPayload(goalDefault, config)).toMatchObject({
+      goalMode: {
+        enabled: true,
+        maxPasses: 8,
+        wallClockMinutes: 120,
+      },
+    });
+    expect(
+      (
+        buildPayload(goalDefault, config)["goalMode"] as Record<string, unknown>
+      )["mockMissingSecrets"],
+    ).toBeUndefined();
+
+    const goalCustom = emptyDraft(config, tasks, {
+      goalMode: {
+        enabled: true,
+        maxPasses: 12,
+        wallClockMinutes: 240,
+        mockMissingSecrets: true,
+      },
+      autoApproveProposals: true,
+    });
+    expect(buildPayload(goalCustom, config)).toMatchObject({
+      goalMode: {
+        enabled: true,
+        maxPasses: 12,
+        wallClockMinutes: 240,
+        mockMissingSecrets: true,
+      },
+      autoApproveProposals: true,
+    });
   });
 });

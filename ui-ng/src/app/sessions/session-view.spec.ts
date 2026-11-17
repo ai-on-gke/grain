@@ -159,6 +159,57 @@ describe("messages", () => {
     expect(sanitized).toContain('class="tok-kw"');
   });
 
+  it("lets a few bare inline tags and character references through, as GitHub does", () => {
+    const html = sanitizeMarkdownHtml(
+      renderMarkdown(
+        "* <code>pkg/sandboxcli/help.go:136</code> -- is never &quot;held&quot;. " +
+          "Live filings (<code>propose_task</code> ...) <strong>refuse</strong> it\n" +
+          "* <em>a</em> <kbd>Ctrl</kbd> H<sub>2</sub>O x<sup>2</sup> one<br>two &amp; &#39;q&#39;",
+      ),
+    );
+    expect(html).toContain("<li><code>pkg/sandboxcli/help.go:136</code> -- ");
+    expect(html).toContain('is never "held".');
+    expect(html).toContain("<strong>refuse</strong>");
+    expect(html).toContain("<em>a</em> <kbd>Ctrl</kbd>");
+    expect(html).toContain("H<sub>2</sub>O x<sup>2</sup> one<br>two &amp; 'q'");
+    expect(html).not.toContain("&lt;");
+    expect(html).not.toContain("&amp;quot;");
+
+    // An attribute, an unlisted tag or a link is still only text.
+    for (const raw of [
+      '<code class="x">a</code>',
+      '<strong onclick="evil()">b</strong>',
+      '<a href="https://evil.example">c</a>',
+      "<span>d</span>",
+      "<img src=x>",
+      "<code\nonmouseover=evil()>e</code>",
+    ]) {
+      const out = sanitizeMarkdownHtml(renderMarkdown(`x ${raw}`));
+      // No element but the paragraph, and no attribute on anything.
+      const doc = new DOMParser().parseFromString(out, "text/html");
+      const tags = Array.from(doc.body.querySelectorAll("*"));
+      expect(
+        tags.map((t) => t.tagName),
+        raw,
+      ).toEqual(["P"]);
+      expect(tags[0].attributes.length, raw).toBe(0);
+      expect(out, raw).toContain("&lt;");
+    }
+    // Block HTML gets the same treatment, tag by tag.
+    const block = renderMarkdown(
+      "<div>\n<strong>s</strong> <script>x</script>\n</div>",
+    );
+    expect(block).toContain("&lt;div&gt;");
+    expect(block).toContain("<strong>s</strong>");
+    expect(block).toContain("&lt;script&gt;");
+    // A reference that names nothing, and a bare &, stay as written.
+    expect(renderMarkdown("a & b &bogus x")).toContain(
+      "a &amp; b &amp;bogus x",
+    );
+    // In code, a reference is literal text.
+    expect(renderMarkdown("`&quot;`")).toContain("<code>&amp;quot;</code>");
+  });
+
   it("opens links in a new tab, drops unsafe ones and never loads images", () => {
     const ok = renderMarkdown("[docs](https://grain.dev/x)");
     expect(ok).toContain('href="https://grain.dev/x"');

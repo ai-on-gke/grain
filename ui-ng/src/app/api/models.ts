@@ -100,6 +100,9 @@ export interface GrainConfig {
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
   capabilities?: CapabilityOption[];
+  // ciCapabilities is what can be granted to a repository's CI jobs
+  // (the repo page's CI capabilities card).
+  ciCapabilities?: CapabilityOption[];
   defaultCapabilities?: string[];
   repoDefaultCapabilities?: Record<string, string[]>;
   agentBackends?: AgentBackendOption[];
@@ -144,6 +147,39 @@ export interface HumanReviewView {
   at?: string;
 }
 
+// ApprovalView is one rule a change waits on a named approver's Submit
+// for (pkg/ui/approvals.go): a sensitive trigger with `human: required`,
+// or grain's own guard over the repository's triggers.
+export interface ApprovalView {
+  rule: string;
+  source?: string;
+  approvers?: string[];
+  approvedBy?: string;
+}
+
+// PolicyRequirement is one line of a change's effective merge policy
+// and the rules that caused it (model.PolicyRequirement).
+export interface PolicyRequirement {
+  Field: string;
+  Value: string;
+  From?: string[];
+}
+
+// EffectiveMergePolicy is what the repository's merge rules
+// (.grain/merge-rules.yml) require of a change's head
+// (model.EffectiveMergePolicy); its fields keep their Go names.
+export interface EffectiveMergePolicy {
+  Head?: string;
+  Rules?: string;
+  Mode?: string;
+  GrainJobs?: string[];
+  GrainFullSuite?: boolean;
+  GitHubChecks?: string[];
+  GitHubAllChecks?: boolean;
+  Matched?: string[];
+  Requirements?: PolicyRequirement[];
+}
+
 export interface TaskPaused {
   at: string;
   by: string;
@@ -177,12 +213,61 @@ export interface GoalDecl {
   max_stall?: string;
 }
 
-export interface TaskGoalView extends GoalDecl {
+// TaskGoalView is a task's goal as GET /api/tasks/{id} returns it: the
+// task_goal row (model.TaskGoal), whose fields are camelCase -- unlike
+// GoalDecl, the snake_case body PUT /api/tasks/{id}/goal takes.
+export interface TaskGoalView {
+  taskId?: string;
+  kind: string;
+  spec: GoalSpec;
+  onMet?: string;
+  onLimit?: string;
+  declaredBy?: string;
+  declaredAt?: string;
   metAt?: string;
-  limitNotifiedAt?: string;
-  resumesWithoutProgress?: number;
+  evidence?: string;
   outcome?: string;
+  progressAt?: string;
+  resumesSinceProgress?: number;
+  maxResumes?: number;
+  // A Go time.Duration: nanoseconds.
+  maxStall?: number;
+  limitNotifiedAt?: string;
   [key: string]: unknown;
+}
+
+export interface GoalModeConfig {
+  enabled: boolean;
+  maxPasses?: number;
+  wallClockMinutes?: number;
+  mockMissingSecrets?: boolean;
+}
+
+export interface GoalAssumption {
+  id: string;
+  topic: string;
+  decision: string;
+  rationale?: string;
+  alternatives?: string;
+  pass?: number;
+  createdAt?: string;
+}
+
+export interface GoalDeliverable {
+  requirement: string;
+  evidence: string;
+  verified: boolean;
+}
+
+export interface GoalScorecard {
+  passesUsed: number;
+  maxPasses: number;
+  verified: boolean;
+  stoppedAtCap?: boolean;
+  stopReason?: string;
+  summary?: string;
+  deliverables?: GoalDeliverable[];
+  updatedAt?: string;
 }
 
 export interface Task {
@@ -194,6 +279,10 @@ export interface Task {
   updatedAt?: string;
   proposedBy?: string;
   questionSummary?: string;
+  // The one line a run gave the closing note an awaiting_reply task
+  // rests on (comment_on_issue's summary); set only when the task asked
+  // nothing (pkg/ui Task.NoteSummary).
+  noteSummary?: string;
   questionCommentId?: number;
   awaitingAccess?: boolean;
   turnStopped?: boolean;
@@ -201,6 +290,16 @@ export interface Task {
   reviewFindings?: unknown[];
   humanApprovedBy?: string;
   humanReviewHold?: HumanReviewView[];
+  // Holds the repository's own rules put on the change (pkg/ui/tasks.go):
+  // the strictest `human` setting of the gating triggers holding it and
+  // the review each filed ("<trigger>=<task>"), a security hold, the
+  // approvals it still owes, and what its merge rules require.
+  pathTriggerHold?: string;
+  pathTriggerTasks?: string[];
+  securityHold?: string;
+  approvals?: ApprovalView[];
+  repoRules?: string;
+  mergePolicy?: EffectiveMergePolicy;
   autoMerge?: boolean;
   pullRequest?: PullRequestRef | string | null;
   prClosedAt?: string;
@@ -223,6 +322,7 @@ export interface Task {
   reviewTemplateName?: string;
   // The template the task was filed from, absent for one written from scratch.
   templateId?: string;
+  qaFlowRef?: string;
   sandboxCpus?: number;
   sandboxMemoryMb?: number;
   sandboxDiskGb?: number;
@@ -241,6 +341,9 @@ export interface Task {
   runNowAt?: string;
   runNowStale?: boolean;
   goal?: TaskGoalView | null;
+  goalMode?: GoalModeConfig | null;
+  goalAssumptions?: GoalAssumption[];
+  goalScorecard?: GoalScorecard | null;
   consoleSession?: unknown;
   interactive?: boolean;
   // What the current run is doing, in a sentence, and when it said so;
@@ -271,8 +374,13 @@ export interface Task {
   approvedByLabel?: string;
   approvedByKind?: string;
   approvedBySource?: string;
-  // The task that filed this one, and the work tree it belongs to.
+  // generatedFrom: the immediate parent proposer -- the task whose
+  // propose_task call filed this one; absent for a task nobody's run filed.
   generatedFrom?: string;
+  // origin: the root of this task's work tree ("owner/repo#N" or
+  // "task:<id>"), inherited at any depth, so it is usually not the parent.
+  // Neither field says who filed the task: that is its filing, the
+  // author* fields (docs/work-trees.md#glossary).
   origin?: string;
   stacked?: boolean;
   review?: boolean;
@@ -301,7 +409,13 @@ export interface Task {
     canMail?: boolean;
     [key: string]: unknown;
   };
-  clSubmit?: { canSync?: boolean; [key: string]: unknown };
+  clSubmit?: {
+    canSubmit?: boolean;
+    canSync?: boolean;
+    reasons?: string[];
+    target?: string;
+    [key: string]: unknown;
+  };
   derivedFrom?: string[];
   designs?: string[];
   // Open dependencies and the state of each (GET /api/tasks).
@@ -312,6 +426,10 @@ export interface Task {
   // Why the task is where it is (orchestrator liveness reason), e.g.
   // {reason: "awaiting_reply/stopped", class: "awaiting a person"}.
   reason?: { reason: string; class?: string; control?: string };
+  // The merge queue's own sub-case for this task's pull request, when it
+  // is on the queue; its control (Retry merge on merge_failed) stands in
+  // when the task's own sub-case names none.
+  mergeQueueReason?: { reason: string; class?: string; control?: string };
 }
 
 export type MergeGateState =
@@ -327,6 +445,9 @@ export interface MergeGate {
   reviewTask?: string;
   approvedBy?: string;
   overridable?: boolean;
+  // A findings gate whose review's findings a person may accept as they
+  // are (POST /api/tasks/{id}/accept-findings, model.MergeGate.Acceptable).
+  acceptable?: boolean;
 }
 
 export interface AccessRequestItem {
@@ -440,6 +561,10 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
+  // kind is admitted (ui.CapabilityMethod.Policy).
+  policy?: Record<string, string>;
   aliasOf?: string[];
 }
 
@@ -510,6 +635,7 @@ export interface Template {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   admission?: string;
@@ -599,6 +725,10 @@ export interface TaskDetail extends Task {
   pendingConfigChange?: PendingConfigChange | null;
   ci?: TaskCIStatus | null;
   ciFaults?: { kind?: string; summary?: string; detail?: string }[];
+}
+
+export interface TaskSummariesResponse {
+  tasks: Record<string, TaskDetail>;
 }
 
 // One standing conversation (pkg/ui console_sessions.go
@@ -838,4 +968,98 @@ export interface MemoryDocument {
 
 export interface MemoryDocumentsResponse {
   documents: MemoryDocument[];
+}
+
+export interface QARuleSpec {
+  id: string;
+  label: string;
+  stage: string;
+  severity: string;
+  summary: string;
+  targetPaths: string[];
+  enabled: boolean;
+}
+
+export interface QAFlowSpec {
+  id: string;
+  label: string;
+  summary: string;
+  injectSkill: boolean;
+  skillBytes: number;
+  stopNudge: boolean;
+  stagingIsolation: boolean;
+  enableS4: boolean;
+  maxS4RepairRounds: number;
+  strictDecoderPaths?: string[];
+  rules: QARuleSpec[];
+}
+
+export interface QAFlowsResponse {
+  flows: QAFlowSpec[];
+}
+
+export interface QAAssignment {
+  rootOrigin: string;
+  epoch: number;
+  regimeId: number;
+  arm: string;
+  flowId: string;
+  rolloutPctAtAssign: number;
+  complexityTier: string;
+  assignedAt: string;
+}
+
+export interface QACheckRun {
+  id: number;
+  taskId: string;
+  runId: string;
+  commitSha: string;
+  stage: string;
+  checkId: string;
+  arm: string;
+  shadow: boolean;
+  verdict: string;
+  durationMs: number;
+  blastTier?: string;
+  blastScore?: number;
+  complexityTier?: string;
+  triageDecision?: string;
+  repairedInNextSha?: number;
+  tokensIn: number;
+  tokensOut: number;
+  allocBytes: number;
+  detailJson?: string;
+  createdAt: string;
+}
+
+export interface QAFinding {
+  id: number;
+  checkRunId: number;
+  taskId: string;
+  stage: string;
+  ruleId: string;
+  severity: string;
+  filePath?: string;
+  line?: number;
+  summary: string;
+  evidence?: string;
+  humanVote: number;
+  votedBy?: string;
+  votedAt?: string;
+  createdAt: string;
+}
+
+export interface TaskQAResponse {
+  taskId: string;
+  enabled: boolean;
+  assignment?: QAAssignment;
+  checkRuns: QACheckRun[];
+  findings: QAFinding[];
+}
+
+export interface VoteQAFindingResponse {
+  findingId: number;
+  taskId: string;
+  vote: number;
+  votedBy?: string;
 }

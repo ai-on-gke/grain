@@ -15,18 +15,23 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  HostListener,
   OnDestroy,
   OnInit,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
+  ElementRef,
   inject,
   input,
   signal,
+  viewChild,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import type { RouteKey } from "../api/generated-routes";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
+import type { BaseBranchGate, BaseBranchGatesResponse } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
@@ -39,9 +44,37 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import type { CapabilityOption } from "../api/models";
+import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
+import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
+import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
+
+// CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
+// which an unjudged gate's warning links to: on a repository grain CI is
+// not enabled for, that control is what enrols its watched branch.
+export const CI_MODE_ID = "repo-ci-mode";
+
+// unjudgedGatesFor is the base-branch gates nothing is judging for repo,
+// as the classic Repo page's header and Releases pane pick them out of
+// GET /api/base-branch-gates. A gate that is only late is left to the
+// release settings it sits beside, as on classic.
+export function unjudgedGatesFor(
+  gates: readonly BaseBranchGate[],
+  repo: string,
+): BaseBranchGate[] {
+  const want = repo.toLowerCase();
+  return gates.filter((g) => !g.judged && g.repo.toLowerCase() === want);
+}
 
 export type RepoTabId =
-  "overview" | "ci" | "merge-queue" | "agents" | "branches" | "releases";
+  | "overview"
+  | "ci"
+  | "merge-queue"
+  | "agents"
+  | "branches"
+  | "releases"
+  | "advanced";
 
 const REPO_TABS: readonly { id: RepoTabId; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -50,6 +83,7 @@ const REPO_TABS: readonly { id: RepoTabId; label: string }[] = [
   { id: "agents", label: "Agents & Grants" },
   { id: "branches", label: "Branches" },
   { id: "releases", label: "Releases" },
+  { id: "advanced", label: "Advanced" },
 ];
 
 function isRepoTabId(val: string | null | undefined): val is RepoTabId {
@@ -64,6 +98,112 @@ function normalizeWorkflowPath(raw: string): string {
   const withExt =
     clean.endsWith(".yml") || clean.endsWith(".yaml") ? clean : `${clean}.yml`;
   return `.grain/workflows/${withExt}`;
+}
+
+// importOutcomeText words one import pass the way the classic Repo page
+// does (ui/src/components/RepoPage.jsx importIssuesNow): an error with
+// nothing open is the listing itself failing, so nothing was read.
+export function importOutcomeText(
+  out: {
+    source?: string;
+    open?: number;
+    imported?: string[] | null;
+    skipped?: number;
+    error?: string;
+  },
+  repo: string,
+): { error: boolean; text: string } {
+  const source = out.source || repo;
+  const open = out.open ?? 0;
+  if (out.error && !open) {
+    return {
+      error: true,
+      text: `Could not read the open issues on ${source}: ${out.error}`,
+    };
+  }
+  const n = (out.imported ?? []).length;
+  let text = `Read ${open} open issue${open === 1 ? "" : "s"} on ${source}: imported ${n}, ${out.skipped ?? 0} already imported.`;
+  if (out.error) text += ` Some could not be imported: ${out.error}`;
+  return { error: Boolean(out.error), text };
+}
+
+// releaseActionReasons says why Cut RC and Promote RC are off for a
+// release, one sentence each, or null for a button that is on: the
+// classic pane's rule (ui/src/components/RepoReleases.jsx). candidate is
+// the release's newest candidate, undefined when it is not loaded.
+export function releaseActionReasons(
+  release: { name: string; status?: string; latestBranch?: string },
+  candidate: { branch?: string; status?: string } | null | undefined,
+  loaded: boolean,
+): { cut: string | null; promote: string | null } {
+  const status = release.status || "active";
+  if (status !== "active") {
+    const why =
+      status === "provisioning"
+        ? `${release.name} is still provisioning: grain cuts and promotes its candidates once its ${release.latestBranch || release.name + ".latest"} branch exists.`
+        : `${release.name} is ${status}: only an active release cuts or promotes candidates.`;
+    return { cut: why, promote: why };
+  }
+  if (!loaded) return { cut: null, promote: null };
+  let cut: string | null = null;
+  if (candidate && candidate.status !== "promoted") {
+    cut =
+      candidate.status === "cutting"
+        ? `${candidate.branch} is still being cut.`
+        : `${candidate.branch} is ${candidate.status || "active"}: a new RC is cut once it is promoted.`;
+  }
+  let promote: string | null = null;
+  if (!candidate) {
+    promote = "No candidate to promote yet: cut one first.";
+  } else if (candidate.status === "promoted") {
+    promote = `${candidate.branch} is already promoted: a candidate is promoted once.`;
+  } else if (candidate.status && candidate.status !== "active") {
+    promote = `${candidate.branch} is ${candidate.status}: only an active candidate can be promoted.`;
+  }
+  return { cut, promote };
+}
+
+function workflowKey(list: readonly { path: string; text: string }[]): string {
+  return JSON.stringify(list.map((w) => [w.path, w.text ?? ""]));
+}
+
+interface ImportFields {
+  enabled: boolean;
+  label: string;
+  repo: string;
+  approved: boolean;
+  // interval is the "Every (minutes)" box's text, empty for the default.
+  interval: string;
+}
+
+// importIntervalText is a stored issue-import interval in the box's own
+// shape: whole minutes, empty for the default (0).
+export function importIntervalText(seconds: number | undefined): string {
+  return seconds ? String(Math.round(seconds / 60)) : "";
+}
+
+// importIntervalSeconds reads the "Every (minutes)" box: 0 for empty (the
+// default), the seconds otherwise, or an error for anything the server
+// would refuse (PUT .../settings: 0 or at least a minute).
+export function importIntervalSeconds(
+  text: string,
+): { seconds: number; error: null } | { seconds: null; error: string } {
+  const t = text.trim();
+  if (t === "") return { seconds: 0, error: null };
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 1) {
+    return {
+      seconds: null,
+      error: "Every (minutes) must be at least 1, or empty for the default.",
+    };
+  }
+  return { seconds: Math.round(n * 60), error: null };
+}
+
+interface AgentFields {
+  setup: string;
+  prompt: string;
+  caps: string;
 }
 
 interface BranchRow {
@@ -103,6 +243,89 @@ interface RepoReleaseSecretRow {
   present?: boolean;
 }
 
+// What GET /api/repos/{owner}/{name}/declarations answers with
+// (ui.RepoDefaults), the part the Advanced tab reads.
+interface DeclaredPushRow {
+  path: string;
+  refs: { ref: string; force?: boolean; delete?: boolean }[];
+}
+
+interface DeclarationsStatus {
+  commit?: string;
+  error?: string;
+  templates?: string[];
+  suites?: string[];
+  schedules?: string[];
+  triggers?: string[];
+  pushes?: DeclaredPushRow[];
+  warnings?: string[];
+}
+
+interface PortDirection {
+  from: string;
+  to: string;
+  paired?: boolean;
+  operatorTypes?: string[];
+  declaredTypes?: string[];
+  types?: string[];
+}
+
+interface RepoDeclarations {
+  declarations?: boolean;
+  declarationsStatus?: DeclarationsStatus | null;
+  portBranches?: string[];
+  declaredPortBranches?: string[];
+  pairedBranches?: string[];
+  portDirections?: PortDirection[];
+  portWarnings?: string[];
+}
+
+// declaredSummary counts what a declarations status says the repository
+// declares, the classic page's words: "1 template(s), 1 suite(s), 0
+// schedule(s), 0 trigger(s)".
+export function declaredSummary(st: DeclarationsStatus): string {
+  return (
+    `${(st.templates ?? []).length} template(s), ` +
+    `${(st.suites ?? []).length} suite(s), ` +
+    `${(st.schedules ?? []).length} schedule(s), ` +
+    `${(st.triggers ?? []).length} trigger(s)`
+  );
+}
+
+// declaredPushRef is one push entry as it reads: "refs/tags/latest
+// (force)".
+export function declaredPushRef(r: {
+  ref: string;
+  force?: boolean;
+  delete?: boolean;
+}): string {
+  const flags = [r.force && "force", r.delete && "delete"].filter(Boolean);
+  return flags.length ? `${r.ref} (${flags.join(", ")})` : r.ref;
+}
+
+// removeRepoMessage is what the Remove confirm says: what dropping repo
+// from allowed does to new work, then what POST /api/repos/plan says
+// the stored work loses (stranded, one summary each). Taking the only
+// entry off the allowlist does not narrow it to nothing: an empty
+// allowlist means unrestricted (model.RepoAllowed), and the confirm
+// says so rather than promise a narrowing that does not happen.
+export function removeRepoMessage(
+  repo: string,
+  allowed: readonly string[],
+  stranded: readonly string[],
+): string {
+  const rest = allowed.filter((r) => r.toLowerCase() !== repo.toLowerCase());
+  const unrestricts = allowed.length > 0 && rest.length === 0;
+  const consequence = unrestricts
+    ? `${repo} is the only repo this deployment allows. An empty allowlist is what means unrestricted, so removing it allows any repo again: new tasks may target any repo, ${repo} included. To stay restricted, add the repo you want first.`
+    : `New tasks won't be able to target ${repo} until it's added back, and it drops off the repos list.`;
+  const cost =
+    stranded.length === 0
+      ? "Tasks already filed there are not affected."
+      : stranded.join(" ");
+  return `${consequence} ${cost}`;
+}
+
 interface PendingReleaseRow {
   version: string;
   summary?: string;
@@ -111,7 +334,15 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    RouterLink,
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    RepoCICapabilitiesComponent,
+    RepoQualificationPlanComponent,
+    RepoWorkOwnershipComponent,
+    StatusIconComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
@@ -127,9 +358,9 @@ interface PendingReleaseRow {
           <div class="repo-top-nav">
             <a
               class="btn-text"
-              routerLink="/settings/repositories"
+              routerLink="/repos"
               data-testid="back-to-repos-link"
-              >← Repositories</a
+              >← Repos</a
             >
             <a
               class="btn-tonal s-btn-sm"
@@ -150,7 +381,8 @@ interface PendingReleaseRow {
             </h1>
             <p class="view-subtitle">
               Per-repository Git connection, CI workflows, merge gates,
-              branches, and release qualification.
+              branches, release qualification, and what the repository declares
+              for itself.
             </p>
           </div>
 
@@ -197,6 +429,43 @@ interface PendingReleaseRow {
           @if (ready()) {
             @switch (activeTab()) {
               @case ("overview") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
                 <div class="s-card" data-testid="card-repo-config">
                   <div class="s-card-head">
                     <div>
@@ -316,6 +585,35 @@ interface PendingReleaseRow {
                     ></button>
                   </div>
 
+                  <div class="s-toggle-row">
+                    <div class="s-toggle-copy">
+                      <span class="s-toggle-name"
+                        >Queue imported tasks at once</span
+                      >
+                      <span class="s-hint" data-testid="issue-import-trust-hint"
+                        >With this off, each imported task waits as Imported
+                        until somebody approves it. Turn it on only if you trust
+                        everybody who can open an issue on
+                        {{ importSourceRepo().trim() || repoSlug() }}: they
+                        write what the agent is told to do.</span
+                      >
+                    </div>
+                    <button
+                      type="button"
+                      class="g-switch"
+                      role="switch"
+                      data-testid="switch-issue-import-approved"
+                      [attr.aria-checked]="importApproved()"
+                      [disabled]="!canWriteSettings()"
+                      [attr.aria-label]="
+                        'Queue imported issues in ' +
+                        repoSlug() +
+                        ' without approval'
+                      "
+                      (click)="importApproved.set(!importApproved())"
+                    ></button>
+                  </div>
+
                   <div class="s-grid">
                     <div class="s-field">
                       <label class="s-label" for="imp-label"
@@ -349,6 +647,49 @@ interface PendingReleaseRow {
                         "
                       />
                     </div>
+                    <div class="s-field">
+                      <label class="s-label" for="imp-interval"
+                        >Every (minutes)</label
+                      >
+                      <input
+                        id="imp-interval"
+                        class="s-input s-num"
+                        type="number"
+                        min="1"
+                        data-testid="input-import-interval"
+                        [placeholder]="importEffectiveMinutes()"
+                        [value]="importInterval()"
+                        [disabled]="!canWriteSettings()"
+                        [attr.aria-invalid]="
+                          importIntervalError() ? 'true' : null
+                        "
+                        [attr.aria-describedby]="
+                          importIntervalError()
+                            ? 'imp-interval-err'
+                            : 'imp-interval-hint'
+                        "
+                        (input)="
+                          importInterval.set($any($event.target).value);
+                          importIntervalError.set(null)
+                        "
+                      />
+                      @if (importIntervalError(); as ivErr) {
+                        <span
+                          id="imp-interval-err"
+                          class="s-field-error"
+                          data-testid="import-interval-error"
+                          >{{ ivErr }}</span
+                        >
+                      } @else {
+                        <span id="imp-interval-hint" class="s-caption">{{
+                          importEffectiveMinutes()
+                            ? "Empty for the default (" +
+                              importEffectiveMinutes() +
+                              " minutes now)."
+                            : "Empty for the default."
+                        }}</span>
+                      }
+                    </div>
                   </div>
 
                   <div class="s-inline">
@@ -366,6 +707,7 @@ interface PendingReleaseRow {
                       class="btn-tonal s-btn-sm"
                       data-testid="import-issues-btn"
                       [disabled]="
+                        importing() ||
                         !can('POST /api/repos/{owner}/{name}/import-issues')
                       "
                       (click)="importIssues()"
@@ -373,6 +715,19 @@ interface PendingReleaseRow {
                       Import issues now
                     </button>
                   </div>
+                  @if (importOutcome(); as out) {
+                    <p
+                      class="s-hint"
+                      role="status"
+                      data-testid="import-issues-outcome"
+                      [class.is-error]="out.error"
+                      [style.color]="
+                        out.error ? 'var(--md-sys-color-error)' : null
+                      "
+                    >
+                      {{ out.text }}
+                    </p>
+                  }
                 </div>
               }
 
@@ -402,7 +757,7 @@ interface PendingReleaseRow {
                   </div>
 
                   <div class="s-grid">
-                    <div class="s-field">
+                    <div class="s-field" [id]="ciModeId">
                       <span class="s-label">CI mode</span>
                       <g-pill-select
                         testid="select-repo-ci-mode"
@@ -531,6 +886,12 @@ interface PendingReleaseRow {
                     </div>
                   </div>
                 </div>
+
+                <g-repo-ci-capabilities
+                  [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
+                  [offered]="ciCapabilityOptions()"
+                />
               }
 
               @case ("merge-queue") {
@@ -752,6 +1113,54 @@ interface PendingReleaseRow {
               }
 
               @case ("releases") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
+
+                <!-- Who runs this repository's standing work, directly
+                     above the card that writes one item of it: the release
+                     switch below is the release item's own override, and
+                     this is the default it is an exception to. -->
+                <g-repo-work-ownership
+                  [repo]="repoSlug()"
+                  [refreshKey]="releaseSaves()"
+                  (saved)="onWorkOwnershipSaved()"
+                />
+
                 <div class="s-card" data-testid="card-repo-release-settings">
                   <div class="s-card-head">
                     <div>
@@ -994,7 +1403,9 @@ interface PendingReleaseRow {
                                     type="button"
                                     class="btn-tonal s-btn-sm"
                                     [attr.data-testid]="'cut-rc-' + rel.name"
+                                    [attr.title]="reasonsFor(rel).cut"
                                     [disabled]="
+                                      !!reasonsFor(rel).cut ||
                                       !can(
                                         'POST /api/repos/{owner}/{name}/releases/{release}/candidates'
                                       )
@@ -1009,12 +1420,14 @@ interface PendingReleaseRow {
                                     [attr.data-testid]="
                                       'promote-rc-' + rel.name
                                     "
+                                    [attr.title]="reasonsFor(rel).promote"
                                     [disabled]="
+                                      !!reasonsFor(rel).promote ||
                                       !can(
                                         'POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote'
                                       )
                                     "
-                                    (click)="promoteCandidate(rel.name)"
+                                    (click)="askPromoteCandidate(rel)"
                                   >
                                     Promote RC
                                   </button>
@@ -1026,7 +1439,7 @@ interface PendingReleaseRow {
                                         'POST /api/repos/{owner}/{name}/releases/{release}/merge'
                                       )
                                     "
-                                    (click)="mergeRelease(rel.name)"
+                                    (click)="askMergeRelease(rel)"
                                   >
                                     Merge back
                                   </button>
@@ -1038,7 +1451,10 @@ interface PendingReleaseRow {
                                         'DELETE /api/repos/{owner}/{name}/releases/{release}'
                                       )
                                     "
-                                    (click)="deleteRelease(rel.name)"
+                                    [attr.data-testid]="
+                                      'delete-release-' + rel.name
+                                    "
+                                    (click)="askDeleteRelease(rel.name)"
                                   >
                                     Delete
                                   </button>
@@ -1049,6 +1465,25 @@ interface PendingReleaseRow {
                         </tbody>
                       </table>
                     </div>
+                  }
+
+                  @for (rel of releases(); track rel.name) {
+                    @if (rel.name === selectedRelease()) {
+                      @let why = reasonsFor(rel);
+                      @if (why.cut || why.promote) {
+                        <p class="s-hint" data-testid="release-action-reasons">
+                          @if (why.cut) {
+                            <span>Cut RC: {{ why.cut }}</span>
+                          }
+                          @if (why.cut && why.promote) {
+                            <br />
+                          }
+                          @if (why.promote) {
+                            <span>Promote RC: {{ why.promote }}</span>
+                          }
+                        </p>
+                      }
+                    }
                   }
 
                   @if (releases().length > 1) {
@@ -1125,11 +1560,16 @@ interface PendingReleaseRow {
                       aria-label="New release name"
                       data-testid="input-new-release-name"
                       placeholder="v1.4.0"
+                      aria-describedby="new-release-error"
+                      [attr.aria-invalid]="newReleaseError() ? 'true' : null"
                       [value]="newReleaseName()"
                       [disabled]="
                         !can('POST /api/repos/{owner}/{name}/releases')
                       "
-                      (input)="newReleaseName.set($any($event.target).value)"
+                      (input)="
+                        newReleaseName.set($any($event.target).value);
+                        newReleaseError.set(null)
+                      "
                     />
                     <button
                       type="button"
@@ -1143,6 +1583,332 @@ interface PendingReleaseRow {
                     >
                       Create release
                     </button>
+                  </div>
+                  @if (newReleaseError(); as relErr) {
+                    <p
+                      id="new-release-error"
+                      class="s-hint"
+                      role="alert"
+                      data-testid="new-release-error"
+                      style="color: var(--md-sys-color-error)"
+                    >
+                      {{ relErr }}
+                    </p>
+                  }
+                </div>
+
+                <g-repo-qualification-plan
+                  [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
+                />
+              }
+              @case ("advanced") {
+                <div class="s-card" data-testid="card-repo-declarations">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">.grain/ declarations</h2>
+                      <p class="s-card-desc">
+                        The templates, suites, schedules and path triggers
+                        {{ repoSlug() }} declares in its own .grain/templates,
+                        .grain/suites, .grain/schedules and .grain/triggers.
+                        Grain re-reads them within a couple of minutes of every
+                        change; they are edited in those files, not here. A
+                        declaration files work in {{ repoSlug() }} on a cadence
+                        and can never widen what that work reads, writes or
+                        holds.
+                      </p>
+                    </div>
+                  </div>
+                  @if (declarations(); as d) {
+                    <div class="s-toggle-row">
+                      <div class="s-toggle-copy">
+                        <span class="s-toggle-name"
+                          >Read this repository's declarations</span
+                        >
+                        @if (declarationsLockedReason(); as why) {
+                          <span
+                            class="s-hint"
+                            id="declarations-locked-reason"
+                            data-testid="declarations-locked-reason"
+                            >{{ why }}</span
+                          >
+                        } @else {
+                          <span class="s-hint"
+                            >Off unless somebody here turns it on: a declared
+                            schedule is a standing claim on this deployment's
+                            agents.</span
+                          >
+                        }
+                      </div>
+                      <button
+                        type="button"
+                        class="g-switch"
+                        role="switch"
+                        data-testid="switch-repo-declarations"
+                        [attr.aria-label]="declarationsSwitchLabel()"
+                        [attr.aria-checked]="!!d.declarations"
+                        [attr.aria-describedby]="
+                          declarationsLockedReason()
+                            ? 'declarations-locked-reason'
+                            : null
+                        "
+                        [disabled]="
+                          !!declarationsLockedReason() || savingDecl()
+                        "
+                        (click)="saveDeclarations(!d.declarations)"
+                      ></button>
+                    </div>
+                    @if (d.declarationsStatus; as st) {
+                      <p
+                        class="s-hint repo-adv-status"
+                        data-testid="declarations-status"
+                      >
+                        @if (st.error) {
+                          Last read failed: {{ st.error }}
+                          @if (st.commit) {
+                            — still running what
+                            {{ shortSha(st.commit) }} declared.
+                          }
+                        } @else {
+                          Read at {{ shortSha(st.commit) || "no commit" }}:
+                          {{ declaredSummary(st) }}
+                        }
+                      </p>
+                      @if (st.error && st.commit) {
+                        <p
+                          class="s-hint"
+                          data-testid="declarations-still-running"
+                        >
+                          Still running from {{ shortSha(st.commit) }}:
+                          {{ declaredSummary(st) }}
+                        </p>
+                      }
+                      @for (w of st.warnings ?? []; track w) {
+                        <p class="s-hint repo-adv-warning">Warning: {{ w }}</p>
+                      }
+                    } @else if (d.declarations) {
+                      <p class="s-hint" data-testid="declarations-status">
+                        Not read yet — grain picks this up on its next cycle.
+                      </p>
+                    } @else {
+                      <p class="s-hint" data-testid="declarations-status">
+                        Grain has never read {{ repoSlug() }}'s declarations.
+                      </p>
+                    }
+                  } @else if (declarationsError()) {
+                    <p class="s-hint repo-adv-warning" role="alert">
+                      Couldn't read the declarations: {{ declarationsError() }}
+                    </p>
+                  } @else {
+                    <p class="s-hint">Loading declarations…</p>
+                  }
+                </div>
+
+                <div class="s-card" data-testid="card-repo-triggers">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Trigger files</h2>
+                      <p class="s-card-desc">
+                        The path triggers {{ repoSlug() }} declares in
+                        .grain/triggers: a Processes trigger row names only its
+                        file, so the file is listed here.
+                      </p>
+                    </div>
+                  </div>
+                  @if (triggerFiles().length > 0) {
+                    <ul class="repo-adv-list" aria-label="Trigger files">
+                      @for (path of triggerFiles(); track path) {
+                        <li>
+                          <code class="s-mono">{{ path }}</code>
+                        </li>
+                      }
+                    </ul>
+                  } @else {
+                    <p class="s-hint" data-testid="triggers-empty">
+                      {{ emptyDeclared("path triggers") }}
+                    </p>
+                  }
+                </div>
+
+                <div class="s-card" data-testid="card-repo-push-refs">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Extra push refs</h2>
+                      <p class="s-card-desc">
+                        What the runs of tasks filed from a declared template
+                        may push in {{ repoSlug() }} beyond their own branch, as
+                        its default branch declares it in the template's push:
+                        list.
+                      </p>
+                    </div>
+                  </div>
+                  @if (pushes().length > 0) {
+                    <div
+                      class="s-table-wrap"
+                      role="region"
+                      tabindex="0"
+                      aria-label="Extra push refs table"
+                    >
+                      <table
+                        class="s-table repo-adv-table"
+                        aria-label="Extra push refs"
+                      >
+                        <thead>
+                          <tr>
+                            <th>Template file</th>
+                            <th>May also push</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (p of pushes(); track p.path) {
+                            <tr>
+                              <td>
+                                <code class="s-mono">{{ p.path }}</code>
+                              </td>
+                              <td class="s-mono">{{ pushRefsText(p) }}</td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                  } @else {
+                    <p class="s-hint" data-testid="push-refs-empty">
+                      {{
+                        emptyDeclared(
+                          "templates that push beyond their own branch"
+                        )
+                      }}
+                    </p>
+                  }
+                </div>
+
+                <div class="s-card" data-testid="card-repo-ports">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Ports</h2>
+                      <p class="s-card-desc">
+                        Which branches grain ports each merge between, and which
+                        merges each direction carries. Set by the operator in
+                        grain/config and by {{ repoSlug() }}'s own
+                        .grain/settings.yml port-types; not editable here.
+                      </p>
+                    </div>
+                  </div>
+                  @if (declarations(); as d) {
+                    <p class="s-hint" data-testid="ports-summary">
+                      @if ((d.pairedBranches ?? []).length > 0) {
+                        Grain ports each merge between
+                        {{ (d.pairedBranches ?? []).join(", ") }}
+                      } @else {
+                        No branches are paired
+                      }
+                      — operator:
+                      {{ (d.portBranches ?? []).join(", ") || "none" }};
+                      declared in .grain/settings.yml:
+                      {{ (d.declaredPortBranches ?? []).join(", ") || "none" }}.
+                    </p>
+                    @if ((d.portDirections ?? []).length > 0) {
+                      <div
+                        class="s-table-wrap"
+                        role="region"
+                        tabindex="0"
+                        aria-label="Port directions table"
+                      >
+                        <table
+                          class="s-table repo-adv-table"
+                          aria-label="Port directions"
+                        >
+                          <thead>
+                            <tr>
+                              <th>Direction</th>
+                              <th>Operator</th>
+                              <th>Declared</th>
+                              <th>Ports</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            @for (
+                              dir of d.portDirections ?? [];
+                              track dir.from + "->" + dir.to
+                            ) {
+                              <tr>
+                                <td class="s-mono">
+                                  {{ dir.from }}→{{ dir.to }}
+                                </td>
+                                <td>
+                                  {{
+                                    (dir.operatorTypes ?? []).join(", ") || "—"
+                                  }}
+                                </td>
+                                <td>
+                                  {{
+                                    (dir.declaredTypes ?? []).join(", ") || "—"
+                                  }}
+                                </td>
+                                <td>{{ portsText(dir) }}</td>
+                              </tr>
+                            }
+                          </tbody>
+                        </table>
+                      </div>
+                    }
+                    @for (w of portWarnings(); track w) {
+                      <p class="s-hint repo-adv-warning">Warning: {{ w }}</p>
+                    }
+                  } @else {
+                    <p class="s-hint">Loading ports…</p>
+                  }
+                </div>
+
+                <div
+                  class="s-card repo-adv-danger"
+                  data-testid="card-repo-remove"
+                >
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Remove repository</h2>
+                      <p class="s-card-desc" data-testid="remove-repo-desc">
+                        @switch (removeState()) {
+                          @case ("config") {
+                            {{ repoSlug() }} is this deployment's own
+                            configuration repository and cannot be removed here.
+                          }
+                          @case ("untargeted") {
+                            {{ repoSlug() }} is not one of this deployment's
+                            target repos, so there is nothing to remove.
+                          }
+                          @default {
+                            Takes {{ repoSlug() }} off this deployment's target
+                            repos. Its tasks and history stay.
+                          }
+                        }
+                      </p>
+                      @if (removeState() === "target") {
+                        @if (removeLockedReason(); as why) {
+                          <p
+                            class="s-hint"
+                            id="remove-locked-reason"
+                            data-testid="remove-locked-reason"
+                          >
+                            {{ why }}
+                          </p>
+                        }
+                      }
+                    </div>
+                    @if (removeState() === "target") {
+                      <button
+                        type="button"
+                        class="btn-tonal danger s-btn-sm"
+                        data-testid="remove-repo-btn"
+                        [attr.aria-describedby]="
+                          removeLockedReason() ? 'remove-locked-reason' : null
+                        "
+                        [disabled]="!!removeLockedReason() || removing()"
+                        (click)="askRemoveRepo()"
+                      >
+                        Remove
+                      </button>
+                    }
                   </div>
                 </div>
               }
@@ -1198,8 +1964,23 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly importLabel = signal("");
   protected readonly importSourceRepo = signal("");
   protected readonly importApproved = signal(false);
+  protected readonly importInterval = signal("");
+  // The interval the importer runs at now, in minutes: the stored one or
+  // the deployment default, shown as the empty box's placeholder.
+  protected readonly importEffectiveMinutes = signal("");
+  protected readonly importIntervalError = signal<string | null>(null);
+  protected readonly importing = signal(false);
+  protected readonly importOutcome = signal<{
+    error: boolean;
+    text: string;
+  } | null>(null);
 
   protected readonly ciMode = signal("grain");
+  protected readonly ciModeId = CI_MODE_ID;
+  protected readonly baseBranchGates = signal<BaseBranchGate[]>([]);
+  protected readonly unjudgedGates = computed(() =>
+    unjudgedGatesFor(this.baseBranchGates(), this.repoSlug()),
+  );
   protected readonly watchDefaultBranch = signal(false);
   protected readonly workflows = signal<RepoWorkflowRow[]>([]);
   protected readonly selectedWorkflowPath = signal(".grain/workflows/ci.yml");
@@ -1210,6 +1991,54 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly requireUpToDate = signal(false);
   protected readonly bypassHumanGates = signal(false);
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
+  private discardResolve: ((ok: boolean) => void) | null = null;
+
+  // What the server last said for the fields that wait for a Save
+  // button. Leaving the page (or switching tab, which reloads a tab's
+  // data) with one of them changed used to drop the edit without a word,
+  // where the classic page asks (2026-11-14 repository walkthrough).
+  private readonly importBaseline = signal<ImportFields>({
+    enabled: false,
+    label: "",
+    repo: "",
+    approved: false,
+    interval: "",
+  });
+  private readonly agentBaseline = signal<AgentFields>({
+    setup: "",
+    prompt: "",
+    caps: "",
+  });
+  private readonly workflowBaseline = signal<string>("[]");
+
+  protected readonly unsavedSections = computed(() => {
+    const out: string[] = [];
+    const ib = this.importBaseline();
+    if (
+      ib.enabled !== this.importEnabled() ||
+      ib.label !== this.importLabel() ||
+      ib.repo !== this.importSourceRepo() ||
+      ib.approved !== this.importApproved() ||
+      ib.interval !== this.importInterval()
+    ) {
+      out.push("issue import");
+    }
+    const ab = this.agentBaseline();
+    if (
+      ab.setup !== this.setupCommand() ||
+      ab.prompt !== this.promptExtension() ||
+      ab.caps !== this.repoCaps()
+    ) {
+      out.push("agent settings");
+    }
+    if (this.workflowBaseline() !== workflowKey(this.workflows())) {
+      out.push("CI workflows");
+    }
+    if (this.planEditor()?.dirty()) {
+      out.push("qualification plan");
+    }
+    return out;
+  });
 
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
@@ -1220,16 +2049,84 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly newBranchFrom = signal("main");
 
   protected readonly releaseEnabled = signal(false);
+  // releaseSaves counts saves of the release switch, which is the release
+  // item's own work-ownership override, so the ownership card re-reads.
+  protected readonly releaseSaves = signal(0);
+  // releaseEnabledStored is the release switch as the server last said,
+  // so a re-read after a work-ownership save can tell an unsaved flip of
+  // the switch from a stale value.
+  private releaseEnabledStored = false;
+  private readonly planEditor = viewChild(RepoQualificationPlanComponent);
+  protected readonly ciCapabilityOptions = signal<readonly CapabilityOption[]>(
+    [],
+  );
   protected readonly baseBranchJobsText = signal("");
   protected readonly postMergeJobsText = signal("");
   protected readonly releaseSecrets = signal<RepoReleaseSecretRow[]>([]);
   protected readonly releases = signal<ReleaseRow[]>([]);
   protected readonly selectedRelease = signal("");
   protected readonly candidates = signal<CandidateRow[]>([]);
+  private readonly candidatesFor = signal("");
   protected readonly pendingReleases = signal<PendingReleaseRow[]>([]);
   protected readonly newReleaseName = signal("");
+  // A refused release name is said beside its box, the way the classic
+  // pane does, not in the page-wide banner, and clears on the next edit
+  // or a clean create.
+  protected readonly newReleaseError = signal<string | null>(null);
+
+  // The Advanced tab: what GET .../declarations last said, and the
+  // allowlist and config repo /api/config last said, which decide
+  // whether this repository can be removed at all.
+  protected readonly declarations = signal<RepoDeclarations | null>(null);
+  protected readonly declarationsError = signal<string | null>(null);
+  protected readonly savingDecl = signal(false);
+  protected readonly removing = signal(false);
+  private readonly targetRepos = signal<string[]>([]);
+  private readonly configRepo = signal("");
+
+  protected readonly triggerFiles = computed(
+    () => this.declarations()?.declarationsStatus?.triggers ?? [],
+  );
+  protected readonly pushes = computed(
+    () => this.declarations()?.declarationsStatus?.pushes ?? [],
+  );
+  // Only what the declarations card has not already said: the
+  // repository's own port-types findings are among its warnings too
+  // (ui.Client.RepoDefaults appends them), and drawing them twice read
+  // as two problems (2026-11-11 repository walkthrough).
+  protected readonly portWarnings = computed(() => {
+    const d = this.declarations();
+    const shown = new Set(d?.declarationsStatus?.warnings ?? []);
+    return (d?.portWarnings ?? []).filter((w) => !shown.has(w));
+  });
+
+  // removeState is whether Remove applies: the config repo is refused
+  // (ui.Client.RemoveTargetRepoForTeam says so with a 400) and a repo
+  // off the allowlist has nothing to take off it.
+  protected readonly removeState = computed<"config" | "untargeted" | "target">(
+    () => {
+      const key = this.repoSlug().toLowerCase();
+      if (this.configRepo().toLowerCase() === key) return "config";
+      return this.targetRepos().some((r) => r.toLowerCase() === key)
+        ? "target"
+        : "untargeted";
+    },
+  );
 
   private subs: Subscription[] = [];
+  private readonly hostEl = inject(ElementRef<HTMLElement>);
+
+  // On a phone the tab bar scrolls sideways, and a deep link or reload
+  // on a later tab (/releases) left the selected tab off screen
+  // (2026-11-14 repository walkthrough). Bring it into view whenever the
+  // tab changes.
+  private readonly keepActiveTabInView = afterRenderEffect(() => {
+    this.activeTab();
+    const btn = (this.hostEl.nativeElement as HTMLElement).querySelector(
+      ".repo-tab-btn.is-active",
+    ) as HTMLElement | null;
+    btn?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
 
   private readonly normalizedRouteParts = computed(() => {
     const rawHost = this.routeHost() || this.host() || "";
@@ -1326,6 +2223,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.routeTab.set(pm.get("tab"));
         if (this.ready()) {
           void this.loadTabData();
+          // The same page shown for another repository reads that
+          // repository's gates; unjudgedGates already drops the last one's.
+          void this.loadBaseBranchGates();
         }
       }),
     );
@@ -1340,7 +2240,68 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     return this.access.can(route, this.repoSlug());
   }
 
-  protected selectTab(tab: RepoTabId): void {
+  private markImportSaved(): void {
+    this.importBaseline.set({
+      enabled: this.importEnabled(),
+      label: this.importLabel(),
+      repo: this.importSourceRepo(),
+      approved: this.importApproved(),
+      interval: this.importInterval(),
+    });
+  }
+
+  // canLeave asks before unsaved edits are dropped: by the route's
+  // canDeactivate guard (app.routes.ts) for Back, the rail and links,
+  // and by selectTab, since switching tab reloads that tab's data over
+  // the edit. Discarding puts the fields back on what the server has, so
+  // the guard that runs next does not ask a second time.
+  async canLeave(): Promise<boolean> {
+    const sections = this.unsavedSections();
+    if (sections.length === 0) return true;
+    if (this.discardResolve) return false;
+    const ok = await new Promise<boolean>((resolve) => {
+      this.discardResolve = resolve;
+      this.confirmReq.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved ${sections.join(", ")} changes on ${this.repoSlug()}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+    if (ok) this.revertUnsaved();
+    return ok;
+  }
+
+  private revertUnsaved(): void {
+    const ib = this.importBaseline();
+    this.importEnabled.set(ib.enabled);
+    this.importLabel.set(ib.label);
+    this.importSourceRepo.set(ib.repo);
+    this.importApproved.set(ib.approved);
+    this.importInterval.set(ib.interval);
+    this.importIntervalError.set(null);
+    this.planEditor()?.revert();
+    const ab = this.agentBaseline();
+    this.setupCommand.set(ab.setup);
+    this.promptExtension.set(ab.prompt);
+    this.repoCaps.set(ab.caps);
+    const wf = JSON.parse(this.workflowBaseline()) as [string, string][];
+    this.workflows.set(wf.map(([path, text]) => ({ path, text })));
+    const cur = this.workflows().find(
+      (w) => w.path === this.selectedWorkflowPath(),
+    );
+    this.workflowYaml.set(cur?.text ?? "");
+  }
+
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedSections().length > 0) ev.preventDefault();
+  }
+
+  protected async selectTab(tab: RepoTabId): Promise<void> {
+    if (tab === this.activeTab()) return;
+    if (!(await this.canLeave())) return;
     this.routeTab.set(tab);
     const h = this.resolvedHost();
     const o = this.resolvedOwner();
@@ -1364,6 +2325,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       if (cfg) {
         this.access.setConfig(cfg);
         const rec = cfg as Record<string, unknown>;
+        this.applyAllowlist(rec);
         this.configRepoOnly.set(
           Boolean(
             rec["configRepoOnly"] ||
@@ -1371,6 +2333,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             rec["settingsLocked"],
           ),
         );
+        // The capabilities CI shells can be given; a server that sends
+        // no list of its own offers the task ones, as the classic page reads.
+        const ciCaps = (rec["ciCapabilities"] ?? rec["capabilities"]) as
+          CapabilityOption[] | undefined;
+        this.ciCapabilityOptions.set(Array.isArray(ciCaps) ? ciCaps : []);
       }
       await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);
@@ -1439,6 +2406,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
                   label?: string;
                   repo?: string;
                   approved?: boolean;
+                  intervalSeconds?: number;
+                  effectiveIntervalSeconds?: number;
                 }
               | undefined;
             if (imp && typeof imp === "object") {
@@ -1446,11 +2415,24 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               this.importLabel.set(String(imp.label ?? ""));
               this.importSourceRepo.set(String(imp.repo ?? ""));
               this.importApproved.set(Boolean(imp.approved));
+              this.importInterval.set(importIntervalText(imp.intervalSeconds));
+              this.importEffectiveMinutes.set(
+                imp.effectiveIntervalSeconds
+                  ? String(Math.round(imp.effectiveIntervalSeconds / 60))
+                  : "",
+              );
             }
+            this.markImportSaved();
+            this.agentBaseline.update((b) => ({
+              ...b,
+              setup: this.setupCommand(),
+              prompt: this.promptExtension(),
+            }));
           })
           .catch(() => undefined),
       );
     }
+    jobs.push(this.loadBaseBranchGates());
     if (this.access.can("GET /api/deployment/git-connections")) {
       jobs.push(
         this.api
@@ -1503,6 +2485,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               }),
             );
             this.workflows.set(list);
+            this.workflowBaseline.set(workflowKey(list));
             const cur = this.selectedWorkflowPath();
             const active = list.find((x) => x.path === cur) ?? list[0] ?? null;
             if (active) {
@@ -1526,6 +2509,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             if (Array.isArray(c?.defaultCapabilities)) {
               this.repoCaps.set(c.defaultCapabilities.join(", "));
             }
+            this.agentBaseline.update((b) => ({ ...b, caps: this.repoCaps() }));
           })
           .catch(() => undefined);
       }
@@ -1543,13 +2527,192 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       }
     } else if (t === "releases") {
       await this.loadReleasesTab();
+    } else if (t === "advanced") {
+      await this.loadDeclarations();
     }
+  }
+
+  private applyAllowlist(cfg: Record<string, unknown>): void {
+    const t = cfg["targetRepos"];
+    this.targetRepos.set(
+      Array.isArray(t) ? t.filter((r): r is string => !!r) : [],
+    );
+    this.configRepo.set(String(cfg["configRepo"] ?? ""));
+  }
+
+  private async loadDeclarations(): Promise<void> {
+    if (!this.can("GET /api/repos/{owner}/{name}/declarations")) {
+      this.declarationsError.set(
+        `your role cannot read ${this.repoSlug()}'s settings (it needs repos:read).`,
+      );
+      return;
+    }
+    try {
+      this.declarations.set(
+        await this.api.get<RepoDeclarations>(
+          "GET /api/repos/{owner}/{name}/declarations",
+          this.params(),
+        ),
+      );
+      this.declarationsError.set(null);
+    } catch (err) {
+      this.declarationsError.set(errText(err));
+    }
+  }
+
+  // declarationsLockedReason says why the declarations switch is off
+  // for this person, or null when they may flip it.
+  protected declarationsLockedReason(): string | null {
+    if (this.configRepoOnly()) {
+      return "Repository settings are managed in the config repository, so this is switched there.";
+    }
+    if (!this.can("PUT /api/repos/{owner}/{name}/declarations")) {
+      return this.roleCannot("switch declarations on or off");
+    }
+    return null;
+  }
+
+  // removeLockedReason says why Remove is off for this person, or null.
+  protected removeLockedReason(): string | null {
+    if (this.configRepoOnly()) {
+      return "The target repo list is managed in the config repository, so a repository is removed there.";
+    }
+    if (!this.can("DELETE /api/repos/{owner}/{name}")) {
+      return this.roleCannot("remove repositories");
+    }
+    return null;
+  }
+
+  private roleCannot(what: string): string {
+    const role = this.access.roleLabel();
+    return `${role ? `Your role, ${role},` : "Your role"} cannot ${what} (it needs repos:write on ${this.repoSlug()}).`;
+  }
+
+  // saveDeclarations turns reading this repository's own declarations
+  // on or off. The request reads and removes nothing itself: the next
+  // cycle does both (orchestrator.reconcileDeclarations), which is why
+  // the status can still be empty a moment after the switch moves.
+  protected async saveDeclarations(on: boolean): Promise<void> {
+    this.savingDecl.set(true);
+    try {
+      this.declarations.set(
+        await this.api.put<RepoDeclarations>(
+          "PUT /api/repos/{owner}/{name}/declarations",
+          this.params(),
+          { declarations: on },
+        ),
+      );
+    } catch (err) {
+      this.error.set(errText(err));
+    } finally {
+      this.savingDecl.set(false);
+    }
+  }
+
+  // askRemoveRepo asks before taking this repository off the allowlist,
+  // naming what the removal strands: asked of the daemon as the very
+  // save it is (POST /api/repos/plan with this repo dropped), since the
+  // work behind a repo is the store's to count. A plan this build cannot
+  // get must not stop a removal that never depended on one.
+  protected async askRemoveRepo(): Promise<void> {
+    const repo = this.repoSlug();
+    this.removing.set(true);
+    let allowed = this.targetRepos();
+    try {
+      const cfg = await this.api.config();
+      if (cfg) {
+        this.applyAllowlist(cfg as Record<string, unknown>);
+        allowed = this.targetRepos();
+      }
+    } catch {
+      // Keep the allowlist the page loaded with.
+    }
+    if (this.removeState() !== "target") {
+      this.removing.set(false);
+      return;
+    }
+    let stranded: string[] = [];
+    try {
+      const plan = await this.api.post<{
+        targetReposStranded?: { summary?: string }[];
+      }>("POST /api/repos/plan", undefined, {
+        targetRepos: allowed.filter(
+          (r) => r.toLowerCase() !== repo.toLowerCase(),
+        ),
+      });
+      stranded = (plan?.targetReposStranded ?? [])
+        .map((x) => x.summary ?? "")
+        .filter(Boolean);
+    } catch {
+      // Said as it always was, without the stranded work.
+    }
+    this.removing.set(false);
+    this.confirmReq.set({
+      title: `Remove ${repo} from target repos?`,
+      message: removeRepoMessage(repo, allowed, stranded),
+      accept: "Remove",
+      destructive: true,
+      run: () => this.removeRepo(),
+    });
+  }
+
+  // Removing the repo leaves this page describing one the deployment
+  // no longer allows, so it goes back to the Repos list.
+  private async removeRepo(): Promise<void> {
+    this.removing.set(true);
+    try {
+      await this.api.delete("DELETE /api/repos/{owner}/{name}", this.params());
+      this.snackbar.show(`Removed ${this.repoSlug()} from target repos.`);
+      await this.router.navigate(["/repos"]);
+    } catch (err) {
+      this.error.set(errText(err));
+    } finally {
+      this.removing.set(false);
+    }
+  }
+
+  protected declarationsSwitchLabel(): string {
+    return `Read ${this.repoSlug()}'s own declarations`;
+  }
+
+  protected shortSha(sha: string | undefined): string {
+    return (sha ?? "").slice(0, 12);
+  }
+
+  protected declaredSummary(st: DeclarationsStatus): string {
+    return declaredSummary(st);
+  }
+
+  protected pushRefsText(p: DeclaredPushRow): string {
+    return (p.refs ?? []).map(declaredPushRef).join(", ");
+  }
+
+  protected portsText(d: PortDirection): string {
+    if (!d.paired) return "nothing (not a paired branch)";
+    return (d.types ?? []).length > 0
+      ? (d.types ?? []).join(", ")
+      : "every merge";
+  }
+
+  // emptyDeclared words an empty list under the declarations status: a
+  // repository grain has not read looks the same as one declaring
+  // nothing unless the line says which it is.
+  protected emptyDeclared(what: string): string {
+    const d = this.declarations();
+    if (!d) return "Loading…";
+    if (!d.declarationsStatus) {
+      return d.declarations
+        ? `Not read yet, so no ${what} are known.`
+        : `Grain does not read ${this.repoSlug()}'s declarations, so it has no ${what}.`;
+    }
+    return `${this.repoSlug()} declares no ${what}.`;
   }
 
   private applyReleaseSettings(relCfg: Record<string, unknown> | null): void {
     if (!relCfg) return;
     if (relCfg["enabled"] !== undefined) {
       this.releaseEnabled.set(Boolean(relCfg["enabled"]));
+      this.releaseEnabledStored = Boolean(relCfg["enabled"]);
     }
     if (Array.isArray(relCfg["baseBranchJobs"])) {
       this.baseBranchJobsText.set(
@@ -1635,6 +2798,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ? cands
           : (cands?.candidates ?? cands?.items ?? []),
       );
+      this.candidatesFor.set(release);
     } catch {
       // Non-fatal
     }
@@ -1688,34 +2852,127 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveIssueImportSettings(): Promise<void> {
+    // An untouched box is left out of the save, so a stored interval
+    // that is not a whole number of minutes (set through the API, CLI or
+    // config repo) is not rounded to what the box shows.
+    const intervalEdited =
+      this.importInterval() !== this.importBaseline().interval;
+    const interval = importIntervalSeconds(this.importInterval());
+    if (intervalEdited && interval.error !== null) {
+      this.importIntervalError.set(interval.error);
+      return;
+    }
     try {
-      await this.api.put(
-        "PUT /api/repos/{owner}/{name}/settings",
-        this.params(),
-        {
-          issueImportEnabled: this.importEnabled(),
-          issueImportLabel: this.importLabel().trim(),
-          issueImportRepo: this.importSourceRepo().trim(),
-          issueImportApproved: this.importApproved(),
-        },
-      );
+      const res = await this.api.put<{
+        issueImport?: { effectiveIntervalSeconds?: number };
+      }>("PUT /api/repos/{owner}/{name}/settings", this.params(), {
+        issueImportEnabled: this.importEnabled(),
+        issueImportLabel: this.importLabel().trim(),
+        issueImportRepo: this.importSourceRepo().trim(),
+        issueImportApproved: this.importApproved(),
+        ...(intervalEdited
+          ? { issueImportIntervalSeconds: interval.seconds }
+          : {}),
+      });
+      const eff = res?.issueImport?.effectiveIntervalSeconds;
+      if (eff) this.importEffectiveMinutes.set(String(Math.round(eff / 60)));
+      this.markImportSaved();
       this.snackbar.show("Issue importer settings saved");
     } catch (err) {
-      this.error.set(errText(err));
+      const text = errText(err);
+      // The interval is the one field here the server refuses by name;
+      // say so beside it rather than in the page-wide banner.
+      if (/issueImportIntervalSeconds/.test(text)) {
+        this.importIntervalError.set(text);
+      } else {
+        this.error.set(text);
+      }
     }
   }
 
+  // importIssues runs one import pass now and says what it did, as the
+  // classic Repo page does. The route answers 200 with an "error" beside
+  // the counts when the source cannot be listed (or some issues failed),
+  // so a bare "triggered" toast read as success for a source repository
+  // that does not exist (2026-11-14 repository walkthrough).
   protected async importIssues(): Promise<void> {
+    this.importing.set(true);
+    this.importOutcome.set(null);
     try {
-      await this.api.post(
-        "POST /api/repos/{owner}/{name}/import-issues",
-        this.params(),
-        {},
-      );
-      this.snackbar.show("Issue import triggered");
+      const out = await this.api.post<{
+        source?: string;
+        open?: number;
+        imported?: string[] | null;
+        skipped?: number;
+        error?: string;
+      }>("POST /api/repos/{owner}/{name}/import-issues", this.params(), {});
+      this.importOutcome.set(importOutcomeText(out ?? {}, this.repoSlug()));
     } catch (err) {
-      this.error.set(errText(err));
+      this.importOutcome.set({ error: true, text: errText(err) });
+    } finally {
+      this.importing.set(false);
     }
+  }
+
+  // loadBaseBranchGates reads this repository's base-branch gates. It is
+  // asked again after every save that changes whether grain judges the
+  // branch (CI mode, Watch default branch), so the warning comes and goes
+  // with the control rather than on the next reload. A failed reading
+  // keeps the last one, as the server's own contract for it does.
+  //
+  // Readings run one after another: GrainApi.get shares a request still
+  // in flight for the same URL, so a second save's reading started
+  // beside the first's would be answered with the state before it.
+  private gatesReading: Promise<void> = Promise.resolve();
+
+  private loadBaseBranchGates(): Promise<void> {
+    this.gatesReading = this.gatesReading.then(() =>
+      this.readBaseBranchGates(),
+    );
+    return this.gatesReading;
+  }
+
+  private async readBaseBranchGates(): Promise<void> {
+    if (!this.can("GET /api/base-branch-gates")) return;
+    try {
+      const q = new URLSearchParams({
+        repo: this.repoSlug(),
+        fields: "full",
+      });
+      const r = await this.api.get<BaseBranchGatesResponse>(
+        "GET /api/base-branch-gates",
+        undefined,
+        q.toString(),
+      );
+      this.baseBranchGates.set(Array.isArray(r?.gates) ? r.gates : []);
+    } catch {
+      // Keep the previous reading.
+    }
+  }
+
+  protected ciTabLink(): string[] {
+    const h = this.resolvedHost();
+    const o = this.resolvedOwner();
+    const n = this.resolvedName();
+    return h ? ["/repos", h, o, n, "ci"] : ["/repos", o, n, "ci"];
+  }
+
+  // goToCiMode opens the CI & Workflows tab and brings its CI mode
+  // control into view, focused, as classic's "Go to CI Mode" does.
+  protected async goToCiMode(ev: Event): Promise<void> {
+    ev.preventDefault();
+    if (this.activeTab() !== "ci") {
+      if (!(await this.canLeave())) return;
+      this.routeTab.set("ci");
+      void this.router.navigate(this.ciTabLink(), { fragment: CI_MODE_ID });
+      void this.loadTabData("ci");
+    }
+    setTimeout(() => {
+      const root = this.hostEl.nativeElement as HTMLElement;
+      const el = root.querySelector<HTMLElement>(`#${CI_MODE_ID}`);
+      el?.scrollIntoView?.({ block: "center" });
+      el?.querySelector<HTMLElement>("button")?.focus();
+    });
   }
 
   protected async saveCiMode(ciMode: string): Promise<void> {
@@ -1728,6 +2985,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ciMode },
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
+      void this.loadBaseBranchGates();
     } catch (err) {
       // A refused mode is not the repo's mode: put the pill back on
       // what the server still has rather than leave it naming one it
@@ -1746,6 +3004,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { watchDefaultBranch: next },
       );
       this.watchDefaultBranch.set(next);
+      void this.loadBaseBranchGates();
     } catch (err) {
       this.error.set(errText(err));
     }
@@ -1815,6 +3074,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         },
       );
       this.workflows.set(remaining);
+      this.workflowBaseline.set(workflowKey(remaining));
       const next = remaining[0] ?? null;
       this.selectedWorkflowPath.set(next?.path ?? ".grain/workflows/ci.yml");
       this.workflowYaml.set(next?.text ?? "");
@@ -1854,6 +3114,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       } else {
         this.workflows.set(next);
       }
+      this.workflowBaseline.set(workflowKey(this.workflows()));
       this.snackbar.show("Workflows saved");
     } catch (err) {
       this.error.set(errText(err));
@@ -1879,9 +3140,38 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       if (res && typeof res === "object") {
         this.applyReleaseSettings(res);
       }
+      this.releaseSaves.update((n) => n + 1);
       this.snackbar.show("Release settings saved");
     } catch (err) {
       this.error.set(errText(err));
+    }
+  }
+
+  // onWorkOwnershipSaved re-reads the release switch, which shows the
+  // release item's override. The rest of the release card is a draft
+  // that waits for its own Save, so only the switch is taken from the
+  // re-read, and only while nobody has flipped it unsaved.
+  protected async onWorkOwnershipSaved(): Promise<void> {
+    // Who runs this repository's standing work decides whether its base
+    // branch is judged here at all (pkg/ui/basebranchgate.go,
+    // baseCheckSwitchedOff), so the unjudged-gate warning is re-read too,
+    // as the classic Repo page does.
+    void this.loadBaseBranchGates();
+    if (!this.can("GET /api/repos/{owner}/{name}/release")) return;
+    try {
+      const rel = await this.api.get<Record<string, unknown>>(
+        "GET /api/repos/{owner}/{name}/release",
+        this.params(),
+      );
+      if (rel?.["enabled"] !== undefined) {
+        const stored = Boolean(rel["enabled"]);
+        if (this.releaseEnabled() === this.releaseEnabledStored) {
+          this.releaseEnabled.set(stored);
+        }
+        this.releaseEnabledStored = stored;
+      }
+    } catch {
+      // Non-fatal: the card itself already says what was stored.
     }
   }
 
@@ -1916,6 +3206,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected async onConfirmDone(accepted: boolean): Promise<void> {
     const req = this.confirmReq();
     this.confirmReq.set(null);
+    const resolve = this.discardResolve;
+    if (resolve) {
+      this.discardResolve = null;
+      resolve(accepted);
+      return;
+    }
     if (!accepted || !req) return;
     await req.run();
   }
@@ -1968,6 +3264,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           defaultCapabilities,
         });
       }
+      this.agentBaseline.set({
+        setup: this.setupCommand(),
+        prompt: this.promptExtension(),
+        caps: this.repoCaps(),
+      });
       this.snackbar.show("Saved repository agent settings");
     } catch (err) {
       this.error.set(errText(err));
@@ -2001,10 +3302,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { name },
       );
       this.newReleaseName.set("");
+      this.newReleaseError.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Created release ${name}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.newReleaseError.set(errText(err));
     }
   }
 
@@ -2020,6 +3322,57 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     } catch (err) {
       this.error.set(errText(err));
     }
+  }
+
+  protected reasonsFor(rel: ReleaseRow): {
+    cut: string | null;
+    promote: string | null;
+  } {
+    const selected = rel.name === this.selectedRelease();
+    return releaseActionReasons(
+      rel,
+      selected ? this.candidates()[0] : undefined,
+      selected && this.candidatesFor() === rel.name,
+    );
+  }
+
+  // Promote, merge back and delete act on branches or drop the release,
+  // so each asks first with the classic pane's words; the /next/ page
+  // used to run them on the first click (2026-11-14 repository
+  // walkthrough).
+  protected askPromoteCandidate(rel: ReleaseRow): void {
+    const rc =
+      (rel.name === this.selectedRelease() && this.candidates()[0]?.branch) ||
+      `${rel.name}'s current candidate`;
+    const prod = rel.prodBranch || rel.name;
+    this.confirmReq.set({
+      title: `Promote ${rc}?`,
+      message: `Promote ${rc} to ${prod}? This moves ${this.repoSlug()}'s ${prod} branch to ${rc}.`,
+      accept: "Promote",
+      destructive: false,
+      run: () => this.promoteCandidate(rel.name),
+    });
+  }
+
+  protected askMergeRelease(rel: ReleaseRow): void {
+    const prod = rel.prodBranch || rel.name;
+    this.confirmReq.set({
+      title: `Merge ${prod} back?`,
+      message: `Merge ${prod} into ${this.repoSlug()}'s default branch? This opens a pull request on GitHub from ${prod}.`,
+      accept: "Open pull request",
+      destructive: false,
+      run: () => this.mergeRelease(rel.name),
+    });
+  }
+
+  protected askDeleteRelease(release: string): void {
+    this.confirmReq.set({
+      title: `Remove release ${release}?`,
+      message: `Remove release ${release}? This drops the release and its candidates from grain.`,
+      accept: "Remove release",
+      destructive: true,
+      run: () => this.deleteRelease(release),
+    });
   }
 
   protected async promoteCandidate(release: string): Promise<void> {

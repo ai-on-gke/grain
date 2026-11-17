@@ -1,0 +1,56 @@
+{
+  "api_version": "grain.gates/v1",
+  "revision": 7,
+  "source": "template",
+  "source_id": "report-v1",
+  "attachments": [
+    {
+      "id": "delivery",
+      "type": "delivery",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "task",
+        "task_id": "self"
+      },
+      "config": {
+        "product": "report",
+        "semantics": "current_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "template",
+        "id": "report-v1",
+        "revision": "7",
+        "imported": false
+      }
+    },
+    {
+      "id": "acknowledgment",
+      "type": "acknowledgment",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "task",
+        "task_id": "self"
+      },
+      "config": {
+        "mode": "explicit_receipt"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "template",
+        "id": "report-v1",
+        "revision": "7",
+        "imported": false
+      }
+    }
+  ],
+  "unguarded_actions": [
+    "change.merge"
+  ]
+}

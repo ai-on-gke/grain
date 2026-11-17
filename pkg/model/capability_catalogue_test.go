@@ -293,16 +293,16 @@ func TestCatalogueKindOf(t *testing.T) {
 	if got := model.CatalogueKindOf(model.Task{}); got != model.CatalogueKindTask {
 		t.Fatalf("plain task is %q", got)
 	}
-	if got := model.CatalogueKindOf(model.Task{Origin: model.Origin{Reason: model.ReasonReview}}); got != model.CatalogueKindReview {
+	if got := model.CatalogueKindOf(model.Task{Filing: model.Filing{Reason: model.ReasonReview}}); got != model.CatalogueKindReview {
 		t.Fatalf("review task is %q", got)
 	}
 	director := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag(model.DirectorSessionID)},
-		Origin: model.Origin{Reason: model.ReasonConsoleSession}}
+		Filing: model.Filing{Reason: model.ReasonConsoleSession}}
 	if got := model.CatalogueKindOf(director); got != model.CatalogueKindDirector {
 		t.Fatalf("director session is %q", got)
 	}
 	session := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag("ops")},
-		Origin: model.Origin{Reason: model.ReasonConsoleSession}}
+		Filing: model.Filing{Reason: model.ReasonConsoleSession}}
 	if got := model.CatalogueKindOf(session); got != model.CatalogueKindSession {
 		t.Fatalf("console session is %q", got)
 	}
@@ -383,7 +383,7 @@ func TestFoldRetiredInProcessMergesConservatively(t *testing.T) {
 	if mem.Enabled == nil || *mem.Enabled {
 		t.Fatalf("Presets[memory] = %+v, want disabled", mem)
 	}
-	for _, g := range []string{"api:memory", "api:grain/memory", "memory"} {
+	for _, g := range []string{"api:memory", "api:grain/memory"} {
 		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{g}}); err == nil || !strings.Contains(err.Error(), "disabled") {
 			t.Errorf("ValidateGrants(%s) = %v, want disabled refusal", g, err)
 		}
@@ -413,7 +413,7 @@ func TestFoldRetiredInProcessMergesConservatively(t *testing.T) {
 	}
 }
 
-func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
+func TestRetiredGrainServerCapabilitiesAndPresets(t *testing.T) {
 	cat := &model.CapabilityCatalogue{
 		InProcess: map[string]model.CatalogueInProcess{
 			"grain-log":         {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"ai-on-gke/grain"}}},
@@ -448,12 +448,12 @@ func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{model.ReleaseGateReadCapability}}); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Errorf("bare release-gate-read = %v, want disabled refusal from api_scopes.presets.release-gate-read", err)
 	}
-	if _, err := cat.ValidateGrants(model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{"self-debug"}}); err == nil || !strings.Contains(err.Error(), "other/repo") {
-		t.Errorf("bare self-debug on other/repo = %v, want repo refusal from api_scopes.presets.self-debug", err)
+	if _, err := cat.ValidateGrants(model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{"api:self-debug"}}); err == nil || !strings.Contains(err.Error(), "other/repo") {
+		t.Errorf("api:self-debug on other/repo = %v, want repo refusal from api_scopes.presets.self-debug", err)
 	}
-	sdVerdict, err := cat.ValidateGrants(model.GrantContext{Repo: repo("ai-on-gke/grain"), Kind: "task", Grants: []string{"self-debug"}})
-	if err != nil || len(sdVerdict.RequiresPerson) != 1 || sdVerdict.RequiresPerson[0] != "self-debug" {
-		t.Errorf("bare self-debug on ai-on-gke/grain = (%+v, %v), want RequiresPerson [self-debug] from api_scopes.presets.self-debug", sdVerdict, err)
+	sdVerdict, err := cat.ValidateGrants(model.GrantContext{Repo: repo("ai-on-gke/grain"), Kind: "task", Grants: []string{"api:self-debug"}})
+	if err != nil || len(sdVerdict.RequiresPerson) != 1 {
+		t.Errorf("api:self-debug on ai-on-gke/grain = (%+v, %v), want RequiresPerson from api_scopes.presets.self-debug", sdVerdict, err)
 	}
 	disabledSD := &model.CapabilityCatalogue{
 		APIScopes: model.CatalogueAPIScopes{
@@ -462,8 +462,13 @@ func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
 			},
 		},
 	}
-	if _, err := disabledSD.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"self-debug"}}); err == nil || !strings.Contains(err.Error(), "disabled") {
-		t.Errorf("bare self-debug with disabled api_scopes.presets.self-debug = %v, want disabled refusal", err)
+	if _, err := disabledSD.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:self-debug"}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("api:self-debug with disabled api_scopes.presets.self-debug = %v, want disabled refusal", err)
+	}
+	// The retired bare name is no longer a preset alias: it reaches no
+	// preset, so api_scopes.presets.self-debug has nothing to bind.
+	if reason, ok := disabledSD.DisabledReason("self-debug"); ok {
+		t.Errorf("DisabledReason(bare self-debug) = %q, want none: it is not an alias for the preset any longer", reason)
 	}
 
 	merged := model.MergeCapabilityRestrictions(

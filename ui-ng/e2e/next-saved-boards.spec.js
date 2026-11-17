@@ -132,3 +132,273 @@ test("the Boards menu opens on the screen at phone width @phone", async ({
     await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
   }
 });
+
+// The Timeline view on /next/tasks drew a task that was still open --
+// waiting, asking, held as a proposal -- as a bar ending where it was
+// filed, a 4% blip that read as finished, while the classic gantt draws
+// the same task "still open" up to now. And a board saved from the
+// Timeline view came back as the list, because the board's query never
+// said which view it was (2026-11-14 saved boards walkthrough,
+// docs/test-runs/2026-11-14-saved-boards-and-visualizations.md).
+test("the Timeline view runs a still-open task's bar up to now", async ({
+  page,
+}) => {
+  const tasks = await (await page.request.get("/api/tasks")).json();
+  const open = tasks.find(
+    (t) => t.state === "proposed" && !t.endedAt && !t.closedAt,
+  );
+  expect(open, "a still-open proposal in the demo store").toBeTruthy();
+
+  await page.goto("tasks?tab=proposed&view=timeline");
+  const row = page.getByTestId(`row-${open.id}`);
+  await expect(row).toBeVisible();
+  const track = await row.locator(".timeline-track").boundingBox();
+  const bar = await row.locator(".timeline-bar").boundingBox();
+  // The bar reaches the right-hand ("now") edge of its track.
+  expect(bar.x + bar.width).toBeGreaterThan(track.x + track.width - 2);
+
+  // So does one filed a moment ago, whose minimum-width bar used to be
+  // pushed 2% short of the edge.
+  const res = await page.request.post("/api/tasks", {
+    data: { title: "E2E fresh proposal", repo: open.repo || "acme/widgets" },
+  });
+  expect(res.ok(), `POST /api/tasks: ${res.status()}`).toBe(true);
+  const fresh = await res.json();
+  try {
+    await page.reload();
+    const freshRow = page.getByTestId(`row-${fresh.id}`);
+    await expect(freshRow).toBeVisible();
+    const ft = await freshRow.locator(".timeline-track").boundingBox();
+    const fb = await freshRow.locator(".timeline-bar").boundingBox();
+    expect(fb.x + fb.width).toBeGreaterThan(ft.x + ft.width - 2);
+    expect(fb.x).toBeGreaterThanOrEqual(ft.x - 1);
+  } finally {
+    await page.request.delete(`/api/tasks/${fresh.id}`).catch(() => {});
+  }
+});
+
+test("a board saved from the Timeline view opens on the Timeline again", async ({
+  page,
+}) => {
+  const name = "E2E Timeline board";
+  const plainName = "E2E Plain list board";
+  try {
+    await page.goto("tasks?tab=asked&view=timeline");
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+    const trigger = page.getByTestId("saved-boards-btn");
+    await trigger.click();
+    await page.getByTestId("board-save-open").click();
+    await page.getByTestId("board-name-input").fill(name);
+    const posted = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().endsWith("/api/boards"),
+    );
+    await page.getByTestId("board-save-submit").click();
+    const body = (await posted).postDataJSON();
+    expect(new URLSearchParams(body.query).get("view")).toBe("timeline");
+    expect(new URLSearchParams(body.query).get("tab")).toBe("asked");
+
+    // Back on the plain list, applying the board brings the Timeline back.
+    await page.getByTestId("tasks-view-list").click();
+    await expect(page.getByTestId("tasks-timeline")).toBeHidden();
+    const boards = await (await page.request.get("/api/boards")).json();
+    const saved = boards.find((b) => b.name === name);
+    await trigger.click();
+    await page.getByTestId(`board-apply-${saved.id}`).click();
+    await expect(page).toHaveURL(/[?&]view=timeline/);
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+
+    // And a board with no view of its own puts the list back.
+    const res = await page.request.post("/api/boards", {
+      data: { name: plainName, kind: "list", query: "tab=asked" },
+    });
+    expect(res.ok()).toBe(true);
+    const plain = await res.json();
+    await page.reload();
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+    await trigger.click();
+    await page.getByTestId(`board-apply-${plain.id}`).click();
+    await expect(page.getByTestId("tasks-timeline")).toBeHidden();
+    await expect(page).not.toHaveURL(/[?&]view=/);
+  } finally {
+    const boards = await (await page.request.get("/api/boards")).json();
+    for (const b of boards.filter((b) => [name, plainName].includes(b.name))) {
+      await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
+    }
+  }
+});
+
+// A failed GET /api/boards on /next/tasks used to leave the Boards menu
+// saying "No saved boards yet.", indistinguishable from an empty deployment
+// (2026-11-15 saved boards walkthrough,
+// docs/test-runs/2026-11-15-saved-boards-and-visualizations.md).
+test("a failed /api/boards read explains why the boards could not be loaded rather than saying none exist", async ({
+  page,
+}) => {
+  await page.route("**/api/boards", (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "store unavailable" }),
+      });
+    }
+    return route.continue();
+  });
+
+  await page.goto("tasks");
+  await page.getByTestId("saved-boards-btn").click();
+  const menu = page.getByTestId("saved-boards-menu");
+  await expect(menu.getByTestId("boards-load-error")).toContainText(
+    "The boards could not be loaded (store unavailable).",
+  );
+  await expect(menu).not.toContainText("No saved boards yet.");
+});
+
+// Choosing New → New board from the shell while already on a narrowed
+// /next/tasks view used to drop tab, q, repo and view=timeline before
+// opening the save bar, and closing the save bar dropped focus to <body>
+// (2026-11-15 saved boards walkthrough).
+test("New board from the rail keeps the current Tasks narrowing and Timeline view, and returns focus", async ({
+  page,
+}) => {
+  const name = "E2E Rail Narrowed";
+  try {
+    await page.goto(
+      "tasks?tab=asked&q=merge&repo=acme%2Fwidgets&view=timeline",
+    );
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+
+    await page.getByTestId("rail-create-menu").click();
+    await page
+      .getByTestId("create-menu")
+      .getByRole("link", { name: /New board/ })
+      .click();
+
+    await expect(page.getByTestId("board-save-form")).toBeVisible();
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+    await expect(page.getByTestId("board-name-input")).toBeFocused();
+
+    // Escape closes the save bar and hands focus to the Boards button.
+    const trigger = page.getByTestId("saved-boards-btn");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("board-save-form")).toBeHidden();
+    await expect(trigger).toBeFocused();
+
+    // Saving from the rail's New board entry keeps every active parameter.
+    await page.getByTestId("rail-create-menu").click();
+    await page
+      .getByTestId("create-menu")
+      .getByRole("link", { name: /New board/ })
+      .click();
+    await page.getByTestId("board-name-input").fill(name);
+    const posted = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().endsWith("/api/boards"),
+    );
+    await page.getByTestId("board-save-submit").click();
+    const params = new URLSearchParams((await posted).postDataJSON().query);
+    expect(params.get("tab")).toBe("asked");
+    expect(params.get("q")).toBe("merge");
+    expect(params.get("repo")).toBe("acme/widgets");
+    expect(params.get("view")).toBe("timeline");
+    await expect(trigger).toBeFocused();
+  } finally {
+    const boards = await (await page.request.get("/api/boards")).json();
+    for (const b of boards.filter((b) => b.name === name)) {
+      await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
+    }
+  }
+});
+
+// Inside the 30/70 split pane (410px on a 1440px desktop) and on a 390px
+// phone, a Backlog row's ⋮ button used to wrap onto a third line at the
+// far-left edge and open its right-aligned popup at x = -54 underneath the
+// rail, making Move down / Move up unclickable (2026-11-15 walkthrough).
+test("the Backlog row More actions menu sits in the right-hand slot and opens on screen @phone @dark", async ({
+  page,
+}) => {
+  await page.goto("tasks");
+  const firstRow = page.locator(".backlog-row").first();
+  await expect(firstRow).toBeVisible();
+
+  const orderBefore = await page
+    .locator(".backlog-row")
+    .evaluateAll((els) => els.map((el) => el.getAttribute("data-task-id")));
+  expect(orderBefore.length).toBeGreaterThanOrEqual(2);
+  const firstId = orderBefore[0];
+  const secondId = orderBefore[1];
+  // Move down may cross a priority band, which re-prioritises the moved
+  // task as well as reordering it; remember both so cleanup restores both.
+  const priorityOf = async (id) =>
+    (await (await page.request.get(`/api/tasks/${id}`)).json()).priority;
+  const firstPriority = await priorityOf(firstId);
+
+  try {
+    const rowBox = await firstRow.boundingBox();
+    const menuBtn = page.getByTestId(`menu-${firstId}`);
+    const btnBox = await menuBtn.boundingBox();
+    // Action sits in the right-hand half of its row, near the right edge.
+    expect(btnBox.x).toBeGreaterThan(rowBox.x + rowBox.width / 2);
+    expect(
+      rowBox.x + rowBox.width - (btnBox.x + btnBox.width),
+    ).toBeLessThanOrEqual(24);
+
+    await menuBtn.click();
+    const popup = page.locator(`#menu-list-${firstId}`);
+    await expect(popup).toBeVisible();
+    const popBox = await popup.boundingBox();
+    const vw = page.viewportSize().width;
+    const railBox = await page
+      .locator("nav.nav-rail")
+      .boundingBox()
+      .catch(() => null);
+    const minX =
+      railBox && railBox.width > 0 && railBox.height > 200
+        ? railBox.x + railBox.width
+        : 0;
+    expect(popBox.x).toBeGreaterThanOrEqual(minX);
+    expect(popBox.x + popBox.width).toBeLessThanOrEqual(vw);
+
+    // Move down is genuinely clickable (not intercepted by the rail) and reorders.
+    const reordered = page.waitForResponse(
+      (r) =>
+        r.request().method() === "POST" &&
+        r.url().endsWith("/api/tasks/reorder") &&
+        r.ok(),
+    );
+    await popup.getByRole("button", { name: "Move down" }).click();
+    await reordered;
+    await expect
+      .poll(() =>
+        page
+          .locator(".backlog-row")
+          .evaluateAll((els) =>
+            els.map((el) => el.getAttribute("data-task-id")),
+          ),
+      )
+      .toEqual([secondId, firstId, ...orderBefore.slice(2)]);
+  } finally {
+    // Restore the worker-scoped demoServer's backlog order (and the moved
+    // task's priority), and fail loudly if the restore did not take, so a
+    // later test in this worker never inherits a reordered backlog.
+    if ((await priorityOf(firstId)) !== firstPriority) {
+      const patched = await page.request.patch(`/api/tasks/${firstId}`, {
+        data: { priority: firstPriority },
+      });
+      expect(patched.ok()).toBe(true);
+    }
+    const restored = await page.request.post("/api/tasks/reorder", {
+      data: { ids: [firstId], beforeId: secondId, afterId: "" },
+    });
+    expect(restored.ok()).toBe(true);
+    await page.reload();
+    await expect
+      .poll(() =>
+        page
+          .locator(".backlog-row")
+          .evaluateAll((els) =>
+            els.map((el) => el.getAttribute("data-task-id")),
+          ),
+      )
+      .toEqual(orderBefore);
+  }
+});

@@ -122,7 +122,7 @@ func takeoverOwner(ctx context.Context, store *model.Store, ref model.PullReques
 		if err != nil {
 			return nil, err
 		}
-		if t == nil || isReviewTask(*t) || t.Origin.Reason == model.ReasonFix {
+		if t == nil || isReviewTask(*t) || t.Filing.Reason == model.ReasonFix {
 			continue
 		}
 		return t, nil
@@ -269,7 +269,7 @@ func fileTakeoverTask(ctx context.Context, deps Deps, ref model.PullRequestRef, 
 		ID:         id,
 		Branch:     branch,
 		Intent:     model.IntentImplement,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -730,7 +730,7 @@ func fileTakeoverReviews(ctx context.Context, deps Deps, task model.Task, own mo
 }
 
 func originSender(task model.Task) string {
-	a := task.Origin.Attribution
+	a := task.Filing.Attribution
 	if a.OnBehalfOf != nil {
 		return a.OnBehalfOf.ID
 	}

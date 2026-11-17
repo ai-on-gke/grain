@@ -131,7 +131,7 @@ const LinkAutoMergeAwaitsPerson LinkKind = "auto-merge-awaits-person"
 // merging itself when they take its auto-merge away. The last of them
 // going is that change's hold clearing (restoreAfterHolds).
 var autoMergeHolds = []LinkKind{LinkSecurityHold, LinkBrokenRulesHold, LinkPathTriggerHold, LinkHumanOnlyHold,
-	LinkHumanReviewHold, LinkReviewFindings, LinkReviewQuestions}
+	LinkHumanReviewHold, LinkReviewFindings, LinkReviewQuestions, LinkQAHold}
 
 // AutoMergeAwaitsPerson reports whether a hold on t ended in a person's
 // decision (LinkAutoMergeAwaitsPerson).
@@ -240,7 +240,7 @@ func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent,
 			case held && !AutoMergeDeclined(*t):
 				if HasReviewFindings(*t) {
 					e.Reason = "kept off: review left findings (" + HumanReviewSummary(*t) +
-						"), and clearing findings requires a clean re-review or a merge:force gate override"
+						"), and clearing findings requires a clean re-review or a person's Accept findings"
 				} else {
 					e.Reason = "kept off: held for a person's review (" + HumanReviewSummary(*t) +
 						"), and only a person's Submit or Release ends that"

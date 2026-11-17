@@ -1170,6 +1170,46 @@ describe("DetailOverlay", () => {
     ).not.toBeInTheDocument();
   });
 
+  // A rolled-over task says where its work went before anything else on
+  // the page, and the successor links back (durable-tasks.design.md#DT-15).
+  it("banners a rollover on both ends", () => {
+    const { unmount } = render(
+      <DetailOverlay
+        task={{ ...baseTask, state: "closed", rolledOverTo: "902" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={vi.fn()}
+        act={vi.fn()}
+      />,
+    );
+    const banner = screen.getByTestId("task-rolled-over-to");
+    expect(banner).toHaveTextContent("Rolled over to 902");
+    expect(within(banner).getByRole("link", { name: "902" })).toHaveAttribute(
+      "href",
+      "/tasks/902",
+    );
+    expect(screen.queryByTestId("task-rolled-over-from")).toBeNull();
+    unmount();
+
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, rolledOverFrom: "901" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={vi.fn()}
+        act={vi.fn()}
+      />,
+    );
+    const back = screen.getByTestId("task-rolled-over-from");
+    expect(within(back).getByRole("link", { name: "901" })).toHaveAttribute(
+      "href",
+      "/tasks/901",
+    );
+    expect(screen.queryByTestId("task-rolled-over-to")).toBeNull();
+  });
+
   // A chain of re-filed revisions is only legible if it can be walked
   // from either end (model.LinkSupersedes, grain/task-473): the closed
   // task points at what replaced it, and the replacement at what it

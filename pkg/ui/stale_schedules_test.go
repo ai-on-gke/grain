@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,5 +92,65 @@ func TestStaleSchedulesAlignsExplicitDefaultBranchWithWorkflowCron(t *testing.T)
 	got := decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes?section=staleSchedules", ""))
 	if len(got.StaleSchedules) != 0 {
 		t.Fatalf("staleSchedules = %+v, want dropped cron cleared by explicit base: trunk schedule", got.StaleSchedules)
+	}
+}
+
+func TestRepoReleaseEndpointBranchFilterAndHeldStaleSchedule(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	now := time.Now()
+	client.Now = func() time.Time { return now }
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	// Two failing branches: release/v2 has failed longer (not gated), while
+	// main is gated on triage task 4256.
+	oldSince := now.Add(-24 * time.Hour)
+	mainSince := now.Add(-6 * time.Hour)
+	finished := now.Add(-time.Hour)
+	if err := client.Store.PutBaseBranchRelease(ctx, model.BaseBranchRelease{
+		Repo: repo, Branch: "release/v2", Commit: "aaa1111", RunID: "rel-v2",
+		StartedAt: now.Add(-2 * time.Hour), FinishedAt: &finished, Conclusion: "failure",
+		Failures: 8, FailingSince: &oldSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.PutBaseBranchRelease(ctx, model.BaseBranchRelease{
+		Repo: repo, Branch: "main", Commit: "bbb2222", RunID: "rel-main",
+		StartedAt: now.Add(-2 * time.Hour), FinishedAt: &finished, Conclusion: "failure",
+		Failures: 3, FailingSince: &mainSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.PutTask(ctx, model.Task{
+		ID: "4256", Title: "Triage main's failing releases", Target: &repo, Base: "main",
+		Tags: []string{model.BaseReleaseTriageBranchTag(repo, "main")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	unfiltered := decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/acme/widgets/release", ""))
+	if unfiltered.BaseBranchPublishing == nil || unfiltered.BaseBranchPublishing.Branch != "release/v2" {
+		t.Fatalf("unfiltered baseBranchPublishing = %+v, want longest-failing branch release/v2", unfiltered.BaseBranchPublishing)
+	}
+	mainOnly := decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/acme/widgets/release?branch=main", ""))
+	if mainOnly.BaseBranchPublishing == nil || mainOnly.BaseBranchPublishing.Branch != "main" ||
+		!mainOnly.BaseBranchPublishing.Gated || mainOnly.BaseBranchPublishing.TriageTaskID != "4256" {
+		t.Fatalf("?branch=main baseBranchPublishing = %+v, want main gated on triage task 4256", mainOnly.BaseBranchPublishing)
+	}
+
+	lastRun := now.Add(-3 * time.Hour)
+	if err := client.Store.PutSchedule(ctx, model.Schedule{
+		ID: "release-train", Title: "Release train", Target: repo, Base: "main",
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 20},
+		Overlap:    model.OverlapSkip, SkipWhen: model.SkipWhenPublishingHeld,
+		Enabled: true, LastRunAt: &lastRun, CreatedAt: now.Add(-48 * time.Hour), NextRunAt: now.Add(-2 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	health := decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes?section=staleSchedules", ""))
+	if len(health.StaleSchedules) != 1 || !health.StaleSchedules[0].Held ||
+		health.StaleSchedules[0].HeldByTaskID != "4256" ||
+		!strings.Contains(health.StaleSchedules[0].Reason, "publishing held by task 4256") {
+		t.Fatalf("staleSchedules = %+v, want held release-train naming task 4256", health.StaleSchedules)
 	}
 }

@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -36,10 +35,7 @@ import (
 // native calls even though they were not advertised: prompt omission is
 // not a security boundary.
 func TestLiveCodexMCPOnlyAcrossModelProfiles(t *testing.T) {
-	binary, err := exec.LookPath("codex")
-	if err != nil {
-		skipUnlessLiveRequired(t, "no codex binary on PATH")
-	}
+	binary := lookReviewedCodex(t)
 	grain := buildGrainBinary(t)
 	for _, tc := range []struct {
 		model string

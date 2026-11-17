@@ -16,6 +16,7 @@ import type { Task } from "../api/models";
 import {
   LEVELS,
   type Level,
+  heldForRunNow,
   isBlocked,
   isWork,
   jumpsQueue,
@@ -27,6 +28,7 @@ import {
 export {
   LEVELS,
   type Level,
+  heldForRunNow,
   isBlocked,
   isWork,
   jumpsQueue,
@@ -278,4 +280,27 @@ export function ago(iso: string | undefined, now = Date.now()): string {
   const h = Math.round(m / 60);
   if (h < 48) return `${h}h`;
   return `${Math.round(h / 24)}d`;
+}
+
+// FINISHED_STATES are the states a task's work has stopped in. "failed"
+// is not closed -- a person may still retry it (pkg/model StateFailed)
+// -- but nothing runs it until they do, so its bar ends where its last
+// run did rather than growing towards now as though work were going on.
+const FINISHED_STATES = new Set(["completed", "closed", "failed"]);
+
+// timelineEndMs is where a task's bar on the Timeline view ends, in
+// epoch milliseconds: when its work ended (endedAt, else closedAt), or
+// `now` while it is still open. A task waiting in the backlog, asking
+// a question or held as a proposal has not ended, so its bar runs to
+// the right-hand edge the way the classic gantt's "still open after"
+// does. It used to stop where the task was filed, drawing a task that
+// had been waiting for hours as a 4% blip that looked finished
+// (2026-11-14 saved boards walkthrough). A finished task with neither
+// time recorded falls back to its last update, then its filing.
+export function timelineEndMs(t: Task, now: number): number {
+  if (t.state === "running") return now;
+  const ended = Date.parse(t.endedAt || t.closedAt || "");
+  if (Number.isFinite(ended)) return ended;
+  if (!FINISHED_STATES.has(t.state)) return now;
+  return Date.parse(t.updatedAt || t.createdAt || "");
 }

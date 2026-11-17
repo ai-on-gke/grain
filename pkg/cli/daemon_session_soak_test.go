@@ -236,7 +236,7 @@ models:
 	chat := model.Task{
 		ID: chatID, Intent: model.IntentImplement, Interactive: true, KeepRunning: true,
 		Title: "keep-running chat soak", Body: "hello chat",
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding: model.BindingDirective,
 		Target:  &model.RepoRef{Owner: owner, Name: repoName},
 	}

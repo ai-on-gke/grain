@@ -138,7 +138,7 @@ func TestPrimaryIsTheFirstChangelist(t *testing.T) {
 // themselves.
 func TestVerifiedRequester(t *testing.T) {
 	filed := func(creator string, by model.Principal) model.Task {
-		return model.Task{Creator: creator, Origin: model.Origin{Attribution: model.Attribution{Actor: by}}}
+		return model.Task{Creator: creator, Filing: model.Filing{Attribution: model.Attribution{Actor: by}}}
 	}
 	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
 	for _, tc := range []struct {

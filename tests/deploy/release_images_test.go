@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -852,6 +853,17 @@ func TestReleaseImagesIsolatesDockerHubAuthFromLocalBuilds(t *testing.T) {
 	}
 	commit := strings.TrimSpace(string(headBytes))
 	const fakeDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	// The schema the daemon image must be labelled with: this tree's
+	// own pkg/model SchemaVersion, which the stub's label answers with.
+	schemaSource, err := os.ReadFile(filepath.Join(repoRoot(t), "pkg", "model", "schema.go"))
+	if err != nil {
+		t.Fatalf("reading pkg/model/schema.go: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^const SchemaVersion = ([0-9]+)$`).FindSubmatch(schemaSource)
+	if m == nil {
+		t.Fatalf("pkg/model/schema.go has no `const SchemaVersion = <n>` line")
+	}
+	schema := string(m[1])
 
 	dockerStub := "#!/bin/sh\n" +
 		"cfg=\"${DOCKER_CONFIG:-<default>}\"\n" +
@@ -882,6 +894,7 @@ func TestReleaseImagesIsolatesDockerHubAuthFromLocalBuilds(t *testing.T) {
 		"    exit 0\n" +
 		"    ;;\n" +
 		"  image)\n" +
+		"    case \"$*\" in *io.grain.schema-version*) echo \"" + schema + "\"; exit 0 ;; esac\n" +
 		"    if [ \"$2\" = inspect ]; then echo \"" + commit + "\"; exit 0; fi\n" +
 		"    ;;\n" +
 		"esac\n" +
@@ -896,7 +909,8 @@ func TestReleaseImagesIsolatesDockerHubAuthFromLocalBuilds(t *testing.T) {
 	}
 	// Stub make so `make image ...` invokes `docker build` under the current environment
 	// without running a real multi-stage container build.
-	makeStub := "#!/bin/sh\nexec docker build -f Dockerfile .\n"
+	makeLog := filepath.Join(dir, "make.log")
+	makeStub := "#!/bin/sh\necho \"$*\" >> \"" + makeLog + "\"\nexec docker build -f Dockerfile .\n"
 	if err := os.WriteFile(filepath.Join(bin, "make"), []byte(makeStub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -978,6 +992,26 @@ func TestReleaseImagesIsolatesDockerHubAuthFromLocalBuilds(t *testing.T) {
 	if sawPull < 2 || sawPush < 4 || sawBuild < 4 {
 		t.Fatalf("unexpected command counts (pull=%d, push=%d, build=%d):\n%s", sawPull, sawPush, sawBuild, rawLog)
 	}
+	// Every daemon image is built with the tree's schema and read back for
+	// it, so pkg/upgrade can tell a schema downgrade from the registry.
+	makeArgs, err := os.ReadFile(makeLog)
+	if err != nil {
+		t.Fatalf("reading make log: %v", err)
+	}
+	sawImage := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(makeArgs)), "\n") {
+		if !strings.HasPrefix(line, "image ") {
+			continue
+		}
+		sawImage++
+		if !strings.Contains(line+" ", " SCHEMA_VERSION="+schema+" ") {
+			t.Errorf("`make %s` was not given SCHEMA_VERSION=%s", line, schema)
+		}
+	}
+	if sawImage == 0 {
+		t.Errorf("release-images.sh build never ran `make image`:\n%s", makeArgs)
+	}
+	containsRun(t, string(rawLog), `image inspect --format {{index .Config.Labels "io.grain.schema-version"}}`)
 	if _, statErr := os.Stat(filepath.Join(home, ".docker", "config.json")); !os.IsNotExist(statErr) {
 		t.Errorf("~/.docker/config.json was created by release-images.sh; subsequent test suites pulling library/* would fail")
 	}
