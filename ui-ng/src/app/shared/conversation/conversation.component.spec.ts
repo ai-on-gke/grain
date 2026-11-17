@@ -15,8 +15,9 @@
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Component, signal } from "@angular/core";
 import {
+  type CommentTarget,
   ConversationComponent,
-  ConversationMode,
+  type ConversationMode,
 } from "./conversation.component";
 import type { Comment } from "../../api/models";
 
@@ -38,9 +39,14 @@ function mk(id: number, body = `message ${id}`): Comment {
       <g-conversation
         [taskId]="'42'"
         [comments]="comments()"
+        [targetComment]="targetComment()"
         [(mode)]="mode"
         [(draft)]="draft"
-        [config]="{ placeholder: 'Type here', submitLabel: 'Send to #42' }"
+        [config]="{
+          placeholder: 'Type here',
+          submitLabel: 'Send to #42',
+          sendOnEnter: sendOnEnter(),
+        }"
         (send)="sent.push($event.body)"
       />
     </div>
@@ -48,9 +54,11 @@ function mk(id: number, body = `message ${id}`): Comment {
 })
 class HostComponent {
   readonly comments = signal<Comment[]>([mk(1), mk(2)]);
+  readonly targetComment = signal<CommentTarget | null>(null);
   readonly mode = signal<ConversationMode>("inline");
   readonly draft = signal("");
   readonly sent: string[] = [];
+  readonly sendOnEnter = signal(false);
 }
 
 describe("ConversationComponent", () => {
@@ -177,6 +185,32 @@ describe("ConversationComponent", () => {
     expect(f.componentInstance.sent).toEqual(["ship it"]);
   });
 
+  it("supports Director Enter-to-send without sending Shift+Enter or IME input", () => {
+    f.componentInstance.sendOnEnter.set(true);
+    f.componentInstance.draft.set("ship it");
+    f.detectChanges();
+    const ta = q<HTMLTextAreaElement>('[data-testid="task-composer"]')!;
+    for (const options of [{ shiftKey: true }, { isComposing: true }]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...options,
+      });
+      ta.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(f.componentInstance.sent).toEqual([]);
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    ta.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(f.componentInstance.sent).toEqual(["ship it"]);
+  });
+
   it("shows a New messages pill when messages arrive while scrolled up, and clears it on jump", async () => {
     const thread = q<HTMLElement>(".convo-thread")!;
     // jsdom has no layout: fake a scrolled-up thread.
@@ -208,5 +242,47 @@ describe("ConversationComponent", () => {
     await f.whenStable();
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).toBeNull();
+  });
+
+  it("does not raise New messages when older history is paged in above, and reveals, focuses and highlights a linked comment", async () => {
+    const thread = q<HTMLElement>(".convo-thread")!;
+    Object.defineProperty(thread, "scrollHeight", {
+      configurable: true,
+      value: 2400,
+    });
+    Object.defineProperty(thread, "clientHeight", {
+      configurable: true,
+      value: 300,
+    });
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll"));
+
+    f.componentInstance.comments.set([mk(-2), mk(-1), mk(0), mk(1), mk(2)]);
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q('[data-testid="convo-jump"]')).toBeNull();
+
+    f.componentInstance.targetComment.set({ id: 0, seq: 1 });
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    const target = q<HTMLElement>('[data-comment-id="0"]')!;
+    expect(target.classList.contains("comment-highlight")).toBe(true);
+    expect(document.activeElement).toBe(target);
+
+    // A new message at the end still counts while reading the linked one.
+    f.componentInstance.comments.set([
+      mk(-2),
+      mk(-1),
+      mk(0),
+      mk(1),
+      mk(2),
+      mk(3),
+    ]);
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q('[data-testid="convo-jump"]')).not.toBeNull();
   });
 });

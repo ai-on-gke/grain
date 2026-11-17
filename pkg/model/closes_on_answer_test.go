@@ -44,7 +44,7 @@ func TestClosesOnAnswerOnlyForAgentFiledSubTasks(t *testing.T) {
 		{"agent-filed sub-task", func(*model.Task) {}, true},
 		{"explicit close", func(t *model.Task) { t.NothingNeededAction = model.NothingNeededClose }, true},
 		{"filed for acknowledgement", func(t *model.Task) { t.NothingNeededAction = model.NothingNeededAck }, false},
-		{"review", func(t *model.Task) { t.Origin.Reason = model.ReasonReview }, false},
+		{"review", func(t *model.Task) { t.Filing.Reason = model.ReasonReview }, false},
 		{"interactive", func(t *model.Task) { t.Interactive = true }, false},
 		{"console-hosted", func(t *model.Task) { t.Hosting = model.HostingConsole }, false},
 		{"keep running", func(t *model.Task) { t.KeepRunning = true }, false},

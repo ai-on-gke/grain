@@ -17,11 +17,11 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/qa"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 )
 
 // resolveTaskQAAssignment resolves and persists the sticky work-tree QA arm for task
@@ -34,44 +34,39 @@ func resolveTaskQAAssignment(
 	task model.Task,
 	runID string,
 	now time.Time,
-) (model.QAAssignment, error) {
+) (*resolve.Resolution, error) {
 	qaCfg := cfg.QA
 	if qaCfg.IsZero() && store != nil {
 		mc, err := store.GetConfig(ctx)
 		if err != nil {
-			return model.QAAssignment{}, fmt.Errorf("orchestrator: reading deployment config for qa: %w", err)
+			return nil, fmt.Errorf("orchestrator: reading deployment config for qa: %w", err)
 		}
 		if mc != nil {
 			qaCfg = mc.QA
 		}
 	}
-	rawOrigin := strings.TrimSpace(string(task.WorkOrigin))
-	if qaCfg.Enabled && store != nil && rawOrigin == "" && task.Parent() != "" {
-		treeOrig, err := store.TreeOrigin(ctx, task.ID)
-		if err != nil {
-			return model.QAAssignment{}, fmt.Errorf("orchestrator: resolving work-tree origin for %s: %w", task.ID, err)
-		}
-		rawOrigin = string(treeOrig)
-	}
-	rootOrigin := qa.ResolveRootOrigin(rawOrigin, task.ID)
-	tier := qa.ClassifyTaskComplexity(task.Title, task.Body)
 	if !qaCfg.Enabled || store == nil {
-		return qa.AssignOrLoadArm(ctx, store, rootOrigin, tier, qaCfg, now)
+		return &resolve.Resolution{Source: "none", ArmID: model.QAArmOff}, nil
 	}
 
-	var assigned model.QAAssignment
+	var qaOverride *model.QAConfig
+	if !cfg.QA.IsZero() {
+		qaOverride = &qaCfg
+	}
+
+	var assigned *resolve.Resolution
 	_, assignErr := cfg.QAProfiler.Measure(qa.PerfSample{
 		TaskID:  task.ID,
 		RunID:   runID,
 		Stage:   "S0",
 		CheckID: "arm-assign",
 	}, func() (string, error) {
-		a, err := qa.AssignOrLoadArm(ctx, store, rootOrigin, tier, qaCfg, now)
+		a, _, err := resolve.EnsureQAResolutionAtDispatchWithConfig(ctx, store, task, runID, qaOverride, now)
 		if err != nil {
 			return "error", err
 		}
 		assigned = a
-		return a.Arm, nil
+		return a.ArmID, nil
 	})
 	return assigned, assignErr
 }

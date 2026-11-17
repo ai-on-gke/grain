@@ -1,0 +1,25 @@
+managers before: 
+fired run 9001 for v1.1.0-rc.1 (success)
+after rc.1: #2 queued
+grants of #2:
+  https://grain.dev/capabilities/api#ci-read={"repo":"acme/widgets"}
+  https://grain.dev/capabilities/api#ci-read={"repo":"ai-on-gke/grain"}
+  https://grain.dev/capabilities/api#releases:read={"repo":"ai-on-gke/grain"}
+  https://grain.dev/capabilities/api#repos:read={"repo":"ai-on-gke/grain"}
+  https://grain.dev/capabilities/api#schedules:read={"repo":"ai-on-gke/grain"}
+  https://grain.dev/capabilities/api#self-debug
+  https://grain.dev/capabilities/api#task-admin={"repo":"ai-on-gke/grain"}
+  https://grain.dev/capabilities/api#templates:read
+dispatch scopes among them: 0
+fired run 9002 for v1.1.0-rc.2 (failure)
+after rc.2 with #2 queued: #2 queued
+deferred #2: deferred
+fired run 9003 for v1.1.0-rc.3 (success)
+after rc.3 with #2 deferred: #2 deferred
+schedule record:
+{"nextRunAt":"2027-11-14T04:17:36.19561841Z","lastRunAt":"2026-11-13T04:17:40.194615266Z","lastWorkflowRun":{"runId":"9001","branch":"v1.1.0-rc.1","workflow":".github/workflows/release-train-assets.yml","conclusion":"success","detail":"GitHub Actions run 9001 concluded success","firedAt":"2026-11-13T04:17:40.194615266Z","finishedAt":"2026-11-13T04:17:39Z","reviewTaskId":"2"},"skips":[{"occurrence":"2026-11-13T04:18:11.313218307Z","at":"2026-11-13T04:18:11.313218307Z","reason":"task","summary":"skipped at 2026-11-13 04:18 UTC: #2 from the previous firing is still open (deferred)","taskId":"2","taskState":"deferred","outcome":"dropped","resolvedAt":"2026-11-13T04:18:11.313218307Z"},{"occurrence":"2026-11-13T04:17:54.756220626Z","at":"2026-11-13T04:17:54.756220626Z","reason":"task","summary":"skipped at 2026-11-13 04:17 UTC: #2 from the previous firing is still open (queued)","taskId":"2","taskState":"queued","outcome":"dropped","resolvedAt":"2026-11-13T04:17:54.756220626Z"}]}
+every task the firings left (F1: a Stage 1 repair for release-train-assets):
+  #1 awaiting_reply p5 foundIn=- Director
+  #2 deferred p8 foundIn=- Release manager for the newest rc
+  #3 closed p9 foundIn=v1.1.0-rc.2 Fix the red Stage 1 (release-train-assets) at 6f8056415837
+  2026/11/13 04:17:54 orchestrator: Stage 1 run 9002 on acme/widgets is red; filed repair 3 at priority 9

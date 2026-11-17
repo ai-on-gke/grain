@@ -58,6 +58,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net/url"
 	"os"
@@ -104,6 +105,8 @@ func Main(args []string) int {
 			return install(args[2:], os.Stdout, os.Stderr)
 		case "allow":
 			return allow(args[2:], os.Stdin, os.Stdout, os.Stderr)
+		case "update":
+			return update(args[2:], os.Stdout, os.Stderr)
 		case "hostd":
 			// Accepted for symmetry with `grain hostd`.
 			return run(args[2:], os.Stdout, os.Stderr)
@@ -351,10 +354,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 				_ = hostd.WriteSecretFile0600(*tokenFile, []byte(next+"\n"))
 			}
 		},
-		// No CurrentLink: there is no installer's versions directory, so a
-		// remote run's hooks name this binary itself (Hello.Grain falls back
-		// to os.Executable). No Builtins: agent CLIs and nothing else.
+		// No CurrentLink: `grain-agentd update`'s versions directory is
+		// not the installer's, so a remote run's hooks name this binary
+		// itself (Hello.Grain falls back to os.Executable), which update
+		// keeps as the previous version. No Builtins: agent CLIs and
+		// nothing else.
+		SelfUpdate: true,
 	}
+	onHello, stopWatchdog := updateWatchdog(home, version.Get().Release, log.Printf, srv.Cutover)
+	defer stopWatchdog()
+	srv.OnControllerHello = onHello
 	usr1 := make(chan os.Signal, 1)
 	signal.Notify(usr1, syscall.SIGUSR1)
 	defer signal.Stop(usr1)

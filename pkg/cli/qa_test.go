@@ -16,6 +16,8 @@ package cli
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -109,7 +111,12 @@ func TestQAEnablePreservesExplicitZeroPercentShadowOnlyRolloutAcrossDisable(t *t
 	srvURL, _ := syncTestServer(t)
 	seedSettings(t, srvURL, *settingsRequest("60s", 2, "github.example"))
 
-	// Fresh unconfigured store: bare `grain qa enable` defaults rolloutPct to 30.
+	// Fresh unconfigured store: a no-op `grain qa disable` must leave QA
+	// unconfigured so a subsequent bare `grain qa enable` still defaults
+	// rolloutPct to 30 instead of turning on silent 0% shadow-only mode.
+	if err := runCLIWithAccessCode([]string{"-server", srvURL, "qa", "disable"}); err != nil {
+		t.Fatalf("no-op grain qa disable on fresh store: %v", err)
+	}
 	var err error
 	outDefault := captureStdout(t, func() {
 		err = runCLIWithAccessCode([]string{"-server", srvURL, "--json", "qa", "enable"})
@@ -122,7 +129,7 @@ func TestQAEnablePreservesExplicitZeroPercentShadowOnlyRolloutAcrossDisable(t *t
 		t.Fatalf("unmarshal initial enable: %v", err)
 	}
 	if !parsed.Enabled || parsed.RolloutPct != 30 {
-		t.Fatalf("initial bare enable = %+v, want enabled with default 30%% rollout", parsed)
+		t.Fatalf("initial bare enable after fresh disable = %+v, want enabled with default 30%% rollout", parsed)
 	}
 
 	// Operator explicitly configures 0% rollout (shadow-only mode), disables QA,
@@ -146,5 +153,60 @@ func TestQAEnablePreservesExplicitZeroPercentShadowOnlyRolloutAcrossDisable(t *t
 	}
 	if !parsed.Enabled || parsed.RolloutPct != 0 || parsed.FlowID != model.QAFlowDeterministicS3Only {
 		t.Fatalf("bare re-enable clobbered explicit 0%% rollout: %+v", parsed)
+	}
+}
+
+func TestQAJudgeRunDryRunIncludesClosedExperimentTasksOnly(t *testing.T) {
+	useAccessCodeFile(t)
+	var listQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/qa/experiments/exp-a":
+			_, _ = w.Write([]byte(`{"experiment":{"id":"exp-a","state":"stopped"}}`))
+		case "/api/qa/experiments/exp-a/results":
+			_, _ = w.Write([]byte(`{"modelMix":{"byArm":{"control":{"gemini-4":1},"golden-v2":{"gemini-4":1}}},"pairByOrigin":{"task:10":"G-01"}}`))
+		case "/api/tasks":
+			listQuery = r.URL.RawQuery
+			if r.URL.Query().Get("limit") != "0" {
+				// Simulate >200 tasks truncating closed task 10 when limit != 0.
+				_, _ = w.Write([]byte(`[{"id":"20","title":"Other exp","description":"B","state":"open","pullRequest":"https://github.example/o/r/pull/2"}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[
+				{"id":"10","title":"Exp A closed","description":"A","state":"closed","pullRequest":"https://github.example/o/r/pull/1"},
+				{"id":"20","title":"Other exp","description":"B","state":"closed","pullRequest":"https://github.example/o/r/pull/2"}
+			]`))
+		case "/api/tasks/10/qa":
+			_, _ = w.Write([]byte(`{"experimentId":"exp-a","armId":"golden-v2"}`))
+		case "/api/tasks/20/qa":
+			_, _ = w.Write([]byte(`{"experimentId":"exp-other","armId":"golden-v2"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	var runErr error
+	rawOut := captureStdout(t, func() {
+		runErr = runCLIWithAccessCode([]string{
+			"-server", ts.URL, "--json", "qa", "judge", "run",
+			"-experiment", "exp-a", "-judge-model", "opus-5.5-high", "-dry-run",
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("grain qa judge run -dry-run: %v", runErr)
+	}
+	if !strings.Contains(listQuery, "limit=0") {
+		t.Fatalf("tasks query = %q, want limit=0 so closed tasks beyond 200 are included", listQuery)
+	}
+	var summary struct {
+		Packets int `json:"packets"`
+	}
+	if err := json.Unmarshal([]byte(rawOut), &summary); err != nil {
+		t.Fatalf("unmarshal summary %q: %v", rawOut, err)
+	}
+	if summary.Packets != 1 {
+		t.Fatalf("packets = %d, want 1 (closed exp-a task included, exp-other excluded)", summary.Packets)
 	}
 }

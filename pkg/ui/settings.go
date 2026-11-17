@@ -577,6 +577,11 @@ type Settings struct {
 	// System -> Agents & Task Branches offers it to a deployment still on
 	// the empty template (grain/task-{id}) as a one-line opt-in.
 	TaskBranchTemplateDefault string `json:"taskBranchTemplateDefault"`
+	// SandboxProbe says whether POST /api/sandbox-probe can build a
+	// sandbox on this deployment (Server.sandboxProbeAvailable), so
+	// Settings -> Sandboxes offers its probe only where it can work.
+	// Read-only: a save ignores it.
+	SandboxProbe bool `json:"sandboxProbe"`
 	// Capabilities is every capability grain ships a provider for, with
 	// this deployment's own readiness computed against it -- capability_
 	// status.go's own CapabilityStatus, bwsalmon/agents#611. Always
@@ -1071,7 +1076,8 @@ var ciStorageDefaults = func() ciStorageBoundDefaults {
 
 func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs []model.RepoConfig) Settings {
 	cfg, unrunnable := c.runnableSettings(cfg)
-	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+	secretList := c.listSecretsBestEffort()
+	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
 	mirror := c.sandboxImageMirrorFor(cfg, granuleImgDefault)
 	effectiveGranule := c.k8sGranuleImageForWarn(cfg, granuleImgDefault, mirror)
@@ -1224,7 +1230,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		QARegimeID:                         cfg.QA.RegimeIDOrDefault(),
 		TaskBranchTemplate:                 cfg.TaskBranchTemplate,
 		DeploymentID:                       cfg.DeploymentID,
-		Capabilities:                       c.capabilityStatuses(cfg, repoConfigs),
+		Capabilities:                       c.capabilityStatusesWithSecrets(cfg, repoConfigs, secretList),
 		DefaultCapabilities:                cfg.DefaultCapabilities,
 		ApprovedByDefault:                  cfg.ApprovedByDefault,
 		AutoMergeByDefault:                 cfg.AutoMergeByDefault,
@@ -1411,7 +1417,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		return Settings{}, err
 	}
 	if cfg == nil {
-		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+		secretList := c.listSecretsBestEffort()
+		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 		def := capability.NewDeploymentConfig()
 		sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &def, repoConfigs)
 		sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
@@ -1472,7 +1479,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			K8sPriorityClassInteractiveDefault: model.DefaultK8sPriorityClassInteractive,
 			K8sPriorityClassAgentDefault:       model.DefaultK8sPriorityClassAgent,
 			K8sPriorityClassCIDefault:          model.DefaultK8sPriorityClassCI,
-			Capabilities:                       c.capabilityStatuses(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs),
+			Capabilities:                       c.capabilityStatusesWithSecrets(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs, secretList),
 			DefaultCapabilities:                def.DefaultCapabilities,
 			AgentKeysEnabled:                   c.Config.Secrets != nil,
 			GeminiAPIKeySet:                    geminiKeySet,
@@ -2438,33 +2445,41 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.AutoMergeByDefault = *req.AutoMergeByDefault
 	}
 	if req.QAEnabled != nil || req.QAFlowID != nil || req.QARolloutPct != nil || req.QAShadowOnControl != nil || req.QAEpoch != nil {
-		nextQA := cfg.QA.Clone()
-		if nextQA.ShadowOnControl == nil {
-			nextQA.ShadowOnControl = model.BoolPtr(cfg.QA.ShadowOnControlEnabled())
-		}
-		if req.QAEnabled != nil {
-			nextQA.Enabled = *req.QAEnabled
-		}
-		if req.QAFlowID != nil {
-			nextQA.FlowID = strings.TrimSpace(*req.QAFlowID)
-		}
-		if req.QARolloutPct != nil {
-			nextQA.RolloutPct = *req.QARolloutPct
-		}
-		if req.QAShadowOnControl != nil {
-			nextQA.ShadowOnControl = model.BoolPtr(*req.QAShadowOnControl)
-		}
-		if req.QAEpoch != nil {
-			if *req.QAEpoch < 1 {
-				return model.Config{}, validationErrorf("qaEpoch must be at least 1")
+		// Disabling QA on a fresh unconfigured store without naming any QA policy
+		// field is a no-op so cfg.QA remains zero (qaConfigured=false) and a
+		// subsequent bare `grain qa enable` still defaults rolloutPct to 30%.
+		noOpDisable := before.QA.IsZero() &&
+			req.QAEnabled != nil && !*req.QAEnabled &&
+			req.QAFlowID == nil && req.QARolloutPct == nil && req.QAShadowOnControl == nil && req.QAEpoch == nil
+		if !noOpDisable {
+			nextQA := cfg.QA.Clone()
+			if nextQA.ShadowOnControl == nil {
+				nextQA.ShadowOnControl = model.BoolPtr(cfg.QA.ShadowOnControlEnabled())
 			}
-			nextQA.Epoch = *req.QAEpoch
+			if req.QAEnabled != nil {
+				nextQA.Enabled = *req.QAEnabled
+			}
+			if req.QAFlowID != nil {
+				nextQA.FlowID = strings.TrimSpace(*req.QAFlowID)
+			}
+			if req.QARolloutPct != nil {
+				nextQA.RolloutPct = *req.QARolloutPct
+			}
+			if req.QAShadowOnControl != nil {
+				nextQA.ShadowOnControl = model.BoolPtr(*req.QAShadowOnControl)
+			}
+			if req.QAEpoch != nil {
+				if *req.QAEpoch < 1 {
+					return model.Config{}, validationErrorf("qaEpoch must be at least 1")
+				}
+				nextQA.Epoch = *req.QAEpoch
+			}
+			advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
+			if err != nil {
+				return model.Config{}, validationErrorf("qa: %v", err)
+			}
+			cfg.QA = advanced
 		}
-		advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
-		if err != nil {
-			return model.Config{}, validationErrorf("qa: %v", err)
-		}
-		cfg.QA = advanced
 	}
 	if req.UpgradeCheckMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*req.UpgradeCheckMode))
@@ -2737,6 +2752,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -2750,6 +2766,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -2763,6 +2780,7 @@ func (s *Server) handlePlanSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 

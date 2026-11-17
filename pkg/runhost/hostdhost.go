@@ -226,6 +226,9 @@ func (d *Hostd) Attach(ctx context.Context, info Info, cursor int64, tee io.Writ
 	if err != nil {
 		return whole.String(), err
 	}
+	if exit.Stopped() {
+		return whole.String(), fmt.Errorf("%w: %s", agent.ErrHostdStopped, exit.String())
+	}
 	if exit.Draining {
 		return whole.String(), fmt.Errorf("%w: %s", agent.ErrHostdDraining, exit.String())
 	}

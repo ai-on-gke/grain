@@ -212,6 +212,7 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 	if prev != nil && headSHA != "" && hasTag(*prev, reviewHeadTag(headSHA)) {
 		// This head is already being reviewed: judging it again files
 		// nothing.
+		syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
 		return *prev, nil
 	}
 	settings := strictestSettings(matches)
@@ -227,7 +228,11 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 		if since != "" {
 			delta, since = reviewDelta(client, ref, baseRef, since, headSHA, files, matches)
 		}
-		review, err := buildPullRequestReview(ctx, store, task, ref, headSHA, kind, matches, settings, since, delta, now)
+		supersedingID := ""
+		if prev != nil && superseding {
+			supersedingID = prev.ID
+		}
+		review, err := buildPullRequestReview(ctx, store, client, task, ref, headSHA, kind, matches, settings, since, delta, supersedingID, now)
 		if err != nil {
 			return model.Task{}, err
 		}
@@ -272,6 +277,7 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 	}); err != nil {
 		return filed, fmt.Errorf("orchestrator: recording %s's %s review: %w", task.ID, kind, err)
 	}
+	syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
 	return filed, nil
 }
 
@@ -404,9 +410,9 @@ func reviewDelta(client github.Client, ref model.PullRequestRef, baseRef, since,
 
 // buildPullRequestReview builds (without yet storing) the review of kind,
 // ready for fileCoalesced to add coalescing links and store atomically.
-func buildPullRequestReview(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
+func buildPullRequestReview(ctx context.Context, store *model.Store, client github.Client, task model.Task, ref model.PullRequestRef,
 	headSHA, kind string, matches []reviewMatch, settings reviewSettings, since string, delta []string,
-	now time.Time) (model.Task, error) {
+	supersedingID string, now time.Time) (model.Task, error) {
 
 	paths := unionPaths(matches)
 	vars := map[string]string{
@@ -414,8 +420,12 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, task model.
 		"paths":   strings.Join(paths, "\n"),
 		"group":   "",
 		"pr":      ref.String(), "head_sha": headSHA, "base_sha": matches[0].rule.Commit,
+		"task_title": reviewSubjectTitle(task),
 	}
-	facts := reviewFacts(ref, headSHA, matches, settings) + incrementalNote(since, headSHA, delta)
+	facts := reviewFacts(ref, headSHA, matches, settings) +
+		earlierReviewsSection(ctx, store, client, &task, ref, headSHA, "", supersedingID) +
+		incrementalNote(since, headSHA, delta) +
+		parallelReviewsSection(parallelReviewsFor(ctx, store, &task, ref, headSHA, "", supersedingID))
 
 	var tmpl *model.Template
 	if kind == model.SecurityReviewTemplateID {
@@ -456,8 +466,9 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, task model.
 		body := strings.TrimSpace(filled.Body) + "\n\n---\n\n" + fmt.Sprintf(
 			"You are reviewing task %s (%q), whose work is on `%s` and proposed in %s. "+
 				"Your checkout is that branch itself: diff it against %s's base to see the change, and push "+
-				"any fix to it.\n", task.ID, task.Title, task.BranchName(), ref, ref) + facts
-		review, err = newReview(ctx, store, task, filled, securityReviewTitle(task), body, true, now)
+				"any fix to it.\n\n", task.ID, task.Title, task.BranchName(), ref, ref) +
+			changeUnderReviewSection(task, true) + facts
+		review, err = newReview(ctx, store, task, filled, targetedReviewTitle(task, triggerNames(matches)), body, true, now)
 	case settings.fixes:
 		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
 			reviewTaskBody(filled, task, ref, task.BranchName())+facts, false, now)
@@ -534,11 +545,40 @@ func incrementalNote(since, head string, delta []string) string {
 	return b.String()
 }
 
+const reviewFactsHeader = "\n\n---\n\ngrain: filed by the path trigger(s) "
+
+// generatedIncrementalNoteAt returns where grain's incrementalNote appendix at
+// the end of body (ahead of any already-stripped parallel-reviews section)
+// starts, or -1. Checking both the last occurrence and incrementalNote's
+// framing lines keeps a header quoted earlier in a brief, template or PR
+// description from being mistaken for grain's appendix.
+func generatedIncrementalNoteAt(body string) int {
+	idx := strings.LastIndex(body, incrementalNoteHeader)
+	if idx < 0 {
+		return -1
+	}
+	rest := body[idx+len(incrementalNoteHeader):]
+	if !strings.HasPrefix(rest, " An earlier review of this kind read the change at ") ||
+		!strings.HasSuffix(rest, "Do not re-review the rest of the change.\n") {
+		return -1
+	}
+	return idx
+}
+
 // stripIncrementalReview converts an undispatched incremental review into a
 // full review when the earlier review it depended on closed without finishing.
 func stripIncrementalReview(t *model.Task) {
-	if idx := strings.Index(t.Body, incrementalNoteHeader); idx >= 0 {
-		t.Body = t.Body[:idx]
+	tail := len(t.Body)
+	if p := generatedParallelSectionAt(t.Body); p >= 0 {
+		tail = p
+	}
+	searchFrom := 0
+	if factsIdx := strings.LastIndex(t.Body[:tail], reviewFactsHeader); factsIdx >= 0 {
+		searchFrom = factsIdx
+	}
+	if rel := generatedIncrementalNoteAt(t.Body[searchFrom:tail]); rel >= 0 {
+		idx := searchFrom + rel
+		t.Body = t.Body[:idx] + t.Body[tail:]
 	}
 	t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool {
 		return strings.HasPrefix(tag, "path-trigger-since:")
@@ -565,6 +605,7 @@ func reviewFindingsBody(tmpl model.Template, task model.Task, ref model.PullRequ
 		task.ID, task.Title, branch, ref, ref, task.ID)
 	b.WriteString("\n\n" + reviewFindingsTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
+	b.WriteString("\n\n" + changeUnderReviewSection(task, true))
 	return b.String()
 }
 

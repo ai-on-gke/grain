@@ -143,14 +143,14 @@ Deterministic reproduction script covering F1–F3 on both SQLite and PostgreSQL
   ```
   Before the fix, `rolloutPct` silently jumped from `0` to `30` on both SQLite and PostgreSQL, routing 30% of PRs into active treatment when the operator had configured `0%` passive shadow evaluation.
 - **Root cause:** `cmdQA` (`pkg/cli/qa.go`) inferred "QA has never been configured" from `current.QARolloutPct == 0 && !current.QAEnabled`, which is indistinguishable from an operator who explicitly configured `0%` rollout and later ran `grain qa disable`.
-- **Fix:** Exposed `QAConfigured bool` (`!cfg.QA.IsZero()`) on `ui.Settings` (`pkg/ui/settings.go`) and gated `grain qa enable`'s default `30%` rollout on `!current.QAConfigured` (`pkg/cli/qa.go`).
+- **Fix:** Exposed `QAConfigured bool` (`!cfg.QA.IsZero()`) on `ui.Settings` (`pkg/ui/settings.go`), kept `cfg.QA` zero when `applySettingsRequest` receives a no-op `qaEnabled: false` on a fresh unconfigured store (so `grain qa disable` followed by bare `grain qa enable` still defaults to `30%`), and gated `grain qa enable`'s default `30%` rollout on `!current.QAConfigured` (`pkg/cli/qa.go`).
 - **Regression tests:** `TestQAEnablePreservesExplicitZeroPercentShadowOnlyRolloutAcrossDisable` (`pkg/cli/qa_test.go`) and `TestQASettingsShipOffPlanCleanlyAndBumpRegimeOnRolloutChange` (`pkg/ui/qa_settings_test.go`).
 
 ### F2: `resolveTaskQAAssignment` split originless child/review tasks off from their work tree's sticky arm
 
 - **Reproduction:** Seed a pre-origin / updated-link child task (`task.WorkOrigin == ""`, `LinkProposedBy -> <root>`) whose standalone `"task:<child>"` bucket falls on the opposite side of `qaRolloutPct` from `"task:<root>"`. Before the fix, `GET /api/tasks/<child>/tree` reported `origin: "task:5"`, yet root task `5` received `treatment` while child task `6` received `control`.
-- **Root cause:** `resolveTaskQAAssignment` (`pkg/orchestrator/qa.go`) passed `string(task.WorkOrigin)` straight to `qa.ResolveRootOrigin` without consulting `store.TreeOrigin(ctx, task.ID)` when `task.WorkOrigin == ""` and `task.Parent() != ""` (unlike `ui.Client.WorkTree`).
-- **Fix:** When `qaCfg.Enabled && store != nil && rawOrigin == "" && task.Parent() != ""`, `resolveTaskQAAssignment` resolves `store.TreeOrigin(ctx, task.ID)`. Disabled deployments, standalone root tasks (`Parent() == ""`), and tasks with `WorkOrigin != ""` perform zero extra queries.
+- **Root cause:** `resolveTaskQAAssignment` / `pkg/qa/resolve` passed `task.WorkOrigin` straight to `ResolveQARootOrigin` without consulting `store.TreeOrigin(ctx, task.ID)` when `task.WorkOrigin == ""` and `task.Parent() != ""` (unlike `ui.Client.WorkTree`).
+- **Fix:** Added `Store.ResolveTaskQARootOrigin` (`pkg/model/qa.go`) and wired it through `pkg/qa/resolve` (`ActiveQAResolutionForTask` and `EnsureQAResolutionAtDispatchWithConfig`), `Store.ActiveQAAssignmentForTask`, and `Store.CheckMemoryFrozenForActor`. Disabled deployments, standalone root tasks (`Parent() == ""`), and tasks with `WorkOrigin != ""` perform zero extra queries.
 - **Regression test:** `TestResolveTaskQAAssignment_OriginlessChildInheritsRootTreeArm` (`pkg/orchestrator/qa_test.go`).
 
 ### F3: `GET /api/config` omitted `access` for scoped `gma_…` external tokens, leaving `/next/` Settings controls enabled for `grain/viewer` tokens

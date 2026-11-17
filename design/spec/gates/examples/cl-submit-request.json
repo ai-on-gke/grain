@@ -1,0 +1,18 @@
+{
+  "request_id": "merge-1",
+  "idempotency_key": "merge/pr1710/H1",
+  "action": "change.submit",
+  "target": {
+    "kind": "change",
+    "authority": "review.example.com",
+    "repository": "ai-on-gke/grain",
+    "change_kind": "cl",
+    "id": "12345"
+  },
+  "expected_head": "snapshot-7",
+  "expected_resource_version": "pr-v3",
+  "expected_contract_revision": 1,
+  "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reason": null
+}

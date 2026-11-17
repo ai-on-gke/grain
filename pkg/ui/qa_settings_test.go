@@ -44,6 +44,17 @@ func TestQASettingsShipOffPlanCleanlyAndBumpRegimeOnRolloutChange(t *testing.T) 
 			initial.QAConfigured, initial.QAEnabled, initial.QARolloutPct, initial.QAFlowID, initial.QAShadowOnControl)
 	}
 
+	// Disabling QA on a fresh unconfigured store is a no-op so QAConfigured stays false.
+	disable := false
+	afterNoOpDisable, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{QAEnabled: &disable})
+	if err != nil {
+		t.Fatalf("UpdateSettings no-op disable: %v", err)
+	}
+	if afterNoOpDisable.QAConfigured || afterNoOpDisable.QAEnabled || afterNoOpDisable.QARolloutPct != 0 {
+		t.Fatalf("expected fresh no-op disable to leave QAConfigured=false, got configured=%v enabled=%v rollout=%d",
+			afterNoOpDisable.QAConfigured, afterNoOpDisable.QAEnabled, afterNoOpDisable.QARolloutPct)
+	}
+
 	enable := true
 	rollout30 := 30
 	flow := model.QAFlowGoldenV1Minimal

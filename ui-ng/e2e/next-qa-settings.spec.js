@@ -15,6 +15,25 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.js";
 
+// A named actor, so no screenshot or task payload carries the host account's user name.
+test.use({ demoArgs: ["-as", "demo-operator"] });
+
+test.afterEach(async ({ demoServer, accessCode }) => {
+  await fetch(`${demoServer}/api/settings`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessCode}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      qaEnabled: false,
+      qaFlowId: "golden-v1-minimal",
+      qaRolloutPct: 0,
+      qaShadowOnControl: true,
+    }),
+  });
+});
+
 test("Settings -> Tasks ships quality control off, previews & saves PR rollout, validates boundaries, and passes WCAG contrast", async ({
   page,
   demoServer,

@@ -327,6 +327,49 @@ func validEnvName(name string) bool {
 	return true
 }
 
+var probeTmpDir = func(dir string) error {
+	d, err := os.MkdirTemp(dir, "gtmp")
+	if err == nil {
+		_ = os.Remove(d)
+	}
+	return err
+}
+
+var probeDefaultTmp = func() error {
+	return probeTmpDir("/tmp")
+}
+
+func tmpDirHidden(tmpDir, root string, hide []string) bool {
+	if len(hide) == 0 {
+		return false
+	}
+	realTmp, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		realTmp = filepath.Clean(tmpDir)
+	}
+	var realRoot string
+	if root != "" {
+		if r, err := filepath.EvalSymlinks(root); err == nil {
+			realRoot = r
+		} else {
+			realRoot = filepath.Clean(root)
+		}
+	}
+	for _, p := range hide {
+		realHide, err := filepath.EvalSymlinks(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			realHide = filepath.Clean(p)
+		}
+		if within(realTmp, realHide) && (realRoot == "" || !within(realTmp, realRoot)) {
+			return true
+		}
+	}
+	return false
+}
+
 // sandboxEnv constructs a sanitized environment for local sandbox subprocesses:
 // HOME is pinned to root (so ~/.gitconfig, ~/.git-credentials, etc. remain confined),
 // and only safe, allowlisted host variables are passed through, followed by
@@ -335,8 +378,14 @@ func validEnvName(name string) bool {
 // here as well as refused by ValidateSandboxEnv, so the pin holds even for a
 // caller that skipped validation.
 func sandboxEnv(root string, extra ...string) []string {
+	return sandboxEnvWithHide(root, nil, extra...)
+}
+
+func sandboxEnvWithHide(root string, hide []string, extra ...string) []string {
 	env := []string{"HOME=" + root}
 	havePath := false
+	haveTmpDir := false
+	droppedTmpDir := false
 	for _, name := range sandboxPassthrough {
 		value, ok := os.LookupEnv(name)
 		if !ok {
@@ -348,16 +397,36 @@ func sandboxEnv(root string, extra ...string) []string {
 				continue
 			}
 		}
+		if name == "TMPDIR" {
+			if value == "" {
+				continue
+			}
+			if tmpDirHidden(value, root, hide) || probeTmpDir(value) != nil {
+				droppedTmpDir = true
+				continue
+			}
+			haveTmpDir = true
+		}
 		env = append(env, name+"="+value)
 	}
 	if !havePath {
 		env = append(env, "PATH="+sandboxFallbackPath)
 	}
 	for _, kv := range extra {
-		if name, _, ok := strings.Cut(kv, "="); !ok || name == "HOME" {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || name == "HOME" {
 			continue
 		}
+		if name == "TMPDIR" && value != "" {
+			haveTmpDir = true
+		}
 		env = append(env, kv)
+	}
+	if !haveTmpDir && root != "" && (droppedTmpDir || probeDefaultTmp() != nil) {
+		fallbackTmp := filepath.Join(root, ".t")
+		if err := os.MkdirAll(fallbackTmp, 0o700); err == nil {
+			env = append(env, "TMPDIR="+fallbackTmp)
+		}
 	}
 	return env
 }
@@ -422,7 +491,7 @@ func runCommandTool(root string, hide, extra []string) Tool {
 			// service account keys, DB paths, or API tokens -- plus only
 			// what the operator opted this sandbox into by name
 			// (NewSandboxTools' extra).
-			cmd.Env = sandboxEnv(root, extra...)
+			cmd.Env = sandboxEnvWithHide(root, hide, extra...)
 			stdout, stderr := newHeadTailBuffer(), newHeadTailBuffer()
 			cmd.Stdout = stdout
 			cmd.Stderr = stderr

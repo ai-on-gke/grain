@@ -61,8 +61,8 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if st.ID != grainserver.ID || !slices.Contains(st.Methods, grainserver.JournalMethod) || !slices.Contains(st.Methods, grainserver.HealthMethod) {
 		t.Fatalf("Status() = %+v, want %s with %s and %s", st, grainserver.ID, grainserver.JournalMethod, grainserver.HealthMethod)
 	}
-	if !grainserver.HasJournal([]string{grainserver.JournalGrant}) || !grainserver.HasJournal([]string{"grain-log"}) {
-		t.Fatalf("HasJournal failed to match canonical or legacy journal grant")
+	if !grainserver.HasJournal([]string{grainserver.JournalGrant}) || grainserver.HasJournal([]string{"grain-log"}) {
+		t.Fatalf("HasJournal failed to match the canonical journal grant, or read the retired grain-log as it")
 	}
 
 	sqlDefault, err := model.NormalizeCapabilityNames([]string{grainserver.SQLRef}, lookup)
@@ -86,11 +86,11 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if !model.IsDangerousGrant(grainserver.HostExecGrant) || !model.IsPersonOnlyGrant(grainserver.HostExecGrant) {
 		t.Fatalf("HostExecGrant should be dangerous and person-only")
 	}
-	if got := model.CanonicalLegacyGrant(grainserver.LegacySelfRepair); got != grainserver.HostExecGrant {
-		t.Fatalf("CanonicalLegacyGrant(self-repair) = %q, want %q", got, grainserver.HostExecGrant)
+	if got := model.RetiredGrantsBecame(grainserver.LegacySelfRepair)[0]; got != grainserver.HostExecGrant {
+		t.Fatalf("RetiredGrantsBecame(self-repair) = %q, want %q", got, grainserver.HostExecGrant)
 	}
-	if !grainserver.HasHostExec([]string{grainserver.HostExecGrant}) || !grainserver.HasHostExec([]string{"self-repair"}) {
-		t.Fatalf("HasHostExec failed to match canonical or legacy host-exec grant")
+	if !grainserver.HasHostExec([]string{grainserver.HostExecGrant}) || grainserver.HasHostExec([]string{"self-repair"}) {
+		t.Fatalf("HasHostExec failed to match the canonical host-exec grant, or read the retired self-repair as it")
 	}
 
 	ciGrant, err := model.NormalizeCapabilityNames([]string{grainserver.CIRef}, lookup)
@@ -103,11 +103,11 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if model.IsDangerousGrant(grainserver.CIGrant) {
 		t.Fatalf("CIGrant should not be dangerous: it opens no credential")
 	}
-	if got := model.CanonicalLegacyGrant(grainserver.LegacyGrainCI); got != grainserver.CIGrant {
-		t.Fatalf("CanonicalLegacyGrant(grain-ci) = %q, want %q", got, grainserver.CIGrant)
+	if got := model.RetiredGrantsBecame(grainserver.LegacyGrainCI)[0]; got != grainserver.CIGrant {
+		t.Fatalf("RetiredGrantsBecame(grain-ci) = %q, want %q", got, grainserver.CIGrant)
 	}
-	if !grainserver.IsCIGrant(grainserver.CIGrant) || !grainserver.IsCIGrant("grain-ci") {
-		t.Fatalf("IsCIGrant failed to match canonical or legacy ci grant")
+	if !grainserver.IsCIGrant(grainserver.CIGrant) || grainserver.IsCIGrant("grain-ci") {
+		t.Fatalf("IsCIGrant failed to match the canonical ci grant, or read the retired grain-ci as it")
 	}
 
 	source, err := model.NormalizeCapabilityNames([]string{grainserver.SourceRef}, lookup)
@@ -121,12 +121,12 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 		t.Fatalf("SourceGrant should not be dangerous: it is read-only, as self-debug was")
 	}
 	wantSelfDebug := []string{model.APIRef("self-debug"), grainserver.SourceGrant}
-	if got := model.CanonicalLegacyGrants(grainserver.LegacySelfDebug); !slices.Equal(got, wantSelfDebug) {
-		t.Fatalf("CanonicalLegacyGrants(self-debug) = %v, want %v", got, wantSelfDebug)
+	if got := model.RetiredGrantsBecame(grainserver.LegacySelfDebug); !slices.Equal(got, wantSelfDebug) {
+		t.Fatalf("RetiredGrantsBecame(self-debug) = %v, want %v", got, wantSelfDebug)
 	}
-	if !grainserver.HasSource([]string{grainserver.SourceGrant}) || !grainserver.HasSource([]string{"self-debug"}) ||
+	if !grainserver.HasSource([]string{grainserver.SourceGrant}) || grainserver.HasSource([]string{"self-debug"}) ||
 		!grainserver.IsSourceGrant(grainserver.SourceRef) {
-		t.Fatalf("HasSource/IsSourceGrant failed to match canonical, bare or legacy source grant")
+		t.Fatalf("HasSource/IsSourceGrant failed to match the canonical or bare source grant, or read the retired self-debug as it")
 	}
 	if grainserver.HasSource([]string{"api:self-debug"}) {
 		t.Fatalf("HasSource matched api:self-debug, which grants no source checkout")
@@ -175,11 +175,11 @@ func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {
 	}
 	if !grainserver.IsGitPushAnyRefGrant(grainserver.GitPushAnyRefGrant) ||
 		!grainserver.IsGitPushAnyRefGrant(reordered) ||
-		!grainserver.IsGitPushAnyRefGrant(grainserver.LegacyGitPushAnyRef) {
-		t.Fatal("IsGitPushAnyRefGrant missed the canonical grant, its reordered spelling or the legacy alias")
+		grainserver.IsGitPushAnyRefGrant(grainserver.LegacyGitPushAnyRef) {
+		t.Fatal("IsGitPushAnyRefGrant missed the canonical grant or its reordered spelling, or read the retired bare name as it")
 	}
-	if got := model.CanonicalLegacyGrant(grainserver.LegacyGitPushAnyRef); got != grainserver.GitPushAnyRefGrant {
-		t.Fatalf("CanonicalLegacyGrant(%q) = %q, want %q", grainserver.LegacyGitPushAnyRef, got, grainserver.GitPushAnyRefGrant)
+	if got := model.RetiredGrantsBecame(grainserver.LegacyGitPushAnyRef)[0]; got != grainserver.GitPushAnyRefGrant {
+		t.Fatalf("RetiredGrantsBecame(%q) = %q, want %q", grainserver.LegacyGitPushAnyRef, got, grainserver.GitPushAnyRefGrant)
 	}
 	for _, narrow := range []string{
 		grainserver.RepoWriteRef,
@@ -296,16 +296,16 @@ func TestGitHubServerNormalizesAndMintsReadIssues(t *testing.T) {
 	if _, err := model.NormalizeCapabilityNames([]string{grainserver.ReadIssuesRef + `={"repo":"acme/widgets"}`}, lookup); err == nil {
 		t.Errorf("NormalizeCapabilityNames accepted unexpected args on %s", grainserver.ReadIssuesRef)
 	}
-	if got := model.CanonicalLegacyGrant(grainserver.LegacyReadIssues); got != grainserver.ReadIssuesGrant {
-		t.Fatalf("CanonicalLegacyGrant(read-issues) = %q, want %q", got, grainserver.ReadIssuesGrant)
+	if got := model.RetiredGrantsBecame(grainserver.LegacyReadIssues)[0]; got != grainserver.ReadIssuesGrant {
+		t.Fatalf("RetiredGrantsBecame(read-issues) = %q, want %q", got, grainserver.ReadIssuesGrant)
 	}
 	if !grainserver.IsReadIssuesGrant(grainserver.ReadIssuesGrant) ||
 		!grainserver.IsReadIssuesGrant(grainserver.ReadIssuesRef) ||
-		!grainserver.IsReadIssuesGrant(grainserver.LegacyReadIssues) {
-		t.Fatal("IsReadIssuesGrant missed canonical grant, bare ref, or legacy alias")
+		grainserver.IsReadIssuesGrant(grainserver.LegacyReadIssues) {
+		t.Fatal("IsReadIssuesGrant missed canonical grant or bare ref, or read the retired bare name as it")
 	}
-	if !grainserver.HasReadIssues([]string{grainserver.ReadIssuesGrant}) || !grainserver.HasReadIssues([]string{grainserver.LegacyReadIssues}) {
-		t.Fatal("HasReadIssues missed canonical grant or legacy alias")
+	if !grainserver.HasReadIssues([]string{grainserver.ReadIssuesGrant}) || grainserver.HasReadIssues([]string{grainserver.LegacyReadIssues}) {
+		t.Fatal("HasReadIssues missed canonical grant, or read the retired bare name as it")
 	}
 	if model.IsDangerousGrant(grainserver.ReadIssuesGrant) || model.IsPersonOnlyGrant(grainserver.ReadIssuesGrant) {
 		t.Error("ReadIssuesGrant should not be dangerous or person-only")
@@ -330,16 +330,16 @@ func TestGitHubServerNormalizesAndMintsReadIssues(t *testing.T) {
 	if want := []string{grainserver.ReadIssuesMethod, grainserver.SandboxRepoMethod}; st.ID != grainserver.GitHubID || !slices.Equal(st.Methods, want) {
 		t.Fatalf("GitHubStatus() = %+v, want %s with %v", st, grainserver.GitHubID, want)
 	}
-	sandboxNames, err := model.NormalizeCapabilityNames([]string{grainserver.SandboxRepoRef, grainserver.SandboxRepoGrant, model.CanonicalLegacyGrant(grainserver.LegacyGitHubSandbox)}, lookup)
+	sandboxNames, err := model.NormalizeCapabilityNames([]string{grainserver.SandboxRepoRef, grainserver.SandboxRepoGrant, model.RetiredGrantsBecame(grainserver.LegacyGitHubSandbox)[0]}, lookup)
 	if err != nil || !slices.Equal(sandboxNames, []string{grainserver.SandboxRepoGrant}) {
 		t.Fatalf("NormalizeCapabilityNames(sandbox-repo) = %v, %v; want [%s]", sandboxNames, err, grainserver.SandboxRepoGrant)
 	}
 	if !grainserver.IsSandboxRepoGrant(grainserver.SandboxRepoGrant) ||
 		!grainserver.IsSandboxRepoGrant(grainserver.SandboxRepoRef) ||
-		!grainserver.IsSandboxRepoGrant(grainserver.LegacyGitHubSandbox) ||
+		grainserver.IsSandboxRepoGrant(grainserver.LegacyGitHubSandbox) ||
 		!grainserver.HasSandboxRepo([]string{grainserver.SandboxRepoGrant}) ||
-		!grainserver.HasSandboxRepo([]string{grainserver.LegacyGitHubSandbox}) {
-		t.Fatal("IsSandboxRepoGrant/HasSandboxRepo missed canonical grant, bare ref, or legacy alias")
+		grainserver.HasSandboxRepo([]string{grainserver.LegacyGitHubSandbox}) {
+		t.Fatal("IsSandboxRepoGrant/HasSandboxRepo missed canonical grant or bare ref, or read the retired bare name as it")
 	}
 }
 
@@ -352,7 +352,7 @@ func TestRepoServerCredentialValidatesConfiguredNamesAndConflicts(t *testing.T) 
 	lookup := grainserver.Lookup(nil)
 	want := grainserver.RepoCredentialGrant("release-bot")
 
-	names, err := model.NormalizeCapabilityNames([]string{model.CanonicalLegacyGrant("github-credential:release-bot")}, lookup)
+	names, err := model.NormalizeCapabilityNames([]string{model.RetiredGrantsBecame("github-credential:release-bot")[0]}, lookup)
 	if err != nil || !slices.Equal(names, []string{want}) {
 		t.Fatalf("NormalizeCapabilityNames(release-bot) = %v, %v; want [%s]", names, err, want)
 	}

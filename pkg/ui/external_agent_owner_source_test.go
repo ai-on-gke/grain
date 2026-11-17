@@ -34,7 +34,7 @@ func filedOnBehalfOf(t *testing.T, srv *ui.Server, client *ui.Client, token, tit
 	if err != nil || stored == nil {
 		t.Fatalf("reading task %s: %v", task.ID, err)
 	}
-	return stored.Origin.Attribution
+	return stored.Filing.Attribution
 }
 
 // An external agent token's on-behalf-of is the verified person who

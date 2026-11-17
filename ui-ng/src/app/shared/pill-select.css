@@ -15,6 +15,7 @@ g-priority-chip {
   align-items: center;
   gap: 6px;
   min-height: 36px;
+  max-width: min(260px, calc(100vw - 48px));
   padding: 0 10px 0 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-full);
@@ -27,13 +28,21 @@ g-priority-chip {
     background-color 140ms var(--md-sys-motion-effects),
     border-color 140ms var(--md-sys-motion-effects);
 }
-:root[data-theme="dark"] .pill-select-btn {
+@media (prefers-reduced-motion: reduce) {
+  .pill-select-btn {
+    transition: none;
+  }
+}
+:root[data-theme="dark"] .pill-select-btn:not(.is-inverse) {
   background: var(--md-sys-color-surface-container);
 }
 .pill-select-btn:hover:not(:disabled),
 .pill-select-btn.is-open {
   background: var(--md-sys-color-surface-container-high);
   border-color: var(--md-sys-color-outline);
+}
+.pill-select-btn.is-invalid {
+  border-color: var(--md-sys-color-error);
 }
 .pill-select-btn.is-inverse {
   background: color-mix(
@@ -64,6 +73,13 @@ g-priority-chip {
 .pill-select-prefix {
   color: var(--md-sys-color-on-surface-variant);
   font-weight: 400;
+  flex-shrink: 0;
+}
+.pill-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pill-select-btn.is-inverse .pill-select-prefix {
   color: inherit;
@@ -139,6 +155,17 @@ g-priority-chip {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.pill-opt-hint {
+  display: block;
+  max-width: 320px;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 11.5px/16px var(--grain-font-body);
+  white-space: normal;
+}
+.pop-menu.pill-select-menu li > button.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 .pill-check {
   color: var(--md-sys-color-primary);

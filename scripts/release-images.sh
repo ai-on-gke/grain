@@ -1186,13 +1186,56 @@ check_edition() {
   fi
 }
 
+# The store schema the grain tree at $1 is built for: pkg/model's
+# `const SchemaVersion`, read the way the Makefile's SCHEMA_VERSION rule
+# reads it. Empty for a tree without one.
+tree_schema_version() {
+  sed -n 's/^const SchemaVersion = \([0-9][0-9]*\)$/\1/p' "$1/pkg/model/schema.go" 2>/dev/null
+}
+
+# The schema the tree at $1 must stamp as io.grain.schema-version, which
+# pkg/upgrade reads off a target's registry config to refuse a schema
+# downgrade before pulling it: empty when the tree's Dockerfile declares
+# no ARG SCHEMA_VERSION (a release from before the label), and an error
+# when it declares one but its schema cannot be read, since a release
+# with an empty label would leave every deployment to pull it first.
+release_schema_version() {
+  local tree="$1" what="$2" schema
+  grep -q '^ARG SCHEMA_VERSION=' "$tree/Dockerfile" || return 0
+  schema="$(tree_schema_version "$tree")"
+  if [ -z "$schema" ]; then
+    echo "release-images.sh: $what's Dockerfile labels io.grain.schema-version, but no \`const SchemaVersion = <n>\` was found in its pkg/model/schema.go to label it with" >&2
+    return 1
+  fi
+  echo "$schema"
+}
+
+# Whether image $1 is labelled io.grain.schema-version=$2.
+check_schema_label() {
+  local image="$1" want="$2" labelled
+  if ! labelled="$(docker image inspect \
+      --format '{{index .Config.Labels "io.grain.schema-version"}}' "$image" 2>&1)"; then
+    echo "release-images.sh: could not read $image's schema label: $labelled" >&2
+    return 1
+  fi
+  if [ "$labelled" != "$want" ]; then
+    echo "release-images.sh: $image is labelled with schema ${labelled:-nothing}, not the $want its tree is built for" >&2
+    return 1
+  fi
+}
+
 # Build daemon image $1 from main package $2, naming the two sandbox images
 # build_images just pinned, and check what it says of itself before
 # anything may publish it.
 build_daemon_image() {
-  local image="$1" main="$2" pair question want answered labelled stamp_dir container stamped
+  local image="$1" main="$2" pair question want answered labelled stamp_dir container stamped schema
+  schema="$(release_schema_version . "this tree")" || exit 1
   make image IMAGE="$image" MAIN_grain="$main" SANDBOX_IMAGE="$guest_pinned" K8S_SANDBOX_IMAGE="$k8s_sandbox_pinned" \
-    GRAIN_IMAGE_REF="$image" GIT_REVISION="$commit" RELEASE="${RELEASE:-}"
+    GRAIN_IMAGE_REF="$image" GIT_REVISION="$commit" RELEASE="${RELEASE:-}" \
+    ${schema:+SCHEMA_VERSION="$schema"}
+  if [ -n "$schema" ]; then
+    check_schema_label "$image" "$schema" || exit 1
+  fi
 
   # The stamp is the point of pushing the sandboxes first, so it is read
   # back off the image the way a deployment reads it -- `grain
@@ -2497,7 +2540,7 @@ checkout_promote_tag() {
 # before it is pulled or run.
 rebuild_release_grain() {
   local source="$1" target="$2" main="${3:-}" question want answered work go_version
-  local guest_ref k8s_ref image_ref vouch pull_ref pulled
+  local guest_ref k8s_ref image_ref vouch pull_ref pulled schema
   check_source_signature "$source" "$target" || return 1
   vouch="$source_vouch"
   pull_ref="$source_pull_ref"
@@ -2555,6 +2598,11 @@ rebuild_release_grain() {
   # does not -- the Makefile's GO_VERSION rule, which says why.
   go_version="$(sed -n 's/^toolchain[[:space:]]\{1,\}go//p' "$work/go.mod")"
   [ -n "$go_version" ] || go_version="$(sed -n 's/^go[[:space:]]\{1,\}//p' "$work/go.mod")"
+  # The release's own schema, from its own pkg/model, for its own label.
+  if ! schema="$(release_schema_version "$work" "$promote_tag")"; then
+    rm -rf "$work"
+    return 1
+  fi
   local source_label=()
   if [ -n "$source_github_repo" ] && { [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ] || [ "$registry" = "ghcr.io" ]; }; then
     source_label=(--label org.opencontainers.image.source="https://github.com/${source_github_repo}")
@@ -2570,6 +2618,7 @@ rebuild_release_grain() {
       --build-arg K8S_SANDBOX_IMAGE="$k8s_ref" \
       --build-arg GRAIN_IMAGE_REF="$image_ref" \
       --build-arg GIT_REVISION="$promote_commit" \
+      ${schema:+--build-arg SCHEMA_VERSION="$schema"} \
       "${source_label[@]}" \
       --build-arg RELEASE="${stamp_tag:-$promote_tag}" \
       --label org.opencontainers.image.version="${stamp_tag:-$promote_tag}" \
@@ -2586,6 +2635,9 @@ rebuild_release_grain() {
     fi
   done
   check_release_stamp "$target" "${stamp_tag:-$promote_tag}"
+  if [ -n "$schema" ]; then
+    check_schema_label "$target" "$schema" || return 1
+  fi
   if [ -n "$main" ]; then
     check_edition "$target" "$main"
   fi

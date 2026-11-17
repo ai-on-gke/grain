@@ -25,6 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/qa"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 )
 
 func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *testing.T) {
@@ -53,8 +54,8 @@ func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *
 	if err != nil {
 		t.Fatalf("resolveTaskQAAssignment off: %v", err)
 	}
-	if offAssign.Arm != model.QAArmOff {
-		t.Fatalf("off Arm = %q, want %q", offAssign.Arm, model.QAArmOff)
+	if offAssign.ArmID != model.QAArmOff {
+		t.Fatalf("off Arm = %q, want %q", offAssign.ArmID, model.QAArmOff)
 	}
 	stored, err := store.QAAssignment(ctx, "task:700", 1)
 	if err != nil || stored != nil {
@@ -77,7 +78,7 @@ func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *
 	if err != nil {
 		t.Fatalf("resolveTaskQAAssignment on: %v", err)
 	}
-	if onAssign.Arm != model.QAArmTreatment || onAssign.ComplexityTier != model.QAComplexityHigh {
+	if onAssign.ArmID != model.QAArmTreatment {
 		t.Fatalf("unexpected assignment: %+v", onAssign)
 	}
 	storedOn, err := store.QAAssignment(ctx, "task:700", 1)
@@ -122,13 +123,15 @@ func TestResolveTaskQAAssignment_OriginlessChildInheritsRootTreeArm(t *testing.T
 		t.Fatalf("failed to pick opposite-bucket task IDs")
 	}
 
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	put := func(id string, links ...model.Link) {
 		t.Helper()
 		tk := model.Task{
 			ID:      id,
 			Intent:  model.IntentImplement,
 			Title:   "task " + id,
-			Origin:  model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
+			Target:  &repo,
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
 			Binding: model.BindingDirective,
 			Links:   links,
 		}
@@ -152,15 +155,17 @@ func TestResolveTaskQAAssignment_OriginlessChildInheritsRootTreeArm(t *testing.T
 	}
 
 	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
-	cfgOn := Config{
-		QA: model.QAConfig{
-			Enabled:    true,
-			FlowID:     model.QAFlowGoldenV1Minimal,
-			RolloutPct: 30,
-			Epoch:      1,
-			RegimeID:   1,
-		},
+	qaCfg := model.QAConfig{
+		Enabled:    true,
+		FlowID:     model.QAFlowGoldenV1Minimal,
+		RolloutPct: 30,
+		Epoch:      1,
+		RegimeID:   1,
 	}
+	if err := store.PutConfig(ctx, model.Config{QA: qaCfg}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	cfgOn := Config{QA: qaCfg}
 
 	rootAssign, err := resolveTaskQAAssignment(ctx, store, cfgOn, *rootTask, rootID+"-1", now)
 	if err != nil {
@@ -170,10 +175,19 @@ func TestResolveTaskQAAssignment_OriginlessChildInheritsRootTreeArm(t *testing.T
 	if err != nil {
 		t.Fatalf("resolveTaskQAAssignment child: %v", err)
 	}
-	if rootAssign.RootOrigin != "task:"+rootID || childAssign.RootOrigin != "task:"+rootID {
-		t.Fatalf("origins = (%q, %q), want both %q", rootAssign.RootOrigin, childAssign.RootOrigin, "task:"+rootID)
+	if rootAssign.ArmID != model.QAArmTreatment || childAssign.ArmID != rootAssign.ArmID {
+		t.Fatalf("arms = (root=%q, child=%q), want both %q", rootAssign.ArmID, childAssign.ArmID, model.QAArmTreatment)
 	}
-	if rootAssign.Arm != model.QAArmTreatment || childAssign.Arm != rootAssign.Arm {
-		t.Fatalf("arms = (root=%q, child=%q), want both %q", rootAssign.Arm, childAssign.Arm, model.QAArmTreatment)
+	rootRow, err := store.QAAssignment(ctx, "task:"+rootID, 1)
+	if err != nil || rootRow == nil || rootRow.Arm != model.QAArmTreatment {
+		t.Fatalf("expected root assignment row on task:%s, got (%+v, %v)", rootID, rootRow, err)
+	}
+	childRow, err := store.QAAssignment(ctx, "task:"+childID, 1)
+	if err != nil || childRow != nil {
+		t.Fatalf("expected no separate assignment row on task:%s, got (%+v, %v)", childID, childRow, err)
+	}
+	activeChild, _, err := resolve.ActiveQAResolutionForTask(ctx, store, childID)
+	if err != nil || activeChild == nil || activeChild.ArmID != model.QAArmTreatment {
+		t.Fatalf("ActiveQAResolutionForTask(%s) = (%+v, %v), want %q", childID, activeChild, err, model.QAArmTreatment)
 	}
 }
