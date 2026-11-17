@@ -56,8 +56,14 @@ import {
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import { ModelPickerComponent } from "../shared/model-picker.component";
+import { type ModelBackendLike, modelGroups } from "../shared/model-catalog";
 import { CompositionViewComponent } from "./composition-view.component";
 import {
+  ADMISSION_OPTIONS,
+  HOSTING_OPTIONS,
+  sameList,
   type Composition,
   type CreateScheduleRequest,
   type CreateSuiteRequest,
@@ -209,6 +215,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    GrantsPickerComponent,
+    ModelPickerComponent,
     MarkdownDirective,
     QaFlowsPanelComponent,
   ],
@@ -2118,7 +2126,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             data-testid="sched-system-banner"
           >
             Built-in Grain schedule — target and prompt are managed by Grain;
-            cadence and overlap policy can be customized.
+            model, cadence and overlap policy can be customized.
           </p>
         } @else {
           <div class="field">
@@ -2293,6 +2301,110 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 (input)="sDraftBase.set($any($event.target).value)"
               />
             </label>
+          </div>
+
+          @if (schedTargetKind() === "prompt") {
+            <div class="switch-row" style="margin-top: 14px">
+              <button
+                type="button"
+                role="switch"
+                class="g-switch"
+                aria-label="Keep running"
+                data-testid="sched-keep-running"
+                [attr.aria-checked]="sDraftKeepRunning()"
+                (click)="sDraftKeepRunning.set(!sDraftKeepRunning())"
+              ></button>
+              <span
+                >Keep running
+                <span class="muted"
+                  >— restart every task this schedule files when its run exits,
+                  instead of completing or parking it</span
+                ></span
+              >
+            </div>
+            <div class="proc-field-grid">
+              <div class="field">
+                <span>Admission</span>
+                <g-pill-select
+                  [options]="admissionOptions"
+                  [value]="sDraftAdmission()"
+                  ariaLabel="Admission"
+                  align="left"
+                  testid="sched-admission"
+                  (valueChange)="sDraftAdmission.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-admission-help"
+                >
+                  {{ admissionHelp(sDraftAdmission()) }} Applies to every task
+                  this schedule files.
+                </p>
+              </div>
+              <div class="field">
+                <span>Hosting</span>
+                <g-pill-select
+                  [options]="hostingOptions"
+                  [value]="sDraftHosting()"
+                  ariaLabel="Hosting"
+                  align="left"
+                  testid="sched-hosting"
+                  (valueChange)="sDraftHosting.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-hosting-help"
+                >
+                  {{ hostingHelp(sDraftHosting()) }} Applies to every task this
+                  schedule files.
+                </p>
+              </div>
+            </div>
+            <div class="field">
+              <span>Grants</span>
+              <g-grants-picker
+                testid="sched-grants"
+                [offered]="offeredCapabilities()"
+                [held]="sDraftCaps()"
+                [repo]="sDraftRepo().trim() || undefined"
+                [policyVerdicts]="true"
+                (heldChange)="sDraftCaps.set($event)"
+              />
+            </div>
+          } @else if (schedTargetKind() === "template") {
+            <p class="muted proc-field-help" data-testid="sched-template-note">
+              Admission, hosting, grants and keep running come from the selected
+              template, and stay in sync with it.
+            </p>
+          }
+        }
+
+        @if (schedTargetKind() !== "suite") {
+          <div class="field">
+            <span>Model</span>
+            <div class="proc-model-row">
+              <g-model-picker
+                [groups]="modelGroups()"
+                [value]="sDraftModel()"
+                [placeholder]="schedModelPlaceholder()"
+                ariaLabel="Model"
+                testid="sched-model"
+                (valueChange)="sDraftModel.set($event)"
+              />
+              @if (sDraftModel()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="sched-model-clear"
+                  (click)="sDraftModel.set('')"
+                >
+                  Use default
+                </button>
+              }
+            </div>
+            <p class="muted proc-field-help">
+              The model every task this schedule files asks for.
+            </p>
           </div>
         }
 
@@ -2848,6 +2960,93 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Keep running"
+            data-testid="tmpl-keep-running"
+            [attr.aria-checked]="tDraftKeepRunning()"
+            (click)="tDraftKeepRunning.set(!tDraftKeepRunning())"
+          ></button>
+          <span
+            >Keep running
+            <span class="muted"
+              >— restart every task this template files when its run exits,
+              instead of completing or parking it</span
+            ></span
+          >
+        </div>
+        <div class="proc-field-grid">
+          <div class="field">
+            <span>Admission</span>
+            <g-pill-select
+              [options]="admissionOptions"
+              [value]="tDraftAdmission()"
+              ariaLabel="Admission"
+              align="left"
+              testid="tmpl-admission"
+              (valueChange)="tDraftAdmission.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-admission-help">
+              {{ admissionHelp(tDraftAdmission()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+          <div class="field">
+            <span>Hosting</span>
+            <g-pill-select
+              [options]="hostingOptions"
+              [value]="tDraftHosting()"
+              ariaLabel="Hosting"
+              align="left"
+              testid="tmpl-hosting"
+              (valueChange)="tDraftHosting.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-hosting-help">
+              {{ hostingHelp(tDraftHosting()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+        </div>
+        <div class="field">
+          <span>Grants</span>
+          <g-grants-picker
+            testid="tmpl-grants"
+            [offered]="offeredCapabilities()"
+            [held]="tDraftCaps()"
+            [repo]="tDraftRepo().trim() || undefined"
+            [policyVerdicts]="true"
+            (heldChange)="tDraftCaps.set($event)"
+          />
+        </div>
+        <div class="field">
+          <span>Model</span>
+          <div class="proc-model-row">
+            <g-model-picker
+              [groups]="modelGroups()"
+              [value]="tDraftModel()"
+              [placeholder]="'Deployment default model'"
+              ariaLabel="Model"
+              testid="tmpl-model"
+              (valueChange)="tDraftModel.set($event)"
+            />
+            @if (tDraftModel()) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="tmpl-model-clear"
+                (click)="tDraftModel.set('')"
+              >
+                Use default
+              </button>
+            }
+          </div>
+          <p class="muted proc-field-help">
+            The model every task this template files asks for.
+          </p>
+        </div>
         <!-- Beside the actions, so a refused save is in view where the
              Save was pressed, on a phone as on a desktop. -->
         @if (dialogError(); as derr) {
@@ -3372,6 +3571,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftGitRefRepo = signal("");
   protected readonly sDraftGitRef = signal("refs/heads/main");
   protected readonly sDraftOverlap = signal("skip");
+  // What every firing of an inline-prompt schedule carries beside its
+  // prompt (model.Schedule): a template-backed schedule takes these from
+  // its template, so only the model is the schedule's own there.
+  protected readonly sDraftModel = signal("");
+  protected readonly sDraftKeepRunning = signal(false);
+  protected readonly sDraftAdmission = signal("standard");
+  protected readonly sDraftHosting = signal("unattended");
+  protected readonly sDraftCaps = signal<string[]>([]);
   protected readonly sDraftQaFlowRef = signal("");
   protected readonly draftSchedComposition = signal<Composition | null>(null);
 
@@ -3393,6 +3600,40 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftParamsCsv = signal("");
   protected readonly tDraftFields = signal<TemplateField[]>([]);
   protected readonly tDraftAutoMerge = signal(false);
+  protected readonly tDraftModel = signal("");
+  protected readonly tDraftKeepRunning = signal(false);
+  protected readonly tDraftAdmission = signal("standard");
+  protected readonly tDraftHosting = signal("unattended");
+  protected readonly tDraftCaps = signal<string[]>([]);
+
+  // The vocabularies the schedule and template forms share: the
+  // deployment's model catalog (one group per connection), the
+  // capabilities it offers, and the admission and hosting settings.
+  protected readonly modelGroups = computed(() =>
+    modelGroups(
+      (this.access.rawConfig()?.agentBackends ?? []) as ModelBackendLike[],
+    ),
+  );
+  protected readonly offeredCapabilities = computed(
+    () => this.access.rawConfig()?.capabilities ?? [],
+  );
+  protected readonly admissionOptions: PillOption[] = ADMISSION_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly hostingOptions: PillOption[] = HOSTING_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly schedModelPlaceholder = computed(() =>
+    this.schedTargetKind() === "template" && !this.editingSchedule()?.system
+      ? "The template's model"
+      : "Deployment default model",
+  );
+  protected admissionHelp(v: string): string {
+    return ADMISSION_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
+  protected hostingHelp(v: string): string {
+    return HOSTING_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
   protected readonly tDraftQaFlowRef = signal("");
 
   // Create/Edit suite dialog state
@@ -4662,6 +4903,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         existing.recurrence?.gitRef?.ref ?? "refs/heads/main",
       );
       this.sDraftOverlap.set(existing.overlap || "skip");
+      this.sDraftModel.set(existing.model || "");
+      this.sDraftKeepRunning.set(!!existing.keepRunning);
+      this.sDraftAdmission.set(existing.admission || "standard");
+      this.sDraftHosting.set(existing.hosting || "unattended");
+      this.sDraftCaps.set([...(existing.capabilities ?? [])]);
       this.sDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.schedTargetKind.set("prompt");
@@ -4684,6 +4930,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftGitRefRepo.set("");
       this.sDraftGitRef.set("refs/heads/main");
       this.sDraftOverlap.set("skip");
+      this.sDraftModel.set("");
+      this.sDraftKeepRunning.set(false);
+      this.sDraftAdmission.set("standard");
+      this.sDraftHosting.set("unattended");
+      this.sDraftCaps.set([]);
       this.sDraftQaFlowRef.set("");
     }
     this.schedDialogOpen.set(true);
@@ -4780,6 +5031,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       timeZone: this.sDraftTz().trim() || undefined,
       overlap: this.sDraftOverlap(),
     };
+    // A suite decides the model of everything it runs; the API refuses
+    // one beside a suiteId. "" is the default, the same as saying nothing.
+    if (tk !== "suite" && this.sDraftModel()) {
+      baseReq.model = this.sDraftModel();
+    }
     if (tk === "template") {
       baseReq.templateId = this.sDraftTemplateId();
     } else if (tk === "suite") {
@@ -4787,7 +5043,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     } else {
       baseReq.title = this.sDraftTitle().trim();
       baseReq.description = this.sDraftDesc().trim();
-      baseReq.capabilities = [];
+      baseReq.keepRunning = this.sDraftKeepRunning();
+      // Only when it differs from the default: raising admission is
+      // gated for a limited role, so a form that says nothing must not ask.
+      if (this.sDraftAdmission() !== "standard") {
+        baseReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== "unattended") {
+        baseReq.hosting = this.sDraftHosting();
+      }
+      baseReq.capabilities = [...this.sDraftCaps()];
       baseReq.reads = [];
       baseReq.writes = [];
     }
@@ -4798,12 +5063,49 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return baseReq;
   }
 
+  /**
+   * buildSchedulePreviewPayload is the create body as the draft
+   * composition endpoint must see it. That endpoint has no saved row to
+   * fall back on, so the model, admission and hosting in force are always
+   * sent -- for a template-backed schedule, the saved schedule's own
+   * (a declared schedule may raise its template's admission), and its own
+   * capabilities, which its firings grant beside the template's
+   * (ScheduleOverlay.jsx previewRequest).
+   */
+  private buildSchedulePreviewPayload(): CreateScheduleRequest {
+    const req = this.buildScheduleCreatePayload();
+    const tk = this.schedTargetKind();
+    if (tk === "suite") return req;
+    const editing = this.editingSchedule();
+    const sameTemplate =
+      tk === "template" &&
+      !!editing?.templateId &&
+      editing.templateId === this.sDraftTemplateId();
+    req.model = this.sDraftModel();
+    if (tk === "prompt") {
+      req.admission = this.sDraftAdmission();
+      req.hosting = this.sDraftHosting();
+    } else {
+      req.admission = sameTemplate ? editing?.admission || "" : "";
+      req.hosting = sameTemplate ? editing?.hosting || "" : "";
+      if (sameTemplate && (editing?.capabilities ?? []).length > 0) {
+        req.capabilities = [...(editing?.capabilities ?? [])];
+      }
+    }
+    return req;
+  }
+
   private buildScheduleUpdatePayload(editing: Schedule): UpdateScheduleRequest {
     if (editing.system) {
+      // One of grain's own schedules: its model is the deployment's to
+      // choose, like its cadence (ui.UpdateScheduleRequest.Model).
       return {
         recurrence: this.buildRecurrenceDraft(),
         timeZone: this.sDraftTz().trim() || undefined,
         overlap: this.sDraftOverlap(),
+        ...(this.sDraftModel() !== (editing.model || "")
+          ? { model: this.sDraftModel() }
+          : {}),
         revision: editing.revision,
       };
     }
@@ -4820,6 +5122,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     if (qaFlowRef || editing.qaFlowRef) {
       patchReq.qaFlowRef = qaFlowRef;
     }
+    // Each setting below only when it changed, as the classic form sends
+    // them: absent leaves the saved value alone (ui.UpdateScheduleRequest),
+    // and resending an unchanged admission would ask a limited role's
+    // grant gate for a raise nobody made.
+    if (tk !== "suite" && this.sDraftModel() !== (editing.model || "")) {
+      patchReq.model = this.sDraftModel();
+    }
     if (tk === "template") {
       patchReq.templateId = this.sDraftTemplateId();
     } else if (tk === "suite") {
@@ -4830,6 +5139,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (editing.templateId) {
         patchReq.templateId = "";
       }
+      if (this.sDraftKeepRunning() !== !!editing.keepRunning) {
+        patchReq.keepRunning = this.sDraftKeepRunning();
+      }
+      if (this.sDraftAdmission() !== (editing.admission || "standard")) {
+        patchReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== (editing.hosting || "unattended")) {
+        patchReq.hosting = this.sDraftHosting();
+      }
+      if (!sameList(this.sDraftCaps(), editing.capabilities)) {
+        patchReq.capabilities = [...this.sDraftCaps()];
+      }
     }
     return patchReq;
   }
@@ -4838,7 +5159,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.dialogError.set(null);
     try {
       const comp = await this.store.previewDraftSchedule(
-        this.buildScheduleCreatePayload(),
+        this.buildSchedulePreviewPayload(),
       );
       this.draftSchedComposition.set(comp);
     } catch (err) {
@@ -4945,6 +5266,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set(clonedFields);
       this.tDraftParamsCsv.set(clonedFields.map((f) => f.name).join(", "));
       this.tDraftAutoMerge.set(existing.autoMerge);
+      this.tDraftModel.set(existing.model || "");
+      this.tDraftKeepRunning.set(!!existing.keepRunning);
+      this.tDraftAdmission.set(existing.admission || "standard");
+      this.tDraftHosting.set(existing.hosting || "unattended");
+      this.tDraftCaps.set([...(existing.capabilities ?? [])]);
       this.tDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.tDraftName.set("");
@@ -4954,6 +5280,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set([]);
       this.tDraftParamsCsv.set("");
       this.tDraftAutoMerge.set(false);
+      this.tDraftModel.set("");
+      this.tDraftKeepRunning.set(false);
+      this.tDraftAdmission.set("standard");
+      this.tDraftHosting.set("unattended");
+      this.tDraftCaps.set([]);
       this.tDraftQaFlowRef.set("");
     }
     this.tmplDialogOpen.set(true);
@@ -5008,6 +5339,42 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.access.can(route, targetRepo);
   }
 
+  /**
+   * buildTemplateUpdatePayload is the PATCH for an edited template: its
+   * text, binding and fields as before, and each setting below only when
+   * it changed (TemplateOverlay.jsx): absent leaves the saved value alone.
+   */
+  private buildTemplateUpdatePayload(
+    editing: Template,
+    fields: TemplateField[],
+  ): UpdateTemplateRequest {
+    const req: UpdateTemplateRequest = {
+      name: this.tDraftName().trim(),
+      title: this.tDraftTitle().trim(),
+      description: this.tDraftDesc(),
+      repo: this.tDraftRepo().trim(),
+      fields,
+      autoMerge: this.tDraftAutoMerge(),
+      revision: editing.revision,
+    };
+    if (this.tDraftModel() !== (editing.model || "")) {
+      req.model = this.tDraftModel();
+    }
+    if (this.tDraftKeepRunning() !== !!editing.keepRunning) {
+      req.keepRunning = this.tDraftKeepRunning();
+    }
+    if (this.tDraftAdmission() !== (editing.admission || "standard")) {
+      req.admission = this.tDraftAdmission();
+    }
+    if (this.tDraftHosting() !== (editing.hosting || "unattended")) {
+      req.hosting = this.tDraftHosting();
+    }
+    if (!sameList(this.tDraftCaps(), editing.capabilities)) {
+      req.capabilities = [...this.tDraftCaps()];
+    }
+    return req;
+  }
+
   protected async saveTemplateDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveTemplate()) return;
     this.dialogError.set(null);
@@ -5017,15 +5384,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const editing = this.editingTemplate();
       const qaFlowRef = this.tDraftQaFlowRef().trim();
       if (editing) {
-        const patchReq: UpdateTemplateRequest = {
-          name: this.tDraftName().trim(),
-          title: this.tDraftTitle().trim(),
-          description: this.tDraftDesc(),
-          repo: this.tDraftRepo().trim(),
-          fields,
-          autoMerge: this.tDraftAutoMerge(),
-          revision: editing.revision,
-        };
+        const patchReq = this.buildTemplateUpdatePayload(editing, fields);
         if (qaFlowRef || editing.qaFlowRef) {
           patchReq.qaFlowRef = qaFlowRef;
         }
@@ -5044,7 +5403,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           repo: this.tDraftRepo().trim(),
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
-          capabilities: [],
+          keepRunning: this.tDraftKeepRunning(),
+          ...(this.tDraftModel() ? { model: this.tDraftModel() } : {}),
+          ...(this.tDraftAdmission() !== "standard"
+            ? { admission: this.tDraftAdmission() }
+            : {}),
+          ...(this.tDraftHosting() !== "unattended"
+            ? { hosting: this.tDraftHosting() }
+            : {}),
+          capabilities: [...this.tDraftCaps()],
           reads: [],
           writes: [],
           customFields: {},

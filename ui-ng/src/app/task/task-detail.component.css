@@ -35,10 +35,8 @@ g-task-detail {
 
 /* These hosts already fill a bounded stage/pane. Query its actual size
    rather than the window, so a docked Director also narrows the layout.
-   Keep .task-page itself out of containment: Chromium sometimes builds no
-   layout boxes for children Angular re-inserts into an inline-size
-   container nested directly in this size container, so switching tasks in
-   the inspector left the header (and everything under it) unrendered. */
+   Keep it the only container here: a nested one on .task-page made Chromium
+   intermittently drop every box under it after switching tasks. */
 g-task-page > g-task-detail,
 .tasks-detail-pane {
   container: task-detail / size;
@@ -323,8 +321,6 @@ g-task-page > g-task-detail,
   background: var(--md-sys-color-surface-container);
 }
 
-/* The aside exists only on the full page, where g-task-detail is the
-   task-detail container and as wide as .task-page. */
 @container task-detail (max-width: 1060px) {
   .task-layout {
     grid-template-columns: minmax(0, 1fr);

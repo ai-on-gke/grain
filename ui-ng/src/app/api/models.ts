@@ -561,6 +561,10 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
+  // kind is admitted (ui.CapabilityMethod.Policy).
+  policy?: Record<string, string>;
   aliasOf?: string[];
 }
 
