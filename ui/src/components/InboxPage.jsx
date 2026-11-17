@@ -356,11 +356,27 @@ const GROUPS = [
     match: (t) => t.state === "awaiting_reply",
     // A report (askedCase's "answer") asked nothing: Acknowledge is its
     // answer and Reply the lesser one, the other way round from a
-    // question. The badge says which a row is.
-    badge: (t) =>
-      isReport(t)
-        ? { label: "Info", color: "info", title: "A report: nothing was asked" }
-        : { label: "Question", color: "warning", title: "Waits on your reply" },
+    // question. The badge says which a row is; a stopped turn, an access
+    // request or a conversation waiting on a message is neither, so it
+    // carries none and its note says what it is.
+    badge: (t) => {
+      switch (askedCase(t)?.kind) {
+        case "answer":
+          return {
+            label: "Info",
+            color: "info",
+            title: "A report: nothing was asked",
+          };
+        case "question":
+          return {
+            label: "Question",
+            color: "warning",
+            title: "Waits on your reply",
+          };
+        default:
+          return null;
+      }
+    },
     replySecondary: (t) => isReport(t),
     // Which of "Asked"'s cases this is (state.js's askedCase): a
     // question, an answer, a stopped turn, or a conversation waiting for
@@ -1466,7 +1482,12 @@ export default function InboxPage({
                 ? bulk.map((action) =>
                     gated(
                       inboxActionScope(action),
-                      rows.map((t) => t.repo).filter(Boolean),
+                      // Only the rows it acts on: a question from a
+                      // repository the viewer only reads must not disable
+                      // the reports they may close.
+                      bulkRows(action, rows)
+                        .map((t) => t.repo)
+                        .filter(Boolean),
                       config,
                       <Button
                         key={action.bulk.label}

@@ -726,6 +726,65 @@ describe("InboxPageComponent", () => {
     expect(closed()).toEqual([]);
   });
 
+  it("acknowledges a report and a question from the resolution dock", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      {
+        id: "20",
+        title: "Which branch?",
+        state: "awaiting_reply",
+        questionSummary: "Fix both?",
+        questionCommentId: 3,
+      },
+      {
+        id: "21",
+        title: "Why is CI slow",
+        state: "awaiting_reply",
+        noteSummary: "Cache misses",
+      },
+    ];
+    const f = await render(api);
+    const store = TestBed.inject(InboxStore);
+    const snacks = TestBed.inject(SnackbarService);
+    const closed = () =>
+      api.posts
+        .filter((p) => p.route === "POST /api/tasks/{id}/close")
+        .map((p) => (p.params as { id: string }).id);
+    const dockAck = () =>
+      q(
+        f,
+        '[data-testid="reply-actions"] [data-testid="action-acknowledge"]',
+      ) as HTMLButtonElement | null;
+
+    // A report's dock Acknowledge closes it at once, with the row's Undo.
+    store.select("task:21:reply");
+    await f.whenStable();
+    expect(dockAck()).not.toBeNull();
+    dockAck()!.click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    expect(closed()).toEqual(["21"]);
+    expect(q(f, '[data-testid="confirm-dialog"]')).toBeNull();
+    expect(snacks.current()?.message).toBe("Acknowledged 1 item");
+    expect(snacks.current()?.action?.label).toBe("Undo");
+
+    // A question's dock Acknowledge asks first: it closes a parked run.
+    api.posts = [];
+    store.select("task:20:reply");
+    await f.whenStable();
+    expect(dockAck()).not.toBeNull();
+    dockAck()!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
+      "without answering",
+    );
+    expect(closed()).toEqual([]);
+    (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    expect(closed()).toEqual(["20"]);
+  });
+
   it("keeps failed rows selected after a batch", async () => {
     const api = new FakeApi();
     proposals(api);

@@ -1046,6 +1046,37 @@ describe("InboxPage", () => {
       });
     });
 
+    // A stopped turn or an access request waits in "Asked" too, but it is
+    // not a question, nor a report: neither badge fits it.
+    it("badges neither a stopped turn nor an access request as a question", () => {
+      renderInbox({
+        tasks: [
+          task({
+            id: "t1",
+            title: "Stopped one",
+            state: "awaiting_reply",
+            turnStopped: true,
+          }),
+          task({
+            id: "t2",
+            title: "Access one",
+            state: "awaiting_reply",
+            awaitingAccess: true,
+          }),
+        ],
+      });
+      for (const title of ["Stopped one", "Access one"]) {
+        const row = screen.getByText(title).closest("li");
+        expect(within(row).queryByText("Question")).not.toBeInTheDocument();
+        expect(within(row).queryByText("Info")).not.toBeInTheDocument();
+      }
+      expect(
+        within(screen.getByText("Stopped one").closest("li")).getByText(
+          "Stopped by you",
+        ),
+      ).toBeInTheDocument();
+    });
+
     it("acknowledges, retries and defers whole groups too", async () => {
       vi.spyOn(window, "confirm").mockReturnValue(true);
       const onActBatch = batched();
@@ -1847,6 +1878,48 @@ describe("InboxPage for a limited role", () => {
     expect(inboxActionScope({ forceMerge: true })).toBe("merge:force");
     expect(inboxActionScope({ open: true })).toBeNull();
     expect(inboxActionScope({ href: () => "x" })).toBeNull();
+  });
+
+  // Acknowledge all closes only the reports, so it asks for tasks:write on
+  // their repositories alone: a question from one the role only reads does
+  // not disable it.
+  it("gates Acknowledge all on the reports it closes, not every row", () => {
+    const limited = {
+      access: {
+        ...contributorConfig.access,
+        repoLimits: { "tasks:write": ["acme/widgets"] },
+      },
+    };
+    render(
+      <InboxPage
+        {...baseProps}
+        config={limited}
+        tasks={[
+          task({
+            id: "a1",
+            title: "Answer one",
+            state: "awaiting_reply",
+            repo: "acme/widgets",
+          }),
+          task({
+            id: "a2",
+            title: "Answer two",
+            state: "awaiting_reply",
+            repo: "acme/widgets",
+          }),
+          task({
+            id: "q1",
+            title: "Question one",
+            state: "awaiting_reply",
+            repo: "acme/other",
+            questionSummary: "Which branch?",
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Acknowledge all (2)" }),
+    ).toBeEnabled();
   });
 
   it("disables every write for a viewer and sends nothing", async () => {
