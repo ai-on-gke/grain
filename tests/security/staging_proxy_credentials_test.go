@@ -36,9 +36,9 @@ type stubStagingSandboxes struct {
 func (s stubStagingSandboxes) List(context.Context) ([]model.PersistentSandboxStatus, error) {
 	return []model.PersistentSandboxStatus{{Name: "preview", Repo: "acme/web", State: "running", UISubpath: "/staging/preview"}}, nil
 }
-func (s stubStagingSandboxes) Logs(string) (string, bool)                   { return "", false }
+func (s stubStagingSandboxes) Logs(string) (string, bool)                    { return "", false }
 func (s stubStagingSandboxes) Control(context.Context, string, string) error { return nil }
-func (s stubStagingSandboxes) StripPrefix(name string) (bool, bool)         { return true, name == "preview" }
+func (s stubStagingSandboxes) StripPrefix(name string) (bool, bool)          { return true, name == "preview" }
 func (s stubStagingSandboxes) Dial(ctx context.Context, name string) (net.Conn, error) {
 	if name != "preview" {
 		return nil, fmt.Errorf("unknown sandbox %s", name)
