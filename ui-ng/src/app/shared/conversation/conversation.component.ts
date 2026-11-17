@@ -250,7 +250,7 @@ export interface ComposerConfig {
                   type="button"
                   class="btn-tonal"
                   data-testid="pending-retry"
-                  (click)="retryPending.emit(p.key)"
+                  (click)="onPendingAction(retryPending, p.key)"
                 >
                   Retry
                 </button>
@@ -259,7 +259,7 @@ export interface ComposerConfig {
                   class="btn-text"
                   data-testid="pending-edit"
                   gTip="Take this message back into the composer"
-                  (click)="editPending.emit(p.key)"
+                  (click)="onPendingAction(editPending, p.key)"
                 >
                   Edit
                 </button>
@@ -652,6 +652,13 @@ export class ConversationComponent implements OnDestroy {
     const cur = this.stagedAttachments();
     const { uploads } = await readFilesAsUploads(files, cur.length);
     if (uploads.length) this.stagedAttachments.set([...cur, ...uploads]);
+  }
+
+  // Retry and Edit take their button away with the bubble, so focus goes
+  // back to the composer rather than to <body>.
+  protected onPendingAction(out: { emit(key: number): void }, key: number) {
+    out.emit(key);
+    setTimeout(() => this.composer()?.nativeElement.focus());
   }
 
   protected onEnter(ev: Event): void {

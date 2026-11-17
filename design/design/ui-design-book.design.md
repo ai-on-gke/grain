@@ -309,9 +309,17 @@ inspector and Task Detail. Sessions shares its message styles.
   floor of `min(18rem, 45dvh)` and the composer is sticky at the pane's
   foot, so Send stays above the bottom bar however many rows the chat head
   wraps to (320×568 included). Only a person's own send scrolls the pane.
-- **Sending is never blocked by sending.** In Sessions a sent message shows
-  at once (dashed: `Sending…`, then `Queued` behind it) and the composer
-  clears; a refused one stays as `Not sent` with its reason, Retry and Edit.
+- **Sending is never blocked by sending.** In Sessions and task chat
+  (`g-conversation`'s `pending` outbox) a sent message shows at once
+  (dashed: `Sending…`, then `Queued` behind it) and the composer clears and
+  stays enabled; one the server refuses stays as `Not sent` with its reason,
+  Retry and Edit, and either hands focus back to the composer. Task chat
+  checks each message against the task, read live, just before it posts:
+  one that check refuses (the question changed, the task closed or was
+  stopped) goes back into the composer, with whatever was queued behind it,
+  and the reason shows in the action banner. A message queued behind
+  another is checked as a comment, since the reply ahead may be what woke
+  the task.
 - **Comment links (`#comment=<id>`)** open Conversation on any tab. A cold
   load reads 500 comments and pages back 500 at a time to the comment
   before rendering, so the thread draws once (a 3,000-comment task is at most
