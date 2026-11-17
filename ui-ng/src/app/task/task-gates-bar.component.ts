@@ -24,6 +24,7 @@ import {
   signal,
   untracked,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   AccessRequestItem,
@@ -33,8 +34,17 @@ import type {
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { parseUnifiedDiff } from "../shared/diff-parse";
+import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
+import { unsatisfiedGates } from "../shared/gates";
+import type { ForceMergeRequest } from "./force-merge-dialog.component";
 import { TaskStore } from "./task.store";
+
+// The human-review hold source of review findings
+// (model.HumanReviewSecurityFindings) and the merge gate it blocks
+// (model.GateSecurityReview).
+const FINDINGS_SOURCE = "security-findings";
+const SECURITY_REVIEW_GATE = "security-review";
 
 const REVIEW_CATEGORIES = [
   { value: "other", label: "General review" },
@@ -43,9 +53,20 @@ const REVIEW_CATEGORIES = [
   { value: "breaking-change", label: "Breaking change" },
 ] as const;
 
+// mergeRuleSource names the rules a merge requirement came from, as
+// classic's MergePolicy does: rule ids, or "defaults" / "repository
+// setting" as they are.
+export function mergeRuleSource(from?: string[]): string {
+  return (from ?? [])
+    .map((f) =>
+      f === "defaults" || f === "repository setting" ? f : `rule ${f}`,
+    )
+    .join(", ");
+}
+
 @Component({
   selector: "g-task-gates-bar",
-  imports: [DiffViewerComponent],
+  imports: [DiffViewerComponent, CappedMarkdownComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-gates-bar.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -138,7 +159,13 @@ const REVIEW_CATEGORIES = [
               }
             </div>
             @if (pa.reason) {
-              <p class="muted" style="margin: 0">{{ pa.reason }}</p>
+              <g-capped-markdown
+                class="muted"
+                testid="gate-access-reason"
+                noun="reason"
+                label="Why the run asks"
+                [text]="pa.reason"
+              />
             }
             <ul class="gate-access-list" data-testid="access-items-list">
               @for (it of displayItems(); track $index) {
@@ -405,7 +432,7 @@ const REVIEW_CATEGORIES = [
         }
 
         <!-- 5. Human-Review Hold -->
-        @if (task().humanReviewHold?.length) {
+        @if (holdOpen()) {
           <section
             class="gate-card"
             data-testid="human-review-hold"
@@ -415,21 +442,61 @@ const REVIEW_CATEGORIES = [
               <h2 id="gate-hr-h" class="gate-card-title">
                 Held for human review
               </h2>
-              @if (
-                can("POST /api/tasks/{id}/human-review/release") &&
-                access.isFullAccess()
-              ) {
-                <button
-                  type="button"
-                  class="btn-primary"
-                  data-testid="release-hold-btn"
-                  [disabled]="store.isBusy('release-hold', task().id)"
-                  (click)="releaseHold()"
-                >
-                  Release hold
-                </button>
-              }
+              <div class="gate-actions">
+                @if (
+                  findingsHeld() &&
+                  findingsGateOpen() &&
+                  canForceMerge() &&
+                  can("POST /api/tasks/{id}/force-merge") &&
+                  access.isFullAccess()
+                ) {
+                  <button
+                    type="button"
+                    class="btn-outlined danger"
+                    data-testid="hold-force-merge-open"
+                    [disabled]="store.isBusy('force-merge', task().id)"
+                    (click)="emitForceMerge()"
+                  >
+                    Override review gate…
+                  </button>
+                }
+                @if (
+                  !findingsOnly() &&
+                  can("POST /api/tasks/{id}/human-review/release") &&
+                  access.isFullAccess()
+                ) {
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    data-testid="release-hold-btn"
+                    [disabled]="store.isBusy('release-hold', task().id)"
+                    (click)="releaseHold()"
+                  >
+                    Release hold
+                  </button>
+                }
+              </div>
             </div>
+            @if (findingsHeld()) {
+              <p
+                class="muted"
+                data-testid="hold-findings-note"
+                style="margin: 0"
+              >
+                @if (!findingsOnly()) {
+                  Release hold releases the other reasons only.
+                }
+                @if (findingsGateOverridden()) {
+                  The review gate has been overridden under
+                  <code>merge:force</code>; these findings no longer block the
+                  merge.
+                } @else {
+                  Review findings cannot be released directly; they require a
+                  passing re-review or an operator gate override under
+                  <code>merge:force</code>.
+                }
+              </p>
+            }
             <ul class="gate-access-list">
               @for (h of task().humanReviewHold; track $index) {
                 <li>
@@ -443,7 +510,149 @@ const REVIEW_CATEGORIES = [
           </section>
         }
 
-        <!-- 6. Request Human Review (for review tasks) -->
+        <!-- 6. Path-trigger hold and owed approvals (pathtriggerhold.go,
+             approvals.go): the repository's gating triggers holding this
+             change, the review each filed, and who may release it. -->
+        @if (showPathTriggerHold()) {
+          <section
+            class="gate-card"
+            data-testid="path-trigger-hold"
+            aria-labelledby="gate-pt-h"
+          >
+            <div class="gate-card-head">
+              <h2 id="gate-pt-h" class="gate-card-title">
+                {{
+                  task().pathTriggerHold
+                    ? "Held by this repository's gating triggers"
+                    : "Waiting for a named approver"
+                }}
+              </h2>
+              @if (task().pathTriggerHold; as human) {
+                <span class="status-pill proposal">human: {{ human }}</span>
+              }
+            </div>
+            <p class="muted" style="margin: 0">
+              {{
+                task().pathTriggerHold === "required"
+                  ? "This change touches paths a person must release: it merges only after an approver's Submit."
+                  : "This change touches paths its repository's triggers gate: it merges once their reviews pass."
+              }}
+            </p>
+            <ul class="gate-access-list">
+              @for (pt of pathTriggers(); track pt.entry) {
+                <li class="gate-access-row" data-testid="path-trigger-row">
+                  <code>.grain/triggers/{{ pt.trigger }}.yml</code>
+                  @if (pt.task) {
+                    <a
+                      data-testid="path-trigger-review-link"
+                      [routerLink]="linkTo(pt.task)"
+                      [queryParams]="linkQuery(pt.task)"
+                      [queryParamsHandling]="pane() ? 'merge' : ''"
+                      >Review task #{{ pt.task }}</a
+                    >
+                  }
+                </li>
+              }
+              @for (a of task().approvals ?? []; track a.rule) {
+                <li class="gate-access-row" data-testid="approval-rule">
+                  <code>{{ a.rule }}</code>
+                  @if (a.source) {
+                    <span class="muted">{{ a.source }}</span>
+                  }
+                  @if (a.approvedBy) {
+                    <span class="status-pill healthy"
+                      >approved by {{ a.approvedBy }}</span
+                    >
+                  } @else {
+                    <span
+                      >Waiting for
+                      {{
+                        (a.approvers ?? []).join(" or ") || "an approver"
+                      }}</span
+                    >
+                  }
+                </li>
+              }
+            </ul>
+            @if (task().repoRules; as rules) {
+              <p class="muted" style="margin: 0">
+                Decided under <code>{{ rules }}</code>
+              </p>
+            }
+          </section>
+        }
+
+        <!-- 7. Security hold (orchestrator's securityhold.go) -->
+        @if (showSecurityHold()) {
+          <section
+            class="gate-card"
+            data-testid="security-hold"
+            aria-labelledby="gate-sec-h"
+          >
+            <div class="gate-card-head">
+              <h2 id="gate-sec-h" class="gate-card-title">
+                {{
+                  task().securityHold
+                    ? "Security hold: " + task().securityHold
+                    : "Touches grain's trust boundary"
+                }}
+              </h2>
+            </div>
+            <p class="muted" style="margin: 0">
+              {{
+                task().securityHold
+                  ? "All gates must pass before it merges. Submit records your approval and merges it once the security review and CI pass."
+                  : "It will not merge automatically: read its security review, then Submit."
+              }}
+            </p>
+            @if (task().securityReviewTask; as rt) {
+              <a
+                data-testid="security-review-link"
+                [routerLink]="linkTo(rt)"
+                [queryParams]="linkQuery(rt)"
+                [queryParamsHandling]="pane() ? 'merge' : ''"
+                >Security review: task #{{ rt }}</a
+              >
+            }
+          </section>
+        }
+
+        <!-- 8. Merge policy: what .grain/merge-rules.yml requires of this
+             head, one line per requirement with the rule behind it. -->
+        @if (mergeRequirements().length) {
+          <section
+            class="gate-card"
+            data-testid="merge-policy"
+            aria-labelledby="gate-mp-h"
+          >
+            <div class="gate-card-head">
+              <h2 id="gate-mp-h" class="gate-card-title">
+                Merge rules
+                @if (task().mergePolicy?.Matched?.length) {
+                  <span class="muted"
+                    >· matched
+                    {{ task().mergePolicy!.Matched!.join(", ") }}</span
+                  >
+                }
+              </h2>
+              @if (task().mergePolicy?.Head; as head) {
+                <code class="muted">{{ head.slice(0, 12) }}</code>
+              }
+            </div>
+            <ul class="gate-access-list">
+              @for (r of mergeRequirements(); track r.key) {
+                <li class="gate-access-row" data-testid="merge-requirement">
+                  <code>{{ r.text }}</code>
+                  @if (r.from) {
+                    <span class="muted">from {{ r.from }}</span>
+                  }
+                </li>
+              }
+            </ul>
+          </section>
+        }
+
+        <!-- 9. Request Human Review (for review tasks) -->
       </div>
     }
   `,
@@ -455,8 +664,12 @@ export class TaskGatesBarComponent {
   private readonly snackbar = inject(SnackbarService);
 
   readonly task = input.required<TaskDetail>();
+  // In the Inbox pane a task link swaps the pane (?task=) rather than
+  // leaving for the full page, as task-detail's own links do.
+  readonly pane = input(false);
   readonly acted = output<void>();
   readonly replyInWordsChange = output<boolean>();
+  readonly forceMerge = output<ForceMergeRequest>();
 
   protected readonly reviewCategories = REVIEW_CATEGORIES;
   protected readonly secretValue = signal("");
@@ -507,14 +720,126 @@ export class TaskGatesBarComponent {
     ),
   );
 
+  // A hold the repository's rules put on an open change; Submit (or the
+  // reviews passing) ends it, so a closed or auto-merging task shows none.
+  private readonly holdable = computed(() => {
+    const t = this.task();
+    return t.state !== "closed" && !t.autoMerge;
+  });
+
+  protected readonly showPathTriggerHold = computed(() => {
+    const t = this.task();
+    return (
+      this.holdable() &&
+      !!(t.pathTriggerHold || t.pathTriggerTasks?.length || t.approvals?.length)
+    );
+  });
+
+  protected readonly showSecurityHold = computed(() => {
+    const t = this.task();
+    return this.holdable() && !!(t.securityHold || t.securityReviewTask);
+  });
+
+  // pathTriggerTasks entries are "<trigger>=<task>" (pkg/ui/tasks.go).
+  protected readonly pathTriggers = computed(() =>
+    (this.task().pathTriggerTasks ?? []).map((entry) => {
+      const at = entry.indexOf("=");
+      return at < 0
+        ? { entry, trigger: entry, task: "" }
+        : {
+            entry,
+            trigger: entry.slice(0, at),
+            task: entry.slice(at + 1),
+          };
+    }),
+  );
+
+  protected readonly mergeRequirements = computed(() => {
+    const t = this.task();
+    const p = t.mergePolicy;
+    if (!p || t.state === "closed" || !p.Requirements?.length) return [];
+    const rows = p.Requirements.map((r) => ({
+      key: `${r.Field}=${r.Value}`,
+      text: `${r.Field}: ${r.Value}`,
+      from: mergeRuleSource(r.From),
+    }));
+    const mode = p.Mode ?? "";
+    if (p.GrainJobs?.length && !p.GrainFullSuite && /grain|both/.test(mode)) {
+      const text = `grain CI is narrowed to ${p.GrainJobs.join(", ")}`;
+      rows.push({ key: text, text, from: "" });
+    }
+    if (
+      p.GitHubChecks?.length &&
+      !p.GitHubAllChecks &&
+      /github|both/.test(mode)
+    ) {
+      const text = `GitHub CI is narrowed to ${p.GitHubChecks.join(", ")}`;
+      rows.push({ key: text, text, from: "" });
+    }
+    return rows;
+  });
+
+  protected linkTo(id: string): unknown[] {
+    return this.pane() ? [] : ["/task", id];
+  }
+
+  protected linkQuery(id: string): Record<string, string> | null {
+    return this.pane() ? { task: id } : null;
+  }
+
+  // Review findings on the hold (source security-findings) are a review
+  // gate of their own: Release hold never clears them
+  // (model.ErrFindingsRequireRereviewOrOverride), so a hold of findings
+  // alone offers no Release, only the gate override.
+  protected readonly findingsHeld = computed(() =>
+    (this.task().humanReviewHold ?? []).some(
+      (h) => h.source === FINDINGS_SOURCE,
+    ),
+  );
+  // A closed task's hold is history: nothing on the card can act on it.
+  protected readonly holdOpen = computed(
+    () =>
+      this.task().state !== "closed" && !!this.task().humanReviewHold?.length,
+  );
+  // Whether the security-review gate that raised these findings is still
+  // unsatisfied so the force-merge dialog has that gate to override.
+  protected readonly findingsGateOpen = computed(() =>
+    unsatisfiedGates(this.task()).some((g) => g.id === SECURITY_REVIEW_GATE),
+  );
+  // Whether an operator explicitly overrode the security-review gate:
+  // checked directly rather than !findingsGateOpen() so an empty mergeGates
+  // list (e.g. before a pull request exists) never falsely claims an override,
+  // and a running code-review gate does not mask an overridden security gate.
+  protected readonly findingsGateOverridden = computed(() =>
+    (this.task().mergeGates ?? []).some(
+      (g) => g.id === SECURITY_REVIEW_GATE && g.state === "overridden",
+    ),
+  );
+  // What POST /api/tasks/{id}/force-merge accepts (ForceMergeWithGates): an
+  // open task with a pull request, or a running one it can open one for.
+  protected readonly canForceMerge = computed(() => {
+    const t = this.task();
+    return (
+      t.state !== "closed" &&
+      (!!t.pullRequest || t.state === "running" || t.state === "awaiting_reply")
+    );
+  });
+  protected readonly findingsOnly = computed(() => {
+    const hold = this.task().humanReviewHold ?? [];
+    return hold.length > 0 && hold.every((h) => h.source === FINDINGS_SOURCE);
+  });
+
   protected readonly hasAnyGate = computed(() => {
     const t = this.task();
     return !!(
+      this.showPathTriggerHold() ||
+      this.showSecurityHold() ||
+      this.mergeRequirements().length ||
       t.pendingSecret ||
       t.pendingAccess ||
       t.pendingConfigChange ||
       this.pendingScripts().length ||
-      t.humanReviewHold?.length ||
+      this.holdOpen() ||
       (t.review && this.can("POST /api/tasks/{id}/human-review"))
     );
   });
@@ -729,9 +1054,47 @@ export class TaskGatesBarComponent {
       t.id,
     );
     if (ok) {
-      this.snackbar.show(`Released human-review hold on #${t.id}`);
+      this.snackbar.show(
+        this.findingsHeld() && !this.findingsGateOverridden()
+          ? `Released the human-review request on #${t.id}; review findings still hold it`
+          : `Released human-review hold on #${t.id}`,
+      );
       this.acted.emit();
     }
+  }
+
+  // emitForceMerge opens the force-merge dialog, as Changes & CI's Force
+  // merge… does, so an operator can override the review gate from here.
+  protected emitForceMerge(): void {
+    const t = this.task();
+    this.forceMerge.emit({
+      task: t,
+      unsatisfiedGates: unsatisfiedGates(t),
+      head: t.ci?.commit,
+      run: (reason, overrideGates, head) =>
+        this.store
+          .act(
+            "force-merge",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/force-merge",
+                { id },
+                {
+                  reason,
+                  ...(head ? { head } : {}),
+                  ...(overrideGates.length ? { overrideGates } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok) {
+              this.snackbar.show(`Force-merge queued for #${t.id}`);
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
   }
 
   protected async requestHold(): Promise<void> {

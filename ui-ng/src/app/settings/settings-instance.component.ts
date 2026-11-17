@@ -21,9 +21,11 @@ import {
   type SimpleChanges,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { type VersionInfo, versionLabel } from "../api/version";
@@ -45,10 +47,55 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { formatStamp } from "../shared/dispatch-status";
+import { TipDirective } from "../shared/tip.directive";
+import { errorText } from "../sessions/session-helpers";
+import {
+  type SandboxCommitment,
+  SandboxCommitmentNoteComponent,
+} from "./sandbox-commitment-note.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService } from "./settings-state.service";
 
 const TZ_STORAGE_KEY = "grain.timeZone";
+
+// HUB_TOKEN_SECRET is where the hub registration credential (grc_...)
+// lives in the secret store (pkg/ui/hub.go).
+const HUB_TOKEN_SECRET = "registry-registration-token";
+
+// HubScopeRule is model.HubScopeRule, one Scope overrides rule.
+interface HubScopeRule {
+  repo: string;
+  pathPrefix?: string;
+  role?: string;
+  exclude?: boolean;
+}
+
+// HubSnapshot is GET /api/registry (model.HubSnapshot), as much of it as
+// the Hub cards read.
+interface HubSnapshot {
+  enabled?: boolean;
+  state?: string;
+  effectiveHostKind?: string;
+  lastHeartbeatAt?: string;
+  heartbeatIntervalSeconds?: number;
+  lastError?: string;
+  scopeConflicts?: {
+    repo: string;
+    path_prefix?: string;
+    conflicting_entry?: string;
+  }[];
+  health?: string;
+  healthDetail?: string;
+  activeTasks?: number;
+  awaitingReplyTasks?: number;
+  advertisedScopes?: {
+    repo: string;
+    pathPrefix?: string;
+    role: string;
+    origin?: string;
+  }[];
+}
 
 interface UpgradeTargetRow {
   name?: string;
@@ -78,7 +125,12 @@ function formatBytes(bytes: number): string {
 
 @Component({
   selector: "g-settings-instance",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    TipDirective,
+    SandboxCommitmentNoteComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -342,8 +394,18 @@ function formatBytes(bytes: number): string {
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-package-cache-btn"
-                [disabled]="!access.can('POST /api/package-cache/flush')"
-                (click)="flushPackageCache()"
+                [disabled]="
+                  !packageCacheLive() ||
+                  !access.can('POST /api/package-cache/flush')
+                "
+                [gTip]="
+                  !access.can('POST /api/package-cache/flush')
+                    ? access.deniedReason('POST /api/package-cache/flush')
+                    : !packageCacheLive()
+                      ? 'Proxy cache is not running on this daemon.'
+                      : 'Flush cached packages'
+                "
+                (click)="confirmFlushPackageCache()"
               >
                 Flush proxy cache
               </button>
@@ -351,8 +413,18 @@ function formatBytes(bytes: number): string {
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-actions-cache-btn"
-                [disabled]="!access.can('POST /api/actions-cache/flush')"
-                (click)="flushActionsCache()"
+                [disabled]="
+                  !actionsCacheLive() ||
+                  !access.can('POST /api/actions-cache/flush')
+                "
+                [gTip]="
+                  !access.can('POST /api/actions-cache/flush')
+                    ? access.deniedReason('POST /api/actions-cache/flush')
+                    : !actionsCacheLive()
+                      ? 'Actions cache is not running on this daemon.'
+                      : 'Flush GitHub Actions cache archives'
+                "
+                (click)="confirmFlushActionsCache()"
               >
                 Flush Actions cache
               </button>
@@ -415,12 +487,13 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="0"
-                [value]="state.val('packageCacheSizeGb', 20)"
+                [value]="state.defaultedNumber('packageCacheSizeGb')"
+                [placeholder]="state.defaultHint('packageCacheSizeGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'packageCacheSizeGb',
-                    Number($any($event.target).value)
+                    $any($event.target).value
                   )
                 "
               />
@@ -434,12 +507,13 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="0"
-                [value]="state.val('actionsCacheSizeGb', 20)"
+                [value]="state.defaultedNumber('actionsCacheSizeGb')"
+                [placeholder]="state.defaultHint('actionsCacheSizeGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'actionsCacheSizeGb',
-                    Number($any($event.target).value)
+                    $any($event.target).value
                   )
                 "
               />
@@ -461,13 +535,19 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="text"
                 data-testid="input-poll-interval"
-                placeholder="30s"
-                [value]="state.val('pollInterval', '30s')"
+                [placeholder]="state.defaultHint('pollInterval', '10s')"
+                [value]="state.val('pollInterval', '')"
                 [disabled]="!canWriteSettings()"
+                aria-describedby="e-poll-hint"
                 (input)="
                   state.setField('pollInterval', $any($event.target).value)
                 "
               />
+              <span class="s-hint" id="e-poll-hint"
+                >Go duration, e.g. 10s. Blank uses grain's default ({{
+                  state.val("pollIntervalDefault", "10s")
+                }}).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-workers">Max worker agents</label>
@@ -477,15 +557,26 @@ function formatBytes(bytes: number): string {
                 type="number"
                 min="1"
                 data-testid="input-max-workers"
-                [value]="state.val('maxWorkers', 4)"
+                [value]="state.defaultedNumber('maxWorkers')"
+                aria-describedby="e-workers-hint"
+                [placeholder]="state.defaultHint('maxWorkers', '10')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'maxWorkers',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    10,
+                    true
                   )
                 "
+                (change)="
+                  state.setNumber('maxWorkers', $any($event.target).value, 10)
+                "
               />
+              <span class="s-hint" id="e-workers-hint"
+                >Ordinary tasks dispatched at once (10 by default; blank
+                resets).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-mpr"
@@ -496,17 +587,34 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="1"
-                [value]="state.val('maxMergesPerRepo', 1)"
+                data-testid="input-max-merges-per-repo"
+                [value]="state.defaultedNumber('maxMergesPerRepo')"
+                aria-describedby="e-mpr-hint"
+                [placeholder]="state.defaultHint('maxMergesPerRepo', '5')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'maxMergesPerRepo',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    5,
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'maxMergesPerRepo',
+                    $any($event.target).value,
+                    5
                   )
                 "
               />
+              <span class="s-hint" id="e-mpr-hint"
+                >Ready pull requests merged into each branch per queue cycle (5
+                by default; blank resets).</span
+              >
             </div>
           </div>
+          <g-sandbox-commitment-note [commitment]="sandboxCommitment()" />
 
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
@@ -533,10 +641,10 @@ function formatBytes(bytes: number): string {
       }
 
       @case ("registry") {
-        <div class="s-card" data-testid="card-registry">
+        <div class="s-card" id="registry-status" data-testid="card-registry">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">Grain Registry &amp; Hub connection</h3>
+              <h3 class="s-card-title">Grain Hub connection</h3>
               <p class="s-card-desc">
                 Advertise repository scopes and health heartbeats to a central
                 Grain Hub directory.
@@ -544,8 +652,9 @@ function formatBytes(bytes: number): string {
             </div>
             <div class="s-inline">
               <span
-                class="status-pill neutral s-mono"
+                [class]="'status-pill ' + registryTone()"
                 data-testid="registry-status-pill"
+                [attr.data-state]="registryState()"
               >
                 {{ registryStateLabel() }}
               </span>
@@ -553,14 +662,134 @@ function formatBytes(bytes: number): string {
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="registry-heartbeat-btn"
-                [disabled]="!access.can('POST /api/registry/heartbeat')"
+                [disabled]="
+                  !access.can('POST /api/registry/heartbeat') ||
+                  !registryEnabled() ||
+                  heartbeatSending()
+                "
                 (click)="sendHeartbeat()"
               >
-                Heartbeat now
+                {{ heartbeatSending() ? "Sending…" : "Heartbeat now" }}
               </button>
             </div>
           </div>
 
+          @if (registryEnabled()) {
+            <span class="s-meta-mono" data-testid="registry-endpoint">
+              {{ hubField("url") }} · {{ hubField("entry") }}
+            </span>
+          }
+          <p class="s-hint s-num" data-testid="registry-summary">
+            {{ registrySummary() }}
+          </p>
+          @if (heartbeatResult(); as hr) {
+            <div
+              class="s-banner"
+              [class.ok]="hr.ok"
+              [class.error]="!hr.ok"
+              role="status"
+              data-testid="registry-heartbeat-result"
+            >
+              <span>{{ hr.text }}</span>
+            </div>
+          }
+          @if (registrySnapshot()?.lastError; as lastErr) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="registry-last-error"
+            >
+              <span>{{ lastErr }}</span>
+            </div>
+          }
+          @if (scopeConflictText()) {
+            <div
+              class="s-banner warn"
+              role="alert"
+              data-testid="registry-scope-conflicts"
+            >
+              <span
+                >Scope conflict reported by the hub:
+                {{ scopeConflictText() }}</span
+              >
+            </div>
+          }
+
+          <div class="s-subsection" data-testid="registry-advertised">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Advertised scopes</h4>
+            </div>
+            @if (advertisedScopes().length === 0) {
+              <span class="s-hint" data-testid="registry-advertised-empty"
+                >No repositories advertised yet. Configured repositories are
+                reported automatically from Settings → Repositories.</span
+              >
+            } @else {
+              <div class="s-table-wrap">
+                <table class="s-table" aria-label="Advertised scopes">
+                  <thead>
+                    <tr>
+                      <th>Scope</th>
+                      <th>Role</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (
+                      sc of advertisedScopes();
+                      track sc.repo + ":" + (sc.pathPrefix || "")
+                    ) {
+                      <tr data-testid="registry-advertised-row">
+                        <td>
+                          <div class="s-cell-stack">
+                            <span class="s-cell-title s-mono">{{
+                              sc.repo
+                            }}</span>
+                            <span class="s-meta-mono">{{
+                              sc.pathPrefix
+                                ? sc.pathPrefix + "/"
+                                : "/ (whole repo)"
+                            }}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <div class="s-inline">
+                            <span
+                              class="status-pill"
+                              [class.healthy]="sc.role === 'primary'"
+                              [class.neutral]="sc.role !== 'primary'"
+                              >{{ sc.role }}</span
+                            >
+                            <span
+                              class="status-pill quiet"
+                              data-testid="registry-origin-chip"
+                              [attr.data-origin]="sc.origin || 'repo_config'"
+                              >{{ originLabel(sc.origin) }}</span
+                            >
+                          </div>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+          </div>
+        </div>
+
+        <div
+          class="s-card"
+          id="registry-config"
+          data-testid="card-registry-config"
+        >
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Catalog &amp; authentication</h3>
+              <p class="s-card-desc">
+                Where this grain registers, how its heartbeats authenticate, and
+                how it is described in the hub directory.
+              </p>
+            </div>
+          </div>
           <div class="s-grid">
             <div class="s-field">
               <label class="s-label" for="reg-url">Hub URL</label>
@@ -574,6 +803,10 @@ function formatBytes(bytes: number): string {
                 [disabled]="!canWriteSettings()"
                 (input)="setHubField('url', $any($event.target).value)"
               />
+              <span class="s-hint"
+                >Leave empty together with Entry name to disable
+                self-registration.</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="reg-entry">Entry name</label>
@@ -587,6 +820,10 @@ function formatBytes(bytes: number): string {
                 [disabled]="!canWriteSettings()"
                 (input)="setHubField('entry', $any($event.target).value)"
               />
+              <span class="s-hint"
+                >Unique 3–32 character lowercase DNS label in the hub
+                directory.</span
+              >
             </div>
             <div class="s-field">
               <span class="s-label">Credential mode</span>
@@ -601,15 +838,292 @@ function formatBytes(bytes: number): string {
               />
             </div>
             <div class="s-field">
+              <label class="s-label" for="reg-aud">OIDC audience</label>
+              <input
+                id="reg-aud"
+                class="s-input s-mono"
+                type="text"
+                data-testid="input-hub-oidc-audience"
+                [placeholder]="hubField('url') || 'the Hub URL'"
+                [value]="hubField('oidcAudience')"
+                [disabled]="
+                  !canWriteSettings() || hubField('authMode') !== 'oidc'
+                "
+                (input)="setHubField('oidcAudience', $any($event.target).value)"
+              />
+              <span class="s-hint"
+                >Used with Workload OIDC; blank uses the Hub URL.</span
+              >
+            </div>
+            <div class="s-field">
+              <span class="s-label">Platform</span>
+              <g-pill-select
+                testid="select-hub-host-kind"
+                ariaLabel="Hub platform (host kind)"
+                align="left"
+                [options]="hubHostKindOptions()"
+                [value]="hubField('hostKind')"
+                [disabled]="!canWriteSettings()"
+                (valueChange)="setHubField('hostKind', $event)"
+              />
+              <span class="s-hint"
+                >Auto-detect follows the active sandbox backend.</span
+              >
+            </div>
+            <div class="s-field">
               <label class="s-label" for="reg-disp">Catalog display name</label>
               <input
                 id="reg-disp"
                 class="s-input"
                 type="text"
+                data-testid="input-hub-display-name"
                 [value]="hubField('displayName')"
                 [disabled]="!canWriteSettings()"
                 (input)="setHubField('displayName', $any($event.target).value)"
               />
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="reg-purpose">Purpose</label>
+              <input
+                id="reg-purpose"
+                class="s-input"
+                type="text"
+                data-testid="input-hub-purpose"
+                placeholder="What repositories or workflows this grain handles"
+                [value]="hubField('purpose')"
+                [disabled]="!canWriteSettings()"
+                (input)="setHubField('purpose', $any($event.target).value)"
+              />
+            </div>
+          </div>
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name">Listed in hub directory</span>
+              <span class="s-hint"
+                >When off, this grain stays addressable by name and route
+                queries for its owners but is left out of default directory
+                listings.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-hub-listed"
+              aria-label="Listed in hub directory"
+              [attr.aria-checked]="hubRaw('listed') === true"
+              [disabled]="!canWriteSettings()"
+              (click)="setHubValue('listed', hubRaw('listed') !== true)"
+            ></button>
+          </div>
+
+          <div class="s-subsection" data-testid="registry-token">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Registration credential</h4>
+              <span
+                class="status-pill"
+                [class.healthy]="hubTokenSet()"
+                [class.neutral]="!hubTokenSet()"
+                data-testid="registry-token-state"
+                >{{ hubTokenSet() ? "set" : "not set" }}</span
+              >
+            </div>
+            <span class="s-hint"
+              >Minted by <code>grain hub register</code> (or rotated in the hub)
+              and stored encrypted in this daemon's secret store as
+              registry-registration-token/value — never exported to
+              grain/config, so it stays editable while settings are managed
+              there. Write-only: it is never shown or read back.</span
+            >
+            <form
+              class="s-inline"
+              autocomplete="off"
+              (submit)="$event.preventDefault(); saveHubToken()"
+            >
+              <input
+                class="s-input s-input-inline s-mono"
+                type="password"
+                autocomplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                aria-label="Registration token (grc_…)"
+                data-testid="input-hub-token"
+                [placeholder]="
+                  hubTokenSet() ? 'Replace the stored grc_… token' : 'grc_…'
+                "
+                [value]="hubToken()"
+                [disabled]="!canWriteSecrets()"
+                (input)="hubToken.set($any($event.target).value)"
+              />
+              <button
+                type="submit"
+                class="btn-tonal s-btn-sm"
+                data-testid="save-hub-token"
+                [disabled]="!canWriteSecrets() || !hubToken().trim()"
+              >
+                Set token
+              </button>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="clear-hub-token"
+                [disabled]="!hubTokenSet() || !canClearSecrets()"
+                (click)="confirmClearHubToken()"
+              >
+                Clear
+              </button>
+            </form>
+            @if (!secretsEnabled()) {
+              <span class="s-hint" data-testid="registry-token-no-store"
+                >This server has no secret store, so the token cannot be stored
+                here; run <code>grain hub register</code> on a daemon that has
+                one.</span
+              >
+            } @else if (!access.can("PUT /api/secrets/{secret}/{key}")) {
+              <span class="s-hint">{{
+                access.deniedReason("PUT /api/secrets/{secret}/{key}")
+              }}</span>
+            }
+          </div>
+        </div>
+
+        <div
+          class="s-card"
+          id="registry-scopes"
+          data-testid="card-registry-scopes"
+        >
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Scope overrides</h3>
+              <p class="s-card-desc">
+                Scopes come automatically from Settings → Repositories and each
+                repository's work ownership (on → primary, off → secondary). Add
+                a rule only to narrow a repository to a path prefix, exclude it
+                from hub routing, or advertise an extra scope.
+              </p>
+            </div>
+          </div>
+          @if (hubRules().length > 0) {
+            <div class="s-table-wrap">
+              <table class="s-table" aria-label="Scope override rules">
+                <thead>
+                  <tr>
+                    <th>Scope</th>
+                    <th>Rule</th>
+                    <th class="s-actions-cell">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (r of hubRules(); track $index) {
+                    <tr data-testid="registry-scope-rule">
+                      <td>
+                        <div class="s-cell-stack">
+                          <span class="s-cell-title s-mono">{{ r.repo }}</span>
+                          <span class="s-meta-mono">{{
+                            r.pathPrefix ? r.pathPrefix + "/" : "whole repo"
+                          }}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          class="status-pill"
+                          [class.healthy]="!r.exclude && r.role !== 'secondary'"
+                          [class.neutral]="!r.exclude && r.role === 'secondary'"
+                          [class.quiet]="r.exclude"
+                          >{{
+                            r.exclude ? "excluded" : r.role || "primary"
+                          }}</span
+                        >
+                      </td>
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            [attr.aria-label]="
+                              'Remove scope rule for ' + r.repo
+                            "
+                            [disabled]="!canWriteSettings()"
+                            (click)="removeHubRule($index)"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          } @else {
+            <span class="s-hint" data-testid="registry-scope-rules-empty"
+              >No overrides: every configured repository is advertised with its
+              own work ownership.</span
+            >
+          }
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Add rule</h4>
+            </div>
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="reg-rule-repo"
+                  >Repository (owner/name)</label
+                >
+                <input
+                  id="reg-rule-repo"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-scope-rule-repo"
+                  placeholder="acme/monorepo"
+                  [value]="newRuleRepo()"
+                  [disabled]="!canWriteSettings()"
+                  (input)="newRuleRepo.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="reg-rule-prefix"
+                  >Path prefix (optional)</label
+                >
+                <input
+                  id="reg-rule-prefix"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-scope-rule-prefix"
+                  placeholder="services/billing"
+                  [value]="newRulePrefix()"
+                  [disabled]="!canWriteSettings()"
+                  (input)="newRulePrefix.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <span class="s-label">Rule</span>
+                <g-pill-select
+                  testid="select-scope-rule-mode"
+                  ariaLabel="Scope rule"
+                  align="left"
+                  [options]="scopeRuleOptions"
+                  [value]="newRuleMode()"
+                  [disabled]="!canWriteSettings()"
+                  (valueChange)="newRuleMode.set($event)"
+                />
+              </div>
+            </div>
+            @if (newRuleError()) {
+              <span class="s-field-error" data-testid="scope-rule-error">{{
+                newRuleError()
+              }}</span>
+            }
+            <div class="s-row-actions">
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="add-scope-rule"
+                [disabled]="!canWriteSettings() || !newRuleRepo().trim()"
+                (click)="addHubRule()"
+              >
+                Add rule
+              </button>
             </div>
           </div>
         </div>
@@ -802,6 +1316,17 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   readonly section = input.required<SettingsSectionId>();
 
+  // A save of the hub settings (or of its token) changes what the daemon
+  // registers as, so the status card re-reads GET /api/registry rather
+  // than keep the snapshot from before the save.
+  private readonly hubReload = effect(() => {
+    void this.state.settings()["hub"];
+    this.hubTokenSet();
+    if (this.section() === "registry") {
+      untracked(() => void this.loadRegistry());
+    }
+  });
+
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
 
@@ -844,9 +1369,9 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly cliLocationOptions: readonly PillOption[] = [
     { value: "", label: "Deployment default" },
-    { value: "host", label: "Host (grain hostd)" },
+    { value: "host", label: "Host (grain host)" },
     { value: "container", label: "Daemon container" },
-    { value: "detached", label: "Detached hostd session" },
+    { value: "detached", label: "Detached host session" },
   ];
 
   protected readonly hubAuthOptions: readonly PillOption[] = [
@@ -865,12 +1390,133 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected readonly broadcastRunningOnly = signal(false);
   protected readonly cliRunLocations = signal<Record<string, string>>({});
 
+  protected readonly packageCacheLive = signal(false);
+  protected readonly actionsCacheLive = signal(false);
   protected readonly packageCacheSummary = signal("Shared package proxy cache");
   protected readonly actionsCacheSummary = signal(
     "Workflow step & dependency cache",
   );
 
-  protected readonly registryStateLabel = signal("Not configured");
+  protected readonly registrySnapshot = signal<HubSnapshot | null>(null);
+  protected readonly heartbeatSending = signal(false);
+  protected readonly heartbeatResult = signal<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+  protected readonly hubToken = signal("");
+  // GET /api/secrets' enabled: a daemon with no secret store (grain demo,
+  // a UI with no secrets directory) cannot hold the token at all.
+  protected readonly secretsEnabled = signal(true);
+  protected readonly newRuleRepo = signal("");
+  protected readonly newRulePrefix = signal("");
+  protected readonly newRuleMode = signal("primary");
+  protected readonly newRuleError = signal("");
+
+  protected readonly scopeRuleOptions: readonly PillOption[] = [
+    { value: "primary", label: "Primary" },
+    { value: "secondary", label: "Secondary" },
+    { value: "exclude", label: "Exclude repo" },
+  ];
+
+  // The stored hub settings, or what GET /api/registry reports when the
+  // settings have not loaded them: the snapshot's own enabled flag is the
+  // daemon's, so a URL and entry staged but not saved do not count.
+  protected readonly registryEnabled = computed(() => {
+    const snap = this.registrySnapshot();
+    if (snap) return Boolean(snap.enabled);
+    const h = this.state.settings()["hub"] as Record<string, unknown> | null;
+    return Boolean(h?.["url"] && h?.["entry"]);
+  });
+
+  protected readonly registryState = computed(() =>
+    this.registryEnabled()
+      ? String(this.registrySnapshot()?.state || "connecting")
+      : "disabled",
+  );
+
+  protected readonly registryStateLabel = computed(
+    () =>
+      ({
+        disabled: "Not configured",
+        connecting: "Connecting",
+        connected: "Connected",
+        degraded: "Degraded",
+        error: "Heartbeat error",
+      })[this.registryState()] ?? this.registryState(),
+  );
+
+  protected readonly registryTone = computed(
+    () =>
+      ({
+        connected: "healthy",
+        degraded: "setup",
+        error: "error",
+      })[this.registryState()] ?? "neutral",
+  );
+
+  protected readonly registrySummary = computed(() => {
+    const snap = this.registrySnapshot();
+    if (!this.registryEnabled()) {
+      return "Set a Hub URL and entry name below (or run grain hub register) so this daemon registers itself and heartbeats its version, health, task counts and repository scopes.";
+    }
+    if (!snap?.lastHeartbeatAt) return "Waiting for the first heartbeat…";
+    const every = snap.heartbeatIntervalSeconds
+      ? ` (every ${snap.heartbeatIntervalSeconds}s)`
+      : "";
+    const health = `health ${snap.health || "ok"}${snap.healthDetail ? ` — ${snap.healthDetail}` : ""}`;
+    return `Last heartbeat ${formatStamp(snap.lastHeartbeatAt, this.state.config()?.timeZone)}${every} · ${health} · ${snap.activeTasks ?? 0} active, ${snap.awaitingReplyTasks ?? 0} awaiting reply`;
+  });
+
+  protected readonly advertisedScopes = computed(() => {
+    const a = this.registrySnapshot()?.advertisedScopes;
+    return Array.isArray(a) ? a : [];
+  });
+
+  protected readonly scopeConflictText = computed(() => {
+    const c = this.registrySnapshot()?.scopeConflicts;
+    if (!Array.isArray(c) || c.length === 0) return "";
+    return c
+      .map(
+        (x) =>
+          `${x.repo}${x.path_prefix ? ` (${x.path_prefix})` : ""} already claimed as primary by ${x.conflicting_entry || "another entry"}`,
+      )
+      .join("; ");
+  });
+
+  protected readonly hubTokenSet = computed(() => {
+    const s = this.state.settings();
+    return Boolean(s["hubTokenSet"] ?? s["registryTokenSet"]);
+  });
+
+  protected readonly hubRules = computed<HubScopeRule[]>(() => {
+    const r = this.hubRaw("scopes");
+    return Array.isArray(r) ? (r as HubScopeRule[]) : [];
+  });
+
+  // Platform is the hub's host kind (model.HubConfig.HostKind). Blank is
+  // auto-detect, which GET /api/registry resolves as effectiveHostKind
+  // while nothing is chosen.
+  protected readonly hubHostKindOptions = computed<readonly PillOption[]>(
+    () => {
+      const eff = this.registrySnapshot()?.effectiveHostKind;
+      const auto =
+        !this.hubField("hostKind") && eff
+          ? `Auto-detect (${eff})`
+          : "Auto-detect";
+      return [
+        { value: "", label: auto },
+        { value: "workstation", label: "Workstation" },
+        { value: "kubernetes", label: "Kubernetes" },
+        { value: "other", label: "Other" },
+      ];
+    },
+  );
+
+  protected readonly sandboxCommitment = computed(
+    () =>
+      (this.state.settings()["sandboxCommitment"] as
+        SandboxCommitment | undefined) ?? null,
+  );
 
   // What the daemon reports it runs (GET /api/upgrade's `running`), else
   // the build stamp GET /api/config carries -- an object on current
@@ -953,9 +1599,32 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
+  // cliSnippet is what a workstation runs to install the grain CLI, sign
+  // in and add the agent skills -- the classic Settings -> CLI lines
+  // (ui/src/components/settings/CLISection.jsx). The installer is
+  // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
+  // that one installs a host, wants root and a registered name, and is
+  // no way to get the CLI onto a laptop.
   protected cliSnippet(): string {
     const origin = this.serverOrigin();
-    return `curl -fsSL ${origin}/api/hostd/install.sh | sh\ngrain login ${origin}`;
+    let host = "";
+    try {
+      host = new URL(origin).hostname;
+    } catch {
+      // An origin that is not a URL names no host; the slug is "default".
+    }
+    // The context name `grain login` gives a deployment when --name is
+    // left out (pkg/cli/login.go contextSlug).
+    const slug =
+      host
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "default";
+    return [
+      `curl -fsSL ${origin}/cli/install.sh | sh`,
+      `grain login ${origin} --name ${slug} --issue-token --scope-set grain/external-dev --expires 30d`,
+      `grain skill install --jetski   # or --claude, --codex, --gemini`,
+    ].join("\n");
   }
 
   private loadForSection(): void {
@@ -980,11 +1649,17 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       if (this.access.can("GET /api/package-cache")) {
         void this.api
           .get<{
+            enabled?: boolean;
             available?: boolean;
             cache?: { kind: string; entries?: number; bytes?: number }[];
           }>("GET /api/package-cache")
           .then((p) => {
-            if (Array.isArray(p?.cache)) {
+            const live =
+              p?.enabled !== false &&
+              p?.available !== false &&
+              Array.isArray(p?.cache);
+            this.packageCacheLive.set(live);
+            if (live && Array.isArray(p?.cache)) {
               let entries = 0;
               let bytes = 0;
               for (const item of p.cache) {
@@ -994,7 +1669,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
               this.packageCacheSummary.set(
                 `${entries} cached packages · ${formatBytes(bytes)}`,
               );
-            } else if (p?.available === false) {
+            } else if (p?.enabled === false || p?.available === false) {
               this.packageCacheSummary.set("Proxy cache not enabled on daemon");
             }
           })
@@ -1004,8 +1679,22 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
         void this.api
           .get<Record<string, unknown>>("GET /api/actions-cache")
           .then((a) => {
-            if (a?.["entries"] !== undefined) {
-              this.actionsCacheSummary.set(`Cached entries: ${a["entries"]}`);
+            const live =
+              Boolean(a) &&
+              a?.["enabled"] !== false &&
+              a?.["available"] !== false;
+            this.actionsCacheLive.set(live);
+            if (!live) {
+              this.actionsCacheSummary.set(
+                "Actions cache not enabled on daemon",
+              );
+            } else if (a?.["entries"] !== undefined) {
+              const bytes = Number(a["bytes"]) || 0;
+              this.actionsCacheSummary.set(
+                bytes > 0
+                  ? `Cached entries: ${a["entries"]} · ${formatBytes(bytes)}`
+                  : `Cached entries: ${a["entries"]}`,
+              );
             }
           })
           .catch(() => undefined);
@@ -1057,7 +1746,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       const n = res?.delivered_count;
       this.snackbar.show(
         typeof n === "number"
-          ? `Broadcast delivered to ${n} task(s)`
+          ? `Broadcast delivered to ${n} ${n === 1 ? "task" : "tasks"}`
           : "Broadcast delivered to active tasks",
       );
     } catch (err) {
@@ -1087,6 +1776,28 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     }
   }
 
+  protected confirmFlushPackageCache(): void {
+    this.confirmRequest.set({
+      title: "Flush package proxy cache?",
+      message:
+        "Deletes all cached packages across apt, npm, PyPI, Go, and Docker on this controller. Active runs remain safe and fetch from upstream on cache miss.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushPackageCache(),
+    });
+  }
+
+  protected confirmFlushActionsCache(): void {
+    this.confirmRequest.set({
+      title: "Flush GitHub Actions cache?",
+      message:
+        "Empties cached CI build archives across all repositories on this controller.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushActionsCache(),
+    });
+  }
+
   protected async flushPackageCache(): Promise<void> {
     try {
       const res = await this.api.post<{
@@ -1111,7 +1822,19 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected async flushActionsCache(): Promise<void> {
     try {
-      await this.api.post("POST /api/actions-cache/flush", undefined, {});
+      const res = await this.api.post<{
+        cache?: { entries?: number; bytes?: number };
+      }>("POST /api/actions-cache/flush", undefined, {});
+      if (res?.cache?.entries !== undefined) {
+        const bytes = Number(res.cache.bytes) || 0;
+        this.actionsCacheSummary.set(
+          bytes > 0
+            ? `Cached entries: ${res.cache.entries} · ${formatBytes(bytes)}`
+            : `Cached entries: ${res.cache.entries}`,
+        );
+      } else {
+        this.actionsCacheSummary.set("Cached entries: 0");
+      }
       this.snackbar.show("Actions cache flushed");
     } catch (err) {
       this.state.recordError(err);
@@ -1119,44 +1842,186 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   }
 
   protected hubField(key: string): string {
-    const h =
-      (this.state.val<Record<string, unknown>>("hub", {}) as Record<
-        string,
-        unknown
-      >) || {};
-    return String(h[key] ?? "");
+    const v = this.hubRaw(key);
+    return v === undefined || v === null ? "" : String(v);
+  }
+
+  protected hubRaw(key: string): unknown {
+    const h = this.state.val<Record<string, unknown> | null>("hub", {}) ?? {};
+    return h[key];
   }
 
   protected setHubField(key: string, val: string): void {
-    const cur =
-      (this.state.val<Record<string, unknown>>("hub", {}) as Record<
-        string,
-        unknown
-      >) || {};
+    this.setHubValue(key, val);
+  }
+
+  protected setHubValue(key: string, val: unknown): void {
+    const cur = this.state.val<Record<string, unknown> | null>("hub", {}) ?? {};
     this.state.setField("hub", { ...cur, [key]: val });
   }
 
-  private async loadRegistry(): Promise<void> {
-    if (!this.access.can("GET /api/registry")) return;
-    try {
-      const r =
-        await this.api.get<Record<string, unknown>>("GET /api/registry");
-      const st = String(r?.["state"] ?? "disabled");
-      this.registryStateLabel.set(st);
-    } catch {
-      // Non-fatal
+  protected originLabel(origin: string | undefined): string {
+    switch (origin) {
+      case "override":
+        return "override";
+      case "added":
+        return "added in settings";
+      default:
+        return "from repo config";
     }
   }
 
-  protected async sendHeartbeat(): Promise<void> {
+  // addHubRule stages one Scope overrides rule into the hub setting; it
+  // saves with the section's Save bar like every other hub field. The
+  // path prefix is stored without leading or trailing slashes, the form
+  // the daemon matches it in.
+  protected addHubRule(): void {
+    const repo = this.newRuleRepo().trim();
+    if (!repo) return;
+    if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) {
+      this.newRuleError.set(`Repository must be owner/name, not "${repo}".`);
+      return;
+    }
+    const prefix = this.newRulePrefix()
+      .trim()
+      .replace(/^\/+|\/+$/g, "");
+    const rules = this.hubRules();
+    if (rules.some((r) => r.repo === repo && (r.pathPrefix || "") === prefix)) {
+      this.newRuleError.set(
+        `There is already a rule for ${repo}${prefix ? ` (${prefix})` : ""}.`,
+      );
+      return;
+    }
+    const mode = this.newRuleMode();
+    const rule: HubScopeRule =
+      mode === "exclude"
+        ? { repo, pathPrefix: prefix, exclude: true }
+        : { repo, pathPrefix: prefix, role: mode };
+    this.setHubValue("scopes", [...rules, rule]);
+    this.newRuleRepo.set("");
+    this.newRulePrefix.set("");
+    this.newRuleError.set("");
+  }
+
+  protected removeHubRule(idx: number): void {
+    this.setHubValue(
+      "scopes",
+      this.hubRules().filter((_, i) => i !== idx),
+    );
+  }
+
+  private async loadRegistry(): Promise<void> {
+    if (this.access.can("GET /api/secrets")) {
+      try {
+        const sec = await this.api.get<unknown[] | { enabled?: boolean }>(
+          "GET /api/secrets",
+        );
+        this.secretsEnabled.set(Array.isArray(sec) || sec?.enabled !== false);
+      } catch {
+        // Non-fatal: the PUT says so if the store is missing.
+      }
+    }
+    if (!this.access.can("GET /api/registry")) return;
     try {
-      const r = await this.api.post<Record<string, unknown>>(
+      const r = await this.api.get<HubSnapshot>("GET /api/registry");
+      if (r && typeof r === "object") this.registrySnapshot.set(r);
+    } catch {
+      // Non-fatal: the card reads the stored settings until it answers.
+    }
+  }
+
+  // sendHeartbeat says what came of it in the card, not only in a
+  // snackbar: the reply is the new snapshot, whose lastError is the hub's
+  // refusal when it refused.
+  protected async sendHeartbeat(): Promise<void> {
+    this.heartbeatSending.set(true);
+    this.heartbeatResult.set(null);
+    try {
+      const r = await this.api.post<HubSnapshot>(
         "POST /api/registry/heartbeat",
         undefined,
         {},
       );
-      if (r?.["state"]) this.registryStateLabel.set(String(r["state"]));
-      this.snackbar.show("Heartbeat sent");
+      if (r && typeof r === "object") this.registrySnapshot.set(r);
+      const at = r?.lastHeartbeatAt
+        ? formatStamp(r.lastHeartbeatAt, this.state.config()?.timeZone)
+        : "";
+      if (r?.lastError) {
+        this.heartbeatResult.set({
+          ok: false,
+          text: `Heartbeat not delivered: ${r.lastError}`,
+        });
+      } else {
+        this.heartbeatResult.set({
+          ok: true,
+          text: `Heartbeat delivered${at ? ` at ${at}` : ""} — the hub reports this entry ${r?.state || "connected"}.`,
+        });
+      }
+    } catch (err) {
+      this.heartbeatResult.set({
+        ok: false,
+        text: `Heartbeat failed: ${errorText(err)}`,
+      });
+      await this.loadRegistry();
+    } finally {
+      this.heartbeatSending.set(false);
+    }
+  }
+
+  // The registration token lives in the secret store, not grain/config,
+  // so a config-repo lock on the settings leaves it editable.
+  protected canWriteSecrets(): boolean {
+    return (
+      this.secretsEnabled() &&
+      this.access.can("PUT /api/secrets/{secret}/{key}")
+    );
+  }
+
+  protected canClearSecrets(): boolean {
+    return (
+      this.secretsEnabled() &&
+      this.access.can("DELETE /api/secrets/{secret}/{key}")
+    );
+  }
+
+  protected async saveHubToken(): Promise<void> {
+    const value = this.hubToken().trim();
+    if (!value || !this.canWriteSecrets()) return;
+    try {
+      await this.api.put(
+        "PUT /api/secrets/{secret}/{key}",
+        { secret: HUB_TOKEN_SECRET, key: "value" },
+        { value },
+      );
+      this.hubToken.set("");
+      await this.state.loadCore(true);
+      await this.loadRegistry();
+      this.snackbar.show("Registration token stored");
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected confirmClearHubToken(): void {
+    this.confirmRequest.set({
+      title: "Clear the registration token?",
+      message:
+        "The stored grc_… token cannot be read back, so putting it back means pasting it again. Heartbeats stop authenticating until it is replaced.",
+      accept: "Clear token",
+      destructive: true,
+      run: () => this.clearHubToken(),
+    });
+  }
+
+  private async clearHubToken(): Promise<void> {
+    try {
+      await this.api.delete("DELETE /api/secrets/{secret}/{key}", {
+        secret: HUB_TOKEN_SECRET,
+        key: "value",
+      });
+      await this.state.loadCore(true);
+      await this.loadRegistry();
+      this.snackbar.show("Registration token cleared");
     } catch (err) {
       this.state.recordError(err);
     }

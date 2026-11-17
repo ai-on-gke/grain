@@ -42,7 +42,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
@@ -950,16 +949,8 @@ func TestLiveACIJobClonesThroughTheProxyAndCannotPushBack(t *testing.T) {
 // is only answerable if both of them count.
 func TestACIJobsSandboxIsCountedAgainstTheDeploymentsLifetime(t *testing.T) {
 	t.Parallel()
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 
 	adapter, _, _ := newCIAdapter(&fakeSandbox{})
 	adapter.Meter = orchestrator.MeterFor(store)

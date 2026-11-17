@@ -211,13 +211,13 @@ func (r GrantRefusal) Error() string { return r.Reason }
 // must not buy it the grants the catalogue keeps for sessions or the
 // director.
 func CatalogueKindOf(t Task) string {
-	if id, ok := ConsoleSessionIDOf(t); ok && t.Interactive && t.Origin.Reason == ReasonConsoleSession {
+	if id, ok := ConsoleSessionIDOf(t); ok && t.Interactive && t.Filing.Reason == ReasonConsoleSession {
 		if id == DirectorSessionID {
 			return CatalogueKindDirector
 		}
 		return CatalogueKindSession
 	}
-	if t.Origin.Reason == ReasonReview {
+	if t.Filing.Reason == ReasonReview {
 		return CatalogueKindReview
 	}
 	return CatalogueKindTask

@@ -88,7 +88,7 @@ func (s *Store) CarryPriorityToReviews(ctx context.Context, gatedID string, befo
 		// rather than being written back as it was: putTask is not free
 		// of side effects (invalidateStaleGrantWait).
 		err := s.UpdateTask(ctx, id, func(t *Task) error {
-			if t.Origin.Reason != ReasonReview {
+			if t.Filing.Reason != ReasonReview {
 				return errReviewPriorityUnchanged
 			}
 			p, ok := CarriedReviewPriority(t.Priority, before, after, slices.Contains(t.Tags, ReviewPriorityHandSetTag))

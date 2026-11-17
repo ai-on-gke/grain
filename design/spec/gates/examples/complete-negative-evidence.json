@@ -1,0 +1,57 @@
+{
+  "evaluation_id": "eval-1",
+  "binding_id": "task/57/pipeline_health",
+  "type": "pipeline_health",
+  "version": 1,
+  "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": "met",
+  "summary": "Complete scoped pipeline scan is healthy.",
+  "human_text": null,
+  "agent_text": null,
+  "evidence": [],
+  "dependencies": [
+    {
+      "key": "pipeline/alerts",
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "head": null,
+      "version": "obs-4",
+      "collection_generation": "alerts-8",
+      "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "complete": true,
+      "observed_at": "2026-11-17T00:15:00Z",
+      "valid_until": "2026-11-17T00:20:00Z",
+      "authorization_revision": 4,
+      "dirty_generation": 3,
+      "covered_generation": 3
+    },
+    {
+      "key": "pipeline/base-set",
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "head": null,
+      "version": "obs-4",
+      "collection_generation": "bases-9",
+      "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "complete": true,
+      "observed_at": "2026-11-17T00:15:00Z",
+      "valid_until": "2026-11-17T00:20:00Z",
+      "authorization_revision": 4,
+      "dirty_generation": 3,
+      "covered_generation": 3
+    }
+  ],
+  "blockers": [],
+  "work": [],
+  "waits": [],
+  "actions": [],
+  "observed_at": "2026-11-17T00:15:00Z",
+  "valid_until": "2026-11-17T00:20:00Z",
+  "error": null
+}

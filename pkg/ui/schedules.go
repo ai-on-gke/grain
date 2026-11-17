@@ -188,7 +188,7 @@ func parseOverlap(text string) (model.OverlapPolicy, error) {
 // create, edit and pause one. There is no separate "run now" or history
 // list here: NextRunAt/LastRunAt are the whole of what a UI can show
 // about a schedule's own timing, and every task it has ever filed already
-// shows up in the ordinary task list (Origin.Reason == schedule renders
+// shows up in the ordinary task list (Filing.Reason == schedule renders
 // there as Task.Scheduled).
 type Schedule struct {
 	ID                   string `json:"id"`
@@ -228,7 +228,8 @@ type Schedule struct {
 	// Model is the model every firing asks for (model.Schedule.Model):
 	// this schedule's own choice, which beats its template's. Empty for
 	// a schedule that chose none.
-	Model string `json:"model,omitempty"`
+	Model     string `json:"model,omitempty"`
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// TemplateID and TemplateName are set when this schedule fires from
 	// a Template (bwsalmon/agents#516) rather than its own inline
 	// content -- Title/Description/AutoMerge/Reads/Writes/Capabilities/
@@ -480,6 +481,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		Admission:            string(s.Admission),
 		Hosting:              string(s.Hosting),
 		Model:                s.Model,
+		QAFlowRef:            s.QAFlowRef,
 		CustomFields:         customFieldValues(s.CustomFields),
 		Capabilities:         []string{},
 		Recurrence:           recurrenceFrom(s.Recurrence),
@@ -768,6 +770,7 @@ type CreateScheduleRequest struct {
 	// a templateId as much as with inline content -- and refused with a
 	// suiteId, whose runs file each template as it stands.
 	Model      string     `json:"model"`
+	QAFlowRef  string     `json:"qaFlowRef,omitempty"`
 	TemplateID string     `json:"templateId"`
 	SuiteID    string     `json:"suiteId"`
 	Recurrence Recurrence `json:"recurrence"`
@@ -819,6 +822,11 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 			return Schedule{}, err
 		}
 		if err := c.validateGitRefRecurrence(ctx, r); err != nil {
+			return Schedule{}, err
+		}
+	}
+	if strings.TrimSpace(req.QAFlowRef) != "" {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, ""); err != nil {
 			return Schedule{}, err
 		}
 	}
@@ -1159,6 +1167,7 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 		return model.Schedule{}, "", "", err
 	}
 	sched.Model = chosenModel
+	sched.QAFlowRef = strings.TrimSpace(req.QAFlowRef)
 	sched.Target = target
 	sched.Base = req.Base
 	if firing != nil {
@@ -1709,6 +1718,7 @@ type UpdateScheduleRequest struct {
 	// it is not content -- and on one of grain's own schedules, whose
 	// model is the deployment's to choose like its cadence.
 	Model      *string     `json:"model,omitempty"`
+	QAFlowRef  *string     `json:"qaFlowRef,omitempty"`
 	TemplateID *string     `json:"templateId,omitempty"`
 	SuiteID    *string     `json:"suiteId,omitempty"`
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
@@ -1743,6 +1753,11 @@ type UpdateScheduleRequest struct {
 // (Enabled is not a cadence), which is what makes a pause a pause
 // rather than a reset.
 func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateScheduleRequest) (Schedule, error) {
+	if req.QAFlowRef != nil {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, ""); err != nil {
+			return Schedule{}, err
+		}
+	}
 	if req.Recurrence != nil && req.Recurrence.Kind == string(model.RecurrenceGitRef) && !(req.Enabled != nil && !*req.Enabled) {
 		r, err := parseRecurrence(*req.Recurrence)
 		if err != nil {
@@ -2100,6 +2115,9 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			}
 			s.Model = *chosenModel
 		}
+		if req.QAFlowRef != nil {
+			s.QAFlowRef = strings.TrimSpace(*req.QAFlowRef)
+		}
 		if s.SuiteID != nil {
 			// A suite-backed schedule carries no content of its own to
 			// edit -- the suite does. Only which suite it runs can change
@@ -2132,6 +2150,9 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 				// as inline content of its own -- the rest of that content
 				// is already on the row as its display cache.
 				*s = withScheduleTemplateSettings(*s, existingTemplate)
+				if req.QAFlowRef == nil && strings.TrimSpace(s.QAFlowRef) == "" && existingTemplate != nil && strings.TrimSpace(existingTemplate.QAFlowRef) != "" {
+					s.QAFlowRef = strings.TrimSpace(existingTemplate.QAFlowRef)
+				}
 				s.TemplateID = nil
 			}
 			if req.Title != nil {

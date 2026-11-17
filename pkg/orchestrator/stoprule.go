@@ -55,7 +55,7 @@ func continueStoppedRun(ctx context.Context, framework agent.Framework, cfg agen
 	if f, ok := framework.(agent.StopRuleFramework); ok && f.EnforcesStopRule() {
 		return result, runErr
 	}
-	decision := agent.DecideStop(cfg.Interactive, result.FinalText, result.ToolCalls)
+	decision := agent.DecideStopForRun(cfg.Interactive, cfg.RequireOpenPullRequest, result.FinalText, result.ToolCalls)
 	if !decision.Block || result.ResumableSession == "" || ctx.Err() != nil {
 		return result, runErr
 	}

@@ -31,8 +31,9 @@ import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
-import { errorText, renderMarkdown } from "../sessions/session-view";
+import { errorText } from "../sessions/session-view";
 import { ActorChipComponent } from "../shared/actor-chip.component";
+import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -90,12 +91,15 @@ type ReachableReposPayload =
     StatusIconComponent,
     ActorChipComponent,
     ConfirmDialogComponent,
+    MarkdownDirective,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
     "../shared/surface-controls.css",
     "../shared/ops-surface.css",
+    "../shared/code-highlight.css",
+    "../shared/mermaid.css",
     "./context-page.component.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -845,11 +849,17 @@ type ReachableReposPayload =
                   ></textarea>
                 }
                 @if (editorMode() !== "edit") {
-                  <div
-                    class="ctx-md-preview"
-                    data-testid="memory-preview"
-                    [innerHTML]="memoryPreviewHtml()"
-                  ></div>
+                  @if (memoryPreviewSrc()) {
+                    <div
+                      class="ctx-md-preview"
+                      data-testid="memory-preview"
+                      [gMarkdown]="memoryPreviewSrc()"
+                    ></div>
+                  } @else {
+                    <div class="ctx-md-preview" data-testid="memory-preview">
+                      <p class="muted">Nothing remembered in this scope yet.</p>
+                    </div>
+                  }
                 }
               </div>
 
@@ -1042,11 +1052,17 @@ type ReachableReposPayload =
                     ></textarea>
                   }
                   @if (editorMode() !== "edit") {
-                    <div
-                      class="ctx-md-preview"
-                      data-testid="doc-preview"
-                      [innerHTML]="docPreviewHtml()"
-                    ></div>
+                    @if (docPreviewSrc()) {
+                      <div
+                        class="ctx-md-preview"
+                        data-testid="doc-preview"
+                        [gMarkdown]="docPreviewSrc()"
+                      ></div>
+                    } @else {
+                      <div class="ctx-md-preview" data-testid="doc-preview">
+                        <p class="muted">Document body preview appears here.</p>
+                      </div>
+                    }
                   }
                 </div>
 
@@ -1153,7 +1169,7 @@ type ReachableReposPayload =
                   <div
                     class="ctx-md-preview"
                     data-testid="fs-md-preview"
-                    [innerHTML]="fsMarkdownHtml()"
+                    [gMarkdown]="fsFileContent() || ''"
                   ></div>
                 } @else {
                   <pre
@@ -1393,13 +1409,9 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     () => this.memoryDraft() !== this.currentScopeRow().text,
   );
 
-  protected readonly memoryPreviewHtml = computed<string>(() => {
-    const src = this.memoryDraft().trim();
-    if (!src) {
-      return '<p class="muted">Nothing remembered in this scope yet.</p>';
-    }
-    return renderMarkdown(src);
-  });
+  protected readonly memoryPreviewSrc = computed<string>(() =>
+    this.memoryDraft().trim(),
+  );
 
   protected readonly scopedDocuments = computed<MemoryDocument[]>(() => {
     const k = scopeKey(this.selectedRepo());
@@ -1488,11 +1500,9 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     return this.docDirty();
   });
 
-  protected readonly docPreviewHtml = computed<string>(() => {
-    const src = this.docTextDraft().trim();
-    if (!src) return '<p class="muted">Document body preview appears here.</p>';
-    return renderMarkdown(src);
-  });
+  protected readonly docPreviewSrc = computed<string>(() =>
+    this.docTextDraft().trim(),
+  );
 
   protected readonly fsBreadcrumbs = computed(() => {
     const dir = this.fsDir();
@@ -1506,10 +1516,6 @@ export class ContextPageComponent implements OnInit, OnDestroy {
 
   protected readonly fsHighlightedHtml = computed(() =>
     highlightSyntaxHtml(this.fsFileContent(), this.fsSelectedFile()),
-  );
-
-  protected readonly fsMarkdownHtml = computed(() =>
-    renderMarkdown(this.fsFileContent() || ""),
   );
 
   ngOnInit(): void {

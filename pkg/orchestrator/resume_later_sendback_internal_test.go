@@ -71,7 +71,7 @@ func TestAMergeQueueRepairTakesATaskOffItsResumeLater(t *testing.T) {
 				repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 				human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 				task := model.Task{ID: "q", Intent: model.IntentImplement, Title: "t", Body: "b",
-					Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+					Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 					Approval: &model.Attribution{Actor: human}, Target: &repo, Binding: model.BindingDirective}
 				if err := store.PutTask(ctx, task); err != nil {
 					t.Fatal(err)

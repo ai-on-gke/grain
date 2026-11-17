@@ -1,0 +1,94 @@
+== a store in public, its sequences put behind
+public-1 POST /api/tasks -> 201 id=1
+public-1 POST /api/tasks/1/comments -> 200 
+public-1 POST /api/settings -> 200
+public-1 POST /api/templates -> 201 id=template-1
+public-1 POST /api/suites -> 201 "id":"suite-1"
+public-2 POST /api/tasks -> 201 id=3
+public-2 POST /api/tasks/3/comments -> 200 
+public-2 POST /api/settings -> 200
+public-2 POST /api/templates -> 201 id=template-2
+public-2 POST /api/suites -> 201 "id":"suite-2"
+public-3 POST /api/tasks -> 201 id=4
+public-3 POST /api/tasks/4/comments -> 200 
+public-3 POST /api/settings -> 200
+public-3 POST /api/templates -> 201 id=template-3
+public-3 POST /api/suites -> 201 "id":"suite-3"
+== a store in schema walk (search_path=walk), its sequences put behind
+walk-1 POST /api/tasks -> 201 id=2
+walk-1 POST /api/tasks/2/comments -> 200 
+walk-1 POST /api/settings -> 200
+walk-1 POST /api/templates -> 201 id=template-1
+walk-1 POST /api/suites -> 201 "id":"suite-1"
+walk-2 POST /api/tasks -> 201 id=3
+walk-2 POST /api/tasks/3/comments -> 200 
+walk-2 POST /api/settings -> 200
+walk-2 POST /api/templates -> 201 id=template-2
+walk-2 POST /api/suites -> 201 "id":"suite-2"
+walk-3 POST /api/tasks -> 201 id=4
+walk-3 POST /api/tasks/4/comments -> 200 
+walk-3 POST /api/settings -> 200
+walk-3 POST /api/templates -> 201 id=template-3
+walk-3 POST /api/suites -> 201 "id":"suite-3"
+walk-4 POST /api/tasks -> 201 id=5
+walk-4 POST /api/tasks/5/comments -> 200 
+walk-4 POST /api/settings -> 200
+walk-4 POST /api/templates -> 201 id=template-4
+walk-4 POST /api/suites -> 201 "id":"suite-4"
+walk-5 POST /api/tasks -> 201 id=6
+walk-5 POST /api/tasks/6/comments -> 200 
+walk-5 POST /api/settings -> 200
+walk-5 POST /api/templates -> 201 id=template-5
+walk-5 POST /api/suites -> 201 "id":"suite-5"
+-- public before
+config_audit.id                                     1 f           24 BEHIND
+integration_event.id                                1 f            9 BEHIND
+secret_resolution_audit.id                          1 f            2 BEHIND
+suite_item.id                                       1 f            3 BEHIND
+suite_sequence.id                                   1 f            3 BEHIND
+task_comment.id                                     1 f            4 BEHIND
+task_sequence.number                                1 f            4 BEHIND
+template_sequence.number                            1 f            3 BEHIND
+-- walk before
+config_audit.id                                     1 f           40 BEHIND
+integration_event.id                                1 f           13 BEHIND
+secret_resolution_audit.id                          1 f            2 BEHIND
+suite_item.id                                       1 f            5 BEHIND
+suite_sequence.id                                   1 f            5 BEHIND
+task_comment.id                                     1 f            6 BEHIND
+task_sequence.number                                1 f            6 BEHIND
+template_sequence.number                            1 f            5 BEHIND
+== daemon on search_path=walk
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=walk, key=525667600274741016)
+grain: PostgreSQL sequence walk.config_audit_id_seq for config_audit.id was behind (next=1, max=40); resynced to 40
+grain: PostgreSQL sequence walk.integration_event_id_seq for integration_event.id was behind (next=1, max=13); resynced to 13
+grain: PostgreSQL sequence walk.secret_resolution_audit_id_seq for secret_resolution_audit.id was behind (next=1, max=2); resynced to 2
+grain: PostgreSQL sequence walk.suite_item_id_seq for suite_item.id was behind (next=1, max=5); resynced to 5
+grain: PostgreSQL sequence walk.suite_sequence_id_seq for suite_sequence.id was behind (next=1, max=5); resynced to 5
+grain: PostgreSQL sequence walk.task_comment_id_seq for task_comment.id was behind (next=1, max=6); resynced to 6
+grain: PostgreSQL sequence walk.task_sequence_number_seq for task_sequence.number was behind (next=1, max=6); resynced to 6
+grain: PostgreSQL sequence walk.template_sequence_number_seq for template_sequence.number was behind (next=1, max=5); resynced to 5
+-- walk after
+config_audit.id                                    40 t           40 ok
+integration_event.id                               13 t           13 ok
+secret_resolution_audit.id                          5 t            5 ok
+suite_item.id                                       5 t            5 ok
+suite_sequence.id                                   5 t            5 ok
+task_comment.id                                     6 t            6 ok
+task_sequence.number                                6 t            6 ok
+template_sequence.number                            5 t            5 ok
+walk-after POST /api/tasks -> 201 id=7
+walk-after POST /api/tasks/7/comments -> 200 
+walk-after POST /api/settings -> 200
+walk-after POST /api/templates -> 201 id=template-6
+walk-after POST /api/suites -> 201 "id":"suite-6"
+-- public after (must be unchanged)
+config_audit.id                                     1 f           24 BEHIND
+integration_event.id                                1 f            9 BEHIND
+secret_resolution_audit.id                          1 f            2 BEHIND
+suite_item.id                                       1 f            3 BEHIND
+suite_sequence.id                                   1 f            3 BEHIND
+task_comment.id                                     1 f            4 BEHIND
+task_sequence.number                                1 f            4 BEHIND
+template_sequence.number                            1 f            3 BEHIND
+public.* untouched
