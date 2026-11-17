@@ -337,8 +337,8 @@ func (u *updater) run(ctx context.Context, want, server, iapAudience, from strin
 		}
 		u.step("pinned rotated release key %s in %s", release.KeyID(signer), u.p.ReleasePub)
 	}
-	if err := u.ensureUnitGuard(); err != nil {
-		u.step("note: %v; a new build that cannot start is not rolled back without it", err)
+	if err := u.ensureUnit(); err != nil {
+		u.step("note: %v; a new build that cannot start is not rolled back without the unit's guard", err)
 	}
 	return nil
 }
@@ -604,9 +604,16 @@ func rollback(l updateLayout, pending []byte) (string, error) {
 	return fmt.Sprintf("rolled back from %s to %s: %s did not reach the controller within %s", strings.TrimSpace(next), prev, strings.TrimSpace(next), UpdateConfirmWindow), nil
 }
 
-// ensureUnitGuard adds the guard to an installed unit that has none (one
-// written before this build), and reloads systemd --user.
-func (u *updater) ensureUnitGuard() error {
+// ensureUnit brings an installed unit written before this build up to
+// what install writes now: the rollback guard, and KillMode=mixed (see
+// unitTemplate), which a unit installed before it lacks -- left out, a
+// host updated in place but never reinstalled stops under systemd's
+// default control-group mode, whose cgroup-wide SIGTERM can reap a CLI as
+// a plain failure before grain-agentd marks it stopped
+// (docs/test-runs/2026-11-14-host-stop.md, F2). It reloads systemd
+// --user when it changed the unit; KillMode takes effect at the unit's
+// next stop without a restart.
+func (u *updater) ensureUnit() error {
 	unitPath := filepath.Join(u.p.UnitDir, UnitName)
 	b, err := os.ReadFile(unitPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -614,14 +621,20 @@ func (u *updater) ensureUnitGuard() error {
 	} else if err != nil {
 		return err
 	}
-	text, changed := withGuard(string(b), u.l.Guard)
-	if !changed {
+	text, guarded := withGuard(string(b), u.l.Guard)
+	text, mixed := withKillMode(text)
+	if !guarded && !mixed {
 		return nil
 	}
 	if err := writeFileAtomic(unitPath, []byte(text), 0o644); err != nil {
 		return err
 	}
-	u.step("added the rollback guard to %s", unitPath)
+	if guarded {
+		u.step("added the rollback guard to %s", unitPath)
+	}
+	if mixed {
+		u.step("added KillMode=mixed to %s", unitPath)
+	}
 	if err := systemctl(io.Discard, "daemon-reload"); err != nil {
 		return fmt.Errorf("systemctl --user daemon-reload: %w", err)
 	}
@@ -638,6 +651,26 @@ func withGuard(unit, guard string) (string, bool) {
 		return unit[:i+1] + line + unit[i:], true
 	}
 	return unit, false
+}
+
+// withKillMode is unit with KillMode=mixed after its ExecStart, if it sets
+// no KillMode of its own.
+func withKillMode(unit string) (string, bool) {
+	for _, line := range strings.Split(unit, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "KillMode=") {
+			return unit, false
+		}
+	}
+	i := strings.Index(unit, "\nExecStart=")
+	if i < 0 {
+		return unit, false
+	}
+	end := strings.Index(unit[i+1:], "\n")
+	if end < 0 {
+		return unit + "\nKillMode=mixed\n", true
+	}
+	at := i + 1 + end + 1
+	return unit[:at] + "KillMode=mixed\n" + unit[at:], true
 }
 
 // unitDefaults reads -server and -iap-audience from the installed unit's

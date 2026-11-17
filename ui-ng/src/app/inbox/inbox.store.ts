@@ -24,6 +24,8 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { RouteKey } from "../api/generated-routes";
 import type {
+  ClearNotificationsRequest,
+  ClearNotificationsResponse,
   DiffPreview,
   LocalScriptApproval,
   Notification,
@@ -1074,6 +1076,29 @@ export class InboxStore implements OnDestroy {
     const id = (a.params as { id?: string } | undefined)?.id;
     if (id && a.route.startsWith("POST /api/tasks/{id}/")) {
       this.answered.set(String(id), a.label);
+    }
+  }
+
+  // clearNotifications is the Clear all / Clear these call: a dry run for
+  // the confirm dialog's count, or the clear itself, after which the
+  // cleared rows leave at once. null when it failed (actionError says why).
+  async clearNotifications(
+    req: ClearNotificationsRequest,
+  ): Promise<ClearNotificationsResponse | null> {
+    if (!req.dryRun) this.busy.set("clear-notifications");
+    this.actionError.set(null);
+    try {
+      const res = await this.api.clearNotifications(req);
+      if (!req.dryRun) {
+        await this.refresh();
+        this.applyUpdates();
+      }
+      return res;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return null;
+    } finally {
+      if (!req.dryRun) this.busy.set(null);
     }
   }
 

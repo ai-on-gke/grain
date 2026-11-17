@@ -19,6 +19,7 @@ import {
   computed,
   input,
   output,
+  signal,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import type { DiffPreviewFile } from "../api/models";
@@ -275,85 +276,131 @@ function readInputChecked(ev: Event): boolean {
                 </div>
 
                 <div class="qa-type-catalog">
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-skill"
-                    (click)="addSkillStepReq.emit(targetStage.id)"
-                  >
-                    <span class="qa-type-title">Markdown skill</span>
-                    <span class="qa-type-desc"
-                      >Inject concise stage instructions scoped to matching file
-                      globs.</span
+                  @if (canAddSkillToStage(targetStage.id)) {
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-skill"
+                      (click)="addSkillStepReq.emit(targetStage.id)"
                     >
-                  </button>
+                      <span class="qa-type-title">Markdown skill</span>
+                      <span class="qa-type-desc"
+                        >Inject concise stage instructions scoped to matching
+                        file globs in {{ targetStage.label }}.</span
+                      >
+                    </button>
+                  }
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-pattern"
-                    (click)="addCheckReq.emit('pattern')"
-                  >
-                    <span class="qa-type-title">Pattern check</span>
-                    <span class="qa-type-desc"
-                      >Flag forbidden regex patterns on added diff lines,
-                      verified with two example lines.</span
+                  @if (canAddChecksToStage(targetStage.id)) {
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-pattern"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'pattern',
+                        })
+                      "
                     >
-                  </button>
+                      <span class="qa-type-title">Pattern check</span>
+                      <span class="qa-type-desc"
+                        >Flag forbidden regex patterns on added diff lines,
+                        verified with two example lines.</span
+                      >
+                    </button>
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-companion"
-                    (click)="addCheckReq.emit('companion')"
-                  >
-                    <span class="qa-type-title">Companion file check</span>
-                    <span class="qa-type-desc"
-                      >Require matching migration, test, or doc updates when
-                      watched files change.</span
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-companion"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'companion',
+                        })
+                      "
                     >
-                  </button>
+                      <span class="qa-type-title">Companion file check</span>
+                      <span class="qa-type-desc"
+                        >Require matching migration, test, or doc updates when
+                        watched files change.</span
+                      >
+                    </button>
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-diff-budget"
-                    (click)="addCheckReq.emit('diff-budget')"
-                  >
-                    <span class="qa-type-title">Diff-budget check</span>
-                    <span class="qa-type-desc"
-                      >Cap added lines per file scope so pull requests remain
-                      focused and reviewable.</span
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-diff-budget"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'diff-budget',
+                        })
+                      "
                     >
-                  </button>
+                      <span class="qa-type-title">Diff-budget check</span>
+                      <span class="qa-type-desc"
+                        >Cap added lines per file scope so pull requests remain
+                        focused and reviewable.</span
+                      >
+                    </button>
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-jsonschema"
-                    (click)="addCheckReq.emit('jsonschema')"
-                  >
-                    <span class="qa-type-title"
-                      >Configuration schema check</span
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-jsonschema"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'jsonschema',
+                        })
+                      "
                     >
-                    <span class="qa-type-desc"
-                      >Validate structured configuration files before pull
-                      request review.</span
-                    >
-                  </button>
+                      <span class="qa-type-title"
+                        >Configuration schema check</span
+                      >
+                      <span class="qa-type-desc"
+                        >Validate structured configuration files before pull
+                        request review.</span
+                      >
+                    </button>
+                  }
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-stage"
-                    (click)="addCustomStageReq.emit()"
-                  >
-                    <span class="qa-type-title">AI critic stage</span>
-                    <span class="qa-type-desc"
-                      >Run an isolated custom verification stage after plan,
-                      pre-PR checks, or diff review.</span
+                  @if (canAddCriticToStage(targetStage.id)) {
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-stage"
+                      (click)="addCustomStageReq.emit(targetStage.id)"
                     >
-                  </button>
+                      <span class="qa-type-title">Custom critic substep</span>
+                      <span class="qa-type-desc"
+                        >Run an isolated verification pass inside
+                        {{ targetStage.label }}.</span
+                      >
+                    </button>
+                  }
+
+                  @if (targetStage.id !== "s3-checks") {
+                    <button
+                      type="button"
+                      class="btn-text qa-jump-stage-link"
+                      data-testid="qa-jump-stage5-checks"
+                      (click)="jumpToStageAddReq.emit('s3-checks')"
+                    >
+                      Need a deterministic file or regex check? Add in Stage 5 →
+                    </button>
+                  } @else {
+                    <button
+                      type="button"
+                      class="btn-text qa-jump-stage-link"
+                      data-testid="qa-jump-stage4-skills"
+                      (click)="jumpToStageAddReq.emit('s2-coding')"
+                    >
+                      Need coding or readability instructions? Add in Stage 4 →
+                    </button>
+                  }
                 </div>
               </div>
             } @else if (step) {
@@ -366,6 +413,17 @@ function readInputChecked(ev: Event): boolean {
                     <h3 class="qa-drawer-title">{{ step.label }}</h3>
                   </div>
                   <div class="qa-drawer-actions">
+                    @if (editing() && step.deletable) {
+                      <button
+                        type="button"
+                        class="btn-tonal qa-danger-btn qa-hdr-del-btn"
+                        data-testid="qa-header-delete-step-btn"
+                        gTip="Delete this custom substep from the draft workflow."
+                        (click)="deleteSelectedStepReq.emit()"
+                      >
+                        Delete substep
+                      </button>
+                    }
                     <span [class]="'status-pill ' + stepPillClass(step)">
                       <g-status-icon [tone]="stepPillClass(step)" />
                       {{ stepPillLabel(step) }}
@@ -374,7 +432,9 @@ function readInputChecked(ev: Event): boolean {
                       type="button"
                       class="qa-help-btn"
                       aria-label="About this substep"
+                      [attr.aria-expanded]="openHelpKey() === 'substep'"
                       [gTip]="helpTipFor(step)"
+                      (click)="toggleHelp('substep', $event)"
                     >
                       ?
                     </button>
@@ -390,6 +450,12 @@ function readInputChecked(ev: Event): boolean {
                     </button>
                   </div>
                 </div>
+
+                @if (openHelpKey() === "substep") {
+                  <div class="qa-example-box" data-testid="qa-inline-help">
+                    <span class="qa-kv-val">{{ helpTipFor(step) }}</span>
+                  </div>
+                }
 
                 <p class="qa-drawer-sub">{{ step.summary }}</p>
 
@@ -520,7 +586,7 @@ function readInputChecked(ev: Event): boolean {
                   }
 
                   @if (canEdit() && !step.lockedFloor) {
-                    <div>
+                    <div class="qa-field-row">
                       <button
                         type="button"
                         class="btn-tonal"
@@ -530,6 +596,17 @@ function readInputChecked(ev: Event): boolean {
                       >
                         Customize workflow to edit…
                       </button>
+                      @if (step.deletable) {
+                        <button
+                          type="button"
+                          class="btn-tonal qa-danger-btn"
+                          data-testid="qa-readonly-delete-step-btn"
+                          gTip="Enter draft mode and delete this custom substep."
+                          (click)="customizeAndDeleteReq.emit()"
+                        >
+                          Customize &amp; delete
+                        </button>
+                      }
                     </div>
                   }
                 } @else {
@@ -770,7 +847,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Activation</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-pack-activation"
                             ariaLabel="Readability pack activation"
                             [options]="packActivationOptions"
@@ -934,7 +1010,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Enforcement</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-check-severity-select"
                             ariaLabel="Check enforcement"
                             [options]="severityOptions"
@@ -1511,7 +1586,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Enforcement</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-builtin-check-severity"
                             ariaLabel="Built-in check enforcement"
                             [disabled]="!step.enabled"
@@ -1550,7 +1624,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Enforcement</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-pr-mode-select"
                             ariaLabel="PR contract enforcement"
                             [options]="prModeOptions"
@@ -1760,11 +1833,24 @@ function readInputChecked(ev: Event): boolean {
                       type="button"
                       class="qa-help-btn"
                       aria-label="About workflow studio"
+                      [attr.aria-expanded]="openHelpKey() === 'guide'"
                       gTip="Select any stage substep to inspect it, or click Customize to draft and verify changes safely before publishing."
+                      (click)="toggleHelp('guide', $event)"
                     >
                       ?
                     </button>
                   </div>
+                  @if (openHelpKey() === "guide") {
+                    <div class="qa-example-box" data-testid="qa-inline-help">
+                      <span class="qa-kv-val"
+                        >Workflows run up to 8 ordered stages around every agent
+                        task. Published versions are immutable; click Customize
+                        in the toolbar to draft a new version safely without
+                        affecting running tasks until you publish and activate
+                        it.</span
+                      >
+                    </div>
+                  }
                   <ol class="qa-guide-steps">
                     <li>
                       Expand any stage in the center spine and click a substep
@@ -1878,11 +1964,22 @@ function readInputChecked(ev: Event): boolean {
                   type="button"
                   class="qa-help-btn"
                   aria-label="About empirical validation"
+                  [attr.aria-expanded]="openHelpKey() === 'empirical'"
                   gTip="Dry-runs evaluate deterministic checks against recent pull requests without altering live task execution."
+                  (click)="toggleHelp('empirical', $event)"
                 >
                   ?
                 </button>
               </div>
+              @if (openHelpKey() === "empirical") {
+                <div class="qa-example-box" data-testid="qa-inline-help">
+                  <span class="qa-kv-val"
+                    >Dry-runs replay your deterministic checks against the last
+                    20 pull requests and report how many PRs would block or warn
+                    before you publish.</span
+                  >
+                </div>
+              }
               @if (canDryRun() || canProbe()) {
                 <div class="qa-field-row">
                   @if (canDryRun()) {
@@ -2008,11 +2105,40 @@ function readInputChecked(ev: Event): boolean {
 })
 export class QaStepDrawerComponent {
   readonly maxPromptBudgetBytes = MAX_PROMPT_BUDGET_BYTES;
+  protected readonly openHelpKey = signal<string | null>(null);
+
+  protected toggleHelp(key: string, ev: Event): void {
+    ev.stopPropagation();
+    this.openHelpKey.update((cur) => (cur === key ? null : key));
+  }
+
+  protected canAddSkillToStage(stageId: string): boolean {
+    return (
+      stageId === "s0-decompose" ||
+      stageId === "s2-plan" ||
+      stageId === "s2-coding" ||
+      stageId === "s3-pr" ||
+      stageId === "s4-verify"
+    );
+  }
+
+  protected canAddChecksToStage(stageId: string): boolean {
+    return stageId === "s3-checks";
+  }
+
+  protected canAddCriticToStage(stageId: string): boolean {
+    return (
+      stageId === "s2-plan" ||
+      stageId === "s3-checks" ||
+      stageId === "s4-verify"
+    );
+  }
 
   readonly detail = input<QAFlowVersionDetail | null>(null);
   readonly stages = input<readonly WorkflowStageView[]>([]);
   readonly selectedStage = input<WorkflowStageView | null>(null);
   readonly selectedStep = input<WorkflowStepView | null>(null);
+  readonly selectedCustomCheckUid = input<number | null>(null);
   readonly addingForStage = input<WorkflowStageView | null>(null);
   readonly inspectorTab = input<StudioInspectorTab>("definition");
   readonly editing = input<boolean>(false);
@@ -2083,8 +2209,14 @@ export class QaStepDrawerComponent {
   readonly draftSummaryChange = output<string>();
 
   readonly addSkillStepReq = output<string>();
-  readonly addCheckReq = output<CustomCheckEngine>();
-  readonly addCustomStageReq = output<void>();
+  readonly addCheckReq = output<{
+    stageId: string;
+    engine: CustomCheckEngine;
+  }>();
+  readonly addCustomStageReq = output<string>();
+  readonly jumpToStageAddReq = output<string>();
+  readonly deleteSelectedStepReq = output<void>();
+  readonly customizeAndDeleteReq = output<void>();
 
   readonly s0IntentChange = output<boolean>();
   readonly decomposeEnabledChange = output<boolean>();
@@ -2217,6 +2349,11 @@ export class QaStepDrawerComponent {
   });
 
   protected readonly selectedCustomCheck = computed(() => {
+    const uid = this.selectedCustomCheckUid();
+    if (uid !== null) {
+      const byUid = this.customChecks().find((c) => c.uid === uid);
+      if (byUid) return byUid;
+    }
     const id = this.selectedStep()?.id || "";
     return this.customChecks().find((c) => c.id === id) ?? null;
   });
@@ -2229,11 +2366,14 @@ export class QaStepDrawerComponent {
   protected readonly rolloutProvenanceTitle = computed(() => {
     const d = this.detail();
     if (!d) return "Available workflow";
+    if (!this.qaEnabled()) {
+      return "No default workflow active";
+    }
     const versionActive =
       this.isVersionActiveDefault() ||
       (!this.isFamilyActiveDefault() && this.activeFlowId() === d.key);
     if (versionActive) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
+      if (this.activeRolloutPct() > 0) {
         return `Default workflow (${this.activeRolloutPct()}% of new tasks)`;
       }
       return "Selected default · Rollout paused (0%)";
@@ -2247,12 +2387,15 @@ export class QaStepDrawerComponent {
   protected readonly rolloutProvenanceBody = computed(() => {
     const d = this.detail();
     if (!d) return "";
+    if (!this.qaEnabled()) {
+      return "New tasks currently run with no automatic workflow. Pin this workflow on specific schedules or suites, compare it in an A/B experiment, or click Set as default… above.";
+    }
     const versionActive =
       this.isVersionActiveDefault() ||
       (!this.isFamilyActiveDefault() && this.activeFlowId() === d.key);
     if (versionActive) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
-        return `Runs automatically on ${this.activeRolloutPct()}% of eligible tasks across repositories, and can be pinned on individual schedules or suites.`;
+      if (this.activeRolloutPct() > 0) {
+        return `Runs automatically on ${this.activeRolloutPct()}% of eligible tasks across repositories. Click Turn off default… above to run new tasks with no automatic workflow.`;
       }
       return "Configured as the default workflow in Settings → Tasks, but quality rollout is currently paused at 0%.";
     }

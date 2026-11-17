@@ -155,6 +155,12 @@ type RepoReleaseSecret struct {
 
 // RepoReleaseSettings reads the release pane of repo's settings.
 func (c *Client) RepoReleaseSettings(ctx context.Context, repo string) (RepoReleaseSettings, error) {
+	return c.RepoReleaseSettingsForBranch(ctx, repo, "")
+}
+
+// RepoReleaseSettingsForBranch reads repo's release settings, optionally
+// scoping BaseBranchPublishing to branch when non-empty.
+func (c *Client) RepoReleaseSettingsForBranch(ctx context.Context, repo, branch string) (RepoReleaseSettings, error) {
 	parsed, err := c.parseRepo(repo)
 	if err != nil {
 		return RepoReleaseSettings{}, validationErrorf("repo: %v", err)
@@ -183,10 +189,10 @@ func (c *Client) RepoReleaseSettings(ctx context.Context, repo string) (RepoRele
 	// shown instead.
 	out.BaseBranchGate = c.baseBranchGate(ctx, parsed)
 	// Read for the same reason, and with the switch's own state already
-	// accounted for: baseBranchPublishingFor reports nothing about a
+	// accounted for: baseBranchPublishingForBranch reports nothing about a
 	// repository whose releases are off, which is a repository publishing
 	// nothing on purpose rather than a repository that cannot.
-	out.BaseBranchPublishing = c.baseBranchPublishingFor(ctx, parsed)
+	out.BaseBranchPublishing = c.baseBranchPublishingForBranch(ctx, parsed, branch)
 	if cfg == nil {
 		return out, nil
 	}
@@ -565,7 +571,7 @@ func (c *Client) checkReleaseRef(ctx context.Context, repo model.RepoRef, ref, c
 }
 
 func (s *Server) handleGetRepoRelease(w http.ResponseWriter, r *http.Request) {
-	out, err := s.tasks.RepoReleaseSettings(r.Context(), r.PathValue("owner")+"/"+r.PathValue("name"))
+	out, err := s.tasks.RepoReleaseSettingsForBranch(r.Context(), r.PathValue("owner")+"/"+r.PathValue("name"), r.URL.Query().Get("branch"))
 	if err != nil {
 		writeClientError(w, err)
 		return

@@ -15,9 +15,49 @@
 package orchestrator
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
+
+// A review that pushed its fixes onto the branch it reviewed is not closed
+// with a note saying it pushed nothing (docs/test-runs/2026-11-14-review-context.md).
+func TestReviewFinishedNoteNamesFixesPushedInPlace(t *testing.T) {
+	plain := model.Task{ID: "8", Links: []model.Link{{Kind: model.LinkProposedBy, Target: "2"}}}
+	if got := reviewFinishedNote(plain); !strings.Contains(got, "pushed no change of its own") {
+		t.Errorf("review that pushed nothing: %q", got)
+	}
+	inPlace := plain
+	inPlace.Links = append(slices.Clone(plain.Links),
+		model.Link{Kind: model.LinkReviewerHead, Target: "68059eebd52870884dbf800afc9042c481b6613e"})
+	got := reviewFinishedNote(inPlace)
+	if strings.Contains(got, "pushed no change") || !strings.Contains(got, "The fixes it pushed, up to `68059eeb") ||
+		!strings.Contains(got, "on task 2") {
+		t.Errorf("review that pushed fixes in place: %q", got)
+	}
+}
+
+// The parallel-reviews note points at `grain pr threads`, which answers in
+// every review sandbox; `grain pr open` refuses in all of them. A body
+// filed with the old pointer is still grain's own section to a refresh,
+// which replaces it rather than appending a second one.
+func TestParallelReviewsSectionPointsAtPRThreadsAndReplacesTheOldPointer(t *testing.T) {
+	peer := model.Task{ID: "9", SourceTemplateID: model.SecurityReviewTemplateID, Title: "Security review: x"}
+	section := parallelReviewsSection([]model.Task{peer})
+	if !strings.Contains(section, "`grain pr threads`") || strings.Contains(section, "`grain pr open`") {
+		t.Fatalf("parallelReviewsSection = %q, want it to point at `grain pr threads` only", section)
+	}
+	legacy := parallelReviewsHeader + "Task 9 (`security-review`) is also reviewing this pull request at this commit. " +
+		"Do not re-raise a question or finding that task 9 has already posted -- " +
+		"check the pull request's review threads with `grain pr open`.\n"
+	const brief = "Review this change."
+	got := setParallelReviewsSection(brief+legacy, section)
+	if got != brief+section {
+		t.Fatalf("refreshing a body with the old pointer = %q, want %q", got, brief+section)
+	}
+}
 
 // A pull request description is written by whoever opened the pull request
 // and lands in an external review's body ahead of grain's own instructions.
