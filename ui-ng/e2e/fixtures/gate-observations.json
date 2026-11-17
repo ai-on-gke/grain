@@ -1,0 +1,402 @@
+{
+  "gate_observation_diagnostics": {
+    "started_at": "2026-08-28T12:01:00Z",
+    "evaluations": 1,
+    "counts": {
+      "equivalent_milestones": 1
+    },
+    "history": [
+      {
+        "generation": 1,
+        "at": "2026-08-28T12:01:00Z",
+        "comparison": "equivalent_milestones",
+        "view": {
+          "api_version": "grain.gates/v1",
+          "mode": "observation_only",
+          "authority": "legacy",
+          "lifecycle_effects": false,
+          "action_effects": false,
+          "dispatch_effects": false,
+          "automatic_cutover": false,
+          "source_revision": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+          "compared_at": "2026-08-28T12:01:00Z",
+          "legacy_state": "awaiting_reply",
+          "bindings": [
+            {
+              "id": "report",
+              "type": "delivery",
+              "version": 1,
+              "purpose": "monitor",
+              "required": false,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "1"
+              },
+              "config": {
+                "product": "report",
+                "semantics": "current_v1"
+              },
+              "freshness_seconds": 60,
+              "origin": {
+                "kind": "task",
+                "id": "1",
+                "revision": "builtin-report-observer-v1",
+                "imported": false
+              }
+            },
+            {
+              "id": "receipt",
+              "type": "acknowledgment",
+              "version": 1,
+              "purpose": "monitor",
+              "required": false,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "1"
+              },
+              "config": {
+                "mode": "explicit_receipt"
+              },
+              "freshness_seconds": 60,
+              "origin": {
+                "kind": "task",
+                "id": "1",
+                "revision": "builtin-report-observer-v1",
+                "imported": false
+              }
+            }
+          ],
+          "results": [
+            {
+              "evaluation_id": "shadow-1-1-report",
+              "revision": 1,
+              "disposition": "accepted",
+              "result": {
+                "evaluation_id": "shadow-1-1-report",
+                "binding_id": "task/1/report",
+                "type": "delivery",
+                "version": 1,
+                "context_digest": "sha256:1fa3a7992b092e122c65ff30bdd290c315b12fa851ad42d62aa0e9c2743992ad",
+                "status": "met",
+                "summary": "Settled run delivered a durable report. This does not prove receipt or completion.",
+                "human_text": null,
+                "agent_text": null,
+                "evidence": [
+                  {
+                    "kind": "report",
+                    "id": "1",
+                    "version": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd",
+                    "subject": {
+                      "kind": "task",
+                      "task_id": "1"
+                    },
+                    "head": null,
+                    "digest": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd"
+                  }
+                ],
+                "dependencies": [
+                  {
+                    "key": "task/1/report-receipt",
+                    "subject": {
+                      "kind": "task",
+                      "task_id": "1"
+                    },
+                    "head": null,
+                    "version": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+                    "collection_generation": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+                    "scope_digest": "sha256:97ead7dc6a0946506c65c98016fcd90e042d2b74314d4f278e9c2f85f5ebd6bb",
+                    "complete": true,
+                    "observed_at": "2026-08-28T12:01:00Z",
+                    "valid_until": "2026-08-28T12:02:00Z",
+                    "authorization_revision": 0,
+                    "dirty_generation": 1,
+                    "covered_generation": 1
+                  }
+                ],
+                "blockers": [],
+                "work": [],
+                "waits": [],
+                "actions": [],
+                "observed_at": "2026-08-28T12:01:00Z",
+                "valid_until": "2026-08-28T12:02:00Z",
+                "error": null
+              },
+              "accepted_at": "2026-08-28T12:01:00Z",
+              "invalidated_at": null,
+              "invalidation_reason": null,
+              "retry_at": null,
+              "dirty_generation": 1,
+              "covered_generation": 1
+            },
+            {
+              "evaluation_id": "shadow-1-1-receipt",
+              "revision": 1,
+              "disposition": "accepted",
+              "result": {
+                "evaluation_id": "shadow-1-1-receipt",
+                "binding_id": "task/1/receipt",
+                "type": "acknowledgment",
+                "version": 1,
+                "context_digest": "sha256:c271fb1be6f510016abd0f285df94eee89c90d784b7731f4a6a77fceac8b9bce",
+                "status": "pending",
+                "summary": "Current report awaits a person's receipt; a reply is not acknowledgment.",
+                "human_text": "Prediction only: the existing Acknowledge/Close flow can record receipt.",
+                "agent_text": null,
+                "evidence": [
+                  {
+                    "kind": "report",
+                    "id": "1",
+                    "version": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd",
+                    "subject": {
+                      "kind": "task",
+                      "task_id": "1"
+                    },
+                    "head": null,
+                    "digest": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd"
+                  }
+                ],
+                "dependencies": [
+                  {
+                    "key": "task/1/report-receipt",
+                    "subject": {
+                      "kind": "task",
+                      "task_id": "1"
+                    },
+                    "head": null,
+                    "version": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+                    "collection_generation": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+                    "scope_digest": "sha256:97ead7dc6a0946506c65c98016fcd90e042d2b74314d4f278e9c2f85f5ebd6bb",
+                    "complete": true,
+                    "observed_at": "2026-08-28T12:01:00Z",
+                    "valid_until": "2026-08-28T12:02:00Z",
+                    "authorization_revision": 0,
+                    "dirty_generation": 1,
+                    "covered_generation": 1
+                  }
+                ],
+                "blockers": [],
+                "work": [],
+                "waits": [
+                  {
+                    "event": "task_message",
+                    "key": "task/1",
+                    "version": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd",
+                    "deadline": "2026-08-28T12:02:00Z",
+                    "owner": "task_lifecycle",
+                    "on_timeout": "escalate"
+                  }
+                ],
+                "actions": [],
+                "observed_at": "2026-08-28T12:01:00Z",
+                "valid_until": "2026-08-28T12:02:00Z",
+                "error": null
+              },
+              "accepted_at": "2026-08-28T12:01:00Z",
+              "invalidated_at": null,
+              "invalidation_reason": null,
+              "retry_at": null,
+              "dirty_generation": 1,
+              "covered_generation": 1
+            }
+          ],
+          "dirty": false
+        }
+      }
+    ]
+  },
+  "gate_observations": {
+    "api_version": "grain.gates/v1",
+    "mode": "observation_only",
+    "authority": "legacy",
+    "lifecycle_effects": false,
+    "action_effects": false,
+    "dispatch_effects": false,
+    "automatic_cutover": false,
+    "source_revision": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+    "compared_at": "2026-08-28T12:01:00Z",
+    "legacy_state": "awaiting_reply",
+    "bindings": [
+      {
+        "id": "report",
+        "type": "delivery",
+        "version": 1,
+        "purpose": "monitor",
+        "required": false,
+        "action": null,
+        "subject": {
+          "kind": "task",
+          "task_id": "1"
+        },
+        "config": {
+          "product": "report",
+          "semantics": "current_v1"
+        },
+        "freshness_seconds": 60,
+        "origin": {
+          "kind": "task",
+          "id": "1",
+          "revision": "builtin-report-observer-v1",
+          "imported": false
+        }
+      },
+      {
+        "id": "receipt",
+        "type": "acknowledgment",
+        "version": 1,
+        "purpose": "monitor",
+        "required": false,
+        "action": null,
+        "subject": {
+          "kind": "task",
+          "task_id": "1"
+        },
+        "config": {
+          "mode": "explicit_receipt"
+        },
+        "freshness_seconds": 60,
+        "origin": {
+          "kind": "task",
+          "id": "1",
+          "revision": "builtin-report-observer-v1",
+          "imported": false
+        }
+      }
+    ],
+    "results": [
+      {
+        "evaluation_id": "shadow-1-1-report",
+        "revision": 1,
+        "disposition": "accepted",
+        "result": {
+          "evaluation_id": "shadow-1-1-report",
+          "binding_id": "task/1/report",
+          "type": "delivery",
+          "version": 1,
+          "context_digest": "sha256:1fa3a7992b092e122c65ff30bdd290c315b12fa851ad42d62aa0e9c2743992ad",
+          "status": "met",
+          "summary": "Settled run delivered a durable report. This does not prove receipt or completion.",
+          "human_text": null,
+          "agent_text": null,
+          "evidence": [
+            {
+              "kind": "report",
+              "id": "1",
+              "version": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd",
+              "subject": {
+                "kind": "task",
+                "task_id": "1"
+              },
+              "head": null,
+              "digest": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd"
+            }
+          ],
+          "dependencies": [
+            {
+              "key": "task/1/report-receipt",
+              "subject": {
+                "kind": "task",
+                "task_id": "1"
+              },
+              "head": null,
+              "version": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+              "collection_generation": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+              "scope_digest": "sha256:97ead7dc6a0946506c65c98016fcd90e042d2b74314d4f278e9c2f85f5ebd6bb",
+              "complete": true,
+              "observed_at": "2026-08-28T12:01:00Z",
+              "valid_until": "2026-08-28T12:02:00Z",
+              "authorization_revision": 0,
+              "dirty_generation": 1,
+              "covered_generation": 1
+            }
+          ],
+          "blockers": [],
+          "work": [],
+          "waits": [],
+          "actions": [],
+          "observed_at": "2026-08-28T12:01:00Z",
+          "valid_until": "2026-08-28T12:02:00Z",
+          "error": null
+        },
+        "accepted_at": "2026-08-28T12:01:00Z",
+        "invalidated_at": null,
+        "invalidation_reason": null,
+        "retry_at": null,
+        "dirty_generation": 1,
+        "covered_generation": 1
+      },
+      {
+        "evaluation_id": "shadow-1-1-receipt",
+        "revision": 1,
+        "disposition": "accepted",
+        "result": {
+          "evaluation_id": "shadow-1-1-receipt",
+          "binding_id": "task/1/receipt",
+          "type": "acknowledgment",
+          "version": 1,
+          "context_digest": "sha256:c271fb1be6f510016abd0f285df94eee89c90d784b7731f4a6a77fceac8b9bce",
+          "status": "pending",
+          "summary": "Current report awaits a person's receipt; a reply is not acknowledgment.",
+          "human_text": "Prediction only: the existing Acknowledge/Close flow can record receipt.",
+          "agent_text": null,
+          "evidence": [
+            {
+              "kind": "report",
+              "id": "1",
+              "version": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd",
+              "subject": {
+                "kind": "task",
+                "task_id": "1"
+              },
+              "head": null,
+              "digest": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd"
+            }
+          ],
+          "dependencies": [
+            {
+              "key": "task/1/report-receipt",
+              "subject": {
+                "kind": "task",
+                "task_id": "1"
+              },
+              "head": null,
+              "version": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+              "collection_generation": "sha256:f6dc94525fbbf78ba3e92c2ac409bca15f009340538857c4df05bf6fd8a2a24d",
+              "scope_digest": "sha256:97ead7dc6a0946506c65c98016fcd90e042d2b74314d4f278e9c2f85f5ebd6bb",
+              "complete": true,
+              "observed_at": "2026-08-28T12:01:00Z",
+              "valid_until": "2026-08-28T12:02:00Z",
+              "authorization_revision": 0,
+              "dirty_generation": 1,
+              "covered_generation": 1
+            }
+          ],
+          "blockers": [],
+          "work": [],
+          "waits": [
+            {
+              "event": "task_message",
+              "key": "task/1",
+              "version": "sha256:d3027e4b098a2ddf28ec5afb5162272a454382e316cf8fae070662efcda06acd",
+              "deadline": "2026-08-28T12:02:00Z",
+              "owner": "task_lifecycle",
+              "on_timeout": "escalate"
+            }
+          ],
+          "actions": [],
+          "observed_at": "2026-08-28T12:01:00Z",
+          "valid_until": "2026-08-28T12:02:00Z",
+          "error": null
+        },
+        "accepted_at": "2026-08-28T12:01:00Z",
+        "invalidated_at": null,
+        "invalidation_reason": null,
+        "retry_at": null,
+        "dirty_generation": 1,
+        "covered_generation": 1
+      }
+    ],
+    "dirty": false
+  }
+}

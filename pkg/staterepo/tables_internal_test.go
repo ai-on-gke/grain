@@ -231,6 +231,8 @@ var notSettings = []string{
 	// GET /api/events (model.IntegrationEvent): runtime event history
 	// written by Store transactions, never settings a PR applies.
 	"integration_event",
+	"gate_observation_shadow",
+	"gate_observation_shadow_history",
 	// config_audit is the record of who changed the configuration
 	// (operator-attribution spec §4.4): grain's own history, not settings
 	// a merged pull request applies.

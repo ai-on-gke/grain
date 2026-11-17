@@ -4668,6 +4668,10 @@ var Tables = []string{
 
 	// Every close and reopen of a task somebody asked for, with who, when
 	// and why (model.TaskEvent).
+	gateObservationTable,
+	gateObservationHistoryTable,
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_at` ON `gate_observation_shadow_history` (`at`)",
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_current_at` ON `gate_observation_shadow` (`evaluated_at`)",
 	taskEventTable,
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
