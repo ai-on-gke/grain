@@ -81,7 +81,14 @@ type securityStubPersistentSandboxes struct {
 func (s *securityStubPersistentSandboxes) List(context.Context) ([]model.PersistentSandboxStatus, error) {
 	return append([]model.PersistentSandboxStatus(nil), s.list...), nil
 }
-func (*securityStubPersistentSandboxes) Logs(string) (string, bool) { return "", false }
+func (s *securityStubPersistentSandboxes) Logs(name string) (string, bool) {
+	for _, st := range s.list {
+		if st.Name == name {
+			return "Cobalt zebra log of " + name, true
+		}
+	}
+	return "", false
+}
 func (*securityStubPersistentSandboxes) Control(context.Context, string, string) error {
 	return errors.New("unused")
 }
@@ -384,6 +391,9 @@ func TestCIAPINarrowingPreventsCrossRepoLeaks(t *testing.T) {
 		"/api/fs/ci/" + other.String(),
 		"/api/ci/runs/run-other",
 		"/api/ci/runs/run-other/artifacts/build/secret-report",
+		// The endpoint no longer reads a {name} without {owner} as a
+		// repository; another repo's sandbox logs must stay refused.
+		"/api/persistent-sandboxes/alpha-secret-other-svc/logs",
 		"/api/repos/" + other.String() + "/settings",
 		"/api/settings",
 		"/api/pause",
