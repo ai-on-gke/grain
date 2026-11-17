@@ -335,7 +335,7 @@ func scaleTask(i int, id string, repo model.RepoRef, created time.Time, rng *ran
 		ID: id, Title: fmt.Sprintf("Scale task %d: %s", i, []string{"fix", "add", "refactor", "document"}[i%4]),
 		Body: scaleBody(i, rng), Intent: model.IntentImplement, Binding: model.BindingDirective,
 		Target: &repo, CreatedAt: &created,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: scaleActor}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: scaleActor}, Reason: model.ReasonDirect},
 		Approval: &approval,
 		CustomFields: map[string][]string{
 			"area":  {[]string{"orchestrator", "store", "ui", "ci", "merge"}[i%5]},
