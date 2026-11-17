@@ -18,8 +18,8 @@ import { test, expect } from "./fixtures.js";
 // tab of the task page and of the Tasks and Agents inspectors fills its tab
 // body: the thread is the only thing that scrolls, the composer sits pinned
 // below it inside the pane, and wheeling the thread never moves the tab body
-// or the page around it. On a phone the thread still fills the tab body and
-// the composer can be reached. The Workstreams inspector is the one scroller
+// or the page around it. On a phone the tab lays out flat in the scrolling
+// page, the thread keeps its inline window, and the composer can be reached. The Workstreams inspector is the one scroller
 // for "In this stream" plus the task, which lays out flat inside it, and
 // stacked Context scrolls a picked document's detail into view. The long
 // thread and the document list are served in place of the demo's own, so the
@@ -182,7 +182,7 @@ test.describe("task conversation has one scroller", () => {
     );
   });
 
-  test("phone task page: the thread fills the tab body and the composer can be reached", async ({
+  test("phone task page: the tab lays out flat, only the thread scrolls in it, and the composer can be reached", async ({
     page,
     demoServer,
     accessCode,

@@ -291,8 +291,9 @@ inspector and Task Detail. Sessions shares its message styles.
   chrome. An empty thread is one quiet line, not a blank box.
 - **Task Detail's Conversation tab** is the conversation: it fills the tab
   body, the composer sits pinned below the thread, and the thread is the
-  only scroller (96px floor). In the Workstreams inspector, where the task
-  lays out flat, it keeps the inline window.
+  only scroller (96px floor). On a phone and in the Workstreams inspector,
+  where the tab lays out flat in a scrolling page, it keeps the inline
+  window.
 - **Expand:** the sibling cards step aside and the thread takes the pane.
 - **Full screen:** a native modal `<dialog>` (top layer, page inert), 860px
   wide, composer pinned, Escape closes, the draft survives. Shift+F toggles

@@ -364,6 +364,25 @@ g-task-page > g-task-detail,
     flex: 1 0 min(440px, 72dvh);
     min-height: min(440px, 72dvh);
   }
+  /* A phone's Conversation tab lays out flat in the scrolling page, its
+     goal card and question above the thread; the thread keeps the inline
+     window rather than the tab body scrolling around it. */
+  .task-page:has(.task-tab-body.is-conversation) .task-layout {
+    flex: none;
+    min-height: 0;
+  }
+  .task-tab-body.is-conversation {
+    flex: none;
+    overflow: visible;
+  }
+  .task-tab-body.is-conversation > .g-conversation,
+  .task-tab-body.is-conversation > .g-conversation > .convo-host {
+    flex: none;
+  }
+  .task-tab-body.is-conversation .convo-host .convo-thread {
+    flex: 1 1 auto;
+    height: clamp(160px, 28dvh, 400px);
+  }
   .task-tabs,
   .task-tab-body {
     padding-left: 12px;
