@@ -109,6 +109,41 @@ describe("GrantsPicker", () => {
     expect(screen.queryByLabelText(/server not attached/)).toBeNull();
   });
 
+  // A held grant is a plain line until the listing says its method takes
+  // arguments; the region is busy until then (task 6516).
+  it("says it is busy until the method listing is in", async () => {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const listing = { current: [hostScript] };
+    api.mockImplementation(async (path, opts) => {
+      if (path.split("?")[0] === "/api/capability-methods") {
+        await gate;
+        return listing.current;
+      }
+      if (path === "/api/capability-grants/check")
+        return JSON.parse(opts.body).grants.map(({ grant }) => ({
+          grant,
+          recorded: grant,
+        }));
+      throw new Error(`unexpected ${path}`);
+    });
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    const region = document.querySelector("[data-grants-picker]");
+    expect(region).toHaveAttribute("aria-busy", "true");
+    expect(region).toHaveAttribute("data-methods-loading", "true");
+    release();
+    await waitFor(() => expect(region).not.toHaveAttribute("aria-busy"));
+    expect(region).not.toHaveAttribute("data-methods-loading");
+  });
+
   it("still flags a grant whose method is absent from a fresh read", async () => {
     serve({ current: [hostScript] });
     render(

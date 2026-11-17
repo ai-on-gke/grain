@@ -1100,10 +1100,21 @@ export default function GrantsPicker({
   )
     return null;
 
+  // Until the method listing is in, a held grant whose method takes
+  // arguments is drawn as a plain line, and becomes its argument section
+  // -- new inputs, drawn from the method's schema -- once it arrives.
+  // The region says it is busy until then, so whatever reads or edits an
+  // argument (a screen reader, the grant matrix e2e) waits for the
+  // inputs that last rather than ones about to be replaced.
+  const methodsLoading = wanted && methods === null && !loadError;
+
   const regionId = `${idPrefix}-grants`;
   return (
     <Box
       data-testid={regionId}
+      data-grants-picker=""
+      data-methods-loading={methodsLoading ? "true" : undefined}
+      aria-busy={methodsLoading || undefined}
       role="group"
       aria-labelledby={`${regionId}-label`}
       sx={{ mt: 1.5 }}
