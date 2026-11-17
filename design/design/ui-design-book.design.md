@@ -194,6 +194,14 @@ instead. Agents does this with a size container query on the list pane (narrower
 than 480px or shorter than 700px). `e2e/next-agents-grid-scroll.spec.js`
 asserts the rule with bounding boxes.
 
+Task Details follows the same rule in a full task page or the Tasks/Agents
+inspector: below 600px of pane width or 700px of pane height, the header,
+tabs and Details document scroll together. Roomier panes keep the header
+and tabs fixed above the Details scroller. Both scroll surfaces are
+keyboard focusable; the final attributes, grants and dependency controls
+must be reachable without chaining between nested vertical scrollers
+(`e2e/next-agent-details-scroll.spec.ts`).
+
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
 only forms and reading measures that need it (Settings sections at 1180px).

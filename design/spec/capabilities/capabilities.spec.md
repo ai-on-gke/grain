@@ -12,6 +12,8 @@ The design this specifies is [`capabilities.design.md`](../../design/capabilitie
 
 Proposed integration: [configurable built-in gates](../gates/gates.spec.md) evaluate through ordinary in-process read helpers. They do not change capability `mint_*`/`release_*`/`configure` discovery, transport or grants. Earlier remote gate discovery, snapshot paging and capability back-call proposals are [deferred history](../gates/history/README.md), not prerequisites for the initial gate implementation.
 
+The proposed [tracked-resource binding](../tracked-resources/implementation.spec.md#TDS-11) also uses the existing Grain-to-capability control-plane calls. Its resource trio, descriptor parser, local registry and controller grants are additive and unimplemented. Watch hints return in bounded pull replies; there is no reverse callback or new Grain webhook. Controller leases are independently approved under [TDS-12](../tracked-resources/implementation.spec.md#TDS-12), never an extension of a released attempt pass.
+
 ## Contents
 
 1. [Terminology, Trust Model & Architecture Overview](#1-terminology-trust-model--architecture-overview)
