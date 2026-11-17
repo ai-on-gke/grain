@@ -1,0 +1,290 @@
+[
+  {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "fix_request",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "unauthenticated",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "authenticate",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "fix_request",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "stale_head",
+        "message": "Rendered H1 differs from current H2; no effect dispatched.",
+        "retryable": false,
+        "recovery": "refresh",
+        "operation_id": null,
+        "field": null,
+        "current": {
+          "contract_revision": 1,
+          "authority_epoch": 1,
+          "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head": "H2",
+          "resource_version": "pr-v3"
+        }
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "stale_evidence",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "refresh",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "revision_conflict",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "refresh",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "idempotency_conflict",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "fix_request",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "blocked",
+        "message": "Required evidence is not met; no effect dispatched.",
+        "retryable": false,
+        "recovery": "refresh",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "outcome_unknown",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "poll_operation",
+        "operation_id": "merge-1",
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 410,
+    "body": {
+      "error": {
+        "code": "cursor_expired",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "refresh",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 413,
+    "body": {
+      "error": {
+        "code": "too_large",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "fix_request",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "unsupported",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "upgrade",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "incomplete",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "fix_request",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 428,
+    "body": {
+      "error": {
+        "code": "upgrade_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "upgrade",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 429,
+    "body": {
+      "error": {
+        "code": "rate_limited",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "wait",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "unavailable",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "same_key",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "boundary_unavailable",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 504,
+    "body": {
+      "error": {
+        "code": "deadline",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "same_key",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  },
+  {
+    "status": 410,
+    "body": {
+      "error": {
+        "code": "evidence_expired",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "refresh",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    }
+  }
+]

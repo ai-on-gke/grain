@@ -204,7 +204,7 @@ func TestUpgradeFromSQLite(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "Test Task for SQLite to Postgres Upgrade",
 		Body:   "Verify full round-trip migration from sqlite to postgres",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"},
 			},
@@ -433,7 +433,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "Queued Task Ready for Dispatch",
 		Body:   "Pending worker assignment",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"},
 			},
@@ -456,7 +456,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 		Title:  "Completed Task",
 		Body:   "Task completed successfully",
 		Tags:   []string{"infra", "resolved"},
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bob"},
 			},
@@ -601,7 +601,7 @@ func TestPostgresComprehensiveWalkthrough(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "Live Task Created on Migrated Postgres",
 		Body:   "Verify that post-migration writes succeed seamlessly",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"},
 			},
@@ -939,7 +939,7 @@ func TestUpgradeFromSQLiteWithNonUTF8Data(t *testing.T) {
 		Intent:    model.IntentImplement,
 		Title:     "Task with non-utf8 data",
 		Body:      "Testing upgrade with non-utf8 byte 0x81",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}, Reason: model.ReasonDirect},
 		Binding:   model.BindingDirective,
 		CreatedAt: &testNow,
 	}
@@ -1062,7 +1062,7 @@ func TestUpgradeFromSQLiteBigIntDurationAndSanitizationWalkthrough(t *testing.T)
 		Intent:    model.IntentImplement,
 		Title:     "Title with invalid byte \x81\x82 and null \x00",
 		Body:      "Body with non-utf8 \xff\xfe\xfd and null \x00 characters",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}, Reason: model.ReasonDirect},
 		Binding:   model.BindingDirective,
 		CreatedAt: &testNow,
 	}

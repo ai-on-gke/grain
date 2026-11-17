@@ -232,7 +232,7 @@ func (r *Reach) entryForHost(name, host string) (*reachEntry, error) {
 
 	cred, ok := r.Credentials.Get(name)
 	if !ok {
-		return nil, fmt.Errorf("no credential named %q is configured", name)
+		return nil, fmt.Errorf("%w %q is configured", ErrNoCredential, name)
 	}
 	if cred.Token == nil {
 		if cred.MintFailure != nil {

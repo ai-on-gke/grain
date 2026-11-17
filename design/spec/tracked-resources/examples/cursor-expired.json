@@ -1,0 +1,24 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "watch-4",
+  "status": "error",
+  "modes": [
+    "cursor",
+    "poll"
+  ],
+  "subscription_id": "sub-A",
+  "generation": 1,
+  "cursor": null,
+  "replay": "expired",
+  "expires_at": "2026-11-16T21:15:00Z",
+  "min_poll_seconds": 30,
+  "max_poll_seconds": 3600,
+  "events": [],
+  "has_more": false,
+  "error": {
+    "code": "cursor_expired",
+    "retryable": false,
+    "summary": "Replay history is unavailable",
+    "retry_after_seconds": null
+  }
+}

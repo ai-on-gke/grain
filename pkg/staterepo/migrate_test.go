@@ -287,7 +287,7 @@ func writeGoldenDump(t *testing.T, ctx context.Context) {
 	if err := store.PutTask(ctx, model.Task{
 		ID: "golden-1", Intent: model.IntentImplement, Title: "Rename the endpoint",
 		Body: "with a body\nover two lines",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}},
 			Reason:      model.ReasonDirect,
 		},

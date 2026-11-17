@@ -1717,6 +1717,71 @@ loop
 expect "loop, still no new commit" "still cuts nothing" eq "$(remote_tag v2.5.0-rc.3)" ""
 expect "loop, several releases" "released twice in one day" eq "$(git -C "$work/remote.git" tag -l 'v2.[34].0' | wc -l | tr -d ' ')" 2
 
+# --- publishing-held split (RELEASE_TRAIN_PHASES=judge,release, RELEASE_TRAIN_HOLD=publishing) ---
+# While main's publishing is held, a tick still runs Phase 1 (judge / release /
+# drop) for the rc in qualification, skips Phase 2 (cut), and emits
+# `held=publishing (cut skipped)`.
+setup "" c1 c2 c3
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c3"
+: > "$work/train.out"
+train RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none \
+  RELEASE_TRAIN_PHASES=judge,release RELEASE_TRAIN_HOLD=publishing RELEASE_TRAIN_HOLD_DETAIL="triage task 4256" \
+  RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "held, green rc" "exits 0" eq "$status" 0
+expect "held, green rc" "promotes v2.3.0" eq "$(remote_tag v2.3.0)" "$c2"
+expect "held, green rc" "moves latest onto v2.3.0" eq "$(remote_tag latest)" "$c2"
+expect "held, green rc" "does not cut v2.4.0-rc.1" eq "$(remote_tag v2.4.0-rc.1)" ""
+expect "held, green rc" "says held=publishing (cut skipped)" has "held=publishing (cut skipped) (triage task 4256)"
+expect "held, green rc" "emits held=publishing (cut skipped)" grep -qxF "held=publishing (cut skipped)" "$work/train.out"
+
+# Held with a red rc: drops it in Phase 1 and does not cut rc.2 even when a
+# newer green commit exists and no rc-hold blocks it.
+setup "" c1 c2 c3
+qualified_rc v2.3.0-rc.1 "$c2"
+qualification fail "$c2"
+runs "$c2" "$c3"
+: > "$work/train.out"
+train RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none \
+  RELEASE_TRAIN_PHASES=judge,release RELEASE_TRAIN_HOLD=publishing RELEASE_TRAIN_HOLD_DETAIL="triage task 4256" \
+  RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "held, red rc" "exits 0" eq "$status" 0
+expect "held, red rc" "drops v2.3.0-rc.1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "held, red rc" "does not cut v2.3.0-rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "held, red rc" "says held=publishing (cut skipped)" has "held=publishing (cut skipped)"
+expect "held, red rc" "emits held=publishing (cut skipped)" grep -qxF "held=publishing (cut skipped)" "$work/train.out"
+
+# Held with nothing in qualification: skips cut and emits held=publishing (cut skipped).
+setup "" c1 c2 c3
+runs "$c2" "$c3"
+: > "$work/train.out"
+train RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none \
+  RELEASE_TRAIN_PHASES=judge,release RELEASE_TRAIN_HOLD=publishing \
+  RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "held, noop" "exits 0" eq "$status" 0
+expect "held, noop" "cuts no rc" eq "$(remote_tag v2.3.0-rc.1)" ""
+expect "held, noop" "emits held=publishing (cut skipped)" grep -qxF "held=publishing (cut skipped)" "$work/train.out"
+
+# Held with an rc still qualifying: reports pending and notes the hold.
+setup "" c1 c2 c3
+tag_remote v2.3.0-rc.1 "$c2" 2
+qualification none
+: > "$work/train.out"
+train RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none \
+  RELEASE_TRAIN_PHASES=judge,release RELEASE_TRAIN_HOLD=publishing \
+  RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "held, qualifying" "exits 0" eq "$status" 0
+expect "held, qualifying" "outputs pending" grep -qxF "qualification=pending" "$work/train.out"
+expect "held, qualifying" "emits held=publishing (cut skipped)" grep -qxF "held=publishing (cut skipped)" "$work/train.out"
+
+# Invalid RELEASE_TRAIN_PHASES is refused cleanly.
+train RELEASE_TRAIN_PHASES=bogus
+expect "phases, unknown" "exits 1" eq "$status" 1
+expect "phases, unknown" "names the bad phase" has "RELEASE_TRAIN_PHASES has unknown phase \"bogus\""
+train RELEASE_TRAIN_PHASES=cut
+expect "phases, cut only" "exits 1" eq "$status" 1
+expect "phases, cut only" "refuses cut without phase 1" has "omits judge/release/drop"
+
 echo
 echo "$((cases - failures))/$cases passed"
 [ "$failures" -eq 0 ]

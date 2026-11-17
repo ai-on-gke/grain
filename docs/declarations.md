@@ -399,8 +399,12 @@ sandbox:
   path trigger, qualification run or release-notes filing firing a template above the
   deployment's maximum files nothing, and the firing fails saying so. On a deployment whose sandboxes are host directories, which
   have no shape, the form and the API leave the template's shape off. A
-  schedule firing there files the shape anyway, and the run fails at
-  sandbox setup, so don't declare `sandbox:` for such a deployment.
+  schedule, suite or trigger firing there still files the shape on the
+  task, but dispatch drops it when every dimension matches the
+  template's (the size came from the template, not from a person) and
+  logs `not asking for template …'s sandbox size`, so the run starts on
+  the host's own directory. A dimension somebody stated on the filing
+  that differs from the template's is still refused at sandbox setup.
 - The template's shape shows on its page (opened from its row on the
   Processes page), in
   `GET /api/templates` (`sandbox: {cpus, memoryMb, diskGb}`), and in the
@@ -495,7 +499,9 @@ guarded the way `.grain/workflows` is (see "Sensitive paths" below for the
 recommended trigger).
 
 What only a person may grant is different. That is a GCP key, a host
-script, a GitHub credential, a dangerous or person-only `api:<scope>`
+script, a GitHub credential (`…/repo#credential`), a `…/repo#write` that
+names anything beyond its `repo` (`refs` or `force`, which widen what the
+git proxy lets the run push), a dangerous or person-only `api:<scope>`
 (`model.DeclaredGrantNeedsPerson`), an `admission:` above `standard`, or
 `network_access: open`. A repository's declaration only asks for these.
 A firing of a declared schedule, or of a declared template, whose
@@ -756,15 +762,36 @@ release train cuts only from a commit whose release published, and on
 skip-when: publishing-held
 ```
 
+**Split hold while an rc is in qualification.** Promoting or dropping a
+release candidate already in qualification (`vX.Y.Z-rc.N` with neither a
+`-discarded` marker nor a `vX.Y.Z` tag) does not depend on `main`'s
+newest commit publishing. While such an rc exists on the repository, the
+scheduler still fires a release-train schedule (overlap group
+`release-train` or the `release-train` template), keeping overlap and
+overlap-group holds in force, so the release train can run Phase 1
+(`judge,release`) and skip only cut (`held=publishing (cut skipped)`).
+Every other `skip-when: publishing-held` schedule stays held. A tick that
+cannot read the hold (`GET /api/repos/<repo>/release?branch=main` fails)
+skips cut too, reporting `held=publishing-unknown (cut skipped)`. Once no rc is in
+qualification, `skip-when: publishing-held` holds the schedule again. A
+Stage 1 trigger that fires only on `v*-rc.*` tags
+(`.grain/schedules/release-train-on-stage1.yml`) omits
+`skip-when: publishing-held` for the same reason.
+
 A held firing is recorded like an overlap skip, as `skipped at <time>:
 publishing held by task N (...)`, and the schedules page says the same
 while it lasts. It is held, not dropped: the cadence stays where it was,
 and the first cycle after the triage task closes fires it once, standing
 in for the occurrences that came round meanwhile. Run now is never held.
 A `github_workflow_run` trigger's firing has no occurrence to hold, so it
-is dropped and recorded. `publishing-held` is the only condition; any
-other value is refused. Settings rows carry the same key
-(`settings/schedules.yml`).
+is dropped and recorded when no rc is in qualification. Stale-schedule
+detection (`grain health` / `StaleSchedules`) marks a deliberately held
+schedule as `held: true` with `heldByTaskID` naming the triage task
+(shown as a warning rather than failing), and the starved-schedule
+detector (`pipeline.schedule-starved`) treats it as deliberately held
+naming that triage task rather than starved. `publishing-held` is the
+only condition; any other value is refused. Settings rows carry the same
+key (`settings/schedules.yml`).
 
 A daemon older than this key refuses a schedule file that says it, and a
 repository with a refused declaration keeps its last good commit's
@@ -987,6 +1014,43 @@ did change, the review of each kind is filed again for the new head:
 - A review for an older head that has not been dispatched yet is
   superseded by the new one, which keeps its incremental base; one already
   running is waited on.
+
+**Merging over findings: Accept findings.** A gating review's findings
+hold its gate (`security-review`, or `review`, which lists every gating
+trigger's `trigger:<name>` findings) until one of three things happens:
+
+- **A clean re-review.** Push fixes, and the review filed for the new head
+  passes.
+- **The owner accepts them as they are.** Use **Accept findings…** beside
+  the gate in the task's merge gates (the Changes tab in the new UI at
+  `/next/`, the merge-gates panel in the classic one), or `grain accept-findings -gate
+  <gate> [-review <task>] <id> <reason>` (`POST
+  /api/tasks/{id}/accept-findings`, `tasks:write`). A person with an
+  unlimited role (grain/operator) may do this; a limited role and an agent
+  never may (403, as with Submit), and a reason is required. It clears
+  that one review's findings and open questions on that one gate, at the
+  pull request's current head. It records who accepted, the reason, the
+  review task and the head on the task (`review-findings-accepted`), on its
+  timeline, and as a comment on the task and the pull request. It clears
+  nothing else: CI, the other gates, other reviews' findings, approvers a
+  `human: required` trigger names and security holds all still apply. A
+  later push is classified and reviewed as any push is, and findings a new
+  review leaves need a new decision. Once nothing else holds the change, it
+  merges itself as it was going to. The panel offers it only on a gate whose
+  findings a review left (the merge gate's `acceptable`). A gate held
+  because its review could not be filed has no review's findings to accept:
+  a re-review or Force merge settles that.
+- **Force merge.** This overrides *every* gate it names, under
+  `merge:force`. It is for overriding everything, not for a decision about
+  one review's findings.
+
+Submit records the owner's approval only and never clears findings. Only
+an explicit acceptance counts as the owner's decision. Answering the
+review's questions with "merge as-is", or resolving its threads, does not
+count: a reply is free text that the next run reads and carries out, and
+threads can be resolved by the change's own agent, so neither one records
+who decided, at which head, or why. An agent that thinks a finding needs
+no fix asks the owner (`ask_question`) and leaves the decision to them.
 
 **One runnable task per key.** A key is (repository, branch, trigger,
 group) for a merge and (pull request, trigger, group) for a pull request

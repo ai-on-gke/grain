@@ -1,0 +1,92 @@
+{
+  "api_version": "grain.gates/v1",
+  "revision": 9,
+  "source": "repository",
+  "source_id": "ai-on-gke/grain",
+  "attachments": [
+    {
+      "id": "checks",
+      "type": "checks",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "*"
+      },
+      "config": {
+        "mode": "effective",
+        "extra_jobs": [],
+        "empty": "unknown",
+        "semantics": "current_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "repository",
+        "id": "ai-on-gke/grain",
+        "revision": "9",
+        "imported": false
+      }
+    },
+    {
+      "id": "review",
+      "type": "review",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "*"
+      },
+      "config": {
+        "category": "security",
+        "requirement_id": "security/default",
+        "semantics": "current_head_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "repository",
+        "id": "ai-on-gke/grain",
+        "revision": "9",
+        "imported": false
+      }
+    },
+    {
+      "id": "approval",
+      "type": "approval",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "*"
+      },
+      "config": {
+        "requirement_ids": [
+          "owners"
+        ],
+        "semantics": "exact_head_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "repository",
+        "id": "ai-on-gke/grain",
+        "revision": "9",
+        "imported": false
+      }
+    }
+  ],
+  "unguarded_actions": []
+}

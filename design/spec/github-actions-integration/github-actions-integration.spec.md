@@ -222,7 +222,7 @@ type GitHubOIDCClaims struct {
 
 3.3.2. **Default cancellation (`cancel-on-abort: false`).** Cancelling or timing out the GitHub Actions workflow MUST NOT stop or close the grain task.
 
-3.3.3. **Opt-in cancellation (`cancel-on-abort: true`).** When `cancel-on-abort: true` and the workflow job receives `SIGINT`/`SIGTERM` or executes its `post:` step with `cancelled()`, `grain-task` MUST send `POST /api/actions/v1/tasks/{id}/stop` with `{"reason": "Cancelled: GitHub Actions run <run_url> was aborted"}` (saving `task-id` in Actions step state `core.saveState("taskId", id)` during the main step so `post:` has it). Grain MUST permit `POST .../tasks/{id}/stop` when either the principal holds `tasks:write` on `{id}`'s repository OR `{id}` carries `Origin.Attribution.Actor == principal` and `LinkGitHubWorkflowRun` matching the caller's `<repository>/actions/runs/<run_id>/`.
+3.3.3. **Opt-in cancellation (`cancel-on-abort: true`).** When `cancel-on-abort: true` and the workflow job receives `SIGINT`/`SIGTERM` or executes its `post:` step with `cancelled()`, `grain-task` MUST send `POST /api/actions/v1/tasks/{id}/stop` with `{"reason": "Cancelled: GitHub Actions run <run_url> was aborted"}` (saving `task-id` in Actions step state `core.saveState("taskId", id)` during the main step so `post:` has it). Grain MUST permit `POST .../tasks/{id}/stop` when either the principal holds `tasks:write` on `{id}`'s repository OR `{id}` carries `Filing.Attribution.Actor == principal` and `LinkGitHubWorkflowRun` matching the caller's `<repository>/actions/runs/<run_id>/`.
 
 ### 3.4 The `grain-task` reusable action {#GA-10}
 

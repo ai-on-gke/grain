@@ -79,6 +79,8 @@ func controlRoster(sandbox []mcp.Tool, grants GrantNames, changelist bool) map[s
 	for _, name := range agent.ModelOnlyGrantToolNames() {
 		keep[name] = true
 	}
+	keep["record_assumption"] = true
+	keep["complete_goal"] = true
 	if changelist || !model.HasGrainCI(grants) {
 		keep["pull_request_status"] = true
 		keep["wait_for_checks"] = true

@@ -156,8 +156,8 @@ func TestSyncReviewsFilesAReviewStackedOnTheBranchItReviews(t *testing.T) {
 	if review.Approval == nil {
 		t.Fatal("a review must be pre-approved -- attaching one is the standing approval")
 	}
-	if review.Origin.Reason != model.ReasonReview {
-		t.Fatalf("review origin reason = %q, want %q", review.Origin.Reason, model.ReasonReview)
+	if review.Filing.Reason != model.ReasonReview {
+		t.Fatalf("review filing reason = %q, want %q", review.Filing.Reason, model.ReasonReview)
 	}
 	if review.ReviewTemplateID != "" {
 		t.Fatal("a review must not itself carry a review, or reviews would nest forever")

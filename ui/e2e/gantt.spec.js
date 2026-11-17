@@ -38,6 +38,23 @@ import { test, expect } from "./fixtures.js";
 // moment that menu has been opened once.
 const select = (page, name) => page.getByRole("combobox", { name });
 
+async function pickSelect(page, label, optionName) {
+  const combo = select(page, label);
+  const option = page.getByRole("option", { name: optionName, exact: true });
+  await expect(async () => {
+    if ((await combo.getAttribute("aria-expanded")) !== "true") {
+      if ((await combo.textContent())?.trim() === optionName) return;
+      await combo.click({ timeout: 2_000 });
+    }
+    await option.click({ timeout: 2_000 });
+    await expect(combo).not.toHaveAttribute("aria-expanded", "true", {
+      timeout: 1_000,
+    });
+    await expect(combo).toHaveText(optionName, { timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+}
+
 // Where the demo's timeline board lives, asked of the server rather than
 // assumed -- board.spec.js's own boardPath, and the same reason.
 async function boardPath(page, name) {
@@ -83,8 +100,7 @@ test("draws the seeded tasks as bars against a clock", async ({ page }) => {
 
   // Widen the range and it is there, with a bar that has an end on it:
   // the server's own closed_at, drawn as a stretch that stopped.
-  await select(page, "Range").click();
-  await page.getByRole("option", { name: "Everything" }).click();
+  await pickSelect(page, "Range", "Everything");
   const done = page.locator(".gantt-row", {
     hasText: "Spike: websocket transport",
   });
@@ -93,8 +109,7 @@ test("draws the seeded tasks as bars against a clock", async ({ page }) => {
 
   // Back to the default, so a rerun of this suite starts where a first
   // run did (this browser remembers the range -- gantt.js).
-  await select(page, "Range").click();
-  await page.getByRole("option", { name: "Last 7 days" }).click();
+  await pickSelect(page, "Range", "Last 7 days");
 });
 
 test("loads a timeline board cold from its own URL", async ({ page }) => {
@@ -139,10 +154,8 @@ test("lands a kept /gantt link on the task list", async ({ page }) => {
 test("keeps the chosen range and lanes across a reload", async ({ page }) => {
   await page.goto(await boardPath(page, "Timeline"));
 
-  await select(page, "Range").click();
-  await page.getByRole("option", { name: "Last 24 hours" }).click();
-  await select(page, "Lanes").click();
-  await page.getByRole("option", { name: "By state" }).click();
+  await pickSelect(page, "Range", "Last 24 hours");
+  await pickSelect(page, "Lanes", "By state");
   await expect(page.locator(".gantt-lane-title").first()).toBeVisible();
 
   await page.reload();
@@ -152,10 +165,8 @@ test("keeps the chosen range and lanes across a reload", async ({ page }) => {
 
   // Put the default back, so a rerun of this suite starts where a first
   // run did -- the same courtesy board.spec.js pays the column layout.
-  await select(page, "Range").click();
-  await page.getByRole("option", { name: "Last 7 days" }).click();
-  await select(page, "Lanes").click();
-  await page.getByRole("option", { name: "No lanes" }).click();
+  await pickSelect(page, "Range", "Last 7 days");
+  await pickSelect(page, "Lanes", "No lanes");
 });
 
 // A timeline row holds no control of its own, so before grain/task-1420

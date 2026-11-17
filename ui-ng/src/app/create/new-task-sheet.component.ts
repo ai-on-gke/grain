@@ -25,6 +25,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
+import { type ForkHead, forkHeadHelp, parseForkHead } from "./fork-head";
 import { Router } from "@angular/router";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
@@ -54,6 +55,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { NoGitConnectionNoticeComponent } from "../shared/no-git-connection-notice.component";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { CreateTaskService } from "./create-task.service";
 import {
@@ -99,6 +101,11 @@ const FRAMEWORKS: readonly PillOption[] = [
   { value: "codex", label: "Codex" },
 ];
 
+const POSTURE_OPTIONS: readonly PillOption[] = [
+  { value: "supervised", label: "Supervised" },
+  { value: "goal", label: "Autonomous goal" },
+];
+
 // NewTaskSheetComponent is the New task side sheet (spec D-23) with full
 // 22-field parity, template launcher + composition preview, file attachments,
 // capabilities/grants, sandbox shape, zero <select>s, and zero Classic links.
@@ -110,6 +117,7 @@ const FRAMEWORKS: readonly PillOption[] = [
     AttachmentPickerComponent,
     GrantsPickerComponent,
     DirectorShaperComponent,
+    NoGitConnectionNoticeComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -203,6 +211,84 @@ const FRAMEWORKS: readonly PillOption[] = [
                 </p>
               }
 
+              <!-- Execution Posture & Autonomous Goal Config -->
+              @if (!draft().workstream) {
+                <div class="field">
+                  <span>Execution posture</span>
+                  <g-pill-select
+                    [options]="postureOptions"
+                    [value]="draft().goalMode?.enabled ? 'goal' : 'supervised'"
+                    ariaLabel="Execution posture"
+                    align="left"
+                    testid="nt-posture"
+                    (valueChange)="setPosture($event)"
+                  />
+                </div>
+                @if (draft().goalMode?.enabled) {
+                  <div class="nt-section-card" data-testid="nt-goal-config">
+                    <p class="nt-goal-note muted">
+                      Runs without stopping for questions — records assumptions,
+                      verifies deliverables across bounded passes, and stays
+                      quiet in Inbox until ready to submit or stopped.
+                    </p>
+                    <div class="nt-goal-grid">
+                      <label class="field">
+                        <span>Max verification passes</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          data-testid="nt-max-passes"
+                          [value]="draft().goalMode?.maxPasses ?? 8"
+                          (input)="
+                            setGoalNum('maxPasses', val($event), 1, 20, 8)
+                          "
+                        />
+                      </label>
+                      <label class="field">
+                        <span>Wall-clock budget (min)</span>
+                        <input
+                          type="number"
+                          min="5"
+                          max="720"
+                          data-testid="nt-wall-clock"
+                          [value]="draft().goalMode?.wallClockMinutes ?? 120"
+                          (input)="
+                            setGoalNum(
+                              'wallClockMinutes',
+                              val($event),
+                              5,
+                              720,
+                              120
+                            )
+                          "
+                        />
+                      </label>
+                    </div>
+                    <div class="switch-row">
+                      <button
+                        type="button"
+                        role="switch"
+                        class="g-switch"
+                        data-testid="nt-mock-secrets"
+                        aria-labelledby="sw-mock-secrets"
+                        [attr.aria-checked]="
+                          !!draft().goalMode?.mockMissingSecrets
+                        "
+                        (click)="toggleGoalMockSecrets()"
+                      >
+                        <span class="sr-only"
+                          >Mock missing external secrets locally</span
+                        >
+                      </button>
+                      <span id="sw-mock-secrets"
+                        >Mock missing external secrets locally</span
+                      >
+                    </div>
+                  </div>
+                }
+              }
+
               <!-- Optional Template Launcher & Live Composition Preview -->
               @if (!draft().workstream && templates().length > 0) {
                 <div class="nt-template-box" data-testid="nt-template-section">
@@ -258,7 +344,7 @@ const FRAMEWORKS: readonly PillOption[] = [
                           data-testid="nt-composition-preview"
                         >
                           <strong>Preview: {{ ct.title }}</strong>
-                          @for (cf of ct.fields.slice(0, 5); track cf.name) {
+                          @for (cf of previewFields(ct.fields); track cf.name) {
                             @if (cf.values?.length) {
                               <span class="muted">
                                 {{ cf.name }}: {{ cf.values!.join(", ") }}
@@ -490,7 +576,7 @@ const FRAMEWORKS: readonly PillOption[] = [
                   type="submit"
                   class="btn-primary"
                   data-testid="new-task-submit"
-                  [disabled]="busy() || !canFile()"
+                  [disabled]="busy() || !canFile() || !!forkHead()?.error"
                 >
                   {{
                     draft().workstream
@@ -498,7 +584,9 @@ const FRAMEWORKS: readonly PillOption[] = [
                         ? "Start workstream"
                         : "Save stream proposal"
                       : draft().approved
-                        ? "Create and start"
+                        ? draft().goalMode?.enabled
+                          ? "Start autonomous goal"
+                          : "Create and start"
                         : "Save as proposal"
                   }}
                 </button>
@@ -613,14 +701,22 @@ const FRAMEWORKS: readonly PillOption[] = [
           <div class="field">
             <span>{{ f.label || "Repository" }}</span>
             <g-pill-select
+              #repoSelect
               [options]="repoOptions()"
               [value]="draft().repo"
+              placeholder="Select a repository…"
               ariaLabel="Repository"
               align="left"
               testid="nt-repo"
+              [invalid]="error()?.field === 'repo'"
+              [describedBy]="error()?.field === 'repo' ? 'new-task-error' : ''"
               (valueChange)="pickRepo($event)"
             />
           </div>
+          <g-no-git-connection-notice
+            [deployment]="config() ? (config()?.deployment ?? {}) : undefined"
+            (navigated)="svc.close(false)"
+          />
         }
         @case ("base") {
           @if (draft().repo !== noRepo) {
@@ -633,8 +729,28 @@ const FRAMEWORKS: readonly PillOption[] = [
                 data-testid="nt-base"
                 placeholder="The repository's default branch"
                 [value]="draft().base"
+                [attr.aria-invalid]="forkHead()?.error ? 'true' : null"
+                [attr.aria-describedby]="forkHead() ? 'nt-fork-head' : null"
                 (input)="set('base', val($event))"
               />
+              @if (forkHead(); as fh) {
+                @if (fh.error) {
+                  <small
+                    id="nt-fork-head"
+                    class="nt-field-error"
+                    role="alert"
+                    data-testid="nt-fork-head-error"
+                    >{{ fh.error }}</small
+                  >
+                } @else {
+                  <small
+                    id="nt-fork-head"
+                    class="muted"
+                    data-testid="nt-fork-head-help"
+                    >{{ forkHeadText(fh) }}</small
+                  >
+                }
+              }
             </label>
             @if (repoBranches().length) {
               <div class="nt-inline-row" aria-label="Known branches">
@@ -1042,6 +1158,7 @@ export class NewTaskSheetComponent {
   protected readonly noRepo = NO_REPO;
   protected readonly sandboxTiers = SANDBOX_TIERS;
   protected readonly frameworkOptions = FRAMEWORKS;
+  protected readonly postureOptions: readonly PillOption[] = POSTURE_OPTIONS;
   protected readonly nothingOptions: readonly PillOption[] = [
     { value: "close", label: "Close the task" },
     { value: "ack", label: "Ask me to acknowledge it" },
@@ -1085,6 +1202,7 @@ export class NewTaskSheetComponent {
   private readonly sheet = viewChild<ElementRef<HTMLElement>>("sheet");
   private readonly titleInput =
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
+  private readonly repoSelect = viewChild<PillSelectComponent>("repoSelect");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
   private readonly foundInInput =
@@ -1167,10 +1285,12 @@ export class NewTaskSheetComponent {
   protected readonly repoOptions = computed<PillOption[]>(() => {
     const f = this.fields().repo;
     const out: PillOption[] = [];
-    if (!this.defaultTarget()) {
-      out.push({ value: "", label: "Deployment default target" });
+    const def = this.defaultTarget().trim();
+    const list = this.repos();
+    if (def && !list.some((r) => r.toLowerCase() === def.toLowerCase())) {
+      out.push({ value: "", label: `Deployment default (${def})` });
     }
-    for (const r of this.repos()) {
+    for (const r of list) {
       out.push({ value: r, label: r });
     }
     if (f.allowNoRepo !== false) {
@@ -1295,6 +1415,19 @@ export class NewTaskSheetComponent {
     const r = this.selectedTemplate()?.repo || this.draft().repo;
     return r && r !== NO_REPO ? r : undefined;
   });
+
+  // forkHead is the Base branch read as a GitHub fork head label
+  // ("<fork-owner>:<branch>"), which the server takes only for a task
+  // that creates no branch of its own: null when the box holds none.
+  protected readonly forkHead = computed(() => {
+    const d = this.draft();
+    if (d.repo === NO_REPO || d.newBranch) return null;
+    return parseForkHead(d.base);
+  });
+
+  protected forkHeadText(h: ForkHead): string {
+    return "owner" in h ? forkHeadHelp(h, this.draft().repo) : h.error;
+  }
 
   protected readonly canFile = computed(() => {
     const repo = this.repoForAccess();
@@ -1440,6 +1573,12 @@ export class NewTaskSheetComponent {
   protected pickTemplate(id: string): void {
     this.selectedTemplateId.set(id);
     this.composition.set(null);
+    if (
+      this.error()?.field === "title" ||
+      this.error()?.field === "templateField"
+    ) {
+      this.error.set(null);
+    }
     const tmpl = this.templates().find((t) => t.id === id);
     if (!tmpl) {
       this.templateValues.set({});
@@ -1459,12 +1598,21 @@ export class NewTaskSheetComponent {
   }
 
   protected setTemplateField(name: string, value: string): void {
+    if (this.error()?.field === "templateField") this.error.set(null);
     this.templateValues.update((m) => ({ ...m, [name]: value }));
     void this.refreshComposition();
   }
 
   protected templateFieldOptions(opts: string[]): PillOption[] {
     return opts.map((o) => ({ value: o, label: o }));
+  }
+
+  protected previewFields(
+    fields: Composition["tasks"][number]["fields"] | undefined,
+  ) {
+    return (fields ?? [])
+      .filter((f) => f.name !== "title" && f.name !== "body")
+      .slice(0, 5);
   }
 
   private async refreshComposition(): Promise<void> {
@@ -1568,6 +1716,15 @@ export class NewTaskSheetComponent {
   protected set<K extends keyof NewTaskDraft>(k: K, v: NewTaskDraft[K]): void {
     this.edited.add(k);
     this.draft.update((d) => ({ ...d, [k]: v }));
+    const curErr = this.error();
+    if (
+      (k === "title" && curErr?.field === "title") ||
+      ((k === "newBranch" || k === "newBranchName") &&
+        curErr?.field === "newBranchName") ||
+      (k === "foundIn" && curErr?.field === "foundIn")
+    ) {
+      this.error.set(null);
+    }
     if ((k === "base" || k === "approved") && this.selectedTemplate()) {
       void this.refreshComposition();
     }
@@ -1587,6 +1744,62 @@ export class NewTaskSheetComponent {
     this.set("sandboxDiskGb", disk);
   }
 
+  protected setPosture(v: string): void {
+    const canAdmin = this.access.canScope(
+      "tasks:admin",
+      this.draft().repo || null,
+    );
+    if (v === "goal") {
+      const prev = this.draft().goalMode;
+      this.set("goalMode", {
+        enabled: true,
+        maxPasses: prev?.maxPasses ?? 8,
+        wallClockMinutes: prev?.wallClockMinutes ?? 120,
+        mockMissingSecrets: prev?.mockMissingSecrets ?? true,
+      });
+      if (!this.edited.has("autoApproveProposals") && canAdmin) {
+        this.draft.update((d) => ({ ...d, autoApproveProposals: true }));
+      }
+    } else {
+      this.set("goalMode", null);
+      if (!this.edited.has("autoApproveProposals")) {
+        this.draft.update((d) => ({ ...d, autoApproveProposals: false }));
+      }
+    }
+  }
+
+  protected setGoalNum(
+    k: "maxPasses" | "wallClockMinutes",
+    raw: string,
+    min: number,
+    max: number,
+    fallback: number,
+  ): void {
+    const parsed = Math.floor(Number(raw));
+    const n =
+      Number.isFinite(parsed) && parsed > 0
+        ? Math.min(max, Math.max(min, parsed))
+        : fallback;
+    const prev = this.draft().goalMode;
+    this.set("goalMode", {
+      enabled: true,
+      maxPasses: prev?.maxPasses ?? 8,
+      wallClockMinutes: prev?.wallClockMinutes ?? 120,
+      mockMissingSecrets: prev?.mockMissingSecrets ?? true,
+      [k]: n,
+    });
+  }
+
+  protected toggleGoalMockSecrets(): void {
+    const prev = this.draft().goalMode;
+    this.set("goalMode", {
+      enabled: true,
+      maxPasses: prev?.maxPasses ?? 8,
+      wallClockMinutes: prev?.wallClockMinutes ?? 120,
+      mockMissingSecrets: !(prev?.mockMissingSecrets ?? true),
+    });
+  }
+
   protected val(ev: Event): string {
     return (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
   }
@@ -1596,6 +1809,7 @@ export class NewTaskSheetComponent {
   }
 
   protected pickRepo(repo: string): void {
+    if (this.error()?.field === "repo") this.error.set(null);
     const tasks = this.inbox.tasks();
     const baseEdited = this.edited.has("base");
     this.edited.add("repo");
@@ -1728,11 +1942,11 @@ export class NewTaskSheetComponent {
   }
 
   private async file(): Promise<void> {
-    if (this.busy()) return;
+    if (this.busy() || !this.canFile() || this.forkHead()?.error) return;
     const d = this.draft();
     const tmpl = this.selectedTemplate();
     const tvals = this.templateValues();
-    const problem = validate(d, this.fields(), tmpl, tvals);
+    const problem = validate(d, this.fields(), tmpl, tvals, this.config());
     if (problem) {
       this.error.set(problem);
       if (problem.field === "foundIn") {
@@ -1740,11 +1954,12 @@ export class NewTaskSheetComponent {
           this.moreOpen.set(true);
         }
         queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
-      } else {
-        (problem.field === "title"
-          ? this.titleInput()
-          : this.branchInput()
-        )?.nativeElement.focus();
+      } else if (problem.field === "repo") {
+        this.repoSelect()?.focus();
+      } else if (problem.field === "title") {
+        this.titleInput()?.nativeElement.focus();
+      } else if (problem.field === "newBranchName") {
+        this.branchInput()?.nativeElement.focus();
       }
       return;
     }
@@ -1788,6 +2003,8 @@ export class NewTaskSheetComponent {
         "origin",
         "parentId",
         "autoApproveProposals",
+        "goalMode",
+        "generatedFrom",
         "customFields",
       ];
       const hasExtraTaskOverrides =

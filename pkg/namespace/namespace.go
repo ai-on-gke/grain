@@ -24,6 +24,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -642,7 +643,7 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 			key := jobKey(job)
 			if key != "" && !seen[key] {
 				seen[key] = true
-				entries = append(entries, Entry{Name: key, Type: "dir"})
+				entries = append(entries, Entry{Name: escapeCIJobName(key), Type: "dir"})
 			}
 			for _, a := range job.Artifacts {
 				if a.Stored {
@@ -665,12 +666,12 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 		return s.resolveCIArtifacts(run, relPath, rest[2:])
 	}
 
-	job, ok := findCIJob(run, rest[1])
+	job, used, ok := matchCIJob(rest[1:], func(name string) (ci.JobRun, bool) { return findCIJob(run, name) })
 	if !ok {
 		return nil, fmt.Errorf("%w: job %q in ci://%s/%s", ErrNotFound, rest[1], repo, runID)
 	}
 
-	rem := rest[2:]
+	rem := rest[1+used:]
 	if len(rem) == 0 {
 		att, _ := job.LatestAttempt()
 		entries := attemptEntries(att, true)
@@ -702,7 +703,7 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 		}
 		att, ok := job.GetAttempt(attemptNum)
 		if !ok {
-			return nil, fmt.Errorf("%w: attempt %d in job %q", ErrNotFound, attemptNum, rest[1])
+			return nil, fmt.Errorf("%w: attempt %d in job %q", ErrNotFound, attemptNum, job.Name)
 		}
 		isLatest := attemptNum == len(attempts)
 		growingAttempt := isLatest && !run.Conclusion.Done() && !job.Conclusion.Done() && !att.Conclusion.Done()
@@ -744,20 +745,22 @@ func (s *Server) externalCINode(ctx context.Context, repo, relPath, runID string
 	if len(rest) == 0 {
 		entries := make([]Entry, 0, len(run.Jobs))
 		for _, job := range run.Jobs {
-			entries = append(entries, Entry{Name: job.Name, Type: "dir"})
+			entries = append(entries, Entry{Name: escapeCIJobName(job.Name), Type: "dir"})
 		}
 		return &ResolvedNode{Scheme: "ci", Path: relPath, IsDir: true, Entries: entries}, nil
 	}
-	var job *ci.JobRun
-	for i := range run.Jobs {
-		if run.Jobs[i].Name == rest[0] || run.Jobs[i].JobID == rest[0] {
-			job = &run.Jobs[i]
-			break
+	job, used, ok := matchCIJob(rest, func(name string) (*ci.JobRun, bool) {
+		for i := range run.Jobs {
+			if run.Jobs[i].Name == name || run.Jobs[i].JobID == name {
+				return &run.Jobs[i], true
+			}
 		}
-	}
-	if job == nil {
+		return nil, false
+	})
+	if !ok {
 		return nil, fmt.Errorf("%w: job %q in ci://%s/%s", ErrNotFound, rest[0], repo, runID)
 	}
+	rest = rest[used-1:]
 	if len(rest) == 1 {
 		entries := []Entry{{Name: externalJobLog, Type: "file"}}
 		seen := map[string]bool{externalJobLog: true}
@@ -1099,6 +1102,56 @@ func findCIJob(run ci.Run, name string) (ci.JobRun, bool) {
 		}
 	}
 	return ci.JobRun{}, false
+}
+
+// ciJobNameEscaper writes a job name that holds a "/" as one path
+// segment: "pkg/cli stress under load" lists as
+// "pkg%2Fcli stress under load", which unescapeCIJobName reads back.
+var ciJobNameEscaper = strings.NewReplacer("%", "%25", "/", "%2F")
+
+// escapeCIJobName is name as the one segment a run's listing shows it
+// under: unchanged unless it holds a "/", which would otherwise read as
+// a directory of its own.
+func escapeCIJobName(name string) string {
+	if !strings.Contains(name, "/") {
+		return name
+	}
+	return ciJobNameEscaper.Replace(name)
+}
+
+// unescapeCIJobName is segment with escapeCIJobName undone, and ok false
+// when it holds no escape to undo.
+func unescapeCIJobName(segment string) (string, bool) {
+	if !strings.Contains(segment, "%") {
+		return "", false
+	}
+	name, err := url.PathUnescape(segment)
+	if err != nil || name == segment {
+		return "", false
+	}
+	return name, true
+}
+
+// matchCIJob finds the job rest begins with, where find looks a job up by
+// one name: the most segments of rest that join, "/" and all, to a job's
+// exact name first (so "pkg/cli stress under load" is that job, not a
+// job "pkg" and its file "cli stress under load"), then the first
+// segment with its %2F escapes undone. used is how many segments of
+// rest named the job.
+func matchCIJob[J any](rest []string, find func(name string) (J, bool)) (job J, used int, ok bool) {
+	for n := len(rest); n >= 1; n-- {
+		if job, ok := find(strings.Join(rest[:n], "/")); ok {
+			return job, n, true
+		}
+	}
+	if len(rest) > 0 {
+		if name, escaped := unescapeCIJobName(rest[0]); escaped {
+			if job, ok := find(name); ok {
+				return job, 1, true
+			}
+		}
+	}
+	return job, 0, false
 }
 
 func sanitizeStepName(name string) string {

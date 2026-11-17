@@ -516,6 +516,9 @@ func syncDiscardedStage1(ctx context.Context, store *model.Store, forge ReleaseQ
 		q := rcQualification{store: store, forge: forge, repo: gate.repo, suite: gate.suite, rcTag: name, sha: sha,
 			tag: model.QualificationTag(gate.stem, gate.repo, name), now: now, check: gate.cfg.Check,
 			release: rc.Version(), notifyKey: name}
+		for _, j := range v.retried {
+			errs = append(errs, q.noteStage1Flake(ctx, gate.cfg.Stage1Name(), j))
+		}
 		errs = append(errs, q.raiseRCFailed(ctx, commits, rc, stage1Failure(gate.cfg.Stage1Name()), lines))
 	}
 	return errors.Join(errs...)

@@ -257,7 +257,7 @@ func TestStoreRedactsHostEnrollmentCodesInTasksAndComments(t *testing.T) {
 		Body:      "Run curl -fsSL https://grain.example/hostd/install | sh -s -- --join " + secretCode,
 		CreatedAt: &now,
 		Owner:     "owner@example.com",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Reason:      model.ReasonDirect,
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "owner@example.com"}},
 		},
