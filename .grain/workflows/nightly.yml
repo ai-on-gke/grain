@@ -103,14 +103,40 @@ jobs:
       - name: Scalability limits test
         run: make scalability
 
-  scale:
+  # One store per sandbox, matching .github/workflows/nightly.yml's matrix:
+  # seeding 50,000 tasks through the store's own write path on PostgreSQL and
+  # SQLite together would overrun make scale's single 70m timeout.
+  scale-sqlite:
     capabilities: []
-    name: deployment scale 50k
+    name: deployment scale 50k (sqlite)
     sandbox:
       cpus: 4
       memory-mb: 16384
       disk-gb: 60
     timeout-minutes: 90
+    artifacts:
+      - name: scale-report-sqlite
+        path: scale-report
+    steps:
+      - name: Scale test (100 running / 1,000 waiting / 50,000 total, SQLite)
+        env:
+          GRAIN_SCALE_BACKENDS: sqlite
+          GRAIN_SCALE_REPORT_DIR: /tmp/scale-report
+        run: |
+          trap 'rm -rf scale-report && cp -r /tmp/scale-report scale-report 2>/dev/null || true' EXIT
+          make scale
+
+  scale-postgres:
+    capabilities: []
+    name: deployment scale 50k (postgres)
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 90
+    artifacts:
+      - name: scale-report-postgres
+        path: scale-report
     steps:
       # Same reason as postgres-stress below: without the binaries the
       # postgres half of the scale test skips.
@@ -126,10 +152,14 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
           fi
           ls /usr/lib/postgresql/*/bin/initdb
-      - name: Scale test (100 running / 1,000 waiting / 50,000 total)
+      - name: Scale test (100 running / 1,000 waiting / 50,000 total, PostgreSQL)
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: make scale
+          GRAIN_SCALE_BACKENDS: postgres
+          GRAIN_SCALE_REPORT_DIR: /tmp/scale-report
+        run: |
+          trap 'rm -rf scale-report && cp -r /tmp/scale-report scale-report 2>/dev/null || true' EXIT
+          make scale
 
   merge-stress:
     capabilities: []
