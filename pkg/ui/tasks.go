@@ -31,6 +31,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -827,6 +828,8 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // agents#403 -- "a way for grain get/the UI to show N consecutive failed
 // attempts, last failure: reason").
 type TaskDetail struct {
+	GateObservations           *gates.ObservationView            `json:"gate_observations,omitempty"`
+	GateObservationDiagnostics *model.GateObservationDiagnostics `json:"gate_observation_diagnostics,omitempty"`
 	Task
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is

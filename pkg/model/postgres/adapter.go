@@ -28,6 +28,9 @@ import (
 
 // Primary keys for model tables in Grain.
 var tablePrimaryKeys = map[string][]string{
+	"gate_observation_shadow":         {"task_id"},
+	"gate_observation_shadow_history": {"task_id", "generation"},
+
 	"grain_schema":                   {"id"},
 	"grain_instance":                 {"singleton"},
 	"task":                           {"id"},

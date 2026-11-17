@@ -102,6 +102,7 @@ import {
   type AcceptFindingsRequest,
 } from "./accept-findings-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
+import { TaskObservationsComponent } from "./task-observations.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskGoalCardComponent } from "./task-goal-card.component";
 import { TaskStore, parseCommentFragment } from "./task.store";
@@ -158,6 +159,7 @@ export function duration(from?: string, to?: string): string {
     AttachmentListComponent,
     GrantsPickerComponent,
     TaskGatesBarComponent,
+    TaskObservationsComponent,
     TaskGoalCardComponent,
     TaskChangesTabComponent,
     TaskDocsTabComponent,
@@ -784,6 +786,10 @@ export function duration(from?: string, to?: string): string {
             }}
           </p>
         }
+        <g-task-observations
+          [observations]="t.gate_observations"
+          [diagnostics]="t.gate_observation_diagnostics"
+        />
         <g-task-gates-bar
           [task]="t"
           [pane]="pane()"

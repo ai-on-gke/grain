@@ -71,7 +71,7 @@ func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id st
 			token = t
 		}
 	}
-	if token != "" {
+	if token != "" && !client.observesGates(id) {
 		if v := client.localScriptApprovals().version(client.now()); v != 0 {
 			token = token + ":lsa=" + strconv.FormatInt(v, 10)
 		}
@@ -101,7 +101,7 @@ func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id st
 		return nil, "", err
 	}
 	etag := etagOf(body)
-	if token != "" {
+	if token != "" && !client.observesGates(id) {
 		c.store(cacheKey, taskDetailCacheEntry{token: token, body: body, etag: etag})
 	}
 	return body, etag, nil
