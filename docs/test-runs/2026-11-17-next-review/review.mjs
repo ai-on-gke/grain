@@ -171,9 +171,7 @@ if (want("design")) {
               h: Math.round(r.height),
             };
           });
-          const gaps = boxes
-            .slice(1)
-            .map((b, i) => b.top - boxes[i].bottom);
+          const gaps = boxes.slice(1).map((b, i) => b.top - boxes[i].bottom);
           const r = el.getBoundingClientRect();
           return {
             boxes,
@@ -249,9 +247,7 @@ if (want("design")) {
         const text = (await q.textContent()) ?? "";
         const qBox = await q.boundingBox();
         const toggle = page.getByTestId("resolution-question-toggle");
-        const tBox = (await toggle.count())
-          ? await toggle.boundingBox()
-          : null;
+        const tBox = (await toggle.count()) ? await toggle.boundingBox() : null;
         const body = await q.evaluate((el) => {
           const sc = el.querySelector(".capped-body, [class*=body]") ?? el;
           return {
@@ -329,12 +325,22 @@ if (want("functional")) {
   await page.getByText(`Review b ${stamp}`).first().click();
   await expectText(page, "BETA detail 12", "switch to alert b, same family");
   const qText = (await question(page).textContent()) ?? "";
-  record("functional", "alert b shows none of a's body", !qText.includes("ALPHA"), {
-    reads: reads.length,
-  });
+  record(
+    "functional",
+    "alert b shows none of a's body",
+    !qText.includes("ALPHA"),
+    {
+      reads: reads.length,
+    },
+  );
   // Raised again with a new body while selected.
   await raise("b", alertBody("GAMMA"), "critical");
-  await expectText(page, "GAMMA detail 12", "re-raised alert shows its new body", 25_000);
+  await expectText(
+    page,
+    "GAMMA detail 12",
+    "re-raised alert shows its new body",
+    25_000,
+  );
   await annotate(page, "functional-reraised.png", [
     [await question(page).boundingBox(), "re-raised: GAMMA body"],
   ]);
@@ -363,12 +369,18 @@ if (want("functional")) {
     !after.some((n) => n.subject === `${fam}:a`),
     { open: after.map((n) => n.subject) },
   );
-  const goneText = (await question(page).textContent().catch(() => "")) ?? "";
+  const goneText =
+    (await question(page)
+      .textContent()
+      .catch(() => "")) ?? "";
   record("functional", "cleared alert's dock after Clear", true, {
     shows: goneText.slice(0, 120),
   });
   await annotate(page, "functional-after-clear.png", [
-    [await page.locator(".inspector-pane").first().boundingBox(), "after Clear"],
+    [
+      await page.locator(".inspector-pane").first().boundingBox(),
+      "after Clear",
+    ],
   ]);
   if (errors.length) record("functional", "page errors", false, errors);
   await ctx.close();
@@ -397,15 +409,20 @@ if (want("functional")) {
     }
     await o.page.waitForTimeout(2500);
     const d = await api("GET", `/api/tasks/${t.id}`);
-    record("functional", `${verb} answers the access request`, !d.pendingAccess, {
-      state: d.state,
-      pendingAccess: !!d.pendingAccess,
-      errors: o.errors,
-      banner: await o.page
-        .getByTestId("action-error")
-        .textContent()
-        .catch(() => null),
-    });
+    record(
+      "functional",
+      `${verb} answers the access request`,
+      !d.pendingAccess,
+      {
+        state: d.state,
+        pendingAccess: !!d.pendingAccess,
+        errors: o.errors,
+        banner: await o.page
+          .getByTestId("action-error")
+          .textContent()
+          .catch(() => null),
+      },
+    );
     await o.ctx.close();
   }
 
@@ -463,7 +480,11 @@ async function expectText(page, needle, check, timeout = 15_000) {
     )
     .then(() => true)
     .catch(() => false);
-  const shows = ((await question(page).textContent().catch(() => "")) ?? "")
+  const shows = (
+    (await question(page)
+      .textContent()
+      .catch(() => "")) ?? ""
+  )
     .replace(/\s+/g, " ")
     .slice(0, 160);
   record("functional", check, ok, { needle, shows });
@@ -484,7 +505,8 @@ if (want("adversarial")) {
   {
     const { ctx, page } = await open(1440, "light");
     await page.route(
-      (u) => u.pathname === "/api/notifications" && u.searchParams.has("family"),
+      (u) =>
+        u.pathname === "/api/notifications" && u.searchParams.has("family"),
       (r) => r.fulfill({ status: 500, body: "boom" }),
     );
     await pickRow(page, `Review adv x ${stamp}`);
@@ -507,7 +529,8 @@ if (want("adversarial")) {
     const { ctx, page } = await open(1440, "light");
     let fail = false;
     await page.route(
-      (u) => u.pathname === "/api/notifications" && u.searchParams.has("family"),
+      (u) =>
+        u.pathname === "/api/notifications" && u.searchParams.has("family"),
       (r) => (fail ? r.fulfill({ status: 500, body: "boom" }) : r.continue()),
     );
     await pickRow(page, `Review adv x ${stamp}`);
@@ -552,8 +575,9 @@ if (want("adversarial")) {
     const actions = await page
       .locator(".inspector-pane [data-testid^='action-']")
       .count();
-    const t = ((await page.locator(".inspector-pane").first().textContent()) ?? "")
-      .replace(/\s+/g, " ");
+    const t = (
+      (await page.locator(".inspector-pane").first().textContent()) ?? ""
+    ).replace(/\s+/g, " ");
     record(
       "adversarial",
       "alert cleared elsewhere: dock read-only, no actions",
@@ -561,7 +585,10 @@ if (want("adversarial")) {
       { actions, shows: t.slice(0, 240), errors },
     );
     await annotate(page, "adversarial-cleared-elsewhere.png", [
-      [await page.locator(".inspector-pane").first().boundingBox(), "cleared elsewhere"],
+      [
+        await page.locator(".inspector-pane").first().boundingBox(),
+        "cleared elsewhere",
+      ],
     ]);
     await ctx.close();
   }
@@ -597,9 +624,15 @@ if (want("adversarial")) {
       "flowchart LR",
       "  A[drain] --> B[migrate]",
     ],
-    styleStmt: ["flowchart LR", "  A[drain] --> B[migrate]", "  style A fill:#ff0000"],
+    styleStmt: [
+      "flowchart LR",
+      "  A[drain] --> B[migrate]",
+      "  style A fill:#ff0000",
+    ],
   };
-  const t = await api("POST", "/api/tasks", { title: `Review diagrams ${stamp}` });
+  const t = await api("POST", "/api/tasks", {
+    title: `Review diagrams ${stamp}`,
+  });
   await api("POST", `/api/tasks/${t.id}/comments`, {
     body: Object.entries(cases)
       .map(([k, src]) => [`${F}mermaid ${k}`, ...src, F].join("\n"))
@@ -610,8 +643,15 @@ if (want("adversarial")) {
     await page.goto(`${BASE}/next/task/${t.id}`);
     await page.waitForTimeout(6000);
     const svgs = await page.evaluate(() =>
-      [...document.querySelectorAll("svg[id^='mermaid'], .mermaid-canvas svg, [class*=mermaid] svg")]
-        .filter((s, i, a) => a.indexOf(s) === i && s.getBoundingClientRect().width > 40)
+      [
+        ...document.querySelectorAll(
+          "svg[id^='mermaid'], .mermaid-canvas svg, [class*=mermaid] svg",
+        ),
+      ]
+        .filter(
+          (s, i, a) =>
+            a.indexOf(s) === i && s.getBoundingClientRect().width > 40,
+        )
         .map((s) => {
           const html = s.outerHTML;
           const fills = [...s.querySelectorAll("rect, path, polygon, circle")]
@@ -628,8 +668,7 @@ if (want("adversarial")) {
             comic: fonts.some((f) => /comic/i.test(f)) || /comic/i.test(html),
             handDrawn: /handDrawn|rough/i.test(html),
             box: { x: r.x, y: r.y, width: r.width, height: r.height },
-            region:
-              s.closest("[aria-label]")?.getAttribute("aria-label") ?? "",
+            region: s.closest("[aria-label]")?.getAttribute("aria-label") ?? "",
           };
         }),
     );
@@ -648,7 +687,10 @@ if (want("adversarial")) {
 }
 
 await browser.close();
-fs.writeFileSync(path.join(OUT, "results.json"), JSON.stringify(results, null, 2));
+fs.writeFileSync(
+  path.join(OUT, "results.json"),
+  JSON.stringify(results, null, 2),
+);
 console.log(
   `${results.filter((r) => r.ok).length}/${results.length} checks passed`,
 );
