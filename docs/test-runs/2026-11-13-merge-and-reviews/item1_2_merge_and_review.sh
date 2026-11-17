@@ -28,7 +28,8 @@ echo "implementation task: $id"
 wait_for 90 '[[ $(task '"$id"' | jq -r ".pullRequest // empty") != "" ]]'
 pr=$(task "$id" | jq -r .pullRequest)
 echo "pull request: $pr"
-wait_for 120 '[[ $(task '"$id"' | jq -r ".mergeQueueState // empty") == "merged" || $(task '"$id"' | jq -r .state) == "merged" ]]' || true
+# A merged change closes; its mergeQueueState clears rather than reading "merged".
+wait_for 120 '[[ $(task '"$id"' | jq -r .state) == "closed" ]]' || true
 echo "--- tasks"
 tasks | tee "$OUT/item2-tasks.jsonl"
 echo "--- review tasks for $pr"

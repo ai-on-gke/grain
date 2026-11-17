@@ -42,10 +42,17 @@ wait_for 240 '[[ $(api GET "/api/notifications?open=true&family=pipeline.merge-n
 task "$id" | jq -c '{state,mergeQueueState,mergeQueueNote: .mergeQueueNote[0:300]}' | tee "$OUT/item5-change.json"
 api GET "/api/notifications?open=true&family=pipeline.merge-needs-person" | jq -c '.[] | {subject,title,taskId,repo,actions}' | tee "$OUT/item5-notification.jsonl"
 api GET "/api/notifications?open=true&family=pipeline.merge-needs-person" | jq -r '.[0].body' | tee "$OUT/item5-notification-body.md"
-api GET /api/inbox | jq -c '.[]? // .items[]? | {kind,taskId,title: (.title // .subject)}' 2>/dev/null | tee "$OUT/item5-inbox.jsonl"
+api GET /api/inbox | jq -c '.items[] | {kind,task,pr,reason}' | tee "$OUT/item5-inbox.jsonl"
 GRAIN_SERVER="$DAEMON" GRAIN_TOKEN="$CODE" "$GRAIN" inbox 2>&1 | tee "$OUT/item5-cli-inbox.txt" || true
 if [[ ${KEEP:-} == 1 ]]; then echo "daemon left running at $DAEMON (task $id)"; exit 0; fi
-echo "=== Retry merge clears the item"
+echo "=== Retry merge while cla/google is still red gives up again"
 api POST "/api/tasks/$id/retry-merge" | jq -c '{state}' || true
 sleep 10
 api GET "/api/notifications?open=true&family=pipeline.merge-needs-person" | jq -c 'length' | tee "$OUT/item5-after-retry.txt"
+echo "=== Retry merge once cla/google is green merges and clears the item"
+branch=$(task "$id" | jq -r .branch)
+curl -s -X POST "http://$GHSIM/_sim/check-runs" -d '{"ref":"'"$branch"'","checks":[{"Name":"cla/google","Status":"completed","Conclusion":"success"},{"Name":"unit","Status":"completed","Conclusion":"success"}]}' >/dev/null
+api POST "/api/tasks/$id/retry-merge" | jq -c '{state}' || true
+wait_for 60 '[[ $(task '"$id"' | jq -r .state) == closed ]]' || true
+api GET "/api/notifications?open=true&family=pipeline.merge-needs-person" | jq -c 'length' | tee "$OUT/item5-after-green-retry.txt"
+curl -s "http://$GHSIM/repos/acme/widgets/pulls/9000" | jq -c '{merged,merged_by}' | tee "$OUT/item5-pr.json"
