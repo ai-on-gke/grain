@@ -1153,3 +1153,31 @@ func elidedKB(t *testing.T, s string) int {
 	}
 	return kb
 }
+
+// Each run acquires a fresh ephemeral sandbox name (c<run>-<index>),
+// whereas declaration acceptance keys CI jobs by their stable workflow
+// job ID (jobs.<id>). SandboxRequest must carry that stable ID on Job
+// so policy checks do not pin acceptance to one run's sandbox name.
+func TestSandboxRequestCarriesStableJobID(t *testing.T) {
+	sandboxes := &fakeSandboxes{}
+	plan := planFor(t, Request{Repo: "acme/widgets", Ref: "main", Commit: "abc", Event: EventPush}, map[string]string{
+		".grain/workflows/publish.yml": "on: push\njobs:\n  publish:\n    steps:\n      - name: check\n        run: echo ok\n",
+	})
+
+	for _, runID := range []string{"run-first-0001", "run-second-0002"} {
+		run := (&Engine{Sandboxes: sandboxes}).Run(context.Background(), runID, plan, nil)
+		if run.Conclusion != ConclusionSuccess {
+			t.Fatalf("run %s conclusion = %q, want success", runID, run.Conclusion)
+		}
+	}
+	if len(sandboxes.acquired) != 2 {
+		t.Fatalf("acquired %d sandboxes, want 2", len(sandboxes.acquired))
+	}
+	first, second := sandboxes.acquired[0], sandboxes.acquired[1]
+	if first.Job != "publish" || second.Job != "publish" {
+		t.Fatalf("acquired Job IDs = (%q, %q), want (publish, publish)", first.Job, second.Job)
+	}
+	if first.Name == second.Name || first.Name == "publish" {
+		t.Fatalf("expected distinct ephemeral sandbox names, got (%q, %q)", first.Name, second.Name)
+	}
+}

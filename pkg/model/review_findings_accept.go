@@ -114,12 +114,37 @@ func ReviewFindingsAccepted(t Task, gate, reviewTask string) bool {
 	return false
 }
 
+// isTargetedReviewTrigger reports whether trigger is one of t's targeted-review
+// triggers (LinkTargetedReviewTrigger).
+func isTargetedReviewTrigger(t Task, trigger string) bool {
+	for _, l := range t.Links {
+		if l.Kind == LinkTargetedReviewTrigger && l.Target == trigger {
+			return true
+		}
+	}
+	return false
+}
+
 // findingsGateCovers reports whether a findings record on recGate belongs
-// to the merge gate gate as ComputeMergeGates shows it: the code-review
-// gate ("review") lists the findings of every gating trigger review
-// ("trigger:<name>") as well as its own.
-func findingsGateCovers(gate, recGate string) bool {
-	return recGate == gate || (gate == GateReview && strings.HasPrefix(recGate, "trigger:"))
+// to the merge gate gate as ComputeMergeGates shows it: the targeted-review
+// gate ("targeted-review") lists the findings of targeted triggers
+// (LinkTargetedReviewTrigger), while the code-review gate ("review") lists
+// its own findings and every other gating trigger review ("trigger:<name>").
+func findingsGateCovers(t Task, gate, recGate string) bool {
+	if recGate == gate {
+		return true
+	}
+	if !strings.HasPrefix(recGate, "trigger:") {
+		return false
+	}
+	trig := strings.TrimPrefix(recGate, "trigger:")
+	switch gate {
+	case GateTargetedReview:
+		return isTargetedReviewTrigger(t, trig)
+	case GateReview:
+		return !isTargetedReviewTrigger(t, trig)
+	}
+	return false
 }
 
 // AcceptableReviewFindings returns the findings records on t that accepting
@@ -128,7 +153,7 @@ func findingsGateCovers(gate, recGate string) bool {
 // false when there is nothing of that review's to accept on that gate.
 func AcceptableReviewFindings(t Task, gate, reviewTask string) (records []ReviewFindingsRecord, ok bool) {
 	for _, r := range ReviewFindings(t) {
-		if r.ReviewTask == reviewTask && findingsGateCovers(gate, r.Gate) {
+		if r.ReviewTask == reviewTask && findingsGateCovers(t, gate, r.Gate) {
 			records = append(records, r)
 		}
 	}
@@ -150,11 +175,20 @@ func AcceptableReviewFindings(t Task, gate, reviewTask string) (records []Review
 
 // questionsGate is the gate ComputeMergeGates lists reviewTask's open
 // questions under: the security review's when it is t's security review,
+// the targeted review's when it is a targeted-review trigger task, and
 // the code review's otherwise.
 func questionsGate(t Task, reviewTask string) string {
 	for _, l := range t.Links {
 		if l.Kind == LinkSecurityReviewTask && l.Target == reviewTask {
 			return GateSecurityReview
+		}
+	}
+	for _, l := range t.Links {
+		if l.Kind != LinkPathTriggerTask {
+			continue
+		}
+		if trig, tid, ok := strings.Cut(l.Target, "="); ok && tid == reviewTask && isTargetedReviewTrigger(t, trig) {
+			return GateTargetedReview
 		}
 	}
 	return GateReview
@@ -167,15 +201,16 @@ func AcceptReviewFindings(t *Task, a ReviewFindingsAcceptance) bool {
 	if _, ok := AcceptableReviewFindings(*t, a.Gate, a.ReviewTask); !ok {
 		return false
 	}
+	snapshot := *t
 	clearQuestions := false
-	if q, has := ReviewQuestionsOf(*t); has && q.ReviewTaskID == a.ReviewTask && questionsGate(*t, a.ReviewTask) == a.Gate {
+	if q, has := ReviewQuestionsOf(snapshot); has && q.ReviewTaskID == a.ReviewTask && questionsGate(snapshot, a.ReviewTask) == a.Gate {
 		clearQuestions = true
 	}
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 		switch l.Kind {
 		case LinkReviewFindings:
 			r, ok := ParseReviewFindingsRecord(l.Target)
-			return ok && r.ReviewTask == a.ReviewTask && findingsGateCovers(a.Gate, r.Gate)
+			return ok && r.ReviewTask == a.ReviewTask && findingsGateCovers(snapshot, a.Gate, r.Gate)
 		case LinkReviewQuestions:
 			return clearQuestions
 		case LinkHumanReviewHold:

@@ -439,9 +439,21 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	dropped := false
 	if err := store.UpdateTask(ctx, reviewedID, func(t *model.Task) error {
 		dropped = false
-		isSecReview := linkTarget(*t, model.LinkSecurityReviewTask) == review.ID
-		if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) && !isSecReview {
-			return nil
+		secReview := linkTarget(*t, model.LinkSecurityReviewTask)
+		isSecReview := secReview == review.ID
+		// Only the security review itself owns LinkSecurityHold and
+		// GateSecurityReview findings. Another review (code review or
+		// path-trigger review) finishing while a security hold is active
+		// must not drop the security hold or record security-review
+		// findings under its own id; dropPathTriggerHoldOnFindings and
+		// reviewfeedback.go handle it on its own gate.
+		if !isSecReview {
+			if secReview != "" || (!hasSecurityHold(*t) && !hasBrokenRulesHold(*t)) {
+				return nil
+			}
+			if linkTarget(*t, model.LinkReviewTask) == review.ID || len(gatingTaskIDs(*t)[review.ID]) > 0 {
+				return nil
+			}
 		}
 		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
 		if isSecReview || hasSecurityHold(*t) {
@@ -662,7 +674,9 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold)
 		if clean {
 			model.ClearReviewFindingsForGate(t, model.GateSecurityReview)
-			if q, ok := model.ReviewQuestionsOf(*t); ok && q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) {
+			if q, ok := model.ReviewQuestionsOf(*t); ok &&
+				q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) &&
+				len(gatingTaskIDs(*t)[q.ReviewTaskID]) == 0 {
 				t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 			}
 			if advancedClearance != "" {

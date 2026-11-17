@@ -238,3 +238,38 @@ func TestSyncHumanReviewHoldsLeavesAcceptedSecurityFindings(t *testing.T) {
 		t.Errorf("reasons after the re-run's findings = %+v, want one from review r9", rs)
 	}
 }
+
+// SyncHumanReviewHolds must only raise HumanReviewSecurityFindings when
+// LinkAutoMergeAwaitsPerson names the task's own LinkSecurityReviewTask.
+// A code or targeted review that finished first and wrote "review <other>
+// left findings" must not raise a security-findings hold or resurrect one
+// after the security review's own findings were accepted.
+func TestSyncHumanReviewHoldsIgnoresNonSecurityReviewAwaitMark(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "a2", repo)
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.AutoMerge = false
+		t.Links = append(t.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#10"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "sec-1"},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "every-pr=code-2"},
+			model.Link{Kind: model.LinkAutoMergeAwaitsPerson, Target: "review code-2 left findings"},
+		)
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{
+			Gate: "trigger:every-pr", ReviewTask: "code-2", Summary: "code review finding", At: baseTime,
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completeReview(t, ctx, store, task.ID)
+	if err := orchestrator.SyncHumanReviewHolds(ctx, store, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	if rs := model.HumanReviewReasons(got); len(rs) != 0 {
+		t.Errorf("non-security review await mark raised security-findings hold: %+v", rs)
+	}
+}

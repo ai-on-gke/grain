@@ -181,3 +181,42 @@ func TestAcceptFindingsLeavesApprovalsStanding(t *testing.T) {
 		t.Error("accepting findings cleared the approval a trigger asks for")
 	}
 }
+
+// POST /api/tasks/{id}/accept-findings accepts gate="targeted-review"
+// independently of the code-review ("review") gate.
+func TestAcceptFindingsTargetedReviewGate(t *testing.T) {
+	_, client := testServer(t)
+	seedFindings(t, client)
+	if err := client.Store.UpdateTask(context.Background(), "700", func(tk *model.Task) error {
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "payments=702"},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "payments"},
+		)
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{
+			Gate: "trigger:payments", ReviewTask: "702", Summary: "payments finding", At: time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC),
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := client.AcceptReviewFindings(personCtx(), "700", ui.AcceptFindingsRequest{
+		Gate:   model.GateTargetedReview,
+		Reason: "accepted payments targeted review finding",
+		Head:   findingsHead[:12],
+	})
+	if err != nil {
+		t.Fatalf("AcceptReviewFindings(targeted-review): %v", err)
+	}
+	if res.Acceptance.Gate != model.GateTargetedReview || res.Acceptance.ReviewTask != "702" {
+		t.Fatalf("acceptance = %+v, want gate=targeted-review reviewTask=702", res.Acceptance)
+	}
+	for _, g := range res.Gates {
+		if g.ID == model.GateTargetedReview && g.State != model.GateStatePassed {
+			t.Errorf("targeted-review gate = %+v, want passed", g)
+		}
+		if g.ID == model.GateReview && g.State != model.GateStateFindings {
+			t.Errorf("code-review gate = %+v, want findings still standing", g)
+		}
+	}
+}

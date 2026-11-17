@@ -1625,6 +1625,174 @@ describe("duration", () => {
     expect(q(f, '[data-testid="accept-findings-dialog"]')).toBeNull();
   });
 
+  it("hides Accept findings from a repo-scoped writer on the Changes tab", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+        {
+          id: "targeted-review",
+          label: "Targeted review",
+          state: "findings",
+          reviewTask: "4711",
+          acceptable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    expect(
+      q(f, '[data-testid="accept-findings-security-review"]'),
+    ).toBeTruthy();
+    expect(
+      q(f, '[data-testid="accept-findings-targeted-review"]'),
+    ).toBeTruthy();
+
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        full: false,
+        role: "widgets-writer",
+        scopes: ["tasks:read", "tasks:write"],
+        repoLimits: { "tasks:write": ["acme/web"] },
+      },
+    } as never);
+    await settle(f);
+    expect(q(f, '[data-testid="accept-findings-security-review"]')).toBeNull();
+    expect(q(f, '[data-testid="accept-findings-targeted-review"]')).toBeNull();
+  });
+
+  it("pins ci.commit rather than a branch-name diff preview head on Accept findings and Force merge", async () => {
+    const api = new FakeApi();
+    api.preview = {
+      ...api.preview,
+      head: "grain/task-7",
+    };
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      ci: {
+        status: "passed",
+        commit: "763a7dbc6e2c",
+      } as TaskDetail["ci"],
+      mergeGates: [
+        {
+          id: "targeted-review",
+          label: "Targeted review",
+          state: "findings",
+          reviewTask: "4711",
+          acceptable: true,
+          overridable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="accept-findings-targeted-review"]',
+    )!.click();
+    await settle(f);
+    const acceptReason = q<HTMLTextAreaElement>(
+      f,
+      '[data-testid="accept-findings-reason"]',
+    )!;
+    acceptReason.value = "accepted targeted findings";
+    acceptReason.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="accept-findings-confirm"]')!.click();
+    await settle(f);
+
+    const acceptCall = api.calls.find(
+      (c) => c.route === "POST /api/tasks/{id}/accept-findings",
+    );
+    expect(acceptCall?.body).toMatchObject({
+      gate: "targeted-review",
+      reviewTask: "4711",
+      head: "763a7dbc6e2c",
+    });
+
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="changes-force-merge-open"]',
+    )!.click();
+    await settle(f);
+    const fmReason = q<HTMLInputElement>(
+      f,
+      '[data-testid="force-merge-reason"]',
+    )!;
+    fmReason.value = "override verified";
+    fmReason.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="override-gate-targeted-review"]',
+    )!.click();
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="force-merge-confirm"]')!.click();
+    await settle(f);
+
+    const forceCall = api.calls.find(
+      (c) => c.route === "POST /api/tasks/{id}/force-merge",
+    );
+    expect(forceCall?.body).toMatchObject({
+      head: "763a7dbc6e2c",
+      overrideGates: ["targeted-review"],
+    });
+  });
+
+  it("omits head on Accept findings when preview head is a branch name and ci.commit is absent", async () => {
+    const api = new FakeApi();
+    api.preview = {
+      ...api.preview,
+      head: "grain/task-7",
+    };
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      ci: undefined,
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="accept-findings-security-review"]',
+    )!.click();
+    await settle(f);
+    const reason = q<HTMLTextAreaElement>(
+      f,
+      '[data-testid="accept-findings-reason"]',
+    )!;
+    reason.value = "accept without ci commit";
+    reason.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="accept-findings-confirm"]')!.click();
+    await settle(f);
+
+    const acceptCall = api.calls.find(
+      (c) => c.route === "POST /api/tasks/{id}/accept-findings",
+    );
+    expect(acceptCall?.body).toEqual({
+      gate: "security-review",
+      reviewTask: "4710",
+      reason: "accept without ci commit",
+    });
+  });
+
   it("points Force merge at Accept findings when a gate holds acceptable findings", async () => {
     const api = new FakeApi();
     api.detail = {

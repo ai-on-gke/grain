@@ -103,6 +103,10 @@ type SandboxRequest struct {
 	// is what a backend that names a network interface after it has
 	// room for.
 	Name string
+	// Job is the workflow job's stable key (`jobs.<id>`), constant across
+	// runs of the same job so per-job policies and declaration acceptances
+	// match across runs rather than being keyed by Name.
+	Job string
 	// Repo, Ref and Commit are what to check out. Commit is the
 	// authority where it is set; Ref is what to resolve when it is not.
 	Repo   string

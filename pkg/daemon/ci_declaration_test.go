@@ -55,3 +55,43 @@ func TestACIJobsUnacceptedDeclarationRefusesIt(t *testing.T) {
 		t.Errorf("a daemon with no store refused a job: %v", err)
 	}
 }
+
+// Each run of a workflow job gets a distinct ephemeral sandbox Name (e.g.
+// c978058-0, c82b1f4-0), while Job carries the stable `jobs.<id>` key.
+// ciDeclarationRefusal must key declaration acceptance by Job so accepting
+// the declaration unblocks subsequent runs of the same job.
+func TestACIJobsDeclarationKeyedByStableJobIDAcrossRuns(t *testing.T) {
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cred := `https://grain.dev/capabilities/repo#credential={"credential":"release-bot"}`
+	accepted := map[string]bool{}
+	var seenJobs []string
+	declarations := func(_ context.Context, r model.RepoRef, job, _ string, caps []string, _ time.Time) (bool, []string, error) {
+		seenJobs = append(seenJobs, job)
+		id := model.CIJobDeclarationID(r, job)
+		if accepted[id] {
+			return true, nil, nil
+		}
+		held := model.DeclaredCIJobHold(caps)
+		return len(held) == 0, held, nil
+	}
+
+	run1 := ci.SandboxRequest{Name: "c111111-0", Job: "publish", Repo: repo.String(), Capabilities: []string{cred, grainci.Grant}}
+	err := ciDeclarationRefusal(context.Background(), declarations, repo, run1, time.Now(), nil)
+	if err == nil || !strings.Contains(err.Error(), model.CIJobDeclarationID(repo, "publish")) {
+		t.Fatalf("run1 err = %v, want refusal naming %s", err, model.CIJobDeclarationID(repo, "publish"))
+	}
+	if strings.Contains(err.Error(), "c111111-0") {
+		t.Errorf("run1 err leaked ephemeral sandbox name: %v", err)
+	}
+
+	// Person accepts the stable declaration ID; a second run with a different
+	// ephemeral sandbox Name must now be admitted.
+	accepted[model.CIJobDeclarationID(repo, "publish")] = true
+	run2 := ci.SandboxRequest{Name: "c222222-0", Job: "publish", Repo: repo.String(), Capabilities: []string{cred, grainci.Grant}}
+	if err := ciDeclarationRefusal(context.Background(), declarations, repo, run2, time.Now(), nil); err != nil {
+		t.Fatalf("run2 after acceptance was refused: %v", err)
+	}
+	if !slices.Equal(seenJobs, []string{"publish", "publish"}) {
+		t.Errorf("seenJobs = %v, want [publish publish]", seenJobs)
+	}
+}

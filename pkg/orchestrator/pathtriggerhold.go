@@ -639,6 +639,9 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 			return nil
 		}
 		triggerNames, own := gatingTaskIDs(*t)[review.ID]
+		if !own && linkTarget(*t, model.LinkSecurityReviewTask) == review.ID {
+			return nil
+		}
 		if len(triggerNames) == 0 {
 			triggerNames = reviewTriggers(review.Tags)
 		}

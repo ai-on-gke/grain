@@ -142,12 +142,12 @@ func SyncHumanReviewHolds(ctx context.Context, store *model.Store, now time.Time
 		if linkTarget(*task, model.LinkHumanOnlyHold) != "" && !sources[model.HumanReviewHumanOnly] {
 			raiseHumanOnlyReview(ctx, store, task.ID, nil, true, now)
 		}
-		if sources[model.HumanReviewSecurityFindings] || hasSecurityHold(*task) ||
-			linkTarget(*task, model.LinkSecurityReviewTask) == "" {
+		secReview := linkTarget(*task, model.LinkSecurityReviewTask)
+		if sources[model.HumanReviewSecurityFindings] || hasSecurityHold(*task) || secReview == "" {
 			continue
 		}
 		m := findingsAwaitReason.FindStringSubmatch(linkTarget(*task, model.LinkAutoMergeAwaitsPerson))
-		if m == nil {
+		if m == nil || m[1] != secReview {
 			continue
 		}
 		// A person accepted that review's security findings: the mark
