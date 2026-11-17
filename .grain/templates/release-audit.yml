@@ -129,10 +129,10 @@ body: |
   - **The GitHub Release** `{{version}}` exists, is not a draft, has a
     body (the release notes), and its assets include `images.json` and the
     CLI archives with `checksums.txt`
-    (`grain api GET /api/repos/ai-on-gke/grain/releases/{{version}}`, or the
-    public `https://api.github.com/repos/ai-on-gke/grain/releases/tags/{{version}}`
-    with `curl`). `images.json`'s version is `{{version}}` and its images
-    are the digests above. `docs/releases/{{version}}.md` is on `main`.
+    (`curl -fsSL https://api.github.com/repos/ai-on-gke/grain/releases/tags/{{version}}`,
+    then `curl -fsSL` the `images.json` asset's `browser_download_url`).
+    `images.json`'s version is `{{version}}` and its images are the digests
+    above. `docs/releases/{{version}}.md` is on `main`.
 
   ## 3. Channels
 

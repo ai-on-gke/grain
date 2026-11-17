@@ -131,3 +131,22 @@ func TestTheReleaseManagerFilesTheAuditWhenItCloses(t *testing.T) {
 		t.Errorf("%s section 5 must file the audit before nothing_needed", releaseManagerTemplatePath)
 	}
 }
+
+// GET /api/repos/{owner}/{name}/releases/{release} reads grain's own
+// release-branch record (model.Release), not a GitHub Release, so the
+// audit reads the published GitHub Release and its images.json asset from
+// GitHub's public Releases API instead.
+func TestTheReleaseAuditReadsTheGitHubReleaseFromGitHub(t *testing.T) {
+	tmpl := releaseAuditTemplate(t)
+	if strings.Contains(tmpl.Body, "/api/repos/ai-on-gke/grain/releases/") {
+		t.Errorf("%s calls /api/repos/ai-on-gke/grain/releases/..., which returns grain's release-branch record rather than the GitHub Release", releaseAuditTemplatePath)
+	}
+	for _, want := range []string{
+		"curl -fsSL https://api.github.com/repos/ai-on-gke/grain/releases/tags/{{version}}",
+		"browser_download_url",
+	} {
+		if !strings.Contains(tmpl.Body, want) {
+			t.Errorf("%s does not say %q for the GitHub Release check", releaseAuditTemplatePath, want)
+		}
+	}
+}
