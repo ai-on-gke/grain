@@ -392,6 +392,20 @@ export const routes: Routes = [
         queryParams: { path: String(params["file"] ?? "") },
       }),
   },
+  // Classic Settings opens a capability server's own page at
+  // /settings/capabilities/<capability ID> (docs/capability-servers-ui.md);
+  // here capability servers live in the Capability servers card on
+  // Settings -> Capabilities.
+  {
+    matcher: (s) =>
+      s.length > 2 && s[0].path === "settings" && s[1].path === "capabilities"
+        ? { consumed: s }
+        : null,
+    redirectTo: () =>
+      inject(Router).createUrlTree(["/settings", "capabilities"], {
+        fragment: "capability-servers",
+      }),
+  },
   {
     path: "settings",
     title: "Settings · grain",

@@ -97,6 +97,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "memory",
           "disk",
           "overcommit",
+          "reserve",
           "network",
           "persistent",
         ],

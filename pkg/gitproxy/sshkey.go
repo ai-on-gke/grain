@@ -146,11 +146,13 @@ func ParseKnownHostsFor(knownHosts, addr string) ([]ssh.PublicKey, error) {
 // sshAddr is host[:port] as the address dialled: port when set, else
 // any port the host itself carries, else 22.
 func sshAddr(host string, port int) string {
-	name := hostName(host)
-	if port == 0 {
-		port = 22
+	if port != 0 {
+		return net.JoinHostPort(hostName(host), strconv.Itoa(port))
 	}
-	return net.JoinHostPort(name, strconv.Itoa(port))
+	if name, hp, err := net.SplitHostPort(host); err == nil && hp != "" {
+		return net.JoinHostPort(name, hp)
+	}
+	return net.JoinHostPort(host, "22")
 }
 
 // parseSSHKeyFile checks f and turns it into an SSHCredential, filling in
@@ -166,6 +168,14 @@ func parseSSHKeyFile(f SSHKeyFile) (SSHKeyFile, *SSHCredential, error) {
 	f.Host = host
 	if f.Port < 0 || f.Port > 65535 {
 		return f, nil, fmt.Errorf("SSH port %d is out of range", f.Port)
+	}
+	if f.Port == 0 {
+		if _, hp, err := net.SplitHostPort(host); err == nil && hp != "" {
+			p, err := strconv.Atoi(hp)
+			if err != nil || p < 1 || p > 65535 {
+				return f, nil, fmt.Errorf("SSH port %q in host %q is out of range", hp, host)
+			}
+		}
 	}
 	f.User = strings.TrimSpace(f.User)
 	if f.User == "" {
@@ -197,10 +207,10 @@ func parseSSHKeyFile(f SSHKeyFile) (SSHKeyFile, *SSHCredential, error) {
 		}
 		return f, nil, fmt.Errorf("the private key will not parse: %v", err)
 	}
-	if strings.TrimSpace(f.KnownHosts) == "" && hostName(host) == model.DefaultGitHost && f.Port == 0 {
+	addr := sshAddr(host, f.Port)
+	if strings.TrimSpace(f.KnownHosts) == "" && knownhosts.Normalize(addr) == model.DefaultGitHost {
 		f.KnownHosts = githubKnownHosts
 	}
-	addr := sshAddr(host, f.Port)
 	keys, err := ParseKnownHostsFor(f.KnownHosts, addr)
 	if err != nil {
 		return f, nil, err

@@ -246,6 +246,18 @@ func unprocessableErrorf(format string, a ...any) error {
 	return &UnprocessableError{err: fmt.Errorf(format, a...)}
 }
 
+// NotImplementedError marks a route or feature this deployment's backend
+// does not support. Server maps it to 501 Not Implemented.
+type NotImplementedError struct{ err error }
+
+func (e *NotImplementedError) Error() string { return e.err.Error() }
+func (e *NotImplementedError) Unwrap() error { return e.err }
+
+// NewNotImplementedError wraps err as a NotImplementedError.
+func NewNotImplementedError(err error) error {
+	return &NotImplementedError{err: err}
+}
+
 // NotFoundError marks a task ID with no task behind it. Server maps this
 // to a 404 -- the one case where the caller's mistake and the store's own
 // trouble need telling apart, which github.Error's status used to answer.

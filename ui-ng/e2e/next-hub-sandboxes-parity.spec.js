@@ -652,6 +652,7 @@ test("Sandboxes: a cleared overcommit or floor share saves grain's default, a ty
   const keys = [
     ["sb-cpu-oc", "sandboxCpuOvercommit"],
     ["sb-mem-oc", "sandboxMemoryOvercommit"],
+    ["sb-disk-oc", "sandboxDiskOvercommit"],
     ["sb-floor-share", "sandboxDiskFloorShare"],
   ];
   try {
@@ -664,6 +665,8 @@ test("Sandboxes: a cleared overcommit or floor share saves grain's default, a ty
     await page.reload();
     await expect(page.locator("#sb-cpu-oc")).toHaveValue("0");
     await expect(page.getByTestId("cpu-overcommit-unbounded")).toBeVisible();
+    await expect(page.locator("#sb-disk-oc")).toHaveValue("0");
+    await expect(page.getByTestId("disk-overcommit-unbounded")).toBeVisible();
 
     // A cleared box shows the default greyed, and that is what Save stores.
     for (const [id, k] of keys) {
@@ -686,5 +689,53 @@ test("Sandboxes: a cleared overcommit or floor share saves grain's default, a ty
     const patch = {};
     for (const [, k] of keys) patch[k] = before[k];
     await restore(request, patch);
+  }
+});
+
+test("Sandboxes: Host memory reserve treats blank as grain's default (-1) and 0 as zero reserve", async ({
+  page,
+  request,
+}) => {
+  const before = await getSettings(request);
+  try {
+    await page.goto("/next/settings/sandboxes");
+    const box = page.getByLabel("Host memory reserve (MiB)");
+    if (before.sandboxMemoryReserveMb < 0) {
+      await expect(box).toHaveValue("");
+    }
+    if (before.sandboxMemoryReserveMbDefault) {
+      await expect(box).toHaveAttribute(
+        "placeholder",
+        String(before.sandboxMemoryReserveMbDefault),
+      );
+    }
+
+    await box.fill("1024");
+    let res = await saveBar(page);
+    expect(res.ok()).toBeTruthy();
+    expect(res.request().postDataJSON().sandboxMemoryReserveMb).toBe(1024);
+    await page.reload();
+    await expect(page.getByLabel("Host memory reserve (MiB)")).toHaveValue(
+      "1024",
+    );
+
+    await page.getByLabel("Host memory reserve (MiB)").fill("0");
+    res = await saveBar(page);
+    expect(res.ok()).toBeTruthy();
+    expect(res.request().postDataJSON().sandboxMemoryReserveMb).toBe(0);
+    await page.reload();
+    await expect(page.getByLabel("Host memory reserve (MiB)")).toHaveValue("0");
+
+    await page.getByLabel("Host memory reserve (MiB)").fill("");
+    res = await saveBar(page);
+    expect(res.ok()).toBeTruthy();
+    expect(res.request().postDataJSON().sandboxMemoryReserveMb).toBe(-1);
+    expect((await getSettings(request)).sandboxMemoryReserveMb).toBe(-1);
+    await page.reload();
+    await expect(page.getByLabel("Host memory reserve (MiB)")).toHaveValue("");
+  } finally {
+    await restore(request, {
+      sandboxMemoryReserveMb: before.sandboxMemoryReserveMb,
+    });
   }
 });
