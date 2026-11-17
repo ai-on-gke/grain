@@ -1,5 +1,7 @@
 # Gate v2 wire transcripts
 
+> **Deferred historical proposal.** Not normative for initial gates. Use [the canonical gate specification](../../gates.spec.md). MCP hosting, paging and remote profiles below are not implementation prerequisites.
+
 These are documentation fixtures, not a runtime implementation. Each transcript is an independent scenario; repeated example IDs across files do not share storage. All call/reply/controller-error messages are complete envelopes. Hashes are real canonical SHA-256 values; the small readable record, snapshot and cursor IDs are illustrative.
 
 | File | Expected behavior |
@@ -29,7 +31,7 @@ python3 - <<'PY'
 import hashlib, json
 from pathlib import Path
 from jsonschema import Draft202012Validator, FormatChecker
-root = Path("design/spec/mcp-gates")
+root = Path("design/spec/gates/history")
 schema = json.loads((root / "wire.schema.json").read_text())
 Draft202012Validator.check_schema(schema)
 def validator(name):

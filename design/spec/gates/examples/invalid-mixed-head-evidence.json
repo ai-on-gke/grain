@@ -1,0 +1,56 @@
+{
+  "evaluation_id": "eval-1",
+  "binding_id": "task/57/checks",
+  "type": "checks",
+  "version": 1,
+  "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": "met",
+  "summary": "Complete required checks passed for H1.",
+  "human_text": null,
+  "agent_text": null,
+  "evidence": [
+    {
+      "kind": "check",
+      "id": "go/run-7",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "dependencies": [
+    {
+      "key": "checks/pr1710",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H0",
+      "version": "obs-4",
+      "collection_generation": "checks-set-7",
+      "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "complete": true,
+      "observed_at": "2026-11-17T00:15:00Z",
+      "valid_until": "2026-11-17T00:20:00Z",
+      "authorization_revision": 4,
+      "dirty_generation": 3,
+      "covered_generation": 3
+    }
+  ],
+  "blockers": [],
+  "work": [],
+  "waits": [],
+  "actions": [],
+  "observed_at": "2026-11-17T00:15:00Z",
+  "valid_until": "2026-11-17T00:20:00Z",
+  "error": null
+}

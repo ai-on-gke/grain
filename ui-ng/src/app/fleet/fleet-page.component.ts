@@ -402,15 +402,27 @@ const PERSISTENT_ACTIONS: readonly {
             <article class="ops-kpi-card" data-testid="meter-disk">
               <div class="ops-kpi-top">
                 <span class="ops-kpi-label">Primary Disk</span>
-                <span class="status-pill neutral tabular">
-                  <g-status-icon tone="neutral" kind="progress" />
-                  {{ primaryDisk()?.path || "/" }}
-                </span>
+                @if (primaryDisk()) {
+                  <span class="status-pill neutral tabular">
+                    <g-status-icon tone="neutral" kind="progress" />
+                    {{ primaryDisk()?.path || "/" }}
+                  </span>
+                }
               </div>
-              <div class="ops-kpi-value tabular">
-                {{ fmtMB(primaryDisk()?.usedMB) }} /
-                {{ fmtMB(primaryDisk()?.totalMB) }}
-              </div>
+              <!-- A host that reports no disks (GET /api/sandboxes host.disks
+                   empty) says so (classic System -> Sandboxes: "No disk figures
+                   available.") rather than showing a 0 MB disk it never
+                   measured. -->
+              @if (primaryDisk(); as disk) {
+                <div class="ops-kpi-value tabular">
+                  {{ fmtMB(disk.usedMB) }} /
+                  {{ fmtMB(disk.totalMB) }}
+                </div>
+              } @else {
+                <div class="ops-kpi-value" data-testid="meter-disk-none">
+                  Not reported
+                </div>
+              }
               <div class="meter-track">
                 <div
                   [class]="
@@ -423,14 +435,18 @@ const PERSISTENT_ACTIONS: readonly {
                   [style.width.%]="diskPct()"
                 ></div>
               </div>
-              <div class="fleet-meter-meta tabular">
-                <span>
-                  {{ (primaryDisk()?.holds ?? []).join(", ") || "host volume" }}
-                  @if (primaryDisk()?.floorMB) {
-                    · floor {{ fmtMB(primaryDisk()?.floorMB) }}
-                  }
-                </span>
-              </div>
+              @if (primaryDisk()) {
+                <div class="fleet-meter-meta tabular">
+                  <span>
+                    {{
+                      (primaryDisk()?.holds ?? []).join(", ") || "host volume"
+                    }}
+                    @if (primaryDisk()?.floorMB) {
+                      · floor {{ fmtMB(primaryDisk()?.floorMB) }}
+                    }
+                  </span>
+                </div>
+              }
             </article>
           </div>
         }
@@ -1227,7 +1243,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                             ? 'Resume dispatching queued tasks'
                             : access.deniedReason('DELETE /api/pipeline-pause')
                         "
-                        (click)="resumePipeline()"
+                        (click)="confirmResumePipeline()"
                       >
                         Resume pipeline
                       </button>
@@ -1256,7 +1272,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                             ? 'Pause new task dispatch'
                             : access.deniedReason('POST /api/pipeline-pause')
                         "
-                        (click)="pausePipeline()"
+                        (click)="confirmPausePipeline()"
                       >
                         Pause pipeline
                       </button>
@@ -1466,10 +1482,21 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                         <g-status-icon tone="error" kind="error" />
                         Restarting
                       </span>
-                    } @else {
+                    } @else if (sandboxes()?.daemon?.startedAt) {
                       <span class="status-pill healthy">
                         <g-status-icon tone="healthy" kind="healthy" />
                         Up {{ fmtAge(sandboxes()?.daemon?.startedAt) }}
+                      </span>
+                    } @else {
+                      <!-- No daemon start time to read uptime from: say so
+                           rather than a green "Up —" (classic hides the
+                           line when GET /api/sandboxes carries no daemon). -->
+                      <span
+                        class="status-pill neutral"
+                        data-testid="fleet-daemon-uptime-unknown"
+                      >
+                        <g-status-icon tone="neutral" kind="progress" />
+                        Uptime not reported
                       </span>
                     }
                   </div>
@@ -2415,6 +2442,50 @@ export class FleetPageComponent implements OnInit {
       }
     }
     this.access.tickClock();
+  }
+
+  // Pausing and resuming the pipeline ask first, as classic System ->
+  // Pipeline does (PipelineControl.jsx). A pause held for a scheduled
+  // upgrade says that resuming cancels it: the reconciler would take the
+  // hold back within seconds otherwise, so the server drops the schedule
+  // (ui/src/alerts.js resumeCancelsUpgrade).
+  protected confirmPausePipeline(): void {
+    if (!this.canWriteDispatch() || this.busyDispatch()) return;
+    this.confirmReq.set({
+      title: "Pause the pipeline?",
+      message:
+        "Grain will stop starting new agent and CI runs. Runs already in flight will continue.",
+      accept: "Pause pipeline",
+      destructive: false,
+      run: () => this.pausePipeline(),
+    });
+  }
+
+  protected confirmResumePipeline(): void {
+    if (!this.canWriteDispatch() || this.busyDispatch()) return;
+    const pause = this.pipelinePause();
+    const upgradeHold =
+      pause?.byKind === "automation" && pause?.byId === "upgrade-schedule";
+    this.confirmReq.set(
+      upgradeHold
+        ? {
+            title: "Resume and cancel the scheduled upgrade?",
+            message:
+              `This deployment is paused because it is waiting to upgrade${pause?.reason ? ` — ${pause.reason}` : ""}. ` +
+              "Resuming cancels that upgrade: tasks start again and the upgrade will not be applied. Schedule it again from Settings → Upgrade.",
+            accept: "Resume and cancel upgrade",
+            destructive: true,
+            run: () => this.resumePipeline(),
+          }
+        : {
+            title: "Resume the pipeline?",
+            message:
+              "Grain will start dispatching queued agent and CI runs again.",
+            accept: "Resume pipeline",
+            destructive: false,
+            run: () => this.resumePipeline(),
+          },
+    );
   }
 
   protected async pausePipeline(): Promise<void> {
