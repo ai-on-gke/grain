@@ -1,0 +1,22 @@
+{
+  "operation": "apply",
+  "request_id": "replay-range-1",
+  "binding_id": "requested-pr-review",
+  "binding_version": 1,
+  "expected_control_revision": 3,
+  "range": {
+    "after_cursor": "retention7:100",
+    "through_cursor": "retention7:120",
+    "from_time": null,
+    "through_time": null
+  },
+  "max_events": 20,
+  "max_tasks": 5,
+  "cost_units": 5,
+  "expires_at": "2026-11-16T19:30:00Z",
+  "skip_prior_firings": true,
+  "allow_new_firings": false,
+  "authorization_ref": "filing-grant-4",
+  "preview_token": "preview:range-1",
+  "reason": "Bounded recovery of retained requests; prior receipts preserved"
+}

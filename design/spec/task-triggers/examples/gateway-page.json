@@ -1,0 +1,34 @@
+{
+  "api_version": "grain.github-relay/v2",
+  "retention_epoch": 7,
+  "oldest_retained_seq": 1,
+  "latest_seq": 101,
+  "events": [
+    {
+      "seq": 101,
+      "delivery_id": "8c639",
+      "verified_at": "2026-11-16T19:00:01Z",
+      "verification_ref": "verification:901",
+      "installation_id": "install-17",
+      "repository_id": 12345,
+      "action": "review_requested",
+      "sender_id": 12,
+      "sender_kind": "human",
+      "pr_number": 812,
+      "head": "abc123",
+      "recipient": {
+        "kind": "team",
+        "id": 77
+      },
+      "occurred_at": null,
+      "title": "Please review this change",
+      "source_digest": "sha256:6fc9549d88cf8ee6f7b065bffa2c655e628e02bbea0cc7aea64a764dad3ef930"
+    }
+  ],
+  "coverage": {
+    "mode": "bounded",
+    "from": "2026-11-09T19:00:00Z",
+    "through": "2026-11-16T19:00:02Z",
+    "gap": null
+  }
+}

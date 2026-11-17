@@ -1,0 +1,29 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "read-expired",
+  "subscription_id": "sub-review-17",
+  "generation": 1,
+  "authorization_epoch": 4,
+  "status": "error",
+  "expires_at": "2026-11-16T19:10:00Z",
+  "baseline_cursor": "retention7:100",
+  "events": [],
+  "next_cursor": null,
+  "has_more": false,
+  "coverage": {
+    "mode": "bounded",
+    "from": "2026-11-09T19:00:00Z",
+    "through": "2026-11-16T19:00:02Z",
+    "gap": {
+      "code": "history_lost",
+      "from": "2026-11-09T19:00:00Z",
+      "through": "2026-11-16T19:00:02Z"
+    }
+  },
+  "error": {
+    "code": "cursor_expired",
+    "retryable": false,
+    "retry_after_seconds": null,
+    "message": "History coverage unavailable"
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "protocol_version": "1.0",
+  "provider": "capability:github/install-17",
+  "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+  "config_revision": "7",
+  "source_types": [
+    {
+      "id": "github_review_requests",
+      "version": "1",
+      "source_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "host",
+          "installation",
+          "repository_id",
+          "repository",
+          "recipient"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "github_review_requests"
+            ]
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "installation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "repository_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "repository": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "recipient": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "user",
+                  "team"
+                ]
+              },
+              "id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
+      },
+      "schema_digest": "sha256:731d377e565c3034e2ecca494b4fb3a6cf73f13efc55e46e9f9023a0b89d649d",
+      "kinds": [
+        {
+          "kind": "github.pull_request.review_requested",
+          "version": "1",
+          "extension_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repository_id",
+              "number",
+              "head",
+              "recipient_kind",
+              "recipient_id",
+              "request_epoch",
+              "url"
+            ],
+            "properties": {
+              "repository_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "head": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "recipient_kind": {
+                "enum": [
+                  "user",
+                  "team"
+                ]
+              },
+              "recipient_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "request_epoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "maxLength": 2048
+              }
+            }
+          },
+          "schema_digest": "sha256:f15628adea910787cce94145a451681353dd60e4fd499132c79db9d1b01759ed",
+          "identity_rule": "provider_occurrence_id",
+          "revision_order": "authoritative_observe",
+          "semantics": "occurrence",
+          "payload_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "title"
+            ],
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            }
+          },
+          "payload_schema_digest": "sha256:e8020ef30e828a4964fa83784b5b6abc74c5edade8c1073a32d7266757cfdbdb"
+        }
+      ],
+      "delivery": "pull_cursor",
+      "recovery": {
+        "history": "bounded",
+        "retention_seconds": 604800,
+        "stable_identity": true,
+        "cursor_support": true,
+        "reconciliation_seconds": 3600,
+        "loss_limits": "No guarantee for webhook not delivered or request history outside retained gateway range; current state cannot reconstruct remove/re-add"
+      },
+      "methods": {
+        "open": "event_open",
+        "read": "event_read",
+        "reconcile": "event_reconcile",
+        "close": "event_close"
+      }
+    }
+  ]
+}

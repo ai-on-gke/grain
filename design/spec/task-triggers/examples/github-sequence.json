@@ -1,0 +1,833 @@
+{
+  "name": "GitHub PR request through proposed durable filing",
+  "binding_fixture": "github-enabled-binding.json",
+  "steps": [
+    {
+      "boundary": "accepted config-repo importer -> immutable desired configuration",
+      "definition": "mutation",
+      "message": {
+        "operation": "apply",
+        "request_id": "import-enabled-1",
+        "binding_id": "requested-pr-review",
+        "expected_version": 0,
+        "expected_control_revision": 0,
+        "candidate": {
+          "api_version": "grain.trigger/v1",
+          "id": "requested-pr-review",
+          "version": 1,
+          "provider": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "event_kind": "github.pull_request.review_requested",
+          "kind_version": "1",
+          "mode": "occurrence",
+          "filter": {
+            "all": [
+              {
+                "path": "/extensions/recipient_kind",
+                "op": "eq",
+                "value": "team"
+              },
+              {
+                "path": "/extensions/recipient_id",
+                "op": "eq",
+                "value": 77
+              }
+            ]
+          },
+          "template": {
+            "id": "repo:template:ai-on-gke:grain:requested-review",
+            "revision": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+            "tracking": "pinned"
+          },
+          "parameters": {
+            "pr": {
+              "from": "/extensions/number",
+              "type": "integer",
+              "max_bytes": 20
+            },
+            "head": {
+              "from": "/extensions/head",
+              "type": "string",
+              "max_bytes": 128
+            },
+            "title": {
+              "from": "/payload/title",
+              "type": "string",
+              "max_bytes": 1024
+            }
+          },
+          "target": {
+            "repository": "ai-on-gke/grain",
+            "base": "main"
+          },
+          "identity": {
+            "owner": "user:review-owner",
+            "service": "service:trigger-filer"
+          },
+          "permissions": {
+            "read_repositories": [
+              "ai-on-gke/grain"
+            ],
+            "task_capabilities": [],
+            "actions": [
+              "task.create_from_trigger",
+              "task.coalesce_trigger"
+            ]
+          },
+          "policy": {
+            "admission": "standard",
+            "approval": "proposed",
+            "approval_authorization": null,
+            "auto_merge": false,
+            "auto_approve_proposals": false
+          },
+          "repeat": {
+            "policy": "coalesce",
+            "key_fields": [
+              "/resource/id",
+              "/extensions/recipient_kind",
+              "/extensions/recipient_id"
+            ],
+            "on_head_change": "new_request_only",
+            "active_limit": 1
+          },
+          "delivery": {
+            "initial": "baseline",
+            "enable": "future_only",
+            "catch_up": "hold",
+            "max_age_seconds": 86400,
+            "debounce_seconds": 30,
+            "batch_max": 20
+          },
+          "state": "enabled",
+          "quotas": {
+            "matches_per_hour": 100,
+            "tasks_per_day": 20,
+            "queue_size": 100,
+            "concurrent_tasks": 1,
+            "fanout_per_event": 1,
+            "cost_units_per_day": 1000
+          },
+          "loops": {
+            "automation": "hold",
+            "max_depth": 3,
+            "max_chain_tasks": 10
+          }
+        },
+        "control": null,
+        "job_id": null,
+        "old_queue": "hold",
+        "authorization_ref": "filing-grant-4",
+        "preview_token": null,
+        "reason": "Import accepted config revision with desired enable; runtime remains held until activation",
+        "recovery": null
+      },
+      "expected": "internal importer applies accepted config change; public config-writing API instead returns config_managed_externally; runtime is not enabled yet"
+    },
+    {
+      "boundary": "authorized operator -> stored standing filing ceiling",
+      "definition": "filing_authorization",
+      "message": {
+        "authorization_id": "filing-grant-4",
+        "binding_id": "requested-pr-review",
+        "binding_version": 1,
+        "binding_digest": "sha256:9ca5eb937e8747065057876f00721107f166f84af2298e550616851c16efefb1",
+        "source_key": "sha256:58ad7108e778172884e13d6c5890942077a7a9d43ced7619da27e63fb0ee9eac",
+        "authorization_partition": "partition-review-team77",
+        "security_digest": "sha256:9f8fe8c7bb10bea04cee661a285acac8ebd1ec5637765aa531d765dea97c3110",
+        "template_tracking": "pinned",
+        "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+        "owner": "user:review-owner",
+        "service": "service:trigger-filer",
+        "issued_by": "verified:user:review-owner",
+        "verification_ref": "person:approval-verification-4",
+        "created_at": "2026-11-16T18:55:00Z",
+        "expires_at": "2026-12-16T18:55:00Z",
+        "revoked_at": null,
+        "authorization_epoch": 4,
+        "target_identity": {
+          "deployment_repository_id": "repo-grain-1",
+          "forge_host": "github.com",
+          "forge_repository_id": "12345",
+          "repository": "ai-on-gke/grain",
+          "base": "main"
+        }
+      },
+      "expected": "person verified independently of webhook actor; grants task creation within exact proposed-task ceiling, no automatic task approval"
+    },
+    {
+      "boundary": "controller -> provider",
+      "definition": "provider_call",
+      "message": {
+        "method": "event_open",
+        "arguments": {
+          "protocol_version": "1.0",
+          "request_id": "open-17",
+          "provider_pin": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "subscription_id": "sub-review-17",
+          "generation": 1,
+          "authorization_epoch": 4,
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "after_cursor": null,
+          "limit": 100,
+          "deadline": "2026-11-16T19:00:30Z",
+          "expires_at": "2026-11-16T19:10:00Z"
+        }
+      },
+      "expected": "persist intent first; grant read/watch, no filing authority; ready baseline exclusive 100"
+    },
+    {
+      "boundary": "provider -> controller",
+      "definition": "provider_result",
+      "message": {
+        "protocol_version": "1.0",
+        "request_id": "open-17",
+        "subscription_id": "sub-review-17",
+        "generation": 1,
+        "authorization_epoch": 4,
+        "status": "ready",
+        "expires_at": "2026-11-16T19:10:00Z",
+        "baseline_cursor": "retention7:100",
+        "events": [],
+        "next_cursor": "retention7:100",
+        "has_more": false,
+        "coverage": {
+          "mode": "bounded",
+          "from": "2026-11-09T19:00:00Z",
+          "through": "2026-11-16T19:00:02Z",
+          "gap": null
+        },
+        "error": null
+      },
+      "expected": "commit baseline activation and operation receipt before live read"
+    },
+    {
+      "boundary": "operator -> side-effect-free activation preview",
+      "definition": "preview_request",
+      "message": {
+        "candidate": {
+          "api_version": "grain.trigger/v1",
+          "id": "requested-pr-review",
+          "version": 1,
+          "provider": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "event_kind": "github.pull_request.review_requested",
+          "kind_version": "1",
+          "mode": "occurrence",
+          "filter": {
+            "all": [
+              {
+                "path": "/extensions/recipient_kind",
+                "op": "eq",
+                "value": "team"
+              },
+              {
+                "path": "/extensions/recipient_id",
+                "op": "eq",
+                "value": 77
+              }
+            ]
+          },
+          "template": {
+            "id": "repo:template:ai-on-gke:grain:requested-review",
+            "revision": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+            "tracking": "pinned"
+          },
+          "parameters": {
+            "pr": {
+              "from": "/extensions/number",
+              "type": "integer",
+              "max_bytes": 20
+            },
+            "head": {
+              "from": "/extensions/head",
+              "type": "string",
+              "max_bytes": 128
+            },
+            "title": {
+              "from": "/payload/title",
+              "type": "string",
+              "max_bytes": 1024
+            }
+          },
+          "target": {
+            "repository": "ai-on-gke/grain",
+            "base": "main"
+          },
+          "identity": {
+            "owner": "user:review-owner",
+            "service": "service:trigger-filer"
+          },
+          "permissions": {
+            "read_repositories": [
+              "ai-on-gke/grain"
+            ],
+            "task_capabilities": [],
+            "actions": [
+              "task.create_from_trigger",
+              "task.coalesce_trigger"
+            ]
+          },
+          "policy": {
+            "admission": "standard",
+            "approval": "proposed",
+            "approval_authorization": null,
+            "auto_merge": false,
+            "auto_approve_proposals": false
+          },
+          "repeat": {
+            "policy": "coalesce",
+            "key_fields": [
+              "/resource/id",
+              "/extensions/recipient_kind",
+              "/extensions/recipient_id"
+            ],
+            "on_head_change": "new_request_only",
+            "active_limit": 1
+          },
+          "delivery": {
+            "initial": "baseline",
+            "enable": "future_only",
+            "catch_up": "hold",
+            "max_age_seconds": 86400,
+            "debounce_seconds": 30,
+            "batch_max": 20
+          },
+          "state": "enabled",
+          "quotas": {
+            "matches_per_hour": 100,
+            "tasks_per_day": 20,
+            "queue_size": 100,
+            "concurrent_tasks": 1,
+            "fanout_per_event": 1,
+            "cost_units_per_day": 1000
+          },
+          "loops": {
+            "automation": "hold",
+            "max_depth": 3,
+            "max_chain_tasks": 10
+          }
+        },
+        "sample_event_ids": [],
+        "synthetic_events": [],
+        "range": null,
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        }
+      },
+      "expected": "use already registered fixed baseline and current caller source rights; no new subscription, checkpoint or task writes"
+    },
+    {
+      "boundary": "preview service -> operator",
+      "definition": "preview_result",
+      "message": {
+        "candidate_digest": "sha256:9ca5eb937e8747065057876f00721107f166f84af2298e550616851c16efefb1",
+        "preview_token": "preview:activation-after-cursor100",
+        "expires_at": "2026-11-16T19:05:00Z",
+        "matching_count": 0,
+        "task_ceiling": 20,
+        "cost_ceiling": 1000,
+        "composition_digest": "sha256:3f05ef38d9567c15abd2eb97f4ec467397785b79d5523f33ae25afd0b2832d3e",
+        "authority_digest": "sha256:64684eda321fec88de165c49343f0bc3e78cec4ebcc2901e89c5125fbc134fb1",
+        "coverage": {
+          "mode": "bounded",
+          "from": "2026-11-09T19:00:00Z",
+          "through": "2026-11-16T19:00:00Z",
+          "gap": null
+        },
+        "samples": [],
+        "warnings": [
+          "Future-only activation at the committed upstream baseline; no historic events will file automatically"
+        ],
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        },
+        "gap_id": null
+      },
+      "expected": "five-minute token binds actor, desired config digest, source baseline, authority epoch and effective budgets; enable rechecks all of them"
+    },
+    {
+      "boundary": "authorized preview -> runtime activation transaction",
+      "definition": "mutation",
+      "message": {
+        "operation": "control",
+        "request_id": "enable-review-1",
+        "binding_id": "requested-pr-review",
+        "expected_version": 1,
+        "expected_control_revision": 1,
+        "candidate": null,
+        "control": "enable",
+        "job_id": null,
+        "old_queue": "hold",
+        "authorization_ref": "filing-grant-4",
+        "preview_token": "preview:activation-after-cursor100",
+        "reason": "Enable only after verified gateway setup and fixed baseline cursor100, future events only",
+        "recovery": {
+          "mode": "future_only",
+          "range": null,
+          "gap_id": null,
+          "acknowledge_loss": false
+        }
+      },
+      "expected": "preview token binds actor, upstream baseline100, pins/authority/quota and candidate; commit control revision2 plus receipt-sequence watermark; later101 eligible"
+    },
+    {
+      "boundary": "activation transaction -> operator",
+      "definition": "management_result",
+      "message": {
+        "request_id": "enable-review-1",
+        "status": "controlled",
+        "binding_id": "requested-pr-review",
+        "version": 1,
+        "control_revision": 2,
+        "audit_receipt": "activation-receipt-1",
+        "job_id": null,
+        "error": null
+      },
+      "expected": "runtime enabled under exact desired config and filing authority, no task yet"
+    },
+    {
+      "boundary": "gateway -> provider",
+      "definition": "relay_result",
+      "message": {
+        "api_version": "grain.github-relay/v2",
+        "retention_epoch": 7,
+        "oldest_retained_seq": 1,
+        "latest_seq": 101,
+        "events": [
+          {
+            "seq": 101,
+            "delivery_id": "8c639",
+            "verified_at": "2026-11-16T19:00:01Z",
+            "verification_ref": "verification:901",
+            "installation_id": "install-17",
+            "repository_id": 12345,
+            "action": "review_requested",
+            "sender_id": 12,
+            "sender_kind": "human",
+            "pr_number": 812,
+            "head": "abc123",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            },
+            "occurred_at": null,
+            "title": "Please review this change",
+            "source_digest": "sha256:6fc9549d88cf8ee6f7b065bffa2c655e628e02bbea0cc7aea64a764dad3ef930"
+          }
+        ],
+        "coverage": {
+          "mode": "bounded",
+          "from": "2026-11-09T19:00:00Z",
+          "through": "2026-11-16T19:00:02Z",
+          "gap": null
+        }
+      },
+      "expected": "verified durable upstream sequence 101; HMAC does not itself grant task authority"
+    },
+    {
+      "boundary": "controller -> provider",
+      "definition": "provider_call",
+      "message": {
+        "method": "event_read",
+        "arguments": {
+          "protocol_version": "1.0",
+          "request_id": "read-101",
+          "provider_pin": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "subscription_id": "sub-review-17",
+          "generation": 1,
+          "authorization_epoch": 4,
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "after_cursor": "retention7:100",
+          "limit": 100,
+          "deadline": "2026-11-16T19:00:30Z",
+          "expires_at": null
+        }
+      },
+      "expected": "authenticated MCP pull; persist request; no callback"
+    },
+    {
+      "boundary": "provider -> controller",
+      "definition": "provider_result",
+      "message": {
+        "protocol_version": "1.0",
+        "request_id": "read-101",
+        "subscription_id": "sub-review-17",
+        "generation": 1,
+        "authorization_epoch": 4,
+        "status": "page",
+        "expires_at": "2026-11-16T19:10:00Z",
+        "baseline_cursor": "retention7:100",
+        "events": [
+          {
+            "protocol_version": "1.0",
+            "provider": "capability:github/install-17",
+            "provider_version": "1",
+            "source": "sha256:58ad7108e778172884e13d6c5890942077a7a9d43ced7619da27e63fb0ee9eac",
+            "event_id": "[\"github.com\",\"install-17\",12345,\"8c639\",\"review_requested\",\"team\",77]",
+            "kind": "github.pull_request.review_requested",
+            "kind_version": "1",
+            "occurred_at": null,
+            "received_at": "2026-11-16T19:00:02Z",
+            "resource": {
+              "type": "github.pull_request",
+              "id": "github.com/repository/12345/pull/812",
+              "revision": "head:abc123"
+            },
+            "provenance": {
+              "transport": "webhook",
+              "authentication_ref": "verification:901",
+              "actor": "github:user:12",
+              "actor_kind": "human",
+              "installation": "install-17",
+              "origin_task": null,
+              "origin_action": null,
+              "causation_id": null,
+              "chain_id": null,
+              "depth": 0
+            },
+            "extensions": {
+              "repository_id": 12345,
+              "number": 812,
+              "head": "abc123",
+              "recipient_kind": "team",
+              "recipient_id": 77,
+              "request_epoch": "8c639",
+              "url": "https://github.com/ai-on-gke/grain/pull/812"
+            },
+            "payload": {
+              "title": "Please review this change"
+            }
+          }
+        ],
+        "next_cursor": "retention7:101",
+        "has_more": false,
+        "coverage": {
+          "mode": "bounded",
+          "from": "2026-11-09T19:00:00Z",
+          "through": "2026-11-16T19:00:02Z",
+          "gap": null
+        },
+        "error": null
+      },
+      "expected": "append E and cursor CAS atomically, then matcher M/checkpoint; fresh authoritative PR H1 outstanding observation required"
+    },
+    {
+      "boundary": "journal consumer -> durable match/checkpoint",
+      "definition": "match_record",
+      "message": {
+        "match_id": "sha256:34955bffaf869acca6a5d00b570c7467ffa6412025ce062ce58c35b8b7ee71c5",
+        "firing_key": "sha256:b3c49f05f98c5b56add60c03a31ac3c2ae8b2a27d587d5727de3b2518b22160e",
+        "event_key": "sha256:799413bd6b6766aef7521ddff3b060c56467023fcad52ae554b5b4fdbe5eb3da",
+        "binding_id": "requested-pr-review",
+        "binding_version": 1,
+        "binding_digest": "sha256:9ca5eb937e8747065057876f00721107f166f84af2298e550616851c16efefb1",
+        "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+        "security_digest": "sha256:9f8fe8c7bb10bea04cee661a285acac8ebd1ec5637765aa531d765dea97c3110",
+        "authorization_ref": "filing-grant-4",
+        "mapped_inputs": {
+          "pr": 812,
+          "head": "abc123",
+          "title": "Please review this change"
+        },
+        "input_digest": "sha256:89bf40b410634d40d67aca959613ce137b00ef21a77c00e6c43ea788691f2831",
+        "repeat_key": "sha256:a842b83ee51ba81e949993bace71295bc6e3161405b0a92ce83c737327ecbab2",
+        "status": "pending",
+        "worker_fence": 8,
+        "created_at": "2026-11-16T19:00:03Z",
+        "target_identity": {
+          "deployment_repository_id": "repo-grain-1",
+          "forge_host": "github.com",
+          "forge_repository_id": "12345",
+          "repository": "ai-on-gke/grain",
+          "base": "main"
+        }
+      },
+      "expected": "immutable binding/template/authority/input pins and per-consumer checkpoint commit together before filing"
+    },
+    {
+      "boundary": "authorized current PR read -> freshness lease",
+      "definition": "review_freshness",
+      "message": {
+        "observation_id": "pr-observation-19",
+        "repository_id": 12345,
+        "number": 812,
+        "recipient": {
+          "kind": "team",
+          "id": 77
+        },
+        "observed_head": "abc123",
+        "request_outstanding": true,
+        "is_open": true,
+        "observed_at": "2026-11-16T19:00:04Z",
+        "valid_until": "2026-11-16T19:00:34Z",
+        "accepted_sequence": 19,
+        "dirty_generation": 4,
+        "verification_ref": "controller:github-read-19"
+      },
+      "expected": "stable repository/PR/recipient and current head/outstanding state verified; filing CASes accepted sequence/dirty generation and 30-second lease"
+    },
+    {
+      "boundary": "filer -> store",
+      "definition": "file_request",
+      "message": {
+        "firing_key": "sha256:b3c49f05f98c5b56add60c03a31ac3c2ae8b2a27d587d5727de3b2518b22160e",
+        "match_id": "sha256:34955bffaf869acca6a5d00b570c7467ffa6412025ce062ce58c35b8b7ee71c5",
+        "expected_match_fence": 8
+      },
+      "expected": "recheck standing filing scope even for proposed task; lock policy/task/repeat/quota; atomic task+origin+F+outbox"
+    },
+    {
+      "boundary": "store -> filer",
+      "definition": "receipt",
+      "message": {
+        "receipt_id": "receipt-812",
+        "firing_key": "sha256:b3c49f05f98c5b56add60c03a31ac3c2ae8b2a27d587d5727de3b2518b22160e",
+        "match_id": "sha256:34955bffaf869acca6a5d00b570c7467ffa6412025ce062ce58c35b8b7ee71c5",
+        "binding_id": "requested-pr-review",
+        "binding_version": 1,
+        "event_key": "sha256:799413bd6b6766aef7521ddff3b060c56467023fcad52ae554b5b4fdbe5eb3da",
+        "slot_id": "primary",
+        "replay_epoch": "live",
+        "disposition": "created",
+        "task_id": "9001",
+        "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+        "authority_digest": "sha256:64684eda321fec88de165c49343f0bc3e78cec4ebcc2901e89c5125fbc134fb1",
+        "committed_at": "2026-11-16T19:00:05Z"
+      },
+      "expected": "one unapproved task 9001; no runtime action in this documentation"
+    },
+    {
+      "boundary": "duplicate/lost commit response -> store",
+      "definition": "file_request",
+      "message": {
+        "firing_key": "sha256:b3c49f05f98c5b56add60c03a31ac3c2ae8b2a27d587d5727de3b2518b22160e",
+        "match_id": "sha256:34955bffaf869acca6a5d00b570c7467ffa6412025ce062ce58c35b8b7ee71c5",
+        "expected_match_fence": 9
+      },
+      "expected": "lookup committed F before lease/config checks; return immutable receipt"
+    },
+    {
+      "boundary": "store -> retry",
+      "definition": "receipt",
+      "message": {
+        "receipt_id": "receipt-812",
+        "firing_key": "sha256:b3c49f05f98c5b56add60c03a31ac3c2ae8b2a27d587d5727de3b2518b22160e",
+        "match_id": "sha256:34955bffaf869acca6a5d00b570c7467ffa6412025ce062ce58c35b8b7ee71c5",
+        "binding_id": "requested-pr-review",
+        "binding_version": 1,
+        "event_key": "sha256:799413bd6b6766aef7521ddff3b060c56467023fcad52ae554b5b4fdbe5eb3da",
+        "slot_id": "primary",
+        "replay_epoch": "live",
+        "disposition": "created",
+        "task_id": "9001",
+        "template_digest": "sha256:db34db4f1626641450148ae286eaf7dd12924c540a5dc28fdc518f8813221ad5",
+        "authority_digest": "sha256:64684eda321fec88de165c49343f0bc3e78cec4ebcc2901e89c5125fbc134fb1",
+        "committed_at": "2026-11-16T19:00:05Z"
+      },
+      "expected": "same task and receipt even after completion; no duplicate"
+    },
+    {
+      "boundary": "controller -> provider",
+      "definition": "provider_call",
+      "message": {
+        "method": "event_open",
+        "arguments": {
+          "protocol_version": "1.0",
+          "request_id": "renew-17",
+          "provider_pin": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "subscription_id": "sub-review-17",
+          "generation": 1,
+          "authorization_epoch": 4,
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "after_cursor": "retention7:101",
+          "limit": 100,
+          "deadline": "2026-11-16T19:00:30Z",
+          "expires_at": "2026-11-16T19:15:00Z"
+        }
+      },
+      "expected": "same generation renewal preserves baseline/cursor, current authorization checked"
+    },
+    {
+      "boundary": "provider -> controller",
+      "definition": "provider_result",
+      "message": {
+        "protocol_version": "1.0",
+        "request_id": "renew-17",
+        "subscription_id": "sub-review-17",
+        "generation": 1,
+        "authorization_epoch": 4,
+        "status": "ready",
+        "expires_at": "2026-11-16T19:15:00Z",
+        "baseline_cursor": "retention7:100",
+        "events": [],
+        "next_cursor": "retention7:101",
+        "has_more": false,
+        "coverage": {
+          "mode": "bounded",
+          "from": "2026-11-09T19:00:00Z",
+          "through": "2026-11-16T19:00:02Z",
+          "gap": null
+        },
+        "error": null
+      },
+      "expected": "persist expiry; no checkpoint reset"
+    },
+    {
+      "boundary": "controller -> provider",
+      "definition": "provider_call",
+      "message": {
+        "method": "event_close",
+        "arguments": {
+          "protocol_version": "1.0",
+          "request_id": "close-17",
+          "provider_pin": {
+            "id": "capability:github/install-17",
+            "release": "sha256:2b1df9c78cf105fac8c56b96bd81437ed27c6e05af721771b82610a2ea409a33",
+            "source_type": "github_review_requests",
+            "version": "1",
+            "schema_digest": "sha256:22ff83124aee5f83ddb98807fdd966054581588f76d368c4b9aa66371aa367ad",
+            "config_revision": "7"
+          },
+          "subscription_id": "sub-review-17",
+          "generation": 1,
+          "authorization_epoch": 4,
+          "source": {
+            "type": "github_review_requests",
+            "host": "github.com",
+            "installation": "install-17",
+            "repository_id": 12345,
+            "repository": "ai-on-gke/grain",
+            "recipient": {
+              "kind": "team",
+              "id": 77
+            }
+          },
+          "after_cursor": "retention7:101",
+          "limit": 100,
+          "deadline": "2026-11-16T19:00:30Z",
+          "expires_at": null
+        }
+      },
+      "expected": "local disable/control fence already committed; shared consumers removed before close last subscription"
+    },
+    {
+      "boundary": "provider -> controller",
+      "definition": "provider_result",
+      "message": {
+        "protocol_version": "1.0",
+        "request_id": "close-17",
+        "subscription_id": "sub-review-17",
+        "generation": 1,
+        "authorization_epoch": 4,
+        "status": "closed",
+        "expires_at": null,
+        "baseline_cursor": "retention7:100",
+        "events": [],
+        "next_cursor": null,
+        "has_more": false,
+        "coverage": {
+          "mode": "bounded",
+          "from": "2026-11-09T19:00:00Z",
+          "through": "2026-11-16T19:00:02Z",
+          "gap": null
+        },
+        "error": null
+      },
+      "expected": "remote generation tombstoned; existing task/history retained"
+    }
+  ],
+  "expected_tasks": 1,
+  "expected_receipts": 1
+}
