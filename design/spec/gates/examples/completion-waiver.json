@@ -18,5 +18,6 @@
   "reason": "Accept this explicit child outcome exception for this delivery.",
   "issued_at": "2026-11-17T00:15:00Z",
   "expires_at": "2026-11-18T00:15:00Z",
-  "revoked_at": null
+  "revoked_at": null,
+  "revision": 1
 }

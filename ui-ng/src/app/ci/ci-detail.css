@@ -1,13 +1,14 @@
 /* CI right-pane run inspector, job/step breakdown, and recessed #13151a log well. */
 
 .ci-inspector {
+  --ci-insp-pad-top: 20px;
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
   position: relative;
   overflow-y: auto;
-  padding: 20px 24px 32px;
+  padding: var(--ci-insp-pad-top) 24px 32px;
   background: var(--md-sys-color-surface);
 }
 
@@ -85,7 +86,9 @@
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-medium);
   background: var(--md-sys-color-surface);
-  overflow: hidden;
+  /* Clip, not hide: hidden makes the card a scroll container and traps
+     .ci-log-bar's sticky positioning inside it instead of .ci-inspector. */
+  overflow: clip;
 }
 
 :root[data-theme="dark"] .ci-job-card {
@@ -160,7 +163,7 @@
 
 .ci-log-bar {
   position: sticky;
-  top: 0;
+  top: calc(-1 * var(--ci-insp-pad-top, 20px));
   z-index: 1;
   display: flex;
   align-items: center;
@@ -273,7 +276,8 @@
 
 @media (max-width: 599.95px) {
   .ci-inspector {
-    padding: 14px 12px 24px;
+    --ci-insp-pad-top: 14px;
+    padding: var(--ci-insp-pad-top) 12px 24px;
   }
 
   .ci-step-btn {

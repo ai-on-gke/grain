@@ -611,4 +611,98 @@ describe("ContextPageComponent", () => {
       root.querySelector('[data-testid="scope-row-acme/web"]'),
     ).not.toBeNull();
   });
+
+  it("scrolls stacked Context split to the detail pane on selection and new pack, and resets on tab switch", async () => {
+    const origMatchMedia = window.matchMedia;
+    let stacked = true;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: stacked && query === "(max-width: 839.95px)",
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+
+    try {
+      const { fixture, root } = await setup();
+      root
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="context-tab-documents"]',
+        )!
+        .click();
+      await settle(fixture);
+
+      const split = root.querySelector<HTMLElement>(
+        '[data-testid="context-split"]',
+      )!;
+      const detail = split.querySelector<HTMLElement>(".ctx-detail-pane")!;
+      const scrollCalls: number[] = [];
+      split.scrollTo = ((opts?: ScrollToOptions | number) => {
+        if (typeof opts === "object" && typeof opts?.top === "number") {
+          scrollCalls.push(opts.top);
+        }
+      }) as typeof split.scrollTo;
+      Object.defineProperty(split, "scrollTop", {
+        configurable: true,
+        get: () => 120,
+      });
+      split.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
+      detail.getBoundingClientRect = () => ({ top: 940 }) as DOMRect;
+
+      // Picking a document row when stacked scrolls detail's top to split's top.
+      root
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="doc-row-db-migrations"] .ctx-row-btn',
+        )!
+        .click();
+      await settle(fixture);
+      expect(scrollCalls).toEqual([960]);
+
+      // Tapping + New pack when stacked also scrolls detail into view.
+      scrollCalls.length = 0;
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="doc-new-btn"]')!
+        .click();
+      await settle(fixture);
+      expect(scrollCalls).toEqual([960]);
+
+      // Switching tabs resets split scroll to top.
+      scrollCalls.length = 0;
+      root
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="context-tab-instructions"]',
+        )!
+        .click();
+      await settle(fixture);
+      expect(scrollCalls).toEqual([0]);
+
+      // Side by side (>= 840px), picking a row does not scroll the split.
+      stacked = false;
+      scrollCalls.length = 0;
+      root
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="scope-row-deployment"] .ctx-row-btn',
+        )!
+        .click();
+      await settle(fixture);
+      expect(scrollCalls).toEqual([]);
+    } finally {
+      if (origMatchMedia === undefined) {
+        Reflect.deleteProperty(window, "matchMedia");
+      } else {
+        Object.defineProperty(window, "matchMedia", {
+          configurable: true,
+          writable: true,
+          value: origMatchMedia,
+        });
+      }
+    }
+  });
 });

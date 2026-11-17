@@ -1,0 +1,33 @@
+daemon up: token /home/debian/wt/pg/local-api-token
+{"repo":"acme/widgets","ciMode":"github"}
+{"id":"sched-1","title":"Stage 1 (nightly on rc tags)"}
+== red Tests push on main (run 9002)
+{"id":"2","title":"Fix the red tests.yml on main at 7f42afc89657","capabilities":["https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"]}
+== red Stage 1 on v1.2.0-rc.1 (run 9101)
+{"id":"4","title":"Fix the red Stage 1 (Nightly) at ef9127434db1","capabilities":["https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"]}
+--- [task 2] grain ci log 9101 --job stage-1
+attempts/
+go test ._....log
+--- [task 2] grain read 'ci://acme/widgets/9101/stage-1/go test ._....log'
+job "stage-1" concluded failure (https://github.com/acme/widgets/actions/runs/9101/job/91011)
+--- [task 2] grain ci list --repo acme/other
+grain: forbidden: acme/other is outside this sandbox's CI read scope
+--- [task 4] grain ci log 9101 --job stage-1
+attempts/
+go test ._....log
+--- [task 4] grain read 'ci://acme/widgets/9101/stage-1/go test ._....log'
+job "stage-1" concluded failure (https://github.com/acme/widgets/actions/runs/9101/job/91011)
+--- [task 4] grain ci list --repo acme/other
+grain: forbidden: acme/other is outside this sandbox's CI read scope
+== repair 2 as a pre-#1492 row: its grant deleted
+--- [task 2] grain ci log 9002 --job go
+grain: forbidden: grain ci: this run may not read CI runs and logs. `grain ci wait` and `grain pr open` work without a grant: they report this branch's checks, GitHub Actions included, and the end of each failing job's log. For the run listings and full logs these commands read, request_access for https://grain.dev/capabilities/api#ci-read with {repo: "acme/widgets"}. Do not ask for https://grain.dev/capabilities/grain#ci: the repository's CI Mode grants it, never a person
+grain: forbidden: ci://acme/widgets/9002/go: this run may not read CI runs and logs. `grain ci wait` and `grain pr open` work without a grant: they report this branch's checks, GitHub Actions included, and the end of each failing job's log. For the run listings and full logs these commands read, request_access for https://grain.dev/capabilities/api#ci-read with {repo: "acme/widgets"}. Do not ask for https://grain.dev/capabilities/grain#ci: the repository's CI Mode grants it, never a person
+daemon up: token /home/debian/wt/pg/local-api-token
+{"id":"2","title":"Fix the red tests.yml on main at 7f42afc89657","capabilities":[]}
+== another red Tests push on main (run 9003)
+2026/11/15 14:20:42 orchestrator: `main` run 9003 on acme/widgets is red; appended it to the open repair 2
+{"id":"2","title":"Fix the red tests.yml on main at 7f42afc89657","capabilities":["https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"]}
+--- [task 2] grain ci log 9003 --job go
+attempts/
+go test ._....log

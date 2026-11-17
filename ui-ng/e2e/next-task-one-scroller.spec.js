@@ -18,12 +18,16 @@ import { test, expect } from "./fixtures.js";
 // tab of the task page and of the Tasks and Agents inspectors fills its tab
 // body: the thread is the only thing that scrolls, the composer sits pinned
 // below it inside the pane, and wheeling the thread never moves the tab body
-// or the page around it. On a phone the tab lays out flat in the scrolling
-// page, the thread keeps its inline window, and the composer can be reached. The Workstreams inspector is the one scroller
-// for "In this stream" plus the task, which lays out flat inside it, and
-// stacked Context scrolls a picked document's detail into view. The long
-// thread and the document list are served in place of the demo's own, so the
-// shared store is left alone.
+// or the page around it. When an inline editor opens on a task page and leaves
+// the tabs under 320px, the page scrolls so the editor's Save stays reachable.
+// On a phone the tab lays out flat in the scrolling page, the thread keeps its
+// inline window, and the composer can be reached. The Workstreams inspector is
+// the one scroller for "In this stream" plus the task, which lays out flat
+// inside it; a CI log runs at full length in the run inspector with a sticky
+// .ci-log-bar; the Inbox live transcript grows inside the thread rather than
+// scrolling on its own; and stacked Context scrolls a picked document's detail
+// into view. Fixtures are served via page.route so the shared demo store is
+// left alone.
 
 const EXTRA = 40;
 
@@ -209,6 +213,35 @@ test.describe("task conversation has one scroller", () => {
     expect(end.composerBottom).toBeLessThanOrEqual(end.pageBottom + 0.5);
   });
 
+  test("task page 320px floor: opening the inline editor lets the page scroll so Save stays reachable", async ({
+    page,
+    demoServer,
+    accessCode,
+  }) => {
+    const t = await openTask(demoServer, accessCode);
+    await longThread(page, t.id);
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await page.goto(`/next/tasks/${t.id}?tab=conversation`);
+    await expectThreadIsTheScroller(page, "g-task-page");
+
+    await page.getByTestId("act-edit").click();
+    await expect(page.getByTestId("task-edit-panel")).toBeVisible();
+    await expect
+      .poll(() => scrolling(page, ["g-task-page .task-page"]))
+      .toEqual(["g-task-page .task-page"]);
+
+    const save = page.getByTestId("edit-save-btn");
+    await save.scrollIntoViewIfNeeded();
+    const [pageBox, saveBox] = await Promise.all([
+      page.locator("g-task-page .task-page").boundingBox(),
+      save.boundingBox(),
+    ]);
+    expect(saveBox.y).toBeGreaterThanOrEqual(pageBox.y - 0.5);
+    expect(saveBox.y + saveBox.height).toBeLessThanOrEqual(
+      pageBox.y + pageBox.height + 0.5,
+    );
+  });
+
   test("Agents inspector at 1440x900: only the thread scrolls and the composer stays in the pane", async ({
     page,
     demoServer,
@@ -227,6 +260,11 @@ test.describe("task conversation has one scroller", () => {
     await expect(pane).toBeVisible();
     await pane.getByTestId("task-tab-conversation").click();
     await expectThreadIsTheScroller(page, '[data-testid="agents-pane"]');
+    const paneBox = await pane.boundingBox();
+    const composer = await pane.locator(".convo-composer").boundingBox();
+    expect(composer.y + composer.height).toBeLessThanOrEqual(
+      paneBox.y + paneBox.height + 0.5,
+    );
   });
 
   test("Workstreams inspector at 1440x900: the inspector is the one scroller and the task lays out flat in it", async ({
@@ -240,11 +278,27 @@ test.describe("task conversation has one scroller", () => {
     await row.click();
     const insp = page.getByTestId("ws-inspector");
     await expect(insp.locator("g-task-detail")).toBeVisible();
+    const root = '[data-testid="ws-inspector"]';
+    // On Details, .ws-insp is the sole vertical scroller in the inspector.
+    await expect
+      .poll(() =>
+        scrolling(page, [
+          root,
+          `${root} .task-page`,
+          `${root} .task-tab-body`,
+          `${root} .task-aside`,
+        ]),
+      )
+      .toEqual([root]);
     const tab = insp.getByTestId("task-tab-conversation");
     if (await tab.count()) await tab.click();
     await expect(insp.locator(".convo-thread")).toBeVisible();
-    const root = '[data-testid="ws-inspector"]';
     // Neither the task nor its tab body is a scroller inside the inspector.
+    await expect
+      .poll(() =>
+        scrolling(page, [root, `${root} .task-page`, `${root} .task-tab-body`]),
+      )
+      .toEqual([root]);
     const styles = await page.evaluate(
       (r) =>
         [".task-page", ".task-tab-body"].map(
@@ -267,6 +321,166 @@ test.describe("task conversation has one scroller", () => {
       };
     });
     expect(end.composerBottom).toBeLessThanOrEqual(end.inspBottom + 0.5);
+  });
+
+  test("CI run inspector at 1440x900: log runs at full length in the inspector and .ci-log-bar stays in view", async ({
+    page,
+  }) => {
+    const logLines = Array.from(
+      { length: 140 },
+      (_, i) =>
+        `2026-11-17T00:00:${String(i % 60).padStart(2, "0")}Z step line ${i + 1}: checking package invariants`,
+    ).join("\n");
+    const run = {
+      id: "ci-scroll-1",
+      provider: "grain",
+      repo: "acme/widgets",
+      ref: "refs/heads/grain/task-101",
+      commit: "aaa111122223333",
+      event: "pull_request",
+      requestedBy: "101",
+      conclusion: "failure",
+      startedAt: "2026-11-17T00:00:00Z",
+      finishedAt: "2026-11-17T00:02:00Z",
+      jobs: [
+        {
+          jobId: "unit",
+          name: "Go unit suite",
+          workflow: "CI",
+          conclusion: "failure",
+          startedAt: "2026-11-17T00:00:00Z",
+          finishedAt: "2026-11-17T00:02:00Z",
+          steps: [
+            {
+              name: "go test ./...",
+              conclusion: "failure",
+              exitCode: 1,
+              output: logLines,
+              startedAt: "2026-11-17T00:00:05Z",
+              finishedAt: "2026-11-17T00:01:55Z",
+            },
+          ],
+        },
+      ],
+    };
+    await page.route(/\/api\/ci\/runs(\?.*)?$/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: { runs: [run] } })
+        : route.continue(),
+    );
+    await page.route(/\/api\/ci\/runs\/ci-scroll-1(\?.*)?$/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: run })
+        : route.continue(),
+    );
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/next/ci");
+    const insp = page.getByTestId("ci-inspector");
+    const viewer = insp.getByTestId("ci-log-viewer");
+    await expect(viewer).toBeVisible();
+
+    // Only .ci-inspector scrolls; the log well and lines run at full length.
+    await expect
+      .poll(() =>
+        scrolling(page, [
+          ".ci-inspector",
+          ".ci-job-card",
+          ".ci-log-well",
+          ".ci-log-lines",
+        ]),
+      )
+      .toEqual([".ci-inspector"]);
+
+    // Scroll halfway down the log and verify .ci-log-bar sticks at the top of .ci-inspector.
+    await insp.evaluate((el) => {
+      const well = el.querySelector(".ci-log-well");
+      const offset =
+        well.getBoundingClientRect().top -
+        el.getBoundingClientRect().top +
+        el.scrollTop;
+      el.scrollTop = offset + 500;
+    });
+    const [inspBox, wellBox, barBox] = await Promise.all([
+      insp.boundingBox(),
+      viewer.boundingBox(),
+      viewer.locator(".ci-log-bar").boundingBox(),
+    ]);
+    expect(wellBox.y).toBeLessThan(inspBox.y - 200);
+    expect(wellBox.y + wellBox.height).toBeGreaterThan(inspBox.y + 200);
+    expect(Math.abs(barBox.y - inspBox.y)).toBeLessThan(2);
+    expect(barBox.y + barBox.height).toBeLessThanOrEqual(
+      inspBox.y + inspBox.height + 0.5,
+    );
+  });
+
+  test("Inbox live transcript at 1440x900: grows inside the thread without a nested scroller", async ({
+    page,
+  }) => {
+    const transcriptLines = Array.from(
+      { length: 60 },
+      (_, i) => `[step ${i + 1}] verifying cluster rollout health...`,
+    ).join("\n");
+    const task99001 = {
+      id: "99001",
+      title: "Run cluster deploy verification",
+      state: "running",
+      repo: "acme/widgets",
+      createdAt: "2026-11-17T00:00:00Z",
+      updatedAt: "2026-11-17T00:05:00Z",
+      attempts: [{ number: 1, startedAt: "2026-11-17T00:01:00Z" }],
+      comments: [],
+    };
+    await page.route(/\/api\/local-script-approvals(\?.*)?$/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({
+            json: [
+              {
+                id: "lsa-scroll-1",
+                taskId: "99001",
+                script: "verify-rollout",
+                args: ["--prod"],
+                requestedAt: "2026-11-17T00:02:00Z",
+              },
+            ],
+          })
+        : route.continue(),
+    );
+    await page.route(/\/api\/tasks\/99001(\?.*)?$/, (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: task99001 })
+        : route.continue(),
+    );
+    await page.route(
+      /\/api\/tasks\/99001\/attempts\/1\/transcript(\?.*)?$/,
+      (route) =>
+        route.request().method() === "GET"
+          ? route.fulfill({ json: { transcript: transcriptLines } })
+          : route.continue(),
+    );
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/next/inbox");
+    const row = page
+      .getByTestId("queue-row")
+      .filter({ hasText: "verify-rollout" });
+    await expect(row).toBeVisible();
+    await row.click();
+
+    const insp = page.getByTestId("next-inbox-inspector");
+    const live = insp.getByTestId("inbox-live-transcript");
+    await expect(live).toBeVisible();
+    expect(await live.evaluate((el) => getComputedStyle(el).overflowY)).toBe(
+      "visible",
+    );
+    await expect
+      .poll(() =>
+        scrolling(page, [
+          '[data-testid="next-inbox-inspector"] .convo-thread',
+          '[data-testid="next-inbox-inspector"] .inbox-live-transcript',
+        ]),
+      )
+      .toEqual(['[data-testid="next-inbox-inspector"] .convo-thread']);
   });
 
   test("stacked Context at 390x844: picking a document brings its detail into view", async ({
@@ -298,15 +512,49 @@ test.describe("task conversation has one scroller", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/next/context?tab=documents");
     const split = page.getByTestId("context-split");
+    const detail = page.locator(".ctx-detail-pane");
     await expect(split).toBeVisible();
+    await expect(
+      page.locator('[data-testid="doc-row-notes-03"]'),
+    ).toBeVisible();
+
+    // Only .ctx-split scrolls, and before selection .ctx-detail-pane sits below the viewport.
+    await expect
+      .poll(() =>
+        scrolling(page, [
+          ".ctx-split",
+          ".ctx-list-pane",
+          ".ctx-list",
+          ".ctx-detail-pane",
+        ]),
+      )
+      .toEqual([".ctx-split"]);
+    expect((await detail.boundingBox()).y).toBeGreaterThanOrEqual(844);
+
     await page.locator('[data-testid="doc-row-notes-03"] .ctx-row-btn').click();
     await expect
       .poll(async () => {
         const [s, d] = await Promise.all([
           split.boundingBox(),
-          page.locator(".ctx-detail-pane").boundingBox(),
+          detail.boundingBox(),
         ]);
-        return Math.abs(d.y - s.y) < 2;
+        return d.y >= 0 && d.y < 844 && Math.abs(d.y - s.y) < 2;
+      })
+      .toBe(true);
+
+    // Tapping + New pack from the top of the list also reveals the detail pane.
+    await split.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    expect((await detail.boundingBox()).y).toBeGreaterThanOrEqual(844);
+    await page.getByTestId("doc-new-btn").click();
+    await expect
+      .poll(async () => {
+        const [s, d] = await Promise.all([
+          split.boundingBox(),
+          detail.boundingBox(),
+        ]);
+        return d.y >= 0 && d.y < 844 && Math.abs(d.y - s.y) < 2;
       })
       .toBe(true);
   });

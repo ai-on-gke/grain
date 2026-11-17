@@ -279,6 +279,10 @@ export interface Task {
   updatedAt?: string;
   proposedBy?: string;
   questionSummary?: string;
+  // The one line a run gave the closing note an awaiting_reply task
+  // rests on (comment_on_issue's summary); set only when the task asked
+  // nothing (pkg/ui Task.NoteSummary).
+  noteSummary?: string;
   questionCommentId?: number;
   awaitingAccess?: boolean;
   turnStopped?: boolean;
@@ -557,6 +561,10 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
+  // kind is admitted (ui.CapabilityMethod.Policy).
+  policy?: Record<string, string>;
   aliasOf?: string[];
 }
 

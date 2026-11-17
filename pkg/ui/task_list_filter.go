@@ -511,12 +511,7 @@ func sortTasksByFiling(tasks []Task) {
 // closed task anyway lets a miss read only the open ones, which is not
 // kept: the cache holds the whole list or nothing.
 func (c *taskListCache) list(ctx context.Context, client *Client, openOnly bool) ([]Task, error) {
-	token := ""
-	if client.Store != nil {
-		if t, err := client.Store.ChangeToken(ctx); err == nil {
-			token = t
-		}
-	}
+	token := c.cacheToken(ctx, client)
 	if token != "" {
 		c.mu.Lock()
 		cached := c.token == token && c.tasks != nil

@@ -14,6 +14,22 @@
 
 import { test, expect } from "./fixtures.js";
 
+// settled waits until el's scroll position has stopped moving: a wheel
+// scroll animates, and a touch swipe coasts on after touchEnd, so reading
+// the position as soon as it first moves reads it mid-flight.
+async function settled(page, el) {
+  await expect
+    .poll(
+      async () => {
+        const a = await el.evaluate((n) => n.scrollTop);
+        await page.waitForTimeout(250);
+        return (await el.evaluate((n) => n.scrollTop)) - a;
+      },
+      { timeout: 10000 },
+    )
+    .toBe(0);
+}
+
 test("Director drawer keeps long history scrollable and composer visible @phone", async ({
   page,
   isMobile,
@@ -43,7 +59,9 @@ test("Director drawer keeps long history scrollable and composer visible @phone"
   await expect
     .poll(() => tasksBody.evaluate((el) => el.scrollTop))
     .toBeGreaterThan(0);
+  await settled(page, tasksBody);
   await page.getByTestId("director-trigger").click();
+  await settled(page, tasksBody);
   const mainScroll = await tasksBody.evaluate((el) => el.scrollTop);
   const drawer = page.getByTestId("director-drawer");
   const thread = drawer.getByRole("log");
@@ -88,6 +106,9 @@ test("Director drawer keeps long history scrollable and composer visible @phone"
     await expect
       .poll(() => thread.evaluate((el) => el.scrollTop))
       .toBeGreaterThan(10);
+    // A touch swipe flings: wait for the thread to come to rest, or the
+    // coast carries it off the top again after it is put back there.
+    await settled(page, thread);
     await expect
       .poll(async () => {
         await thread.evaluate((el) =>

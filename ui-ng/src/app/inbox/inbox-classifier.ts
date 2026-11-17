@@ -105,6 +105,10 @@ export interface InboxEntry {
   summary: string;
   pillLabel: string;
   pillTone: Tone;
+  // iconKind, when set, is the status icon's kind in place of kind: a
+  // closing note files under "reply" but asked nothing, so it is not
+  // drawn with the reply shape.
+  iconKind?: string;
   at: string | null;
   // rationale is the "why this needs a person" line the inspector shows.
   rationale: string;
@@ -679,12 +683,23 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       return e;
     }
     const e = taskEntry(t, "reply", "reply");
-    e.pillLabel = "Needs reply";
-    e.pillTone = "reply";
-    e.summary =
-      plainMarkdownSummary(t.questionSummary || "") ||
-      "Answered on the task itself.";
-    e.rationale = "The run is parked until somebody answers it.";
+    if (!t.questionSummary && t.noteSummary) {
+      // A closing note (comment_on_issue) asked nothing: the row reads
+      // as that note, by the line its run gave it, not as a question.
+      e.pillLabel = "Note";
+      e.pillTone = "neutral";
+      e.iconKind = "note";
+      e.summary = plainMarkdownSummary(t.noteSummary) || t.noteSummary;
+      e.rationale =
+        "The run finished with a note and asked nothing. Acknowledge to close it, or reply to run it again.";
+    } else {
+      e.pillLabel = "Needs reply";
+      e.pillTone = "reply";
+      e.summary =
+        plainMarkdownSummary(t.questionSummary || "") ||
+        "Answered on the task itself.";
+      e.rationale = "The run is parked until somebody answers it.";
+    }
     e.actions.push(
       taskAction(
         t,
