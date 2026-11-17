@@ -77,6 +77,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,7 +106,11 @@ type scaleConfig struct {
 	seedWorkers             int
 
 	// Budgets, at p95. Zero reports the number without judging it.
-	tickP95, dispatchP95, apiP95, writeP95 time.Duration
+	tickP95, dispatchP95, apiP95, listAPIP95, writeP95 time.Duration
+	// allowUnansweredLists lets the whole-store list endpoints named in
+	// scaleUnansweredListAllowance finish with only api-unanswered/ samples
+	// until their SQL paging/filtering follow-up lands.
+	allowUnansweredLists bool
 	// tickTimeout bounds one RunCycle, and requestTimeout one API call;
 	// either running out is an error, not a slow sample.
 	tickTimeout, requestTimeout time.Duration
@@ -118,7 +123,7 @@ type scaleConfig struct {
 func defaultScaleConfig() scaleConfig {
 	return scaleConfig{
 		total: 50000, waiting: 1000, running: 100, repos: 20,
-		duration: 3 * time.Minute, runLifetime: 8 * time.Second, heartbeat: 500 * time.Millisecond,
+		duration: 4 * time.Minute, runLifetime: 8 * time.Second, heartbeat: 500 * time.Millisecond,
 		apiWorkers: 1, sseClients: 10, seedWorkers: 8,
 		// Ceilings, not targets. At this shape today's code takes most of
 		// a minute to dispatch, up to two to tick and nearly two to list
@@ -127,14 +132,19 @@ func defaultScaleConfig() scaleConfig {
 		// nothing. These sit at about three times what a 7-vCPU host
 		// measured, for a 4-vCPU
 		// hosted runner: what they catch is a regression on top of where
-		// things are -- a tick or a list that gets several times worse, an
-		// endpoint that stops answering, a store error, a slot that stops
-		// being refilled. Each follow-up that fixes a bottleneck is meant
-		// to lower the budget it moved; the doc names the targets.
+		// things are -- a tick or an endpoint that gets several times
+		// worse, an endpoint that stops answering, a store error, a slot
+		// that stops being refilled. duration (4m) stays above apiP95 (2m)
+		// so cutOff catches an in-flight request that stalls past budget,
+		// while the whole-store list endpoints that cannot answer under 7x
+		// concurrency today are named in scaleUnansweredListAllowance until
+		// follow-up #3 lands. Each follow-up that fixes a bottleneck is
+		// meant to lower the budget it moved; the doc names the targets.
 		tickP95: 6 * time.Minute, dispatchP95: 3 * time.Minute,
-		apiP95: 6 * time.Minute, writeP95: 20 * time.Second,
-		minCompletions: 100,
-		tickTimeout:    8 * time.Minute, requestTimeout: 8 * time.Minute,
+		apiP95: 2 * time.Minute, listAPIP95: 6 * time.Minute, writeP95: 20 * time.Second,
+		allowUnansweredLists: true,
+		minCompletions:       100,
+		tickTimeout:          8 * time.Minute, requestTimeout: 8 * time.Minute,
 	}
 }
 
@@ -154,9 +164,13 @@ func scaleConfigFromEnv(t *testing.T) scaleConfig {
 	envDuration(t, "GRAIN_SCALE_TICK_P95", &cfg.tickP95)
 	envDuration(t, "GRAIN_SCALE_DISPATCH_P95", &cfg.dispatchP95)
 	envDuration(t, "GRAIN_SCALE_API_P95", &cfg.apiP95)
+	envDuration(t, "GRAIN_SCALE_LIST_API_P95", &cfg.listAPIP95)
 	envDuration(t, "GRAIN_SCALE_WRITE_P95", &cfg.writeP95)
 	envDuration(t, "GRAIN_SCALE_TICK_TIMEOUT", &cfg.tickTimeout)
 	envDuration(t, "GRAIN_SCALE_REQUEST_TIMEOUT", &cfg.requestTimeout)
+	if v := strings.TrimSpace(os.Getenv("GRAIN_SCALE_STRICT_LISTS")); v != "" && v != "0" && !strings.EqualFold(v, "false") {
+		cfg.allowUnansweredLists = false
+	}
 	return cfg
 }
 
@@ -588,30 +602,34 @@ func scaleRun(runCtx context.Context, store *model.Store, cfg scaleConfig, sd *s
 	})
 }
 
-func scaleAPIWorker(ctx context.Context, base, endpoint string, timeout, budget time.Duration, sd *scaleSeed, rng *rand.Rand, stats *scaleStats) {
+func scaleAPIWorker(ctx context.Context, base, endpoint string, timeout, budget time.Duration, allowUnanswered bool, sd *scaleSeed, rng *rand.Rand, stats *scaleStats) {
 	client := &http.Client{Timeout: timeout}
 	cursor := ""
-	// A request the end of the run cuts off is no sample, unless it had
-	// already been waiting longer than its budget: then it is the slowest
-	// sample of all, and dropping it would let an endpoint that never
-	// answers pass.
-	// One under its budget is still reported, under api-unanswered/, with
-	// how long it had waited: an endpoint with no api/ samples at all and
-	// one of those is one that did not answer once in the whole run.
+	// A request the end of the run cuts off is no sample, unless it falls
+	// outside scaleUnansweredListAllowance and had already been waiting
+	// longer than its budget: then it is the slowest sample of all, and
+	// dropping it would let an endpoint that stalls mid-run pass.
+	// One under its budget (or covered by the list allowance) is recorded
+	// under api-unanswered/, with how long it had waited, and judgeScale
+	// fails any unallowed endpoint that finished with no api/ samples.
+	cutOffBudget := budget
+	if allowUnanswered {
+		cutOffBudget = 0
+	}
 	cutOff := func(name string, start time.Time) {
 		waited := time.Since(start)
-		if budget > 0 && waited > budget {
-			stats.fail("api/"+name, fmt.Errorf("still unanswered after %v when the run ended", waited.Round(time.Second)))
+		if cutOffBudget > 0 && waited > cutOffBudget {
+			stats.fail("api/"+name, fmt.Errorf("still unanswered after %v when the run ended (budget %v)", waited.Round(time.Second), cutOffBudget))
 			return
 		}
 		stats.lat("api-unanswered/" + name).Record(waited)
 	}
-	get := func(name, path string) []byte {
+	get := func(reqCtx context.Context, name, path string) []byte {
 		start := time.Now()
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+		req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, base+path, nil)
 		resp, err := client.Do(presentAccessCode(req))
 		if err != nil {
-			if ctx.Err() == nil {
+			if reqCtx.Err() == nil {
 				stats.fail("api/"+name, err)
 			} else {
 				cutOff(name, start)
@@ -620,7 +638,7 @@ func scaleAPIWorker(ctx context.Context, base, endpoint string, timeout, budget 
 		}
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if ctx.Err() != nil {
+		if reqCtx.Err() != nil {
 			cutOff(name, start)
 			return nil
 		}
@@ -633,37 +651,45 @@ func scaleAPIWorker(ctx context.Context, base, endpoint string, timeout, budget 
 		}
 		return body
 	}
-	for ctx.Err() == nil {
+	// When no latency budget is set (TestScaleSmoke's 3s run under -race),
+	// let each required endpoint finish at least one request up to
+	// requestTimeout before honouring runCtx cancellation, just as the tick
+	// loop runs at least one tick.
+	for first := true; (first && budget == 0 && !allowUnanswered) || ctx.Err() == nil; first = false {
+		reqCtx := ctx
+		if first && budget == 0 && !allowUnanswered {
+			reqCtx = context.WithoutCancel(ctx)
+		}
 		id := sd.historyIDs[rng.IntN(len(sd.historyIDs))]
 		switch endpoint {
 		case "tasks-default":
-			get(endpoint, "/api/tasks")
+			get(reqCtx, endpoint, "/api/tasks")
 		case "tasks-state-queued":
-			get(endpoint, "/api/tasks?state=queued")
+			get(reqCtx, endpoint, "/api/tasks?state=queued")
 		case "tasks-state-running":
-			get(endpoint, "/api/tasks?state=running,awaiting_reply")
+			get(reqCtx, endpoint, "/api/tasks?state=running,awaiting_reply")
 		case "tasks-search":
-			get(endpoint, "/api/tasks?q="+url.QueryEscape(sd.searchTerm))
+			get(reqCtx, endpoint, "/api/tasks?q="+url.QueryEscape(sd.searchTerm))
 		case "tasks-cursor-page":
 			var page struct {
 				NextCursor string `json:"nextCursor"`
 			}
-			body := get(endpoint, "/api/tasks?limit=100&cursor="+url.QueryEscape(cursor))
+			body := get(reqCtx, endpoint, "/api/tasks?limit=100&cursor="+url.QueryEscape(cursor))
 			if json.Unmarshal(body, &page) == nil {
 				cursor = page.NextCursor
 			}
 		case "tasks-summary":
-			get(endpoint, "/api/tasks?fields=summary&limit=50")
+			get(reqCtx, endpoint, "/api/tasks?fields=summary&limit=50")
 		case "task-detail":
-			get(endpoint, "/api/tasks/"+id)
+			get(reqCtx, endpoint, "/api/tasks/"+id)
 		case "task-conversation":
-			get(endpoint, "/api/tasks/"+id+"/messages")
+			get(reqCtx, endpoint, "/api/tasks/"+id+"/messages")
 		case "metrics":
-			get(endpoint, "/api/metrics")
+			get(reqCtx, endpoint, "/api/metrics")
 		case "states":
-			get(endpoint, "/api/tasks/states")
+			get(reqCtx, endpoint, "/api/tasks/states")
 		case "inbox":
-			get(endpoint, "/api/inbox")
+			get(reqCtx, endpoint, "/api/inbox")
 		}
 	}
 }
@@ -675,6 +701,36 @@ func scaleAPIWorker(ctx context.Context, base, endpoint string, timeout, budget 
 var scaleEndpoints = []string{
 	"tasks-default", "tasks-state-queued", "tasks-state-running", "tasks-search", "tasks-cursor-page",
 	"tasks-summary", "task-detail", "task-conversation", "metrics", "states", "inbox",
+}
+
+// scaleUnansweredListAllowance names the whole-store list endpoints that
+// rebuild all 50,000 tasks per request without SQL paging or filtering and
+// whose cache is invalidated on every live-run write
+// (docs/test-runs/2026-11-15-scale-50k.md, limit #3 and follow-up #3 from
+// task 5994: "GET /api/tasks / /api/inbox: page and filter in SQL, and stop
+// live-run activity from invalidating the list cache"). With one client per
+// endpoint driving all seven at once, none answered in the 50k runs. While an
+// endpoint remains here (and cfg.allowUnansweredLists is true), judgeScale
+// allows it to finish with only api-unanswered/ samples and checks any
+// completed response against cfg.listAPIP95, while still failing on HTTP or
+// transport errors. Remove entries as follow-up #3 lands, or set
+// GRAIN_SCALE_STRICT_LISTS=1 to hold every endpoint to cfg.apiP95.
+var scaleUnansweredListAllowance = map[string]string{
+	"tasks-default":       "follow-up #3 (task 5994): GET /api/tasks whole-store rebuild and cache invalidation on live-run writes",
+	"tasks-state-queued":  "follow-up #3 (task 5994): GET /api/tasks?state= whole-store load without SQL filtering",
+	"tasks-state-running": "follow-up #3 (task 5994): GET /api/tasks?state= whole-store load without SQL filtering",
+	"tasks-search":        "follow-up #3 (task 5994): GET /api/tasks?q= whole-store scan in Go",
+	"tasks-cursor-page":   "follow-up #3 (task 5994): GET /api/tasks?cursor= whole-store load before paging",
+	"tasks-summary":       "follow-up #3 (task 5994): GET /api/tasks?fields=summary whole-store load before projection",
+	"inbox":               "follow-up #3 (task 5994): GET /api/inbox whole-store task load",
+}
+
+func (cfg scaleConfig) allowsUnansweredEndpoint(endpoint string) (string, bool) {
+	if !cfg.allowUnansweredLists {
+		return "", false
+	}
+	reason, ok := scaleUnansweredListAllowance[endpoint]
+	return reason, ok
 }
 
 // scaleSSEClient holds one /api/events stream open for the run and
@@ -821,15 +877,6 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 	}), store))
 
 	var bg sync.WaitGroup
-	for i := 0; i < cfg.apiWorkers; i++ {
-		for j, endpoint := range scaleEndpoints {
-			bg.Add(1)
-			go func(seed uint64) {
-				defer bg.Done()
-				scaleAPIWorker(runCtx, server, endpoint, cfg.requestTimeout, cfg.apiP95, sd, rand.New(rand.NewPCG(seed, 3)), stats)
-			}(uint64(100 + i*len(scaleEndpoints) + j))
-		}
-	}
 	for i := 0; i < cfg.sseClients; i++ {
 		bg.Add(1)
 		go func() {
@@ -856,7 +903,9 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 		CycleTimes: cycles,
 	}
 
-	// Fill the slots before the first tick, so the tick never sees one free.
+	// Fill the slots before the first tick and before the API workers
+	// start, so the tick never sees a slot free and API latencies are
+	// measured over the run phase rather than setup.
 	dispatchOnce := func() {
 		var ds []dispatch.Dispatch
 		stats.timed("dispatch/cycle", func() error {
@@ -878,6 +927,16 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 	time.AfterFunc(cfg.duration, stopRun)
 	if got := live.Load(); got < int64(cfg.running) {
 		t.Errorf("first dispatch filled %d of %d slots from a queue of %d", got, cfg.running, census[model.StateQueued])
+	}
+	for i := 0; i < cfg.apiWorkers; i++ {
+		for j, endpoint := range scaleEndpoints {
+			_, allowUnanswered := cfg.allowsUnansweredEndpoint(endpoint)
+			bg.Add(1)
+			go func(seed uint64, endpoint string, allowUnanswered bool) {
+				defer bg.Done()
+				scaleAPIWorker(runCtx, server, endpoint, cfg.requestTimeout, cfg.apiP95, allowUnanswered, sd, rand.New(rand.NewPCG(seed, 3)), stats)
+			}(uint64(100+i*len(scaleEndpoints)+j), endpoint, allowUnanswered)
+		}
 	}
 
 	bg.Add(1)
@@ -1070,17 +1129,37 @@ func reportScale(t *testing.T, backend string, cfg scaleConfig, stats *scaleStat
 	}
 }
 
-func judgeScale(t *testing.T, cfg scaleConfig, stats *scaleStats) {
+type scaleReporter interface {
+	Errorf(format string, args ...any)
+	Logf(format string, args ...any)
+}
+
+func (s *scaleStats) latStats(name string) LatencyStats {
+	s.mu.Lock()
+	l := s.latencies[name]
+	s.mu.Unlock()
+	if l == nil {
+		return LatencyStats{}
+	}
+	return l.Stats()
+}
+
+func judgeScale(t scaleReporter, cfg scaleConfig, stats *scaleStats) {
 	stats.mu.Lock()
-	for n, e := range stats.errors {
-		t.Errorf("%s: %d error(s), first: %s", n, e, stats.errSample[n])
+	errNames := make([]string, 0, len(stats.errors))
+	for n := range stats.errors {
+		errNames = append(errNames, n)
+	}
+	sort.Strings(errNames)
+	for _, n := range errNames {
+		t.Errorf("%s: %d error(s), first: %s", n, stats.errors[n], stats.errSample[n])
 	}
 	stats.mu.Unlock()
 	budget := func(name string, p95 time.Duration) {
 		if p95 == 0 {
 			return
 		}
-		if got := stats.lat(name).Stats(); got.Count > 0 && got.P95 > p95 {
+		if got := stats.latStats(name); got.Count > 0 && got.P95 > p95 {
 			t.Errorf("%s: p95 %v over its %v budget (%s)", name, got.P95, p95, got)
 		}
 	}
@@ -1089,21 +1168,157 @@ func judgeScale(t *testing.T, cfg scaleConfig, stats *scaleStats) {
 	for _, n := range []string{"run/heartbeat", "run/transcript", "run/comment", "run/finish"} {
 		budget(n, cfg.writeP95)
 	}
+	if cfg.apiWorkers > 0 {
+		for _, ep := range scaleEndpoints {
+			name := "api/" + ep
+			got := stats.latStats(name)
+			unans := stats.latStats("api-unanswered/" + ep)
+			reason, allowed := cfg.allowsUnansweredEndpoint(ep)
+			if got.Count == 0 {
+				if allowed {
+					t.Logf("%s: 0 completed responses in %v (unanswered=%d max-wait=%v); allowed (%s)",
+						name, cfg.duration, unans.Count, unans.Max, reason)
+				} else if unans.Count > 0 {
+					t.Errorf("%s: no response completed within %v (%d in-flight request(s) under api-unanswered/%s, max wait %v)",
+						name, cfg.duration, unans.Count, ep, unans.Max)
+				} else {
+					t.Errorf("%s: no response completed within %v", name, cfg.duration)
+				}
+				continue
+			}
+			epBudget := cfg.apiP95
+			if allowed && cfg.apiP95 > 0 && cfg.listAPIP95 > 0 {
+				epBudget = cfg.listAPIP95
+			}
+			budget(name, epBudget)
+		}
+	}
 	stats.mu.Lock()
-	var apis []string
+	var extraAPIs []string
 	for n := range stats.latencies {
-		if strings.HasPrefix(n, "api/") {
-			apis = append(apis, n)
+		if ep, ok := strings.CutPrefix(n, "api/"); ok && !slices.Contains(scaleEndpoints, ep) {
+			extraAPIs = append(extraAPIs, n)
 		}
 	}
 	stats.mu.Unlock()
-	for _, n := range apis {
+	sort.Strings(extraAPIs)
+	for _, n := range extraAPIs {
 		budget(n, cfg.apiP95)
 	}
-	if got := stats.lat("orchestrator/tick").Stats().Count; got == 0 {
+	if got := stats.latStats("orchestrator/tick").Count; got == 0 {
 		t.Errorf("orchestrator: no tick finished within %v", cfg.duration)
 	}
 	if got := stats.count("runs/completed").Load(); got < int64(cfg.minCompletions) {
 		t.Errorf("continuous dispatch: %d run(s) completed and were replaced, want at least %d", got, cfg.minCompletions)
+	}
+}
+
+type recordedScaleReport struct {
+	errors []string
+	logs   []string
+}
+
+func (r *recordedScaleReport) Errorf(format string, args ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
+}
+
+func (r *recordedScaleReport) Logf(format string, args ...any) {
+	r.logs = append(r.logs, fmt.Sprintf(format, args...))
+}
+
+func TestScaleJudgeCatchesUnansweredEndpoints(t *testing.T) {
+	t.Parallel()
+	def := defaultScaleConfig()
+	if def.apiP95 <= 0 || def.duration <= def.apiP95 {
+		t.Fatalf("defaultScaleConfig duration (%v) must exceed apiP95 (%v) so cutOff is reachable", def.duration, def.apiP95)
+	}
+	for ep := range scaleUnansweredListAllowance {
+		if !slices.Contains(scaleEndpoints, ep) {
+			t.Errorf("scaleUnansweredListAllowance names unknown endpoint %q", ep)
+		}
+	}
+
+	healthyStats := func() *scaleStats {
+		s := newScaleStats()
+		s.lat("orchestrator/tick").Record(10 * time.Millisecond)
+		s.count("runs/completed").Store(int64(def.minCompletions))
+		for _, ep := range scaleEndpoints {
+			if _, allowed := def.allowsUnansweredEndpoint(ep); allowed {
+				s.lat("api-unanswered/" + ep).Record(3 * time.Minute)
+				continue
+			}
+			s.lat("api/" + ep).Record(50 * time.Millisecond)
+		}
+		return s
+	}
+
+	// Default 50k config: allowed whole-store list endpoints with only
+	// api-unanswered/ samples pass (and are logged), while every other
+	// endpoint has answered.
+	rep := &recordedScaleReport{}
+	judgeScale(rep, def, healthyStats())
+	if len(rep.errors) != 0 {
+		t.Fatalf("healthy stats with list allowance failed: %v", rep.errors)
+	}
+	if len(rep.logs) != len(scaleUnansweredListAllowance) {
+		t.Fatalf("logged %d unanswered-list allowances, want %d: %v", len(rep.logs), len(scaleUnansweredListAllowance), rep.logs)
+	}
+
+	// A non-allowed endpoint with only api-unanswered/ (or no sample at all)
+	// fails judgeScale even when cutOff did not fire.
+	missingMetrics := healthyStats()
+	delete(missingMetrics.latencies, "api/metrics")
+	missingMetrics.lat("api-unanswered/metrics").Record(90 * time.Second)
+	rep = &recordedScaleReport{}
+	judgeScale(rep, def, missingMetrics)
+	if len(rep.errors) != 1 || !strings.Contains(rep.errors[0], "api/metrics: no response completed") || !strings.Contains(rep.errors[0], "api-unanswered/metrics") {
+		t.Fatalf("expected api/metrics unanswered failure, got: %v", rep.errors)
+	}
+
+	// Disabling the list allowance (GRAIN_SCALE_STRICT_LISTS=1, or Smoke)
+	// fails every unanswered list endpoint.
+	strict := def
+	strict.allowUnansweredLists = false
+	rep = &recordedScaleReport{}
+	judgeScale(rep, strict, healthyStats())
+	if len(rep.errors) != len(scaleUnansweredListAllowance) {
+		t.Fatalf("strict mode reported %d error(s), want %d: %v", len(rep.errors), len(scaleUnansweredListAllowance), rep.errors)
+	}
+
+	// cutOff path: an endpoint that answers once and then stalls past
+	// apiP95 before runCtx cancels fails via stats.fail.
+	var calls atomic.Int64
+	stallRelease := make(chan struct{})
+	defer close(stallRelease)
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		}
+		select {
+		case <-r.Context().Done():
+		case <-stallRelease:
+		}
+	}))
+	stalledStats := newScaleStats()
+	stalledStats.lat("orchestrator/tick").Record(10 * time.Millisecond)
+	stalledStats.count("runs/completed").Store(1)
+	for _, ep := range scaleEndpoints {
+		if ep != "metrics" {
+			stalledStats.lat("api/" + ep).Record(5 * time.Millisecond)
+		}
+	}
+	runCtx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	scaleAPIWorker(runCtx, srv, "metrics", time.Second, 40*time.Millisecond, false,
+		&scaleSeed{historyIDs: []string{"s000001"}}, rand.New(rand.NewPCG(1, 2)), stalledStats)
+	cutOffCfg := scaleConfig{
+		duration: 120 * time.Millisecond, apiWorkers: 1, apiP95: 40 * time.Millisecond, minCompletions: 1,
+	}
+	rep = &recordedScaleReport{}
+	judgeScale(rep, cutOffCfg, stalledStats)
+	if len(rep.errors) != 1 || !strings.Contains(rep.errors[0], "api/metrics") || !strings.Contains(rep.errors[0], "still unanswered") {
+		t.Fatalf("expected cutOff failure on stalled 2nd metrics request, got: %v", rep.errors)
 	}
 }
