@@ -42,19 +42,27 @@ g-task-page {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
   font-size: 13px;
 }
 
 .close-reason {
+  box-sizing: border-box;
   min-width: 0;
   width: 220px;
   max-width: 100%;
-  padding: 4px 8px;
+  height: 32px;
+  padding: 0 8px;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid var(--md-sys-color-outline);
   background: var(--md-sys-color-surface-container-lowest);
   color: var(--md-sys-color-on-surface);
   font: inherit;
+}
+
+.close-reason::placeholder {
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .task-layout {
@@ -139,6 +147,7 @@ g-task-page {
   padding-left: 18px;
   font-size: 12px;
   line-height: 20px;
+  overflow-wrap: anywhere;
 }
 
 .question-card {
