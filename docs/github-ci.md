@@ -30,11 +30,33 @@ rather than counting it twice.
 | `run_url`, `job_url` | GitHub's pages for the run and the job |
 | `output` | the check run's output (title, summary, text), bounded to 16 KiB |
 | `failure_tail` | for a **failed** job only: the bounded tail of its log (`tail_source: log`) or, for a check that is not an Actions job, its output (`tail_source: output`) |
+| `failed_tests` | the tests that tail names as failing, one per line: `--- FAIL:` lines by full name, Playwright `✘` lines as `spec file › title path`. Parsed once when the tail arrives, and kept after the tail is gone |
+| `history_only` | a failure kept past its branch's other jobs for `failed_tests` alone; the metrics' outcome rates leave it out |
 | `via` | `webhook` or `poll` |
 
 grain's own checks are not recorded: `grain/review` and grain CI's
 mirrored verdicts are grain CI's results, and those are measured already.
-Rows are kept for 14 days.
+Rows are kept in two tiers (`model.GitHubCIPrune`, applied hourly by the
+`github-ci-tails` reconciler):
+
+- **Eight weeks:** every job on a default branch (`main`, `master`, and
+  whatever default branch the workflow-run poll read) and on a release
+  candidate tag (`v*-rc.*`, Stage 1), and every failed job anywhere. This
+  is the verdict history a weekly report's time to repair and flake
+  baseline is read from. Past 14 days these rows are compacted: the
+  failure tail and check output are cleared, and the verdict, times and
+  `failed_tests` stay.
+- **14 days:** everything else, which is a task branch's jobs that did
+  not fail.
+
+`GET /api/ci/runs?provider=github-actions` reads this record beside the
+forge's own listing. The forge listing pages at most 500 runs
+(`github.MaxActionsRunsLimit`), newest first. `since` and `until` are
+passed to it as `?created=`, and `since`, `until` and `ref` narrow the
+record in the query rather than afterwards, so an older window reaches
+back past the newest 500. In a sandbox, `grain ci test-history` counts
+a test's failures over the record's failed jobs that name it, as well as
+over the newest runs it lists.
 
 ## How it is collected
 

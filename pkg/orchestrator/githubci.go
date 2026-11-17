@@ -66,11 +66,73 @@ const (
 	// gitHubCITailMaxAge is how old a failure may be and still have its
 	// log read: past the shared-fault window nobody will correlate it.
 	gitHubCITailMaxAge = 6 * time.Hour
-	// gitHubCIRetention is how long a recorded job is kept.
+	// gitHubCIRetention is how long a recorded job keeps everything it
+	// was recorded with: a task branch's passing jobs, and a failed job's
+	// log tail and check output. Past it, what is left is the verdict
+	// history (gitHubCIVerdictRetention).
 	gitHubCIRetention = 14 * 24 * time.Hour
+	// gitHubCIVerdictRetention is how long the verdicts of the default
+	// branch and of Stage 1 (release candidate tags), and every failed
+	// job's verdict and FailedTests, are kept. Eight weeks, so that a
+	// weekly report's four-week baseline of time to repair and of flaky
+	// tests is read from grain's own record whatever the forge's listing
+	// reaches (grain/task-5274); a few hundred bytes a job, against the
+	// 16KiB a tail can be.
+	gitHubCIVerdictRetention = 8 * 7 * 24 * time.Hour
 	// gitHubCIPruneEvery is how often retention is applied.
 	gitHubCIPruneEvery = time.Hour
 )
+
+// gitHubCIKeptRefs are the refs whose every recorded job lives as long as
+// a verdict does: "main" and "master", every base branch a release is
+// tracked on, and the default branch of each repository on ci_mode:
+// github, read from the forge (gitHubBasePollDefaultBranch, cached, so at
+// most one call per repository per gitHubBasePollDefaultsFor).
+//
+// complete is false when any of those default branches could not be read
+// -- no forge client, a low API budget, a failed call -- and then the
+// caller must not forget anything by the short window: a default branch
+// that is neither main nor master, left out of the list, would lose its
+// weeks of verdicts to one prune. In-memory knowledge alone is not enough
+// for that, since a restart empties it.
+func gitHubCIKeptRefs(ctx context.Context, deps Deps, now time.Time) (refs []string, complete bool) {
+	refs = []string{"main", "master"}
+	seen := map[string]bool{"main": true, "master": true}
+	add := func(ref string) {
+		if ref = strings.TrimSpace(ref); ref != "" && !seen[ref] {
+			seen[ref] = true
+			refs = append(refs, ref)
+		}
+	}
+	complete = true
+	if brel, err := deps.Store.ListBaseBranchRelease(ctx); err == nil {
+		for _, row := range brel {
+			add(row.Branch)
+		}
+	} else {
+		complete = false
+	}
+	configs, err := deps.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return refs, false
+	}
+	for _, c := range configs {
+		if c.CIMode != model.CIModeGitHub {
+			continue
+		}
+		if deps.Client == nil || gitHubCIBudgetLow(now) {
+			complete = false
+			continue
+		}
+		def, err := gitHubBasePollDefaultBranch(deps, c.Repo, now)
+		if err != nil || def == "" {
+			complete = false
+			continue
+		}
+		add(def)
+	}
+	return refs, complete
+}
 
 // gitHubCIBudgetLow is github.BudgetLow, a variable so a test can say the
 // budget is low without spending one.
@@ -254,7 +316,14 @@ func reconcileGitHubCITails(ctx context.Context, deps Deps, now time.Time) error
 	}
 	ledger.mu.Unlock()
 	if prune {
-		if _, err := deps.Store.PruneGitHubCIJobs(ctx, now.Add(-gitHubCIRetention)); err != nil {
+		keep, complete := gitHubCIKeptRefs(ctx, deps, now)
+		p := model.GitHubCIPrune{Before: now.Add(-gitHubCIVerdictRetention), KeepRefs: keep}
+		if complete {
+			// Only with every default branch known: otherwise this cycle
+			// forgets by the long window alone, and the next one tries again.
+			p.Compact = now.Add(-gitHubCIRetention)
+		}
+		if _, err := deps.Store.PruneGitHubCIJobs(ctx, p); err != nil {
 			errs = append(errs, err)
 		}
 	}

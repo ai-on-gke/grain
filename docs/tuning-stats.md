@@ -174,9 +174,12 @@ controller, its bounds and its targets.
   so a long window covers however much of it is still stored. The buckets
   show it -- the oldest go empty -- and `jobs` is the denominator to read
   every share against.
-- **GitHub CI rows** are kept 14 days (docs/github-ci.md), so a longer
-  window's `github_ci` covers the last fortnight only; `jobs` is the
-  denominator to read it against.
+- **GitHub CI rows** are kept 14 days, and eight weeks on default
+  branches and release candidate tags (docs/github-ci.md). So a longer
+  window's `github_ci` covers the last fortnight of task branches and up
+  to eight weeks of the base branches. Failures kept past their branch's
+  passes (`history_only`) are not counted. `jobs` is the denominator to
+  read it against.
 - **Host rollups** are hourly, in memory, bounded by
   `sysstat.DefaultHistoryHours` (two weeks), a few kilobytes, and lost on
   restart.

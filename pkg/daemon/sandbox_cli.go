@@ -349,10 +349,11 @@ var errNoGitHubClientYet = errors.New(
 type sandboxExternalCI struct{}
 
 var (
-	_ ci.ExternalRuns        = sandboxExternalCI{}
-	_ ci.ExternalRunsCounter = sandboxExternalCI{}
-	_ ci.ExternalRunsRepos   = sandboxExternalCI{}
-	_ ci.ExternalAttempts    = sandboxExternalCI{}
+	_ ci.ExternalRuns         = sandboxExternalCI{}
+	_ ci.ExternalRunsCounter  = sandboxExternalCI{}
+	_ ci.ExternalRunsRepos    = sandboxExternalCI{}
+	_ ci.ExternalAttempts     = sandboxExternalCI{}
+	_ ci.ExternalTestFailures = sandboxExternalCI{}
 )
 
 func (sandboxExternalCI) ServesRepo(ctx context.Context, repo string) bool {
@@ -377,6 +378,18 @@ func (sandboxExternalCI) FindExternalRunsCounted(ctx context.Context, f ci.RunFi
 		return nil, 0, ""
 	}
 	return ci.FindExternalRunsCounted(ctx, client.ExternalCIRuns(), f, limit)
+}
+
+func (sandboxExternalCI) FindExternalTestFailures(ctx context.Context, f ci.RunFilter, test string) ([]ci.Run, string) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, ""
+	}
+	failures, ok := client.ExternalCIRuns().(ci.ExternalTestFailures)
+	if !ok {
+		return nil, ""
+	}
+	return failures.FindExternalTestFailures(ctx, f, test)
 }
 
 func (sandboxExternalCI) ExternalRun(ctx context.Context, id string) (ci.Run, bool, error) {

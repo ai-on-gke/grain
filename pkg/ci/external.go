@@ -43,6 +43,37 @@ type ExternalRuns interface {
 	ExternalJobLog(ctx context.Context, id, job string) (string, error)
 }
 
+// ExternalTestFailures is an optional extension of ExternalRuns: f.Repo's
+// runs that recorded a failure of test, newest first, over as far back as
+// the provider's record of failed jobs reaches -- weeks, where a listing
+// reaches the newest hundred runs. Each run carries only its jobs that
+// failed, so it says nothing of a pass; WithRecordedFailures adds them to
+// a listing's runs.
+type ExternalTestFailures interface {
+	FindExternalTestFailures(ctx context.Context, f RunFilter, test string) (runs []Run, note string)
+}
+
+// WithRecordedFailures is runs with every run of failures that names a
+// failure of test and is not among them already, and how many it added.
+// A run in both is the listing's, which has every job of it rather than
+// only the failed ones.
+func WithRecordedFailures(runs, failures []Run, test string) ([]Run, int) {
+	have := make(map[string]bool, len(runs))
+	for _, run := range runs {
+		have[run.ID] = true
+	}
+	added := 0
+	for _, run := range failures {
+		if have[run.ID] || QueryTestHistory([]Run{run}, test).Executions == 0 {
+			continue
+		}
+		have[run.ID] = true
+		runs = append(runs, run)
+		added++
+	}
+	return runs, added
+}
+
 // ExternalRunsCounter is an optional extension of ExternalRuns that reports
 // the total number of runs matching f before limit truncated them.
 type ExternalRunsCounter interface {

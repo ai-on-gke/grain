@@ -49,6 +49,8 @@ type fakeActions struct {
 	notFound bool
 	// logErr, when set, is every job log's answer.
 	logErr error
+	// queries is every runs listing it was asked, in order.
+	queries []github.ActionsRunsQuery
 }
 
 func (f *fakeActions) note(call, owner string) {
@@ -74,6 +76,9 @@ func (f *fakeActions) ListActionsRuns(owner, repo string, q github.ActionsRunsQu
 
 func (f *fakeActions) ListActionsRunsPage(owner, repo string, q github.ActionsRunsQuery) (github.ActionsRunsPage, error) {
 	f.note("runs", owner)
+	f.mu.Lock()
+	f.queries = append(f.queries, q)
+	f.mu.Unlock()
 	if f.notFound {
 		return github.ActionsRunsPage{NotFound: true}, nil
 	}
@@ -85,6 +90,9 @@ func (f *fakeActions) ListActionsRunsPage(owner, repo string, q github.ActionsRu
 	}
 	for _, r := range f.runs {
 		if q.Branch != "" && r.HeadBranch != q.Branch {
+			continue
+		}
+		if !q.Until.IsZero() && (r.StartedAt == nil || !r.StartedAt.Before(q.Until)) {
 			continue
 		}
 		if wfFiltered && !(ci.RunFilter{Workflow: w}).Matches(ci.Run{Actions: &ci.ActionsRun{Workflow: r.Path, WorkflowName: r.Name}}) {
