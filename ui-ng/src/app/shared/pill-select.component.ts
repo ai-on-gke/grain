@@ -91,7 +91,7 @@ let nextPillSelectId = 0;
           #menuEl
           [id]="menuId()"
           class="pop-menu pill-select-menu"
-          [class.align-left]="align() === 'left'"
+          [class.align-left]="align() === 'left' || autoAlignLeft()"
           [class.open-up]="openUp()"
           role="listbox"
           [attr.aria-label]="ariaLabel() || prefix() || placeholder()"
@@ -170,6 +170,7 @@ export class PillSelectComponent implements OnDestroy {
   }
 
   protected readonly open = signal(false);
+  protected readonly autoAlignLeft = signal(false);
   protected readonly menuId = computed(() =>
     this.testid() ? `${this.testid()}-menu` : this.fallbackId,
   );
@@ -212,6 +213,14 @@ export class PillSelectComponent implements OnDestroy {
   }
 
   private openMenu(): void {
+    const btn = this.btnEl()?.nativeElement;
+    this.autoAlignLeft.set(
+      Boolean(
+        btn &&
+        typeof btn.getBoundingClientRect === "function" &&
+        btn.getBoundingClientRect().right < 280,
+      ),
+    );
     this.open.set(true);
     this.zone.runOutsideAngular(() => {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
