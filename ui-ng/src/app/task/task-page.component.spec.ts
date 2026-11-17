@@ -1592,6 +1592,44 @@ describe("duration", () => {
     expect(q(f, '[data-testid="accept-findings-dialog"]')).toBeNull();
   });
 
+  it("hides Accept findings and drops 'or accept' for a limited role", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        { id: "ci", label: "CI", state: "passed" },
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          detail: "security review left findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "team/engineer",
+        roles: ["team/engineer"],
+        full: false,
+        scopes: ["tasks:read", "tasks:write", "dispatch:write"],
+      },
+    });
+    await settle(f);
+
+    expect(
+      q(f, '[data-testid="gate-security-review-accept-findings"]'),
+    ).toBeNull();
+    expect(q(f, '[data-testid="act-force-merge"]')).toBeNull();
+    expect(q(f, '[data-testid="gate-security-review-send-back"]')).toBeTruthy();
+    const needed = q(f, '[data-testid="whats-needed"]')!.textContent ?? "";
+    expect(needed).toContain("Fix it (send it back to the agent) to continue.");
+    expect(needed).not.toContain("or accept");
+  });
+
   it("points Force merge at Accept findings when a gate holds acceptable findings", async () => {
     const api = new FakeApi();
     api.detail = {

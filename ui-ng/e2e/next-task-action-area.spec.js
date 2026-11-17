@@ -272,6 +272,81 @@ test("the task page and the Inbox inspector offer the same actions", async ({
   ).toContainText("Fix or accept 1 review finding");
 });
 
+test("a limited role holding tasks:write is not offered Accept findings or told to accept", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const title = `Limited findings ${Date.now()}`;
+  const id = await fileTask(demoServer, accessCode, title);
+  await overlay(page, id, CASES["findings plus CI running"]);
+  await page.route(
+    (url) => url.pathname === "/api/config",
+    async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      const res = await route.fetch({ headers });
+      const body = await res.json();
+      await route.fulfill({
+        response: res,
+        json: {
+          ...body,
+          access: {
+            role: "team/engineer",
+            roles: ["team/engineer"],
+            full: false,
+            scopes: [
+              "boards:read",
+              "ci:read",
+              "dispatch:write",
+              "repos:read",
+              "schedules:read",
+              "settings:read",
+              "suites:read",
+              "tasks:read",
+              "tasks:write",
+              "templates:read",
+            ],
+          },
+        },
+      });
+    },
+  );
+
+  await page.goto(`task/${id}`);
+  const onPage = page.getByTestId("task-action-area");
+  await expect(onPage.getByTestId("gate-review-send-back")).toBeVisible();
+  await expect(onPage.getByTestId("gate-review-accept-findings")).toHaveCount(
+    0,
+  );
+  await expect(onPage.getByTestId("act-force-merge")).toHaveCount(0);
+  await expect(onPage.getByTestId("whats-needed")).toContainText(
+    "Code review left 1 finding. Fix it (send it back to the agent) to continue. CI is still running.",
+  );
+
+  await page.goto("inbox");
+  const inboxRow = page.getByTestId("queue-row").filter({ hasText: title });
+  await expect(inboxRow).toContainText("Fix 1 review finding.");
+  await expect(inboxRow).not.toContainText("or accept");
+  await inboxRow.locator(".row-main").click();
+  const inInbox = page
+    .getByTestId("next-inbox-inspector")
+    .getByTestId("task-action-area");
+  await expect(inInbox.getByTestId("gate-review-send-back")).toBeVisible();
+  await expect(inInbox.getByTestId("gate-review-accept-findings")).toHaveCount(
+    0,
+  );
+  await expect(inInbox.getByTestId("whats-needed")).toContainText(
+    "Code review left 1 finding. Fix it (send it back to the agent) to continue. CI is still running.",
+  );
+
+  await page.goto("tasks?tab=merging");
+  await expect(page.getByTestId(`next-step-${id}`)).toHaveText(
+    "Fix 1 review finding",
+  );
+});
+
 test("the action area fits its column, gates and buttons inside it @phone @dark", async ({
   page,
   demoServer,

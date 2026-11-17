@@ -1601,7 +1601,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   // The concrete next step a person has to take, under the state's name
   // (shared/task-actions.ts nextStep); list rows carry no CI detail yet.
   protected next(t: Task): string {
-    return nextStep(t, true);
+    return nextStep(t, true, {
+      can: (route, repo) => this.access.canAccessTask(route, repo ?? null),
+      fullAccess: this.access.isFullAccess(),
+    });
   }
   protected readonly prio = priorityOf;
   protected readonly jumps = jumpsQueue;
