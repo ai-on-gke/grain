@@ -24,7 +24,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -179,6 +178,7 @@ var secretStoreMethodArity = map[string]int{
 	"Resolve":          2,
 	"KnownValues":      1,
 	"Set":              3,
+	"DeleteKey":        2,
 	"Ensure":           2,
 	"Rotate":           2,
 	"ImportKey":        1,
@@ -186,11 +186,11 @@ var secretStoreMethodArity = map[string]int{
 	"UnwrapKeyFromKMS": 2,
 }
 
-var scriptContinuationRE = regexp.MustCompile(`\\\r?\n`)
+var scriptContinuationRE = regexp.MustCompile(`\\\r?\n[ \t]*`)
 
 var scriptReleasePublishRE = regexp.MustCompile(
 	`(?m)` +
-		`(?:\bdocker\s+(?:push|login|manifest\s+push|buildx\s+build[^\n]*--push)\b)` +
+		`(?:\bdocker\s+(?:push|login|manifest\s+push|buildx\s+imagetools\s+create|buildx\s+build[^\n]*--push)\b)` +
 		`|(?:\bcrane\s+(?:push|copy|tag|mutate)\b)` +
 		`|(?:\bskopeo\s+copy\b)` +
 		`|(?:\bcosign\s+(?:sign|attest)\b)` +
@@ -214,15 +214,12 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 
 	imports := map[string]string{}
 	hasNetHTTP := false
-	hasSecrets := false
 	hasSecretsRepo := false
 	for _, imp := range f.Imports {
 		ip := strings.Trim(imp.Path.Value, `"`)
 		switch ip {
 		case "net/http":
 			hasNetHTTP = true
-		case secretsImportPath:
-			hasSecrets = true
 		case secretsRepoImportPath:
 			hasSecretsRepo = true
 		}
@@ -241,7 +238,6 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 	}
 
 	isModelPkg := f.Name != nil && f.Name.Name == "model"
-	secretVars := collectSecretVars(f)
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -290,7 +286,7 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 		case *ast.CallExpr:
 			switch fn := x.Fun.(type) {
 			case *ast.Ident:
-				if fn.Name == "route" && (hasNetHTTP || routePatternArg(x)) {
+				if fn.Name == "route" && len(x.Args) == 2 {
 					add("registers HTTP route via route(...)")
 				}
 				if grantPredicateFuncs[fn.Name] {
@@ -307,8 +303,9 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 				// A registration split out of the server file into one that
 				// never names net/http (s.route("GET /api/x", s.handleX), the
 				// handlers living in a sibling file) is still caught by its
-				// pattern argument.
-				if (sel == "route" || sel == "HandleFunc" || sel == "Handle") && (hasNetHTTP || routePatternArg(x)) {
+				// two-argument shape, while 3-argument r.route(path, headers,
+				// body) in pkg/daemon/forgeroute.go is ignored.
+				if (sel == "route" || sel == "HandleFunc" || sel == "Handle") && len(x.Args) == 2 {
 					add("registers HTTP route via ." + sel + "(...)")
 				}
 				if (sel == "Allows" || sel == "allows") && len(x.Args) > 0 {
@@ -356,12 +353,12 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 						}
 					}
 				}
-				// A file can reach the secret store through a field or
-				// parameter whose type it never names (s.secrets.Resolve(ctx,
-				// name), or aliased via store := s.Config.Secrets, with no
-				// pkg/secrets import), so both the receiver expression and any
-				// local alias bound from a secret-named expression count.
-				if wantArgs, ok := secretStoreMethodArity[sel]; ok && (hasSecrets || mentionsSecret(fn.X) || isSecretVar(fn.X, secretVars)) && len(x.Args) == wantArgs {
+				// A file can reach *secrets.Store through a struct field typed
+				// in another file (s.tasks.Config.Secrets, c.Config.Secrets) or
+				// through a narrow local interface (PasswordStore, literalSecrets),
+				// where Go forbids importing pkg/secrets unused. Match by method
+				// name and argument count alone.
+				if wantArgs, ok := secretStoreMethodArity[sel]; ok && len(x.Args) == wantArgs {
 					add("calls secret store ." + sel + "(...)")
 				}
 			}
@@ -375,51 +372,6 @@ func scanGoSource(fset *token.FileSet, filename string, src any) ([]string, erro
 	}
 	sort.Strings(out)
 	return out, nil
-}
-
-// collectSecretVars records local variable names assigned from an expression
-// mentioning a secret store (e.g. store := s.tasks.Config.Secrets) so method
-// calls on the alias are still flagged when pkg/secrets is not imported.
-func collectSecretVars(f *ast.File) map[string]bool {
-	vars := map[string]bool{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.AssignStmt:
-			for i, rhs := range x.Rhs {
-				if i < len(x.Lhs) && (mentionsSecret(rhs) || isSecretVar(rhs, vars)) {
-					if id, ok := x.Lhs[i].(*ast.Ident); ok && id.Name != "_" {
-						vars[id.Name] = true
-					}
-				}
-			}
-		case *ast.ValueSpec:
-			for i, rhs := range x.Values {
-				if i < len(x.Names) && (mentionsSecret(rhs) || isSecretVar(rhs, vars)) {
-					if x.Names[i].Name != "_" {
-						vars[x.Names[i].Name] = true
-					}
-				}
-			}
-		}
-		return true
-	})
-	return vars
-}
-
-func isSecretVar(e ast.Expr, vars map[string]bool) bool {
-	if len(vars) == 0 || e == nil {
-		return false
-	}
-	for {
-		switch x := e.(type) {
-		case *ast.ParenExpr:
-			e = x.X
-		case *ast.Ident:
-			return vars[x.Name]
-		default:
-			return false
-		}
-	}
 }
 
 func exprNamesGrantType(e ast.Expr) bool {
@@ -466,54 +418,6 @@ func funcTypeUsesGrant(ft *ast.FuncType) bool {
 		}
 	}
 	return false
-}
-
-// mentionsSecret reports whether any identifier in a call's receiver
-// expression (s.secrets, srv.SecretStore, deps.Secrets()) names a secret
-// store, so a store reached through a field or accessor is caught even when
-// the file never imports pkg/secrets.
-func mentionsSecret(e ast.Expr) bool {
-	found := false
-	ast.Inspect(e, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && strings.Contains(strings.ToLower(id.Name), "secret") {
-			found = true
-		}
-		return !found
-	})
-	return found
-}
-
-// routePatternRE matches the unquoted prefix of a ServeMux-style registration:
-// an optional HTTP method, then a leading "/".
-var routePatternRE = regexp.MustCompile(`^(?:(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|CONNECT|TRACE) +)?/`)
-
-// routePatternArg reports whether call's first argument is a string literal
-// (quoted or raw, or the left prefix of a "+" concatenation) that reads as an
-// HTTP route pattern ("GET /api/x", `POST /api/x`, "/healthz", "GET /api/"+p).
-func routePatternArg(call *ast.CallExpr) bool {
-	if len(call.Args) == 0 {
-		return false
-	}
-	expr := call.Args[0]
-	for {
-		switch x := expr.(type) {
-		case *ast.ParenExpr:
-			expr = x.X
-		case *ast.BinaryExpr:
-			if x.Op != token.ADD {
-				return false
-			}
-			expr = x.X
-		case *ast.BasicLit:
-			if x.Kind != token.STRING {
-				return false
-			}
-			s, err := strconv.Unquote(x.Value)
-			return err == nil && routePatternRE.MatchString(s)
-		default:
-			return false
-		}
-	}
 }
 
 func scanScriptSource(src string) []string {
@@ -741,9 +645,20 @@ func (s *Server) registerWidgetRoutes() { s.route("GET /api/widgets", s.handleLi
 			want: "registers HTTP route via .route(...)",
 		},
 		{
-			name: "unrelated route method with no pattern and no net/http import",
-			src: `package planner
-func plan(g *graph) { g.route(nodeA, nodeB) }`,
+			name: "route registration with non-literal pattern and no net/http import",
+			src: `package ui
+func (s *Server) registerWidgetRoutes(pattern string) {
+	s.route(pattern, s.handleListWidgets)
+	route(pattern, s.handleListWidgets)
+}`,
+			want: "registers HTTP route via .route(...); registers HTTP route via route(...)",
+		},
+		{
+			name: "three-argument forgeRouter.route is ignored",
+			src: `package daemon
+func (r *forgeRouter) forward(path string, headers map[string]string, body []byte) {
+	r.route(path, headers, body)
+}`,
 			want: "",
 		},
 		{
@@ -757,6 +672,34 @@ func (s *Server) reg() { s.route(` + "`GET /api/widgets`" + `, s.h) }`,
 			src: `package ui
 func (s *Server) reg(suffix string) { s.HandleFunc("POST /api/"+suffix, s.h) }`,
 			want: "registers HTTP route via .HandleFunc(...)",
+		},
+		{
+			name: "secrets store via struct field without pkg/secrets import",
+			src: `package ui
+import "context"
+func manage(ctx context.Context, c *Client, v []byte) {
+	_ = c.Secrets.Set("tok", "key", v)
+	_ = c.Secrets.DeleteKey("tok", "key")
+	_, _ = c.Secrets.KnownValues(ctx)
+}`,
+			want: "calls secret store .DeleteKey(...); calls secret store .KnownValues(...); calls secret store .Set(...)",
+		},
+		{
+			name: "secrets store via PasswordStore interface with no secret-named identifier",
+			src: `package postgres
+import "context"
+type PasswordStore interface {
+	Set(name, key string, value []byte) error
+	Resolve(ctx context.Context, name string) (string, error)
+}
+func save(ctx context.Context, store PasswordStore, pw []byte) error {
+	if err := store.Set("db", "value", pw); err != nil {
+		return err
+	}
+	_, err := store.Resolve(ctx, "db")
+	return err
+}`,
+			want: "calls secret store .Resolve(...); calls secret store .Set(...)",
 		},
 		{
 			name: "secrets store aliased to a local variable without import",
@@ -851,6 +794,9 @@ func initCode() (string, error) { return newAccessCode() }`,
 		{name: "release binary stamp", src: "#!/usr/bin/env bash\ngo build -ldflags \"-X github.com/ai-on-gke/grain/pkg/version.Release=$v\" ./cmd/grain\n", want: true},
 		{name: "agentd signing", src: "#!/usr/bin/env bash\n\"$SIGN_TOOL\" manifest -signing-key \"$AGENTD_RELEASE_SIGNING_KEY\"\n", want: true},
 		{name: "buildx push wrapped across lines", src: "#!/usr/bin/env bash\ndocker buildx build \\\n  --platform linux/amd64 \\\n  --push -t \"$img\" .\n", want: true},
+		{name: "buildx push wrapped with --push last", src: "#!/usr/bin/env bash\ndocker buildx build \\\n  --tag \"$img\" \\\n  --push .\n", want: true},
+		{name: "buildx imagetools create", src: "#!/usr/bin/env bash\ndocker buildx imagetools create --tag \"$dst\" \"$src\" --prefer-index=false\n", want: true},
+		{name: "buildx imagetools create wrapped across lines", src: "#!/usr/bin/env bash\ndocker buildx \\\n  imagetools create \\\n  --tag \"$dst\" \"$src\"\n", want: true},
 		{name: "gcloud kms sign wrapped across lines", src: "#!/usr/bin/env bash\ngcloud kms \\\n  asymmetric-sign --key k --input-file f\n", want: true},
 		{name: "comment ending in a backslash does not hide the next command", src: "#!/usr/bin/env bash\n# push the image \\\ndocker push \"$img\"\n", want: true},
 		{name: "comment only", src: "#!/usr/bin/env bash\n# docker push example\n# git push --tags\necho ok\n", want: false},

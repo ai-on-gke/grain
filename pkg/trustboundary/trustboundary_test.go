@@ -1000,6 +1000,7 @@ func TestV30HygieneSweepFilesAreClassified(t *testing.T) {
 		"pkg/model/steward_audit_template.go":              "capabilities-secrets",
 		"pkg/model/system_template.go":                     "capabilities-secrets",
 		"pkg/model/workflow_review_template.go":            "capabilities-secrets",
+		"pkg/model/postgres/upgrade.go":                    "capabilities-secrets",
 		"pkg/ui/capability_catalogue.go":                   "capabilities-secrets",
 		"pkg/ui/capability_grants.go":                      "capabilities-secrets",
 		"pkg/ui/capability_policy.go":                      "capabilities-secrets",

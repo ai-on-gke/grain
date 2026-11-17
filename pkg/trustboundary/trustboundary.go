@@ -106,7 +106,8 @@ type Category struct {
 // notification_wake,pipeline_steward_template,priority_dispatch,
 // proposal_seeding,ref_push,repo_declaration_store,runtime_grant_retirement,
 // schedule_fire,scratch_fixture,standing_task,steward_audit_template,
-// system_template,workflow_review_template}.go, pkg/ui/{capability_catalogue,
+// system_template,workflow_review_template}.go, pkg/model/postgres/upgrade.go,
+// pkg/ui/{capability_catalogue,
 // capability_grants,capability_policy,capability_status,
 // capability_servers_figma,change_submit,console_sessions,
 // declaration_acceptance,repo_release_workflows,secrets,secrets_redact,
@@ -502,6 +503,9 @@ var Categories = []Category{
 			"pkg/model/steward_audit_template.go",
 			"pkg/model/workflow_review_template.go",
 			"pkg/model/notification_wake.go",
+			// PostgreSQL database config DSN password split, secret-store
+			// persistence and resolution via PasswordStore.
+			"pkg/model/postgres/upgrade.go",
 			// UI/API capability catalogue, grant attachment, policy preview,
 			// status checks, one-shot Submit grant lifecycle, standing
 			// console sessions, declaration acceptance, and secret store
