@@ -258,8 +258,11 @@ if (want("design")) {
         });
         record(
           "design",
-          `alert ${width}/${theme}: whole body read, box capped with a toggle`,
-          text.includes("CAP detail 12") && !!tBox,
+          `alert ${width}/${theme}: whole body read, capped with a toggle when over its cap`,
+          // A body that fits under its cap needs no toggle (the phone's
+          // cap is taller than this one's 14 lines).
+          text.includes("CAP detail 12") &&
+            (!!tBox || body.scrollH <= parseFloat(body.maxH)),
           { qBox, toggle: tBox, body, hasLast: text.includes("CAP detail 12") },
         );
         await annotate(page, `design-alert-${width}-${theme}.png`, [
