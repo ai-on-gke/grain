@@ -337,7 +337,7 @@
   },
   {
     "file": "report-template-defaults.json",
-    "definition": "policy",
+    "definition": "template_defaults",
     "schema_valid": true,
     "semantic_valid": true,
     "reason": null

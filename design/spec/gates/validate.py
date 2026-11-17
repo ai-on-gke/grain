@@ -49,7 +49,10 @@ def attachment(value):
 
 
 def semantic(definition, value):
-    if definition == "attachment":
+    if definition == "template_defaults":
+        require(value["policy"]["source"] == "template", "template defaults need template provenance")
+        semantic("policy", value["policy"])
+    elif definition == "attachment":
         attachment(value)
     elif definition in {"contract", "policy"}:
         if definition == "policy" and value["unguarded_actions"]:

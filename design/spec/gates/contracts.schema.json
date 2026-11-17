@@ -3720,6 +3720,22 @@
           }
         }
       ]
+    },
+    "template_defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "lifecycle"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle"
+        }
+      }
     }
   }
 }
