@@ -773,6 +773,29 @@ export interface ConsoleSessionList {
   networkAccessOptions?: string[];
 }
 
+// ClearNotificationsRequest is POST /api/notifications/clear's body
+// (pkg/ui/notifications_clear.go): every filter given narrows the open
+// notifications, none is every open alert.
+export interface ClearNotificationsRequest {
+  subject?: string;
+  severity?: string;
+  olderThan?: string;
+  ids?: number[];
+  reason?: string;
+  dryRun?: boolean;
+}
+
+export interface ClearNotificationsResponse {
+  matched: number;
+  cleared: number;
+  ids: number[];
+  // expectedBack is how many are level-triggered and will be raised
+  // again while their condition holds.
+  expectedBack: number;
+  expectedBackFamilies?: string[];
+  dryRun?: boolean;
+}
+
 export interface Notification {
   id: number;
   subject: string;
