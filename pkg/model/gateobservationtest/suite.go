@@ -312,4 +312,40 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 		now = *stored.Results[0].RetryAt
 	}
+	// Rotating the bounded cohort can evict a current cache while its
+	// diagnostic history remains. Both accepted/error replay must continue
+	// beyond retained generations instead of colliding with history keys.
+	latest, priorDiag, e := s.ObserveTaskGates(ctx, task.ID, now)
+	must(e)
+	priorGeneration := latest.Results[0].Revision
+	beforeEviction := legacy()
+	unchanged := s.Changed()
+	_, e = db.ExecContext(ctx, "DELETE FROM `gate_observation_shadow` WHERE `task_id` = ?", task.ID)
+	must(e)
+	restored, restoredDiag, e := model.New(db).ObserveTaskGates(ctx, task.ID, now)
+	must(e)
+	if restored.Results[0].Revision <= priorGeneration {
+		t.Fatal("cold cache reused a retained generation")
+	}
+	if !restoredDiag.StartedAt.Equal(priorDiag.StartedAt) {
+		t.Fatal("cold cache lost the retained start marker")
+	}
+	_, e = db.ExecContext(ctx, "DELETE FROM `gate_observation_shadow` WHERE `task_id` = ?", task.ID)
+	must(e)
+	failure.ComparedAt = now
+	must(s.RecordGateObservationFailure(ctx, task.ID, now, &failure))
+	failedAgain, failedDiag, e := model.New(db).ObserveTaskGates(ctx, task.ID, now)
+	must(e)
+	if !failedAgain.Dirty || failedAgain.Results[0].Revision <= restored.Results[0].Revision || failedDiag.Counts["unknown_error"] == 0 {
+		t.Fatal("cold error replay lost retained history")
+	}
+	if legacy() != beforeEviction {
+		t.Fatal("cold diagnostic replay changed legacy progress")
+	}
+	select {
+	case <-unchanged:
+		t.Fatal("cold diagnostic replay woke dispatch")
+	default:
+	}
+
 }

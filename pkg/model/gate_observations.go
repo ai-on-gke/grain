@@ -235,6 +235,13 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 			if err != nil && !missing {
 				return err
 			}
+			if missing {
+				generation, started, err = gateHistoryFloor(ctx, tx, id, now)
+				if err != nil {
+					return err
+				}
+				evaluations = generation
+			}
 			unsupportedCache := false
 			if !missing {
 				var cachedView gates.ObservationView
@@ -251,9 +258,6 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 			} else {
 				generation++
 				evaluations++
-				if missing {
-					started = now
-				}
 				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: gates.Bindings(id), Results: []gates.EvaluationState{}}
 				for _, b := range view.Bindings {
 					r := gates.Evaluate(b, f, now, generation)
@@ -357,6 +361,13 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	if errors.Is(err, sql.ErrNoRows) {
+		generation, started, err = gateHistoryFloor(ctx, tx, id, now)
+		if err != nil {
+			return err
+		}
+		evaluations = generation
+	}
 	delay := time.Second
 	if raw != "" {
 		var old gates.ObservationView
@@ -369,8 +380,6 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 				delay = min(2*nominal, time.Minute)
 			}
 		}
-	} else {
-		started = now
 	}
 	generation++
 	evaluations++
@@ -481,4 +490,21 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 		}
 	}
 	return true
+}
+
+// Current caches may be evicted before their bounded history expires. Resume
+// above retained keys on both acceptance and failure paths, preserving the first
+// retained collection marker. Unsampled minute refresh counts are not recoverable.
+func gateHistoryFloor(ctx context.Context, q querier, id string, now time.Time) (uint64, time.Time, error) {
+	var generation uint64
+	err := q.QueryRowContext(ctx, "SELECT `generation` FROM `gate_observation_shadow_history` WHERE `task_id` = ? ORDER BY `generation` DESC LIMIT 1", id).Scan(&generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, now, nil
+	}
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	var started time.Time
+	err = q.QueryRowContext(ctx, "SELECT `at` FROM `gate_observation_shadow_history` WHERE `task_id` = ? ORDER BY `generation` ASC LIMIT 1", id).Scan(&started)
+	return generation, started, err
 }

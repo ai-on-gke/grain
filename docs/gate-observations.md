@@ -102,7 +102,11 @@ current results/evaluation totals without flooding history. Retention is at most
 Pruning runs during diagnostic writes, including failure writes. Idle/disabled
 records are not swept until collection resumes. Rotation or unusually frequent
 changes can shorten the retained window; counts describe retained samples, not
-all evaluations or time-weighted reliability. Current/history data is local to the
+all evaluations or time-weighted reliability. If cohort rotation evicts a current cache while history remains, accepted/error
+replay resumes above retained generations and restores the first retained
+collection marker. The evaluation counter is reconstructed from the last sample;
+unsampled minute refreshes after that point cannot be recovered. Aggregate retained
+comparison counts remain exact. Current/history data is local to the
 database and deliberately excluded from state-repository exports.
 
 The comparison labels are:
