@@ -2754,8 +2754,18 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 	tasks := make(map[string]json.RawMessage, len(q.ids))
 	if s.tasks != nil && s.tasks.Store != nil {
 		ctx := r.Context()
+		token := s.taskDetails.tokenFor(ctx, s.tasks)
 		readable := s.taskReadable(r)
 		for _, id := range q.ids {
+			if token != "" {
+				cacheKey := taskDetailCacheKey(id, q.page, q.paged)
+				if entry, ok := s.taskDetails.hit(cacheKey, token, q.paged); ok {
+					if readable(entry.repo) {
+						tasks[id] = json.RawMessage(entry.body)
+					}
+					continue
+				}
+			}
 			t, err := s.tasks.Store.GetTask(ctx, id)
 			if err != nil {
 				writeClientError(w, err)
@@ -2764,7 +2774,7 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 			if t == nil || !readable(taskRepo(t)) {
 				continue
 			}
-			entryBody, _, err := s.taskDetails.responseFor(ctx, s.tasks, id, q.page, q.paged)
+			entryBody, _, err := s.taskDetails.responseForWithToken(ctx, s.tasks, id, q.page, q.paged, token)
 			if err != nil {
 				var nfe *NotFoundError
 				if errors.As(err, &nfe) {
