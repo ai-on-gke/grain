@@ -384,6 +384,12 @@ any condition in `when` is met. With no `when`, it is re-queued on the
 next cycle, which suits a durable task splitting long work into steps.
 `message: true` adds "or when anybody posts to this task".
 
+Current PR feedback also permits a dispatch despite a CI/message wait or an
+ordinary pending question, retaining its evidence and questions. See the
+[PR feedback wake specification](../spec/pr-feedback-wake/pr-feedback-wake.spec.md)
+for supported events, eligibility and delivery races. This applies to the
+current runtime independently of the future built-in gates protocol.
+
 How it relates to what exists:
 
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
@@ -599,6 +605,23 @@ The rules:
 - **Acknowledge is not clear.** Acknowledging hides it from the Alerts
   count. It stays in the inbox list until its condition clears, and a
   raise after the ack re-surfaces it only if the severity rose.
+- **Clearing many at once is clearing each.** `POST
+  /api/notifications/clear` (the Inbox's **Clear all** / **Clear these**,
+  `grain notifications clear`) takes a `subject` prefix, `severity`,
+  `olderThan` (a duration or `7d`, against `last_raised_at`), `ids`, or
+  none for every open alert -- a `release.pending` approval is left alone
+  unless the subject or ids name it -- and a required `reason`. Each match
+  is cleared with the same `Store.ClearNotificationByID` call the per-id
+  clear makes, so a level-triggered family (`model.LevelTriggeredFamily`:
+  the ones a reconciler re-raises with `ensurePipelineNotification`, such
+  as `pipeline.nightly-red-unattended`) comes back as a new instance on
+  the next cycle while its condition holds. The answer counts them
+  (`expectedBack`, `expectedBackFamilies`), and `dryRun` returns the counts
+  without clearing, for the confirm dialog. Credential notices
+  (`credentials-expired.*`) are raised once per block, so a cleared one
+  stays cleared until the block lifts and recurs. One config-audit entry
+  (surface `notifications`) records each call, its filter, count and
+  reason.
 - **It never parks the sender.** Raising writes no
   `PendingQuestionCommentID` and changes no task state. The only way a
   notification moves a task is the progress-limit `hold` above, where the
@@ -617,9 +640,14 @@ The rules:
 - **Reconcilers and health checks**, through `Store.RaiseNotification`.
 - **The API**: `POST /api/notifications` (raise),
   `GET /api/notifications?open=1&after=<id>&family=<f>`,
-  `POST /api/notifications/{id}/ack`, `/clear`, and `/investigate`.
+  `POST /api/notifications/{id}/ack`, `/clear`, and `/investigate`, and
+  `POST /api/notifications/clear` (many at once, above).
   Raising and clearing need `notifications:write`, which
-  `api:task-admin` includes. Acknowledging needs a person.
+  `api:task-admin` includes. Acknowledging needs a person. A run may clear
+  in bulk only its own task's `agent.<task>:` notifications, even with
+  `api:task-admin` (which lets it clear another's one at a time): a bulk
+  clear is a person's tool for a noisy Inbox, as `pipeline-control` lifts
+  only its own pauses.
 
 ### Where they show
 
@@ -630,7 +658,11 @@ The rules:
   is not required by this design.
 - **Inbox**: a "Notifications" section above the task rows, one row per
   open notification, with its actions (Acknowledge, Investigate, Open
-  task, plus kind-specific ones such as Retry merge).
+  task, plus kind-specific ones such as Retry merge). In the `/next/`
+  Inbox the Alerts group's head offers **Clear all N**, or **Clear these
+  N** when a filter, search or workstream narrows the queue (it then sends
+  the shown ids). It counts with a dry run first and confirms with that
+  count, how many are expected back, and a reason box.
 - **Director chat**: when the deployment has a director session, every
   new `warning` or `critical` notification is posted into its
   conversation as a grain-authored comment (actor

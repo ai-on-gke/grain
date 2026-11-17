@@ -243,6 +243,83 @@ test("Re-run failed follows to the run it starts", async ({ page }) => {
   ]);
 });
 
+// What the 2026-11-14 deployment-operations walkthrough found under /next/
+// (docs/test-runs/2026-11-14-deployment-operations.md): nothing said the
+// deployment had stopped answering.
+
+test("the disconnected banner stands above the shell on a failed or held connection and clears on its own", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.route("**/api/persistent-sandboxes", (r) =>
+    r.fulfill({
+      json: [
+        {
+          name: "docs-preview",
+          repo: "acme/widgets",
+          state: "running",
+          command: "npm run preview",
+          restarts: 0,
+        },
+      ],
+    }),
+  );
+  await page.goto("fleet");
+  await expect(page.locator("#fleet-panel-sandboxes")).toBeVisible();
+  const banner = page.getByTestId("disconnected-banner");
+  await expect(banner).toHaveCount(0);
+
+  // The demo does not supervise persistent sandboxes, so Logs (a
+  // responseType: "text" read) gets the daemon's own JSON 503; that is the
+  // daemon answering, not a gateway saying it is down.
+  await page.getByTestId("persistent-logs-btn-docs-preview").click();
+  await expect(page.getByTestId("persistent-logs-docs-preview")).toContainText(
+    "the service is temporarily unavailable",
+  );
+  await expect(banner).toHaveCount(0);
+  await page.unroute("**/api/persistent-sandboxes");
+
+  // Every request refused: the connection failed.
+  await page.route("**/api/**", (r) => r.abort());
+  try {
+    await expect(banner).toBeVisible({ timeout: 30_000 });
+    await expect(banner).toHaveAttribute("role", "status");
+    await expect(banner).toContainText(
+      "This deployment cannot be reached: the connection to it failed.",
+    );
+    await expect(banner).toContainText("retrying automatically");
+    const b = await banner.boundingBox();
+    const top = await page.locator(".top-bar").boundingBox();
+    const rail = await page.locator(".nav-rail").boundingBox();
+    const bottom = await page.locator(".bottom-bar").boundingBox();
+    const vh = page.viewportSize().height;
+    expect(b.y).toBe(0);
+    expect(top.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(rail.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(bottom.y + bottom.height).toBeLessThanOrEqual(vh + 0.5);
+  } finally {
+    await page.unroute("**/api/**");
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+
+  // Requests accepted and never answered: held without an answer.
+  const held = [];
+  await page.route("**/api/**", (r) => {
+    held.push(r);
+  });
+  try {
+    await expect(banner).toContainText(
+      "it accepted the connection but sent no answer within 10 seconds",
+      { timeout: 45_000 },
+    );
+  } finally {
+    await page.unroute("**/api/**");
+    for (const r of held) await r.abort().catch(() => {});
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+  await expect(page).toHaveURL(/\/next\/fleet$/);
+});
+
 test("a deep link to a later Fleet tab keeps that tab in view on a phone @phone", async ({
   page,
 }) => {

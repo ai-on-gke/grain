@@ -833,7 +833,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				continue
 			}
 		}
-		d, admitted, refusal, err := startTask(ctx, store, req.TaskID, now, limits, o.admit, req.Priority, repair)
+		d, admitted, refusal, err := startTask(ctx, store, req.TaskID, now, limits, o.admit, req.Priority, repair, false)
 		if err != nil {
 			// Unlike the ready loop below, a capacity refusal here is
 			// passed over rather than ending the cycle: this list is in
@@ -841,6 +841,9 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			// is spent in, so the next entry may well be of the kind
 			// there is still room for -- and the ready list behind it
 			// certainly may be.
+			if errors.Is(err, model.ErrTaskNotReady) || errors.Is(err, model.ErrTaskPaused) {
+				continue
+			}
 			if errors.Is(err, model.ErrDurableCeiling) {
 				setQuotaWait(ctx, store, req.TaskID, durableCeilingReason(limits.Durable), now)
 				if !ceilingRaised {
@@ -1031,8 +1034,11 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			}
 		}
 
-		d, admitted, refusal, err := startTask(ctx, store, candidate, now, limits, o.admit, priority, repair)
+		d, admitted, refusal, err := startTask(ctx, store, candidate, now, limits, o.admit, priority, repair, true)
 		if err != nil {
+			if errors.Is(err, model.ErrTaskNotReady) || errors.Is(err, model.ErrTaskPaused) {
+				continue
+			}
 			if errors.Is(err, model.ErrDurableCeiling) {
 				setQuotaWait(ctx, store, candidate, durableCeilingReason(limits.Durable), now)
 				if !ceilingRaised {
@@ -1242,7 +1248,7 @@ func recordSkipQuotaWait(ctx context.Context, store *model.Store, taskID, why st
 //
 // On a refusal by admit, the Admission returned is the admitter's own, for
 // the caller to log (logRefusal).
-func startTask(ctx context.Context, store *model.Store, taskID string, now time.Time, limits model.Limits, admit Admitter, priority, repair bool) (Dispatch, bool, Admission, error) {
+func startTask(ctx context.Context, store *model.Store, taskID string, now time.Time, limits model.Limits, admit Admitter, priority, repair, requireReady bool) (Dispatch, bool, Admission, error) {
 	attempts, err := store.Attempts(ctx, taskID)
 	if err != nil {
 		return Dispatch{}, false, Admission{}, fmt.Errorf("counting attempts for %s: %w", taskID, err)
@@ -1283,11 +1289,12 @@ func startTask(ctx context.Context, store *model.Store, taskID string, now time.
 	// claim this package is in no position to make. The orchestrator
 	// acquires one and records it (Store.SetRunSandbox).
 	run := model.Run{
-		ID:        candidate.RunID,
-		TaskID:    taskID,
-		Attempt:   attempt,
-		StartedAt: now,
-		Leases:    admission.Leases,
+		RequireReady: requireReady,
+		ID:           candidate.RunID,
+		TaskID:       taskID,
+		Attempt:      attempt,
+		StartedAt:    now,
+		Leases:       admission.Leases,
 	}
 	if err := store.StartRun(ctx, run, limits); err != nil {
 		releaseSandbox()

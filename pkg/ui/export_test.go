@@ -155,3 +155,9 @@ func FrontendCachedGzipBytesForTest(s *Server, rawPath string) ([]byte, bool) {
 	}
 	return entry.gz, true
 }
+
+// SetClearNotificationForTest replaces the store call a bulk clear makes
+// for each notification, so a test can fail one partway.
+func (c *Client) SetClearNotificationForTest(f func(ctx context.Context, id int64, by string) (bool, error)) {
+	c.clearNotification = f
+}
