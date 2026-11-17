@@ -134,13 +134,21 @@ export class ProcessesStore {
   });
 
   // triggers is each .grain/triggers file a declaring repository's synced
-  // declarations name (RepoDeclarationsStatus.triggers).
+  // declarations name (RepoDeclarationsStatus.triggers), enriched with
+  // parsed PathTrigger metadata when triggerDetails is present.
   readonly triggers = computed(() => {
     const out: DeclaredTrigger[] = [];
     const defaults = this.repoDefaults();
     for (const repo of this.declaringRepos()) {
-      for (const path of defaults[repo]?.declarationsStatus?.triggers ?? []) {
-        out.push({ repo, path });
+      const status = defaults[repo]?.declarationsStatus;
+      const byPath = new Map(
+        (status?.triggerDetails ?? []).map((d) => [d.path, d]),
+      );
+      const paths =
+        status?.triggers ?? (status?.triggerDetails ?? []).map((d) => d.path);
+      for (const path of paths) {
+        const detail = byPath.get(path);
+        out.push(detail ? { repo, path, detail } : { repo, path });
       }
     }
     return out;

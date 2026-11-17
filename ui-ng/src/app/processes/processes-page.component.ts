@@ -35,7 +35,6 @@ import {
   viewChild,
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
-import type { RouteKey } from "../api/generated-routes";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
@@ -71,6 +70,7 @@ import {
   type DeclarationAcceptanceView,
   type DeclaredTrigger,
   type DerivedRuns,
+  type PathTriggerView,
   type ProcessSort,
   type ProcessTab,
   type Recurrence,
@@ -105,7 +105,7 @@ import { MarkdownDirective } from "../shared/code-highlight";
 
 const DEFAULT_QA_FLOW_REFS = [
   "engineering-workflow-v4@1",
-  "golden-v3-enforced@1",
+  "golden-v1-minimal@1",
   "golden-v3@1",
   "golden-v2@1",
 ] as const;
@@ -200,6 +200,224 @@ interface SchedTabRow {
 
 function triggerName(path: string): string {
   return path.replace(/^\.grain\/triggers\//, "");
+}
+
+function templateFileStem(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/\.ya?ml$/i, "");
+}
+
+function synthesizeTriggerYaml(
+  repo: string,
+  filePath: string,
+  detail: PathTriggerView | undefined,
+  templates: readonly Template[],
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (!detail) {
+    lines.push("# Synced path trigger declaration.");
+    return lines.join("\n");
+  }
+  if (detail.on) lines.push(`on: ${detail.on}`);
+  if (detail.branches?.length) {
+    lines.push(
+      `branches: [${detail.branches.map((b) => JSON.stringify(b)).join(", ")}]`,
+    );
+  }
+  if (detail.paths?.length) {
+    lines.push(
+      `paths: [${detail.paths.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.ignore?.length) {
+    lines.push(
+      `ignore: [${detail.ignore.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.template) {
+    const declTmpl = templates.find(
+      (t) => t.id === detail.template && t.declaredIn?.repo === repo,
+    );
+    const tmplRef = declTmpl?.declaredIn?.path
+      ? templateFileStem(declTmpl.declaredIn.path)
+      : detail.template;
+    lines.push(`template: ${tmplRef}`);
+  }
+  if (detail.per) lines.push(`per: ${detail.per}`);
+  lines.push(`gate: ${detail.gate ? "true" : "false"}`);
+  if (detail.human) lines.push(`human: ${detail.human}`);
+  if (detail.auto_approve) lines.push("auto-approve: true");
+  if (detail.sensitive) lines.push("sensitive: true");
+  if (detail.approvers?.length) {
+    lines.push(
+      `approvers: [${detail.approvers.map((a) => JSON.stringify(a)).join(", ")}]`,
+    );
+  }
+  if (detail.fixes) lines.push("fixes: true");
+  return lines.join("\n");
+}
+
+function synthesizeDeclaredTemplateYaml(
+  repo: string,
+  filePath: string,
+  t: Template,
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (t.name) lines.push(`name: ${t.name}`);
+  if (t.title) lines.push(`title: ${t.title}`);
+  if (t.fields?.length) {
+    lines.push("fields:");
+    for (const f of t.fields) {
+      lines.push(`  - name: ${f.name}`);
+      if (f.label) lines.push(`    label: ${JSON.stringify(f.label)}`);
+      if (f.required) lines.push("    required: true");
+      if (f.default) lines.push(`    default: ${JSON.stringify(f.default)}`);
+    }
+  }
+  if (t.description) {
+    lines.push("prompt: |");
+    for (const pl of t.description.split(/\r?\n/)) {
+      lines.push(`  ${pl}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+const UPPER_QA_TOKENS = new Set(["qa", "pr", "ci", "llm", "ui", "api", "id"]);
+
+function humanizeQaFlowKey(key: string): string {
+  return key
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (/^v\d+[a-z0-9]*$/i.test(word) || /^s\d+$/i.test(word)) {
+        return word.toUpperCase();
+      }
+      if (UPPER_QA_TOKENS.has(lower)) {
+        return lower.toUpperCase();
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+function formatQaFlowLabel(key: string, rawLabel?: string): string {
+  const trimmed = (rawLabel ?? "").trim();
+  if (!trimmed || trimmed === key) {
+    return humanizeQaFlowKey(key);
+  }
+  const parenIdx = trimmed.indexOf(" (");
+  const head = (parenIdx >= 0 ? trimmed.slice(0, parenIdx) : trimmed).trim();
+  if (
+    head === key ||
+    head === head.toLowerCase() ||
+    head.toLowerCase().replace(/[\s_]+/g, "-") === key.toLowerCase()
+  ) {
+    return humanizeQaFlowKey(head);
+  }
+  return trimmed;
+}
+
+function formatQaFlowHint(ref: string): string {
+  const atIdx = ref.indexOf("@");
+  if (atIdx < 0) return ref;
+  const key = ref.slice(0, atIdx);
+  const ver = ref.slice(atIdx + 1).replace(/^v/i, "") || "1";
+  return `${key}@v${ver}`;
+}
+
+function isBenchmarkQaFlow(key: string, rawLabel?: string): boolean {
+  const k = key.toLowerCase();
+  const l = (rawLabel ?? "").toLowerCase();
+  return (
+    k === "deterministic-s3-only" ||
+    k.endsWith("-skill-only") ||
+    k.endsWith("-checks-only") ||
+    k.endsWith("-seed") ||
+    k.endsWith("-benchmark") ||
+    k.includes("-ablation") ||
+    k.startsWith("bench-") ||
+    l.includes("ablation") ||
+    l.includes("benchmark")
+  );
+}
+
+interface ParsedTriggerYaml {
+  on: string;
+  paths: string[];
+  gate: string;
+  template: string;
+}
+
+function unquoteYamlScalar(raw: string): string {
+  const s = raw.replace(/\s+#.*$/, "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function parseInlineYamlList(raw: string): string[] {
+  const inner = raw.trim().slice(1, -1).trim();
+  if (!inner) return [];
+  return inner
+    .split(",")
+    .map((part) => unquoteYamlScalar(part))
+    .filter(Boolean);
+}
+
+function parseTriggerYaml(raw: string): ParsedTriggerYaml {
+  const out: ParsedTriggerYaml = { on: "", paths: [], gate: "", template: "" };
+  const lines = raw.split(/\r?\n/);
+  let listKey: "paths" | "on" | null = null;
+  for (const line of lines) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const listMatch = /^\s*-\s+(.*)$/.exec(line);
+    if (listMatch && listKey) {
+      const val = unquoteYamlScalar(listMatch[1]);
+      if (val) {
+        if (listKey === "paths") out.paths.push(val);
+        else if (listKey === "on") {
+          out.on = out.on ? `${out.on}, ${val}` : val;
+        }
+      }
+      continue;
+    }
+    listKey = null;
+    if (!/^\s/.test(line)) {
+      const kv = /^["']?([a-zA-Z0-9_-]+)["']?\s*:\s*(.*)$/.exec(line);
+      if (!kv) continue;
+      const key = kv[1].toLowerCase();
+      const rest = kv[2].trim();
+      if (key === "paths") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "paths";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.paths = parseInlineYamlList(rest);
+        } else {
+          const val = unquoteYamlScalar(rest);
+          if (val) out.paths = [val];
+        }
+      } else if (key === "on") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "on";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.on = parseInlineYamlList(rest).join(", ");
+        } else {
+          out.on = unquoteYamlScalar(rest);
+        }
+      } else if (key === "gate") {
+        out.gate = unquoteYamlScalar(rest);
+      } else if (key === "template") {
+        out.template = unquoteYamlScalar(rest);
+      }
+    }
+  }
+  return out;
 }
 
 const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
@@ -367,6 +585,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               [attr.aria-current]="activeTab() === t.id ? 'page' : null"
               [attr.data-testid]="'proc-tab-' + t.id"
               [gTip]="t.tip"
+              (click)="onTabClick($event, t.id)"
             >
               {{ t.label }}
               <span
@@ -476,24 +695,49 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           (drop)="onDrop($event, 'schedules', r.key)"
                           (dragend)="onDragEnd()"
                         >
-                          <a
+                          <button
+                            type="button"
                             class="proc-row"
-                            draggable="false"
-                            [routerLink]="repoAdvancedRoute(tr.repo)"
+                            [class.is-selected]="selectedTriggerKey() === r.key"
+                            [attr.aria-current]="
+                              selectedTriggerKey() === r.key ? 'true' : null
+                            "
                             [attr.data-testid]="'trigger-row-' + r.key"
                             [attr.aria-keyshortcuts]="
                               activeSort() === 'custom'
                                 ? 'Alt+ArrowUp Alt+ArrowDown'
                                 : null
                             "
-                            [gTip]="
-                              'Open the Advanced tab of ' +
-                              tr.repo +
-                              ', where its triggers are'
-                            "
+                            (click)="selectTrigger(tr, true)"
                             (keydown)="onRowKey($event, 'schedules', r.key)"
+                            (keydown.space)="
+                              selectTrigger(tr, true); $event.preventDefault()
+                            "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span class="status-pill reply">
                                 <g-status-icon tone="reply" kind="reply" />
                                 Declared
@@ -509,7 +753,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               <span class="tabular">· {{ tr.path }}</span>
                               <span>· next: on change</span>
                             </div>
-                          </a>
+                          </button>
                         </li>
                       }
                       @if (r.schedule; as s) {
@@ -553,6 +797,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span [class]="'status-pill ' + badge.tone">
                                 <g-status-icon
                                   [tone]="badge.tone"
@@ -664,6 +931,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           "
                         >
                           <div class="proc-row-top">
+                            @if (activeSort() === "custom") {
+                              <span
+                                class="proc-drag-grip"
+                                aria-hidden="true"
+                                data-testid="proc-drag-grip"
+                                [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                              >
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 16 16"
+                                  fill="currentColor"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="5.5" cy="3.5" r="1.25" />
+                                  <circle cx="10.5" cy="3.5" r="1.25" />
+                                  <circle cx="5.5" cy="8" r="1.25" />
+                                  <circle cx="10.5" cy="8" r="1.25" />
+                                  <circle cx="5.5" cy="12.5" r="1.25" />
+                                  <circle cx="10.5" cy="12.5" r="1.25" />
+                                </svg>
+                              </span>
+                            }
                             <span [class]="'status-pill ' + badge.tone">
                               <g-status-icon
                                 [tone]="badge.tone"
@@ -810,6 +1100,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span class="status-pill proposal">
                                 <g-status-icon
                                   tone="proposal"
@@ -1330,12 +1643,127 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     }
                   </div>
                 } @else {
-                  <div class="empty-state">
-                    <p>
-                      Select a schedule or event trigger to inspect its cadence
-                      and composition.
-                    </p>
-                  </div>
+                  @if (selectedTrigger(); as tr) {
+                    @let parsed = parsedSelectedTrigger();
+                    <div
+                      class="trigger-inspector"
+                      data-testid="trigger-inspector"
+                    >
+                      <div class="proc-insp-head">
+                        <div class="proc-insp-top">
+                          <div class="headline-cluster">
+                            <button
+                              type="button"
+                              class="btn-text proc-mobile-back"
+                              (click)="closeMobileDetail()"
+                            >
+                              ← Back
+                            </button>
+                            <span class="status-pill reply">
+                              <g-status-icon tone="reply" kind="reply" />
+                              Declared
+                            </span>
+                            <h2
+                              class="proc-insp-title"
+                              data-testid="trigger-detail-title"
+                            >
+                              {{ triggerName(tr.path) }}
+                            </h2>
+                          </div>
+
+                          <div class="headline-actions">
+                            <a
+                              class="btn-tonal"
+                              [routerLink]="repoAdvancedRoute(tr.repo)"
+                              data-testid="trigger-open-repo-link"
+                              >Open repository settings</a
+                            >
+                          </div>
+                        </div>
+
+                        <p
+                          class="banner banner-info"
+                          style="margin: 6px 0 0"
+                          data-testid="trigger-declared-banner"
+                        >
+                          Declared in <code>{{ tr.repo }}</code> at
+                          <code>{{ tr.path }}</code
+                          >.
+                        </p>
+                      </div>
+
+                      <div class="g-panes">
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-config-h"
+                          data-testid="trigger-config-pane"
+                        >
+                          <h3 id="trigger-config-h" class="g-pane-title">
+                            Configuration
+                          </h3>
+                          <dl class="g-attrs">
+                            <dt>Repository</dt>
+                            <dd class="tabular">{{ tr.repo }}</dd>
+                            <dt>File path</dt>
+                            <dd class="tabular">
+                              <code>{{ tr.path }}</code>
+                            </dd>
+                            <dt>On</dt>
+                            <dd class="tabular">{{ parsed.on || "—" }}</dd>
+                            <dt>Paths</dt>
+                            <dd class="tabular">
+                              {{
+                                parsed.paths.length
+                                  ? parsed.paths.join(", ")
+                                  : "—"
+                              }}
+                            </dd>
+                            <dt>Gate</dt>
+                            <dd class="tabular">{{ parsed.gate || "—" }}</dd>
+                            <dt>Template</dt>
+                            <dd>
+                              @if (matchedTriggerTemplate(); as mt) {
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
+                                  data-testid="trigger-template-link"
+                                  (click)="openTriggerTemplate(mt.id)"
+                                >
+                                  {{ mt.name || mt.title || parsed.template }}
+                                </button>
+                              } @else {
+                                <span class="tabular">{{
+                                  parsed.template || "—"
+                                }}</span>
+                              }
+                            </dd>
+                          </dl>
+                        </section>
+
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-yaml-h"
+                          data-testid="trigger-yaml-pane"
+                        >
+                          <h3 id="trigger-yaml-h" class="g-pane-title">
+                            Declared trigger YAML
+                          </h3>
+                          <pre
+                            class="comp-body-well s-mono"
+                            data-testid="trigger-yaml-preview"
+                            [textContent]="triggerYamlDisplay()"
+                          ></pre>
+                        </section>
+                      </div>
+                    </div>
+                  } @else {
+                    <div class="empty-state">
+                      <p>
+                        Select a schedule or event trigger to inspect its
+                        cadence and composition.
+                      </p>
+                    </div>
+                  }
                 }
               }
 
@@ -1809,7 +2237,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                   @let def = store.repoDefaults()[repo];
                   @let status = def?.declarationsStatus;
                   @let wfResp = store.repoWorkflows()[repo];
-                  <div class="proc-insp-head" data-testid="decl-inspector">
+                  <div
+                    class="proc-insp-head decl-inspector"
+                    data-testid="decl-inspector"
+                  >
                     <div class="proc-insp-top">
                       <div class="headline-cluster">
                         <button
@@ -1822,31 +2253,41 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <h2 class="proc-insp-title tabular">{{ repo }}</h2>
                       </div>
 
-                      @if (def) {
-                        <div class="switch-row">
-                          <button
-                            type="button"
-                            role="switch"
-                            class="g-switch"
-                            attr.aria-label="Read {{ repo }}'s own declarations"
-                            data-testid="decl-toggle-switch"
-                            [disabled]="
-                              !access.can(
-                                'PUT /api/repos/{owner}/{name}/declarations',
+                      <div class="headline-actions">
+                        @if (def) {
+                          <div class="switch-row">
+                            <button
+                              type="button"
+                              role="switch"
+                              class="g-switch"
+                              attr.aria-label="Read {{
                                 repo
-                              )
-                            "
-                            [attr.aria-checked]="def.declarations"
-                            (click)="
-                              toggleRepoDeclarations(repo, !def.declarations)
-                            "
-                          ></button>
-                          <span
-                            >Read its own
-                            <code>.grain/</code> declarations</span
-                          >
-                        </div>
-                      }
+                              }}'s own declarations"
+                              data-testid="decl-toggle-switch"
+                              [disabled]="
+                                !access.can(
+                                  'PUT /api/repos/{owner}/{name}/declarations',
+                                  repo
+                                )
+                              "
+                              [attr.aria-checked]="def.declarations"
+                              (click)="
+                                toggleRepoDeclarations(repo, !def.declarations)
+                              "
+                            ></button>
+                            <span
+                              >Read its own
+                              <code>.grain/</code> declarations</span
+                            >
+                          </div>
+                        }
+                        <a
+                          class="btn-tonal"
+                          [routerLink]="repoAdvancedRoute(repo)"
+                          data-testid="decl-open-repo-link"
+                          >Open repository settings</a
+                        >
+                      </div>
                     </div>
 
                     <div class="proc-meta-row">
@@ -1944,14 +2385,16 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <div class="proc-insp-top">
                             <div class="headline-cluster">
                               @if (item.kind === "trigger") {
-                                <a
-                                  class="tabular"
-                                  [routerLink]="repoAdvancedRoute(repo)"
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
                                   [attr.data-testid]="
                                     'decl-trigger-link-' + item.path
                                   "
-                                  ><code>{{ item.path }}</code></a
+                                  (click)="toggleInlineYaml(repo, item.path)"
                                 >
+                                  <code>{{ item.path }}</code>
+                                </button>
                               } @else {
                                 <code class="tabular">{{ item.path }}</code>
                               }
@@ -1964,19 +2407,21 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               class="btn-text"
                               data-testid="decl-inline-yaml-toggle"
                               [attr.data-file-path]="item.path"
-                              [attr.aria-expanded]="isInlineYamlOpen(item.path)"
+                              [attr.aria-expanded]="
+                                isInlineYamlOpen(repo, item.path)
+                              "
                               (click)="toggleInlineYaml(repo, item.path)"
                             >
                               {{
-                                isInlineYamlOpen(item.path)
+                                isInlineYamlOpen(repo, item.path)
                                   ? "Hide YAML"
                                   : "View YAML"
                               }}
                             </button>
                           </div>
-                          @if (isInlineYamlOpen(item.path)) {
+                          @if (isInlineYamlOpen(repo, item.path)) {
                             <pre
-                              class="comp-body-well"
+                              class="comp-body-well s-mono"
                               data-testid="decl-inline-yaml"
                               [textContent]="inlineYamlDisplay()"
                             ></pre>
@@ -2041,14 +2486,14 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                                   data-testid="decl-inline-yaml-toggle"
                                   [attr.data-file-path]="wf.path"
                                   [attr.aria-expanded]="
-                                    isInlineYamlOpen(wf.path)
+                                    isInlineYamlOpen(repo, wf.path)
                                   "
                                   (click)="
                                     toggleInlineYaml(repo, wf.path, wf.text)
                                   "
                                 >
                                   {{
-                                    isInlineYamlOpen(wf.path)
+                                    isInlineYamlOpen(repo, wf.path)
                                       ? "Hide YAML"
                                       : "View YAML"
                                   }}
@@ -2072,9 +2517,9 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                                 </button>
                               </div>
                             </div>
-                            @if (isInlineYamlOpen(wf.path)) {
+                            @if (isInlineYamlOpen(repo, wf.path)) {
                               <pre
-                                class="comp-body-well"
+                                class="comp-body-well s-mono"
                                 data-testid="decl-inline-yaml"
                                 [textContent]="inlineYamlDisplay()"
                               ></pre>
@@ -3487,6 +3932,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  private readonly hostEl = inject<ElementRef<HTMLElement>>(ElementRef);
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.openPicker()) {
@@ -3520,11 +3966,87 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly suitesView = signal<SuitesPaneView>("suites");
 
   protected readonly selectedScheduleId = signal<string | null>(null);
+  protected readonly selectedTrigger = signal<DeclaredTrigger | null>(null);
+  protected readonly liveSelectedTrigger = computed<DeclaredTrigger | null>(
+    () => {
+      const sel = this.selectedTrigger();
+      if (!sel) return null;
+      return (
+        this.store
+          .triggers()
+          .find((t) => t.repo === sel.repo && t.path === sel.path) ?? sel
+      );
+    },
+  );
+  protected readonly selectedTriggerKey = computed(() => {
+    const tr = this.selectedTrigger();
+    return tr ? `trigger:${tr.repo}:${tr.path}` : null;
+  });
+  protected readonly triggerYamlText = signal("");
+  protected readonly triggerYamlLoading = signal(false);
+  protected readonly triggerYamlDisplay = computed(() => {
+    const tr = this.liveSelectedTrigger();
+    if (!tr) return "No YAML content available.";
+    if (tr.detail) {
+      return synthesizeTriggerYaml(
+        tr.repo,
+        tr.path,
+        tr.detail,
+        this.store.templates(),
+      );
+    }
+    if (this.triggerYamlLoading() || this.store.repoLoading() === tr.repo) {
+      return "Loading YAML…";
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return raw;
+    return synthesizeTriggerYaml(
+      tr.repo,
+      tr.path,
+      undefined,
+      this.store.templates(),
+    );
+  });
+  protected readonly parsedSelectedTrigger = computed<ParsedTriggerYaml>(() => {
+    const tr = this.liveSelectedTrigger();
+    if (tr?.detail) {
+      return {
+        on: tr.detail.on || "",
+        paths: tr.detail.paths ?? [],
+        gate: tr.detail.gate ? "true" : "false",
+        template: tr.detail.template || "",
+      };
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return parseTriggerYaml(raw);
+    return { on: "", paths: [], gate: "", template: "" };
+  });
+  protected readonly matchedTriggerTemplate = computed<Template | null>(() => {
+    const tr = this.liveSelectedTrigger();
+    const ref = this.parsedSelectedTrigger().template.trim();
+    if (!tr || !ref) return null;
+    const list = this.store.templates();
+    return (
+      list.find((t) => t.id === ref) ??
+      list.find((t) => t.id === `repo:${tr.repo}:${ref}`) ??
+      list.find(
+        (t) =>
+          t.declaredIn?.repo === tr.repo &&
+          templateFileStem(t.declaredIn.path) === ref,
+      ) ??
+      list.find(
+        (t) =>
+          (!t.declaredIn || t.declaredIn.repo === tr.repo) && t.name === ref,
+      ) ??
+      null
+    );
+  });
   protected readonly selectedTemplateId = signal<string | null>(null);
   protected readonly selectedSuiteId = signal<string | null>(null);
   protected readonly selectedSuiteRunId = signal<number | null>(null);
   protected readonly selectedDeclRepo = signal<string | null>(null);
-  protected readonly inlineYamlPath = signal<string | null>(null);
+  protected readonly inlineYamlKey = signal<string | null>(null);
+  private inlineYamlSeq = 0;
   protected readonly inlineYamlText = signal<string>("");
   protected readonly inlineYamlLoading = signal(false);
   protected readonly inlineYamlDisplay = computed(() =>
@@ -3651,21 +4173,46 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly stDraftQaFlowRef = signal("");
   protected readonly draftSuiteComposition = signal<Composition | null>(null);
 
-  protected readonly loadedQaFlowRefs = signal<string[]>([]);
+  private requestedQaFlowVersions = false;
+  protected readonly qaFlowVersionsLoaded = signal(false);
+  protected readonly loadedQaFlowVersions = signal<
+    {
+      ref: string;
+      key: string;
+      version: number;
+      label: string;
+      hint?: string;
+      benchmark: boolean;
+    }[]
+  >([]);
   protected readonly qaFlowOptions = computed<PillOption[]>(() => {
     const opts: PillOption[] = [{ value: "", label: "Deployment default" }];
     const seen = new Set<string>([""]);
-    const addRef = (raw: string | undefined): void => {
+    const addOption = (
+      raw: string | undefined,
+      explicitLabel?: string,
+      explicitHint?: string,
+    ): void => {
       const ref = (raw ?? "").trim();
       if (!ref || seen.has(ref)) return;
       seen.add(ref);
-      opts.push({ value: ref, label: ref });
+      const atIdx = ref.indexOf("@");
+      const key = atIdx >= 0 ? ref.slice(0, atIdx) : ref;
+      opts.push({
+        value: ref,
+        label: formatQaFlowLabel(key, explicitLabel),
+        hint: explicitHint ?? formatQaFlowHint(ref),
+      });
     };
-    for (const ref of this.loadedQaFlowRefs()) addRef(ref);
-    for (const ref of DEFAULT_QA_FLOW_REFS) addRef(ref);
-    addRef(this.sDraftQaFlowRef());
-    addRef(this.tDraftQaFlowRef());
-    addRef(this.stDraftQaFlowRef());
+    for (const v of this.loadedQaFlowVersions()) {
+      addOption(v.ref, v.label, v.hint);
+    }
+    if (!this.qaFlowVersionsLoaded()) {
+      for (const ref of DEFAULT_QA_FLOW_REFS) addOption(ref);
+    }
+    addOption(this.sDraftQaFlowRef());
+    addOption(this.tDraftQaFlowRef());
+    addOption(this.stDraftQaFlowRef());
     return opts;
   });
 
@@ -3969,6 +4516,30 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   constructor() {
     afterNextRender(() => this.sp.attach());
 
+    const nav =
+      this.router.getCurrentNavigation() ??
+      this.router.lastSuccessfulNavigation;
+    const navState = nav?.extras.state;
+    const handoffTmplId =
+      typeof navState?.["selectTemplateId"] === "string"
+        ? navState["selectTemplateId"].trim()
+        : "";
+    if (handoffTmplId) {
+      this.tmplFilter.set("all");
+      this.selectedTemplateId.set(handoffTmplId);
+      this.mobileDetailOpen.set(true);
+    }
+    let handledHandoffTmpl = !handoffTmplId;
+    effect(() => {
+      const loaded = this.store.loaded();
+      untracked(() => {
+        if (!handledHandoffTmpl && loaded) {
+          handledHandoffTmpl = true;
+          this.selectTemplate(handoffTmplId, true);
+        }
+      });
+    });
+
     // ?q= (a shared link, a reload, Back and Forward) fills the "Filter
     // this view" box, and what is typed there goes back into ?q=, the way
     // the Tasks page keeps it. While one of this page's own ?q= writes is
@@ -4016,6 +4587,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
             this.clearMissingItemError();
             if (prevTab === "schedules") {
               this.selectedScheduleId.set(null);
+              this.selectedTrigger.set(null);
               this.scheduleComposition.set(null);
             } else if (prevTab === "templates") {
               this.selectedTemplateId.set(null);
@@ -4077,6 +4649,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const item = this.itemId();
       const run = this.runId();
       const scheds = this.sortedSchedules();
+      const trigs = this.filteredTriggers();
       const tmpls = this.sortedTemplates();
       const suites = this.sortedSuites();
       const repos = this.filteredDeclRepos();
@@ -4084,8 +4657,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         if (!loaded || item || run) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
-        if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
-          this.selectSchedule(scheds[0].id, false);
+        if (
+          tab === "schedules" &&
+          !this.selectedScheduleId() &&
+          !this.selectedTrigger()
+        ) {
+          if (scheds[0]) {
+            this.selectSchedule(scheds[0].id, false);
+          } else if (trigs[0]) {
+            this.selectTrigger(trigs[0], false);
+          }
         } else if (
           tab === "templates" &&
           !this.selectedTemplateId() &&
@@ -4183,6 +4764,37 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         });
       });
     });
+
+    // Load active QA flow versions once the store is loaded and the caller
+    // holds global qa:read (GET /api/qa/flow-versions).
+    effect(() => {
+      const loaded = this.store.loaded();
+      const canReadFlows =
+        this.access.can("GET /api/qa/flow-versions") &&
+        this.access.canGlobalScope("qa:read");
+      untracked(() => {
+        if (!loaded || !canReadFlows || this.requestedQaFlowVersions) return;
+        this.requestedQaFlowVersions = true;
+        void this.loadQaFlowOptions();
+      });
+    });
+
+    // Keep the active section tab visible inside horizontal .tab-strip scroll
+    // containers on phone viewports (e.g. /processes/quality at 390x844).
+    effect(() => {
+      this.activeTab();
+      afterNextRender(
+        () => {
+          const active = this.hostEl.nativeElement.querySelector<HTMLElement>(
+            '.tab-strip .tab-link[aria-current="page"]',
+          );
+          if (active && typeof active.scrollIntoView === "function") {
+            active.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
+        },
+        { injector: this.injector },
+      );
+    });
   }
 
   ngOnInit(): void {
@@ -4190,30 +4802,66 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
     });
     this.store.start();
-    void this.loadQaFlowOptions();
   }
 
   private async loadQaFlowOptions(): Promise<void> {
     try {
-      const res = (await this.api.get(
-        "GET /api/qa/flow-versions" as RouteKey,
-        undefined,
-        "limit=50",
-      )) as {
+      const res = (await this.api.get<{
         versions?: {
+          hash?: string;
           key?: string;
           version?: number;
+          label?: string;
+          builtIn?: boolean;
+          retiredAt?: string | null;
+          retired?: boolean;
+        }[];
+      }>("GET /api/qa/flow-versions", undefined, "limit=500")) as {
+        versions?: {
+          hash?: string;
+          key?: string;
+          version?: number;
+          label?: string;
+          builtIn?: boolean;
           retiredAt?: string | null;
           retired?: boolean;
         }[];
       } | null;
-      const refs: string[] = [];
-      for (const v of res?.versions ?? []) {
-        if (v.retiredAt || v.retired || !v.key) continue;
-        refs.push(`${v.key}@${v.version ?? 1}`);
+      const versions = res?.versions ?? [];
+      const builtInKeys = new Set<string>();
+      for (const v of versions) {
+        if (v.builtIn === true && v.key) {
+          builtInKeys.add(v.key);
+        }
       }
-      if (refs.length > 0) {
-        this.loadedQaFlowRefs.set(refs);
+      const items: {
+        ref: string;
+        key: string;
+        version: number;
+        label: string;
+        hint?: string;
+        benchmark: boolean;
+      }[] = [];
+      for (const v of versions) {
+        if (v.retiredAt || v.retired || !v.key) continue;
+        const ver = v.version ?? 1;
+        const hash = (v.hash ?? "").trim();
+        const isBuiltInV1Override =
+          !v.builtIn && ver === 1 && builtInKeys.has(v.key) && hash !== "";
+        const ref = isBuiltInV1Override ? hash : `${v.key}@${ver}`;
+        const hint = isBuiltInV1Override ? `${v.key}@v1 (override)` : undefined;
+        items.push({
+          ref,
+          key: v.key,
+          version: ver,
+          label: formatQaFlowLabel(v.key, v.label),
+          hint,
+          benchmark: isBenchmarkQaFlow(v.key, v.label),
+        });
+      }
+      this.loadedQaFlowVersions.set(items);
+      if (items.length > 0) {
+        this.qaFlowVersionsLoaded.set(true);
       }
     } catch {
       // Built-in fallback options remain available.
@@ -4356,8 +5004,24 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           this.store.awaitingAcceptancesCount() ||
           this.store.knownRepos().length
         );
-      case "quality":
-        return this.store.qaFlows().length;
+      case "quality": {
+        if (this.qaFlowVersionsLoaded()) {
+          const primaryKeys = new Set(
+            this.loadedQaFlowVersions()
+              .filter((v) => !v.benchmark)
+              .map((v) => v.key),
+          );
+          for (const f of this.store.qaFlows()) {
+            if (f.id && !isBenchmarkQaFlow(f.id, f.label)) {
+              primaryKeys.add(f.id);
+            }
+          }
+          if (primaryKeys.size > 0) return primaryKeys.size;
+        }
+        return this.store
+          .qaFlows()
+          .filter((f) => f.id && !isBenchmarkQaFlow(f.id, f.label)).length;
+      }
     }
   }
 
@@ -4475,6 +5139,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     fromClick: boolean,
     syncUrl = fromClick,
   ): void {
+    this.selectedTrigger.set(null);
     this.selectedScheduleId.set(id);
     if (fromClick) {
       this.mobileDetailOpen.set(true);
@@ -4490,6 +5155,39 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         })
         .catch(() => undefined);
     }
+  }
+
+  protected selectTrigger(tr: DeclaredTrigger, fromClick: boolean): void {
+    this.selectedScheduleId.set(null);
+    this.scheduleComposition.set(null);
+    this.triggerYamlText.set("");
+    this.triggerYamlLoading.set(false);
+    this.selectedTrigger.set(tr);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+      if (this.itemId()) {
+        this.handledItemLinkKey = "";
+        this.handledItemTab = null;
+        void this.router.navigate(
+          ["/processes", "schedules"],
+          this.preserveQueryExtras(),
+        );
+      }
+    }
+    if (!tr.detail && !this.store.repoDefaults()[tr.repo]?.declarationsStatus) {
+      void this.store.loadRepoInspect(tr.repo);
+    }
+  }
+
+  protected openTriggerTemplate(id: string): void {
+    this.tmplFilter.set("all");
+    this.selectTemplate(id, true, false);
+    this.handledItemLinkKey = this.itemLinkKey("templates", id);
+    this.handledItemTab = "templates";
+    void this.router.navigate(["/processes", "templates", id], {
+      state: { selectTemplateId: id },
+    });
   }
 
   protected selectTemplate(
@@ -4575,7 +5273,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected selectDeclRepo(repo: string, fromClick: boolean): void {
     this.selectedDeclRepo.set(repo);
-    this.inlineYamlPath.set(null);
+    this.inlineYamlSeq++;
+    this.inlineYamlKey.set(null);
     this.inlineYamlText.set("");
     this.inlineYamlLoading.set(false);
     if (fromClick) this.mobileDetailOpen.set(true);
@@ -4614,48 +5313,107 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return out;
   }
 
-  protected isInlineYamlOpen(path: string): boolean {
-    return this.inlineYamlPath() === path;
+  protected isInlineYamlOpen(repo: string, path: string): boolean {
+    return this.inlineYamlKey() === `${repo}:${path}`;
   }
 
   protected async toggleInlineYaml(
     repo: string,
     filePath: string,
-    fallbackText?: string,
+    rawText?: string,
   ): Promise<void> {
-    if (this.inlineYamlPath() === filePath) {
-      this.inlineYamlPath.set(null);
+    const key = `${repo}:${filePath}`;
+    const seq = ++this.inlineYamlSeq;
+    if (this.inlineYamlKey() === key) {
+      this.inlineYamlKey.set(null);
       this.inlineYamlText.set("");
       this.inlineYamlLoading.set(false);
       return;
     }
-    this.inlineYamlPath.set(filePath);
-    this.inlineYamlText.set("");
-    this.inlineYamlLoading.set(true);
-    const repoPath = filePath.startsWith(`${repo}/`)
-      ? filePath
-      : `${repo}/${filePath.replace(/^\/+/, "")}`;
-    try {
-      if (typeof this.api.getText === "function") {
-        const text = await this.api.getText(
-          "GET /api/fs/repo/{path...}" as RouteKey,
-          { path: repoPath },
-        );
-        if (this.inlineYamlPath() === filePath) {
-          this.inlineYamlText.set(text || fallbackText || "");
-        }
-      } else if (fallbackText !== undefined) {
-        this.inlineYamlText.set(fallbackText);
-      }
-    } catch (err) {
-      if (this.inlineYamlPath() === filePath) {
-        this.inlineYamlText.set(fallbackText ?? errorText(err));
-      }
-    } finally {
-      if (this.inlineYamlPath() === filePath) {
-        this.inlineYamlLoading.set(false);
+    this.inlineYamlKey.set(key);
+    if (rawText !== undefined && rawText.length > 0) {
+      this.inlineYamlText.set(rawText);
+      this.inlineYamlLoading.set(false);
+      return;
+    }
+    const hasDecl = Boolean(
+      this.store.repoDefaults()[repo]?.declarationsStatus,
+    );
+    const hasWfs = Boolean(this.store.repoWorkflows()[repo]);
+    if (!hasDecl || !hasWfs) {
+      this.inlineYamlText.set("");
+      this.inlineYamlLoading.set(true);
+      await this.store.loadRepoInspect(repo);
+      if (this.inlineYamlSeq !== seq || this.inlineYamlKey() !== key) {
+        return;
       }
     }
+    this.inlineYamlText.set(this.resolveDeclaredFileYaml(repo, filePath));
+    this.inlineYamlLoading.set(false);
+  }
+
+  private resolveDeclaredFileYaml(repo: string, filePath: string): string {
+    const wfs = this.store.repoWorkflows();
+    const wf = wfs[repo]?.workflows.find((w) => w.path === filePath);
+    if (wf?.text) return wf.text;
+
+    const status = this.store.repoDefaults()[repo]?.declarationsStatus;
+    const trig = status?.triggerDetails?.find((d) => d.path === filePath);
+    if (trig || (status?.triggers ?? []).includes(filePath)) {
+      return synthesizeTriggerYaml(
+        repo,
+        filePath,
+        trig,
+        this.store.templates(),
+      );
+    }
+
+    const tmpl = this.store
+      .templates()
+      .find(
+        (t) => t.declaredIn?.repo === repo && t.declaredIn.path === filePath,
+      );
+    if (tmpl) {
+      return synthesizeDeclaredTemplateYaml(repo, filePath, tmpl);
+    }
+
+    const suite = this.store
+      .suites()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (suite) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `name: ${suite.name}`,
+        `mode: ${suite.mode}`,
+      ];
+      if (suite.maxPasses) lines.push(`maxPasses: ${suite.maxPasses}`);
+      if (suite.items.length) {
+        lines.push("items:");
+        for (const it of suite.items) {
+          lines.push(`  - template: ${it.templateName || it.templateId}`);
+        }
+      }
+      return lines.join("\n");
+    }
+
+    const sched = this.store
+      .schedules()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (sched) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `title: ${sched.title}`,
+        `cadence: ${formatCadence(sched.recurrence, sched.timeZone)}`,
+      ];
+      if (sched.overlap) lines.push(`overlap: ${sched.overlap}`);
+      return lines.join("\n");
+    }
+
+    return `# ${repo}:${filePath}\n# Synced repository declaration.`;
   }
 
   protected scheduledTasksFor(s: Schedule) {
@@ -5760,9 +6518,68 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private discardDraftResolve: ((ok: boolean) => void) | null = null;
+  private bypassUnsavedDraftGuard = false;
+
+  private hasUnsavedQaDraft(): boolean {
+    return Boolean(this.doc.querySelector('[data-qa-unsaved-draft="true"]'));
+  }
+
+  canDeactivate(): boolean | Promise<boolean> {
+    if (this.bypassUnsavedDraftGuard || !this.hasUnsavedQaDraft()) {
+      return true;
+    }
+    return this.promptDiscardQaDraft();
+  }
+
+  private promptDiscardQaDraft(): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unpublished workflow draft?",
+        message:
+          "You have an unpublished workflow draft in Software Workflow & QA. Discard your unsaved changes?",
+        accept: "Discard draft",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected onTabClick(ev: MouseEvent, tabId: ProcessTab): void {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    if (tabId === this.activeTab() || !this.hasUnsavedQaDraft()) {
+      return;
+    }
+    ev.preventDefault();
+    void this.promptDiscardQaDraft().then((ok) => {
+      if (!ok) return;
+      this.bypassUnsavedDraftGuard = true;
+      void this.router
+        .navigate(["/processes", tabId], { queryParamsHandling: "merge" })
+        .finally(() => {
+          this.bypassUnsavedDraftGuard = false;
+        });
+    });
+  }
+
   protected async onConfirmDone(accepted: boolean): Promise<void> {
     const req = this.confirming();
+    const resolveDraft = this.discardDraftResolve;
+    this.discardDraftResolve = null;
     this.confirming.set(null);
+    if (resolveDraft) {
+      resolveDraft(accepted);
+    }
     if (!accepted || !req) return;
     try {
       await req.run();
