@@ -53,6 +53,9 @@ func reconcileNotifications(ctx context.Context, deps Deps, now time.Time) error
 	if err := ReconcileStewardRegression(ctx, deps.Store, now); err != nil {
 		log.Printf("grain: %s notification: %v", model.SubjectStewardRegression, err)
 	}
+	if err := reconcileUpgradeSchemaDowngradeClears(ctx, deps); err != nil {
+		log.Printf("grain: %s notifications: %v", model.FamilyUpgradeSchemaDowngrade, err)
+	}
 	return ClearMetNotifications(ctx, deps.Store, now)
 }
 

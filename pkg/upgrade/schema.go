@@ -172,6 +172,9 @@ type SchemaConfig struct {
 	// is refused because its target build has a lower schema version than
 	// the running store (for example, to raise an Inbox notification).
 	OnDowngradeRefused func(branch string, runningSchema, targetSchema int, err error)
+	// OnUpgradeSucceeded, when set, is invoked whenever an upgrade reaches
+	// PhaseOK (for example, to clear open schema-downgrade notifications).
+	OnUpgradeSucceeded func(branch string)
 	// VersionArgs asks the new build for its own -- {"schema-version"},
 	// the same subcommand HealthCheckArgs runs, whose entire output is
 	// the number.
@@ -488,6 +491,12 @@ func (u *Upgrader) CheckTargetSchema(ctx context.Context, branch, imageRef strin
 func (u *Upgrader) notifyDowngradeRefused(branch string, runningSchema, targetSchema int, err error) {
 	if u.cfg.Schema != nil && u.cfg.Schema.OnDowngradeRefused != nil {
 		u.cfg.Schema.OnDowngradeRefused(branch, runningSchema, targetSchema, err)
+	}
+}
+
+func (u *Upgrader) notifyUpgradeSucceeded(branch string) {
+	if u.cfg.Schema != nil && u.cfg.Schema.OnUpgradeSucceeded != nil {
+		u.cfg.Schema.OnUpgradeSucceeded(branch)
 	}
 }
 
