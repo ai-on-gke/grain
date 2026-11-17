@@ -660,7 +660,7 @@ jobs:
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/infrasig/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/mergelogins/... ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
-            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/qa/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/reviewedmerge/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \

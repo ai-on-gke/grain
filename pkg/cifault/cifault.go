@@ -158,7 +158,7 @@ func Fixes(ctx context.Context, store Store, files FileLister, fault ci.SharedFa
 		if failing[task.BranchName()] {
 			continue
 		}
-		paths, err := listPullRequestFilesWithContext(ctx, files, repo.Owner, repo.Name, ref.Number)
+		paths, err := listPullRequestFilesWithContext(ctx, files, repo.StoredOwner(), repo.Name, ref.Number)
 		if err != nil {
 			log.Printf("ci faults: reading files of %s: %v", link.PullRequest, err)
 			if ctx.Err() != nil {

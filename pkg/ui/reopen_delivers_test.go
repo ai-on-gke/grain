@@ -367,3 +367,66 @@ func TestAnAgentsCommentCannotReopen(t *testing.T) {
 		}
 	}
 }
+
+// A task whose only run failed yet still left an answer (the agent wrote
+// prose and made no tool call) is awaiting_reply with no delivered mark:
+// AdvanceDeliveredFrom runs on succeeded turns only. A person's comment
+// left while it was closed must still be delivered on reopen
+// (docs/test-runs/2026-11-11-task-detail-paging.md, §2.5).
+func TestReopenQueuesACommentLeftWhileClosedWithNoDeliveredMark(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	completeForAck(t, store, ctx, task.ID, model.StateAwaitingReply)
+	if obs, err := store.GetObservation(ctx, task.ID); err != nil || obs.DeliveredCommentID != nil {
+		t.Fatalf("observation = %+v, err = %v; want no delivered mark", obs, err)
+	}
+	if err := c.Close(ctx, task.ID, ui.CloseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddCommentWithAuthor(ctx, task.ID, "Does this cover the staging cluster too?", nil, otherPerson); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Reopen(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := store.State(ctx, task.ID); err != nil || state != model.StateQueued {
+		t.Fatalf("state = %q, err = %v; want queued by the reopen", state, err)
+	}
+	if ids := dispatchedIDs(t, store, ctx); len(ids) != 1 || ids[0] != task.ID {
+		t.Fatalf("dispatched %v, want a run of %s", ids, task.ID)
+	}
+	if got, want := reopenDetail(t, store, ctx, task.ID), "reopened with an unanswered comment from "+otherPerson+"; queued"; got != want {
+		t.Fatalf("reopen detail = %q, want %q", got, want)
+	}
+}
+
+// The timing fallback is only for comments left while the task was
+// closed: a person's comment from before the close, already answered by
+// the task's own answer, is not delivered again on reopen.
+func TestReopenWithNoDeliveredMarkIgnoresCommentsFromBeforeTheClose(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: otherPerson}},
+		Body:      "Please also update the changelog.",
+		CreatedAt: baseTime.Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completeForAck(t, store, ctx, task.ID, model.StateAwaitingReply)
+	if err := c.Close(ctx, task.ID, ui.CloseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Reopen(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := store.State(ctx, task.ID); err != nil || state != model.StateAwaitingReply {
+		t.Fatalf("state = %q, err = %v; want awaiting_reply as before the close", state, err)
+	}
+	if got := reopenDetail(t, store, ctx, task.ID); got != "" {
+		t.Fatalf("reopen detail = %q, want none", got)
+	}
+}

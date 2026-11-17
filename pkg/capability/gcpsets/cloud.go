@@ -106,6 +106,10 @@ type GoogleConnector struct {
 	// Options are extra client options for the Google API clients
 	// Connect builds; tests point them at a fake.
 	Options []option.ClientOption
+	// Endpoints, test only, point each service -- the API clients, the
+	// admins' token fetches and tokeninfo -- at a stub on this machine
+	// (`grain capability gcp -test-endpoints`); nil is Google.
+	Endpoints Endpoints
 }
 
 const cloudPlatform = "https://www.googleapis.com/auth/cloud-platform"
@@ -114,7 +118,7 @@ const cloudPlatform = "https://www.googleapis.com/auth/cloud-platform"
 // their token source fetches with tokenContext, never with ctx, and a
 // fetch that fails comes back as a CredentialError.
 func (g GoogleConnector) credentials(ctx context.Context, a Admin) (*google.Credentials, error) {
-	tctx := tokenContext(ctx, g.TokenTransport)
+	tctx := tokenContext(ctx, g.Endpoints.transport(g.TokenTransport))
 	var creds *google.Credentials
 	switch a.CredentialSource {
 	case SourceConfigured:
@@ -131,6 +135,12 @@ func (g GoogleConnector) credentials(ctx context.Context, a Admin) (*google.Cred
 		c, err := adc(tctx, cloudPlatform)
 		if err != nil {
 			return nil, &CredentialError{Admin: a.Name, Source: a.CredentialSource, Kind: CredentialMissing, Err: err}
+		}
+		// The metadata server's client is its own, not tctx's: under
+		// test endpoints its token would be a real one, fetched from the
+		// machine and handed to a stub.
+		if len(g.Endpoints) > 0 && len(c.JSON) == 0 {
+			return nil, &CredentialError{Admin: a.Name, Source: a.CredentialSource, Kind: CredentialMissing, Err: fmt.Errorf("%s: ambient credentials from the metadata server are not something the test endpoints stand in for; give the admin a credential file", TestEndpointsEnv)}
 		}
 		creds = c
 	default:
@@ -164,23 +174,26 @@ func (g GoogleConnector) Connect(ctx context.Context, a Admin) (Cloud, error) {
 	// The clients outlive ctx as the credentials do.
 	ctx = context.WithoutCancel(ctx)
 	opt := append([]option.ClientOption{option.WithCredentials(creds)}, g.Options...)
-	iamSvc, err := iam.NewService(ctx, opt...)
+	withEndpoint := func(service string) []option.ClientOption {
+		return append(opt[:len(opt):len(opt)], g.Endpoints.clientOption(service)...)
+	}
+	iamSvc, err := iam.NewService(ctx, withEndpoint(EndpointIAM)...)
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building an IAM client: %w", a.Name, err)
 	}
-	crm, err := cloudresourcemanager.NewService(ctx, opt...)
+	crm, err := cloudresourcemanager.NewService(ctx, withEndpoint(EndpointResourceManager)...)
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building a Resource Manager client: %w", a.Name, err)
 	}
-	st, err := storage.NewService(ctx, opt...)
+	st, err := storage.NewService(ctx, withEndpoint(EndpointStorage)...)
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building a Storage client: %w", a.Name, err)
 	}
-	ar, err := artifactregistry.NewService(ctx, opt...)
+	ar, err := artifactregistry.NewService(ctx, withEndpoint(EndpointArtifactRegistry)...)
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building an Artifact Registry client: %w", a.Name, err)
 	}
-	credsSvc, err := iamcredentials.NewService(ctx, opt...)
+	credsSvc, err := iamcredentials.NewService(ctx, withEndpoint(EndpointIAMCredentials)...)
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building an IAM Credentials client: %w", a.Name, err)
 	}
@@ -226,6 +239,9 @@ func (g GoogleConnector) Identity(ctx context.Context, a Admin) (string, error) 
 	client := g.HTTP
 	if client == nil {
 		client = http.DefaultClient
+	}
+	if len(g.Endpoints) > 0 {
+		client = &http.Client{Timeout: client.Timeout, Transport: g.Endpoints.transport(client.Transport)}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://oauth2.googleapis.com/tokeninfo?access_token="+tok.AccessToken, nil)
 	if err != nil {

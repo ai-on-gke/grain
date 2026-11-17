@@ -1,0 +1,1287 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { Component, input, output } from "@angular/core";
+@Component({
+  selector: "g-task-detail",
+  template: '<div id="task-title">#{{id()}}</div>',
+  standalone: true,
+})
+class MockTaskDetailComponent {
+  readonly id = input<string>();
+  readonly pane = input<boolean>();
+  readonly tab = input<string>();
+  readonly closable = input<boolean>();
+  readonly closed = output<void>();
+  readonly expand = output<void>();
+}
+
+import { TaskDetailComponent } from "../task/task-detail.component";
+
+import { TestBed, type ComponentFixture } from "@angular/core/testing";
+import {
+  provideRouter,
+  Router,
+  withComponentInputBinding,
+} from "@angular/router";
+import { RouterTestingHarness } from "@angular/router/testing";
+import { NEVER } from "rxjs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { GrainApi } from "../api/grain-api.service";
+import { GrainEvents } from "../api/grain-events.service";
+import type { Task, TaskDetail } from "../api/models";
+import { AccessService } from "../services/access.service";
+import { KeyboardService } from "../services/keyboard.service";
+import { ViewFilter } from "../services/view-filter.service";
+import { SnackbarService } from "../services/snackbar.service";
+import { AgentsPageComponent } from "./agents-page.component";
+import { AgentsStore } from "./agents.store";
+
+const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+
+class FakeApi {
+  live: Task[] = [];
+  details: Record<string, TaskDetail> = {};
+  sandboxes: unknown = { host: { cpus: 8 } };
+  posts: { route: string; body: unknown }[] = [];
+  postResult: unknown = { delivered_count: 2 };
+  postFails = false;
+  // The list GET answers 304 with the shared newest body, as GrainApi does
+  // after another page took the fresh copy.
+  listUnchanged = false;
+  detailReads: string[] = [];
+  failDetail = new Set<string>();
+
+  getIfChanged = (route: string, p?: { id?: string }, query?: string) => {
+    if (route === "GET /api/tasks") {
+      return Promise.resolve({
+        body: structuredClone(this.live),
+        changed: !this.listUnchanged,
+      });
+    }
+    if (route === "GET /api/tasks/summaries") {
+      const ids =
+        new URLSearchParams(query ?? "")
+          .get("ids")
+          ?.split(",")
+          .filter(Boolean) ?? [];
+      const tasks: Record<string, TaskDetail> = {};
+      for (const id of ids) {
+        this.detailReads.push(id);
+        if (this.failDetail.has(id)) continue;
+        tasks[id] =
+          this.details[id] ??
+          ({ state: "running", attempts: [] } as unknown as TaskDetail);
+      }
+      return Promise.resolve({ body: { tasks }, changed: true });
+    }
+    this.detailReads.push(p?.id ?? "");
+    if (this.failDetail.has(p?.id ?? "")) {
+      return new Promise((_r, rej) => setTimeout(() => rej(new Error("404"))));
+    }
+    return Promise.resolve({
+      body:
+        this.details[p?.id ?? ""] ??
+        ({ state: "running", attempts: [] } as unknown as TaskDetail),
+      changed: true,
+    });
+  };
+  get = () => Promise.resolve(this.sandboxes);
+  post = (route: string, _p: unknown, body: unknown) => {
+    this.posts.push({ route, body });
+    if (this.postFails) {
+      return new Promise((_r, rej) => setTimeout(() => rej(new Error("nope"))));
+    }
+    return Promise.resolve(this.postResult);
+  };
+}
+
+function run(id: string, extra: Partial<Task> = {}): Task {
+  return {
+    id,
+    title: `Task ${id}`,
+    state: "running",
+    activity: `doing ${id}`,
+    activityAt: iso(60000),
+    ...extra,
+  } as Task;
+}
+
+async function render(
+  api: FakeApi,
+): Promise<ComponentFixture<AgentsPageComponent>> {
+  TestBed.configureTestingModule({
+    imports: [AgentsPageComponent],
+    providers: [
+      { provide: GrainApi, useValue: api },
+      { provide: GrainEvents, useValue: { events: () => NEVER } },
+      provideRouter([{ path: "**", children: [] }]),
+    ],
+  });
+  const fixture = TestBed.createComponent(AgentsPageComponent);
+  fixture.autoDetectChanges();
+  const store = TestBed.inject(AgentsStore);
+  await store.refresh();
+  await store.refreshSlow();
+  await fixture.whenStable();
+  return fixture;
+}
+
+const el = (f: ComponentFixture<unknown>) => f.nativeElement as HTMLElement;
+const q = (f: ComponentFixture<unknown>, sel: string) =>
+  el(f).querySelector<HTMLElement>(sel);
+const cards = (f: ComponentFixture<unknown>) =>
+  [...el(f).querySelectorAll<HTMLElement>(".agent-card")].map(
+    (c) => c.dataset["testid"],
+  );
+
+function key(k: string): void {
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", { key: k, bubbles: true }),
+  );
+}
+
+describe("AgentsPageComponent", () => {
+  afterEach(() => document.body.classList.remove("agents-wall"));
+
+  it("shows one card per running task, quiet first with a reason", async () => {
+    const api = new FakeApi();
+    api.live = [
+      run("1"),
+      run("2", { activityAt: iso(25 * 60000) }),
+      run("3", { state: "queued" } as Partial<Task>),
+      run("4", { consoleSession: true } as Partial<Task>),
+    ];
+    const f = await render(api);
+    expect(cards(f)).toEqual(["agent-2", "agent-1"]);
+    const quiet = q(f, '[data-testid="agent-2"]')!;
+    expect(quiet.classList).toContain("is-quiet");
+    expect(
+      quiet.querySelector('[data-testid="quiet-line"]')!.textContent,
+    ).toContain("No update for 25m");
+    expect(
+      q(f, '[data-testid="agent-1"] [data-testid="quiet-line"]'),
+    ).toBeNull();
+    expect(q(f, '[data-testid="agent-1"] a')!.getAttribute("href")).toBe(
+      "/task/1",
+    );
+  });
+
+  it("sums the strip: working, setting up, quiet and tokens", async () => {
+    const api = new FakeApi();
+    api.live = [
+      run("1"),
+      run("2", { activityBySetup: true } as Partial<Task>),
+      run("3", { activityAt: iso(20 * 60000) }),
+    ];
+    api.details = {
+      "1": {
+        state: "running",
+        attempts: [{ number: 1, promptTokens: 1200, model: "m" }],
+      } as unknown as TaskDetail,
+      "3": {
+        state: "running",
+        attempts: [{ number: 2, promptTokens: 300 }],
+      } as unknown as TaskDetail,
+    };
+    const f = await render(api);
+    const s = q(f, '[data-testid="agents-summary"]')!.textContent!.replace(
+      /\s+/g,
+      " ",
+    );
+    expect(s).toContain("1 working");
+    expect(s).toContain("1 setting up");
+    expect(s).toContain("1 quiet");
+    expect(s).toContain(`≈${(1500).toLocaleString()} prompt tokens (est.)`);
+    expect(q(f, '[data-testid="agent-1"] .agent-foot')!.textContent).toContain(
+      "run 1",
+    );
+    expect(q(f, '[data-testid="agent-2"] .grain-chip')).not.toBeNull();
+  });
+
+  it("filters by status and switches to the list layout", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2", { activityAt: iso(20 * 60000) })];
+    const f = await render(api);
+    q(f, '[data-testid="agents-filter-quiet"]')!.click();
+    await f.whenStable();
+    expect(cards(f)).toEqual(["agent-2"]);
+    q(f, '[data-testid="agents-filter-all"]')!.click();
+    q(f, '[data-testid="layout-list"]')!.click();
+    await f.whenStable();
+    expect(cards(f)).toEqual([]);
+    expect(q(f, '[data-testid="agent-table"]')).not.toBeNull();
+    expect(q(f, '[data-testid="agent-row-2"]')!.classList).toContain(
+      "is-quiet",
+    );
+  });
+
+  it("groups by repository", async () => {
+    const api = new FakeApi();
+    api.live = [run("1", { repo: "o/b" }), run("2", { repo: "o/a" })];
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="agents-group"]')!.click();
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="agents-group-opt-repo"]')!.click();
+    await f.whenStable();
+    const heads = [...el(f).querySelectorAll(".band-header")].map(
+      (h) => h.textContent!.trim().split(/\s+/)[0],
+    );
+    expect(heads).toEqual(["o/a", "o/b"]);
+  });
+
+  it("shows CPU as unknown with a reason when there is no probe", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    const f = await render(api);
+    expect(
+      q(f, '[data-testid="agent-1"] .cpu .sr-only')!.textContent,
+    ).toContain("Not sampled: this deployment reported no sandbox");
+    expect(
+      q(f, '[data-testid="agent-1"] .cpu .cpu-none')!.textContent!.trim(),
+    ).toBe("not sampled");
+    expect(q(f, '[data-testid="agent-1"] .cpu-meter')).toBeNull();
+    expect(q(f, '[data-testid="agents-summary"]')!.textContent).not.toContain(
+      "vCPU",
+    );
+  });
+
+  it("draws the CPU meter from a matching sandbox probe", async () => {
+    const api = new FakeApi();
+    api.live = [run("1", { activityAt: iso(15 * 60000) })];
+    api.sandboxes = {
+      sandboxes: [
+        { name: "grain-task-1", cpus: 2, loadAverage: "0.2 0.1 0.1" },
+      ],
+    };
+    const f = await render(api);
+    const card = q(f, '[data-testid="agent-1"]')!;
+    expect(card.querySelector(".cpu-fill")!.classList).toContain("low");
+    expect(card.querySelector<HTMLElement>(".cpu-fill")!.style.width).toBe(
+      "10%",
+    );
+    expect(
+      card.querySelector('[data-testid="quiet-line"]')!.textContent,
+    ).toContain("likely stuck");
+    expect(q(f, '[data-testid="agents-summary"]')!.textContent).toContain(
+      "of 2 vCPU",
+    );
+  });
+
+  it("sends a notice to running agents", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    const f = await render(api);
+    TestBed.inject(AccessService).setConfig(null);
+    q(f, '[data-testid="contact-open"]')!.click();
+    await f.whenStable();
+    const ta = q(f, '[data-testid="contact-text"]') as HTMLTextAreaElement;
+    ta.value = "  please rebase  ";
+    ta.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    q(f, '[data-testid="contact-send"]')!.click();
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    expect(api.posts).toEqual([
+      {
+        route: "POST /api/deployment/broadcast",
+        body: { message: "please rebase", running_only: true },
+      },
+    ]);
+    expect(q(f, '[data-testid="contact-dialog"]')).toBeNull();
+    expect(TestBed.inject(SnackbarService).current()?.message).toContain(
+      "Notice sent to 2 running agents",
+    );
+  });
+
+  it("keeps the dialog open and says so when the notice fails", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    api.postFails = true;
+    const f = await render(api);
+    q(f, '[data-testid="contact-open"]')!.click();
+    await f.whenStable();
+    const ta = q(f, '[data-testid="contact-text"]') as HTMLTextAreaElement;
+    ta.value = "hi";
+    ta.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    q(f, '[data-testid="contact-send"]')!.click();
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    expect(q(f, '[data-testid="contact-dialog"]')).not.toBeNull();
+    expect(TestBed.inject(SnackbarService).current()?.message).toContain(
+      "was not sent",
+    );
+  });
+
+  it("toggles the wall view with f and leaves it with Escape", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    const f = await render(api);
+    key("f");
+    await f.whenStable();
+    expect(document.body.classList).toContain("agents-wall");
+    expect(
+      q(f, '[data-testid="wall-toggle"]')!.getAttribute("aria-pressed"),
+    ).toBe("true");
+    key("Escape");
+    await f.whenStable();
+    expect(document.body.classList).not.toContain("agents-wall");
+    key("f");
+    f.destroy();
+    expect(document.body.classList).not.toContain("agents-wall");
+  });
+
+  it("ignores f when shortcuts are off, and lists it in the help", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    const f = await render(api);
+    const kb = TestBed.inject(KeyboardService);
+    expect(kb.list().some((s) => s.key === "f")).toBe(true);
+    kb.setEnabled(false);
+    key("f");
+    await f.whenStable();
+    expect(document.body.classList).not.toContain("agents-wall");
+    kb.setEnabled(true);
+    f.destroy();
+    expect(kb.list().some((s) => s.key === "f")).toBe(false);
+  });
+
+  it("closes the dialog with Escape from the textarea and returns focus", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    const f = await render(api);
+    q(f, '[data-testid="contact-open"]')!.click();
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    const ta = q(f, '[data-testid="contact-text"]')!;
+    expect(document.activeElement).toBe(ta);
+    expect(q(f, ".agents-panel")!.hasAttribute("inert")).toBe(true);
+    ta.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    expect(q(f, '[data-testid="contact-dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(q(f, '[data-testid="contact-open"]'));
+  });
+
+  it("ignores the search box in wall view and says so", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    const f = await render(api);
+    TestBed.inject(ViewFilter).query.set("Task 1");
+    await f.whenStable();
+    expect(cards(f)).toEqual(["agent-1"]);
+    q(f, '[data-testid="wall-toggle"]')!.click();
+    await f.whenStable();
+    expect(cards(f).sort()).toEqual(["agent-1", "agent-2"]);
+    expect(q(f, '[data-testid="wall-filter-note"]')).not.toBeNull();
+  });
+
+  it("takes the shared newest list from an unchanged answer", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    const f = await render(api);
+    api.live = [run("2")];
+    api.listUnchanged = true;
+    await TestBed.inject(AgentsStore).refresh();
+    await f.whenStable();
+    expect(cards(f)).toEqual(["agent-2"]);
+  });
+
+  it("shows interactive running tasks", async () => {
+    const api = new FakeApi();
+    api.live = [run("1", { interactive: true } as Partial<Task>)];
+    const f = await render(api);
+    expect(cards(f)).toEqual(["agent-1"]);
+  });
+
+  it("drops details of finished runs and does not hammer a failing detail", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    api.failDetail.add("2");
+    const f = await render(api);
+    await new Promise((r) => setTimeout(r, 5));
+    const reads = api.detailReads.filter((id) => id === "2").length;
+    expect(reads).toBeGreaterThan(0);
+    await TestBed.inject(AgentsStore).refresh();
+    await TestBed.inject(AgentsStore).refresh();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(api.detailReads.filter((id) => id === "2").length).toBe(reads);
+    expect(Object.keys(TestBed.inject(AgentsStore).details())).toEqual(["1"]);
+    api.live = [run("3")];
+    await TestBed.inject(AgentsStore).refresh();
+    await TestBed.inject(AgentsStore).refreshSlow();
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    expect(Object.keys(TestBed.inject(AgentsStore).details())).toEqual(["3"]);
+  });
+
+  it("does not claim nothing is running when the list cannot be read", async () => {
+    const api = new FakeApi();
+    api.getIfChanged = () =>
+      new Promise((_r, rej) => setTimeout(() => rej(new Error("down"))));
+    const f = await render(api);
+    expect(q(f, '[role="alert"]')!.textContent).toContain("could not be read");
+    expect(q(f, '[data-testid="agents-empty"]')).toBeNull();
+  });
+
+  it("speaks only the quiet count", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2", { activityAt: iso(20 * 60000) })];
+    const f = await render(api);
+    expect(
+      q(f, '[data-testid="agents-summary"]')!.getAttribute("role"),
+    ).toBeNull();
+    expect(q(f, '[data-testid="agents-live"]')!.textContent!.trim()).toBe(
+      "1 run quiet",
+    );
+  });
+
+  it("points at the Backlog when nothing is running", async () => {
+    const api = new FakeApi();
+    api.live = [run("3", { state: "queued" } as Partial<Task>)];
+    const f = await render(api);
+    const empty = q(f, '[data-testid="agents-empty"]')!;
+    expect(empty.querySelector("a")!.getAttribute("href")).toBe(
+      "/tasks?tab=backlog",
+    );
+    expect(q(f, '[data-testid="contact-open"]')).toBeNull();
+  });
+
+  it("shows a loading state, not 0 working, until the first read completes", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const read = api.getIfChanged;
+    api.getIfChanged = (route: string, p?: { id?: string }) =>
+      route === "GET /api/tasks"
+        ? gate.then(() => read(route, p))
+        : read(route, p);
+    TestBed.configureTestingModule({
+      imports: [AgentsPageComponent],
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+        provideRouter([{ path: "**", children: [] }]),
+      ],
+    });
+
+    TestBed.overrideComponent(AgentsPageComponent, {
+      remove: { imports: [TaskDetailComponent] },
+      add: { imports: [MockTaskDetailComponent] },
+    });
+
+    const f = TestBed.createComponent(AgentsPageComponent);
+    f.autoDetectChanges();
+    await f.whenStable();
+    const summary = q(f, '[data-testid="agents-summary"]')!;
+    expect(summary.textContent).not.toContain("working");
+    expect(q(f, '[data-testid="agents-loading"]')).toBeTruthy();
+    expect(summary.getAttribute("aria-busy")).toBe("true");
+
+    release();
+    await TestBed.inject(AgentsStore).refresh();
+    await f.whenStable();
+    expect(q(f, '[data-testid="agents-loading"]')).toBeNull();
+    expect(summary.textContent).toContain("1");
+    expect(summary.textContent).toContain("working");
+  });
+
+  it("keeps loaded=false and shows load failure note when the initial read fails", async () => {
+    const api = new FakeApi();
+    api.getIfChanged = () =>
+      new Promise((_r, rej) => setTimeout(() => rej(new Error("boom"))));
+    TestBed.configureTestingModule({
+      imports: [AgentsPageComponent],
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+        provideRouter([{ path: "**", children: [] }]),
+      ],
+    });
+
+    TestBed.overrideComponent(AgentsPageComponent, {
+      remove: { imports: [TaskDetailComponent] },
+      add: { imports: [MockTaskDetailComponent] },
+    });
+
+    const f = TestBed.createComponent(AgentsPageComponent);
+    f.autoDetectChanges();
+    await new Promise((r) => setTimeout(r, 15));
+    await TestBed.inject(AgentsStore).refresh();
+    await new Promise((r) => setTimeout(r, 15));
+    await f.whenStable();
+    expect(TestBed.inject(AgentsStore).loaded()).toBe(false);
+    expect(q(f, '[data-testid="agents-load-failed"]')!.textContent).toContain(
+      "Running agents could not be loaded.",
+    );
+  });
+
+  it("shows Part of workstream links on agent cards and table rows", async () => {
+    const api = new FakeApi();
+    api.live = [
+      { id: "90", title: "Voice goal", state: "completed" } as Task,
+      run("1", { origin: "task:90", generatedFrom: "90" }),
+    ];
+    const f = await render(api);
+    const cardLink = q<HTMLAnchorElement>(f, '[data-testid="agent-part-of"]');
+    expect(cardLink?.textContent).toContain("Part of Voice goal");
+    expect(cardLink?.getAttribute("href")).toContain("/workstreams/task:90");
+
+    q<HTMLButtonElement>(f, '[data-testid="layout-list"]')!.click();
+    await f.whenStable();
+    const rowLink = q<HTMLAnchorElement>(
+      f,
+      '[data-testid="agent-row-part-of"]',
+    );
+    expect(rowLink?.textContent).toContain("Part of Voice goal");
+  });
+
+  it("renders polyline sparkline, .is-fresh pulse on recent activity, and reactive Aurora states", async () => {
+    const api = new FakeApi();
+    api.live = [
+      run("1", { activityAt: iso(4000), author: "ana", authorKind: "human" }),
+    ];
+    const f = await render(api);
+
+    const summary = q(f, '[data-testid="agents-summary"]')!;
+    expect(summary.getAttribute("data-aurora-state")).toBe("processing");
+
+    const card = q(f, '[data-testid="agent-1"]')!;
+    expect(card.classList).toContain("is-fresh");
+    expect(card.querySelector(".spark-line")).not.toBeNull();
+    expect(card.querySelector('[data-testid="actor-chip"]')).not.toBeNull();
+
+    // When all agents finish, summary pulses "responding" then settles to "idle".
+    api.live = [];
+    await TestBed.inject(AgentsStore).refresh();
+    await f.whenStable();
+    expect(summary.getAttribute("data-aurora-state")).toBe("responding");
+
+    await new Promise((r) => setTimeout(r, 500));
+    await f.whenStable();
+    expect(summary.getAttribute("data-aurora-state")).toBe("idle");
+  });
+
+  it("renders a split layout with resizer and detail pane", async () => {
+    const api = new FakeApi();
+    api.live = [
+      {
+        id: "7",
+        title: "Task 7",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+    ];
+    const f = await render(api);
+    f.componentRef.setInput("task", "7");
+    f.detectChanges();
+    const split = f.nativeElement.querySelector(".inbox-split");
+    expect(split.classList).toContain("has-pane");
+    expect(split).toBeTruthy();
+    const resizer = f.nativeElement.querySelector(".inbox-resizer");
+    expect(resizer).toBeTruthy();
+    const pane = f.nativeElement.querySelector(".tasks-detail-pane");
+    expect(pane).toBeTruthy();
+  });
+
+  it("shows full-width cards with no agent in focus when no task is in the URL", async () => {
+    const api = new FakeApi();
+    api.live = [
+      {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+    ];
+    const f = await render(api);
+    f.detectChanges();
+    expect(f.nativeElement.querySelector(".agent-card")).toBeTruthy();
+    expect(f.nativeElement.querySelector(".agent-card.is-selected")).toBeNull();
+    expect(f.componentInstance["selectedId"]()).toBeNull();
+    const split = f.nativeElement.querySelector(".inbox-split");
+    expect(split.classList).not.toContain("has-pane");
+    expect(split.classList).not.toContain("is-idle");
+    expect(f.nativeElement.querySelector(".inbox-resizer")).toBeNull();
+    expect(f.nativeElement.querySelector(".tasks-detail-pane")).toBeNull();
+  });
+
+  it("highlights the card matching ?task= parameter", async () => {
+    const api = new FakeApi();
+    api.live = [
+      {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+      {
+        id: "456",
+        title: "Task 456",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+    ];
+    const f = await render(api);
+    f.componentRef.setInput("task", "456");
+    f.detectChanges();
+    const cardElems = Array.from(
+      f.nativeElement.querySelectorAll(".agent-card"),
+    );
+    expect(cardElems[1].classList.contains("is-selected")).toBe(true);
+    expect(cardElems[0].classList.contains("is-selected")).toBe(false);
+  });
+
+  it("steps through agents with j and k keys", async () => {
+    const api = new FakeApi();
+    api.live = [
+      {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+      {
+        id: "456",
+        title: "Task 456",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+    ];
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+
+    // Press j
+    const router = TestBed.inject(Router);
+    vi.spyOn(router, "navigate").mockResolvedValue(true);
+    f.componentInstance["onKey"]({
+      key: "j",
+      target: document.body,
+      preventDefault: () => {},
+    } as unknown as KeyboardEvent);
+    expect(router.navigate).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "456" } }),
+    );
+  });
+
+  it("opens the inspector on the first agent with j or k when none is in focus", async () => {
+    const api = new FakeApi();
+    api.live = [run("123"), run("456")];
+    const f = await render(api);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    for (const k of ["j", "k"]) {
+      f.componentInstance["onKey"]({
+        key: k,
+        target: document.body,
+        preventDefault: () => {},
+      } as unknown as KeyboardEvent);
+    }
+    expect(nav).toHaveBeenCalledTimes(2);
+    for (const call of nav.mock.calls) {
+      expect(call[1]).toEqual(
+        expect.objectContaining({ queryParams: { task: "123" } }),
+      );
+    }
+  });
+
+  it("steps in the order the cards are drawn, not the order the API lists them", async () => {
+    const api = new FakeApi();
+    // 456 has been quiet for 20 minutes, so it sorts first on screen.
+    api.live = [run("123"), run("456", { activityAt: iso(20 * 60_000) })];
+    const f = await render(api);
+    expect(cards(f)).toEqual(["agent-456", "agent-123"]);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const press = (k: string) =>
+      f.componentInstance["onKey"]({
+        key: k,
+        target: document.body,
+        preventDefault: () => {},
+      } as unknown as KeyboardEvent);
+    press("j");
+    expect(nav).toHaveBeenLastCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "456" } }),
+    );
+    f.componentRef.setInput("task", "456");
+    f.detectChanges();
+    press("j");
+    expect(nav).toHaveBeenLastCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "123" } }),
+    );
+    // A search that hides 456 makes 123 the first agent j opens.
+    f.componentRef.setInput("task", undefined);
+    TestBed.inject(ViewFilter).query.set("Task 123");
+    f.detectChanges();
+    expect(cards(f)).toEqual(["agent-123"]);
+    press("j");
+    expect(nav).toHaveBeenLastCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "123" } }),
+    );
+    TestBed.inject(ViewFilter).query.set("");
+  });
+
+  it("leaves the inspector open on Escape typed into a field or an inline confirmation", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const field = document.createElement("textarea");
+    const confirm = document.createElement("div");
+    confirm.className = "confirm-inline";
+    const yes = document.createElement("button");
+    confirm.appendChild(yes);
+    el(f).append(field, confirm);
+    for (const t of [field, yes]) {
+      t.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    }
+    expect(nav).not.toHaveBeenCalled();
+    key("Escape");
+    expect(nav).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: null, pane: null } }),
+    );
+    field.remove();
+    confirm.remove();
+  });
+
+  it("with nothing running and nothing pinned, drops the split for one full-width idle state", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const empty = f.nativeElement.querySelector('[data-testid="agents-empty"]');
+    expect(empty?.textContent).toContain("No agent is running right now.");
+    expect(f.nativeElement.querySelector(".inbox-resizer")).toBeNull();
+    expect(f.nativeElement.querySelector(".tasks-detail-pane")).toBeNull();
+    expect(
+      f.nativeElement
+        .querySelector(".inbox-split")
+        ?.classList.contains("is-idle"),
+    ).toBe(true);
+    const backlog = empty.querySelector('a[href*="tasks"]');
+    expect(backlog?.getAttribute("href")).toContain("tab=backlog");
+  });
+
+  it("shows pinned banner when the selected task leaves the Live set", async () => {
+    const api = new FakeApi();
+    api.live = [
+      {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+    ];
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    expect(
+      f.nativeElement.querySelector('[data-testid="pane-moved"]'),
+    ).toBeNull();
+
+    // Task stops running
+    api.live = [];
+    await TestBed.inject(AgentsStore).refresh();
+    f.detectChanges();
+
+    const banner = f.nativeElement.querySelector('[data-testid="pane-moved"]');
+    expect(banner).toBeTruthy();
+    expect(banner.textContent).toContain("This task is no longer running");
+  });
+
+  it("navigates instead of opening a pane on narrow viewports", async () => {
+    const api = new FakeApi();
+    api.live = [
+      {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+    ];
+    const f = await render(api);
+
+    // Mock isPhone
+    vi.spyOn(
+      f.componentInstance as unknown as { isPhone: () => boolean },
+      "isPhone",
+    ).mockReturnValue(true);
+    f.detectChanges();
+
+    const router = TestBed.inject(Router);
+    vi.spyOn(router, "navigate").mockResolvedValue(true);
+
+    const card = f.nativeElement.querySelector(".agent-card");
+    card.click();
+    expect(router.navigate).toHaveBeenCalledWith(
+      ["/task", "123"],
+      expect.objectContaining({
+        queryParams: expect.objectContaining({ from: "agents" }),
+      }),
+    );
+  });
+
+  it("uses zero <select> elements", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    expect(f.nativeElement.querySelector("select")).toBeNull();
+  });
+
+  it("never renders a dialog under an [inert] ancestor", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const modals = Array.from(
+      f.nativeElement.querySelectorAll('[aria-modal="true"]'),
+    );
+    for (const modal of modals) {
+      let node = modal;
+      while (node && node !== document.body) {
+        expect(node.hasAttribute("inert")).toBe(false);
+        node = node.parentElement;
+      }
+    }
+  });
+});
+
+async function renderRouted(
+  api: FakeApi,
+  url: string,
+): Promise<{ harness: RouterTestingHarness; router: Router }> {
+  TestBed.configureTestingModule({
+    imports: [AgentsPageComponent],
+    providers: [
+      { provide: GrainApi, useValue: api },
+      { provide: GrainEvents, useValue: { events: () => NEVER } },
+      provideRouter(
+        [
+          { path: "agents", component: AgentsPageComponent },
+          { path: "**", children: [] },
+        ],
+        withComponentInputBinding(),
+      ),
+    ],
+  });
+  const harness = await RouterTestingHarness.create();
+  await harness.navigateByUrl(url, AgentsPageComponent);
+  const store = TestBed.inject(AgentsStore);
+  await store.refresh();
+  await store.refreshSlow();
+  await settle(harness);
+  return { harness, router: TestBed.inject(Router) };
+}
+
+async function settle(harness: RouterTestingHarness): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  harness.detectChanges();
+}
+
+describe("AgentsPageComponent selection and inspector", () => {
+  const two = () => [
+    run("123", { activityAt: iso(30_000) }),
+    run("456", { activityAt: iso(30_000) }),
+  ];
+
+  it("marks only the selected card: is-selected and aria-current", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "456");
+    f.detectChanges();
+    const sel = q(f, '[data-testid="agent-456"]')!;
+    const other = q(f, '[data-testid="agent-123"]')!;
+    expect(sel.classList).toContain("is-selected");
+    expect(sel.getAttribute("aria-current")).toBe("true");
+    expect(other.classList).not.toContain("is-selected");
+    expect(other.hasAttribute("aria-current")).toBe(false);
+    expect(sel.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("selects from a click on the card body but leaves the title link alone", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    vi.spyOn(router, "navigateByUrl").mockResolvedValue(true);
+    q(f, '[data-testid="agent-456"] .agent-activity')!.click();
+    expect(nav).toHaveBeenCalledTimes(1);
+    expect(nav).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "456" } }),
+    );
+    q(f, '[data-testid="agent-123"] .agent-title a')!.click();
+    expect(nav).toHaveBeenCalledTimes(1);
+    expect(router.navigateByUrl).toHaveBeenCalled();
+  });
+
+  it("selects the focused card with Enter or Space and does not open the previously selected task", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const card = q(f, '[data-testid="agent-456"]')!;
+    card.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    card.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(nav).toHaveBeenCalledTimes(2);
+    for (const call of nav.mock.calls) {
+      expect(call[0]).toEqual([]);
+      expect(call[1]).toEqual(
+        expect.objectContaining({ queryParams: { task: "456" } }),
+      );
+    }
+  });
+
+  it("selects the card whose CPU reading has focus on Enter, rather than opening the previously selected task", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const cpu = q(f, '[data-testid="agent-456"] [data-testid="agent-cpu"]')!;
+    expect(cpu.getAttribute("tabindex")).toBe("0");
+    for (const key of ["Enter", " "]) {
+      cpu.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    }
+    expect(nav).toHaveBeenCalledTimes(2);
+    for (const call of nav.mock.calls) {
+      expect(call[0]).toEqual([]);
+      expect(call[1]).toEqual(
+        expect.objectContaining({ queryParams: { task: "456" } }),
+      );
+    }
+  });
+
+  it("leaves Enter on a link inside a card to the link", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const link = q(f, '[data-testid="agent-456"] .agent-title a')!;
+    const ev = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    link.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(nav).not.toHaveBeenCalled();
+  });
+
+  it("selects and marks list rows like cards", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    q(f, '[data-testid="layout-list"]')!.click();
+    f.componentRef.setInput("task", "456");
+    await f.whenStable();
+    const sel = q(f, '[data-testid="agent-row-456"]')!;
+    const other = q(f, '[data-testid="agent-row-123"]')!;
+    expect(sel.classList).toContain("is-selected");
+    expect(sel.getAttribute("aria-current")).toBe("true");
+    expect(sel.getAttribute("tabindex")).toBe("0");
+    expect(other.classList).not.toContain("is-selected");
+    expect(other.hasAttribute("aria-current")).toBe(false);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    (other.querySelectorAll("td")[2] as HTMLElement).click();
+    expect(nav).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "123" } }),
+    );
+    other.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(nav).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes the inspector from the bar button, Escape, the pane's close, or the selected card", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const { harness, router } = await renderRouted(api, "/agents?task=456");
+    const root = harness.routeNativeElement as HTMLElement;
+    const open = async () => {
+      await router.navigateByUrl("/agents?task=456&pane=runs");
+      await settle(harness);
+      expect(root.querySelector(".inbox-split")!.classList).toContain(
+        "has-pane",
+      );
+      expect(root.querySelector(".agent-card.is-selected")).not.toBeNull();
+    };
+    const shut = async () => {
+      await settle(harness);
+      expect(router.url).toBe("/agents");
+      expect(root.querySelector(".inbox-split")!.classList).not.toContain(
+        "has-pane",
+      );
+      expect(root.querySelector('[data-testid="agents-pane"]')).toBeNull();
+      expect(root.querySelector(".agent-card.is-selected")).toBeNull();
+      expect(root.querySelectorAll(".agent-card").length).toBe(2);
+    };
+
+    await open();
+    root
+      .querySelector<HTMLElement>('[data-testid="agents-pane-close"]')!
+      .click();
+    await shut();
+
+    await open();
+    key("Escape");
+    await shut();
+
+    await open();
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="agents-pane"] [data-testid="pane-close"]',
+      )!
+      .click();
+    await shut();
+
+    await open();
+    root
+      .querySelector<HTMLElement>('[data-testid="agent-456"] .agent-activity')!
+      .click();
+    await shut();
+    // Escape with nothing in focus leaves the card view as it is.
+    key("Escape");
+    await shut();
+  });
+
+  it("opens the task full screen from the pane's expand button, coming back to Agents", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    const { harness, router } = await renderRouted(api, "/agents?task=123");
+    const root = harness.routeNativeElement as HTMLElement;
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="agents-pane"] [data-testid="pane-expand"]',
+      )!
+      .click();
+    expect(nav).toHaveBeenCalledWith(
+      ["/task", "123"],
+      expect.objectContaining({
+        queryParams: expect.objectContaining({ from: "agents" }),
+      }),
+    );
+  });
+
+  it("switches inspector tabs from the embedded pane", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    api.details = {
+      "1": {
+        id: "1",
+        title: "Task 1",
+        state: "running",
+        attempts: [
+          { number: 1, startedAt: iso(600_000), outcome: "", model: "m" },
+        ],
+        comments: [],
+      } as unknown as TaskDetail,
+    };
+    const { harness, router } = await renderRouted(api, "/agents?task=1");
+    const root = harness.routeNativeElement as HTMLElement;
+    const pane = () => root.querySelector('[data-testid="agents-pane"]')!;
+    const current = () =>
+      pane()
+        .querySelector(".task-tabs [aria-current]")
+        ?.getAttribute("data-testid");
+    const body = () =>
+      pane().querySelector(".task-tab-body")!.textContent!.replace(/\s+/g, " ");
+    expect(current()).toBe("task-tab-conversation");
+
+    pane().querySelector<HTMLElement>('[data-testid="task-tab-runs"]')!.click();
+    await settle(harness);
+    expect(router.url).toContain("pane=runs");
+    expect(current()).toBe("task-tab-runs");
+    expect(pane().querySelector(".task-tab-body h2")!.textContent).toBe("Runs");
+
+    pane()
+      .querySelector<HTMLElement>('[data-testid="task-tab-details"]')!
+      .click();
+    await settle(harness);
+    expect(current()).toBe("task-tab-details");
+    expect(pane().querySelector('[data-testid="task-details"]')).not.toBeNull();
+
+    pane()
+      .querySelector<HTMLElement>('[data-testid="task-tab-conversation"]')!
+      .click();
+    await settle(harness);
+    expect(current()).toBe("task-tab-conversation");
+    expect(body()).toContain("Conversation");
+  });
+});
+
+describe("AgentsPageComponent CPU", () => {
+  const hostRow = (sandbox: string, extra: Record<string, unknown> = {}) => ({
+    sandbox,
+    name: `/data/sandboxes/runs/${sandbox}`,
+    kind: "agent",
+    backend: "host",
+    ready: true,
+    terminationReason: "running",
+    ...extra,
+  });
+
+  it("shows a host run's own CPU in vCPU, joined by run id, with what it measures", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    api.details = {
+      "1": {
+        state: "running",
+        attempts: [{ number: 1 }, { number: 2 }],
+      } as unknown as TaskDetail,
+    };
+    api.sandboxes = {
+      host: { cpus: 24 },
+      sandboxes: [
+        hostRow("1-2", { cpuCores: 1.5, cpuWindowMS: 15000 }),
+        hostRow("12-1", { cpuCores: 9 }),
+        hostRow("2-1", { cpuCores: 0.25, cpuWindowMS: 15000 }),
+      ],
+    };
+    const f = await render(api);
+    const cpu = q(f, '[data-testid="agent-1"] [data-testid="agent-cpu"]')!;
+    expect(cpu.textContent).toContain("1.5 vCPU");
+    expect(cpu.querySelector(".cpu-meter")).not.toBeNull();
+    expect(cpu.querySelector(".sr-only")!.textContent).toContain(
+      "This run's own processes kept 1.50 vCPU busy over the last 15 s: 6% of this host's 24 vCPU",
+    );
+    expect(
+      q(f, '[data-testid="agent-2"] [data-testid="agent-cpu"]')!.textContent,
+    ).toContain("0.3 vCPU");
+    // Two runs on one host count its 24 vCPU once.
+    const strip = q(f, '[data-testid="agents-summary"]')!.textContent!;
+    expect(strip).toContain("CPU 1.8 of 24 vCPU");
+
+    q(f, '[data-testid="layout-list"]')!.click();
+    await f.whenStable();
+    const cell = q(f, '[data-testid="agent-row-1"]')!.querySelectorAll("td")[6];
+    expect(cell.textContent!.trim()).toBe("1.5 vCPU");
+    expect(cell.getAttribute("title")).toContain("this host's 24 vCPU");
+  });
+
+  it("says CPU is not sampled, and why, when a host run has no reading", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    api.sandboxes = { host: { cpus: 24 }, sandboxes: [hostRow("1-1")] };
+    const f = await render(api);
+    const cpu = q(f, '[data-testid="agent-1"] [data-testid="agent-cpu"]')!;
+    expect(cpu.querySelector(".cpu-none")!.textContent!.trim()).toBe(
+      "not sampled",
+    );
+    expect(cpu.querySelector(".sr-only")!.textContent).toContain(
+      "none of this run's processes were found in its directory",
+    );
+    expect(cpu.textContent).not.toContain("—");
+  });
+
+  it("reads a quiet host run with half a core busy as building, not stuck", async () => {
+    const api = new FakeApi();
+    api.live = [run("1", { activityAt: iso(15 * 60000) })];
+    api.sandboxes = {
+      host: { cpus: 24 },
+      sandboxes: [hostRow("1-1", { cpuCores: 0.8, cpuWindowMS: 15000 })],
+    };
+    const f = await render(api);
+    expect(
+      q(f, '[data-testid="agent-1"] [data-testid="quiet-line"]')!.textContent,
+    ).toContain("CPU busy, probably building or testing");
+  });
+
+  it("forwards ?pane= to the embedded g-task-detail [tab] input", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    const { harness } = await renderRouted(api, "/agents?task=123&pane=runs");
+    const el = harness.routeNativeElement as HTMLElement;
+    const current = el.querySelector("g-task-detail .task-tabs [aria-current]");
+    expect(current?.getAttribute("data-testid")).toBe("task-tab-runs");
+  });
+
+  it("renders the embedded g-task-detail containment hierarchy inside .tasks-detail-pane", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    api.details = {
+      "123": {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        attempts: [{ number: 1, startedAt: iso(60_000), outcome: "" }],
+        comments: [],
+      } as unknown as TaskDetail,
+    };
+    const { harness } = await renderRouted(api, "/agents?task=123");
+    const el = harness.routeNativeElement as HTMLElement;
+    const pane = el.querySelector<HTMLElement>(".tasks-detail-pane");
+    const detail = pane?.querySelector<HTMLElement>("g-task-detail");
+    const taskPage = detail?.querySelector<HTMLElement>(".task-page.is-pane");
+    const taskMain = taskPage?.querySelector<HTMLElement>(
+      ".task-layout > .task-main",
+    );
+    const tabBody = taskMain?.querySelector<HTMLElement>(".task-tab-body");
+    const convo = tabBody?.querySelector<HTMLElement>(
+      "g-conversation .convo-thread",
+    );
+
+    expect(pane).not.toBeNull();
+    expect(detail).not.toBeNull();
+    expect(taskPage).not.toBeNull();
+    expect(taskMain).not.toBeNull();
+    expect(tabBody).not.toBeNull();
+    expect(convo).not.toBeNull();
+  });
+});

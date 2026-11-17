@@ -81,7 +81,7 @@ func readMergeRequirements(client github.Client, ref model.PullRequestRef, base 
 	if !ok {
 		return github.MergeRequirements{}, false
 	}
-	req, err := reader.MergeRequirements(ref.Repo.Owner, ref.Repo.Name, ref.Number, base)
+	req, err := reader.MergeRequirements(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, base)
 	if err != nil {
 		// Half an answer is still worth having: the reads are
 		// independent, and a credential that may not read rulesets can
@@ -140,7 +140,7 @@ func githubCheckRuns(client github.Client, ref model.PullRequestRef, sha string,
 	if len(have) > 0 || sha == "" {
 		return have
 	}
-	runs, err := client.ListCheckRuns(ref.Repo.Owner, ref.Repo.Name, sha)
+	runs, err := client.ListCheckRuns(ref.Repo.StoredOwner(), ref.Repo.Name, sha)
 	if err != nil {
 		return nil
 	}
@@ -425,6 +425,9 @@ func sendBackForUnresolvedThreads(ctx context.Context, store *model.Store, clien
 		o.RetryRequestedAt = &now
 	}); err != nil {
 		return false, fmt.Errorf("orchestrator: queueing %s for its unresolved review threads: %w", task.ID, err)
+	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "its unresolved review threads", now); err != nil {
+		return false, err
 	}
 	log.Printf("orchestrator: GitHub refused to merge %s over %d unresolved review thread(s); sending %s another run",
 		ref, len(threads), task.ID)

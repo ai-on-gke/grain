@@ -218,7 +218,7 @@ func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 }
 
 func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(string) bool) ([]InboxItem, error) {
-	tasks, err := cache.list(ctx, c)
+	tasks, err := cache.list(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +287,8 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 		if n.Severity != model.NotificationWarning && n.Severity != model.NotificationCritical {
 			continue
 		}
-		if heldTasks[n.TaskID] && n.Subject == model.HumanReviewNotificationSubject(n.TaskID) {
+		if heldTasks[n.TaskID] && (n.Subject == model.HumanReviewNotificationSubject(n.TaskID) ||
+			n.Subject == model.NotificationSubject(model.FamilyMergeNeedsPerson, n.TaskID)) {
 			// The merge-held item already says it, with the reason.
 			continue
 		}

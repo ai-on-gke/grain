@@ -49,6 +49,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -64,6 +65,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/qa"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
@@ -482,6 +484,12 @@ type Config struct {
 	// Skills is this deployment's default repository skill discovery
 	// configuration (model.Config.Skills), refreshed from grain_config each cycle.
 	Skills *model.SkillsConfig
+	// QA is this deployment's quality control engine and PR rollout configuration
+	// (model.Config.QA), refreshed from grain_config each cycle.
+	QA model.QAConfig
+	// QAProfiler records optional JSONL stage timing and heap allocation deltas
+	// for QA assignment and check stages.
+	QAProfiler *qa.Profiler
 	// TimeZone is this deployment's own clock, model.Config.TimeZone --
 	// "" for one that never set it. It is the zone a run's prompt tells
 	// the time in for a task that names none of its own (RunDispatch);
@@ -719,6 +727,9 @@ type Config struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller-local synchronized state repository used by deployment-health.
 	GrainStateDir string
+	// DataDir is the deployment data directory used for local telemetry such as
+	// Goal Mode performance JSONL profiling (<DataDir>/perf/goal-mode.jsonl).
+	DataDir string
 	// SandboxGuestImage is the reference this deployment's sandboxes are
 	// really created from -- cmd/grain's chooseSandboxImage, the same
 	// value ui.SandboxImage.Image reports.
@@ -985,6 +996,13 @@ type Config struct {
 	// The release-triggered automatic upgrade (reconcileReleaseUpgrade)
 	// follows it; nil leaves that mode with nothing to follow.
 	LatestRelease func(ctx context.Context) (string, error)
+	// ReleaseUpgradeClockOffset, when set, is how far ahead of the real
+	// clock the release-triggered upgrade measures its settle window and
+	// minimum interval (reconcileReleaseUpgrade, watchAutoUpgrade). It is
+	// test-only: a deployment's daemon leaves it nil, and only a grain
+	// built with the grain_debugclock tag sets it (daemon.DebugClockOffset),
+	// so a walkthrough can step past hours of waiting in minutes.
+	ReleaseUpgradeClockOffset func() time.Duration
 	// UpgradeDrainWindow, when non-zero, bounds how long a scheduled upgrade
 	// will wait for in-flight tasks and CI jobs to complete before proceeding
 	// with the upgrade. If the draining window elapses and runs are still active,
@@ -1178,6 +1196,10 @@ type HostSandboxes struct {
 	mu       sync.Mutex
 	live     map[string]*hostSandbox
 	building map[string]bool
+
+	// cpu turns each live run's process-tree CPU time into the rate
+	// Health reports (SandboxHealth.CPUCores).
+	cpu hostCPUSampler
 }
 
 // NewHostSandboxes returns a HostSandboxes rooted at baseDir, which must
@@ -1235,6 +1257,10 @@ func (h *HostSandboxes) IsolatesNetwork() bool { return false }
 // tasks are dispatched to it (checkUnisolated).
 func (h *HostSandboxes) Unisolated() bool { return true }
 
+// Shapeless reports that a host directory has no CPU, memory or disk of
+// its own to size (Acquire refuses every size; template_shape.go).
+func (h *HostSandboxes) Shapeless() bool { return true }
+
 // Acquire implements Sandboxes: a fresh directory under baseDir, named
 // for the run.
 //
@@ -1279,7 +1305,7 @@ func (h *HostSandboxes) Acquire(ctx context.Context, name string, shape Shape) (
 	// A directory left behind by a previous process using this same
 	// -sandbox-dir would otherwise be inherited wholesale, which is the
 	// one thing a sandbox per run exists to rule out.
-	if err := os.RemoveAll(root); err != nil {
+	if err := removeSandboxDir(root); err != nil {
 		return nil, fmt.Errorf("orchestrator: clearing sandbox directory %q: %w", root, err)
 	}
 	// 0700: the checkout may be a private repository, and nobody else on
@@ -1369,7 +1395,7 @@ func (h *HostSandboxes) ReapOrphans(ctx context.Context) (int, error) {
 		}
 		path := filepath.Join(h.baseDir, entry.Name())
 		killDetachedStepRunners(path)
-		if err := os.RemoveAll(path); err != nil {
+		if err := removeSandboxDir(path); err != nil {
 			errs = append(errs, fmt.Errorf("removing orphaned sandbox directory %q: %w", path, err))
 			continue
 		}
@@ -1458,7 +1484,7 @@ func (s *hostSandbox) ConfigureGitCredentials(ctx context.Context, remoteURL, to
 // deployment runs. A run that reaches for this on one backend and is
 // refused on the other would be the more surprising outcome.
 func (s *hostSandbox) Rebuild(ctx context.Context) error {
-	if err := os.RemoveAll(s.root); err != nil {
+	if err := removeSandboxDir(s.root); err != nil {
 		return fmt.Errorf("orchestrator: removing sandbox directory %q to rebuild it: %w", s.root, err)
 	}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
@@ -1485,10 +1511,56 @@ func (s *hostSandbox) Release(ctx context.Context) error {
 			return fmt.Errorf("orchestrator: removing sandbox environment file %q: %w", envFile, err)
 		}
 	}
-	if err := os.RemoveAll(s.root); err != nil {
+	if err := removeSandboxDir(s.root); err != nil {
 		return fmt.Errorf("orchestrator: removing sandbox directory %q: %w", s.root, err)
 	}
 	return nil
+}
+
+// removeSandboxDir removes a host sandbox directory tree that may contain
+// read-only directories or files (such as Go module cache entries under
+// GOPATH/pkg/mod created with 0555/0444 permissions). It skips symlinks so
+// targets outside the sandbox are never modified before removing root.
+func removeSandboxDir(root string) error {
+	root = filepath.Clean(root)
+	if _, err := os.Lstat(root); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, fs.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		isDir := d.IsDir()
+		if !isDir && !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		need := fs.FileMode(0o200)
+		if isDir {
+			need = 0o700
+		}
+		if mode := info.Mode(); mode&need != need {
+			if err := os.Chmod(path, mode|need); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return os.RemoveAll(root)
 }
 
 // SandboxReadopter is a Sandboxes backend that can take back a sandbox a

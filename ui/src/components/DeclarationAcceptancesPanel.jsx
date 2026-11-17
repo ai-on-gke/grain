@@ -23,7 +23,9 @@ import api from "../api.js";
 // person, the scopes they held and the declaration's commit, and its work
 // lands approved for as long as it asks for no more; a declaration that
 // widened past what was accepted shows the new items and waits again.
-export function DeclarationAcceptance({ d, onAccept }) {
+// Revoking clears the acceptance, so its next firing is held again until
+// a person accepts once more.
+export function DeclarationAcceptance({ d, onAccept, onRevoke }) {
   const [busy, setBusy] = useState(false);
   const run = async (fn) => {
     if (busy) return;
@@ -102,6 +104,17 @@ export function DeclarationAcceptance({ d, onAccept }) {
             Accept
           </Button>
         )}
+        {d.acceptedAt && (
+          <Button
+            size="small"
+            variant="outlined"
+            color="error"
+            disabled={busy}
+            onClick={() => run(() => onRevoke(d))}
+          >
+            Revoke
+          </Button>
+        )}
       </Stack>
     </Alert>
   );
@@ -109,7 +122,8 @@ export function DeclarationAcceptance({ d, onAccept }) {
 
 // DeclarationAcceptancesPanel lists every repository declaration that has
 // asked for a grant only a person may give, those awaiting acceptance
-// first, with Accept on each one that is.
+// first, with Accept on each one that is and Revoke on each one a person
+// has accepted.
 export default function DeclarationAcceptancesPanel({ showError }) {
   const [rows, setRows] = useState(null);
   const load = useCallback(async () => {
@@ -141,7 +155,8 @@ export default function DeclarationAcceptancesPanel({ showError }) {
         a host script, a GitHub credential, a dangerous API scope, admission
         above standard, open network access -- is held until a person holding
         its scope accepts it. Accepted work lands approved until the declaration
-        asks for more.
+        asks for more, or until a person holding the same scopes revokes the
+        acceptance.
       </Typography>
       {rows.length === 0 ? (
         <Typography variant="body2" data-testid="declarations-empty">
@@ -155,6 +170,7 @@ export default function DeclarationAcceptancesPanel({ showError }) {
             onAccept={() =>
               post("/api/declarations/accept", { id: d.id, seen: d.requested })
             }
+            onRevoke={() => post("/api/declarations/revoke", { id: d.id })}
           />
         ))
       )}

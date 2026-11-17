@@ -25,7 +25,15 @@
             "polyfills": ["zone.js"],
             "tsConfig": "tsconfig.app.json",
             "baseHref": "/next/",
-            "styles": ["../ui-shared/tokens.css", "src/styles.css"]
+            "assets": [{ "glob": "**/*", "input": "public" }],
+            "styles": ["../ui-shared/tokens.css", "src/styles.css"],
+            "allowedCommonJsDependencies": [
+              "@braintree/sanitize-url",
+              "cytoscape-cose-bilkent",
+              "cytoscape-fcose",
+              "dayjs",
+              "elkjs"
+            ]
           },
           "configurations": {
             "production": {

@@ -564,6 +564,37 @@ describe("GrantsPicker", () => {
     expect(onRemove).toHaveBeenCalledWith(held);
   });
 
+  // grain/task-4797: an edit still waiting out its save delay when its
+  // section was removed was saved as the section unmounted, and that
+  // save put the removed grant back.
+  it("drops an edit not saved yet when its section is removed", async () => {
+    serve({ current: [cloudKey] });
+    const held = grantOf(cloudKey, { account: "dev", ttl: 60 });
+    const onSubmit = vi.fn().mockResolvedValue();
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    const props = {
+      config,
+      onApiChange: vi.fn(),
+      onSubmit,
+      onRemove,
+    };
+    const { rerender } = render(<GrantsPicker grants={[held]} {...props} />);
+    const section = await waitFor(() => {
+      const el = document.querySelector(`[data-grant='${held}']`);
+      expect(el?.querySelector("input")).toBeTruthy();
+      return el;
+    });
+    const ttl = within(section).getByLabelText(/^ttl/);
+    await user.clear(ttl);
+    await user.type(ttl, "90");
+    await user.click(within(section).getByRole("button", { name: /^Remove / }));
+    expect(onRemove).toHaveBeenCalledWith(held);
+    rerender(<GrantsPicker grants={[]} {...props} />);
+    await new Promise((r) => setTimeout(r, 700));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("draws a grant without arguments on one line, flagged when its server is gone", async () => {
     serve({ current: [hostScript] });
     render(
@@ -1175,5 +1206,206 @@ describe("GrantsPicker", () => {
     expect(
       within(readOnlyLine).queryByRole("button", { name: /remove/i }),
     ).toBeNull();
+  });
+
+  it("searches grain/<preset> aliases onto their preset row, flags held dangerous aliases, and draws a one-value repo#credential select", async () => {
+    const repoCredential = {
+      ref: "https://grain.dev/capabilities/repo#credential",
+      capability: "https://grain.dev/capabilities/repo",
+      method: "credential",
+      description: "Named GitHub credential",
+      requiresArgs: true,
+      args: {
+        type: "object",
+        additionalProperties: false,
+        required: ["credential"],
+        properties: {
+          credential: {
+            type: "string",
+            enum: ["default"],
+            description: "Named GitHub credential",
+          },
+        },
+      },
+    };
+    api.mockImplementation(async (path) => {
+      if (path.startsWith("/api/capability-methods")) return [repoCredential];
+      if (path === "/api/capability-grants/check") return [];
+      throw new Error(`unexpected ${path}`);
+    });
+    const config = {
+      capabilityMethods: 1,
+      capabilities: [
+        {
+          id: "api:deployment-ops",
+          preset: true,
+          dangerous: true,
+          scopes: ["deployment:read", "deployment:upgrade"],
+          summary: "Upgrade and restart",
+          description: "Upgrade and restart",
+        },
+        {
+          id: "api:grain/viewer",
+          preset: true,
+          dangerous: false,
+          scopes: ["tasks:read", "ci:read"],
+          summary: "Read everything",
+          description: "Read everything",
+        },
+      ],
+    };
+    const onSubmit = vi.fn().mockResolvedValue();
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={["https://grain.dev/capabilities/api#grain/deployment-ops"]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
+      />,
+    );
+
+    const heldSection = await screen.findByLabelText(
+      "api#grain/deployment-ops (dangerous)",
+    );
+    expect(within(heldSection).getByText(/Dangerous/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const search = screen.getByRole("textbox", { name: "Search grants" });
+    await user.type(search, "grain/deployment-ops");
+    const presetRow = screen.getByRole("menuitemcheckbox", {
+      name: "deployment-ops",
+    });
+    expect(presetRow).toHaveAttribute("aria-checked", "true");
+
+    await user.clear(search);
+    await user.type(search, "repo#credential");
+    await user.click(
+      await screen.findByRole("menuitem", { name: /repo server › credential/ }),
+    );
+    const select = await screen.findByLabelText(/^credential/);
+    await user.click(select);
+    await user.click(screen.getByRole("option", { name: "default" }));
+    await waitFor(
+      () =>
+        expect(onSubmit).toHaveBeenCalledWith(
+          {
+            capability: "https://grain.dev/capabilities/repo#credential",
+            with: { credential: "default" },
+          },
+          null,
+        ),
+      { timeout: 2000 },
+    );
+  });
+
+  it("does not fold a grain/<name> row of its own onto a deployment set of the same name", async () => {
+    api.mockImplementation(async (path) => {
+      if (path.startsWith("/api/capability-methods")) return [];
+      if (path === "/api/capability-grants/check") return [];
+      throw new Error(`unexpected ${path}`);
+    });
+    const config = {
+      capabilityMethods: 0,
+      capabilities: [
+        {
+          id: "api:grain/operator",
+          preset: true,
+          dangerous: true,
+          scopes: ["tasks:admin"],
+          summary: "Operate grain",
+          description: "Operate grain",
+        },
+        {
+          id: "api:operator",
+          preset: true,
+          dangerous: false,
+          scopes: ["tasks:read"],
+          summary: "The deployment's own operator set",
+          description: "The deployment's own operator set",
+        },
+      ],
+    };
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={["https://grain.dev/capabilities/api#grain/operator"]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue()}
+        onRemove={onRemove}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Search grants" }),
+      "operator",
+    );
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "grain/operator" }),
+    ).toHaveAttribute("aria-checked", "true");
+    const deploymentRow = screen.getByRole("menuitemcheckbox", {
+      name: "operator",
+    });
+    expect(deploymentRow).toHaveAttribute("aria-checked", "false");
+    await user.click(deploymentRow);
+    expect(onRemove).not.toHaveBeenCalled();
+  });
+});
+
+// Opening a select in a method section moves focus into its menu, which
+// is a portal outside the section's DOM. That is not focus leaving the
+// section: saving there re-rendered the list mid-pick on a page that
+// saves as it goes, and the option click could be lost (task 6257).
+describe("GrantsPicker ArgsSection focus", () => {
+  beforeEach(() => resetCapabilityMethodsForTest());
+
+  it("does not save when a select in the section opens its menu", async () => {
+    const keyed = {
+      ref: "https://example.com/caps/cloud#keyed",
+      method: "keyed",
+      args: {
+        type: "object",
+        required: ["account"],
+        properties: {
+          account: { type: "string", minLength: 1 },
+          mode: { type: "string", enum: ["alpha", "beta", "gamma"] },
+        },
+      },
+    };
+    serve({ current: [keyed] });
+    const held = `${keyed.ref}=${JSON.stringify({ account: "x", mode: "alpha" })}`;
+    const onSubmit = vi.fn(async () => {});
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[held]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={vi.fn()}
+      />,
+    );
+    const section = await waitFor(() => {
+      const el = document.querySelector(`[data-grant='${held}']`);
+      expect(el?.querySelector('input[data-arg="account"]')).toBeTruthy();
+      return el;
+    });
+    await user.type(within(section).getByLabelText(/^account/), "y");
+    await user.click(within(section).getByRole("combobox"));
+    expect(await screen.findByRole("option", { name: "beta" })).toBeTruthy();
+    // Let a deferred blur save run, if one was (wrongly) scheduled.
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("option", { name: "beta" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0]).toEqual({
+      capability: keyed.ref,
+      with: { account: "xy", mode: "beta" },
+    });
   });
 });

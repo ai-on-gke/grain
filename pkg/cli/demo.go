@@ -62,6 +62,8 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	fs := flag.NewFlagSet("grain demo", flag.ContinueOnError)
 	addr := fs.String("addr", net.JoinHostPort("127.0.0.1", strconv.Itoa(ports.Demo)), "address to serve the demo UI on")
 	actor := fs.String("as", "", "principal to attribute the fake tasks to (defaults to the OS user)")
+	dbDriver := fs.String("db-driver", "sqlite", "database backend driver for the throwaway store (\"sqlite\" or \"postgres\")")
+	dbDSN := fs.String("db-dsn", "", "PostgreSQL connection URL under -db-driver=postgres; empty starts an embedded server in the throwaway directory")
 	defaultTargetRepo := fs.String("default-target-repo", "acme/widgets", "owner/name the fake tasks target")
 	open := fs.Bool("open", true, "open the UI in the system's default browser once it's listening")
 	observability := fs.Bool("observability", false, "serve the live CI and sandbox observability demo")
@@ -166,6 +168,15 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	if *reconcile < 0 {
 		return demo.Options{}, errors.New("-reconcile must not be negative")
 	}
+	switch *dbDriver {
+	case "sqlite":
+		if strings.TrimSpace(*dbDSN) != "" {
+			return demo.Options{}, errors.New("-db-dsn only means something with -db-driver=postgres")
+		}
+	case "postgres":
+	default:
+		return demo.Options{}, fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\" (got %q)", *dbDriver)
+	}
 	repo, err := model.ParseRepo(*defaultTargetRepo)
 	if err != nil {
 		return demo.Options{}, fmt.Errorf("-default-target-repo: %w", err)
@@ -201,6 +212,8 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		AccessCodeFile:         *accessCodeFile,
 		Addr:                   *addr,
 		Actor:                  *actor,
+		DBDriver:               *dbDriver,
+		DBDSN:                  strings.TrimSpace(*dbDSN),
 		Repo:                   repo,
 		Open:                   *open,
 		Observability:          *observability,

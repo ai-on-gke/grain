@@ -136,7 +136,7 @@ Usage: `grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>] [--max N]`
 
 ## 3. CI and pull request
 
-These are scoped by the proxy to the run's task repository and branch. **Needs** `…/grain#ci` (own repository) or `ci-read` (others). `ci retrigger` and `ci run-job` are grain-CI-only.
+These are scoped by the proxy to the run's task repository and branch. **Needs** `…/grain#ci` (own repository) or `ci-read` (others). On a repository GitHub Actions gates (`ci_mode: github`), `ci retrigger` and `ci run-job` need no grant: they re-run the Actions runs at the head of the task's own pull request instead of starting grain CI (§3.7).
 
 ### 3.1 `grain ci list` {#CLI-86}
 
@@ -199,6 +199,8 @@ Usage: `grain ci checks <sha> [--repo owner/name] [--name <check>] [--format git
 
 It then lists the run's jobs, or with `--job` the job's steps, or with `--step` reads `ci://<repo>/<run>/<job>/[attempts/<k>/]<step>.log` (`.log` is added when missing). For `gha:` runs it reads `<job>/job.log`.
 
+`--job` takes a job's name or id. A job name holding a `/` (`pkg/cli stress under load`) is one path segment: a run lists it with `/` written `%2F` (and `%` as `%25`), the namespace reads a job by the most segments that join to its exact name before it splits at `/`, and by the escaped segment, and `grain ci log` escapes the `--job` it is given, so the name, its listed form and its id all read the same log.
+
 Errors:
 - no run on the branch: `<this task's branch|task N's branch> has no grain CI run yet`;
 - a task with no repository and no run id: `this task has no repository or branch, so it has no latest grain CI run: name a run id, with --repo <owner/repo> if you like (`grain ci list --repo <owner/repo>` lists them), or pass --task <id>`.
@@ -220,7 +222,7 @@ Usage: `grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [-
 | `-n` | count (non-negative integer) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`, `TestSandboxCLIOnANoRepoTask`.
+**Pinned by:** `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`, `TestSandboxCLIOnANoRepoTask`. `pkg/sandboxcli/actions_slash_job_test.go`: `TestSandboxCLIReadsAnActionsJobWhoseNameHasASlash`; `pkg/namespace/namespace_test.go`: `TestCIJobWhoseNameHasASlash`.
 
 ### 3.4 `grain ci test-history` {#CLI-89}
 
@@ -302,6 +304,8 @@ The external `grain ci retrigger <run-id>` is [host #CLI-62](host.spec.md#CLI-62
 
 `POST /cli/ci/retrigger` with `{"jobs"?, "all"?, "commit"?, "workflow"?}`. Reruns failed or named jobs fresh and uncached.
 
+On a repository GitHub Actions gates (`ci_mode: github`) it re-runs the GitHub Actions runs at the head of the task's own pull request (its branch's newest commit with runs, before one is open), through the daemon's forge connection, with no commit pushed: `POST .../actions/runs/{id}/rerun-failed-jobs` for each concluded red or cancelled run by default, `.../runs/{id}/rerun` with `--all`, and, for `--jobs`, `.../actions/jobs/{id}/rerun` when it names one job of a run (GitHub re-runs one job, all failed jobs or every job of a run at once, so naming several jobs of one run is refused unless they are exactly its failed jobs or all of them, which take the two calls above). `grain ci run-job <job>` does the last for one job and answers as a wait still running, to be followed by `grain ci wait`. The request names no repository or run, and a `--commit` that is not that head is refused, so a run re-runs only its own pull request's checks; re-running any other run is `POST /api/ci/runs/{id}/rerun`, which needs `ci:write` on that run's repository. No run at one commit is re-run more than 3 times (`ui.MaxActionsRerunsPerHead`), counted from GitHub's `run_attempt`, so the merge queue's automatic re-runs of a runner fault count towards it.
+
 <!-- BEGIN GENERATED FLAGS: grain ci retrigger -->
 Usage: `grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]`
 
@@ -313,7 +317,7 @@ Usage: `grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <
 | `--workflow` | string |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`.
+**Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/gitproxy/cli_actions_test.go`: `TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode`; `pkg/ui/ci_actions_rerun_test.go`: `TestRetriggerOnGitHubActionsReRunsTheRunsAtTheTasksOwnHead`, `TestRetriggerOnGitHubActionsRefusesAnotherTasksChecks`, `TestRetriggerOnGitHubActionsIsBoundedPerHead`.
 
 ### 3.8 `grain pr …` {#CLI-94}
 

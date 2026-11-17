@@ -143,13 +143,18 @@ func TestListGrainTasksFilters(t *testing.T) {
 		{ID: "833", Title: "a repair", State: "queued", Kinds: []string{"repair"}, Stall: "queued too long", ChangedAt: &old},
 		{ID: "834", Title: "stuck merge", State: "completed", ChangedAt: &old,
 			MergeQueue: TaskMergeQueue{State: "waiting_ci", StalledAt: &stalledAt}},
+		// Queued on a failed task (task 4856): stalled with no Stall of its own.
+		{ID: "835", Title: "waits on a failure", State: "queued", ChangedAt: &old, BlockedBy: []string{"4822"},
+			Reason: &TaskReason{Reason: reasonBlockedOnPerson, Resource: "a person acting on task 4822 (failed -- Retry or close it)"}},
+		{ID: "836", Title: "waits on a run", State: "queued", ChangedAt: &old, BlockedBy: []string{"4823"},
+			Reason: &TaskReason{Reason: "queued/blocked_on_task"}},
 	}}
 	for _, tc := range []struct {
 		args map[string]any
 		want []string
 	}{
 		{map[string]any{"changed_since": "1h"}, []string{"832"}},
-		{map[string]any{"stalled": true}, []string{"833", "834"}},
+		{map[string]any{"stalled": true}, []string{"833", "834", "835"}},
 		{map[string]any{"kind": "port"}, []string{"832"}},
 		{map[string]any{"kind": "repair", "stalled": true}, []string{"833"}},
 	} {

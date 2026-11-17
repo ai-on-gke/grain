@@ -241,7 +241,7 @@ func install(args []string, stdout, stderr io.Writer) int {
 	// 2. A registered transport's own preparation, done before contacting the
 	// controller so template fetches, enrollment and the first start can use it.
 	unit := unitConfig{Bin: p.Bin, Server: *server, Name: *name, IAPAudience: *iapAudience,
-		Token: p.Token, Allowlist: p.Allowlist, StateDir: p.StateDir}
+		Token: p.Token, Allowlist: p.Allowlist, StateDir: p.StateDir, Guard: layoutFor(home).Guard}
 	if t := transportFor(u); t != nil && t.Prepare != nil {
 		extra, err := t.Prepare(ctx, InstallConfig{Server: u, Home: home, StateDir: p.StateDir})
 		if err != nil {
@@ -327,6 +327,9 @@ func install(args []string, stdout, stderr io.Writer) int {
 		if token == "" {
 			if have, _ := readTokenFile(p.Token); have != "" {
 				step("keeping the token in %s (set %s to replace it)", p.Token, TokenEnv)
+				if st, err := os.Stat(p.Key); err == nil && st.Mode().IsRegular() {
+					unit.Key = p.Key
+				}
 			} else if token, err = promptToken(); err != nil {
 				fmt.Fprintln(stderr, Program+" install: "+err.Error())
 				return 2
@@ -341,7 +344,14 @@ func install(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// 5. The unit.
+	// 5. The unit, and the update rollback guard it runs first.
+	if err := os.MkdirAll(layoutFor(home).Lib, 0o755); err == nil {
+		err = writeGuard(layoutFor(home))
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, Program+" install: writing the update guard: "+err.Error())
+		return 1
+	}
 	text, err := renderUnit(unit)
 	if err != nil {
 		fmt.Fprintln(stderr, Program+" install: "+err.Error())
@@ -417,6 +427,9 @@ func readTokenFile(path string) (string, error) {
 
 type unitConfig struct {
 	Bin, Server, Name, IAPAudience, Token, Key, Allowlist, StateDir string
+	// Guard is `grain-agentd update`'s rollback guard (guardScript), the
+	// unit's ExecStartPre.
+	Guard string
 	// Extra are a transport's own flags (Transport.Prepare).
 	Extra []string
 }
@@ -440,13 +453,34 @@ func (u unitConfig) commandLine() string {
 	return u.Bin + " " + strings.Join(u.args(), " ")
 }
 
+// unitTemplate restarts grain-agentd whenever it exits, not only on a
+// failure: a drain or cutover (OpDrain) ends with grain-agentd exiting 0
+// so the binary ~/.local/bin/grain-agentd now names takes over, as
+// grain-hostd.service does with Restart=always. With Restart=on-failure a
+// drained host stayed offline, and a run whose Exit frame raced the drain
+// waited out the daemon's re-attach window
+// (docs/test-runs/2026-11-11-host-agent-contract.md). systemctl --user
+// stop still stops it: a stop is never restarted.
+//
+// KillMode=mixed sends SIGTERM to grain-agentd alone, so a stop or restart
+// lets Serve mark its running CLIs with killStopping (interrupted) rather
+// than racing a cgroup-wide SIGTERM that can reap a CLI as a plain failure
+// first, and then sends SIGKILL to anything left in the cgroup once
+// grain-agentd exits (or crashes), so stopped or uninstalled units never
+// leak unsupervised CLIs. KillMode=process would not keep detached runs
+// usable across a PID-changing restart anyway: hostd spawns CLIs directly
+// (Wait4 needs ppid == os.Getpid() in canAdoptLiveSpool), holds their
+// deadline timers and remote OpListen loopback endpoints in-process, and
+// kills unadoptable survivors in ReapRecorded.
 var unitTemplate = template.Must(template.New("unit").Parse(`[Unit]
 Description={{.Program}}: agent CLIs for the grain daemon at {{.Server}}
 After=network-online.target
 
 [Service]
+ExecStartPre=-/bin/sh {{.Guard}}
 ExecStart={{.Command}}
-Restart=on-failure
+KillMode=mixed
+Restart=always
 RestartSec=10
 
 [Install]
@@ -456,13 +490,13 @@ WantedBy=default.target
 // renderUnit is the systemd --user unit that runs u. It refuses a value
 // that would need quoting there rather than quote it.
 func renderUnit(u unitConfig) (string, error) {
-	for _, v := range append([]string{u.Bin}, u.args()...) {
+	for _, v := range append([]string{u.Bin, u.Guard}, u.args()...) {
 		if strings.ContainsAny(v, " \t\n\"'\\%$") {
 			return "", fmt.Errorf("%q cannot go in a systemd unit as it is (spaces, quotes or %%)", v)
 		}
 	}
 	var b strings.Builder
-	err := unitTemplate.Execute(&b, struct{ Program, Server, Command string }{Program, u.Server, u.commandLine()})
+	err := unitTemplate.Execute(&b, struct{ Program, Server, Command, Guard string }{Program, u.Server, u.commandLine(), u.Guard})
 	return b.String(), err
 }
 

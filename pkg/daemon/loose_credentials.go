@@ -240,7 +240,9 @@ func fileSecretsBeside(dataDir string) *secrets.Store {
 	if _, err := os.Stat(cfg.KeyFile); err != nil {
 		return nil
 	}
-	return secrets.Open(cfg)
+	// Shared: RepoToken asks on every sync, and a fresh store per ask
+	// is a Cloud KMS unwrap per ask when the key is wrapped.
+	return secrets.OpenShared(cfg)
 }
 
 // repoTokenSecrets is the file store a repository token is kept in: the
@@ -254,7 +256,9 @@ func repoTokenSecrets(dataDir string) *secrets.Store {
 	if _, err := os.Stat(cfg.KeyFile); err != nil {
 		return nil
 	}
-	return secrets.Open(cfg)
+	// Shared: RepoToken asks on every sync, and a fresh store per ask
+	// is a Cloud KMS unwrap per ask when the key is wrapped.
+	return secrets.OpenShared(cfg)
 }
 
 // storedRepoTokenName is the repoTokenNames entry tokenFile is the

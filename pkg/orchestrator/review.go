@@ -101,6 +101,9 @@ func SyncReviews(ctx context.Context, store *model.Store, now time.Time) error {
 	if err := closeObsoleteReviews(ctx, store, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := releaseStaleReviewDependencies(ctx, store, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -233,6 +236,7 @@ func closeFinishedReview(ctx context.Context, store *model.Store, task model.Tas
 	}); err != nil {
 		return err
 	}
+	refreshQueuedReviewsAfterFinish(ctx, store, nil, task)
 	return reviewComment(ctx, store, task.ID, reviewFinishedNote(task), now)
 }
 
@@ -290,7 +294,7 @@ func reviewTaskLink(task model.Task) (string, bool) {
 // change of its own. syncEntry treats it exactly the way it treats a fix
 // task: never a queue entry in its own right, and merged into the branch
 // it was filed against the moment it reads clean.
-func isReviewTask(task model.Task) bool { return task.Origin.Reason == model.ReasonReview }
+func isReviewTask(task model.Task) bool { return task.Filing.Reason == model.ReasonReview }
 
 // reviewsInPlace reports whether task is a review working on the reviewed
 // change's own branch (model.LinkPushesReviewedBranch), and which task
@@ -341,7 +345,7 @@ func reviewsInPlace(task model.Task) (reviewedID string, ok bool) {
 // work nobody will ever see, so it is set here regardless of what the
 // template says about the tasks it files anywhere else.
 //
-// Origin.Reason is ReasonReview, which is what isReviewTask reads and
+// Filing.Reason is ReasonReview, which is what isReviewTask reads and
 // therefore what keeps the review out of its repo's merge queue as an
 // entry in its own right. It is deliberately not ReasonFix: that reason
 // draws on the capacity model.Limits.Mergers keeps back for the merge
@@ -372,11 +376,23 @@ func fileReviewTask(ctx context.Context, store *model.Store, task model.Task,
 			task.ID, task.ReviewTemplateID)
 	}
 
-	reviewTask, err := putStackedReview(ctx, store, task, *tmpl,
-		reviewTaskTitle(*tmpl, task), reviewTaskBody(*tmpl, task, ref, task.BranchName()), now)
+	headSHA := knownTaskHead(task)
+	body := reviewTaskBody(*tmpl, task, ref, task.BranchName()) +
+		earlierReviewsSection(ctx, store, nil, &task, ref, headSHA, "") +
+		parallelReviewsSection(parallelReviewsFor(ctx, store, &task, ref, headSHA, ""))
+	reviewTask, err := newReview(ctx, store, task, *tmpl, reviewTaskTitle(*tmpl, task), body, false, now)
 	if err != nil {
 		return err
 	}
+	if ref != (model.PullRequestRef{}) {
+		reviewTask.Links = append(reviewTask.Links,
+			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
+	}
+	reviewTask.Tags = addReviewHeadTag(reviewTask.Tags, headSHA)
+	if err := store.PutTask(ctx, reviewTask); err != nil {
+		return fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
+	}
+	syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
 	branch := task.BranchName()
 
 	// Through UpdateTask, for the reason finishWithPullRequest gives: the
@@ -495,13 +511,17 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 			task.ID, tmpl.Admission, tmpl.ID, admission)
 	}
 	reviewTask := model.Task{
-		ID:        id,
-		Intent:    model.IntentImplement,
-		Title:     title,
-		Body:      body,
-		Admission: admission,
-		Hosting:   model.NormalizeHosting(tmpl.Hosting),
-		Origin: model.Origin{
+		ID:     id,
+		Intent: model.IntentImplement,
+		// A review gates the change it reviews, so it runs at that
+		// change's priority, and never below model.ReviewPriorityFloor.
+		Priority:         model.ReviewPriority(task),
+		Title:            title,
+		Body:             body,
+		SourceTemplateID: tmpl.ID,
+		Admission:        admission,
+		Hosting:          model.NormalizeHosting(tmpl.Hosting),
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,
 		},
@@ -560,14 +580,46 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 // in the title of the task or the body an agent is handed is worse than
 // the empty string a field with no default means.
 func reviewTaskTitle(tmpl model.Template, task model.Task) string {
-	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, tmpl.FieldValues(nil))); title != "" {
+	values := tmpl.FieldValues(nil)
+	if _, ok := values["task_title"]; !ok {
+		// {{task_title}}, as a gating trigger's review fills it
+		// (buildPullRequestReview), unless the template declares a field
+		// of that name itself.
+		if values == nil {
+			values = map[string]string{}
+		}
+		values["task_title"] = reviewSubjectTitle(task)
+	}
+	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, values)); title != "" {
 		return title
 	}
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
+	return "Review: " + reviewSubjectTitle(task)
+}
+
+// reviewSubjectTitle is how a review's title names the task under review:
+// its title, or its ID when it has none. Review templates read it as
+// {{task_title}}.
+func reviewSubjectTitle(task model.Task) string {
+	if title := strings.TrimSpace(task.Title); title != "" {
+		return title
 	}
-	return "Review: " + title
+	return task.ID
+}
+
+// targetedReviewTitle names the review sensitive path triggers file
+// without a template of their own (grain's security review brief, filed
+// for the trigger rather than the trust-boundary hold): "Targeted review
+// (<trigger>, ...): <task title>", every trigger it serves listed in
+// name order so one review for several reads the same whichever matched
+// first. The trust-boundary hold's own review keeps securityReviewTitle.
+func targetedReviewTitle(task model.Task, triggers []string) string {
+	names := slices.Clone(triggers)
+	slices.Sort(names)
+	names = slices.Compact(names)
+	if len(names) == 0 {
+		return "Targeted review: " + reviewSubjectTitle(task)
+	}
+	return "Targeted review (" + strings.Join(names, ", ") + "): " + reviewSubjectTitle(task)
 }
 
 // reviewTaskBody is the template's instructions with the subject of the
@@ -605,6 +657,7 @@ func reviewTaskBody(tmpl model.Template, task model.Task, ref model.PullRequestR
 		task.ID, task.Title, branch, ref, branch, branch, task.ID, ref, task.ID)
 	b.WriteString("\n\n" + reviewTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
+	b.WriteString("\n\n" + changeUnderReviewSection(task, true))
 	return b.String()
 }
 

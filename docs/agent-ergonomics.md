@@ -482,7 +482,11 @@ and `force`, and works in two modes:
   depends-on links (`POST /api/tasks/{id}/wait-on`, `ui.Client.WaitOn`).
   `processResult` records the run as `parked` (which no failure streak
   counts) and leaves the task queued. The scheduler dispatches it again
-  once the targets close, or once a person removes the links. The next
+  once the targets close, or once a person removes the links. The links
+  the park wrote are the park's own: they are recorded on its suspension
+  (`ResumeOn.Links`), and the run that resumes it removes them
+  (`resumeSuspensionsTx`), so a target reopened later holds the task no
+  more. A dependency the task already declared stays. The next
   prompt says it resumed from a park and how each target ended
   (`parkedResumeSection`). The sandbox does not survive a park, so a park
   with unpushed commits or uncommitted changes is refused unless
@@ -512,7 +516,10 @@ and `force`, and works in two modes:
 The refusals are the dependency picker's own (`dependsOnLinks`): the task
 itself, an unknown id, a standing chat or director session, or a task
 that already waits on this one. A waiting run sees only a target's title,
-state, outcome and its runs' closing note, never its transcript. When a
+state, outcome and its runs' closing note, never its transcript -- and
+when the target belongs to a repository or workspace outside the waiting
+task's own target, `reads` and `writes` (`Store.WaitTargetFor`), its
+title and closing note are withheld (`withheld: true`) too. When a
 run is *filing* follow-up work, `propose_task`'s `depends_on` is still
 the right tool. `wait_for_task` is for the run that has to wait itself.
 

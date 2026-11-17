@@ -229,6 +229,11 @@ const (
 	// FamilyMergeStalled is a merge-queue entry handed to a person past
 	// its patience, "<task>".
 	FamilyMergeStalled = "pipeline.merge-stalled"
+	// FamilyMergeNeedsPerson is a pull request the merge queue has given
+	// up driving (merge_failed: repairs spent, checks no branch reaches,
+	// CI that never reported), "<task>" -- raised whether or not the
+	// change has been approved, so the person it was handed to hears it.
+	FamilyMergeNeedsPerson = "pipeline.merge-needs-person"
 	// FamilyMergeBatch is a merge batch that failed to answer or ran
 	// long, "<repo>@<branch>" (one batch per base branch at a time).
 	FamilyMergeBatch = "pipeline.batch"
@@ -250,6 +255,18 @@ const (
 	// (orchestrator's stage1repair.go). It clears when the repair runs or
 	// Stage 1 is green again.
 	FamilyNightlyRedUnattended = "pipeline.nightly-red-unattended"
+	// FamilyBaseRedUnattended is a red default branch on GitHub Actions
+	// (a gating workflow such as tests.yml concluded failure on it) whose
+	// repair task nobody is working on, on the same patience as
+	// FamilyNightlyRedUnattended, "<repo>" (orchestrator's
+	// githubbaserepair.go). It clears when the repair runs or closes.
+	FamilyBaseRedUnattended = "pipeline.base-red-unattended"
+	// FamilyBaseNoVerdict is a default branch on GitHub Actions whose
+	// gating workflows have run but reached no verdict -- every run
+	// cancelled by the next push -- for orchestrator.GitHubBaseNoVerdictAfter, which
+	// stalls a release train that cuts only from a green commit, "<repo>"
+	// (orchestrator's githubbaserepair.go). It clears on the next verdict.
+	FamilyBaseNoVerdict = "pipeline.base-no-verdict"
 	// FamilyReleaseLoopIdle is a repository running the continuous release
 	// loop (design/playbook/releases.playbook.md §15) that has had no
 	// release candidate in qualification past ReleaseLoopIdleAfter while

@@ -325,6 +325,11 @@ var settingsDiffRows = []settingsDiffRow{
 	// line around it.
 	{"promptExtension", "prompt extension", func(s ui.Settings) any { return s.PromptExtension }},
 	{"skills", "skills", func(s ui.Settings) any { return model.EncodeSkillsConfig(s.Skills) }},
+	{"qaEnabled", "qa enabled", func(s ui.Settings) any { return s.QAEnabled }},
+	{"qaFlowId", "qa flow id", func(s ui.Settings) any { return s.QAFlowID }},
+	{"qaRolloutPct", "qa rollout pct", func(s ui.Settings) any { return s.QARolloutPct }},
+	{"qaShadowOnControl", "qa shadow on control", func(s ui.Settings) any { return s.QAShadowOnControl }},
+	{"qaEpoch", "qa epoch", func(s ui.Settings) any { return s.QAEpoch }},
 	{"taskBranchTemplate", "task branch template", func(s ui.Settings) any { return s.TaskBranchTemplate }},
 	{"deploymentId", "deployment id", func(s ui.Settings) any { return s.DeploymentID }},
 	{"repairTemplateID", "repair template", func(s ui.Settings) any { return s.RepairTemplateID }},

@@ -116,6 +116,14 @@ func (g Grant) MayFile(stem string) bool {
 	return g.Holds("tasks:from-template") && (g.AnyTemplate || slices.Contains(g.Templates, stem))
 }
 
+// HoldsReleaseGate reports whether the grant holds every scope of the
+// api:release-gate-read preset (ci:read, tasks:read, sandboxes:read, and
+// tasks:from-template covering release-notes), which is what
+// POST /api/notifications/release-pending requires.
+func (g Grant) HoldsReleaseGate() bool {
+	return g.Holds("ci:read") && g.Holds("tasks:read") && g.Holds("sandboxes:read") && g.MayFile("release-notes")
+}
+
 // Tokens is the registry of live tokens. Safe for concurrent use; the
 // zero value is not -- use NewTokens.
 type Tokens struct {
@@ -560,6 +568,40 @@ func placements(listener, token string) []model.Placement {
 		{Side: model.SideSandbox, Path: EnvPath, Content: fmt.Sprintf("export %s=%q\nexport %s=%q\n",
 			URLEnv, listener, TokenEnv, token)},
 	}
+}
+
+// StepEnv is URLEnv and TokenEnv as a job's steps are to see them, read
+// back out of the placements Materialize returned among materialized, and
+// nil when none of them is this provider's.
+//
+// The files alone do not reach every step: a host sandbox writes a
+// placement under its run's own directory, where an absolute
+// /home/debian/.grain-api names nothing and HOME is that directory, not
+// the placement's parent. The CI executor exports these in every step
+// instead, whatever kind of sandbox the job runs in.
+func StepEnv(materialized []model.Materialized) map[string]string {
+	var env map[string]string
+	for _, m := range materialized {
+		for _, pl := range m.Materialization.Placements {
+			if pl.Side != model.SideSandbox {
+				continue
+			}
+			var name string
+			switch pl.Path {
+			case URLPath:
+				name = URLEnv
+			case TokenPath:
+				name = TokenEnv
+			default:
+				continue
+			}
+			if env == nil {
+				env = map[string]string{}
+			}
+			env[name] = strings.TrimSuffix(pl.Content, "\n")
+		}
+	}
+	return env
 }
 
 // Revoke drops the token the lease names.

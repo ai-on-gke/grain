@@ -116,7 +116,9 @@ var notSettings = []string{
 	"task_read",
 	"task_write",
 	"task_filed_template",
+	"task_source_template",
 	"task_grant",
+	"qa_flow_version",
 	"task_link",
 	"task_tag",
 	// Which comment grain keeps on a work tree's GitHub origin, and what it
@@ -480,6 +482,14 @@ var notSettings = []string{
 	// (model.CIStepAttachment): written while a step runs so a restart
 	// can reattach it, and deleted when its job is done.
 	"ci_step_attachment",
+	// Sticky per-tree QA rollout assignments, per-run check verdicts and
+	// individual QA findings (model.QAAssignment, model.QACheckRun,
+	// model.QAFinding): runtime telemetry and task execution history.
+	"task_qa_assignment",
+	"task_qa_check_run",
+	"task_qa_finding",
+	"qa_experiment",
+	"qa_enrollment",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a

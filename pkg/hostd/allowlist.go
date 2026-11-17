@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -122,6 +123,70 @@ type Allowlist struct {
 	// built-in login table so existing allowlists keep working; an empty
 	// map ("logins: {}") lends none.
 	Logins map[string]string `yaml:"logins"`
+	// Update is the owner's policy for `grain-agentd update`
+	// (FeatureSelfUpdate); absent is mode offer with no pin. Only a host
+	// agent that lists FeatureSelfUpdate reads it, and an older one
+	// refuses the key, so add it only once the host runs such a build.
+	Update UpdatePolicy `yaml:"update"`
+}
+
+// The update: modes (UpdatePolicy.Mode).
+const (
+	// UpdateOff refuses every update: the owner updates by reinstalling.
+	UpdateOff = "off"
+	// UpdateOffer, the default, has the controller show an available
+	// release, and the owner run `grain-agentd update` to take it.
+	UpdateOffer = "offer"
+	// UpdateAuto is reserved for the controller asking for the update
+	// itself (design/design/agentd-stable-contract.design.md, "The safety
+	// valve"). Not implemented: it behaves as offer.
+	UpdateAuto = "auto"
+)
+
+// UpdatePolicy is the allowlist's update: section. The controller can
+// never write it: it lives in the host-owned allowlist.
+//
+//	update:
+//	  mode: offer     # off | offer | auto (auto: not yet implemented)
+//	  pin: v3.*       # optional: never leave this range
+type UpdatePolicy struct {
+	// Mode is UpdateOff, UpdateOffer (the default when empty) or
+	// UpdateAuto.
+	Mode string `yaml:"mode"`
+	// Pin is a version or a glob over versions (path.Match: "v3.*",
+	// "v3.4.?") an update must match. A pin naming one exact version
+	// is also the only way to move to an older release.
+	Pin string `yaml:"pin"`
+}
+
+// EffectiveMode is p.Mode, or UpdateOffer when unset.
+func (p UpdatePolicy) EffectiveMode() string {
+	if p.Mode == "" {
+		return UpdateOffer
+	}
+	return p.Mode
+}
+
+// Allows reports whether version is inside p's pin (any version, with
+// no pin).
+func (p UpdatePolicy) Allows(version string) bool {
+	if p.Pin == "" {
+		return true
+	}
+	ok, err := path.Match(p.Pin, version)
+	return err == nil && ok
+}
+
+func (p UpdatePolicy) validate() error {
+	switch p.Mode {
+	case "", UpdateOff, UpdateOffer, UpdateAuto:
+	default:
+		return fmt.Errorf("hostd allowlist: update.mode %q: want off, offer or auto", p.Mode)
+	}
+	if _, err := path.Match(p.Pin, ""); err != nil || strings.ContainsAny(p.Pin, "/ \t\n") {
+		return fmt.Errorf("hostd allowlist: update.pin %q is not a version or a version glob like v3.*", p.Pin)
+	}
+	return nil
 }
 
 // DefaultDrainCap is the allowlist's drain_cap when it sets none.
@@ -162,7 +227,8 @@ type Entry struct {
 	CwdUnder []string `yaml:"cwd_under"`
 	// Env are the variable names the daemon may set, exactly, as a
 	// "PREFIX_*" pattern, or "*" for any variable outside the contract's
-	// frozen deny set (EnvDeny: identityEnv, LD_*, and injectionEnv). Any
+	// frozen deny set (EnvDeny: identityEnv, LD_*, and injectionEnv, plus
+	// envDenyV2 under FeatureEnvDenyV2). Any
 	// other name in a request refuses it, and so does a name set_env or
 	// pass_env already supplies. Denied names are admitted only by their
 	// exact name, never by "*" or a pattern; listing one hands the daemon
@@ -217,6 +283,9 @@ func ParseAllowlist(data []byte) (*Allowlist, error) {
 		if k == "" || strings.ContainsAny(k+v, ",= ") {
 			return nil, fmt.Errorf("hostd allowlist: label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
 		}
+	}
+	if err := a.Update.validate(); err != nil {
+		return nil, err
 	}
 	for name, p := range a.Logins {
 		if !validName(name) {
@@ -576,8 +645,81 @@ func envDenyPatterns() []string {
 	return out
 }
 
+// envDenyV2 is what FeatureEnvDenyV2 adds to envDenyPatterns: the other
+// startup, module-path and command variables of the loaders, shells,
+// interpreters and tools an agent CLI runs, which the 2026-11-11 contract
+// walkthrough found admitted under env: ["*"]
+// (docs/test-runs/2026-11-11-host-agent-contract.md, item 2). A value like
+// "-javaagent:x" or "core.pager=x" is not path-like, so paths_under never
+// sees it, and a module path under paths_under is in the stage directory
+// the daemon writes. A trailing "*" is a prefix. The daemon sends none of
+// these (claude, codex and antigravity's HostdEnv); one a capability needs
+// is listed by exact name. Append only, under a new feature.
+var envDenyV2 = []string{
+	// The macOS dynamic loader (LD_* is Linux's) and glibc's iconv modules.
+	"DYLD_*",
+	"GCONV_PATH",
+	// Shells: options set at startup, and commands run before a prompt or
+	// expanded with every xtrace line.
+	"BASHOPTS",
+	"SHELLOPTS",
+	"PROMPT_COMMAND",
+	"PS4",
+	"ZDOTDIR",
+	// Interpreter module paths, and Python's warning filters, whose
+	// dotted category is imported at startup (with BROWSER, a known
+	// stdlib-only way to run a command).
+	"NODE_PATH",
+	"PYTHONHOME",
+	"PYTHONUSERBASE",
+	"PERL5LIB",
+	"PERLLIB",
+	"PERL5DB",
+	"RUBYLIB",
+	"PYTHONWARNINGS",
+	// The JVM's class path, agent and option variables.
+	"CLASSPATH",
+	"JAVA_TOOL_OPTIONS",
+	"JDK_JAVA_OPTIONS",
+	"_JAVA_OPTIONS",
+	// git's config (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and
+	// GIT_CONFIG_KEY_n set core.pager, core.sshCommand, ...) and the
+	// commands it runs (GIT_SSH_COMMAND, GIT_ASKPASS, GIT_EXEC_PATH, ...),
+	// and XDG_CONFIG_HOME, whose git/config is git's global config.
+	"GIT_*",
+	"XDG_CONFIG_HOME",
+	// OpenSSL reads its config at library init in any child linking it
+	// (curl, git over https, python's ssl), and a config can load an
+	// engine or provider shared object: GCONV_PATH's reach. Lua runs
+	// LUA_INIT at startup and searches LUA_PATH/LUA_CPATH (each also with
+	// a _5_x version suffix) for modules.
+	"OPENSSL_CONF",
+	"OPENSSL_ENGINES",
+	"OPENSSL_MODULES",
+	"LUA_INIT*",
+	"LUA_PATH*",
+	"LUA_CPATH*",
+}
+
+// envDenyMatches reports whether name is one of patterns, where a
+// trailing "*" is a prefix.
+func envDenyMatches(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if prefix, ok := strings.CutSuffix(p, "*"); ok {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+		} else if name == p {
+			return true
+		}
+	}
+	return false
+}
+
+// envDeniedByPattern reports whether only an exact env entry admits name:
+// the frozen v1 set and envDenyV2, both of which this build enforces.
 func envDeniedByPattern(name string) bool {
-	return slices.Contains(identityEnv, name) || strings.HasPrefix(name, "LD_") || slices.Contains(injectionEnv, name)
+	return envDenyMatches(name, envDenyPatterns()) || envDenyMatches(name, envDenyV2)
 }
 
 // ProbeEnv is the variable the daemon sets to "1" when it starts a stdio
@@ -656,7 +798,7 @@ func redactEnv(kv string) string {
 
 // acceptsEnv reports whether the daemon may set name. hostd's identity
 // variables, the dynamic loader's LD_* and interpreter/shell injection
-// variables change what the child is and what it loads, so only an exact
+// variables (envDeniedByPattern) change what the child is and what it loads, so only an exact
 // entry in env admits one: neither "*" nor a NAME_* pattern ever does.
 // agy's per-run HOME is the case that needs this. A capability entry also
 // accepts ProbeEnv.

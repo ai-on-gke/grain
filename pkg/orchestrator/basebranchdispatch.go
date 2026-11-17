@@ -276,7 +276,7 @@ func baseBranchesToDispatchOn(ctx context.Context, deps Deps, repo model.RepoRef
 	if deps.Client == nil {
 		return nil, nil // no way to ask what the default branch is
 	}
-	branch, err := deps.Client.DefaultBranch(repo.Owner, repo.Name)
+	branch, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: reading %s's default branch: %w", repo, err)
 	}

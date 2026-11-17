@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -32,15 +33,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/runhost"
+	"github.com/ai-on-gke/grain/pkg/safepath"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -392,6 +391,9 @@ func frameworkOpensPullRequests(framework agent.Framework) bool {
 func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRequest bool,
 	maxRuntime time.Duration, history History, setup *SetupResult) string {
 	branch := task.BranchName()
+	if strings.TrimSpace(history.PushBranch) != "" {
+		branch = strings.TrimSpace(history.PushBranch)
+	}
 	task, history = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if task.ChangeTarget != nil {
@@ -469,6 +471,9 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	// blank line every other pair of paragraphs here is.
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
+	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
 	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
@@ -658,8 +663,12 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += nothingNeededSection(task)
-	prompt += questionSummarySection
-	prompt += personActionSection
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+		prompt += autonomousGoalSection(gm)
+	} else {
+		prompt += questionSummarySection
+		prompt += personActionSection
+	}
 	prompt += statusSection(canOpenPullRequest)
 	prompt += chatSection(task, canOpenPullRequest)
 	prompt += runtimeSection(task, maxRuntime)
@@ -718,6 +727,10 @@ const suspendedCLINote = "\n\nYour tools may have changed since this session las
 func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	history History, setup *SetupResult, newComments []model.Comment, extraSections ...string) string {
 	branch := task.BranchName()
+	// The current brief stands in for the description here as in
+	// BuildPrompt: a durable task resumes its session on most runs, so
+	// leaving it out would brief those runs on the original description.
+	task, _ = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if line := model.ChangeTargetSuspendedPromptLine(task); line != "" {
 		prompt += fmt.Sprintf("Task: %s (task %s). %s", task.Title, task.ID, line)
@@ -770,11 +783,24 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
 	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
+	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
+	// The compaction note says the handover is below, so it goes in only
+	// with the comments that carry it; a session that already read both
+	// needs neither again.
+	if summarised := summarisedSection(history); summarised != "" &&
+		slices.ContainsFunc(newComments, func(c model.Comment) bool { return c.Handover }) {
+		prompt += "\n\n" + strings.TrimRight(summarised, "\n")
+	}
 	if thread := commentThreadSection(newComments); thread != "" {
 		prompt += "\n\n" + strings.TrimRight(thread, "\n")
+	}
+	if upkeep := contextUpkeepSection(task, history, len(prompt)); upkeep != "" {
+		prompt += "\n\n" + strings.TrimRight(upkeep, "\n")
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
@@ -819,14 +845,14 @@ func commentsSinceSuspend(comments []model.Comment, priorDelivered *int64) []mod
 // is a branch repair rather than ordinary work: a task the queue has sent
 // back to fix its own pull request branch and whose repair has not finished
 // (Observation.RepairInFlight), a task the queue filed to repair another
-// task's branch back when a repair was a separate task (model.OriginReason.Merger),
+// task's branch back when a repair was a separate task (model.FilingReason.Merger),
 // or a task repairing the base branch itself (model.FixesBaseBranch).
 //
 // A nil obs -- a task nothing has ever been observed about, which is
 // every first dispatch -- is still a repair when FixesBaseBranch(task) or
-// Origin.Reason.Merger() holds.
+// Filing.Reason.Merger() holds.
 func mergeRepairRun(task model.Task, obs *model.Observation) bool {
-	return task.Origin.Reason.Merger() || obs.RepairInFlight() || model.FixesBaseBranch(task)
+	return task.Filing.Reason.Merger() || obs.RepairInFlight() || model.FixesBaseBranch(task)
 }
 
 // redCIProcedureSection is the one way every run with grain CI is told to
@@ -1113,13 +1139,19 @@ func nothingNeededSection(task model.Task) string {
 	if task.NothingNeededAction.Resolved() == model.NothingNeededAck {
 		what = "leaves this task for a human to acknowledge"
 	}
-	return "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
+	s := "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
 		"reason: " + mcp.NothingNeededDescription + ". It ends your run the way " +
 		"comment_on_issue does, posts the reason as the closing comment and " + what +
 		". A finding, an answer or a recommendation somebody should read is still a " +
 		"comment_on_issue note, and anything you pushed or asked in the same run still " +
 		"wins: the pull request is opened, or the question is asked, with the reason " +
 		"posted beside it."
+	if model.ClosesOnAnswer(task) {
+		s += " Task " + task.Proposer.TaskID + " filed this task as a report-only sub-task, so a " +
+			"comment_on_issue closing note with no pull request closes it too: that task, and any " +
+			"task depending on this one, reads your note, so put the whole answer in it."
+	}
+	return s
 }
 
 // questionSummarySection is what every run is told about the one-line
@@ -1676,11 +1708,22 @@ func runCIAccessOf(task model.Task) runCIAccess {
 	return runCIAccess{read: read}
 }
 
+// githubRerunHint is what a run on a repository GitHub Actions gates is
+// told about re-running its checks: grain ci retrigger and run-job, in
+// place of the empty commits that moved a pull request's head and threw
+// away its approvals (ui.MaxActionsRerunsPerHead is the bound it names).
+const githubRerunHint = "`grain ci retrigger` re-runs the failed jobs of the GitHub Actions runs at your pull request's head " +
+	"(`--all` every job; `grain ci run-job <job>` one job) without a commit, so the head, its approvals and " +
+	"its reviews stay put -- use it for a flake or a runner fault, never an empty commit. Each run at one " +
+	"commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included."
+
 // grainCLICIBullet is the CI & pull request bullet of grainCLISection,
 // naming only the commands this run can use (task 4364). Every command
 // it lists for a GitHub-CI run answers for GitHub Actions runs
-// (gha:<owner>:<name>:<run>); run-job and retrigger drive grain CI alone
-// and are not offered there. A run that cannot
+// (gha:<owner>:<name>:<run>); there, run-job and retrigger re-run the
+// Actions runs at the head of the run's own pull request, with no commit
+// pushed and at most ui.MaxActionsRerunsPerHead times per head, which is
+// what agents used to push empty commits for. A run that cannot
 // read its CI is told the one grant that would let it, once -- never
 // grain#ci, which no repository GitHub Actions gates can grant and which
 // is what agents told only "forbidden" kept asking a person for.
@@ -1702,12 +1745,12 @@ func grainCLICIBullet(repo string, access runCIAccess) string {
 			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
 			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
 			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
-			"`grain ci log <run-id>`. `grain ci run-job` and `grain ci retrigger` drive grain CI only " +
-			"and cannot rerun GitHub's checks: push a commit for that.\n"
+			"`grain ci log <run-id>`. " + githubRerunHint + "\n"
 	}
 	return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
 		"which reports each failing job's log tail, `grain pr open` (your pull request, its checks and " +
-		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. This run does " +
+		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. " +
+		githubRerunHint + " This run does " +
 		"not hold read access to the CI of " + repo + ": to read CI logs, `request_access` for " +
 		"`https://grain.dev/capabilities/api#ci-read` on " + repo + "; never `grain#ci`, which a " +
 		"repository GitHub Actions gates cannot grant.\n"
@@ -1822,7 +1865,7 @@ func timezoneSectionAt(task model.Task, now time.Time) string {
 	tInLoc := now.In(loc)
 	timeFormatted := tInLoc.Format("2006-01-02 15:04 MST")
 
-	isDirect := task.Interactive || task.Origin.Reason == model.ReasonDirect || task.Origin.Reason == model.ReasonConsoleSession
+	isDirect := task.Interactive || task.Filing.Reason == model.ReasonDirect || task.Filing.Reason == model.ReasonConsoleSession
 	if isDirect {
 		return fmt.Sprintf("\n\nUser timezone: %s (current time: %s)", resolvedName, timeFormatted)
 	}
@@ -2485,7 +2528,7 @@ func proposalSection(task model.Task) string {
 		"in your comments, questions, chat messages, or task descriptions must always be a " +
 		"relative path (such as `[Task #31](/tasks/31)` or `[Settings → CI](/settings/ci)`) " +
 		"and never an absolute `http://127.0.0.1:...` or `http://localhost:...` URL, so links " +
-		"work when viewed through UberProxy or any reverse proxy. To point at one comment " +
+		"work when viewed through an authenticating reverse proxy or any reverse proxy. To point at one comment " +
 		"in a task's conversation, add its comment id as the fragment: " +
 		"`[comment](/tasks/31#comment=13)`."
 	return s
@@ -2543,6 +2586,11 @@ type History struct {
 	// (model.RepoConfig.PairedBranches), or nil for a repository that
 	// pairs fewer than two. See pairedBranchesSection.
 	PairedBranches []string
+	// PushBranch, when non-empty, overrides task.BranchName() in checkout and
+	// push instructions (for example grain-qa-stage/<task-id> on treatment-arm runs).
+	PushBranch string
+	// QASkillPrompt holds the compact coding-time quality contract injected on treatment-arm runs.
+	QASkillPrompt string
 	// UpstreamRepo is the upstream repository pull requests for task.Target
 	// open against when task.Target is a fork (model.RepoConfig.UpstreamRepo),
 	// or the zero RepoRef when pull requests open on task.Target itself.
@@ -2551,6 +2599,10 @@ type History struct {
 	// through wait_for_task, as they stand now -- set only when that
 	// attempt ended model.ParkedOutcome. See parkedResumeSection.
 	Resumed []model.WaitTarget
+	// Dependencies is the tasks this one depends on (model.LinkDependsOn)
+	// that are not already in Resumed, as they stand now, with each one's
+	// closing note. See dependenciesSection.
+	Dependencies []model.WaitTarget
 	// ResumedUntil is the time the previous attempt parked this task
 	// until through wait_for_task's resume_at -- zero unless that attempt
 	// ended model.ParkedOutcome that way. See parkedResumeSection.
@@ -2570,6 +2622,11 @@ type History struct {
 	// context_compaction.go.
 	Context     model.TaskContext
 	HandoverAge model.HandoverAge
+	// RolloverDue is the record limit a console session is past
+	// (model.RolloverRecord.PastLimit), "" for a session under every
+	// limit and for every other task: rollover refuses a session, so
+	// contextUpkeepSection tells it to be closed and refiled instead.
+	RolloverDue string
 	// AutoCompactBytes is the prompt size past which a durable task's run
 	// is asked to compact first (Config.AutoCompactBytes); zero is
 	// DefaultAutoCompactBytes.
@@ -2619,6 +2676,55 @@ func parkedResumeSection(h History) string {
 		b.WriteString(t.Describe())
 	}
 	return b.String()
+}
+
+// dependenciesSection tells a run what the tasks it depends on found:
+// each one's id, where it stands and its closing note. A task filed with
+// depends_on on a report-only sub-task (model.ClosesOnAnswer) is
+// dispatched when that sub-task closes on its answer, and the answer is
+// what it was waiting for; without this it would have neither the note
+// nor the sub-task's id (a proposal names an earlier one by its local id,
+// before any id exists), and an ordinary run cannot read another task's
+// record (grain/task-4384). A park's own targets are told by
+// parkedResumeSection instead, so none is said twice.
+func dependenciesSection(h History) string {
+	if len(h.Dependencies) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("This task depends on the task(s) below (depends_on). Here is where each stands and " +
+		"what it said when it finished; build on its findings rather than redoing them:\n")
+	for _, t := range h.Dependencies {
+		b.WriteString(t.Describe())
+	}
+	return b.String()
+}
+
+// DependenciesOf is the tasks task depends on (model.LinkDependsOn), as
+// they stand now and as task may be told them (model.Store.WaitTargetFor:
+// a dependency in a repository task cannot read keeps its closing note to
+// itself), leaving out any already in resumed (a park's own depends-on
+// links, which parkedResumeSection describes). Advisory, like
+// ResumedFrom: a target grain cannot read is left out rather than
+// failing the dispatch.
+func DependenciesOf(ctx context.Context, store *model.Store, task model.Task, resumed []model.WaitTarget) []model.WaitTarget {
+	told := map[string]bool{}
+	for _, r := range resumed {
+		told[r.ID] = true
+	}
+	var out []model.WaitTarget
+	for _, l := range task.Links {
+		if l.Kind != model.LinkDependsOn || told[l.Target] {
+			continue
+		}
+		told[l.Target] = true
+		target, err := store.WaitTargetFor(ctx, task, l.Target, time.Now())
+		if err != nil || target == nil {
+			continue
+		}
+		out = append(out, *target)
+	}
+	return out
 }
 
 // pairedBranchesSection tells a run in a repository that pairs branches
@@ -3097,6 +3203,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		}
 	}
 	task = withDeploymentTimeZone(task, cfg.TimeZone)
+	cfg = goalModeDispatch(task, cfg)
 	run := model.Run{ID: d.RunID, TaskID: d.TaskID, Sandbox: d.RunID, Attempt: d.Attempt, StartedAt: at}
 	cc := model.CapabilityContext{Task: task, Run: run, Now: at, Workdir: sandboxRoot, Credentials: cfg.Credentials,
 		Deadline: capabilityDeadline(at, cfg.maxRunRuntime())}
@@ -3238,6 +3345,60 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	qaAssignment, err := resolveTaskQAAssignment(ctx, store, cfg, task, d.RunID, cfg.now())
+	if err != nil {
+		return unprepared(err)
+	}
+	pushBranch := task.BranchName()
+	var qaSkillPrompt string
+	qaStopNudge := false
+	var preCloneClarification *PreCloneQAResult
+	if qaAssignment != nil && qaAssignment.IsEnforcedTreatment() && model.TaskEligibleForQAStaging(task) {
+		if cfg.GitRemoteBase != "" && (qaAssignment.Spec == nil || qaAssignment.Spec.StagingIsolation) {
+			pushBranch = model.QAStageBranchName(task.ID)
+		}
+		if qaAssignment.Spec != nil {
+			qaSkillPrompt = qaAssignment.Spec.SkillPrompt()
+			qaStopNudge = qaAssignment.Spec.StopNudge
+			preRes := ExecutePreCloneQAPhase(ctx, store, task, qaAssignment.Spec, qaAssignment.ExperimentID, qaAssignment.ArmID, qaAssignment.FlowHash, qaSkillPrompt)
+			qaSkillPrompt = preRes.Prompt
+			if preRes.NeedsClarification {
+				preCloneClarification = &preRes
+			}
+		}
+	}
+	if preCloneClarification != nil {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+		defer cancelCleanup()
+		revokeAll(cleanupCtx, store, cc, cfg.PreparedCapabilities)
+		q := strings.TrimSpace(preCloneClarification.Question)
+		if q == "" {
+			q = "Clarification is required before this task can proceed."
+		}
+		summary := model.QuestionSummary("Clarification needed before implementation", q, "s0_clarification on "+task.ID)
+		commentID, qErr := relayQuestion(ctx, store, task, q, summary, nil, cfg.now())
+		if qErr != nil {
+			return unprepared(fmt.Errorf("orchestrator: posting S0 clarification question for %s: %w", task.ID, qErr))
+		}
+		if oErr := observeField(ctx, store, task.ID, cfg.now(), func(o *model.Observation) {
+			o.PendingQuestionCommentID = &commentID
+		}); oErr != nil {
+			return unprepared(fmt.Errorf("orchestrator: parking %s on S0 clarification question: %w", task.ID, oErr))
+		}
+		clarifyResult := &agent.Result{
+			ToolCalls: []agent.ToolCall{{
+				Name: "ask_question",
+				Arguments: map[string]any{
+					"question": q,
+					"summary":  summary,
+				},
+				Relayed: true,
+			}},
+		}
+		_ = recordRunEnd(ctx, cleanupCtx, store, cfg, task, d.RunID, obs, clarifyResult,
+			runEnding{outcome: "succeeded"}, nil, false, "", "")
+		return clarifyResult, nil
+	}
 
 	// Before the agent's first turn: a run whose sandbox never got its repo
 	// has nothing to do. Capability placements are applied just below before
@@ -3322,7 +3483,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				defer srcWG.Done()
 				placeGrainSource(runCtx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
 			}()
-			prepared, checkoutErr = prepareCheckoutWithUpstream(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithBranch(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, pushBranch, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			srcWG.Wait()
 			if checkoutErr == nil {
 				prepared.GrainSource = srcOut.GrainSource
@@ -3331,7 +3492,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
 			}
 		} else {
-			prepared, checkoutErr = prepareCheckoutWithUpstream(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithBranch(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, pushBranch, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			if checkoutErr == nil {
 				placeGrainSource(runCtx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 			}
@@ -3340,6 +3501,15 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			persistCommittedContextManifests(ctx, store, &task, prepared.Context)
 			cc.Task = task
 		}
+	}
+	if checkoutErr == nil && prepErr == nil && qaAssignment != nil && qaAssignment.IsEnforcedTreatment() && model.TaskEligibleForQAStaging(task) && qaAssignment.Spec != nil {
+		var worktreeDir string
+		if sandboxRoot != "" && prepared.Dir != "" && !prepared.StateRepo {
+			if resolved, sErr := safepath.Within(sandboxRoot, prepared.Dir); sErr == nil {
+				worktreeDir = resolved
+			}
+		}
+		qaSkillPrompt = ExecutePostCloneWorkflowPhases(ctx, store, task, worktreeDir, qaAssignment.Spec, qaAssignment.ExperimentID, qaAssignment.ArmID, qaAssignment.FlowHash, qaSkillPrompt)
 	}
 	var repoSkills repoSkillDiscovery
 	if checkoutErr == nil && prepErr == nil && len(skillFolders) > 0 && prepared.Dir != "" {
@@ -3360,9 +3530,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		SandboxReused:    cfg.sandboxReused,
 		SandboxReclaimed: cfg.sandboxReclaimed,
 		CommittedContext: prepared.Context,
+		PushBranch:       pushBranch,
+		QASkillPrompt:    qaSkillPrompt,
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
-	history.Resumed = ResumedFrom(ctx, store, previous)
+	history.Resumed = ResumedFrom(ctx, store, task, previous)
+	history.Dependencies = DependenciesOf(ctx, store, task, history.Resumed)
 	loadTaskContext(ctx, store, task, &history)
 	history.AutoCompactBytes = cfg.autoCompactBytes()
 	history.ResumedUntil = ResumedUntil(previous)
@@ -3683,6 +3856,27 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if err := store.SetRunPrompt(ctx, d.RunID, prompt); err != nil {
 			log.Printf("orchestrator: run %s: recording the prompt it was given: %v", d.RunID, err)
 		}
+		if qaAssignment != nil && qaAssignment.IsEnforcedTreatment() && qaSkillPrompt != "" {
+			detailJSON, _ := json.Marshal(map[string]any{
+				"qaPromptBytes": len(qaSkillPrompt),
+				"totalBytes":    len(prompt),
+				"flowId":        qaAssignment.FlowID,
+			})
+			_, _ = store.RecordQACheckRun(ctx, model.QACheckRun{
+				TaskID:       task.ID,
+				RunID:        d.RunID,
+				Stage:        "S1",
+				CheckID:      "skill-inject",
+				Arm:          model.QAArmTreatment,
+				Verdict:      "pass",
+				DetailJSON:   string(detailJSON),
+				ExperimentID: qaAssignment.ExperimentID,
+				ArmID:        qaAssignment.ArmID,
+				FlowHash:     qaAssignment.FlowHash,
+				QAEngineRev:  qaAssignment.QAEngineRev,
+				Model:        task.Model,
+			}, nil)
+		}
 
 		// And how big it came out. The conversation a prompt carries
 		// grows monotonically with the task -- every message replayed
@@ -3819,6 +4013,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// tool budget (model.UsesToolBudget, DT-13).
 			ToolBudget:               model.UsesToolBudget(task),
 			ToolBudgetPipelineCursor: model.IsPipelineStewardFiring(task),
+			RequireOpenPullRequest:   qaStopNudge && frameworkOpensPullRequests(framework),
 			Grants:                   grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
 			// Which repositories a proposal this run makes may be filed
 			// against -- the half of propose_task's `repo` argument only
@@ -3850,6 +4045,14 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// moment the framework names it (earlySession).
 			OnResumableSession: early.record,
 		}
+		var initialGoalHead string
+		var goalPass1Span *GoalPerfSpan
+		gmEnabled := false
+		if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+			gmEnabled = true
+			initialGoalHead, _ = inspectGoalCheckout(hostCtx, tools)
+			goalPass1Span = NewGoalPerfProfiler(cfg.DataDir).Start(task.ID, d.RunID, 1, "verifier-pass")
+		}
 		result, runErr = framework.Run(hostCtx, runCfg)
 		if runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
 			noteFirstTurn()
@@ -3858,9 +4061,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
+		// Autonomous Goal Mode drives its own multi-pass continuation loop
+		// below without falling back to BackgroundContinueReason.
+		if !gmEnabled && !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
 			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
 		}
+		result, runErr = runGoalVerifierPasses(hostCtx, ctx, store, cfg, framework, runCfg, tools, &task, d.RunID, initialGoalHead, goalPass1Span, result, runErr)
 		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
@@ -4571,6 +4777,10 @@ func prepareCapabilityPromptWithSkills(ctx context.Context, cc model.CapabilityC
 		prompt += "\n\n" + unifiedSkills
 		dynamicSections = append(dynamicSections, unifiedSkills)
 	}
+	if strings.TrimSpace(history.QASkillPrompt) != "" {
+		prompt += "\n\n" + strings.TrimSpace(history.QASkillPrompt)
+		dynamicSections = append(dynamicSections, strings.TrimSpace(history.QASkillPrompt))
+	}
 	return appendSection(prompt, extension), dynamicSections, keptPassSections, nil
 }
 
@@ -4600,10 +4810,9 @@ func prepareCapabilityPromptWithSkills(ctx context.Context, cc model.CapabilityC
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant, model.APIGrantPrefix + "self-debug", selfDebugAPIGrant, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
-	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SourceRef, grainserver.SourceGrant, model.APIGrantPrefix + "self-debug", selfDebugAPIGrant, grainserver.JournalRef, grainserver.JournalGrant,
+	grainserver.CIRef, grainserver.CIGrant, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
@@ -5147,6 +5356,14 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		outcome = model.InterruptedOutcome
 		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && errors.Is(runErr, agent.ErrHostdStopped):
+		// The host agent running the CLI stopped, restarted or crashed
+		// while the run was going, with no drain in progress: nothing
+		// about the task earned a strike. Interrupted, as a drain or
+		// daemon restart is, so the task is queued again.
+		outcome = model.InterruptedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case runErr != nil && errors.Is(runErr, agent.ErrHostdLost):
 		// The hostd the CLI ran on dropped and was not back within
 		// -hostd-reattach-timeout (runhost.Hostd.ReattachTimeout): an
@@ -5529,10 +5746,11 @@ func ResumedUntil(previous []model.Run) time.Time {
 	return until
 }
 
-// ResumedFrom is the tasks the last of previous parked on, as they stand
-// now, or nil when it did not end parked. Advisory, like BaseIncident: a
+// ResumedFrom is the tasks the last of task's previous runs parked on, as
+// they stand now and as task may be told them (model.Store.WaitTargetFor),
+// or nil when it did not end parked. Advisory, like BaseIncident: a
 // target grain cannot read is left out rather than failing the dispatch.
-func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) []model.WaitTarget {
+func ResumedFrom(ctx context.Context, store *model.Store, task model.Task, previous []model.Run) []model.WaitTarget {
 	if len(previous) == 0 {
 		return nil
 	}
@@ -5542,7 +5760,7 @@ func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) 
 	}
 	var out []model.WaitTarget
 	for _, id := range model.ParkedTargets(last.Detail) {
-		target, err := store.WaitTargetOf(ctx, id)
+		target, err := store.WaitTargetFor(ctx, task, id, time.Now())
 		if err != nil || target == nil {
 			continue
 		}

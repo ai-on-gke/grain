@@ -232,6 +232,14 @@ type K8sGranuleConfig struct {
 	// DefaultNetworkAccess seeds the deployment-wide network a run that
 	// asked for none of its own gets. Empty reads as model.NetworkOpen.
 	DefaultNetworkAccess model.NetworkAccess
+	// NetworkPolicyEnforced is K8sConfig.NetworkPolicyEnforced for this
+	// backend (-k8s-network-policy): the operator saying the cluster's
+	// CNI enforces deploy/kubernetes/networkpolicy.yaml's
+	// grain-sandbox-egress, which is what keeps an open-network pod off
+	// the cluster. network:none needs no policy here (the guest has no
+	// NIC at all); without it, external capability grants are refused
+	// (OpenNetworkUnfenced).
+	NetworkPolicyEnforced bool
 }
 
 // DefaultK8sGranuleReadyTimeout bounds Acquire's wait for a sandbox pod's
@@ -683,6 +691,15 @@ func (k *K8sGranuleSandboxes) podOptions(shape Shape) k8s.PodOptions {
 	}
 	for key, value := range k.cfg.Env {
 		env[key] = value
+	}
+	// An inline guest owns the pod's network, metadata server route
+	// included: have its splice drop frames to the metadata endpoints
+	// before they leave the pod, whether or not the cluster's CNI
+	// enforces grain-sandbox-egress (k8s_fence.go). Applied after the
+	// operator's own env so that cannot take it away. A guest with no
+	// network has no splice to guard.
+	if resolved.NetworkAccess != model.NetworkNone {
+		k8sGranuleMetadataGuardEnv(env)
 	}
 	opts := k8s.PodOptions{
 		Image:          k.CurrentImage(),

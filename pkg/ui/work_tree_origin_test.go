@@ -30,7 +30,7 @@ func TestAnOriginlessTaskPartWayDownATreeIsDrawnInItsFilersTree(t *testing.T) {
 		t.Helper()
 		task := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "task " + id,
-			Origin:  model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
 			Binding: model.BindingDirective,
 			Links:   links,
 		}

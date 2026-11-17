@@ -81,6 +81,13 @@ GIT_REVISION ?=
 ifeq ($(origin RELEASE),undefined)
 RELEASE := $(shell bash scripts/build-version.sh 2>/dev/null)
 endif
+# The schema version stamped onto the image (io.grain.schema-version),
+# read from pkg/model's SchemaVersion constant so an upgrading deployment
+# can tell a schema downgrade from registry metadata alone, before it
+# pulls anything (pkg/upgrade/schema.go). Empty when the constant cannot
+# be found, which leaves the label empty and the check to the pulled
+# build's own `grain schema-version`.
+SCHEMA_VERSION ?= $(shell sed -n 's/^const SchemaVersion = \([0-9][0-9]*\)$$/\1/p' pkg/model/schema.go 2>/dev/null)
 EDITION ?=
 
 # The main bin/grain is built from: cmd/grain, core grain. A build that
@@ -171,7 +178,7 @@ IMAGE ?= grain:dev
 # IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
 # pre-rename name, honoured for a release (as is `make image-registry`).
 IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-ng test-e2e-ng-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -375,7 +382,7 @@ test-long: frontend
 
 # ui/e2e (bwsalmon/agents#415) drives the real built frontend through a
 # real browser, over a real pkg/ui.Server -- a `grain demo` per
-# Playwright worker, started by ui/e2e/fixtures.js out of the binary
+# Playwright worker, started by ui-shared/e2e/demo.js out of the binary
 # ui/e2e/global-setup.js builds first (grain/task-292) -- unlike `test`
 # above, that needs a real browser on the machine, which `npx playwright
 # install --with-deps` fetches and apt-installs itself.
@@ -418,6 +425,19 @@ test-e2e-suite:
 	cd ui-hub && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
 
 test-e2e: frontend playwright-browsers test-e2e-suite
+
+# ui-ng/e2e: the Angular UI at /next/, driven the same way -- a `grain
+# demo` per Playwright worker, through the harness in ui-shared/e2e/ that
+# ui/e2e uses too -- with projects desktop (1440x900), phone (390x844,
+# touch) and dark (ui-ng/playwright.config.ts). Chromium only, out of the
+# same @playwright/test version ui/ pins, so `playwright-browsers` (which
+# installs from ui/) fetches the browser this suite drives. CI runs it as
+# the `ui-ng e2e` job; split in two for the same reason as above.
+test-e2e-ng-suite:
+	cd ui-ng && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
+
+test-e2e-ng: export PLAYWRIGHT_BROWSERS ?= chromium
+test-e2e-ng: frontend playwright-browsers test-e2e-ng-suite
 
 # Screenshots of the real UI over a `grain demo` store, at desktop and
 # phone widths in light and dark, for looking at rather than asserting on
@@ -714,6 +734,7 @@ image:
 		$(if $(GRAIN_IMAGE_REF),--build-arg GRAIN_IMAGE_REF=$(GRAIN_IMAGE_REF),) \
 		$(if $(GIT_REVISION),--build-arg GIT_REVISION=$(GIT_REVISION),) \
 		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
+		$(if $(SCHEMA_VERSION),--build-arg SCHEMA_VERSION=$(SCHEMA_VERSION),) \
 		-t $(IMAGE) -f Dockerfile .
 
 image-hub:

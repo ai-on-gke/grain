@@ -58,13 +58,6 @@ func (m *Metrics) IncRequests(status int) {
 	}
 }
 
-func (m *Metrics) IncAssertionsSigned() {
-	if m == nil {
-		return
-	}
-	m.assertionsSigned.Add(1)
-}
-
 func (m *Metrics) IncAdmissionRejected() {
 	if m == nil {
 		return

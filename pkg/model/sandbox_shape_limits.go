@@ -54,6 +54,81 @@ type SandboxShape struct {
 // IsZero reports whether no dimension is stated.
 func (s SandboxShape) IsZero() bool { return s == SandboxShape{} }
 
+// ValidateTemplateSandbox checks a template's own sandbox shape
+// (Template.Sandbox): every dimension it states is positive and no larger
+// than the default ceiling a task's own shape is held to
+// (DefaultMaxSandboxCPUs, DefaultMaxSandboxMemoryMB,
+// DefaultMaxSandboxDiskGB), and memory is at least the 128 MiB a VM is
+// built with at the least (ui.validateSandboxShape's floor). Zero is "not
+// stated" and always passes. The error names each dimension by the key a
+// declaration writes it under (`cpus`, `memory-mb`, `disk-gb`).
+func ValidateTemplateSandbox(s SandboxShape) error {
+	var problems []string
+	check := func(name string, v, floor, ceiling int) {
+		switch {
+		case v == 0:
+		case v < floor:
+			problems = append(problems, fmt.Sprintf("%s is %d, and must be at least %d", name, v, floor))
+		case v > ceiling:
+			problems = append(problems, fmt.Sprintf("%s is %d, and may be at most %d", name, v, ceiling))
+		}
+	}
+	check("cpus", s.CPUs, 1, DefaultMaxSandboxCPUs)
+	check("memory-mb", s.MemoryMB, 128, DefaultMaxSandboxMemoryMB)
+	check("disk-gb", s.DiskGB, 1, DefaultMaxSandboxDiskGB)
+	if len(problems) > 0 {
+		return fmt.Errorf("sandbox: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// EncodeSandboxShape is how a template's sandbox shape is stored in its
+// `sandbox` column: "" for none stated, and the JSON of s otherwise.
+func EncodeSandboxShape(s SandboxShape) string {
+	if s.IsZero() {
+		return ""
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// DecodeSandboxShape is EncodeSandboxShape's inverse. Text this build
+// cannot read, or a shape ValidateTemplateSandbox refuses, is no shape at
+// all, rather than an error on every read of the template table.
+func DecodeSandboxShape(text string) SandboxShape {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return SandboxShape{}
+	}
+	var s SandboxShape
+	if err := json.Unmarshal([]byte(text), &s); err != nil {
+		return SandboxShape{}
+	}
+	if ValidateTemplateSandbox(s) != nil {
+		return SandboxShape{}
+	}
+	return s
+}
+
+// Describe is s as a person reads it: "4 vCPU, 16384 MiB, 100 GiB disk",
+// naming only the dimensions s states, and "" when it states none.
+func (s SandboxShape) Describe() string {
+	var parts []string
+	if s.CPUs > 0 {
+		parts = append(parts, fmt.Sprintf("%d vCPU", s.CPUs))
+	}
+	if s.MemoryMB > 0 {
+		parts = append(parts, fmt.Sprintf("%d MiB", s.MemoryMB))
+	}
+	if s.DiskGB > 0 {
+		parts = append(parts, fmt.Sprintf("%d GiB disk", s.DiskGB))
+	}
+	return strings.Join(parts, ", ")
+}
+
 // TaskSandboxShape is the shape task asks for itself.
 func TaskSandboxShape(task Task) SandboxShape {
 	return SandboxShape{CPUs: task.SandboxCPUs, MemoryMB: task.SandboxMemoryMB, DiskGB: task.SandboxDiskGB}

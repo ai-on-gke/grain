@@ -116,11 +116,6 @@ func DeclaredItemScopes(item string) []APIScope {
 	if g, ok, err := ParseAPIGrant(item); ok && err == nil && len(g.Scopes) > 0 {
 		return slices.Clone(g.Scopes)
 	}
-	if preset, ok := apiAliasCapabilities[strings.TrimSpace(item)]; ok {
-		if g, ok, err := ParseAPIGrant(APIGrantPrefix + preset); ok && err == nil && len(g.Scopes) > 0 {
-			return slices.Clone(g.Scopes)
-		}
-	}
 	return []APIScope{"capabilities:admin"}
 }
 
@@ -382,6 +377,29 @@ func (s *Store) NoteCIJobDeclaration(ctx context.Context, repo RepoRef, job, com
 	return accepted, items, err
 }
 
+// NoteDeclaredTemplateHold records what a repository-declared template id asks
+// for (DeclaredCompositionHold) and reports whether a person's acceptance
+// covers it, plus whether a prior acceptance existed and was widened past.
+func (s *Store) NoteDeclaredTemplateHold(ctx context.Context, id string, items []string, now time.Time) (accepted bool, widened bool, err error) {
+	if len(items) == 0 || !IsRepoDeclaredID(id) {
+		return true, false, nil
+	}
+	err = s.write(ctx, "note what declared template "+id+" asks for", func(tx *sql.Tx) error {
+		prior, err := getDeclarationAcceptance(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		widened = prior != nil && prior.AcceptedAt != nil
+		hold := &DeclarationHold{ID: id, Kind: DeclaredTemplate, Items: items}
+		if err := noteDeclarationHold(ctx, tx, hold, now); err != nil {
+			return err
+		}
+		accepted = prior.Covers(items)
+		return nil
+	})
+	return accepted, widened, err
+}
+
 // ErrDeclarationMoved is AcceptDeclaration's refusal when the set the
 // person saw is no longer what the declaration asks for.
 var ErrDeclarationMoved = errors.New("the declaration's requested set has changed since it was shown")
@@ -418,6 +436,47 @@ func (s *Store) AcceptDeclaration(ctx context.Context, id, by string, scopes []s
 				"`accepted_commit` = ?, `accepted_at` = ? WHERE `id` = ?",
 			encodeItems(acc.Requested), by, encodeItems(scopes), commit, now.UTC(), id); err != nil {
 			return fmt.Errorf("recording the acceptance of %s: %w", id, err)
+		}
+		got, err := getDeclarationAcceptance(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		out = *got
+		return nil
+	})
+	return out, err
+}
+
+// ErrAcceptanceMoved is RevokeDeclarationAcceptance's refusal when what
+// a person accepted is no longer the set the caller checked the revoker's
+// scopes against: it was revoked already, or accepted again wider.
+var ErrAcceptanceMoved = errors.New("the declaration's accepted set has changed since it was read")
+
+// RevokeDeclarationAcceptance clears id's accepted set, leaving what it
+// asked for: its next firing is held again, as though nobody had ever
+// accepted it, and work already filed approved on the acceptance's
+// strength is held at dispatch (PersonStandsBehind). accepted is the
+// accepted set the caller checked the revoker's scopes against: unless id
+// is still accepted with exactly that set the revocation is refused with
+// ErrAcceptanceMoved, so a set accepted wider in between is not withdrawn
+// by somebody who could not have accepted it.
+func (s *Store) RevokeDeclarationAcceptance(ctx context.Context, id string, accepted []string) (DeclarationAcceptance, error) {
+	var out DeclarationAcceptance
+	err := s.write(ctx, "revoke the acceptance of "+id, func(tx *sql.Tx) error {
+		acc, err := getDeclarationAcceptance(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if acc == nil {
+			return fmt.Errorf("declaration %s has asked for nothing to revoke", id)
+		}
+		if acc.AcceptedAt == nil || encodeItems(accepted) != encodeItems(acc.Accepted) {
+			return ErrAcceptanceMoved
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE `declaration_acceptance` SET `accepted` = '', `accepted_by` = '', `accepted_scopes` = '', "+
+				"`accepted_commit` = '', `accepted_at` = NULL WHERE `id` = ?", id); err != nil {
+			return fmt.Errorf("revoking the acceptance of %s: %w", id, err)
 		}
 		got, err := getDeclarationAcceptance(ctx, tx, id)
 		if err != nil {

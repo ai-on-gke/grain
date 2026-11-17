@@ -174,7 +174,7 @@ func (c *RESTClient) CollaboratorPermission(owner, repo, username string) (strin
 	resp, err := c.request(
 		"GET",
 		fmt.Sprintf("/repos/%s/%s/collaborators/%s/permission",
-			url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(username)),
+			quoteKeepSlash(owner), url.PathEscape(repo), url.PathEscape(username)),
 		c.headers(owner, repo, false), nil,
 	)
 	if err != nil {

@@ -50,7 +50,7 @@ func TestHostingSettingAndLegacyConsoleAlias(t *testing.T) {
 		t.Fatalf("explicit.Hosting = %q, want console", explicit.Hosting)
 	}
 
-	legacyCaps := []string{"console", "github-sandbox"}
+	legacyCaps := []string{"console", model.GitHubSandboxRepoGrant}
 	aliased, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "legacy console", Capabilities: &legacyCaps, Approved: true,
 	})

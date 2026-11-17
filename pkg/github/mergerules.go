@@ -452,7 +452,7 @@ func (c *RESTClient) readRequestedReviewers(owner, repo string, number int, req 
 		req.RequestedUsers = append(req.RequestedUsers, "@"+u.Login)
 	}
 	for _, t := range data.Teams {
-		req.RequestedTeams = append(req.RequestedTeams, "@"+owner+"/"+t.Slug)
+		req.RequestedTeams = append(req.RequestedTeams, "@"+BareOwner(owner)+"/"+t.Slug)
 	}
 	sort.Strings(req.RequestedUsers)
 	sort.Strings(req.RequestedTeams)

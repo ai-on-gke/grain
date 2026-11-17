@@ -1,0 +1,13 @@
+context: {"compacted_through":39,"handover_version":1,"compacted_by":"task 2","summarised":38}
+comments around the cursor:
+{"id":37,"a":"alice@example.com","b":"Asked for this task to be picked up now,"}
+{"id":38,"a":"grain","b":"grain: this task's run parked it until 2"}
+{"id":39,"a":"alice@example.com","b":"Asked for this task to be picked up now,"}
+{"id":40,"a":"alice@example.com","b":"MIDRUN-COMMENT: also mention the widget-"}
+{"id":41,"a":"grain","b":"grain: this task's run parked it until 2"}
+{"id":42,"a":"grain","b":"HANDOVER-V-COMPACT: rounds 1-3 settled w"}
+{"id":43,"a":"alice@example.com","b":"Asked for this task to be picked up now,"}
+{"id":44,"a":"grain","b":"grain: this task's run parked it until 2"}
+prompt-2-4.txt: bytes=21142 round-notes=30 midrun=0 handover=0 note=0
+prompt-2-6.txt: bytes=16151 round-notes=0 midrun=1 handover=1 note=1
+TASK=2

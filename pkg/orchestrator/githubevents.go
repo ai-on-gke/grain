@@ -120,9 +120,9 @@ func processGitHubEvent(ctx context.Context, deps Deps, allowedRepos []string,
 	}
 
 	if ev.Number > 0 {
-		github.Polls().Reset(github.PullRequestSubject(repo.Owner, repo.Name, ev.Number))
+		github.Polls().Reset(github.PullRequestSubject(repo.StoredOwner(), repo.Name, ev.Number))
 	} else {
-		github.Polls().ResetRepo(repo.Owner, repo.Name)
+		github.Polls().ResetRepo(repo.StoredOwner(), repo.Name)
 	}
 
 	switch ev.Event {
@@ -188,7 +188,7 @@ func senderTrusted(client github.Client, cache map[string]bool, repo model.RepoR
 	if login == "" || client == nil {
 		return false, nil
 	}
-	key := strings.ToLower(repo.Owner + "/" + repo.Name + ":" + login)
+	key := strings.ToLower(repo.StoredOwner() + "/" + repo.Name + ":" + login)
 	if trusted, ok := cache[key]; ok {
 		return trusted, nil
 	}
@@ -197,7 +197,7 @@ func senderTrusted(client github.Client, cache map[string]bool, repo model.RepoR
 		cache[key] = false
 		return false, nil
 	}
-	perm, err := reader.CollaboratorPermission(repo.Owner, repo.Name, login)
+	perm, err := reader.CollaboratorPermission(repo.StoredOwner(), repo.Name, login)
 	if err != nil {
 		if github.IsPermissionDenied(err) || strings.Contains(err.Error(), "404") {
 			cache[key] = false
@@ -442,7 +442,7 @@ func fileTaskFromMention(ctx context.Context, deps Deps, repo model.RepoRef, num
 	if isPR && wantsReviewCommand(instruction) {
 		var prBody string
 		if headRef == "" && deps.Client != nil {
-			if detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+			if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 				headRef = detail.HeadRef
 				headSHA = detail.HeadSHA
 				baseRef = detail.BaseRef
@@ -462,7 +462,7 @@ func fileTaskFromMention(ctx context.Context, deps Deps, repo model.RepoRef, num
 		ref := model.PullRequestRef{Repo: repo, Number: number}
 		links = append(links, model.Link{Kind: model.LinkExternalPR, Target: ref.String()})
 		if headRef == "" && deps.Client != nil {
-			if detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+			if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 				headRef = detail.HeadRef
 				baseRef = detail.BaseRef
 				if subjectTitle == "" {
@@ -497,7 +497,7 @@ func fileTaskFromMention(ctx context.Context, deps Deps, repo model.RepoRef, num
 	task := model.Task{
 		ID:         id,
 		Intent:     model.IntentImplement,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -568,9 +568,16 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	repo, number, sender, trusted := r.repo, r.number, r.sender, r.trusted
 	prTitle, prBody, headRef, headSHA, baseRef := r.prTitle, r.prBody, r.headRef, r.headSHA, r.baseRef
 	eventKey, extraNote := r.eventKey, r.extraNote
+	// The pull request's own text is written by whoever opened it, and the
+	// sections grain appends to this body later are found again by their
+	// headers (syncParallelReviewBodies, refreshQueuedReviewsAfterFinish):
+	// a description carrying one must not be mistaken for grain's own.
+	prTitle = neutralizeReviewSectionHeaders(prTitle)
+	prBody = neutralizeReviewSectionHeaders(prBody)
+	extraNote = neutralizeReviewSectionHeaders(extraNote)
 
 	if (headRef == "" || headSHA == "") && deps.Client != nil {
-		if detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+		if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 			if headRef == "" {
 				headRef = detail.HeadRef
 			}
@@ -621,7 +628,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	// Best-effort native GitHub Check Run while the review is queued/running.
 	if trusted && headSHA != "" && r.shepherdID == "" {
 		if checks, ok := deps.Client.(github.CheckRunWriter); ok {
-			checkID, err := checks.CreateCheckRun(repo.Owner, repo.Name, github.CheckRunWrite{
+			checkID, err := checks.CreateCheckRun(repo.StoredOwner(), repo.Name, github.CheckRunWrite{
 				Name:    externalReviewCheckName,
 				HeadSHA: headSHA,
 				Status:  "queued",
@@ -641,7 +648,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 
 	origin, approval, approvedAt := attributionForSender(sender, trusted, model.ReasonReview, now)
 	if r.requester != nil {
-		origin = model.Origin{Attribution: *r.requester, Reason: model.ReasonReview}
+		origin = model.Filing{Attribution: *r.requester, Reason: model.ReasonReview}
 		approval, approvedAt = nil, nil
 		if trusted {
 			a := *r.requester
@@ -700,10 +707,13 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		"finding with `add_review_comment` (supplying `path` and `line` for inline diff findings). " +
 		"If the pull request looks clean with no findings, summarize what you checked via `comment_on_issue`.")
 
+	b.WriteString(earlierReviewsSection(ctx, deps.Store, deps.Client, r.shepherdTask, ref, headSHA, id))
+	b.WriteString(parallelReviewsSection(parallelReviewsFor(ctx, deps.Store, r.shepherdTask, ref, headSHA, id)))
+
 	task := model.Task{
 		ID:         id,
 		Intent:     model.IntentReview,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -713,6 +723,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		Base:       base,
 		WorkOrigin: model.GitHubOrigin(repo, number),
 		Grants:     grants,
+		Tags:       addReviewHeadTag(nil, headSHA),
 		Links:      links,
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
@@ -723,6 +734,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	if err := deps.Store.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("filing external PR review task %s: %w", task.ID, err)
 	}
+	syncParallelReviewBodies(ctx, deps.Store, r.shepherdTask, ref, headSHA)
 	log.Printf("orchestrator: filed external PR review task %s (trusted=%v) for %s", task.ID, trusted, ref)
 	return task.ID, nil
 }
@@ -752,7 +764,7 @@ func completeExternalReviewOutcome(_ context.Context, client github.Client, task
 	if findings == 0 && summary != "" {
 		if submitter, ok := client.(github.ReviewSubmitter); ok {
 			body := fmt.Sprintf("Review from grain task %s:\n\n%s", task.ID, summary)
-			if _, err := submitter.SubmitReview(ref.Repo.Owner, ref.Repo.Name, ref.Number,
+			if _, err := submitter.SubmitReview(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number,
 				github.ReviewEventComment, body, nil); err != nil {
 				log.Printf("orchestrator: submitting clean review on %s for task %s: %v", ref, task.ID, err)
 			}
@@ -779,7 +791,7 @@ func completeExternalReviewOutcome(_ context.Context, client github.Client, task
 		checkSummary = fmt.Sprintf("Grain review task %s posted %s on %s.",
 			task.ID, countOf(findings, "finding"), ref)
 	}
-	if err := checks.UpdateCheckRun(ref.Repo.Owner, ref.Repo.Name, checkRunID, github.CheckRunWrite{
+	if err := checks.UpdateCheckRun(ref.Repo.StoredOwner(), ref.Repo.Name, checkRunID, github.CheckRunWrite{
 		Status:     "completed",
 		Conclusion: conclusion,
 		Output: &github.CheckRunOutput{
@@ -820,15 +832,15 @@ func externalPRNumberForTarget(task model.Task) int {
 	return ref.Number
 }
 
-func attributionForSender(sender string, trusted bool, trustedReason model.OriginReason,
-	now time.Time) (model.Origin, *model.Attribution, *time.Time) {
+func attributionForSender(sender string, trusted bool, trustedReason model.FilingReason,
+	now time.Time) (model.Filing, *model.Attribution, *time.Time) {
 
 	human := model.Principal{Kind: model.PrincipalHuman, ID: sender}
 	if trusted {
 		attr := model.Attribution{Actor: human}
-		return model.Origin{Attribution: attr, Reason: trustedReason}, &attr, &now
+		return model.Filing{Attribution: attr, Reason: trustedReason}, &attr, &now
 	}
-	return model.Origin{
+	return model.Filing{
 		Attribution: model.Attribution{Actor: githubWebhookAutomation, OnBehalfOf: &human},
 		Reason:      model.ReasonProposal,
 	}, nil, nil
@@ -844,7 +856,7 @@ func defaultRepoGrants(ctx context.Context, store *model.Store, repo model.RepoR
 
 func usableRepoBranch(client github.Client, repo model.RepoRef, preferred, fallback string) string {
 	if preferred != "" && client != nil {
-		if exists, err := client.BranchExists(repo.Owner, repo.Name, preferred); err == nil && exists {
+		if exists, err := client.BranchExists(repo.StoredOwner(), repo.Name, preferred); err == nil && exists {
 			return preferred
 		}
 		if fallback != "" {
@@ -879,6 +891,12 @@ func deliverReplyAndWakeTask(ctx context.Context, store *model.Store, task model
 		Body:      body,
 		CreatedAt: now,
 	}); err != nil {
+		return err
+	}
+	// A person posting is what a resume_later(when: {message: true}) waits
+	// for, wherever they posted it. Such a task reads deferred, not
+	// awaiting_reply, so nothing below would release it.
+	if _, err := store.WakeOnMessage(ctx, task.ID, now); err != nil {
 		return err
 	}
 
@@ -916,7 +934,7 @@ func openGrainTaskForPR(ctx context.Context, store *model.Store, ref model.PullR
 		if err != nil || t == nil {
 			return nil, err
 		}
-		if isReviewTask(*t) || t.Origin.Reason == model.ReasonFix {
+		if isReviewTask(*t) || t.Filing.Reason == model.ReasonFix {
 			continue
 		}
 		return t, nil
@@ -985,9 +1003,9 @@ func reactEyes(client github.Client, repo model.RepoRef, commentID int64, inline
 	}
 	var err error
 	if inlineReview {
-		err = poster.CreateReviewCommentReaction(repo.Owner, repo.Name, commentID, "eyes")
+		err = poster.CreateReviewCommentReaction(repo.StoredOwner(), repo.Name, commentID, "eyes")
 	} else {
-		err = poster.CreateIssueCommentReaction(repo.Owner, repo.Name, commentID, "eyes")
+		err = poster.CreateIssueCommentReaction(repo.StoredOwner(), repo.Name, commentID, "eyes")
 	}
 	if err != nil {
 		log.Printf("orchestrator: posting reaction to comment %d on %s: %v", commentID, repo, err)

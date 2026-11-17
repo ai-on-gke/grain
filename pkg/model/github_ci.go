@@ -125,6 +125,13 @@ func (j GitHubCIJob) IsActions() bool {
 // conclusions a failure tail is kept for.
 func (j GitHubCIJob) Failed() bool { return GitHubCIFailed(j.Conclusion) }
 
+// GitHubBaseRepairTag is the tag every repair of a red default branch on
+// GitHub Actions carries (the orchestrator's githubbaserepair.go): at most
+// one is open per repository.
+func GitHubBaseRepairTag(repo RepoRef) string {
+	return "github-base-repair:" + strings.ToLower(repo.String())
+}
+
 // GitHubCIFailed reports whether a GitHub conclusion is a failure of the
 // job itself, as against a cancellation, a skip or a pass.
 func GitHubCIFailed(conclusion string) bool {
@@ -345,7 +352,10 @@ type GitHubCIFilter struct {
 	// NeedsTail keeps failed Actions jobs whose log nobody has asked for
 	// yet -- the failure-tail fetcher's work list.
 	NeedsTail bool
-	Limit     int
+	// Refs, when set, keeps jobs of runs on one of these refs (a branch
+	// name, as recorded).
+	Refs  []string
+	Limit int
 }
 
 // ListGitHubCIJobs returns recorded GitHub CI jobs, most recently
@@ -364,6 +374,12 @@ func (s *Store) ListGitHubCIJobs(ctx context.Context, f GitHubCIFilter) ([]GitHu
 	if !f.Since.IsZero() {
 		where = append(where, "COALESCE(`completed_at`, `recorded_at`) >= ?")
 		args = append(args, f.Since.UTC())
+	}
+	if len(f.Refs) > 0 {
+		where = append(where, "`ref` IN ("+strings.TrimSuffix(strings.Repeat("?,", len(f.Refs)), ",")+")")
+		for _, r := range f.Refs {
+			args = append(args, r)
+		}
 	}
 	if f.FailedOnly || f.NeedsTail {
 		where = append(where, "`conclusion` IN ('failure','timed_out','startup_failure')")

@@ -1039,6 +1039,123 @@ var Migrations = []Migration{
 			"or a target repo places off the default host (grain/task-4335)",
 		Up: migrateStoredOwners,
 	},
+	{
+		Version:     143,
+		Description: "add template.sandbox, the sandbox shape every task filed from a template asks for (grain/task-4591)",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `sandbox` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 144,
+		Description: "take the copies of a template's admission, hosting and grants off the schedules that fire it, " +
+			"leaving what each schedule adds to its template (grain/task-4607)",
+		Up: migrateScheduleOwnSettings,
+	},
+	{
+		Version: 145,
+		Description: "host-qualify the owner column of release, release_candidate and qualification_run " +
+			"(StoredOwner) for repositories a target repo places off the default host (grain/task-4489)",
+		Up: migrateReleaseOwners,
+	},
+	{
+		Version:     146,
+		Description: "add grain_config.qa, the deployment-wide quality control engine and PR rollout configuration",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `qa` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 147,
+		Description: "have every repository's declarations read again, writing back the grants a schedule file " +
+			"declares that a firing from before 144 wrote its template's over (grain/task-5360)",
+		Up: rereadDeclarations,
+	},
+	{
+		Version:     148,
+		Description: "add qa_flow_version to track quality-control execution flow snapshots and task_origin_ref index",
+		Statements: []string{
+			"CREATE TABLE IF NOT EXISTS `qa_flow_version` (" +
+				"`hash` TEXT NOT NULL," +
+				"`key` TEXT NOT NULL," +
+				"`version` INTEGER NOT NULL," +
+				"`parent_hash` TEXT NOT NULL DEFAULT ''," +
+				"`label` TEXT NOT NULL," +
+				"`summary` TEXT NOT NULL," +
+				"`spec_json` TEXT NOT NULL," +
+				"`source_yaml` TEXT NOT NULL," +
+				"`qa_engine_rev` INTEGER NOT NULL," +
+				"`created_by` TEXT NOT NULL," +
+				"`created_at` DATETIME NOT NULL," +
+				"`retired_at` DATETIME NULL," +
+				"PRIMARY KEY (`hash`)," +
+				"UNIQUE (`key`, `version`)" +
+				")",
+			"CREATE INDEX IF NOT EXISTS `task_origin_ref` ON `task` (`origin_ref`)",
+		},
+	},
+	{
+		Version:     149,
+		Description: "add qa_experiment and qa_enrollment tables and provenance columns on task_qa_check_run",
+		Statements: []string{
+			qaExperimentTable,
+			qaExperimentRunningIndex,
+			qaEnrollmentTable,
+			qaEnrollmentExpIndex,
+			taskQAAssignmentTable,
+			"CREATE TABLE IF NOT EXISTS `task_qa_check_run` (" +
+				"`id` INTEGER PRIMARY KEY AUTOINCREMENT," +
+				"`task_id` TEXT NOT NULL," +
+				"`run_id` TEXT NOT NULL DEFAULT ''," +
+				"`commit_sha` TEXT NOT NULL DEFAULT ''," +
+				"`stage` TEXT NOT NULL," +
+				"`check_id` TEXT NOT NULL," +
+				"`arm` TEXT NOT NULL DEFAULT 'control'," +
+				"`shadow` INTEGER NOT NULL DEFAULT 0," +
+				"`verdict` TEXT NOT NULL," +
+				"`duration_ms` INTEGER NOT NULL DEFAULT 0," +
+				"`tokens_in` INTEGER NOT NULL DEFAULT 0," +
+				"`tokens_out` INTEGER NOT NULL DEFAULT 0," +
+				"`alloc_bytes` INTEGER NOT NULL DEFAULT 0," +
+				"`detail_json` TEXT NOT NULL DEFAULT ''," +
+				"`created_at` DATETIME NOT NULL" +
+				")",
+			taskQAFindingTable,
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `experiment_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `arm_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `flow_hash` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `qa_engine_rev` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `model` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `base_sha` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     150,
+		Description: "add schema_ver and source provenance to qa_flow_version, and blast/complexity/triage tracking to task_qa_check_run",
+		Statements: []string{
+			"ALTER TABLE `qa_flow_version` ADD COLUMN `schema_ver` TEXT NOT NULL DEFAULT 'grain.dev/qa-flow/v2'",
+			"ALTER TABLE `qa_flow_version` ADD COLUMN `source_kind` TEXT NOT NULL DEFAULT 'ui'",
+			"ALTER TABLE `qa_flow_version` ADD COLUMN `source_repo` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `qa_flow_version` ADD COLUMN `source_path` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `qa_flow_version` ADD COLUMN `source_commit` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `blast_tier` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `blast_score` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `complexity_tier` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `triage_decision` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_qa_check_run` ADD COLUMN `repaired_in_next_sha` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     151,
+		Description: "add operator-only qa_flow_ref to template, suite, schedule, repo_config, and task",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `suite` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

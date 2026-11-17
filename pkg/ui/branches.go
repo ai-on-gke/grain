@@ -70,7 +70,7 @@ func (c *Client) proposalDefaultBranches() func(model.RepoRef) string {
 		if def, ok := known[key]; ok {
 			return def
 		}
-		def, err := reader.DefaultBranch(repo.Owner, repo.Name)
+		def, err := reader.DefaultBranch(repo.StoredOwner(), repo.Name)
 		if err != nil {
 			def = ""
 		}
@@ -287,7 +287,7 @@ func (c *Client) ListGitHubBranches(ctx context.Context, repo model.RepoRef) ([]
 	}
 	credentialAvailable := false
 	if c.Config.GitHubCredentialAvailable != nil {
-		credentialAvailable = c.Config.GitHubCredentialAvailable(repo.Owner, repo.Name)
+		credentialAvailable = c.Config.GitHubCredentialAvailable(repo.StoredOwner(), repo.Name)
 	} else if c.Config.Credentials != nil {
 		// The deployment's git connection for the repository, as the git
 		// proxy resolves it, naming a credential that is stored here.
@@ -326,7 +326,7 @@ func (c *Client) ListGitHubBranches(ctx context.Context, repo model.RepoRef) ([]
 	c.githubBranches[key] = entry
 	c.githubBranchesMu.Unlock()
 
-	names, err := c.Config.GitHubBranches.ListBranches(repo.Owner, repo.Name)
+	names, err := c.Config.GitHubBranches.ListBranches(repo.StoredOwner(), repo.Name)
 	c.githubBranchesMu.Lock()
 	entry.names, entry.err = append([]string(nil), names...), err
 	entry.fetchedAt = now
@@ -493,6 +493,9 @@ func (s *Server) handleListGitHubBranches(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	if r.URL.Query().Get("refresh") == "1" {
+		s.tasks.forgetGitHubBranches(repo, 0)
 	}
 	names, err := s.tasks.ListGitHubBranches(r.Context(), repo)
 	if err != nil {

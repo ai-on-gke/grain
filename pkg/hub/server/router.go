@@ -291,11 +291,6 @@ func (rt *Router) RateLimiters() *RateLimiters {
 	return rt.limiters
 }
 
-// ReplicaID returns this router's unique replica identifier.
-func (rt *Router) ReplicaID() string {
-	return rt.replicaID
-}
-
 // PeerAddr returns this replica's `:8082` peer address.
 func (rt *Router) PeerAddr() string {
 	rt.peerAddrMu.RLock()
@@ -361,7 +356,7 @@ func (rt *Router) StartBackground(ctx context.Context) {
 		firstAttemptDone := make(chan struct{})
 		var once sync.Once
 		markAttempt := func() { once.Do(func() { close(firstAttemptDone) }) }
-		go listenPostgresChannels(bgCtx, rt.opts.DatabaseURL, PostgresNotificationHandlers{
+		go listenPostgresChannels(bgCtx, rt.opts.DatabaseURL, postgresNotificationHandlers{
 			OnEntry:      rt.onEntryNotification,
 			OnTunnel:     rt.onTunnelNotification,
 			OnCatalog:    rt.onCatalogNotification,

@@ -500,13 +500,14 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/deployment/git-connections/check` | `connections:read` | `admin` | Probes git forge connection credential. |
 | `PUT /api/deployment/agent-backends/{backendId}` | `connections:write` | `admin` | Configures model backend. |
 | `DELETE /api/deployment/agent-backends/{backendId}` | `connections:write` | `admin` | Removes model backend. |
+| `POST /api/deployment/agent-backends/{backendId}/discover` | `connections:write` | `admin` | Refreshes the models the backend's provider advertises (writes only the discovered-models cache). |
 | `PUT /api/deployment/repos/{owner}/{name}/git-connection` | `connections:write` | `admin` | Binds git connection to repository. |
 | `GET /api/deployment/secret-audit` | `secrets:read` | `admin` | Reads secret access/write audit log. |
 | `GET /api/deployment/audit-logs` | `secrets:read` | `admin` | Reads deployment security/config audit logs. |
 | `GET /api/agent-keys` | `secrets:read` | `admin` | Lists configured model API key statuses (never values). |
 | `PUT /api/agent-keys/{framework}` | `secrets:write` | `admin` | Sets model framework API key. |
 | `DELETE /api/agent-keys/{framework}` | `secrets:write` | `admin` | Deletes model framework API key. |
-| `POST /api/agent-keys/{framework}/check` | `secrets:read` | `admin` | Probes model framework API key against vendor. |
+| `POST /api/agent-keys/{framework}/check` | `secrets:read` | `admin` | Probes model framework API key against vendor. Optional `?backend={id}` checks only the saved connection’s dispatch credential; missing/mismatched connections are refused and unsupported authentication modes never report success. |
 | `PUT /api/agent-backends/{id}/credential` | `secrets:write` | `admin` | Sets model backend credential. |
 | `DELETE /api/agent-backends/{id}/credential` | `secrets:write` | `admin` | Deletes model backend credential. |
 | `GET /api/agent-backends/{id}/codex-auth` | `secrets:read` | `admin` | Codex auth status (never secret bytes). |

@@ -720,8 +720,50 @@ func exercise(t *testing.T, label, bin string) {
 	})
 
 	t.Run("drain", func(t *testing.T) {
+		// This tree's agent delivers the Exit of a run that ends during
+		// the drain to the daemon streaming it before it exits. Released
+		// ones (v3.x and earlier) could close the session first, leaving
+		// the run to finish from its spool on the next agent, so only head
+		// is held to it.
+		var lastRun chan error
+		if label == "head" {
+			gate := filepath.Join(stageRoot, "drain-gate")
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageMkdirAll, Path: gate, Perm: 0o700}); err != nil {
+				t.Fatal(err)
+			}
+			started := make(chan hostd.Started, 1)
+			dc := c
+			dc.OnStarted = func(s hostd.Started) { started <- s }
+			dc.Detach = func(context.Context) bool { return true }
+			lastRun = make(chan error, 1)
+			go func() {
+				var out bytes.Buffer
+				exit, err := dc.Run(ctx, hostd.Request{Kind: hostd.KindCLI, Name: "fake", Args: []string{"wait", gate},
+					Dir: stageRoot, Detach: true, Run: "run-2", Task: "task-1"}, nil, lockedWriter(&out), io.Discard)
+				if err == nil && (exit.Code != 3 || !strings.Contains(out.String(), "released")) {
+					err = fmt.Errorf("exit %+v, stdout %q", exit, out.String())
+				}
+				lastRun <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(30 * time.Second):
+				t.Fatal("the detached start never started")
+			}
+		}
 		// An idle agent may exit on s.Drain() before its mux flushes frameOK.
 		drainErr := c.Drain(ctx)
+		if lastRun != nil {
+			if drainErr != nil {
+				t.Fatalf("drain with a run going: %v", drainErr)
+			}
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: filepath.Join(stageRoot, "drain-gate", "go"), Data: []byte("1"), Perm: 0o600}); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-lastRun; err != nil {
+				t.Fatalf("the run that ended during the drain: %v; want its Exit, not the stream dropping", err)
+			}
+		}
 		if drainErr != nil && !errors.Is(drainErr, io.EOF) {
 			t.Fatalf("drain: %v", drainErr)
 		}

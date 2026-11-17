@@ -22,7 +22,10 @@
 
 export const TASK_COMMENTS_LIMIT = 50;
 export const TASK_ATTEMPTS_LIMIT = 20;
-export const TASK_DEEP_LINK_COMMENTS_LIMIT = 200;
+// TASK_DETAIL_MAX_PAGE is the largest page GET /api/tasks/<id> serves
+// (pkg/ui's maxTaskDetailPage); a deep link to an old comment pages back
+// this many at a time.
+export const TASK_DETAIL_MAX_PAGE = 500;
 
 export function taskDetailPath(id) {
   return `/api/tasks/${encodeURIComponent(id)}?comments_limit=${TASK_COMMENTS_LIMIT}&attempts_limit=${TASK_ATTEMPTS_LIMIT}`;
@@ -124,6 +127,41 @@ export function prependEarlierPage(
     );
   }
   return next;
+}
+
+// fetchEarlier fetches the page before what task holds with api, as
+// taskEarlierPath describes it, or null when nothing earlier remains.
+//
+// With throughCommentId it instead pages back through the conversation
+// TASK_DETAIL_MAX_PAGE comments at a time, comments only, until it holds
+// that comment or reaches the first one, and returns every page fetched
+// as one: the caller prepends it once, so the page draws the long
+// conversation once rather than at every step (a deep link to the oldest
+// of 2,500 comments is 5 round trips and one render, not 13 and 13).
+export async function fetchEarlier(api, task, opts = {}) {
+  const { throughCommentId, ...pageOpts } = opts;
+  if (throughCommentId == null) {
+    const path = taskEarlierPath(task, pageOpts);
+    return path ? api(path) : null;
+  }
+  const through = Number(throughCommentId);
+  let cur = task;
+  let combined = null;
+  for (;;) {
+    const path = taskEarlierPath(cur, {
+      commentsLimit: TASK_DETAIL_MAX_PAGE,
+      commentsOnly: true,
+    });
+    if (!path) break;
+    const page = await api(path);
+    const got = Array.isArray(page?.comments) ? page.comments : [];
+    if (!page || got.length === 0) break;
+    const merge = { loadedComments: true };
+    combined = combined ? prependEarlierPage(combined, page, merge) : page;
+    cur = prependEarlierPage(cur, page, merge);
+    if (!(got[0].id > through) || !(page.olderComments > 0)) break;
+  }
+  return combined;
 }
 
 // mergeFreshDetail merges a newly polled head page onto prev without dropping

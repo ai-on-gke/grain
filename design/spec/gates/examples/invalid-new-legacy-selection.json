@@ -1,0 +1,27 @@
+{
+  "id": "review",
+  "type": "review",
+  "version": 1,
+  "purpose": "guard",
+  "required": true,
+  "action": "change.merge",
+  "subject": {
+    "kind": "change",
+    "authority": "github.com",
+    "repository": "ai-on-gke/grain",
+    "change_kind": "pr",
+    "id": "1710"
+  },
+  "config": {
+    "category": "security",
+    "requirement_id": "security/default",
+    "semantics": "legacy_completion_v1"
+  },
+  "freshness_seconds": 300,
+  "origin": {
+    "kind": "task",
+    "id": "57",
+    "revision": "1",
+    "imported": false
+  }
+}

@@ -922,13 +922,6 @@ func scopeResource(project, scope string) (string, bool) {
 	return "", false
 }
 
-// ScopeResource resolves a permission set's resource_scope (e.g.
-// "buckets/<name>" or "repositories/<location>/<repo>") to the resource name
-// Cloud.GetPolicy and Cloud.SetPolicy use.
-func ScopeResource(project, scope string) (string, bool) {
-	return scopeResource(project, scope)
-}
-
 func list(v any) []map[string]any {
 	items, _ := v.([]any)
 	out := make([]map[string]any, 0, len(items))

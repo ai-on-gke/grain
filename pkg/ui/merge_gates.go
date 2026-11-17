@@ -112,7 +112,8 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 		if g.State.Satisfied() {
 			continue
 		}
-		isReviewGate := g.ID == model.GateSecurityReview || g.ID == model.GateReview || strings.HasPrefix(g.ID, "trigger:")
+		isReviewGate := g.ID == model.GateSecurityReview || g.ID == model.GateReview ||
+			g.ID == model.GateTargetedReview || strings.HasPrefix(g.ID, "trigger:")
 		if isReviewGate && !model.GateOverriddenBy(g.ID, normalizedGates) {
 			missingReviewGates = append(missingReviewGates, fmt.Sprintf("%s (%s)", g.ID, g.State))
 			continue
@@ -133,7 +134,8 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 	if len(missingReviewGates) > 0 {
 		var flagGates []string
 		for _, g := range liveGates {
-			if !g.State.Satisfied() && (g.ID == model.GateSecurityReview || g.ID == model.GateReview) {
+			if !g.State.Satisfied() && (g.ID == model.GateSecurityReview || g.ID == model.GateReview ||
+				g.ID == model.GateTargetedReview) {
 				flagGates = append(flagGates, g.ID)
 			}
 		}
@@ -243,7 +245,7 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 	}); ok {
 		if parsedRef, perr := model.ParsePullRequestRef(ref); perr == nil && !model.IsConfigRepo(parsedRef.Repo) {
 			prComment := fmt.Sprintf("**grain gate override** (task %s)\n\n%s", id, body)
-			if _, cerr := commenter.CreateComment(parsedRef.Repo.Owner, parsedRef.Repo.Name, parsedRef.Number, prComment); cerr != nil {
+			if _, cerr := commenter.CreateComment(parsedRef.Repo.StoredOwner(), parsedRef.Repo.Name, parsedRef.Number, prComment); cerr != nil {
 				log.Printf("ui: posting gate override comment on %s: %v", ref, cerr)
 			}
 		}

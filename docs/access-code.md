@@ -236,7 +236,13 @@ the database (`allowed_principal`).
   whatever they hold.
 - **Routes outside the scope table:** the SPA's static pages are served
   to every admitted caller, and so are sign-in, `GET /api/config` and
-  `whoami`. Event streams, console terminals and file downloads are
+  `whoami`. The UIs' content-hashed bundles (`/next/<name>` and
+  `/assets/<name>`: the built `.js`, `.css`, fonts and images, never
+  `index.html` or a source map) are served before any of this, to
+  whoever can reach the port, with no access code or identity verifier
+  asked: they are the open-source build's own output and carry no
+  deployment data ([authentication.design.md](../design/design/authentication.design.md), *Content-hashed frontend
+  bundle exemption*). Event streams, console terminals and file downloads are
   ordinary scoped routes. `/api/mcp` and `/mcp` admit any signed-in role
   and check each tool call against the caller's role using the scope and
   repository rules of the route that tool maps to (filtering tool
@@ -508,8 +514,11 @@ also records who presented it, as the principal `access-code:<name>`
 
 The daemon also serves its API on a unix socket,
 `<data-dir>/api/grain.sock`, in a directory only its own account may
-enter (mode `0700`). `-api-socket` names another path, and `none` turns
-it off. For each connection the daemon asks the kernel which account
+enter (mode `0700`). `-api-socket` names another path, in a directory
+of its own (a new one, or one the daemon's account owns and that holds
+nothing but the socket: a shared directory such as `/tmp`, or one with
+other files in it such as `/run`, `$HOME` or the data directory, is
+refused rather than restricted), and `none` turns it off. For each connection the daemon asks the kernel which account
 connected (`SO_PEERCRED`) and maps that uid to a person:
 
 - `-host-accounts 1000=alice@example.com,1001=bob@example.com`
@@ -546,7 +555,12 @@ The directory's `0700` means that by default only the daemon's account
 (and root) can connect, which is what the CLI wrapper `scripts/setup.sh`
 installs runs as. To let another account in, grant it search on the
 directory (`setfacl -m u:alice:x <data-dir>/api`) and name its uid in
-`-host-accounts`. Being able to connect admits nobody on its own.
+`-host-accounts`. The socket itself is mode `0666`, so the directory is
+the gate, and on a directory that carries an ACL a restart keeps the
+group search bit that holds the ACL's mask, so the grant survives it,
+and clears the ACL's owning-group entry (`g::`) so only named grants
+pass that mask (without an ACL the directory goes back to `0700`). Being able to connect admits nobody on
+its own.
 
 ### Elsewhere: `grain login` through IAP or an identity proxy
 

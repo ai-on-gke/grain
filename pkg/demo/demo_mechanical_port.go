@@ -80,7 +80,7 @@ func seedMechanicalPortDemo(ctx context.Context, store *model.Store, cfg ui.Conf
 			"so the same change belongs on `candidate` too. Port it there.\n\n"+
 			"grain has already made this port itself, with no agent: it %s, pushed the result as `%s`, and opened "+
 			"the pull request from it.", source.ID, sourcePR, demoMechanicalPortSourceTitle, repo, picked, model.BranchName(id)),
-		Origin:     model.Origin{Attribution: porter, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: porter, Reason: model.ReasonDirect},
 		Approval:   &porter,
 		ApprovedAt: &merged,
 		Target:     &repo,

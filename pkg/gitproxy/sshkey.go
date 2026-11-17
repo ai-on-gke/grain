@@ -49,7 +49,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -230,11 +229,6 @@ func asPassphraseMissing(err error, target **ssh.PassphraseMissingError) bool {
 		return true
 	}
 	return false
-}
-
-// sshFile is name's SSH key path.
-func (c *CredentialSet) sshFile(name string) string {
-	return filepath.Join(c.dir, name+".ssh.json")
 }
 
 // IsSSH reports whether name is backed by a <name>.ssh.json file.

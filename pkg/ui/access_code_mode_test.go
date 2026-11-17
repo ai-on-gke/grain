@@ -245,3 +245,31 @@ func TestRecoveryModeRefusesEveryOtherRoute(t *testing.T) {
 		t.Fatalf("checked only %d routes", checked)
 	}
 }
+
+// Settings -> Access's history lists what a code session changed beside
+// the role changes (docs/access-code.md), not only Settings -> Audit:
+// GET /api/access/history read the access surface alone
+// (docs/test-runs/2026-11-11-caller-identity.md, F2).
+func TestAccessHistoryListsAccessCodeWrites(t *testing.T) {
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	cookie := signInWithCode(t, srv, "alice@example.com")
+	rec := serveFrom(srv, networkAddr, http.MethodDelete, "/api/pipeline-pause", "",
+		map[string]string{"Cookie": cookie.String()})
+	if rec.Code/100 != 2 {
+		t.Fatalf("DELETE /api/pipeline-pause with alice's session: %d %s", rec.Code, rec.Body)
+	}
+	rec = serveFrom(srv, networkAddr, http.MethodGet, "/api/access/history", "",
+		map[string]string{"Cookie": cookie.String()})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/access/history: %d %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"surface":"access-code"`) ||
+		!strings.Contains(body, "DELETE /api/pipeline-pause by alice@example.com") ||
+		!strings.Contains(body, `"actor":"access-code:alice@example.com"`) {
+		t.Errorf("GET /api/access/history = %s, want alice's code-session write beside the role changes", body)
+	}
+}

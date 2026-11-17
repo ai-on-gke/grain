@@ -167,7 +167,7 @@ func (s PullRequestScope) prRepo() string {
 
 func (s PullRequestScope) prHead() string {
 	if s.hasUpstream() && s.Branch != "" && !strings.Contains(s.Branch, ":") {
-		return s.Owner + ":" + s.Branch
+		return github.BareOwner(s.Owner) + ":" + s.Branch
 	}
 	return s.Branch
 }

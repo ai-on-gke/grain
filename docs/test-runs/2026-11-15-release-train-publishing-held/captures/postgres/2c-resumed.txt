@@ -1,0 +1,22 @@
+-- tasks
+7	queued	Run the release train (check, release, cut)
+1	awaiting_reply	Director
+-- skips
+ id |                     schedule_id                     |          occurrence           |     reason     | task_id | outcome | fired_task_id |          held_by_schedule_id           
+----+-----------------------------------------------------+-------------------------------+----------------+---------+---------+---------------+----------------------------------------
+  1 | repo:schedule:acme:grain:release-train              | 2026-11-15 06:19:41.088049+00 | publishingHeld | 2       | fired   | 5             | 
+  2 | repo:schedule:acme:grain:walk-release-v351-template | 2026-11-15 06:19:41.088049+00 | publishingHeld | 2       | fired   | 6             | 
+  3 | repo:schedule:acme:grain:release-train-on-stage1    | 2026-11-15 07:24:51.407092+00 | publishingHeld | 2       | dropped |               | 
+  4 | repo:schedule:acme:grain:release-train-on-stage1    | 2026-11-15 07:25:01.406628+00 | publishingHeld | 2       | dropped |               | 
+  5 | repo:schedule:acme:grain:release-train-on-stage1    | 2026-11-15 07:25:26.412572+00 | task           | 5       | dropped |               | repo:schedule:acme:grain:release-train
+(5 rows)
+
+-- schedules
+                         id                          |          next_run_at          |          last_run_at          
+-----------------------------------------------------+-------------------------------+-------------------------------
+ repo:schedule:acme:grain:release-train              | 2026-11-15 07:39:41.088049+00 | 2026-11-15 07:25:26.412572+00
+ repo:schedule:acme:grain:release-train-on-stage1    | 2027-11-16 07:24:40.407061+00 | 2026-11-15 07:26:07.406967+00
+ repo:schedule:acme:grain:walk-release-v351          | 2026-11-15 07:39:41.088049+00 | 2026-11-15 07:24:41.407321+00
+ repo:schedule:acme:grain:walk-release-v351-template | 2026-11-15 07:39:41.088049+00 | 2026-11-15 07:25:26.412572+00
+(4 rows)
+

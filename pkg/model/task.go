@@ -27,7 +27,7 @@
 //     did they do it directly?" is answerable from the task rather than
 //     only from an audit log.
 //   - Landing state is decided by the creating actor, never the reason —
-//     see LandsQueued. A new OriginReason therefore cannot queue itself.
+//     see LandsQueued. A new FilingReason therefore cannot queue itself.
 //   - Blocked is not a state. It is derived from links, and a blocked
 //     task is still queued.
 //
@@ -154,20 +154,20 @@ type Attribution struct {
 	OnBehalfOf *Principal
 }
 
-// --- origin ----------------------------------------------------------
+// --- filing ----------------------------------------------------------
 
-// OriginReason is why a task was created -- the half of Origin that is
+// FilingReason is why a task was created -- the half of Filing that is
 // never consulted to decide whether it lands queued (LandsQueued).
-type OriginReason string
+type FilingReason string
 
 const (
-	ReasonDirect        OriginReason = "direct"        // somebody just filed it
-	ReasonSchedule      OriginReason = "schedule"      // a scheduled job fired
-	ReasonFix           OriginReason = "fix"           // filed for a broken PR
-	ReasonReview        OriginReason = "review"        // a review of another task's own work
-	ReasonProposal      OriginReason = "proposal"      // an agent or parent proposed it
-	ReasonQualification OriginReason = "qualification" // a release candidate's qualification plan fired it
-	ReasonSuite         OriginReason = "suite"         // a suite run fired it (bwsalmon/agents#642)
+	ReasonDirect        FilingReason = "direct"        // somebody just filed it
+	ReasonSchedule      FilingReason = "schedule"      // a scheduled job fired
+	ReasonFix           FilingReason = "fix"           // filed for a broken PR
+	ReasonReview        FilingReason = "review"        // a review of another task's own work
+	ReasonProposal      FilingReason = "proposal"      // an agent or parent proposed it
+	ReasonQualification FilingReason = "qualification" // a release candidate's qualification plan fired it
+	ReasonSuite         FilingReason = "suite"         // a suite run fired it (bwsalmon/agents#642)
 	// ReasonUpgradeCheck is grain checking an upgrade of itself: the task
 	// orchestrator files, once, after an in-place upgrade has installed a
 	// new build and restarted the deployment, to have an agent go and
@@ -179,7 +179,7 @@ const (
 	// wants that checked" is a different thing to have happened than
 	// "a cadence came due", and a person reading the task's origin is
 	// entitled to be told which.
-	ReasonUpgradeCheck OriginReason = "upgrade-check"
+	ReasonUpgradeCheck FilingReason = "upgrade-check"
 	// ReasonConsoleSession is the task holding one of this deployment's
 	// standing interactive sessions -- the director, and whatever else
 	// Config.ConsoleSessions names (ConsoleSession, grain/task-415).
@@ -191,7 +191,7 @@ const (
 	// that a completed task is done, that a task nobody approved is
 	// waiting for somebody -- are exactly the ones
 	// orchestrator.reconcileConsoleSessions exempts it from.
-	ReasonConsoleSession OriginReason = "console-session"
+	ReasonConsoleSession FilingReason = "console-session"
 	// ReasonImported is an open GitHub issue the periodic issue importer
 	// turned into a task (orchestrator.reconcileIssueImports, configured
 	// per repository by RepoConfig.IssueImport). The task names the issue
@@ -202,25 +202,30 @@ const (
 	// issue on GitHub and grain picked it up" is not "somebody filed this
 	// here", and the person deciding whether to approve it is entitled to
 	// be told that the words in it came from outside.
-	ReasonImported OriginReason = "imported"
+	ReasonImported FilingReason = "imported"
 )
 
-// Origin is two orthogonal facts kept together: who created a task, and
+// Filing is two orthogonal facts kept together: who created a task, and
 // why. An earlier design fused them into one enum, which hid that two of
 // its cases were identical in who and differed only in why.
-type Origin struct {
+//
+// It was called Origin until the name collided with WorkOrigin, which the
+// API exposes as `origin`: the root of a task's tree of work, not who
+// filed this one task. The store keeps its columns under the old prefix
+// (`task`.`origin_actor_*`, `origin_behalf_*`, `origin_reason`).
+type Filing struct {
 	Attribution Attribution
-	Reason      OriginReason
+	Reason      FilingReason
 }
 
-// LandsQueued reports whether a task with this origin starts approved.
+// LandsQueued reports whether a task filed this way starts approved.
 //
-// The actor decides; the reason does not. An OriginReason added later
+// The actor decides; the reason does not. A FilingReason added later
 // cannot queue itself, because reasons are never consulted — the
 // trust gate as code rather than as a convention each filing path
 // remembers.
-func LandsQueued(o Origin) bool {
-	return o.Attribution.Actor.Kind == PrincipalHuman
+func LandsQueued(f Filing) bool {
+	return f.Attribution.Actor.Kind == PrincipalHuman
 }
 
 // --- repos and folders -----------------------------------------------
@@ -659,9 +664,9 @@ type Grant struct {
 //
 // Both sides are read through CanonicalGrant into the spelling slice 2
 // stores (StoredGrantSpelling), so an api reference and the api:<scope>
-// it stands for compare equal, and retired one-release aliases match
-// the canonical grant(s) they became (CanonicalLegacyGrants) in either
-// direction.
+// it stands for compare equal, and a name a build outside core
+// registered as an alias matches the grant it became
+// (CanonicalLegacyGrants) in either direction.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
 	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
 	have := heldNonRefGrants(allowed)
@@ -1071,9 +1076,10 @@ func AutoSubmits(child, parent Task) bool {
 		LandsWhereGranted(child, parent)
 }
 
-// GitCredentialCapabilityPrefix is the retired one-release alias prefix for a
-// per-task git credential override (now RepoCredentialGrant on the in-process
-// repo server, https://grain.dev/capabilities/repo#credential).
+// GitCredentialCapabilityPrefix is the retired bare prefix for a per-task git
+// credential override (now RepoCredentialGrant on the in-process repo server,
+// https://grain.dev/capabilities/repo#credential; schema migration 120 rewrote
+// stored rows and RetiredGrantsBecame upgrades older exports).
 const GitCredentialCapabilityPrefix = "github-credential:"
 
 // GitCredentialCapability is the canonical capability grant standing for "use
@@ -1090,14 +1096,11 @@ func LegacyGitCredentialName(capability string) (name string, ok bool) {
 	return name, ok && name != ""
 }
 
-// GitCredentialName returns the credential name a git credential override grant
-// selects -- canonical RepoCredentialGrant or the one-release legacy
-// github-credential:<name> prefix -- and false for any other capability string.
+// GitCredentialName returns the credential name a canonical RepoCredentialGrant
+// git credential override grant selects, and false for any other capability
+// string. The retired github-credential:<name> spelling is no longer an alias.
 func GitCredentialName(capability string) (name string, ok bool) {
-	if name, ok := ParseRepoCredentialGrant(capability); ok {
-		return name, true
-	}
-	return LegacyGitCredentialName(capability)
+	return ParseRepoCredentialGrant(capability)
 }
 
 // ReleaseGateReadCapability is the CI capability a release workflow's job
@@ -1114,9 +1117,9 @@ const ReleaseGateReadCapability = "release-gate-read"
 // deployment status) and GrainSourceGrant, which places the deployment's
 // own baked-in source at grain-src/ in the sandbox (orchestrator's
 // placeGrainSource) and opens src://. Schema migration 115 rewrote the
-// stored grants; the bare name stays readable as an alias for one release
-// (CanonicalLegacyGrants, IsGrainSourceGrant, apiAliasCapabilities). The
-// source grant reaches no repository through the git proxy, and implies
+// stored grants, and an import rewrites an older grain/config
+// (RetiredGrantsBecame); the bare name was an alias for one release and
+// is not any longer. The source grant reaches no repository through the git proxy, and implies
 // none (CapabilityRepos).
 const SelfDebugCapability = "self-debug"
 
@@ -1183,14 +1186,13 @@ func GCPKeyGrant(name string) Grant {
 }
 
 // ErrConflictingGitCredentials is returned when a task holds more than one
-// distinct git credential override grant (repo#credential or legacy
-// github-credential:<name>).
+// distinct git credential override grant (repo#credential).
 var ErrConflictingGitCredentials = errors.New("task holds conflicting git credential grants")
 
-// GitCredentialOverride returns the credential name a repo#credential (or
-// legacy github-credential:<name>) grant among grants selects, if any. If
-// grants hold more than one distinct git credential override, it returns
-// ErrConflictingGitCredentials rather than picking a winner silently.
+// GitCredentialOverride returns the credential name a repo#credential grant
+// among grants selects, if any. If grants hold more than one distinct git
+// credential override, it returns ErrConflictingGitCredentials rather than
+// picking a winner silently.
 func GitCredentialOverride(grants []Grant) (name string, ok bool, err error) {
 	for _, g := range grants {
 		n, isOverride := GitCredentialName(g.Capability)
@@ -1262,12 +1264,13 @@ func (l Lease) Expired(now time.Time, maxAge time.Duration) bool {
 type LinkKind string
 
 const (
-	LinkDependsOn  LinkKind = "depends-on"  // blocks dispatch
-	LinkChildOf    LinkKind = "child-of"    // blocks the parent
-	LinkFixes      LinkKind = "fixes"       // -> a pull request
-	LinkMergeWith  LinkKind = "merge-with"  // blocks the merge, not the run
-	LinkAddresses  LinkKind = "addresses"   // -> a review thread
-	LinkProposedBy LinkKind = "proposed-by" // provenance only
+	LinkDependsOn    LinkKind = "depends-on"  // blocks dispatch
+	LinkChildOf      LinkKind = "child-of"    // blocks the parent
+	LinkFixes        LinkKind = "fixes"       // -> a pull request
+	LinkMergeWith    LinkKind = "merge-with"  // blocks the merge, not the run
+	LinkAddresses    LinkKind = "addresses"   // -> a review thread
+	LinkProposedBy   LinkKind = "proposed-by" // provenance only
+	LinkQATriageHold LinkKind = "qa-triage-hold"
 	// LinkFixTask recorded the separate task the merge queue used to file
 	// to repair this task's own PR (-> that task's ID). Nothing writes it
 	// any more: a repair now runs as another attempt of the task itself,
@@ -1433,6 +1436,13 @@ const (
 	// for this task's change (-> "<trigger>=<task ID>"). A gated hold
 	// is released only once every gating one has finished.
 	LinkPathTriggerTask LinkKind = "path-trigger-task"
+	// LinkTargetedReviewTrigger names one gating trigger on this task's
+	// change whose review is a targeted review -- a sensitive trigger with
+	// no template of its own, reviewed with grain's security review brief
+	// (-> the trigger's name). Written and dropped with
+	// LinkPathTriggerTask, so the merge gates can show that trigger's
+	// review apart from the code review (ComputeMergeGates).
+	LinkTargetedReviewTrigger LinkKind = "targeted-review-trigger"
 	// LinkPathTriggersRead records the head commit grain last judged
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
@@ -1443,6 +1453,11 @@ const (
 	// what the next push's review starts its incremental diff from
 	// (orchestrator's pathtriggerreview.go).
 	LinkPathTriggerReviewed LinkKind = "path-trigger-reviewed"
+	// LinkReviewsCarried records the last head this task's gating reviews
+	// were carried to without being filed again, because the head moved
+	// without changing the change (-> the sha; orchestrator's
+	// samechange.go). It is what says so on the task once per head.
+	LinkReviewsCarried LinkKind = "reviews-carried"
 	// LinkReviewCommentsOnly marks a review that posts its findings and
 	// fixes nothing (-> the reviewed task's ID): its run never opens a
 	// pull request, whatever it pushed. Grain files every review that
@@ -1471,8 +1486,9 @@ const (
 	// LinkReviewFindings records that a required review of this task's pull
 	// request failed its gate -- left findings or open questions, had fixes
 	// closed without merging, or could not be filed (-> ReviewFindingsRecord
-	// JSON). Cleared only by a clean re-review after fixes or an explicit
-	// merge:force gate override, never by Submit.
+	// JSON). Cleared by a clean re-review after fixes, by a person accepting
+	// that review's findings (LinkReviewFindingsAccepted), or by an explicit
+	// merge:force gate override -- never by Submit.
 	LinkReviewFindings LinkKind = "review-findings"
 	// LinkGateOverride records an operator's explicit merge:force override
 	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
@@ -1482,6 +1498,16 @@ const (
 	// LinkHumanSubmitted is consumed so the UI and merge gates know who
 	// approved which commit.
 	LinkHumanApproved LinkKind = "human-approved"
+	// LinkQAHold records that grain withdrew or withheld this task's auto-merge
+	// while a pre-PR quality verification gate (S4) is running or left unresolved
+	// findings after retry caps (-> the head SHA).
+	LinkQAHold LinkKind = "qa-hold"
+	// LinkQAS4Attempted records that the 1-round fresh-context S4 orthogonal
+	// verifier has already executed for this task (-> the staged head SHA).
+	LinkQAS4Attempted LinkKind = "qa-s4-attempted"
+	// LinkQASalvageRetried records that salvagePushedBranch already requeued
+	// one bounded repair turn for deterministic S3 findings (-> the head SHA).
+	LinkQASalvageRetried LinkKind = "qa-salvage-retried"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
@@ -1640,6 +1666,15 @@ const (
 	// read-only grant (orchestrator.SyncCLReviews). Only grain writes it,
 	// and it is what a clean finish clears (LinkCLReviewCleared).
 	LinkCLReviewOf LinkKind = "cl-review-of"
+	// LinkGoalMode stores the compact JSON GoalModeConfig for a task running
+	// in autonomous goal posture. Blocks nothing.
+	LinkGoalMode LinkKind = "goal-mode"
+	// LinkGoalAssumption stores one compact JSON GoalAssumption recorded by an
+	// autonomous goal run. Blocks nothing.
+	LinkGoalAssumption LinkKind = "goal-assumption"
+	// LinkGoalScorecard stores the compact JSON GoalScorecard summarizing
+	// multi-pass verification progress and deliverables. Blocks nothing.
+	LinkGoalScorecard LinkKind = "goal-scorecard"
 )
 
 // CLThreadsPrincipal is who tells a task about new review threads on its
@@ -1856,6 +1891,9 @@ type Task struct {
 	// Skills is the per-task repository skill discovery override (nil defers
 	// to the target repository and deployment defaults).
 	Skills *SkillsConfig `json:"skills,omitempty"`
+	// QAFlowRef is the operator-configured quality-control flow reference
+	// bound to this task (`<key>`, `<key>@v<N>`, or `sha256:<hex>`).
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a
@@ -1863,7 +1901,7 @@ type Task struct {
 	// historical grain/task-<id> form.
 	Branch string
 	Intent Intent
-	Origin Origin
+	Filing Filing
 	Title  string
 	Body   string
 
@@ -2252,6 +2290,18 @@ type Task struct {
 	// may push (Store.GitDeclaredPush). Never inherited by a proposal: an
 	// agent cannot hand its own push set on to work it files.
 	TemplateID string
+	// SourceTemplateID is the template this task's content was filed
+	// from, for reporting alone (grain/task-5273): what the code-quality
+	// report splits change failure rate, first-push CI and review findings
+	// by. It is TemplateID wherever that is set, and besides it records
+	// what TemplateID deliberately does not: an agent's proposal naming a
+	// template_id, and a port of a task filed from one. It grants nothing
+	// -- no push set, no template-restricted capability, no goal -- which
+	// is what lets it be recorded where TemplateID may not be. Stored in
+	// task_source_template; putTask writes TemplateID there when this is
+	// empty, so a firing that sets only TemplateID is recorded too, and a
+	// task rewritten on redispatch keeps whatever was recorded at filing.
+	SourceTemplateID string
 	// Owner is the account responsible for this task (attribution.design.md):
 	// fixed at creation from the filer / on-behalf-of / schedule owner /
 	// deployment fallback, inherited along DerivedFrom, and reassignable by
@@ -2420,7 +2470,7 @@ type Observation struct {
 	// and that is the whole of the second chance there is.
 	//
 	// It is also what makes the repair run a *merger*
-	// (OriginReason.Merger's own doc comment): a task being repaired
+	// (FilingReason.Merger's own doc comment): a task being repaired
 	// draws on the capacity Limits.Mergers keeps back, where before this
 	// the repair was a separate ReasonFix task and the reason column
 	// alone answered it.
@@ -3066,6 +3116,12 @@ type Comment struct {
 	// FiledVia is the sanitized X-Grain-Client label of the tool the
 	// comment was posted from, as Task.FiledVia is the task's.
 	FiledVia string
+	// Note marks a run's comment_on_issue note, whose Summary
+	// (Store.NoteSummary) names a report rather than a question: GET
+	// /api/events records it as task.comment, not task.question
+	// (design/design/integration-events.design.md §3.2). Only read as the
+	// comment is written; it is not stored.
+	Note bool
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's
@@ -3114,7 +3170,7 @@ func (t Task) BranchName() string {
 // reviewed task's instead, so one push to the shared branch is one run.
 // inPlace reports which of the two this is.
 func (t Task) CIOwner() (owner string, inPlace bool) {
-	if t.Origin.Reason == ReasonReview {
+	if t.Filing.Reason == ReasonReview {
 		for _, l := range t.Links {
 			if l.Kind == LinkPushesReviewedBranch && l.Target != "" {
 				return l.Target, true

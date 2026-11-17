@@ -30,10 +30,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+
+	"golang.org/x/mod/semver"
 
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	agentdrelease "github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -65,6 +69,43 @@ type HostdView struct {
 	// using env: ["*"] and ~/-relative paths only when the host advertises
 	// FeatureEnvOpen.
 	AllowlistSnippet string `json:"allowlistSnippet,omitempty"`
+	// Update is a newer signed grain-agentd release this host's owner can
+	// take with `grain-agentd update`; nil when there is none, and always
+	// for a host that does not list hostd.FeatureSelfUpdate (a
+	// root-installed `grain host` never does).
+	Update *HostUpdate `json:"update,omitempty"`
+}
+
+// HostUpdate is an update Settings -> Hosts offers a host.
+type HostUpdate struct {
+	// Build is what the host runs, Available the release it can take.
+	Build     string `json:"build"`
+	Available string `json:"available"`
+	// Command is what the host's owner runs on it to take Available.
+	Command string `json:"command"`
+}
+
+// hostUpdateFor is the update to offer the host st describes, given
+// latest: the signed grain-agentd release this controller serves for a
+// platform. Only a connected, agents-only host that lists
+// FeatureSelfUpdate, whose update.mode is not off, is offered anything,
+// and only a release newer than its build and inside its update.pin.
+// The platform is the host's own word, so only one a release is built
+// for is looked up: anything else would key the release cache and an
+// upstream fetch on a string the host chose.
+func hostUpdateFor(st *hostd.RemoteStatus, latest func(platform string) (string, bool)) *HostUpdate {
+	if st == nil || !st.Connected || !st.AgentsOnly || !slices.Contains(agentdrelease.Platforms, st.Platform) ||
+		!slices.Contains(st.Features, hostd.FeatureSelfUpdate) || st.UpdateMode == hostd.UpdateOff {
+		return nil
+	}
+	v, ok := latest(st.Platform)
+	if !ok || !semver.IsValid(v) || !semver.IsValid(st.Build) || semver.Compare(v, st.Build) <= 0 {
+		return nil
+	}
+	if !(hostd.UpdatePolicy{Pin: st.UpdatePin}).Allows(v) {
+		return nil
+	}
+	return &HostUpdate{Build: st.Build, Available: v, Command: "grain-agentd update -version " + v}
 }
 
 // HostCLISnippet renders a clis: allowlist entry snippet in Settings for
@@ -188,7 +229,8 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 			if c.Config.LocalHostdLogins != nil {
 				v.Logins, v.LoginsKnown = c.Config.LocalHostdLogins(ctx)
 			}
-			v.Features = slices.Clone(hostd.Features)
+			// local is a root-installed host: it never self-updates.
+			v.Features = slices.DeleteFunc(slices.Clone(hostd.Features), func(f hostd.Feature) bool { return f == hostd.FeatureSelfUpdate })
 			v.AllowlistSnippet = HostCLISnippet(model.AgentFrameworkClaude, hostd.ThisHello(""))
 		}
 		v.State = hostdState(h, v.Connection)
@@ -382,10 +424,66 @@ func (s *Server) handleListHostds(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	s.offerHostUpdates(r.Context(), out)
 	out = filterList(out, func(h HostdView) bool {
 		return list.matches(h.Name, h.Owner)
 	})
 	writeListBy(w, out, list, func(h HostdView) string { return h.Name })
+}
+
+// offerHostUpdates fills in each connected host's Update from the signed
+// grain-agentd release this controller serves for its platform.
+func (s *Server) offerHostUpdates(ctx context.Context, views []HostdView) {
+	known := map[string]string{}
+	latest := func(platform string) (string, bool) {
+		if v, ok := known[platform]; ok {
+			return v, v != ""
+		}
+		entry, ok := s.resolveAgentdReleaseFor(ctx, platform, hostUpdateLookupWait)
+		// The host refuses an unsigned release, so none is offered.
+		if !ok || entry.manifest.Signature == "" {
+			known[platform] = ""
+			return "", false
+		}
+		known[platform] = entry.manifest.Version
+		return entry.manifest.Version, true
+	}
+	for i := range views {
+		views[i].Update = hostUpdateFor(views[i].Connection, latest)
+	}
+}
+
+// hostUpdateLookupWait is how long the hosts list waits for a platform's
+// release before answering without an offer.
+var hostUpdateLookupWait = 3 * time.Second
+
+// resolveAgentdReleaseFor is resolveAgentdRelease, waited on for at most
+// wait. The lookup itself runs on a context detached from ctx: an upstream
+// fetch it starts must not be cut short by the list's deadline, since a
+// cut-short fetch is cached as a failure (agentdFetchBackoff) and would
+// leave the install and update routes with no release to serve. A fetch
+// that outlasts wait finishes in the background and is cached for the
+// next list.
+func (s *Server) resolveAgentdReleaseFor(ctx context.Context, platform string, wait time.Duration) (cachedAgentdRelease, bool) {
+	type result struct {
+		entry cachedAgentdRelease
+		ok    bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		entry, ok := s.resolveAgentdRelease(context.WithoutCancel(ctx), platform)
+		done <- result{entry, ok}
+	}()
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case r := <-done:
+		return r.entry, r.ok
+	case <-t.C:
+		return cachedAgentdRelease{}, false
+	case <-ctx.Done():
+		return cachedAgentdRelease{}, false
+	}
 }
 
 func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {

@@ -87,16 +87,6 @@ func extractNamespaceAuthToken(header string) (string, bool) {
 	return "", false
 }
 
-// authenticateSandbox resolves r's proxy token to its sandbox, answering
-// 401 itself when it cannot.
-func (p *GitProxy) authenticateSandbox(w http.ResponseWriter, r *http.Request) (string, bool) {
-	grant, ok := p.authenticateSandboxGrant(w, r)
-	if !ok {
-		return "", false
-	}
-	return grant.Sandbox, true
-}
-
 // authenticateSandboxGrant resolves r's proxy token to its full Grant, answering
 // 401 itself when it cannot.
 func (p *GitProxy) authenticateSandboxGrant(w http.ResponseWriter, r *http.Request) (Grant, bool) {

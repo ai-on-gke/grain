@@ -894,6 +894,36 @@ describe("RepoPage", () => {
     expect(screen.getByPlaceholderText("feature/foo")).toHaveValue("bad name");
   });
 
+  // 2026-11-11 repository walkthrough: the refusal was a five-second
+  // toast, gone while the refused name was still in the box.
+  it("shows a refused branch name on its box until it is edited", async () => {
+    routeApi();
+    const showError = vi.fn();
+    const user = userEvent.setup();
+    renderPage({ tab: "branches", showError });
+    await screen.findByText(/^A task filed against \S+ starts with:/);
+
+    answerOnce(addingBranch, () =>
+      Promise.reject(
+        Object.assign(new Error('invalid branch name "bad name"'), {
+          status: 400,
+        }),
+      ),
+    );
+    const box = screen.getByPlaceholderText("feature/foo");
+    await user.type(box, "bad name");
+    await user.click(screen.getByRole("button", { name: "Add branch" }));
+
+    expect(box).toHaveAccessibleDescription(/invalid branch name "bad name"/);
+    expect(box).toHaveAttribute("aria-invalid", "true");
+    expect(box).toHaveValue("bad name");
+    expect(showError).not.toHaveBeenCalled();
+
+    await user.type(box, "x");
+    expect(box).toHaveAttribute("aria-invalid", "false");
+    expect(screen.queryByText(/invalid branch name/)).toBeNull();
+  });
+
   // grain/task-24: a repo's own default capability set is edited beside
   // the repo it belongs to rather than on the deployment-wide Settings
   // pane -- and the form says what a task filed against this repo would

@@ -631,15 +631,6 @@ func VerifyRenewProof(_ string, currentToken, publicKey string, p RenewProof, no
 	return nil
 }
 
-// EnrollHTTPProvider builds an HTTP client and optional bearer token source for
-// enrollment requests when an edition wraps grain with its own proxy transport.
-type EnrollHTTPProvider func(serverURL string) (*http.Client, func(context.Context) (string, error), error)
-
-var (
-	enrollHTTPMu       sync.RWMutex
-	enrollHTTPProvider EnrollHTTPProvider
-)
-
 // DetectAgentCLIs probes PATH for known agent CLIs on this host.
 func DetectAgentCLIs() []string {
 	candidates := []string{"agy", "claude", "codex", "gemini", "antigravity"}
@@ -755,21 +746,6 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 
 	httpClient := opts.HTTPClient
 	idToken := opts.IDToken
-	if httpClient == nil {
-		enrollHTTPMu.RLock()
-		prov := enrollHTTPProvider
-		enrollHTTPMu.RUnlock()
-		if prov != nil {
-			c, tokFn, err := prov(baseURL)
-			if err != nil {
-				return nil, err
-			}
-			httpClient = c
-			if idToken == nil {
-				idToken = tokFn
-			}
-		}
-	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}

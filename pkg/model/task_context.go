@@ -227,7 +227,9 @@ func (s *Store) RequestCompaction(ctx context.Context, taskID, by string, at tim
 // CompactTask folds taskID's conversation up to throughID into handover:
 // it posts handover as the task's newest handover comment, moves the
 // cursor to throughID (never backwards), bumps the handover version and
-// clears any standing compaction request. throughID <= 0 means every
+// clears any standing compaction request -- or, when handover is the
+// task's newest handover already, confirms it instead of bumping the
+// version. throughID <= 0 means every
 // comment posted before this call.
 //
 // author is the comment's attribution: an agent's compaction is posted
@@ -248,7 +250,17 @@ func (s *Store) CompactTask(ctx context.Context, taskID, handover string, throug
 			throughID = last.ID
 		}
 	}
-	if _, err := s.AddComment(ctx, Comment{
+	// The same handover compacted again is a confirmation, as it is
+	// written again with write_handover: the cursor still moves, but
+	// there is no new version and no second copy of it on the task.
+	latest, err := s.LatestHandover(ctx, taskID)
+	if err != nil {
+		return TaskContext{}, err
+	}
+	bump := 1
+	if latest != nil && strings.TrimSpace(latest.Body) == handover {
+		bump = 0
+	} else if _, err := s.AddComment(ctx, Comment{
 		TaskID:    taskID,
 		Author:    author,
 		Body:      handover,
@@ -264,10 +276,10 @@ func (s *Store) CompactTask(ctx context.Context, taskID, handover string, throug
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_context` SET "+
 				"`compacted_through` = CASE WHEN `compacted_through` > ? THEN `compacted_through` ELSE ? END, "+
-				"`compacted_at` = ?, `compacted_by` = ?, `handover_version` = `handover_version` + 1, "+
+				"`compacted_at` = ?, `compacted_by` = ?, `handover_version` = `handover_version` + ?, "+
 				"`handover_confirmed_at` = ?, `compact_requested_at` = NULL, `compact_requested_by` = '' "+
 				"WHERE `task_id` = ?",
-			throughID, throughID, at.UTC(), by, at.UTC(), taskID)
+			throughID, throughID, at.UTC(), by, bump, at.UTC(), taskID)
 		return err
 	}); err != nil {
 		return TaskContext{}, err
@@ -319,6 +331,14 @@ func (s *Store) TaskBriefEdits(ctx context.Context, taskID string) ([]TaskBriefE
 // since: the runs started after it was written or last confirmed,
 // whichever is later, and the comments posted after it that are not
 // handovers themselves.
+//
+// Only comments from people and agents count -- grain's own notices
+// (automation on nobody's behalf, such as "this task's run parked it
+// until ...") are left out, as DueMessageResumes leaves them out, since
+// a durable task that parks collects two or three of them every run and
+// would otherwise go stale by comments with nobody having said anything
+// (docs/test-runs/2026-11-11-durable-tasks.md, follow-up B). Grain
+// relaying somebody's words (automation on their behalf) still counts.
 func (s *Store) TaskHandoverAge(ctx context.Context, taskID string) (HandoverAge, error) {
 	latest, err := s.LatestHandover(ctx, taskID)
 	if err != nil {
@@ -336,8 +356,9 @@ func (s *Store) TaskHandoverAge(ctx context.Context, taskID string) (HandoverAge
 		age.At = *tc.HandoverConfirmedAt
 	}
 	if err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM `task_comment` WHERE `task_id` = ? AND `id` > ? AND `handover` = 0 AND `created_at` > ?",
-		taskID, latest.ID, age.At.UTC()).Scan(&age.Comments); err != nil {
+		"SELECT COUNT(*) FROM `task_comment` WHERE `task_id` = ? AND `id` > ? AND `handover` = 0 AND `created_at` > ? "+
+			"AND NOT (`author_kind` = ? AND COALESCE(`author_behalf_kind`, '') = '')",
+		taskID, latest.ID, age.At.UTC(), string(PrincipalAutomation)).Scan(&age.Comments); err != nil {
 		return HandoverAge{}, fmt.Errorf("model: counting comments since the handover on %s: %w", taskID, err)
 	}
 	if err := s.db.QueryRowContext(ctx,

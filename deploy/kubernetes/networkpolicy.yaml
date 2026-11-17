@@ -3,9 +3,12 @@
 # grain-sandbox-egress, which keeps an open-network one to the internet
 # rather than the cluster it runs in.
 #
-# It is a separate file from grain.yaml because it is separately
-# *optional*, and because installing it is only half of turning the
-# feature on. A NetworkPolicy object is accepted by every cluster and
+# grain.yaml ships verbatim copies of both policies, so a deployment
+# made from it alone already has them (pkg/orchestrator's
+# k8s_networkpolicy_test.go keeps the copies in step); this file is
+# where they are explained, and what grain-granule.yaml deployments and
+# hand-assembled ones apply. Installing the policies is only half of
+# turning network:none on. A NetworkPolicy object is accepted by every cluster and
 # enforced by only some -- a cluster running kubenet, or a managed
 # cluster with its network plugin left off, stores this happily and
 # ignores it. So grain refuses a task that asked for no network access

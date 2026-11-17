@@ -492,8 +492,6 @@ func validSortedCredentialNames(names []string) []string {
 func repoCredentialArgs(configured []string) (map[string]any, []string) {
 	prop := map[string]any{
 		"type":        "string",
-		"pattern":     githubtoken.NamePattern,
-		"not":         map[string]any{"const": "anonymous"},
 		"description": "Named GitHub credential under secrets/github (<name>.token, <name>.app.json, or <name>.ssh.json) to authenticate this task's git operations with.",
 	}
 	var valid []string
@@ -504,6 +502,9 @@ func repoCredentialArgs(configured []string) (map[string]any, []string) {
 			enum[i] = n
 		}
 		prop["enum"] = enum
+	} else {
+		prop["pattern"] = githubtoken.NamePattern
+		prop["not"] = map[string]any{"const": "anonymous"}
 	}
 	return map[string]any{
 		"type":                 "object",
@@ -857,36 +858,34 @@ func HasSQL(grants []string) bool { return model.HasGrainSQL(grants) }
 // HasSQLWrite reports whether any grant in grants opens grain#sql with write: true.
 func HasSQLWrite(grants []string) bool { return model.HasGrainSQLWrite(grants) }
 
-// IsHostExecGrant reports whether grant names grain#host-exec or the retired self-repair alias.
+// IsHostExecGrant reports whether grant names grain#host-exec.
 func IsHostExecGrant(grant string) bool { return model.IsGrainHostExecGrant(grant) }
 
 // HasHostExec reports whether any grant in grants opens grain#host-exec.
 func HasHostExec(grants []string) bool { return model.HasGrainHostExec(grants) }
 
 // IsSourceGrant reports whether grant names grain#source (recorded or
-// bare) or the retired bare self-debug alias.
+// bare).
 func IsSourceGrant(grant string) bool { return model.IsGrainSourceGrant(grant) }
 
 // HasSource reports whether any grant in grants opens grain#source.
 func HasSource(grants []string) bool { return model.HasGrainSource(grants) }
 
-// IsCIGrant reports whether grant names grain#ci (recorded or bare) or
-// the retired grain-ci alias.
+// IsCIGrant reports whether grant names grain#ci (recorded or bare).
 func IsCIGrant(grant string) bool { return model.IsGrainCIGrant(grant) }
 
-// IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant or the
-// retired bare git-push-any-ref alias.
+// IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant.
 func IsGitPushAnyRefGrant(grant string) bool { return model.IsGitPushAnyRefGrant(grant) }
 
 // IsReadIssuesGrant reports whether grant names github#read-issues (recorded
-// or bare) or the retired bare read-issues alias.
+// or bare).
 func IsReadIssuesGrant(grant string) bool { return model.IsGitHubReadIssuesGrant(grant) }
 
 // HasReadIssues reports whether any grant in grants opens github#read-issues.
 func HasReadIssues(grants []string) bool { return model.HasGitHubReadIssues(grants) }
 
 // IsSandboxRepoGrant reports whether grant names github#sandbox-repo (recorded
-// or bare) or the retired bare github-sandbox alias.
+// or bare).
 func IsSandboxRepoGrant(grant string) bool { return model.IsGitHubSandboxRepoGrant(grant) }
 
 // HasSandboxRepo reports whether any grant in grants opens github#sandbox-repo.

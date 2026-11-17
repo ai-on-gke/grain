@@ -25,10 +25,97 @@ export interface AccessInfo {
   repoLimits?: Record<string, string[]>;
 }
 
+export interface CustomFieldDeclaration {
+  name: string;
+  label?: string;
+  type: "string" | "enum" | "bool" | "number" | string;
+  options?: string[];
+  description?: string;
+  default?: unknown;
+  position?: string;
+  multiple?: boolean;
+  showOnRow?: boolean;
+}
+
+export interface AgentBackendOption {
+  id: string;
+  name?: string;
+  framework?: string;
+  models?: string[];
+  disabled?: boolean;
+  team?: string;
+}
+
+export interface AgentPauseEntry {
+  connection?: string;
+  connectionName?: string;
+  model?: string;
+  labels?: string[];
+  escalated?: string;
+  team?: string;
+  framework?: string;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  canLift?: boolean;
+}
+
+export interface AgentPauseStatus {
+  paused: boolean;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  pauses?: AgentPauseEntry[];
+}
+
+export interface PipelinePauseStatus {
+  paused: boolean;
+  since?: string;
+  reason?: string;
+  byKind?: string;
+  byId?: string;
+  bySource?: string;
+  byLabel?: string;
+  untilTask?: string;
+  runNowPasses?: boolean;
+  cancelledUpgrade?: string;
+}
+
+export interface DispatchCondition {
+  name?: string;
+  error?: string;
+  since?: string;
+  remedy?: string;
+  held?: boolean | string;
+  check?: boolean | string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
-  version?: string;
+  viewerOwner?: string;
+  actor?: string;
+  // The build stamp (api/version.ts); a string on older servers.
+  version?: string | Record<string, unknown>;
+  configRepo?: string;
+  gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
+  capabilities?: CapabilityOption[];
+  // ciCapabilities is what can be granted to a repository's CI jobs
+  // (the repo page's CI capabilities card).
+  ciCapabilities?: CapabilityOption[];
+  defaultCapabilities?: string[];
+  repoDefaultCapabilities?: Record<string, string[]>;
+  agentBackends?: AgentBackendOption[];
+  agentFramework?: string;
+  models?: string[];
+  defaultModel?: string;
+  customFields?: CustomFieldDeclaration[];
+  agentPause?: AgentPauseStatus | null;
+  pipelinePause?: PipelinePauseStatus | null;
+  dispatchBlocked?: DispatchCondition[] | null;
+  reconcilerDown?: boolean;
+  timeZone?: string;
+  deployment?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -38,12 +125,156 @@ export interface PullRequestRef {
   [key: string]: unknown;
 }
 
+export interface AttachmentUpload {
+  filename: string;
+  contentType: string;
+  content: string;
+}
+
+export interface AttachmentMeta {
+  id: string | number;
+  filename: string;
+  contentType?: string;
+  size?: number;
+}
+
+export interface HumanReviewView {
+  source?: string;
+  category?: string;
+  reason?: string;
+  reviewTask?: string;
+  run?: string;
+  at?: string;
+}
+
+// ApprovalView is one rule a change waits on a named approver's Submit
+// for (pkg/ui/approvals.go): a sensitive trigger with `human: required`,
+// or grain's own guard over the repository's triggers.
+export interface ApprovalView {
+  rule: string;
+  source?: string;
+  approvers?: string[];
+  approvedBy?: string;
+}
+
+// PolicyRequirement is one line of a change's effective merge policy
+// and the rules that caused it (model.PolicyRequirement).
+export interface PolicyRequirement {
+  Field: string;
+  Value: string;
+  From?: string[];
+}
+
+// EffectiveMergePolicy is what the repository's merge rules
+// (.grain/merge-rules.yml) require of a change's head
+// (model.EffectiveMergePolicy); its fields keep their Go names.
+export interface EffectiveMergePolicy {
+  Head?: string;
+  Rules?: string;
+  Mode?: string;
+  GrainJobs?: string[];
+  GrainFullSuite?: boolean;
+  GitHubChecks?: string[];
+  GitHubAllChecks?: boolean;
+  Matched?: string[];
+  Requirements?: PolicyRequirement[];
+}
+
+export interface TaskPaused {
+  at: string;
+  by: string;
+  byKind?: string;
+  bySource?: string;
+  byLabel?: string;
+  fromState: string;
+  immediate?: boolean;
+  graceUntil?: string;
+}
+
+export interface GoalSpec {
+  repo?: string;
+  branch?: string;
+  publishing?: boolean;
+  task?: string;
+  number?: number;
+  tasks?: string[];
+  until?: string;
+  repos?: string[];
+  cl?: number;
+  workflow?: string;
+}
+
+export interface GoalDecl {
+  kind: string;
+  spec: GoalSpec;
+  on_met?: string;
+  on_limit?: string;
+  max_resumes?: number;
+  max_stall?: string;
+}
+
+// TaskGoalView is a task's goal as GET /api/tasks/{id} returns it: the
+// task_goal row (model.TaskGoal), whose fields are camelCase -- unlike
+// GoalDecl, the snake_case body PUT /api/tasks/{id}/goal takes.
+export interface TaskGoalView {
+  taskId?: string;
+  kind: string;
+  spec: GoalSpec;
+  onMet?: string;
+  onLimit?: string;
+  declaredBy?: string;
+  declaredAt?: string;
+  metAt?: string;
+  evidence?: string;
+  outcome?: string;
+  progressAt?: string;
+  resumesSinceProgress?: number;
+  maxResumes?: number;
+  // A Go time.Duration: nanoseconds.
+  maxStall?: number;
+  limitNotifiedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface GoalModeConfig {
+  enabled: boolean;
+  maxPasses?: number;
+  wallClockMinutes?: number;
+  mockMissingSecrets?: boolean;
+}
+
+export interface GoalAssumption {
+  id: string;
+  topic: string;
+  decision: string;
+  rationale?: string;
+  alternatives?: string;
+  pass?: number;
+  createdAt?: string;
+}
+
+export interface GoalDeliverable {
+  requirement: string;
+  evidence: string;
+  verified: boolean;
+}
+
+export interface GoalScorecard {
+  passesUsed: number;
+  maxPasses: number;
+  verified: boolean;
+  stoppedAtCap?: boolean;
+  stopReason?: string;
+  summary?: string;
+  deliverables?: GoalDeliverable[];
+  updatedAt?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   state: string;
   repo?: string;
-  repos?: string[];
   createdAt?: string;
   updatedAt?: string;
   proposedBy?: string;
@@ -54,7 +285,17 @@ export interface Task {
   reviewQuestions?: string;
   reviewFindings?: unknown[];
   humanApprovedBy?: string;
-  humanReviewHold?: { category?: string }[];
+  humanReviewHold?: HumanReviewView[];
+  // Holds the repository's own rules put on the change (pkg/ui/tasks.go):
+  // the strictest `human` setting of the gating triggers holding it and
+  // the review each filed ("<trigger>=<task>"), a security hold, the
+  // approvals it still owes, and what its merge rules require.
+  pathTriggerHold?: string;
+  pathTriggerTasks?: string[];
+  securityHold?: string;
+  approvals?: ApprovalView[];
+  repoRules?: string;
+  mergePolicy?: EffectiveMergePolicy;
   autoMerge?: boolean;
   pullRequest?: PullRequestRef | string | null;
   prClosedAt?: string;
@@ -62,13 +303,147 @@ export interface Task {
   merged?: boolean;
   closedReason?: string;
   mergeQueueState?: string;
+  mergeQueueNote?: string;
   mergeQueueStalledAt?: string;
   mergeQueueBlockedAt?: string;
   redBaseBranch?: unknown;
   stall?: string;
+  deferredUntil?: string;
+  reads?: string[];
+  writes?: { repo: string; base?: string }[];
+  capabilities?: string[];
+  customFields?: Record<string, string | string[]>;
+  reviewers?: string[];
+  reviewTemplateId?: string;
+  reviewTemplateName?: string;
+  // The template the task was filed from, absent for one written from scratch.
+  templateId?: string;
+  qaFlowRef?: string;
+  sandboxCpus?: number;
+  sandboxMemoryMb?: number;
+  sandboxDiskGb?: number;
+  agentFramework?: string;
+  agentBackendId?: string;
+  model?: string;
+  networkAccess?: string;
+  nothingNeededAction?: string;
+  promptExtension?: string;
+  noPort?: boolean;
+  // The release this task is filed against (vX.Y.Z or vX.Y.Z-rc.N).
+  foundIn?: string;
+  keepRunning?: boolean;
+  hosting?: string;
+  paused?: TaskPaused | null;
+  runNowAt?: string;
+  runNowStale?: boolean;
+  goal?: TaskGoalView | null;
+  goalMode?: GoalModeConfig | null;
+  goalAssumptions?: GoalAssumption[];
+  goalScorecard?: GoalScorecard | null;
   consoleSession?: unknown;
-  body?: string;
+  interactive?: boolean;
+  // What the current run is doing, in a sentence, and when it said so;
+  // activityBySetup marks grain's own setup steps rather than the agent.
+  activity?: string;
+  activityAt?: string;
+  activityBySetup?: boolean;
+  priority?: number;
+  // Waiting on an open dependency (GET /api/tasks).
+  blocked?: boolean;
+  // Dispatch pool: "standard", "bypass" or "durable" (model.Admission).
+  admission?: string;
+  authorKind?: string;
+  authorLabel?: string;
+  author?: string;
+  authorSource?: string;
   branch?: string;
+  base?: string;
+  // Tasks this one waits for (task detail).
+  dependsOn?: string[];
+  description?: string;
+  body?: string;
+  // Who the task belongs to and who filed it (pkg/ui tasks.go Task).
+  owner?: string;
+  creator?: string;
+  approved?: boolean;
+  approvedBy?: string;
+  approvedByLabel?: string;
+  approvedByKind?: string;
+  approvedBySource?: string;
+  // generatedFrom: the immediate parent proposer -- the task whose
+  // propose_task call filed this one; absent for a task nobody's run filed.
+  generatedFrom?: string;
+  // origin: the root of this task's work tree ("owner/repo#N" or
+  // "task:<id>"), inherited at any depth, so it is usually not the parent.
+  // Neither field says who filed the task: that is its filing, the
+  // author* fields (docs/work-trees.md#glossary).
+  origin?: string;
+  stacked?: boolean;
+  review?: boolean;
+  scheduled?: boolean;
+  suiteRun?: boolean;
+  imported?: boolean;
+  awaitingImportApproval?: boolean;
+  grainBaseRepair?: boolean;
+  fixesBaseBranch?: boolean;
+  repairOf?: string;
+  reviewTask?: string;
+  securityReviewTask?: string;
+  autoApproveProposals?: boolean;
+  externalRef?: string;
+  continues?: string;
+  rolledOverFrom?: string;
+  rolledOverTo?: string;
+  startedAt?: string;
+  endedAt?: string;
+  closedAt?: string;
+  filedVia?: string;
+  changelists?: string[];
+  changeTargetKind?: string;
+  clReview?: {
+    canPublish?: boolean;
+    canMail?: boolean;
+    [key: string]: unknown;
+  };
+  clSubmit?: {
+    canSubmit?: boolean;
+    canSync?: boolean;
+    reasons?: string[];
+    target?: string;
+    [key: string]: unknown;
+  };
+  derivedFrom?: string[];
+  designs?: string[];
+  // Open dependencies and the state of each (GET /api/tasks).
+  blockedBy?: string[];
+  dependsOnStates?: Record<string, string>;
+  // The gates a pull request must pass to merge (model.MergeGate).
+  mergeGates?: MergeGate[];
+  // Why the task is where it is (orchestrator liveness reason), e.g.
+  // {reason: "awaiting_reply/stopped", class: "awaiting a person"}.
+  reason?: { reason: string; class?: string; control?: string };
+  // The merge queue's own sub-case for this task's pull request, when it
+  // is on the queue; its control (Retry merge on merge_failed) stands in
+  // when the task's own sub-case names none.
+  mergeQueueReason?: { reason: string; class?: string; control?: string };
+}
+
+export type MergeGateState =
+  "passed" | "running" | "failing" | "findings" | "needed" | "overridden";
+
+// MergeGate is one required gate on a change (pkg/model merge_gates.go).
+// A gate is satisfied when it has passed or was overridden.
+export interface MergeGate {
+  id: string;
+  label: string;
+  state: MergeGateState | string;
+  detail?: string;
+  reviewTask?: string;
+  approvedBy?: string;
+  overridable?: boolean;
+  // A findings gate whose review's findings a person may accept as they
+  // are (POST /api/tasks/{id}/accept-findings, model.MergeGate.Acceptable).
+  acceptable?: boolean;
 }
 
 export interface AccessRequestItem {
@@ -83,6 +458,8 @@ export interface AccessRequestItem {
   requiresPerson?: boolean;
   held?: boolean;
   error?: string;
+  substitute?: boolean;
+  substituteGrant?: string;
 }
 
 export interface AccessRequestView {
@@ -92,23 +469,310 @@ export interface AccessRequestView {
   createdAt: string;
 }
 
+export interface PendingConfigChange {
+  summary: string;
+  description?: string;
+  branch: string;
+  base?: string;
+  baseSha?: string;
+  headSha: string;
+  prNumber?: number;
+  files?: string[];
+  diff: string;
+  validation?: { ok: boolean; error?: string };
+  createdAt?: string;
+}
+
+export interface TaskCIStatus {
+  runId?: string;
+  commit?: string;
+  startedAt?: string;
+  conclusion?: string;
+  finishedAt?: string;
+  detail?: string;
+}
+
+export interface CIRunStep {
+  name: string;
+  status?: string;
+  conclusion?: string;
+  exitCode?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  output?: string;
+  outputTruncated?: boolean;
+}
+
+export interface CIRunJob {
+  id?: string | number;
+  name: string;
+  status?: string;
+  conclusion?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  steps?: CIRunStep[];
+}
+
+export interface CIRun {
+  id: string;
+  provider?: string;
+  repo?: string;
+  ref?: string;
+  branch?: string;
+  commit?: string;
+  event?: string;
+  workflow?: string;
+  taskId?: string;
+  url?: string;
+  status: string;
+  conclusion?: string;
+  detail?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  jobs?: CIRunJob[];
+  fault?: { kind?: string; summary?: string; detail?: string };
+}
+
+export interface CIRunsResponse {
+  enabled?: boolean;
+  runs: CIRun[];
+  matched?: number;
+  faults?: { kind?: string; summary?: string; detail?: string }[];
+}
+
+export interface CompareResponse {
+  base: string;
+  head: string;
+  mergeBase?: string;
+  merged?: boolean;
+  diff: string;
+}
+
+export interface CapabilityMethod {
+  ref: string;
+  capability: string;
+  method: string;
+  description?: string;
+  args?: Record<string, unknown>;
+  requiresArgs?: boolean;
+  releasable?: boolean;
+  policyRefusal?: string;
+  aliasOf?: string[];
+}
+
+export interface APIScopeSetRow {
+  name: string;
+  description?: string;
+  scopes?: string[];
+  source?: string;
+  catalogue?: { disabled?: boolean };
+}
+
+export interface APIScopeSetsResponse {
+  sets: APIScopeSetRow[];
+  error?: string;
+  path?: string;
+}
+
+export interface GrantCheck {
+  grant?: string;
+  recorded: string;
+  error?: string;
+  fields?: { field: string; message: string }[];
+  catalogueRefusal?: boolean;
+}
+
+export interface CapabilityAuditEntry {
+  grant: string;
+  attemptId?: string;
+  at: string;
+  hostd?: string;
+  record?: unknown;
+  note?: string;
+}
+
+export interface TaskContextView {
+  brief?: string;
+  original_description?: string;
+  compacted_through?: number;
+  handover?: string;
+  handover_stale?: boolean;
+  summarised?: number;
+  brief_edits?: {
+    brief?: string;
+    reason?: string;
+    by?: string;
+    at?: string;
+  }[];
+}
+
+export interface TemplateField {
+  name: string;
+  label?: string;
+  options?: string[];
+  default?: string;
+  required?: boolean;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  fields?: TemplateField[];
+  repo?: string;
+  base?: string;
+  priority?: number;
+  autoMerge?: boolean;
+  networkAccess?: string;
+  nothingNeededAction?: string;
+  model?: string;
+  qaFlowRef?: string;
+  interactive?: boolean;
+  keepRunning?: boolean;
+  admission?: string;
+  hosting?: string;
+  reads?: string[];
+  writes?: { repo: string; base?: string }[];
+  reviewers?: string[];
+  customFields?: Record<string, string | string[]>;
+  capabilities?: string[];
+  declaredIn?: { repo: string; file?: string; path?: string };
+  system?: boolean;
+  revision?: string;
+}
+
+export interface ComposedField {
+  name: string;
+  values?: string[];
+  source: string;
+  sources?: string[];
+}
+
+export interface ComposedTask {
+  templateId?: string;
+  templateName?: string;
+  title: string;
+  fields: ComposedField[];
+}
+
+export interface Composition {
+  kind: string;
+  repo?: string;
+  base?: string;
+  tasks: ComposedTask[];
+}
+
 export interface Comment {
   id: number;
   author?: string;
+  // "human", "agent" or "automation" (pkg/ui tasks.go Comment).
+  authorKind?: string;
+  authorLabel?: string;
+  onBehalfOf?: string;
+  onBehalfOfLabel?: string;
   body: string;
   summary?: string;
+  handover?: boolean;
   createdAt?: string;
+  attachments?: AttachmentMeta[];
+}
+
+export interface Attempt {
+  number: number;
+  startedAt?: string;
+  agentStartedAt?: string;
+  promptTokens?: number;
+  capabilityAuditCount?: number;
+  // The grain hostd this attempt's host work went to (model.TaskRunHostd).
+  hostd?: {
+    hostd: string;
+    instance?: string;
+    owner?: string;
+    deleted?: boolean;
+  };
+  finishedAt?: string;
+  outcome?: string;
+  detail?: string;
+  setupNote?: string;
+  model?: string;
+  agentFramework?: string;
 }
 
 export interface TaskDetail extends Task {
   comments?: Comment[];
+  attempts?: Attempt[];
+  olderComments?: number;
+  olderAttempts?: number;
+  compactedThrough?: number;
+  attachments?: AttachmentMeta[];
+  localScriptApprovals?: LocalScriptApproval[];
   pendingAccess?: AccessRequestView | null;
-  pendingSecret?: { name: string; secret?: string; key?: string } | null;
+  pendingSecret?: {
+    name: string;
+    secret?: string;
+    key?: string;
+    set?: boolean;
+  } | null;
+  pendingConfigChange?: PendingConfigChange | null;
+  ci?: TaskCIStatus | null;
+  ciFaults?: { kind?: string; summary?: string; detail?: string }[];
+}
+
+export interface TaskSummariesResponse {
+  tasks: Record<string, TaskDetail>;
+}
+
+// One standing conversation (pkg/ui console_sessions.go
+// ConsoleSessionSetting). Its conversation is the comments of its task.
+export interface ConsoleSession {
+  id: string;
+  title: string;
+  team?: string;
+  taskId?: string;
+  capabilities?: string[];
+  missingShippedDefaults?: string[];
+  networkAccess?: string;
+  effectiveNetworkAccess?: string;
+  tasksApproved?: boolean;
+  keepRunning?: boolean;
+  hosting?: string;
+  reads?: string[];
+  readsAll?: boolean;
+  writes?: { repo: string; base?: string }[];
+  googleChatSpace?: string;
+  model?: string;
+  crowded?: boolean;
+  crowdedNote?: string;
+}
+
+// A capability this deployment offers (ui.Capability): what a picker
+// lists. `ready: false` means it is not set up here.
+export interface CapabilityOption {
+  id: string;
+  name?: string;
+  description?: string;
+  ready?: boolean;
+  grantable?: boolean;
+  default?: boolean;
+  needs?: string;
+}
+
+export interface ConsoleSessionList {
+  sessions: ConsoleSession[];
+  created?: string;
+  capabilities?: CapabilityOption[];
+  networkAccessOptions?: string[];
 }
 
 export interface Notification {
   id: number;
   subject: string;
+  title?: string;
+  taskId?: string;
+  lastRaisedAt?: string;
+  ackedBy?: string;
+  clearsWhen?: { kind?: string; task?: string };
   family?: string;
   severity?: string;
   body?: string;
@@ -125,12 +789,19 @@ export interface Notification {
 export interface LocalScriptApproval {
   id: string;
   taskId: string;
+  call?: string;
   tool?: string;
   script?: string;
   args?: string[];
   stdinBytes?: number;
   stdinPreview?: string;
   stdinTruncated?: boolean;
+  stdinSha256?: string;
+  status?: string;
+  deadline?: string;
+  requested?: string;
+  answeredBy?: string;
+  answeredAt?: string;
 }
 
 // DiffPreview is GET /api/tasks/{id}/diff-preview (pkg/ui/diff_preview.go):
@@ -167,4 +838,220 @@ export interface DiffPreview {
   totalFiles: number;
   totalHunks: number;
   truncated?: boolean;
+}
+
+export interface TreeNode {
+  id: string;
+  title: string;
+  status: string;
+  pullRequest?: string;
+  done: boolean;
+  root?: boolean;
+  children?: TreeNode[];
+}
+
+export interface WorkTree {
+  origin?: string;
+  rootTask?: string;
+  done: number;
+  total: number;
+  nodes: TreeNode[];
+}
+
+export interface TaskListPage {
+  tasks: Task[];
+  nextCursor?: string;
+  truncated?: boolean;
+  total?: number;
+  merged?: number;
+  sessions?: number;
+}
+
+export interface WirePrincipal {
+  kind: string;
+  id: string;
+  source: string;
+  label: string;
+}
+
+export interface WhoamiResponse {
+  actor: WirePrincipal;
+  onBehalfOf?: WirePrincipal | null;
+  via?: string;
+  source: string;
+  verified: boolean;
+  allowed: boolean;
+}
+
+export interface LogoutResponse {
+  redirect?: string;
+}
+
+export interface BaseBranchGate {
+  repo: string;
+  branch?: string;
+  judged: boolean;
+  reason: string;
+  lastRunAt?: string;
+  lastRunAgeMS?: number;
+  runInFlight?: boolean;
+  mergesWaiting?: boolean;
+  runID?: string;
+  runDetail?: string;
+  detail?: string;
+}
+
+export interface BaseBranchGatesResponse {
+  gates: BaseBranchGate[];
+  total?: number;
+  truncated?: boolean;
+  nextCursor?: string;
+}
+
+export interface Board {
+  id: string;
+  name: string;
+  folder?: string;
+  kind: string;
+  description?: string;
+  query?: string;
+  orderKey?: number;
+}
+
+export interface CreateBoardRequest {
+  name: string;
+  kind?: string;
+  folder?: string;
+  description?: string;
+  query?: string;
+}
+
+export interface AttemptTranscriptResponse {
+  transcript: string;
+}
+
+export interface AgentModel {
+  id: string;
+  label?: string;
+  effort?: string;
+  family?: string;
+  supportedEfforts?: string[];
+  defaultEffort?: string;
+}
+
+export interface AgentModelsResponse {
+  available: boolean;
+  framework?: string;
+  error?: string;
+  models: AgentModel[];
+  efforts?: string[];
+}
+
+export interface MemoryDocument {
+  repo?: string;
+  name: string;
+  summary: string;
+  text?: string;
+  length: number;
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByKind?: string;
+}
+
+export interface MemoryDocumentsResponse {
+  documents: MemoryDocument[];
+}
+
+export interface QARuleSpec {
+  id: string;
+  label: string;
+  stage: string;
+  severity: string;
+  summary: string;
+  targetPaths: string[];
+  enabled: boolean;
+}
+
+export interface QAFlowSpec {
+  id: string;
+  label: string;
+  summary: string;
+  injectSkill: boolean;
+  skillBytes: number;
+  stopNudge: boolean;
+  stagingIsolation: boolean;
+  enableS4: boolean;
+  maxS4RepairRounds: number;
+  strictDecoderPaths?: string[];
+  rules: QARuleSpec[];
+}
+
+export interface QAFlowsResponse {
+  flows: QAFlowSpec[];
+}
+
+export interface QAAssignment {
+  rootOrigin: string;
+  epoch: number;
+  regimeId: number;
+  arm: string;
+  flowId: string;
+  rolloutPctAtAssign: number;
+  complexityTier: string;
+  assignedAt: string;
+}
+
+export interface QACheckRun {
+  id: number;
+  taskId: string;
+  runId: string;
+  commitSha: string;
+  stage: string;
+  checkId: string;
+  arm: string;
+  shadow: boolean;
+  verdict: string;
+  durationMs: number;
+  blastTier?: string;
+  blastScore?: number;
+  complexityTier?: string;
+  triageDecision?: string;
+  repairedInNextSha?: number;
+  tokensIn: number;
+  tokensOut: number;
+  allocBytes: number;
+  detailJson?: string;
+  createdAt: string;
+}
+
+export interface QAFinding {
+  id: number;
+  checkRunId: number;
+  taskId: string;
+  stage: string;
+  ruleId: string;
+  severity: string;
+  filePath?: string;
+  line?: number;
+  summary: string;
+  evidence?: string;
+  humanVote: number;
+  votedBy?: string;
+  votedAt?: string;
+  createdAt: string;
+}
+
+export interface TaskQAResponse {
+  taskId: string;
+  enabled: boolean;
+  assignment?: QAAssignment;
+  checkRuns: QACheckRun[];
+  findings: QAFinding[];
+}
+
+export interface VoteQAFindingResponse {
+  findingId: number;
+  taskId: string;
+  vote: number;
+  votedBy?: string;
 }

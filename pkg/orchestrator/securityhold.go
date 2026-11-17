@@ -143,17 +143,19 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		return nil
 	}
 
+	var baseRef string
 	if headSHA == "" {
-		detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			log.Printf("orchestrator: reading %s's head before classifying it: %v -- "+
 				"it is classified again before it merges", ref, err)
 		} else {
 			headSHA = detail.HeadSHA
+			baseRef = detail.BaseRef
 		}
 	}
 
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	known := err == nil && len(files) < github.PullRequestFilesCap
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches: %v -- holding it for a "+
@@ -204,9 +206,25 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	// A port of a change already cleared, or a head that changed none of
 	// the trust-boundary patches a clearance was given for, keeps that
 	// clearance rather than being reviewed again (securityhold_inherit.go).
+	//
+	// Failing that, a head whose whole change is the one its security
+	// review read -- an empty commit, a clean merge of the base -- keeps
+	// that review's result as it stands, pending, passed or findings,
+	// rather than being filed another (samechange.go).
 	if known {
 		if carried, ok := carryClearance(ctx, store, client, *current, ref, headSHA, matches, rules); ok {
-			return keepClearance(ctx, store, client, *current, ref, headSHA, cleared, carried, matches, now)
+			from := classifiedHead(*current)
+			if err := keepClearance(ctx, store, client, *current, ref, headSHA, cleared, carried, matches, now); err != nil {
+				return err
+			}
+			if carried.source == nil && from != "" && !strings.EqualFold(from, headSHA) &&
+				linkTarget(*current, model.LinkSecurityReviewTask) != "" && sameChange(client, *current, ref, from, headSHA) {
+				return noteReviewsCarried(ctx, store, current.ID, from, headSHA, now)
+			}
+			return nil
+		}
+		if from, ok := securityReviewUnchanged(ctx, store, client, *current, ref, headSHA, rules); ok {
+			return carrySecurityReview(ctx, store, *current, ref, from, headSHA, cleared, matches, now)
 		}
 	}
 	// A clean review may release the security-review gate, while a change
@@ -226,6 +244,15 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		(!bypass || linkTarget(*current, model.LinkBaseRepairBypass) == headSHA) &&
 		securityReviewReusable(ctx, store, prevReview, ref) {
 		return nil
+	}
+
+	var incSince string
+	var incDelta []string
+	if known && headSHA != "" {
+		incSince = securityIncrementalBase(ctx, store, *current, ref, headSHA, rules)
+		if incSince != "" {
+			incDelta, incSince = securityReviewDelta(ctx, store, client, *current, ref, baseRef, incSince, headSHA, files)
+		}
 	}
 
 	var submittedThisHead bool
@@ -304,8 +331,12 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	}
 
 	tmpl := model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
-	review, fileErr := putSecurityReview(ctx, store, *current, ref, *tmpl,
-		securityReviewTitle(*current), securityReviewBody(*tmpl, *current, ref, matches, known), now)
+	body := securityReviewBody(*tmpl, *current, ref, matches, known) +
+		earlierReviewsSection(ctx, store, client, current, ref, headSHA, "", prevReview) +
+		incrementalNote(incSince, headSHA, incDelta) +
+		parallelReviewsSection(parallelReviewsFor(ctx, store, current, ref, headSHA, "", prevReview))
+	review, fileErr := putSecurityReviewAt(ctx, store, *current, ref, headSHA, incSince, *tmpl,
+		securityReviewTitle(*current), body, now)
 	if fileErr == nil {
 		fileErr = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkSecurityReviewTask, Target: review.ID})
@@ -326,10 +357,13 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 				return nil
 			})
 		}
-	} else if err := supersedeSecurityReview(ctx, store, prevReview, review, now); err != nil {
-		// The new review is filed and the hold names it, so the old one can
-		// no longer release anything; at worst it runs for nothing.
-		log.Printf("orchestrator: %v", err)
+	} else {
+		if err := supersedeSecurityReview(ctx, store, prevReview, review, now); err != nil {
+			// The new review is filed and the hold names it, so the old one can
+			// no longer release anything; at worst it runs for nothing.
+			log.Printf("orchestrator: %v", err)
+		}
+		syncParallelReviewBodies(ctx, store, current, ref, headSHA)
 	}
 	prFileErr := fileErr
 	if fileErr != nil {
@@ -373,7 +407,7 @@ func securityHoldNote(ctx context.Context, store *model.Store, client github.Cli
 		return nil
 	}
 	prBody = fmt.Sprintf("**grain security hold** (task %s)\n\n%s", taskID, prBody)
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prBody); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prBody); err != nil {
 		log.Printf("orchestrator: noting %s's security hold on %s: %v -- it is on the task only", taskID, ref, err)
 	}
 	return nil
@@ -415,7 +449,11 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 				Gate:       model.GateSecurityReview,
 				ReviewTask: review.ID,
 				Summary:    summary,
-				At:         now,
+				// The head the review read, which a head moved on
+				// without changing the change carries them to
+				// (securityReviewUnchanged).
+				HeadSHA: classifiedHead(*t),
+				At:      now,
 			})
 		}
 		dropped = true
@@ -431,8 +469,9 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	raiseFindingsReview(ctx, store, review, reviewedID, summary, now)
 	body := fmt.Sprintf(
 		"Review task %s left findings on this change, so its security-review gate did not pass. "+
-			"Address the findings so a re-review passes, or override the gate under merge:force with "+
-			"a reason; pressing Submit records your approval only and will not merge over open findings.",
+			"Address the findings so a re-review passes, or, if the change should merge as it is, "+
+			"accept them as they are with **Accept findings** on the merge-gates panel (`grain accept-findings`, a reason required), which clears this review's findings on this gate and nothing else. Pressing Submit records your approval only and will not merge over open findings; "+
+			"Force merge is for overriding every gate, not for this.",
 		review.ID)
 	_, ref, ok, err := reviewedPullRequest(ctx, store, review)
 	if err != nil || !ok {
@@ -584,10 +623,10 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 		}
 		advancedClearance = clearedTarget(reviewerHead, repoRulesFor(ctx, store, *task.Target))
 	} else if clean && pushed && landed && ref != nil && client != nil && task.Target != nil {
-		if detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number); err == nil && detail.HeadSHA != "" {
+		if detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number); err == nil && detail.HeadSHA != "" {
 			_, recordedSHA, ok := strings.Cut(linkTarget(task, model.LinkTrustBoundaryCleared), "@")
 			if ok && recordedSHA != "" && detail.HeadSHA != recordedSHA {
-				files, ferr := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+				files, ferr := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 				known := ferr == nil && len(files) < github.PullRequestFilesCap
 				matches := trustboundary.Classify(files)
 				rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
@@ -922,10 +961,10 @@ func loadConfigRepoAutoMergePaths(client github.Client, repo model.RepoRef) []st
 		return nil
 	}
 	base := "main"
-	if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && strings.TrimSpace(def) != "" {
+	if def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && strings.TrimSpace(def) != "" {
 		base = strings.TrimSpace(def)
 	}
-	data, exists, err := reader.ReadFile(repo.Owner, repo.Name, base, trustboundary.ConfigPolicyPath)
+	data, exists, err := reader.ReadFile(repo.StoredOwner(), repo.Name, base, trustboundary.ConfigPolicyPath)
 	if err != nil {
 		log.Printf("orchestrator: reading %s from %s@%s: %v -- holding all config paths for human Submit",
 			trustboundary.ConfigPolicyPath, repo, base, err)
@@ -1042,7 +1081,7 @@ func holdIsAbout(task model.Task, ref model.PullRequestRef) bool {
 // (holdForTrustBoundary classifies nothing of it): a stacked fix, which
 // lands on a branch that is judged when it merges, or a review.
 func unjudged(task model.Task) bool {
-	return task.Origin.Reason == model.ReasonFix || isReviewTask(task)
+	return task.Filing.Reason == model.ReasonFix || isReviewTask(task)
 }
 
 // clearedTarget is LinkTrustBoundaryCleared's target for headSHA under this
@@ -1139,11 +1178,7 @@ func withoutLinks(links []model.Link, kinds ...model.LinkKind) []model.Link {
 }
 
 func securityReviewTitle(task model.Task) string {
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
-	}
-	return "Security review: " + title
+	return "Security review: " + reviewSubjectTitle(task)
 }
 
 // securityReviewBody is the template's instructions with the subject
@@ -1162,6 +1197,7 @@ func securityReviewBody(tmpl model.Template, task model.Task, ref model.PullRequ
 		"any fix to it.\n\n",
 		task.ID, task.Title, task.BranchName(), ref, ref)
 	b.WriteString(matchList(matches, known))
+	b.WriteString("\n" + changeUnderReviewSection(task, true) + "\n")
 	return b.String()
 }
 

@@ -185,6 +185,12 @@ type Schedule struct {
 	// alongside Reads and Grants, and taken from the template instead
 	// while TemplateID is set, exactly as they are.
 	Writes []WriteTarget
+	// Grants is the capabilities every task this schedule files holds.
+	// Unlike Reads and Writes it is not taken from the template while
+	// TemplateID is set: it is then the capabilities the schedule grants
+	// beside its template's (ComposeScheduleTask files both), which a
+	// repository's declared schedule says as `grants:` beside
+	// `template:`, and a firing leaves it as it is (syncTemplateCache).
 	Grants []Grant
 
 	// NetworkAccess is how much network every task this schedule files
@@ -217,8 +223,13 @@ type Schedule struct {
 	NothingNeededAction NothingNeededAction
 	KeepRunning         bool
 	// Admission is the optional admission setting for tasks this schedule files.
+	// While TemplateID is set it is not a copy of the template's but the
+	// schedule's own raise of it (ComposeScheduleTask takes the higher of
+	// the two), and a firing leaves it as it is (syncTemplateCache).
 	Admission Admission
-	// Hosting is the optional hosting setting for tasks this schedule files.
+	// Hosting is the optional hosting setting for tasks this schedule
+	// files -- the schedule's own raise of its template's while TemplateID
+	// is set, exactly as Admission is.
 	Hosting Hosting
 
 	// Model is the model every task this schedule files asks for
@@ -282,7 +293,7 @@ type Schedule struct {
 
 	// TemplateID, if set, names the Template (template.go) this
 	// schedule fires from instead of its own
-	// Title/Body/AutoMerge/Reads/Grants/NetworkAccess/NothingNeededAction/CustomFields above
+	// Title/Body/AutoMerge/Reads/Writes/NetworkAccess/NothingNeededAction/CustomFields above
 	// (bwsalmon/agents#516). Target and Base are this schedule's own,
 	// unless that template is bound to a repo of its own, in which case
 	// the binding decides both (Template.Target, docs/composition.md's
@@ -295,7 +306,9 @@ type Schedule struct {
 	// keeps them in sync as a display cache each time it fires, so
 	// ui.scheduleFrom can render a schedule's effective title and the
 	// rest with no extra lookup, but while TemplateID is set they are
-	// not what decides what gets filed.
+	// not what decides what gets filed. Admission, Hosting and Grants are
+	// not part of that cache: they are what the schedule adds to its
+	// template, and are its own whether or not TemplateID is set.
 	TemplateID *string
 
 	// SuiteID, if set, names the Suite (suite.go) this schedule runs on
@@ -347,6 +360,9 @@ type Schedule struct {
 	// the way an unfinished previous firing does (ScheduleSkipWhen,
 	// grain/task-4393). Empty, the default, holds nothing.
 	SkipWhen ScheduleSkipWhen
+	// QAFlowRef is the operator-configured quality-control flow reference
+	// bound to tasks composed from this schedule. Never set by in-repo declarations.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// Enabled is the pause/resume switch a UI toggles -- a disabled
 	// schedule stays around (with its own history in NextRunAt/LastRunAt)
 	// rather than being deleted, the same as closing a task keeps its row

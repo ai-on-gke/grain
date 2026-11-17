@@ -555,6 +555,14 @@ type Settings struct {
 	PromptExtension  string              `json:"promptExtension"`
 	Skills           *model.SkillsConfig `json:"skills,omitempty"`
 	RepairTemplateID string              `json:"repairTemplateID"`
+	// Quality control engine and single-instance PR rollout settings (model.Config.QA).
+	QAEnabled         bool     `json:"qaEnabled"`
+	QAFlowID          string   `json:"qaFlowId"`
+	QAFlowIDs         []string `json:"qaFlowIds"`
+	QARolloutPct      int      `json:"qaRolloutPct"`
+	QAShadowOnControl bool     `json:"qaShadowOnControl"`
+	QAEpoch           int      `json:"qaEpoch"`
+	QARegimeID        int      `json:"qaRegimeId"`
 	// TaskBranchTemplate controls names assigned to newly created tasks.
 	TaskBranchTemplate string `json:"taskBranchTemplate"`
 	// DeploymentID is model.Config's own: the id {deployment} expands to
@@ -568,6 +576,11 @@ type Settings struct {
 	// System -> Agents & Task Branches offers it to a deployment still on
 	// the empty template (grain/task-{id}) as a one-line opt-in.
 	TaskBranchTemplateDefault string `json:"taskBranchTemplateDefault"`
+	// SandboxProbe says whether POST /api/sandbox-probe can build a
+	// sandbox on this deployment (Server.sandboxProbeAvailable), so
+	// Settings -> Sandboxes offers its probe only where it can work.
+	// Read-only: a save ignores it.
+	SandboxProbe bool `json:"sandboxProbe"`
 	// Capabilities is every capability grain ships a provider for, with
 	// this deployment's own readiness computed against it -- capability_
 	// status.go's own CapabilityStatus, bwsalmon/agents#611. Always
@@ -1062,7 +1075,8 @@ var ciStorageDefaults = func() ciStorageBoundDefaults {
 
 func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs []model.RepoConfig) Settings {
 	cfg, unrunnable := c.runnableSettings(cfg)
-	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+	secretList := c.listSecretsBestEffort()
+	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
 	mirror := c.sandboxImageMirrorFor(cfg, granuleImgDefault)
 	effectiveGranule := c.k8sGranuleImageForWarn(cfg, granuleImgDefault, mirror)
@@ -1205,9 +1219,16 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		PromptExtension:                    cfg.PromptExtension,
 		Skills:                             cfg.Skills.Clone(),
 		RepairTemplateID:                   cfg.RepairTemplateID,
+		QAEnabled:                          cfg.QA.Enabled,
+		QAFlowID:                           cfg.QA.FlowIDOrDefault(),
+		QAFlowIDs:                          model.QAFlowIDs(),
+		QARolloutPct:                       cfg.QA.RolloutPct,
+		QAShadowOnControl:                  cfg.QA.ShadowOnControlEnabled(),
+		QAEpoch:                            cfg.QA.EpochOrDefault(),
+		QARegimeID:                         cfg.QA.RegimeIDOrDefault(),
 		TaskBranchTemplate:                 cfg.TaskBranchTemplate,
 		DeploymentID:                       cfg.DeploymentID,
-		Capabilities:                       c.capabilityStatuses(cfg, repoConfigs),
+		Capabilities:                       c.capabilityStatusesWithSecrets(cfg, repoConfigs, secretList),
 		DefaultCapabilities:                cfg.DefaultCapabilities,
 		ApprovedByDefault:                  cfg.ApprovedByDefault,
 		AutoMergeByDefault:                 cfg.AutoMergeByDefault,
@@ -1394,7 +1415,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		return Settings{}, err
 	}
 	if cfg == nil {
-		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+		secretList := c.listSecretsBestEffort()
+		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 		def := capability.NewDeploymentConfig()
 		sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &def, repoConfigs)
 		sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
@@ -1455,7 +1477,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			K8sPriorityClassInteractiveDefault: model.DefaultK8sPriorityClassInteractive,
 			K8sPriorityClassAgentDefault:       model.DefaultK8sPriorityClassAgent,
 			K8sPriorityClassCIDefault:          model.DefaultK8sPriorityClassCI,
-			Capabilities:                       c.capabilityStatuses(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs),
+			Capabilities:                       c.capabilityStatusesWithSecrets(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs, secretList),
 			DefaultCapabilities:                def.DefaultCapabilities,
 			AgentKeysEnabled:                   c.Config.Secrets != nil,
 			GeminiAPIKeySet:                    geminiKeySet,
@@ -1465,6 +1487,13 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AgentKeyChecksEnabled:              c.Config.AgentKeyChecks != nil,
 			ApprovedByDefault:                  def.ApprovedByDefault,
 			AutoMergeByDefault:                 def.AutoMergeByDefault,
+			QAEnabled:                          def.QA.Enabled,
+			QAFlowID:                           def.QA.FlowIDOrDefault(),
+			QAFlowIDs:                          model.QAFlowIDs(),
+			QARolloutPct:                       def.QA.RolloutPct,
+			QAShadowOnControl:                  def.QA.ShadowOnControlEnabled(),
+			QAEpoch:                            def.QA.EpochOrDefault(),
+			QARegimeID:                         def.QA.RegimeIDOrDefault(),
 			PackageCacheEnabled:                def.PackageCacheEnabled,
 			PackageCacheSizeGB:                 def.PackageCacheSizeGB,
 			PackageCacheSizeGBDefault:          int(pkgcache.DefaultMaxBytes >> 30),
@@ -1642,6 +1671,11 @@ type UpdateSettingsRequest struct {
 	PromptExtension       *string               `json:"promptExtension"`
 	Skills                *model.SkillsConfig   `json:"skills"`
 	RepairTemplateID      *string               `json:"repairTemplateID"`
+	QAEnabled             *bool                 `json:"qaEnabled"`
+	QAFlowID              *string               `json:"qaFlowId"`
+	QARolloutPct          *int                  `json:"qaRolloutPct"`
+	QAShadowOnControl     *bool                 `json:"qaShadowOnControl"`
+	QAEpoch               *int                  `json:"qaEpoch"`
 	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
@@ -2407,6 +2441,35 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.AutoMergeByDefault != nil {
 		cfg.AutoMergeByDefault = *req.AutoMergeByDefault
 	}
+	if req.QAEnabled != nil || req.QAFlowID != nil || req.QARolloutPct != nil || req.QAShadowOnControl != nil || req.QAEpoch != nil {
+		nextQA := cfg.QA.Clone()
+		if nextQA.ShadowOnControl == nil {
+			nextQA.ShadowOnControl = model.BoolPtr(cfg.QA.ShadowOnControlEnabled())
+		}
+		if req.QAEnabled != nil {
+			nextQA.Enabled = *req.QAEnabled
+		}
+		if req.QAFlowID != nil {
+			nextQA.FlowID = strings.TrimSpace(*req.QAFlowID)
+		}
+		if req.QARolloutPct != nil {
+			nextQA.RolloutPct = *req.QARolloutPct
+		}
+		if req.QAShadowOnControl != nil {
+			nextQA.ShadowOnControl = model.BoolPtr(*req.QAShadowOnControl)
+		}
+		if req.QAEpoch != nil {
+			if *req.QAEpoch < 1 {
+				return model.Config{}, validationErrorf("qaEpoch must be at least 1")
+			}
+			nextQA.Epoch = *req.QAEpoch
+		}
+		advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
+		if err != nil {
+			return model.Config{}, validationErrorf("qa: %v", err)
+		}
+		cfg.QA = advanced
+	}
 	if req.UpgradeCheckMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*req.UpgradeCheckMode))
 		if !model.ValidUpgradeCheckMode(mode) {
@@ -2444,6 +2507,10 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.AutoUpgradeMinIntervalHours != nil {
 		if *req.AutoUpgradeMinIntervalHours < 0 {
 			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at least 0")
+		}
+		if *req.AutoUpgradeMinIntervalHours > model.MaxAutoUpgradeMinIntervalHours {
+			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at most %d (about 292 years; 0 turns the minimum interval off)",
+				model.MaxAutoUpgradeMinIntervalHours)
 		}
 		cfg.AutoUpgradeMinIntervalHours = *req.AutoUpgradeMinIntervalHours
 	}
@@ -2674,6 +2741,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -2687,6 +2755,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -2700,6 +2769,7 @@ func (s *Server) handlePlanSettings(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	settings.SandboxProbe = s.sandboxProbeAvailable()
 	writeJSON(w, http.StatusOK, settings)
 }
 

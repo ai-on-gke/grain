@@ -64,19 +64,20 @@ import (
 // still unresolved: a merge waits on all of them, not on the newest batch.
 //
 // Which tasks: one whose run is over and whose change is waiting to land
-// (completed and on the merge queue, or awaiting Submit) -- never a
-// running, parked or closed one, and never a review or fix stacked on
-// somebody else's branch, whose pull request is grain merging into a task
-// branch rather than anything a reviewer reads. A change held on its own
+// (completed and on the merge queue, or awaiting Submit), or one resting on
+// its own resume_later, which the run sent takes off its wait -- never a
+// running or closed one, nor one a person deferred, and never a review or
+// fix stacked on somebody else's branch, whose pull request is grain
+// merging into a task branch rather than anything a reviewer reads. A change held on its own
 // review's questions waits for its owner first: their answer sends the
 // run, and that run will see these threads in pull_request_status too.
 func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
 	if client == nil {
 		return nil
 	}
-	links, err := store.OpenPullRequestLinks(ctx)
+	links, err := openAndResumeLaterPullRequestLinks(ctx, store)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)
+		return err
 	}
 	var errs []error
 	for _, link := range links {
@@ -89,7 +90,7 @@ func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Cl
 			errs = append(errs, fmt.Errorf("orchestrator: reading task %s: %w", link.TaskID, err))
 			continue
 		}
-		if task == nil || isReviewTask(*task) || task.Origin.Reason == model.ReasonFix {
+		if task == nil || isReviewTask(*task) || task.Filing.Reason == model.ReasonFix {
 			continue
 		}
 		if _, held := model.ReviewQuestionsOf(*task); held {
@@ -104,6 +105,19 @@ func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Cl
 			errs = append(errs, fmt.Errorf("orchestrator: reading %s's state: %w", task.ID, err))
 			continue
 		}
+		if state == model.StateDeferred {
+			// Resting on its own resume_later it still owns its pull
+			// request, and sendRunForReviewThreads takes it off the wait
+			// (sendBackFromResumeLater); a person's Defer is left alone.
+			ours, err := store.RestsOnResumeLater(ctx, task.ID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: reading %s's deferral: %w", task.ID, err))
+				continue
+			}
+			if ours {
+				state = model.StateCompleted
+			}
+		}
 		if state != model.StateCompleted && state != model.StateAwaitingSubmit {
 			continue
 		}
@@ -112,6 +126,30 @@ func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Cl
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// openAndResumeLaterPullRequestLinks is OpenPullRequestLinks and, beside
+// them, the links of tasks resting on their own resume_later
+// (model.Store.ResumeLaterPullRequestLinks), each task once.
+func openAndResumeLaterPullRequestLinks(ctx context.Context, store *model.Store) ([]model.TaskPullRequestLink, error) {
+	links, err := store.OpenPullRequestLinks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: reading open pull request links: %w", err)
+	}
+	resting, err := store.ResumeLaterPullRequestLinks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: reading the pull request links of tasks resting on resume_later: %w", err)
+	}
+	have := map[model.TaskPullRequestLink]bool{}
+	for _, l := range links {
+		have[l] = true
+	}
+	for _, l := range resting {
+		if !have[l] {
+			links = append(links, l)
+		}
+	}
+	return links, nil
 }
 
 // reviewThreadLister is the thread view github.RESTClient offers beside
@@ -136,11 +174,11 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	// less often (github.PollSchedule): any new comment, or anything
 	// grain writes to it, puts it back on every cycle.
 	poll := github.PollKey{Scope: storeScope(store),
-		Subject: github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number), Aspect: "review comments"}
+		Subject: github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number), Aspect: "review comments"}
 	if !github.Polls().Due(poll, github.PollNormal, false, now) {
 		return nil
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		// Best effort, every cycle: the next one reads them again.
 		log.Printf("orchestrator: reading review comments on %s: %v", ref, err)
@@ -181,7 +219,7 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	threadOf := map[int]github.ReviewThread{}
 	threadsRead := false
 	if lister, ok := client.(reviewThreadLister); ok {
-		threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			log.Printf("orchestrator: reading review threads on %s (%v); counting every new one as open", ref, err)
 		} else {
@@ -240,6 +278,9 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	}); err != nil {
 		return fmt.Errorf("orchestrator: queueing %s for its review threads: %w", task.ID, err)
 	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "new review threads", now); err != nil {
+		return err
+	}
 	log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(open), ref, task.ID)
 	return reviewComment(ctx, store, task.ID, reviewThreadsNote(ref, open, still), now)
 }
@@ -288,12 +329,12 @@ func listUnresolvedThreads(client github.Client, ref model.PullRequestRef) ([]re
 	if !ok {
 		return nil, false
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		log.Printf("orchestrator: reading review threads on %s: %v", ref, err)
 		return nil, false
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		// Without the comments there is no ReviewID to tell grain's own
 		// draft-review threads (the owner's questions, which no agent run
@@ -467,6 +508,9 @@ func sendRunForChangeThreads(ctx context.Context, store *model.Store, task model
 		}); err != nil {
 			return fmt.Errorf("orchestrator: queueing %s for its CL review threads: %w", task.ID, err)
 		}
+		if err := sendBackFromResumeLater(ctx, store, task.ID, "new CL review threads", now); err != nil {
+			return err
+		}
 		log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(fresh), change.Primary(task), task.ID)
 	}
 	if _, err := store.AddComment(ctx, model.Comment{
@@ -521,11 +565,11 @@ func discoverRelayedThreads(client github.Client, ref model.PullRequestRef, revi
 	if !ok {
 		return nil
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return nil
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return nil
 	}
@@ -588,11 +632,11 @@ func syncRelayedReviewThreads(ctx context.Context, store *model.Store, client gi
 	if !ok {
 		return task, nil, nil
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return task, nil, nil
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return task, comments, nil
 	}
@@ -734,12 +778,12 @@ func resolveHandledRelayedThreads(ctx context.Context, store *model.Store, clien
 			continue
 		}
 		if canReply && !repliedTo[rt.CommentID] && len(th.CommentIDs) <= 1 && strings.TrimSpace(replyLine) != "" {
-			if _, err := replier.ReplyToReviewComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, rt.CommentID, replyLine); err != nil {
+			if _, err := replier.ReplyToReviewComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, rt.CommentID, replyLine); err != nil {
 				log.Printf("orchestrator: replying to relayed review comment %d on %s before resolving thread %s: %v",
 					rt.CommentID, ref, th.ID, err)
 			}
 		}
-		if err := resolver.ResolveReviewThread(ref.Repo.Owner, ref.Repo.Name, th.ID); err != nil {
+		if err := resolver.ResolveReviewThread(ref.Repo.StoredOwner(), ref.Repo.Name, th.ID); err != nil {
 			return resolved, fmt.Errorf("orchestrator: resolving relayed review thread %s on %s: %w", th.ID, ref, err)
 		}
 		resolved++
@@ -881,11 +925,11 @@ func unresolvedReviewThreads(client github.Client, task model.Task, ref model.Pu
 	if !ok {
 		return 0, nil
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return 0, nil
 	}
-	comments, _ := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, _ := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	commentByID := map[int]github.ReviewComment{}
 	for _, c := range comments {
 		commentByID[c.ID] = c

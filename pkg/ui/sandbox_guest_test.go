@@ -307,7 +307,7 @@ func TestSandboxHealthSaysWhenThePostMergeGuestCacheDispatchFilledNothing(t *tes
 	// (model.GuestCacheFollowsBaseBranch), so this is the deployment's
 	// own shape rather than a contrived one.
 	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
-		Repo: repo, CICapabilities: []string{model.CapabilityPackagePublish},
+		Repo: repo, CICapabilities: []string{model.PackagePublishRef + "={}"},
 		Work: model.ItemOwnership(model.ReleaseItem, model.OwnershipOff),
 	}); err != nil {
 		t.Fatal(err)
@@ -450,7 +450,7 @@ func TestRepoReleaseSettingsSayWhenGrainFillsTheGuestCacheItself(t *testing.T) {
 	// Releases on: the release run fills the cache, so grain adds
 	// nothing and the pane has nothing to claim.
 	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
-		Repo: repo, CICapabilities: []string{model.CapabilityPackagePublish},
+		Repo: repo, CICapabilities: []string{model.PackagePublishRef + "={}"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestRepoReleaseSettingsSayWhenGrainFillsTheGuestCacheItself(t *testing.T) {
 	// leaves behind by pressing one button, and the cache follows the
 	// branch anyway.
 	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
-		Repo: repo, CICapabilities: []string{model.CapabilityPackagePublish},
+		Repo: repo, CICapabilities: []string{model.PackagePublishRef + "={}"},
 		Work: model.ItemOwnership(model.ReleaseItem, model.OwnershipOff),
 	}); err != nil {
 		t.Fatal(err)

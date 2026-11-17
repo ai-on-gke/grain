@@ -46,16 +46,6 @@ var (
 	selfActAsConflictDelays = []time.Duration{200 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
 )
 
-// WithSelfPrincipalResolver overrides how the provider works out its own IAM
-// principal when compute.self_principal is unset (for tests).
-func WithSelfPrincipalResolver(fn func(ctx context.Context) (string, error)) ResourcesOption {
-	return func(r *GCPInstanceResources) {
-		if fn != nil {
-			r.principalResolver = fn
-		}
-	}
-}
-
 // WithIAMRetrySleep overrides the wait between IAM policy retries (for tests).
 func WithIAMRetrySleep(fn func(ctx context.Context, d time.Duration) error) ResourcesOption {
 	return func(r *GCPInstanceResources) {

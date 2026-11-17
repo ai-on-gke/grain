@@ -596,3 +596,229 @@ func TestHostdDrainCapKillSurfacesErrHostdDrainingOnRunAndAttach(t *testing.T) {
 		}
 	})
 }
+
+// When hostd stops or restarts without draining (killStopping or loadSpools
+// closing an unfinished spool), both HostdHost.Run and Hostd.Attach surface
+// agent.ErrHostdStopped rather than agent.ErrHostdDraining, so the interrupted
+// reason says the host agent stopped or restarted rather than drained.
+func TestHostdStopWithoutDrainSurfacesErrHostdStoppedOnRunAndAttach(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no shell: %v", err)
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+
+	startRestartable := func(t *testing.T) (dir string, socket string, stopFirst func(), startSecond func()) {
+		t.Helper()
+		dir, err := os.MkdirTemp("", "hostd-stop")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		allow := filepath.Join(dir, "hostd.yaml")
+		if err := os.WriteFile(allow, []byte(fmt.Sprintf("clis:\n  sh:\n    path: %s\n", sh)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		socket = filepath.Join(dir, "run", "hostd.sock")
+		state := filepath.Join(dir, "state")
+
+		launch := func() func() {
+			srv := &hostd.Server{
+				Socket:          socket,
+				Allowlist:       allow,
+				AllowlistOwners: []uint32{uint32(os.Getuid())},
+				StateDir:        state,
+				DisconnectGrace: 500 * time.Millisecond,
+				Env:             []string{"PATH=" + os.Getenv("PATH")},
+				Logf:            t.Logf,
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- srv.Serve(ctx) }()
+			c := hostd.Client{Socket: socket, Build: "test"}
+			for i := 0; ; i++ {
+				if _, err := c.Hello(context.Background()); err == nil {
+					break
+				} else if i > 100 {
+					cancel()
+					<-done
+					t.Fatalf("hostd never answered: %v", err)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			stopped := false
+			stopFn := func() {
+				if stopped {
+					return
+				}
+				stopped = true
+				cancel()
+				<-done
+			}
+			t.Cleanup(stopFn)
+			return stopFn
+		}
+		stop1 := launch()
+		return dir, socket, stop1, func() { _ = launch() }
+	}
+
+	t.Run("live Run across host restart", func(t *testing.T) {
+		_, socket, stopFirst, startSecond := startRestartable(t)
+		client := hostd.Client{Socket: socket, Build: "test"}
+		d := &Hostd{Client: client, ReattachTimeout: 10 * time.Second}
+		ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-stop-live", Deadline: time.Now().Add(time.Hour)})
+		var tee lockedBuf
+		done := make(chan error, 1)
+		go func() {
+			_, err := d.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", "echo up; sleep 60"}}, &tee)
+			done <- err
+		}()
+		for !strings.Contains(tee.String(), "up\n") {
+			time.Sleep(10 * time.Millisecond)
+		}
+		stopFirst()
+		startSecond()
+		err := <-done
+		if !errors.Is(err, agent.ErrHostdStopped) || errors.Is(err, agent.ErrHostdDraining) {
+			t.Fatalf("live Run across host restart = %v, want ErrHostdStopped (not ErrHostdDraining)", err)
+		}
+		if strings.Contains(err.Error(), "draining for its own upgrade") {
+			t.Errorf("err = %q, must not say draining for its own upgrade", err.Error())
+		}
+	})
+
+	t.Run("adopted Attach after host stop", func(t *testing.T) {
+		_, socket, stopFirst, startSecond := startRestartable(t)
+		client := hostd.Client{Socket: socket, Build: "test"}
+		first := &Hostd{Client: client}
+		ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-stop-adopted", Deadline: time.Now().Add(time.Hour)})
+		var tee lockedBuf
+		flushed := make(chan error, 1)
+		go func() {
+			_, err := first.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", "echo up; sleep 60"}}, &tee)
+			flushed <- err
+		}()
+		for !strings.Contains(tee.String(), "up\n") {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if _, err := first.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		<-flushed
+
+		stopFirst()
+		startSecond()
+
+		procs, err := client.Processes(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		infos := HostdInfos(procs, hostd.ThisHello("test"))
+		if len(infos) != 1 {
+			t.Fatalf("infos = %+v, want 1", infos)
+		}
+		next := &Hostd{Client: client}
+		_, err = next.Attach(context.Background(), infos[0], int64(len(tee.String())), nil)
+		if !errors.Is(err, agent.ErrHostdStopped) || errors.Is(err, agent.ErrHostdDraining) {
+			t.Fatalf("adopted Attach after host stop = %v, want ErrHostdStopped (not ErrHostdDraining)", err)
+		}
+		if strings.Contains(err.Error(), "draining for its own upgrade") {
+			t.Errorf("err = %q, must not say draining for its own upgrade", err.Error())
+		}
+	})
+}
+
+// gatedLink is a hostd that cannot be reached at all until open is
+// closed: every dial before then fails, as one does while hostd restarts
+// onto a new build -- a drain's exit, systemd's Restart= -- or while a
+// hostd that dials in has not reconnected yet.
+type gatedLink struct {
+	socket string
+	open   chan struct{}
+	failed chan struct{} // closed at the first dial that failed
+	once   sync.Once
+}
+
+func (g *gatedLink) dial(ctx context.Context) (net.Conn, error) {
+	select {
+	case <-g.open:
+	default:
+		g.once.Do(func() { close(g.failed) })
+		return nil, errors.New("gated: the host agent is restarting")
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, "unix", g.socket)
+}
+
+// An adopted run whose hostd cannot be reached when the next daemon first
+// attaches to it -- hostd is restarting under it, onto the build a drain
+// or cutover is installing -- waits for hostd within the reattach timeout,
+// as a stream that drops does, rather than failing the run at once: the
+// process it adopts is still running there, or its exit is in its spool.
+func TestAnAdoptedHostdRunWaitsForAHostdThatIsNotBackYet(t *testing.T) {
+	client := serveHostd(t)
+	first := &Hostd{Client: client, CursorEvery: time.Millisecond}
+	ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-g", Deadline: time.Now().Add(time.Hour)})
+	var tee lockedBuf
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", "echo up; sleep 0.2; echo down"}}, &tee)
+		done <- err
+	}()
+	for !strings.Contains(tee.String(), "up\n") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := first.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, agent.ErrDetached) {
+		t.Fatalf("Run after the flush = %v, want ErrDetached", err)
+	}
+	procs, err := client.Processes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	infos := HostdInfos(procs, hostd.ThisHello("test"))
+	if len(infos) != 1 {
+		t.Fatalf("listing after the flush = %+v", infos)
+	}
+
+	gate := &gatedLink{socket: client.Socket, open: make(chan struct{}), failed: make(chan struct{})}
+	gated := client
+	gated.Dial = gate.dial
+	waiting := make(chan struct{})
+	var waitOnce sync.Once
+	next := &Hostd{Client: gated, ReattachTimeout: time.Minute,
+		Reconnected: func(ctx context.Context) error {
+			waitOnce.Do(func() { close(waiting) })
+			select {
+			case <-gate.open:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+	type result struct {
+		out string
+		err error
+	}
+	attached := make(chan result, 1)
+	go func() {
+		out, err := next.Attach(context.Background(), infos[0], int64(len("up\n")), nil)
+		attached <- result{out, err}
+	}()
+	<-gate.failed
+	select {
+	case r := <-attached:
+		t.Fatalf("Attach with hostd not back yet = %q, %v; want it to wait for hostd", r.out, r.err)
+	case <-waiting:
+	}
+	close(gate.open)
+	r := <-attached
+	if r.err != nil || r.out != "up\ndown\n" {
+		t.Fatalf("Attach once hostd was back = %q, %v; want the run's whole stdout", r.out, r.err)
+	}
+}

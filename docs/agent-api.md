@@ -239,6 +239,8 @@ every `DELETE`.
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
 | `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |
+| `qa:read` | read quality flow versions, experiment configurations and experiment results | |
+| `qa:admin` | publish or retire quality flow versions, manage quality experiments, import readout manifests | yes |
 
 `internal` marks grain's own plumbing, which no agent can ever reach.
 This covers the access-code login, executor bootstrap, and the endpoints
@@ -266,16 +268,18 @@ table only so the table stays total.
 | `external-dev` | `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` |
 | `external-read` | `tasks:read`, `ci:read`, `repos:read`, `templates:read`, `deployment:read` |
 
-The `self-debug` capability is now an alias. A task holding it is also
-served its preset's routes, and keeps the tools it always had under
-their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
+The `self-debug` capability was retired onto `api:self-debug` plus
+`https://grain.dev/capabilities/grain#source={}` (schema migration 115):
+`api:self-debug` serves the preset's routes and keeps the tools under their
+existing names (`list_grain_tasks`, `read_grain_metrics`, ...), while
+`grain#source` provides the source checkout. Its bare name was an alias for
+one release and is not any longer.
 
 `team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
-`release-notes`, `self-upgrade` and `test-quarantine` are aliases
-too, but their
-in-process capabilities are retired (design/design/unified-grants.design.md §4):
-they have no tools of their own any longer, and a run holding one is
-served its preset's routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
+`release-notes`, `self-upgrade` and `test-quarantine` were retired onto
+the `api:<preset>` presets of the same names (design/design/unified-grants.design.md §4):
+they have no tools of their own any longer, and a run holding the preset is
+served its routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
 routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
 `defer_task`; for pipeline-control, the pipeline-pause routes, which an
@@ -284,13 +288,11 @@ upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
 `/api/release-notes*` routes and `grain memory` / `grain release-notes`;
 for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
 plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
-`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
-`api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
-lists and the standing sessions. The bare name keeps granting the preset
-wherever it is still written, such as a repository's own `.grain`
-declarations.
+lists and the standing sessions -- and importing an older `grain/config`
+export upgrades them the same way (`model.RetiredGrantsBecame`). The bare
+names were aliases for one release and are no longer accepted.
 
 The per-ability capabilities that were queued separately are presets over
 this mechanism rather than new tool plumbing:
@@ -463,12 +465,13 @@ jobs:
 A job has no agent to serve tools to, so its api grants are worth one
 bearer token instead (`pkg/capability/ciapi`). It is minted when the
 job's sandbox is acquired, revoked when the sandbox is released, and
+exported in every step as `GRAIN_API_TOKEN`, beside the listener's
+address as `GRAIN_API_URL`. In a VM or container sandbox both are also
 placed in `/home/debian/.grain-api/`: `url`, `token`, and `env`, which
-exports `GRAIN_API_URL` and `GRAIN_API_TOKEN`. However many api grants
-the job declares, it holds one token worth all of them.
+exports them; a host sandbox has only the environment. However many api
+grants the job declares, it holds one token worth all of them.
 
 ```sh
-. /home/debian/.grain-api/env
 curl -fsS -H "Authorization: Bearer $GRAIN_API_TOKEN" "$GRAIN_API_URL/api/ci/runs?ref=main&limit=100"
 ```
 
@@ -480,14 +483,23 @@ own repository:
 
 - A `repo=` naming another repository is refused. A request naming none
   is given the job's.
-- A route whose path names another repository
-  (`/api/repos/{owner}/{name}/...`) is refused.
-- Whatever the answer holds of another repository's is dropped. An
-  object whose `repo` is another's answers 404, and list elements whose
-  `repo` is another's are removed (`GET /api/tasks`, which takes no
-  repository filter, is held to the job's repository this way).
-- `POST /api/tasks/from-template` files for the job's repository only,
-  from the templates the grant allows, and files the task approved.
+- A route naming another repository or one of its resources --
+  `/api/repos/{owner}/{name}/...`, `/api/tasks/{id}/...`,
+  `/api/ci/runs/{id}/...`, `/api/fs/task/...`, `/api/fs/ci/...` -- is
+  refused, as is any resource with no repository (`no_repo` tasks) or
+  route whose answer has no repository narrowing.
+- Whatever a collection answer holds outside the job's repository is
+  dropped: an object whose `repo` is another's answers 404, and list
+  elements belonging to another repository (or, for a `ci_api_repos`
+  repository, carrying no `repo`) are removed.
+- `POST /api/tasks/from-template` files for the job's repository only
+  (refusing a template that reads, writes, or grants API access on another
+  repository), from the templates the grant allows, and files the task
+  approved unless the template asks for unaccepted person-held grants,
+  deployment-wide or write API/daemon grants beyond the job's own repository
+  bounds, or person-only settings (`DeclarationAcceptance`, `keep_running`,
+  elevated priority, or a declared push set), in which case it lands proposed
+  for a person.
 
 A job may hold only the scopes whose answers narrow to one repository:
 `ci:read`, `tasks:read`, `tasks:from-template`, `sandboxes:read`,
@@ -557,6 +569,7 @@ and the forge is not asked.
 | `GET /api/ci/runs/{id}` | With an Actions id (`gha:<owner>:<name>:<run id>`, for example `gha:ai-on-gke:grain:123`): the run with its jobs and their steps, each with its conclusion. Logs are not included. |
 | `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
 | `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
+| `POST /api/ci/runs/{id}/rerun` | (`ci:write`) Re-runs an Actions run (`gha:...`) on GitHub as its next attempt, with no commit pushed: its failed and cancelled jobs by default, every job with `{"all": true}`, or one job with `{"jobs": ["<name or id>"]}`. No run at one commit is re-run more than 3 times (`ui.MaxActionsRerunsPerHead`), grain's automatic runner-fault re-runs included. |
 
 ### A task's own CI: the default `api:ci-read`
 
@@ -582,9 +595,13 @@ run's own CI reads answer for its GitHub Actions runs
 | `grain ls/read ci://<owner>/<name>/...` | the namespace's `ci://` tree |
 
 `grain ci test-history <test>` reads the same runs. `grain ci wait` and
-`grain pr open` work without the grant. `grain ci run-job` and `grain ci
-retrigger` drive grain CI only, and are not offered on a GitHub-CI
-repository.
+`grain pr open` work without the grant, and on a `ci_mode: github`
+repository so do `grain ci retrigger` and `grain ci run-job`: they
+re-run the GitHub Actions runs at the head of the task's own pull
+request (`--all` every job; `--jobs` or `grain ci run-job <job>` one
+job) without pushing a commit, up to 3 re-runs per run at one commit
+(`ui.MaxActionsRerunsPerHead`, automatic runner-fault re-runs included).
+Re-running any other run needs `ci:write` (`POST /api/ci/runs/{id}/rerun`).
 
 **The trade-off.** The grant is read-only (`ci:read` alone: runs, jobs,
 logs and artifact lists, with no `ci:write`, tasks, merges or memory). It
@@ -795,8 +812,8 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
     only a person may grant); or one setting `keep_running` or an
     `admission` above `standard` (`bypass` or `durable`, which replaced the
     `priority-dispatch` and `durable` grants), whoever filed it, or asking
-    for a capability, write target, read or priority its own proposer
-    doesn't hold.
+    for a capability, write target, read, priority or sandbox shape its
+    own proposer doesn't hold.
 
   The refusal is a 403 naming the chain or the holds. Once a task is
   approved, `run-now` still jumps it ahead of the queue under
@@ -884,6 +901,13 @@ auto-submit do not release it. `POST /api/tasks/{id}/human-review/release`
 (`tasks:write`) releases it as a person, recorded with who did; every
 agent is refused there, and on Submit or a `PATCH` turning auto-merge on
 while the hold stands. See [merging.design.md](../design/design/merging.design.md#gates).
+
+A review's *findings* are not a hold either of these releases. `POST
+/api/tasks/{id}/accept-findings` (`tasks:write`, body `{gate, reviewTask?,
+reason, head?}`) is a person accepting one review's findings on one gate as
+they are. It needs an unlimited role (grain/operator), is refused for every
+agent, and clears nothing else
+([declarations.md](declarations.md#gating-reviews)).
 
 ## Paging a list
 
@@ -1124,7 +1148,10 @@ It is refused on the caller's own task.
 An agent may edit, re-queue or speak in another task only when that
 task is within its own task's envelope. `PATCH /api/tasks/{id}`,
 `retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
-`PUT /api/tasks/{id}/goal`, `agent-messages` and `notes` are refused
+`PUT` and `DELETE /api/tasks/{id}/goal`, `agent-messages`, `notes`, and the
+context routes `brief`, `compact` and `rollover` (a brief or handover
+becomes the target's next prompt, and a rollover files a successor
+carrying its grants) are refused
 with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
 capability's arguments bind), writes to or reads a repository the
@@ -1149,7 +1176,7 @@ Two other routes look like they do this, but don't:
 | Route | What it does |
 |---|---|
 | `POST /api/tasks/{id}/messages` | The caller's own chat with the person watching its own task; parks that task. Refused on any other task. |
-| `POST /api/tasks/{id}/comments` | A note on the target's conversation. It lifts any question the target is parked on, as a reply does, and leaves a second, audit note naming the call. |
+| `POST /api/tasks/{id}/comments` | A comment on the target's conversation, plus an audit note naming the call. An agent's plain comment is recorded as its own and does **not** lift a question the target is parked on (`commentDelivery: "awaiting_person"`). Only `{"relay": true}` (or `grain task message <id> --relay` in a sandbox), from a console session acting on behalf of a verified person whose own role may reply on that task, writes the comment as `<person> via <session>` and wakes `awaiting_reply` as that person's reply. |
 
 ## External agents
 
@@ -1268,7 +1295,8 @@ through `agentAPIGate`:
   owner. The journal line reads `{agent, external:<name> on behalf of
   <owner>}`, the audit comment says `on behalf of <owner>`, comments the
   agent posts record the owner, and a task it files records the owner as
-  its requester (`creator`) and in its origin. A body naming an `author`
+  its requester (`creator`) and in its filing (`model.Task.Filing`, the
+  `author*` fields; not the work-tree `origin`). A body naming an `author`
   is refused, and `X-Forwarded-User` is not believed.
 - **Client label**: a request may carry `X-Grain-Client` (the CLI sends
   `$GRAIN_CLIENT`, plus ` session=$GRAIN_CLIENT_SESSION`). The daemon
@@ -1372,7 +1400,7 @@ task" behave as follows:
 | `/api/console/*` and `/api/console-sessions*` | Excluded from `tools/list` and refused by `agentAPIGate` (bound to in-grain sandbox consoles and session tasks). |
 | `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
 | Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. Approval is the exception: see the next row. |
-| Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's origin names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. It approves only work it could have filed itself over `POST /api/tasks`, so it is also refused (403) a task holding a grant the credential does not hold, writing to a repository it does not hold `tasks:write` on, reading one it does not hold `tasks:read` on, widening `networkAccess` past the deployment's default, turning on `autoApproveProposals`, or naming a `reviewTemplateId` it could not name at filing. A credential presented inside a limited verified session is held to that session's role for all of these. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions, a reason included (`X-Grain-Acting-Reason`, `grain_invoke`'s `reason`, `grain approve`/`grain run-now -reason`): approve is destructive under `tasks:admin`, so neither approves without one. That is `tasks:admin` on the task's repository, or, for a task with no repository, `tasks:admin` on every repository: a credential holding `tasks:admin` only for some repositories approves neither way a task that names none. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
+| Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's filing, `author`, names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. It approves only work it could have filed itself over `POST /api/tasks`, so it is also refused (403) a task holding a grant the credential does not hold, writing to a repository it does not hold `tasks:write` on, reading one it does not hold `tasks:read` on, widening `networkAccess` past the deployment's default, turning on `autoApproveProposals`, or naming a `reviewTemplateId` it could not name at filing. A credential presented inside a limited verified session is held to that session's role for all of these. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions, a reason included (`X-Grain-Acting-Reason`, `grain_invoke`'s `reason`, `grain approve`/`grain run-now -reason`): approve is destructive under `tasks:admin`, so neither approves without one. That is `tasks:admin` on the task's repository, or, for a task with no repository, `tasks:admin` on every repository: a credential holding `tasks:admin` only for some repositories approves neither way a task that names none. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
 | Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents`, `GET /api/memory/documents/{name}`, `GET /api/suite-runs`, `GET /api/ci/faults`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
 | External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
 

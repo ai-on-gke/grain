@@ -73,9 +73,9 @@ func (s *Store) WrapKeyWithKMS(ctx context.Context, name string, c *KMSClient) (
 	if err := writeKeyFileData(s.cfg.KeyFile, w.String()); err != nil {
 		return KeyWrapReport{}, err
 	}
-	s.keyMu.Lock()
-	s.lastUnwrap = s.clock() // WrapKey has just unwrapped it to check
-	s.keyMu.Unlock()
+	s.keys.mu.Lock()
+	s.keys.lastUnwrap = s.clock() // WrapKey has just unwrapped it to check
+	s.keys.mu.Unlock()
 	rep := s.wrapReport(key)
 	rep.Notes = append(rep.Notes,
 		"an escrow of the plaintext key -- the secrets-key secret in Secret Manager on terraform/gcp, "+

@@ -14,6 +14,7 @@
 
 import type { Notification, Task } from "../api/models";
 import {
+  awaitsHumanSubmit,
   buildEntries,
   classifyNotification,
   classifyTask,
@@ -21,6 +22,7 @@ import {
   matchesFilter,
   matchesQuery,
   pendingReleaseOf,
+  plainMarkdownSummary,
   releaseConfirm,
   waitsOnUser,
 } from "./inbox-classifier";
@@ -41,11 +43,14 @@ describe("inbox classifier", () => {
     expect(
       waitsOnUser(task({ state: "awaiting_reply", consoleSession: {} })),
     ).toBe(false);
+    // A running task is never offered Submit, even with an open pull
+    // request and no auto-merge (the classic UI lists it): its agent may
+    // still be pushing to the branch.
     expect(
       waitsOnUser(
         task({ state: "running", pullRequest: { url: "https://x/pr/1" } }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       waitsOnUser(
         task({
@@ -80,7 +85,7 @@ describe("inbox classifier", () => {
     expect(proposal?.actions[0].route).toBe("POST /api/tasks/{id}/approve");
     expect(proposal?.actions[0].params).toEqual({ id: "9" });
     expect(proposal?.actions[2].confirm).toContain("Decline #9");
-    expect(proposal?.taskLink).toBe("/tasks/9");
+    expect(proposal?.taskLink).toBe("/task/9");
 
     const failed = classifyTask(task({ state: "failed" }));
     expect(failed?.actions.map((a) => a.id)).toEqual(["retry", "close"]);
@@ -104,6 +109,73 @@ describe("inbox classifier", () => {
     expect(base?.groupId).toBe("base-repair");
 
     expect(classifyTask(task({ state: "running" }))).toBeNull();
+  });
+
+  it("keeps an approved awaiting_submit change the merge queue gave up on in the Inbox", () => {
+    // Task 4525: approved, not auto-merge, its repairs spent and the
+    // queue blocked -- no Submit item lists it, so this one has to.
+    const blocked = classifyTask(
+      task({
+        id: "4525",
+        state: "awaiting_submit",
+        humanApprovedBy: "someone@example.com",
+        mergeQueueBlockedAt: "2026-11-12T04:00:00Z",
+        pullRequest: { url: "https://x/pr/1270" },
+      }),
+    );
+    expect(blocked?.groupId).toBe("merge-blocked");
+    expect(blocked?.actions.map((a) => a.id)).toEqual(["retry-merge"]);
+
+    // Approved and not blocked, but a gate other than approval is red.
+    const gated = classifyTask(
+      task({
+        id: "4526",
+        state: "awaiting_submit",
+        humanApprovedBy: "someone@example.com",
+        pullRequest: { url: "https://x/pr/1271" },
+        mergeGates: [
+          { id: "approval", label: "Approval", state: "passed" },
+          { id: "code-review", label: "Code review", state: "needed" },
+        ],
+      } as Partial<Task>),
+    );
+    expect(gated?.groupId).toBe("merge-blocked");
+    expect(gated?.summary).toContain("Code review");
+
+    // Approved with every gate passed: nothing for a person to do.
+    expect(
+      classifyTask(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "someone@example.com",
+          pullRequest: { url: "https://x/pr/1272" },
+          mergeGates: [
+            { id: "approval", label: "Approval", state: "passed" },
+            { id: "ci", label: "CI", state: "passed" },
+          ],
+        } as Partial<Task>),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps a submittable CL's Submit out of Submit all and says it submits", () => {
+    const e = classifyTask(
+      task({
+        id: "31",
+        state: "awaiting_submit",
+        clSubmit: { canSubmit: true },
+      }),
+    );
+    expect(e?.groupId).toBe("submit");
+    const submit = e?.actions.find((a) => a.label === "Submit");
+    expect(submit).toBeTruthy();
+    expect(submit?.bulk).toBeFalsy();
+    expect(submit?.blocked).toBeUndefined();
+    expect(e?.summary).toContain("Submit this CL now");
+    expect(e?.rationale).not.toContain("approval before merging");
+    // A pull request's Submit, a recorded approval, still joins it.
+    const pr = classifyTask(task({ id: "32", state: "awaiting_submit" }));
+    expect(pr?.actions.find((a) => a.label === "Submit")?.bulk).toBeTruthy();
   });
 
   it("reads a pending release, its soak, breaking changes and a failed dispatch", () => {
@@ -147,6 +219,51 @@ describe("inbox classifier", () => {
     ).toBeNull();
   });
 
+  it("offers a stuck task the control its sub-case names, and none where it names none", () => {
+    const control = (over: Partial<Task>) =>
+      classifyTask(task({ stall: "stuck", ...over }))?.actions.map((a) => [
+        a.id,
+        a.route,
+      ]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready", control: "Run now" },
+      }),
+    ).toEqual([["run-now", "POST /api/tasks/{id}/run-now"]]);
+    expect(
+      control({
+        state: "running",
+        reason: { reason: "running/live_run", control: "Cancel" },
+      }),
+    ).toEqual([["cancel", "POST /api/tasks/{id}/close"]]);
+    expect(
+      control({
+        state: "deferred",
+        reason: { reason: "deferred/wake_time", control: "Undefer" },
+      }),
+    ).toEqual([["undefer", "POST /api/tasks/{id}/undefer"]]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready" },
+        mergeQueueReason: { reason: "merge_failed", control: "Retry merge" },
+      }),
+    ).toEqual([["retry-merge", "POST /api/tasks/{id}/retry-merge"]]);
+    expect(
+      control({ state: "running", reason: { reason: "running/live_run" } }),
+    ).toEqual([]);
+    const cancel = classifyTask(
+      task({
+        stall: "stuck",
+        state: "running",
+        reason: { reason: "r", control: "Cancel" },
+      }),
+    )?.actions[0];
+    expect(cancel?.confirm).toContain("Cancel #1?");
+    expect(cancel?.destructive).toBe(true);
+  });
+
   it("offers acknowledge, investigate and clear on an alert", () => {
     const e = classifyNotification({
       id: 3,
@@ -188,8 +305,250 @@ describe("inbox classifier", () => {
       entries.filter((e) => matchesFilter(e, "unread", seen)),
     ).toHaveLength(3);
     expect(entries.filter((e) => matchesQuery(e, "bump"))).toHaveLength(1);
-    expect(entries.find((e) => e.kind === "host-script")?.summary).toBe(
-      "deploy.sh --prod",
+    const hs = entries.find((e) => e.kind === "host-script");
+    expect(hs?.summary).toBe("deploy.sh --prod");
+    expect(hs?.taskLink).toBe("/task/2");
+    expect(hs?.externalLink).toBeNull();
+  });
+
+  it("reads production notification title, taskId, clearsWhen.task, and lastRaisedAt", () => {
+    const e = classifyNotification({
+      id: 42,
+      subject: "base-branch-red:acme/web",
+      title: "main is failing merge verification",
+      taskId: "310",
+      severity: "critical",
+      lastRaisedAt: "2026-11-13T10:00:00Z",
+      raisedAt: "2026-11-12T08:00:00Z",
+    });
+    expect(e.title).toBe("main is failing merge verification");
+    expect(e.ref).toBe("base-branch-red:acme/web");
+    expect(e.taskId).toBe("310");
+    expect(e.taskLink).toBe("/task/310");
+    expect(e.at).toBe("2026-11-13T10:00:00Z");
+
+    const cleared = classifyNotification({
+      id: 43,
+      subject: "ci-stalled",
+      clearsWhen: { kind: "task-closed", task: "412" },
+    });
+    expect(cleared.taskId).toBe("412");
+    expect(cleared.taskLink).toBe("/task/412");
+  });
+
+  it("keeps an approved awaiting_submit task in awaitsHumanSubmit when held by security-findings source", () => {
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "security-findings",
+              category: "security",
+              reason: "review 77 left findings",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "requested",
+              category: "security",
+              reason: "intent unclear",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("enforces Inbox silence for mid-flight autonomous goal questions and auto-approved child proposals while surfacing terminal and safety states", () => {
+    const midFlightQuestion = task({
+      id: "501",
+      state: "awaiting_reply",
+      goalMode: { enabled: true, maxPasses: 8, wallClockMinutes: 120 },
+      questionSummary: "Which port should the server bind?",
+    });
+    expect(waitsOnUser(midFlightQuestion)).toBe(false);
+    expect(classifyTask(midFlightQuestion)).toBeNull();
+
+    const childProposal = task({
+      id: "502",
+      state: "proposed",
+      goalMode: { enabled: true },
+      proposedBy: "agent:501",
+      autoApproveProposals: true,
+    });
+    expect(waitsOnUser(childProposal)).toBe(false);
+    expect(classifyTask(childProposal)).toBeNull();
+
+    // Root goal proposal or non-auto-approved proposal still surfaces.
+    const manualProposal = task({
+      id: "503",
+      state: "proposed",
+      goalMode: { enabled: true },
+    });
+    expect(waitsOnUser(manualProposal)).toBe(true);
+    expect(classifyTask(manualProposal)?.kind).toBe("proposal");
+
+    // Access request during Goal Mode still surfaces.
+    const accessReq = task({
+      id: "504",
+      state: "awaiting_reply",
+      goalMode: { enabled: true },
+      awaitingAccess: { summary: "Grant write to acme/api" },
+    });
+    expect(waitsOnUser(accessReq)).toBe(true);
+    expect(classifyTask(accessReq)?.kind).toBe("access");
+
+    // Stopped turn during Goal Mode still surfaces in paused.
+    const stoppedGoal = task({
+      id: "505",
+      state: "awaiting_reply",
+      goalMode: { enabled: true },
+      turnStopped: true,
+    });
+    expect(waitsOnUser(stoppedGoal)).toBe(true);
+    expect(classifyTask(stoppedGoal)?.kind).toBe("stopped");
+
+    // Terminal verified awaiting_submit surfaces as "Goal ready" (healthy).
+    const verifiedGoal = task({
+      id: "506",
+      state: "awaiting_submit",
+      goalMode: { enabled: true, maxPasses: 8 },
+      goalScorecard: {
+        passesUsed: 2,
+        maxPasses: 8,
+        verified: true,
+        summary: "All deliverables verified.",
+      },
+    });
+    const readyEntry = classifyTask(verifiedGoal);
+    expect(readyEntry?.kind).toBe("submit");
+    expect(readyEntry?.pillLabel).toBe("Goal ready");
+    expect(readyEntry?.pillTone).toBe("healthy");
+
+    // Terminal capped awaiting_submit surfaces as "Goal capped" (warn).
+    const cappedGoal = task({
+      id: "507",
+      state: "awaiting_submit",
+      goalMode: { enabled: true, maxPasses: 4 },
+      goalScorecard: {
+        passesUsed: 4,
+        maxPasses: 4,
+        verified: false,
+        stoppedAtCap: true,
+        stopReason: "Reached maxPasses (4/4).",
+      },
+    });
+    const cappedEntry = classifyTask(cappedGoal);
+    expect(cappedEntry?.kind).toBe("submit");
+    expect(cappedEntry?.pillLabel).toBe("Goal capped");
+    expect(cappedEntry?.pillTone).toBe("warn");
+
+    // Failed, base-repair, merge-blocked, merge-stalled, and stalled still surface.
+    expect(
+      classifyTask(
+        task({ id: "508", state: "failed", goalMode: { enabled: true } }),
+      )?.kind,
+    ).toBe("failed");
+    expect(
+      classifyTask(
+        task({
+          id: "509",
+          state: "awaiting_submit",
+          goalMode: { enabled: true },
+          redBaseBranch: true,
+          pullRequest: "https://github.com/sidthe/grain/pull/9",
+        }),
+      )?.kind,
+    ).toBe("base-repair");
+    expect(
+      classifyTask(
+        task({
+          id: "510",
+          state: "completed",
+          goalMode: { enabled: true },
+          pullRequest: "https://github.com/sidthe/grain/pull/10",
+          mergeQueueBlockedAt: "2026-11-15T00:00:00Z",
+        }),
+      )?.kind,
+    ).toBe("merge-blocked");
+    expect(
+      classifyTask(
+        task({
+          id: "511",
+          state: "completed",
+          goalMode: { enabled: true },
+          mergeQueueState: "rebasing",
+          mergeQueueStalledAt: "2026-11-15T00:00:00Z",
+        }),
+      )?.kind,
+    ).toBe("merge-stalled");
+    expect(
+      classifyTask(
+        task({
+          id: "512",
+          state: "running",
+          goalMode: { enabled: true },
+          stall: "Heartbeat lost for 20m.",
+        }),
+      )?.kind,
+    ).toBe("stalled");
+  });
+
+  it("strips inline and block Markdown from summaries while keeping refs and snake_case", () => {
+    expect(
+      plainMarkdownSummary(
+        "## **Urgent**: Check [PR #12](https://example.com/12)\n- Run `npm test` and *verify* __foo_bar__ on #582 (2 * 3)",
+      ),
+    ).toBe(
+      "Urgent: Check PR #12 Run npm test and verify foo_bar on #582 (2 * 3)",
     );
+
+    const reply = classifyTask(
+      task({
+        id: "10",
+        state: "awaiting_reply",
+        questionSummary:
+          "### **Pick** [option A](https://x/a)\n* Use `flag_name` or *skip*",
+      }),
+    );
+    expect(reply?.summary).toBe("Pick option A Use flag_name or skip");
+
+    const access = classifyTask(
+      task({
+        id: "11",
+        state: "awaiting_reply",
+        awaitingAccess: true,
+        questionSummary: "- Need **write** to `sidthe/grain`",
+      }),
+    );
+    expect(access?.summary).toBe("Need write to sidthe/grain");
+
+    const stalled = classifyTask(
+      task({
+        id: "12",
+        state: "queued",
+        stall: "**Blocked** on *review*\n+ Check `ci`",
+      }),
+    );
+    expect(stalled?.summary).toBe("Blocked on review Check ci");
+
+    const note = classifyNotification({
+      id: 99,
+      subject: "ci.red",
+      body: "## **Main** is *red* on [run 1](https://x/1)\nSecond line",
+    });
+    expect(note.summary).toBe("Main is red on run 1");
   });
 });

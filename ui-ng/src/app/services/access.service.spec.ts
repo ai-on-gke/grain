@@ -13,12 +13,22 @@
 // limitations under the License.
 
 import { TestBed } from "@angular/core/testing";
-import { AccessService } from "./access.service";
+import { AccessService, initialsFromIdentity } from "./access.service";
 
 describe("AccessService", () => {
   let svc: AccessService;
   beforeEach(() => {
     svc = TestBed.inject(AccessService);
+  });
+
+  it("fails closed for operator-only (scope: null) routes until config is loaded", () => {
+    expect(svc.configLoaded()).toBe(false);
+    expect(svc.can("GET /api/hostds/enrollment-codes")).toBe(false);
+    expect(svc.can("POST /api/state-repo/remote")).toBe(false);
+
+    svc.setConfig({ access: null });
+    expect(svc.configLoaded()).toBe(true);
+    expect(svc.can("GET /api/hostds/enrollment-codes")).toBe(true);
   });
 
   it("allows everything to an unlimited caller", () => {
@@ -60,5 +70,12 @@ describe("AccessService", () => {
     });
     expect(svc.can("POST /api/tasks/{id}/close", "acme/widgets")).toBe(true);
     expect(svc.can("POST /api/tasks/{id}/close", "acme/other")).toBe(false);
+  });
+
+  it("derives crisp initials and ignores parenthetical suffixes", () => {
+    expect(initialsFromIdentity("")).toBe("G");
+    expect(initialsFromIdentity("operator (local)")).toBe("OP");
+    expect(initialsFromIdentity("Alice Example (access code)")).toBe("AE");
+    expect(initialsFromIdentity("bob.smith@example.com")).toBe("BS");
   });
 });

@@ -76,7 +76,8 @@ const (
 	FeatureFeatures Feature = "features"
 	// FeatureEnvOpen: an allowlist entry's env may include "*" to admit any
 	// variable name outside EnvDeny (identity variables, LD_*, and the
-	// interpreter/shell injection variables), path/paths_under/cwd_under
+	// interpreter/shell injection variables; FeatureEnvDenyV2 adds more),
+	// path/paths_under/cwd_under
 	// accept ~/ relative to hostd's home, and top-level and entry-level x-*
 	// keys are ignored.
 	FeatureEnvOpen Feature = "env_open"
@@ -93,6 +94,18 @@ const (
 	// detached CLI processes over across hostd's own in-place re-exec, and
 	// Exit.Draining marks processes ended by hostd's own drain or stop.
 	FeatureHandover Feature = "handover"
+	// FeatureEnvDenyV2: env: ["*"] and NAME_* patterns also refuse the
+	// names in envDenyV2 (DYLD_*, GIT_*, JAVA_TOOL_OPTIONS, NODE_PATH, ...),
+	// which only an exact name admits. A daemon never needs to check it:
+	// it sends none of them, and an exact name is admitted by every host.
+	FeatureEnvDenyV2 Feature = "env_deny_v2"
+	// FeatureSelfUpdate: a rootless host agent (grain-agentd) whose owner
+	// can update it with `grain-agentd update` from the signed release the
+	// controller serves; Hello.Platform and Hello.UpdateMode/UpdatePin say
+	// what to offer it. Only a host agent started with Server.SelfUpdate
+	// lists it: a root-installed `grain host` never does, and is never
+	// offered an update by the controller.
+	FeatureSelfUpdate Feature = "self_update"
 )
 
 // Features is every feature this build implements, in the order they
@@ -112,6 +125,8 @@ var Features = []Feature{
 	FeatureLoginsMap,
 	FeatureHookPolicy,
 	FeatureHandover,
+	FeatureEnvDenyV2,
+	FeatureSelfUpdate,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited

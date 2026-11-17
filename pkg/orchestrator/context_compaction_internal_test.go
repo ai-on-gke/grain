@@ -326,3 +326,102 @@ func TestCommentsPastCursorKeepsTheHandoverThatSummarisesThem(t *testing.T) {
 		t.Fatalf("past cursor 4 with a later handover = %+v, want comments 5 and 6 only", got)
 	}
 }
+
+// suspendedPromptFor builds the prompt a dispatch of tk that resumes its
+// suspended session would send, given the comments it has not yet seen.
+func suspendedPromptFor(ctx context.Context, t *testing.T, store *model.Store, tk model.Task, newComments []model.Comment) string {
+	t.Helper()
+	h := History{}
+	loadTaskContext(ctx, store, tk, &h)
+	return BuildSuspendedPrompt(tk, "", "", h, nil, newComments)
+}
+
+// A durable task resumes its session on most runs, so the prompt it
+// resumes with must carry the same context as a fresh one: the current
+// brief in place of the description, a standing compaction request, a
+// stale handover's warning, and -- with the handover it names -- the
+// compaction note. Before this, BuildSuspendedPrompt carried none of
+// them (docs/test-runs/2026-11-11-durable-tasks.md, finding 1).
+func TestSuspendedPromptCarriesTheBriefAndContextUpkeep(t *testing.T) {
+	store, ctx := openTestStore(t)
+	tk := durableTask("hub")
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTaskBrief(ctx, tk.ID, "Maintain the hub: keep main green.", "alice", "stage 1 is finished", standingNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequestCompaction(ctx, tk.ID, "alice", standingNow); err != nil {
+		t.Fatal(err)
+	}
+	prompt := suspendedPromptFor(ctx, t, store, tk, nil)
+	if strings.Contains(prompt, "Stage 1: build the hub.") {
+		t.Errorf("the resumed prompt carries the original description:\n%s", prompt)
+	}
+	for _, want := range []string{"Maintain the hub: keep main green.", currentBriefNote,
+		"alice asked for this task's context to be compacted"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("resumed prompt is missing %q:\n%s", want, prompt)
+		}
+	}
+
+	humanSays(ctx, t, store, tk.ID, "use the blue database", standingNow.Add(-2*time.Hour))
+	if _, err := store.CompactTask(ctx, tk.ID, "Stage 1 is done on the blue database.", 0,
+		model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}, "alice", standingNow); err != nil {
+		t.Fatal(err)
+	}
+	comments, err := dispatchComments(ctx, store, tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt := suspendedPromptFor(ctx, t, store, tk, comments); !strings.Contains(prompt, "is summarised by the handover below") {
+		t.Errorf("a resumed prompt delivering the handover does not say what it summarises:\n%s", prompt)
+	}
+	if prompt := suspendedPromptFor(ctx, t, store, tk, nil); strings.Contains(prompt, "summarised by the handover below") {
+		t.Errorf("a resumed prompt with no handover below still points at one:\n%s", prompt)
+	}
+
+	for i := 0; i < model.HandoverStaleRuns; i++ {
+		id := fmt.Sprintf("hub-%d", i+1)
+		if err := store.StartRun(ctx, model.Run{ID: id, TaskID: tk.ID, Attempt: i + 1,
+			StartedAt: standingNow.Add(time.Duration(i+1) * time.Minute)}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.FinishRun(ctx, id, standingNow.Add(time.Hour), "succeeded", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if prompt := suspendedPromptFor(ctx, t, store, tk, nil); !strings.Contains(prompt, "handover is stale") {
+		t.Errorf("a resumed prompt does not flag a handover %d runs old as stale:\n%s", model.HandoverStaleRuns, prompt)
+	}
+}
+
+// A console session past a rollover limit is told to be closed and
+// refiled, since rollover refuses it (model.RolloverRefusal); a durable
+// task that is not a session, past the same limit, is not -- grain rolls
+// it over itself (reconcileRollover).
+func TestConsoleSessionPastRolloverLimitIsToldToBeRefiled(t *testing.T) {
+	store, ctx := openTestStore(t)
+	old := time.Now().Add(-2 * model.RolloverAgeLimit)
+	session := durableTask("director")
+	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+	session.CreatedAt = &old
+	plain := durableTask("hub")
+	plain.CreatedAt = &old
+	fresh := durableTask("young")
+	fresh.Tags = []string{model.ConsoleSessionTag("other")}
+	for _, tk := range []model.Task{session, plain, fresh} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if prompt := promptFor(ctx, t, store, session); !strings.Contains(prompt, "past a durable task's record limit: it has been open since") ||
+		!strings.Contains(prompt, "closed, and grain files it again") {
+		t.Errorf("an old session's prompt does not say it is due to be refiled:\n%s", prompt)
+	}
+	for _, tk := range []model.Task{plain, fresh} {
+		if prompt := promptFor(ctx, t, store, tk); strings.Contains(prompt, "record limit") {
+			t.Errorf("task %s's prompt says it is past a record limit:\n%s", tk.ID, prompt)
+		}
+	}
+}

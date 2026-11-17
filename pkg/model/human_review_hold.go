@@ -77,6 +77,8 @@ const (
 	// HumanReviewHumanOnly is a change touching a trust-boundary path only
 	// a human may release (LinkHumanOnlyHold).
 	HumanReviewHumanOnly HumanReviewSource = "human-only"
+	// HumanReviewQATriage is a QA finding that tripped S5 merge triage to require a human review.
+	HumanReviewQATriage HumanReviewSource = "qa-triage"
 )
 
 // The categories a reason may name.
@@ -178,9 +180,10 @@ var ErrHumanReviewRateLimited = errors.New("this review has already asked for hu
 var ErrAgentCannotReleaseHumanReview = errors.New("an agent cannot release a human-review hold: only a person's Submit or Release does")
 
 // ErrFindingsRequireRereviewOrOverride refuses releasing review findings via
-// Submit or ReleaseHumanReviewHold: findings require either a clean re-review
-// after fixes or an explicit merge:force gate override with a reason.
-var ErrFindingsRequireRereviewOrOverride = errors.New("review findings cannot be cleared by Submit or Release hold: fix the findings for a clean re-review, or override the review gate under merge:force with a reason")
+// Submit or ReleaseHumanReviewHold: findings require a clean re-review after
+// fixes, a person's acceptance of them (AcceptReviewFindings), or an
+// explicit merge:force gate override with a reason.
+var ErrFindingsRequireRereviewOrOverride = errors.New("review findings cannot be cleared by Submit or Release hold: fix the findings for a clean re-review, or accept them as they are with Accept findings (grain accept-findings) and a reason")
 
 // NormalizeHumanReviewReason trims r, bounds its reason and checks its
 // category, filling in what is missing.
@@ -233,12 +236,12 @@ func AddHumanReviewReason(t *Task, r HumanReviewReason) (HumanReviewReason, bool
 	if r.Source == HumanReviewRequested && fromReview >= MaxHumanReviewRequestsPerReview {
 		return r, false, ErrHumanReviewRateLimited
 	}
-	if r.Source == HumanReviewHumanOnly {
-		// One path-held reason at a time: a head classified again says
-		// afresh which paths hold it.
+	if r.Source == HumanReviewHumanOnly || r.Source == HumanReviewQATriage {
+		// One path-held or QA triage reason at a time: a head classified again says
+		// afresh which paths or QA rules hold it.
 		t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 			e, ok := ParseHumanReviewReason(l.Target)
-			return l.Kind == LinkHumanReviewHold && ok && e.Source == HumanReviewHumanOnly
+			return l.Kind == LinkHumanReviewHold && ok && e.Source == r.Source
 		})
 	}
 	if !r.AutoMerge {
@@ -247,6 +250,9 @@ func AddHumanReviewReason(t *Task, r HumanReviewReason) (HumanReviewReason, bool
 	}
 	t.AutoMerge = false
 	r.At = r.At.UTC().Truncate(time.Second)
+	if r.Source == HumanReviewQATriage && !slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkQATriageHold }) {
+		t.Links = append(t.Links, Link{Kind: LinkQATriageHold, Target: r.Reason})
+	}
 	t.Links = append(t.Links, r.Link())
 	return r, true, nil
 }
@@ -264,7 +270,7 @@ func DropHumanReviewHold(t *Task) []HumanReviewReason {
 		}
 	}
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
-		if l.Kind == LinkHumanOnlyHold {
+		if l.Kind == LinkHumanOnlyHold || l.Kind == LinkQATriageHold {
 			return true
 		}
 		if l.Kind != LinkHumanReviewHold {
@@ -280,15 +286,30 @@ func DropHumanReviewHold(t *Task) []HumanReviewReason {
 // only while LinkHumanOnlyHold does, so a later head classified clear of
 // that path takes them with it -- the human-only hold's semantics, kept.
 func normalizeHumanReviewHold(t *Task) {
-	if slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkHumanOnlyHold }) {
-		return
+	var humanOnly bool
+	var qaTriage bool
+	for _, l := range t.Links {
+		if l.Kind == LinkHumanOnlyHold {
+			humanOnly = true
+		} else if l.Kind == LinkQATriageHold {
+			qaTriage = true
+		}
 	}
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 		if l.Kind != LinkHumanReviewHold {
 			return false
 		}
 		r, ok := ParseHumanReviewReason(l.Target)
-		return ok && r.Source == HumanReviewHumanOnly
+		if !ok {
+			return false
+		}
+		if r.Source == HumanReviewHumanOnly && !humanOnly {
+			return true
+		}
+		if r.Source == HumanReviewQATriage && !qaTriage {
+			return true
+		}
+		return false
 	})
 }
 
@@ -364,8 +385,8 @@ func (s *Store) RaiseHumanReviewHold(ctx context.Context, taskID string, req Hum
 	}
 	if reason.Source == HumanReviewSecurityFindings {
 		body.WriteString("This change will not merge until the findings are addressed and a re-review passes, " +
-			"or an operator holding merge:force overrides the review gate with a reason. Pressing Submit records " +
-			"your approval only and does not clear review findings.")
+			"or a person accepts them as they are with Accept findings (`grain accept-findings`, a reason required). " +
+			"Pressing Submit records your approval only and does not clear review findings.")
 	} else {
 		body.WriteString("This change will not merge itself while the hold stands: a clean CI run, a later clean " +
 			"review or a new push do not release it. Press Submit to approve it (merges once all review and CI " +

@@ -22,7 +22,7 @@ grain repo ci-capabilities -set '' bwsalmon/grain
 ```
 
 The API is `GET` / `PUT /api/repos/{owner}/{name}/ci-capabilities`, with a PUT
-body such as `{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}` (bare `"github-sandbox"` remains accepted as a one-release alias). The database
+body such as `{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}` (the retired bare `"github-sandbox"` is refused as an unknown capability). The database
 stores the list in `repo_config.ci_capabilities`; existing databases migrate to
 an empty list. State/settings exports preserve it with the other repo settings.
 
@@ -53,9 +53,11 @@ Migration 97 turned each of the deployment's named GCP keys (the retired
 `image-signing`, `registry-push` and `package-publish` are methods of grain's
 in-process release server, `https://grain.dev/capabilities/release#<name>`
 (`pkg/capability/release`), since schema migration 101 rewrote the stored bare
-names to `https://grain.dev/capabilities/release#<name>={}`. The bare names
-are read as those grants for one release (a repository's `.grain`, an older
-grain/config), and the repos page's CI picker offers the methods. When each
+names to `https://grain.dev/capabilities/release#<name>={}`. An older
+grain/config is rewritten the same way on import; anywhere else the bare
+names were aliases for one release only, and a job declaring one now is
+refused, naming the method to declare instead. The repos page's CI picker
+offers the methods. When each
 one may be handed out is declared by the server in code (`model.CIGrantRule`)
 and enforced by grain before the capability policy is read, so a policy rule
 can narrow them but never widen them: a rule allowing `image-signing` on
@@ -197,15 +199,17 @@ The model proxies are retired onto grain's in-process
 (schema migration 100 rewrote stored `claude-proxy`, `openai-proxy` and
 `gemini-proxy`, `repo_config.ci_capabilities` included). It forwards with
 the run's own team connection, as the retired providers did. The bare
-names remain one-release aliases, and as references they reach only a job
-that declares them.
+names were aliases for one release and are not any longer; as references
+the methods reach only a job that declares them.
 
 ## A person accepts what only a person may grant
 
 A workflow file is the repository's to write, so a job that declares a
 capability only a person may grant is asking for it, not granted it. That
-covers a GCP key, a host script, a GitHub credential or a dangerous
-`api:<scope>` (`model.DeclaredGrantNeedsPerson`). Such a job fails before
+covers a GCP key, a host script, a GitHub credential
+(`…/repo#credential`), a `…/repo#write` that names anything beyond its
+`repo` (`refs` or `force`) or a dangerous `api:<scope>`
+(`model.DeclaredGrantNeedsPerson`). Such a job fails before
 anything is minted, with an error naming what it waits for, until a person
 accepts that set for the job. Accept it on **Settings → Capabilities →
 Repository declarations**. Accepting takes `capabilities:admin` for a
@@ -572,16 +576,20 @@ No request it allows approves a release: that is
 `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve`, which
 only a person may call (design/design/release-from-trunk.design.md §4).
 
-The job finds the listener in `/home/debian/.grain-api/`:
+Every step of the job finds the listener's address and its token in its
+environment, as `GRAIN_API_URL` and `GRAIN_API_TOKEN`:
 
 ```sh
-. /home/debian/.grain-api/env   # GRAIN_API_URL, GRAIN_API_TOKEN
 curl -fsS -H "Authorization: Bearer $GRAIN_API_TOKEN" \
   "$GRAIN_API_URL/api/ci/runs?ref=main&limit=100"
 ```
 
-The address and the token are also in `url` and `token` in the same
-directory. The token stops working when the job's sandbox is released.
+A step that sets either variable itself keeps its own value. In a VM or
+container sandbox both are also in `/home/debian/.grain-api/` (`url`,
+`token`, and `env`, which exports them). A host sandbox (`-host-sandboxes`)
+writes those files under the job's own directory instead, where that path
+does not reach them, so read the environment. The token stops working when
+the job's sandbox is released.
 
 Like repository access, a job gets api grants by declaring them
 (`capabilities: ["https://grain.dev/capabilities/api#release-gate-read"]`,

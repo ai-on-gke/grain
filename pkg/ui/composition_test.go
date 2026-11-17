@@ -569,7 +569,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	draft, err := c.DraftScheduleComposition(ctx, ui.CreateScheduleRequest{
 		Title:        "Weekly Dependency & Vulnerability Audit",
 		Repo:         "acme/widgets",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{model.GitHubReadIssuesGrant},
 	})
 	if err != nil {
 		t.Fatalf("composing draft schedule: %v", err)
@@ -598,7 +598,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
 		Name:         "Audit",
 		Title:        "Audit",
-		Capabilities: []string{"gcp-key"},
+		Capabilities: []string{model.GCPKeySandboxAgentGrant},
 	})
 	tmplComp, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
 	if err != nil {
@@ -737,11 +737,11 @@ func TestDraftScheduleCompositionKeepsAScheduleCapabilitiesBesideItsTemplates(t 
 	t.Parallel()
 	c, _, ctx := testClient(t)
 	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
-		Name: "Audit", Title: "Audit", Capabilities: []string{"gcp-key"},
+		Name: "Audit", Title: "Audit", Capabilities: []string{model.GCPKeySandboxAgentGrant},
 	})
 	req := ui.CreateScheduleRequest{
 		TemplateID: tmpl.ID, Repo: "acme/widgets", Base: "main",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{model.GitHubReadIssuesGrant},
 	}
 	draft, err := c.DraftScheduleComposition(ctx, req)
 	if err != nil {
@@ -759,4 +759,223 @@ func TestDraftScheduleCompositionKeepsAScheduleCapabilitiesBesideItsTemplates(t 
 		t.Errorf("draft sources = %v, want [template schedule repo]", caps.Sources)
 	}
 
+}
+
+func TestQAFlowRefCompositionAndUICrudRoundTrip(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+
+	// 1. Template CRUD round-trip + TemplateComposition.
+	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:      "StrictQA",
+		Title:     "Run with strict QA",
+		Repo:      "acme/widgets",
+		QAFlowRef: "golden-v1",
+	})
+	if err != nil {
+		t.Fatalf("CreateTemplate: %v", err)
+	}
+	if tmpl.QAFlowRef != "golden-v1" {
+		t.Fatalf("created template QAFlowRef = %q, want golden-v1", tmpl.QAFlowRef)
+	}
+	tmplComp, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("TemplateComposition: %v", err)
+	}
+	wantField(t, tmplComp.Tasks[0], "qaFlow", "template", "golden-v1")
+
+	updatedFlow := "strict-v2"
+	tmpl, err = c.UpdateTemplate(ctx, tmpl.ID, ui.UpdateTemplateRequest{QAFlowRef: &updatedFlow})
+	if err != nil {
+		t.Fatalf("UpdateTemplate: %v", err)
+	}
+	if tmpl.QAFlowRef != "strict-v2" {
+		t.Fatalf("updated template QAFlowRef = %q, want strict-v2", tmpl.QAFlowRef)
+	}
+
+	// 2. Schedule CRUD round-trip + ScheduleComposition precedence (Schedule > Template).
+	sched, err := c.CreateSchedule(ctx, ui.CreateScheduleRequest{
+		TemplateID: tmpl.ID,
+		Repo:       "acme/widgets",
+		Base:       "main",
+		Recurrence: everyDay,
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule inheriting template: %v", err)
+	}
+	schedComp, err := c.ScheduleComposition(ctx, sched.ID)
+	if err != nil {
+		t.Fatalf("ScheduleComposition inherited: %v", err)
+	}
+	wantField(t, schedComp.Tasks[0], "qaFlow", "template", "strict-v2")
+
+	schedFlow := "sched-flow-v3"
+	sched, err = c.UpdateSchedule(ctx, sched.ID, ui.UpdateScheduleRequest{QAFlowRef: &schedFlow})
+	if err != nil {
+		t.Fatalf("UpdateSchedule QAFlowRef: %v", err)
+	}
+	if sched.QAFlowRef != "sched-flow-v3" {
+		t.Fatalf("updated schedule QAFlowRef = %q, want sched-flow-v3", sched.QAFlowRef)
+	}
+	schedComp, err = c.ScheduleComposition(ctx, sched.ID)
+	if err != nil {
+		t.Fatalf("ScheduleComposition overridden: %v", err)
+	}
+	wantField(t, schedComp.Tasks[0], "qaFlow", "schedule", "sched-flow-v3")
+
+	// 3. Suite CRUD round-trip + SuiteComposition precedence (Suite > Schedule > Template).
+	suite, err := c.CreateSuite(ctx, ui.CreateSuiteRequest{
+		Name:        "QASuite",
+		TemplateIDs: []string{tmpl.ID},
+		Mode:        "count",
+		Count:       1,
+		QAFlowRef:   "suite-flow-v4",
+	})
+	if err != nil {
+		t.Fatalf("CreateSuite: %v", err)
+	}
+	if suite.QAFlowRef != "suite-flow-v4" {
+		t.Fatalf("created suite QAFlowRef = %q, want suite-flow-v4", suite.QAFlowRef)
+	}
+	suiteComp, err := c.SuiteComposition(ctx, suite.ID, "acme/widgets", "main")
+	if err != nil {
+		t.Fatalf("SuiteComposition: %v", err)
+	}
+	wantField(t, suiteComp.Tasks[0], "qaFlow", "suite", "suite-flow-v4")
+
+	suiteSched, err := c.CreateSchedule(ctx, ui.CreateScheduleRequest{
+		SuiteID:    suite.ID,
+		Repo:       "acme/widgets",
+		Base:       "main",
+		Recurrence: everyDay,
+		QAFlowRef:  "sched-flow-v3",
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule for suite: %v", err)
+	}
+	suiteSchedComp, err := c.ScheduleComposition(ctx, suiteSched.ID)
+	if err != nil {
+		t.Fatalf("ScheduleComposition for suite: %v", err)
+	}
+	wantField(t, suiteSchedComp.Tasks[0], "qaFlow", "suite", "suite-flow-v4")
+
+	// Clearing Suite.QAFlowRef lets Schedule.QAFlowRef win over Template.QAFlowRef.
+	empty := ""
+	suite, err = c.UpdateSuite(ctx, suite.ID, ui.UpdateSuiteRequest{QAFlowRef: &empty})
+	if err != nil {
+		t.Fatalf("UpdateSuite clear QAFlowRef: %v", err)
+	}
+	if suite.QAFlowRef != "" {
+		t.Fatalf("cleared suite QAFlowRef = %q, want empty", suite.QAFlowRef)
+	}
+	suiteSchedComp, err = c.ScheduleComposition(ctx, suiteSched.ID)
+	if err != nil {
+		t.Fatalf("ScheduleComposition after clearing suite QAFlowRef: %v", err)
+	}
+	wantField(t, suiteSchedComp.Tasks[0], "qaFlow", "schedule", "sched-flow-v3")
+
+	// 4. RepoSettings CRUD round-trip.
+	repoFlow := "repo-flow-v5"
+	settings, err := c.SetRepoSettings(ctx, "acme/widgets", ui.SetRepoSettingsRequest{
+		QAFlowRef: &repoFlow,
+	})
+	if err != nil {
+		t.Fatalf("SetRepoSettings: %v", err)
+	}
+	if settings.QAFlowRef != "repo-flow-v5" {
+		t.Fatalf("SetRepoSettings QAFlowRef = %q, want repo-flow-v5", settings.QAFlowRef)
+	}
+	gotSettings, err := c.RepoDefaults(ctx, "acme/widgets")
+	if err != nil {
+		t.Fatalf("RepoDefaults: %v", err)
+	}
+	if gotSettings.QAFlowRef != "repo-flow-v5" {
+		t.Fatalf("RepoDefaults QAFlowRef = %q, want repo-flow-v5", gotSettings.QAFlowRef)
+	}
+
+	// 5. Task CreateTask round-trip + template inheritance + agent escalation refusal.
+	fromTmplTask, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		TemplateID: tmpl.ID,
+		Repo:       "acme/widgets",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask from template: %v", err)
+	}
+	if fromTmplTask.QAFlowRef != "strict-v2" {
+		t.Fatalf("task from template QAFlowRef = %q, want strict-v2", fromTmplTask.QAFlowRef)
+	}
+	explicitTask, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:     "Explicit QA flow task",
+		Repo:      "acme/widgets",
+		QAFlowRef: "task-explicit-flow",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask explicit QAFlowRef: %v", err)
+	}
+	if explicitTask.QAFlowRef != "task-explicit-flow" {
+		t.Fatalf("explicit task QAFlowRef = %q, want task-explicit-flow", explicitTask.QAFlowRef)
+	}
+
+	// Proposed task (agent caller) is forbidden from setting QAFlowRef.
+	if _, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:      "Agent task attempting qaFlowRef",
+		Repo:       "acme/widgets",
+		ProposedBy: explicitTask.ID,
+		QAFlowRef:  "bypass-flow",
+	}); err == nil {
+		t.Fatal("expected CreateTask with ProposedBy and QAFlowRef to be refused, got nil")
+	}
+
+	// Agent principal in context is refused across Template, Schedule, Suite, and RepoSettings QAFlowRef writes.
+	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "agent-run-1"})
+	if _, err := c.CreateTemplate(agentCtx, ui.CreateTemplateRequest{
+		Name:      "agent-tmpl",
+		Title:     "Agent tmpl",
+		QAFlowRef: "bypass-flow",
+	}); err == nil {
+		t.Fatal("expected agent CreateTemplate with QAFlowRef to be refused")
+	}
+	bypassFlow := "bypass-flow"
+	if _, err := c.UpdateTemplate(agentCtx, tmpl.ID, ui.UpdateTemplateRequest{QAFlowRef: &bypassFlow}); err == nil {
+		t.Fatal("expected agent UpdateTemplate with QAFlowRef to be refused")
+	}
+	if _, err := c.CreateSchedule(agentCtx, ui.CreateScheduleRequest{
+		Title:      "Agent sched",
+		Repo:       "acme/widgets",
+		QAFlowRef:  "bypass-flow",
+		Recurrence: everyDay,
+	}); err == nil {
+		t.Fatal("expected agent CreateSchedule with QAFlowRef to be refused")
+	}
+	if _, err := c.UpdateSchedule(agentCtx, sched.ID, ui.UpdateScheduleRequest{QAFlowRef: &bypassFlow}); err == nil {
+		t.Fatal("expected agent UpdateSchedule with QAFlowRef to be refused")
+	}
+	if _, err := c.CreateSuite(agentCtx, ui.CreateSuiteRequest{
+		Name:        "Agent suite",
+		TemplateIDs: []string{tmpl.ID},
+		Mode:        "count",
+		Count:       1,
+		QAFlowRef:   "bypass-flow",
+	}); err == nil {
+		t.Fatal("expected agent CreateSuite with QAFlowRef to be refused")
+	}
+	if _, err := c.UpdateSuite(agentCtx, suite.ID, ui.UpdateSuiteRequest{QAFlowRef: &bypassFlow}); err == nil {
+		t.Fatal("expected agent UpdateSuite with QAFlowRef to be refused")
+	}
+	if _, err := c.SetRepoSettings(agentCtx, "acme/widgets", ui.SetRepoSettingsRequest{QAFlowRef: &bypassFlow}); err == nil {
+		t.Fatal("expected agent SetRepoSettings with QAFlowRef to be refused")
+	}
+
+	// Detaching a schedule from a template when schedule.QAFlowRef is empty preserves the template's QAFlowRef.
+	sched, err = c.UpdateSchedule(ctx, sched.ID, ui.UpdateScheduleRequest{QAFlowRef: &empty})
+	if err != nil {
+		t.Fatalf("clear schedule QAFlowRef: %v", err)
+	}
+	detachedSched, err := c.UpdateSchedule(ctx, sched.ID, ui.UpdateScheduleRequest{TemplateID: &empty})
+	if err != nil {
+		t.Fatalf("detach schedule template: %v", err)
+	}
+	if detachedSched.QAFlowRef != "strict-v2" {
+		t.Fatalf("detached schedule QAFlowRef = %q, want strict-v2 (inherited from detached template)", detachedSched.QAFlowRef)
+	}
 }

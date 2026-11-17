@@ -64,10 +64,13 @@ custom-fields:                     # optional; this deployment's declared fields
 ```
 
 This review is the one attached to a task, and it is stacked on the task's
-branch to fix what it finds. The reviews a gating path trigger files work
-differently: one per pull request head and review template however many
-triggers match, posting findings rather than pushing fixes unless asked to,
-and re-reading only what a new push changed. See "Gating reviews" under
+branch to fix what it finds. Like every other review grain files for a task,
+its prompt includes a "The change under review" section with the reviewed
+task's brief, any linked designs, and the CI and deployment-settings checks
+described under "Gating reviews" below. The reviews a gating path trigger
+files work differently: one per pull request head and review template however
+many triggers match, posting findings rather than pushing fixes unless asked
+to, and re-reading only what a new push changed. See "Gating reviews" under
 `.grain/triggers/<name>.yml`.
 
 To review every pull request with findings only, declare a gating
@@ -330,6 +333,10 @@ hosting: unattended                # optional; "unattended" or "console" -- what
                                    #   console capability gave (capabilities.md); a bare console
                                    #   under capabilities: is read as this, with a warning
 priority: 10                       # optional; positive integer (unset/0 files tasks at default 5)
+sandbox:                           # optional; the sandbox every task it files gets -- see below
+  cpus: 4                          #   each key optional; left out, that dimension is the
+  memory-mb: 16384                 #   deployment's default (2 vCPU / 8192 MiB / 30 GiB unless
+  disk-gb: 100                     #   an operator changed it). Needs grain v3.6.0 or later
 custom-fields:                     # optional; this deployment's declared fields
   team: infra
   reviewers: [ana, bo]
@@ -358,6 +365,75 @@ grants:                            # optional; the unified spelling of capabilit
 string or a `{capability, with}` mapping, the two keys are read as one list,
 and an entry both name (in either spelling) is held once. Everything this
 section says about `capabilities:` holds for `grants:` as well.
+
+#### Sizing the sandbox: `sandbox:` on a template
+
+A template can say how big a machine its work needs, with the same three
+keys a `.grain/workflows` job's own `sandbox:` uses:
+
+```yaml
+# .grain/templates/publish-images.yml
+title: Publish the release images
+sandbox:
+  disk-gb: 100      # the image build needs ~100 GB; the default disk is 30 GB
+```
+
+- `cpus` (vCPUs), `memory-mb` (MiB) and `disk-gb` (GiB) are each optional.
+  A key left out leaves that dimension on the deployment's default.
+- Each is a positive integer, at most the ceiling a task's own sandbox
+  shape is held to: 32 vCPUs, 131072 MiB and 1024 GiB. `memory-mb` is at
+  least 128. `0`, a negative number, or anything above the ceiling refuses
+  the repository's declarations, as any value out of range does. Any other
+  key under `sandbox:` is refused by name.
+- Every task filed from the template carries the shape: a schedule
+  firing it, a suite or qualification pass, `propose_task` or
+  `POST /api/tasks` naming its id, and the New Task form. A filing that
+  states a dimension of its own (`sandbox_disk_gb` on `propose_task`,
+  `sandboxDiskGb` on the API, the form's own boxes) keeps its value for
+  that dimension, and the template fills the rest.
+- A filing through the API or the form is also held to the deployment's
+  own `sandboxShapeLimits` (Settings → Sandboxes), exactly as a task sized
+  by hand is: the deployment's maximum, and a limited role's own ceiling
+  for whoever files, writes or schedules it. An agent can't file from, or
+  write, a template larger than its own task's sandbox. A schedule, suite,
+  path trigger, qualification run or release-notes filing firing a template above the
+  deployment's maximum files nothing, and the firing fails saying so. On a deployment whose sandboxes are host directories, which
+  have no shape, the form and the API leave the template's shape off. A
+  schedule, suite or trigger firing there still files the shape on the
+  task, but dispatch drops it when every dimension matches the
+  template's (the size came from the template, not from a person) and
+  logs `not asking for template …'s sandbox size`, so the run starts on
+  the host's own directory. A dimension somebody stated on the filing
+  that differs from the template's is still refused at sandbox setup.
+- The template's shape shows on its page (opened from its row on the
+  Processes page), in
+  `GET /api/templates` (`sandbox: {cpus, memoryMb, diskGb}`), and in the
+  preview beside the New Task form.
+
+**Which grain accepts it.** `sandbox:` on a template is new in schema 143.
+The first release that accepts it is the first one cut from a `main` that
+has this change: **v3.6.0** if v3.6.0 is cut after it lands, otherwise the
+release after. v3.5.1 and every v3.6.0 release candidate up to rc.6 don't
+know the key. Check the reading daemon's version before you declare
+`sandbox:`. If a daemon doesn't know the key, it refuses the file loudly:
+
+- A daemon from before forward-compatible parsing (v3.5.1, and
+  v3.6.0-rc.6 and earlier) refuses the repository's **whole** declaration
+  set at that commit. It keeps the declarations of the last commit it
+  could read, and records the refusal (the file, the line and `field
+  sandbox not found`) as the repository's declaration-sync error
+  (`repo_declaration_sync.last_error`).
+- A daemon with forward-compatible parsing but without this change
+  *holds back* just that template file: it keeps the version it already
+  had (still without the shape), and raises an Inbox notice under
+  `declarations held back by this grain build:`. See [Declarations newer
+  than the daemon](#declarations-newer-than-the-daemon).
+
+Neither daemon files a task without the shape while saying nothing
+about it. `grain declarations check` in CI runs the code on the pull
+request's own branch, so it accepts `sandbox:` once this change is on
+`main`, whatever the deployment runs. That check alone does not show the
+deployment can read the key.
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
@@ -423,7 +499,9 @@ guarded the way `.grain/workflows` is (see "Sensitive paths" below for the
 recommended trigger).
 
 What only a person may grant is different. That is a GCP key, a host
-script, a GitHub credential, a dangerous or person-only `api:<scope>`
+script, a GitHub credential (`…/repo#credential`), a `…/repo#write` that
+names anything beyond its `repo` (`refs` or `force`, which widen what the
+git proxy lets the run push), a dangerous or person-only `api:<scope>`
 (`model.DeclaredGrantNeedsPerson`), an `admission:` above `standard`, or
 `network_access: open`. A repository's declaration only asks for these.
 A firing of a declared schedule, or of a declared template, whose
@@ -435,7 +513,14 @@ declarations**. Accepting takes `capabilities:admin` for a capability
 server's grant, and the scope itself for an `api:` grant. From then on
 its firings land approved again, while it asks for nothing beyond the
 accepted set. A declaration that widens past that set is held again, and
-shows as awaiting acceptance, until a person accepts the new set. Schedules
+shows as awaiting acceptance, until a person accepts the new set. A
+person can also take an acceptance back with **Revoke** on the same card
+(`POST /api/declarations/revoke`). Revoking takes what accepting did: a
+person acting directly, never an agent or a delegated caller, holding
+every scope the accepted set needs. It is recorded in the config audit
+log. The declaration's next firing is held again with the "Nobody has
+accepted that set yet" note. Work already filed approved on the
+acceptance is held before it dispatches. Schedules
 and templates an operator wrote are a person's standing approval already
 and are never held this way. CI jobs are accepted the same way; see
 [`docs/ci-capabilities.md`](ci-capabilities.md).
@@ -526,7 +611,7 @@ ref of it (`docs/ci-capabilities.md`), and has no task branch to be held
 to.
 
 The repo server's any-ref grant, `https://grain.dev/capabilities/repo#write` with `{"force": true, "refs": ["refs/heads/*", "refs/tags/*"]}`
-(formerly the bare `git-push-any-ref`, which is still read as it), is
+(formerly the bare `git-push-any-ref`), is
 still there for ad-hoc work with no template behind it. It is a team
 grant, not an admin one: a team grants it to its own task, and the
 team's own credential still bounds every push.
@@ -647,9 +732,10 @@ overlap group "sync-oss-release" is still open (running)`.
   the repository the firing goes into, so another repository's schedule
   naming the same group neither holds nor is held by these.
 - **Tagged tasks.** Every task a grouped schedule files carries
-  `schedule-group:<owner>/<name>:<group>` beside its own `schedule:<id>`
-  tag, so a task keeps holding the group after the schedule that filed
-  it is renamed or withdrawn.
+  `schedule-group:<owner>/<name>:<group>` (beside `schedule:<id>` for a
+  task or workflow-review schedule, and in every pass of a suite
+  schedule's run), so it keeps holding the group after the schedule that
+  filed it is renamed or withdrawn.
 - **Names.** Letters, digits, `.`, `_` and `-`, starting with a letter or
   digit, at most 128 characters.
 - **Refused combinations.** A group is a skip by definition, so
@@ -745,8 +831,9 @@ the template's title and body, and the same facts appended to the body.
 opens or updates the pull request, and again whenever the merge queue
 finds its head at a commit it has not judged, against the pull request's
 files (its diff from the merge base). Variables: `{{trigger}}`,
-`{{paths}}`, `{{group}}`, `{{pr}}`, `{{head_sha}}` and `{{base_sha}}`
-(the base commit the rule was read at). Without `gate`, the task is an
+`{{paths}}`, `{{group}}`, `{{pr}}`, `{{head_sha}}`, `{{base_sha}}`
+(the base commit the rule was read at) and `{{task_title}}` (the title of
+the task whose change it is, or its ID when it has none). Without `gate`, the task is an
 ordinary one in the repository. With `gate: true` it is a review of the
 change (see "Gating reviews" below), the change's auto-merge is withdrawn,
 and the change and its pull request say which trigger demanded what. The hold is
@@ -784,6 +871,23 @@ review):
   tag and a `path-trigger-head:<sha>` tag; judging a head that already has
   its review files nothing.
 
+**What a review is called.** A gating review takes its template's title
+when the template has one: this repository's `every-pr` trigger files
+`pr-review`, titled `Code review: {{task_title}} ({{pr}})`. A sensitive
+trigger with no `template:` files a *targeted review*, titled
+`Targeted review (<trigger>): <task title>`, with every trigger it serves
+listed in name order (`Targeted review (grain-declarations,
+release-machinery): ...`). A template with no title of its own files
+`Review: <task title>`.
+The trust-boundary hold's own review is the *security review*, `Security
+review: <task title>`, and when it already covers what a sensitive
+trigger matched it serves that trigger too, under its own title. The
+change's merge gates use the same names: **Security review** (the
+trust-boundary hold, `security-review`), **Code review** (a configured
+review and every gating trigger that names a template, `review`) and
+**Targeted review** (template-less sensitive triggers, `targeted-review`).
+`--override-gates=review` still covers a targeted review gate.
+
 **Reviews post findings.** A gating review posts what it finds on the
 pull request (`add_review_comment`, which also puts it to the reviewed
 task's owner) and on the reviewed task, and its run never opens a pull
@@ -795,8 +899,82 @@ second one), and a review whose triggers all say `fixes: true`, which is
 stacked on the change's branch with a pull request of its own merged back
 into it before the change can land.
 
-**Incremental, debounced re-review.** When the head moves, the review of
-each kind is filed again for the new head:
+**What a review is given.** Every review grain files for a task -- grain's
+security review, gating path-trigger reviews (findings-only, `fixes: true`,
+and security), stacked `.grain/review.yml` reviews, and CL reviews -- appends
+a "The change under review" section to the template's body:
+
+- **The brief:** the reviewed task's own description, fenced as the owner's
+  words about the change's intent rather than instructions to the reviewer,
+  stripped of grain's own appended notices (`grain: this proposal asked for
+  …` and similar), and capped at 6 KiB with a truncation note; omitted when
+  the task has no description.
+- **Linked designs:** the task's `designs:` paths (`LinkDesign` and adopted
+  spec/design links), with one line asking the reviewer to read them, check
+  that the change conforms, and flag where it departs; omitted when none are
+  linked.
+- **CI:** one line telling the reviewer to read the head's existing check
+  results first (`grain pr open`, or `grain ci checks`, `grain ci list` and
+  `grain ci log` through the review's repo-scoped `api:ci-read` grant) and to
+  compare any red check against the base branch before blaming the change,
+  without waiting or blocking on CI.
+- **Deployment settings:** one line requiring the reviewer to state what
+  happens on a deployment that leaves a newly required environment variable,
+  repository variable or setting unset (or when a default changes).
+
+**Priority.** A gating review runs at the priority of the change it gates,
+and never below 7 (`model.ReviewPriorityFloor`). That applies to grain's
+security review, every `.grain/triggers` review and each re-review after a
+push: a review of a priority-9 change is filed at 9, and a review of a
+priority-3 or default-priority change at 7. A review is short, and it is
+the last thing between a finished change and its merge, so 7 puts it ahead
+of ordinary work. It stays below the release gate (8) and the repairs and
+release train (9), so a review of an ordinary change never takes the slot
+they are waiting for. Reviews are also filed at the front of the backlog,
+so at equal priority they dispatch before work already queued. Base-branch
+repairs still sort ahead of them. When a person changes the gated task's
+priority, its open reviews follow, but never below 7. A review whose own
+priority a person has set is tagged `priority-set-by-hand`. A later raise
+of the gated task can still lift it, but a lowered priority is not carried
+over to it.
+The floor is grain's, not a person's: a review only it raised may still
+file follow-ups at no more than the default priority without a person's
+approval.
+
+**A head that moves without changing the change is not reviewed again**
+(grain/task-4808). The change is the pull request's diff against where its
+head forked from its base, `git diff $(git merge-base <base> <head>) <head>`.
+An empty "rerun CI" commit doesn't change it, and nor does a merge of the
+base that resolved no conflict, whether the task's agent or grain's merge
+queue made it. Before a head move files anything, grain compares that diff
+file by file with the diff at the head the reviews last read. It compares
+patches the way `git patch-id` does, ignoring line numbers and blob ids.
+When the two are identical:
+
+- every gating review's result carries to the new head as it stands:
+  still running, passed, findings or questions. Carried findings block
+  exactly as they did. Grain's security review carries the same way, and
+  so does its trust-boundary clearance;
+- no review is filed, and no ungated trigger fires again either;
+- the task says once per head: "Head moved to `<sha>` without changing the
+  change; reviews carried from `<sha>`."
+
+A person's approval is not carried. It was given at the head they read, and
+a head move consumes it as before. So a `human: required` trigger, or a
+path only a human may release, asks for their Submit again at the new head,
+and owner approvals are asked for again. One exception predates this
+change: a base merge that leaves a cleared change's trust-boundary patches
+unchanged keeps a Submit given at the cleared head.
+
+A merge that resolved a conflict changes the patch of the file it
+resolved, and a commit of the change's own changes its diff. Both are
+reviewed again, as below. So is any head grain can't compare: a diff
+GitHub won't serve, a binary file, a file list too long to read, repository
+rules that changed under it, or a gating trigger that the base's rules added
+or dropped.
+
+**Incremental, debounced re-review.** When the head moves and the change
+did change, the review of each kind is filed again for the new head:
 
 - If the last review of that kind finished -- clean, or with findings the
   push may have addressed -- or is still running, the new one is
@@ -815,6 +993,43 @@ each kind is filed again for the new head:
 - A review for an older head that has not been dispatched yet is
   superseded by the new one, which keeps its incremental base; one already
   running is waited on.
+
+**Merging over findings: Accept findings.** A gating review's findings
+hold its gate (`security-review`, or `review`, which lists every gating
+trigger's `trigger:<name>` findings) until one of three things happens:
+
+- **A clean re-review.** Push fixes, and the review filed for the new head
+  passes.
+- **The owner accepts them as they are.** Use **Accept findings…** beside
+  the gate in the task's merge gates (the Changes tab in the new UI at
+  `/next/`, the merge-gates panel in the classic one), or `grain accept-findings -gate
+  <gate> [-review <task>] <id> <reason>` (`POST
+  /api/tasks/{id}/accept-findings`, `tasks:write`). A person with an
+  unlimited role (grain/operator) may do this; a limited role and an agent
+  never may (403, as with Submit), and a reason is required. It clears
+  that one review's findings and open questions on that one gate, at the
+  pull request's current head. It records who accepted, the reason, the
+  review task and the head on the task (`review-findings-accepted`), on its
+  timeline, and as a comment on the task and the pull request. It clears
+  nothing else: CI, the other gates, other reviews' findings, approvers a
+  `human: required` trigger names and security holds all still apply. A
+  later push is classified and reviewed as any push is, and findings a new
+  review leaves need a new decision. Once nothing else holds the change, it
+  merges itself as it was going to. The panel offers it only on a gate whose
+  findings a review left (the merge gate's `acceptable`). A gate held
+  because its review could not be filed has no review's findings to accept:
+  a re-review or Force merge settles that.
+- **Force merge.** This overrides *every* gate it names, under
+  `merge:force`. It is for overriding everything, not for a decision about
+  one review's findings.
+
+Submit records the owner's approval only and never clears findings. Only
+an explicit acceptance counts as the owner's decision. Answering the
+review's questions with "merge as-is", or resolving its threads, does not
+count: a reply is free text that the next run reads and carries out, and
+threads can be resolved by the change's own agent, so neither one records
+who decided, at which head, or why. An agent that thinks a finding needs
+no fix asks the owner (`ask_question`) and leaves the decision to them.
 
 **One runnable task per key.** A key is (repository, branch, trigger,
 group) for a merge and (pull request, trigger, group) for a pull request

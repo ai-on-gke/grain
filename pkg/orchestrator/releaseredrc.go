@@ -518,11 +518,11 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 	}
 	// Only a hold grain's own App posted is grain's, as with the verdict
 	// (latestCheckRun); a connection grain cannot name posts none.
-	app, err := forge.CheckRunApp(repo.Owner, repo.Name)
+	app, err := forge.CheckRunApp(repo.StoredOwner(), repo.Name)
 	if err != nil || app == "" {
 		return errors.Join(err, clear())
 	}
-	checks, err := forge.ListCheckRuns(repo.Owner, repo.Name, sha)
+	checks, err := forge.ListCheckRuns(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
@@ -598,9 +598,9 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 	}
 	if run.Status != "" {
 		if updateExisting {
-			err = forge.UpdateCheckRun(repo.Owner, repo.Name, hold.ID, run)
+			err = forge.UpdateCheckRun(repo.StoredOwner(), repo.Name, hold.ID, run)
 		} else {
-			_, err = forge.CreateCheckRun(repo.Owner, repo.Name, run)
+			_, err = forge.CreateCheckRun(repo.StoredOwner(), repo.Name, run)
 		}
 		if err != nil {
 			return fmt.Errorf("posting %s on %s: %w", model.ReleaseHoldCheckName, rcTag, err)
@@ -679,7 +679,7 @@ func droppedUnreleased(forge ReleaseQualificationForge, repo model.RepoRef, name
 		return false, nil
 	}
 	marker := name + "-discarded"
-	refs, err := reader.ListMatchingTags(repo.Owner, repo.Name, marker)
+	refs, err := reader.ListMatchingTags(repo.StoredOwner(), repo.Name, marker)
 	if err != nil {
 		return false, err
 	}
@@ -687,7 +687,7 @@ func droppedUnreleased(forge ReleaseQualificationForge, repo model.RepoRef, name
 		if t.Name != marker || t.ObjectType != "tag" {
 			continue
 		}
-		at, err := reader.GetAnnotatedTag(repo.Owner, repo.Name, t.ObjectSHA)
+		at, err := reader.GetAnnotatedTag(repo.StoredOwner(), repo.Name, t.ObjectSHA)
 		if err != nil || at == nil {
 			return false, err
 		}

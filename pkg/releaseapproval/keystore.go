@@ -63,7 +63,9 @@ func storeIn(dataDir string) *secrets.Store {
 	if _, err := os.Stat(cfg.KeyFile); err != nil {
 		return nil
 	}
-	return secrets.Open(cfg)
+	// Shared, so a KMS-wrapped key is unwrapped once per process rather
+	// than once per signature.
+	return secrets.OpenShared(cfg)
 }
 
 // loadStoredSigner is the signer the store holds, importing the key file

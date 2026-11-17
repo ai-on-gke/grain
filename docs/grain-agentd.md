@@ -56,6 +56,10 @@ With `-join`:
 3. files a join request naming you and the host, and waits for the deployment owner to click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
 4. writes the issued 30-day key-bound credential to `~/.config/grain/agentd-token` (`0600`), installs `~/.config/grain/agentd.yaml` and `~/.config/systemd/user/grain-agentd.service`, and starts `grain-agentd`, which signs every `/api/hostd/connect` upgrade with its Ed25519 key and renews its 30-day credential silently while connected.
 
+The unit restarts `grain-agentd` whenever it exits (`Restart=always`) and sets `KillMode=mixed`: a drain ends with a clean exit once the last agent CLI finishes, so the binary `~/.local/bin/grain-agentd` names takes over; on a stop or restart (`systemctl --user stop` or `restart`), systemd sends `SIGTERM` to `grain-agentd` alone so it marks in-flight CLIs as interrupted (`stopped because the host agent stopped or restarted`) before exiting, and then `SIGKILL`s anything left in the cgroup so stopped, crashed or uninstalled units never leak agent CLIs. A unit written by an older `grain-agentd install` said `Restart=on-failure` (leaving a drained host offline) or omitted `KillMode=mixed` (racing a cgroup-wide `SIGTERM` against `grain-agentd`'s own cleanup); re-run `grain-agentd install -server <url>` without `-join`, passing the same `-name` and `-iap-audience` you installed with (the unit is rewritten from the flags given), to rewrite it. That re-run keeps the existing allowlist, credential and `-key-file`.
+
+To drain a host by hand -- before replacing `~/.local/bin/grain-agentd`, say -- run `grain-agentd -drain` as the same user (it finds the socket from `$XDG_RUNTIME_DIR`, or pass `-socket`), or send the unit `SIGUSR1` (`systemctl --user kill -s USR1 --kill-whom=main grain-agentd`). A host agent of this build cuts over: it keeps taking starts and exits the moment no agent CLI runs, refusing new starts only if that moment has not come within the allowlist's `drain_cap`. `SIGUSR1`, and `-drain` against an older host agent, refuse new starts at once and wait for the running CLIs, up to `drain_cap`, cancelling any still running then. Either way systemd starts it again.
+
 Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
 
 ### Migrating an existing per-host token (`-rekey`)
@@ -191,6 +195,56 @@ emitting `env: ["*"]` and `~/` paths only when the installed `grain-agentd`
 supports `env_open`, and the controller's closed `env:` list otherwise -- and
 writes `~/.config/grain/agentd.yaml` once you confirm on the host (pass `-yes`
 for non-interactive automation).
+
+## Updating it (`grain-agentd update`)
+
+When Settings -> Hosts shows **Update available** for a host, its owner runs,
+on the host:
+
+```sh
+grain-agentd update            # or: grain-agentd update -version v3.9.0
+```
+
+`update` fetches the signed manifest and binary for this machine's platform
+from the controller recorded in `grain-agentd.service` (or `-server URL`;
+`-from DIR` reads release assets from a directory instead), and:
+
+1. verifies the manifest's signature against the release key pinned at install
+   (`~/.config/grain/agentd-release.pub`, else the key built into the binary)
+   -- never a key the controller sends -- and the binary's size and SHA-256;
+2. refuses an older release than the installed one, unless the allowlist's
+   `update.pin` names exactly that version, and refuses anything outside the
+   pin;
+3. stages it as `~/.local/lib/grain-agentd/versions/<v>/grain-agentd`, runs it
+   with `-build` and `-check` against the current allowlist, and only then
+   points `~/.local/lib/grain-agentd/current` at it.
+   `~/.local/bin/grain-agentd` becomes a link through `current`, and the
+   previous version stays beside it;
+4. asks the running host agent to cut over: it keeps taking runs and exits the
+   first moment none runs (within the allowlist's `drain_cap`), and systemd
+   `--user` starts the new build. That build adopts the detached runs the old
+   one left in its spool.
+
+If the new build has not answered the controller's hello within five minutes
+of its first start, it is rolled back: the unit's `ExecStartPre` guard
+(`~/.local/lib/grain-agentd/guard.sh`, which `update` adds to a unit an older
+install wrote) and the new build itself both move `current` back to the
+previous version. The rolled-back update is recorded in
+`~/.local/lib/grain-agentd/update-failed`. `-no-cutover` stages and switches
+without touching the running host agent.
+
+The owner controls this in the allowlist, which the controller cannot write:
+
+```yaml
+update:
+  mode: offer   # off: refuse every update | offer (default) | auto (not implemented yet; behaves as offer)
+  pin: v3.*     # optional: never leave this range; an exact version also allows moving back to it
+```
+
+Add `update:` only once the host runs a build that has `grain-agentd update`:
+an older one refuses the unknown key. The controller never starts an update
+by itself, and a root-installed `grain host` is never offered one. It updates
+with its machine's installer.
 
 ## Hooks
 

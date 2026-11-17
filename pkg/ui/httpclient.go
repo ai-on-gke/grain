@@ -46,6 +46,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
+	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -576,6 +577,9 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 			return nil, err
 		}
 		if err := c.prepareRequest(ctx, req); err != nil {
+			if ctx.Err() != nil {
+				return nil, contextDoneError(ctx, c.BaseURL, err)
+			}
 			var own contextTokenError
 			if errors.As(err, &own) {
 				return nil, own.err // already says what it is about
@@ -585,7 +589,12 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 		resp, err := c.redirectClient().Do(req)
 		var failure error
 		switch {
-		case err != nil && retryableError(method, err) && ctx.Err() == nil:
+		case err != nil && ctx.Err() != nil:
+			// The caller's context ran out during the attempt. What the
+			// transport returned then -- a dial timeout, a refused
+			// connection -- need not wrap ctx.Err(), so say it does.
+			return nil, contextDoneError(ctx, c.BaseURL, err)
+		case err != nil && retryableError(method, err):
 			failure = err
 		case err != nil:
 			return nil, fmt.Errorf("reaching grain server at %s: %w", c.BaseURL, err)
@@ -610,13 +619,32 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 		select {
 		case <-time.After(sleep):
 		case <-ctx.Done():
-			return nil, fmt.Errorf("reaching grain server at %s: %w (while waiting out: %v)", c.BaseURL, ctx.Err(), failure)
+			return nil, contextDoneError(ctx, c.BaseURL, failure)
+		}
+		if ctx.Err() != nil {
+			// The wait and the context ended together and select took
+			// the timer: do not start an attempt that cannot run.
+			return nil, contextDoneError(ctx, c.BaseURL, failure)
 		}
 		wait *= 2
 		if policy.Max > 0 && wait > policy.Max {
 			wait = policy.Max
 		}
 	}
+}
+
+// contextDoneError is what send returns once ctx is done, whatever the
+// last attempt's error was: one that wraps ctx.Err(), so a caller's
+// errors.Is(err, context.DeadlineExceeded) holds however the deadline
+// landed, with last kept in the message.
+func contextDoneError(ctx context.Context, baseURL string, last error) error {
+	switch {
+	case last == nil:
+		return fmt.Errorf("reaching grain server at %s: %w", baseURL, ctx.Err())
+	case errors.Is(last, ctx.Err()):
+		return fmt.Errorf("reaching grain server at %s: %w", baseURL, last)
+	}
+	return fmt.Errorf("reaching grain server at %s: %w (while waiting out: %v)", baseURL, ctx.Err(), last)
 }
 
 // RoundTrip sends req the way every call of this client is sent:
@@ -1104,6 +1132,62 @@ func (c *HTTPClient) OpenChange(ctx context.Context, id string, req OpenChangeRe
 		return PullRequestStatus{}, err
 	}
 	return status, nil
+}
+
+// TaskQA reads id's sticky QA assignment, pre-PR check runs, and findings (GET /api/tasks/{id}/qa).
+func (c *HTTPClient) TaskQA(ctx context.Context, id string) (TaskQAResponse, error) {
+	var out TaskQAResponse
+	if err := c.do(ctx, http.MethodGet, "/api/tasks/"+id+"/qa", nil, &out); err != nil {
+		return TaskQAResponse{}, err
+	}
+	return out, nil
+}
+
+// RecordTaskQACheckRuns persists in-sandbox S3 check runs and findings on the daemon (POST /api/tasks/{id}/qa/check-runs).
+func (c *HTTPClient) RecordTaskQACheckRuns(ctx context.Context, id string, entries []RecordQACheckRunEntry) error {
+	var resp map[string]any
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/qa/check-runs", RecordQACheckRunsRequest{Entries: entries}, &resp)
+}
+
+// QAFlows lists built-in quality control flow packages and rules (GET /api/qa/flows).
+func (c *HTTPClient) QAFlows(ctx context.Context) (QAFlowsResponse, error) {
+	var out QAFlowsResponse
+	if err := c.do(ctx, http.MethodGet, "/api/qa/flows", nil, &out); err != nil {
+		return QAFlowsResponse{}, err
+	}
+	return out, nil
+}
+
+// QASummary reads the deployment's quality control A/B rollout summary (GET /api/qa/summary).
+func (c *HTTPClient) QASummary(ctx context.Context, window string, repos []string) (metrics.QASummary, error) {
+	q := url.Values{}
+	if window = strings.TrimSpace(window); window != "" {
+		q.Set("window", window)
+	}
+	for _, repo := range repos {
+		if repo = strings.TrimSpace(repo); repo != "" {
+			q.Add("repo", repo)
+		}
+	}
+	path := "/api/qa/summary"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var out metrics.QASummary
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return metrics.QASummary{}, err
+	}
+	return out, nil
+}
+
+// VoteTaskQAFinding records helpful/not-helpful operator feedback on a QA finding.
+func (c *HTTPClient) VoteTaskQAFinding(ctx context.Context, taskID string, findingID int64, vote int) (VoteQAFindingResponse, error) {
+	var out VoteQAFindingResponse
+	path := fmt.Sprintf("/api/tasks/%s/qa/findings/%d/feedback", taskID, findingID)
+	if err := c.do(ctx, http.MethodPost, path, VoteQAFindingRequest{Vote: vote}, &out); err != nil {
+		return VoteQAFindingResponse{}, err
+	}
+	return out, nil
 }
 
 // RecreateSandbox is Client.RecreateSandbox over the wire: destroy the
@@ -2365,6 +2449,16 @@ func (c *HTTPClient) DownloadCIArtifact(ctx context.Context, ref ci.ArtifactRef,
 		return 0, c.httpError(resp)
 	}
 	return io.Copy(w, resp.Body)
+}
+
+// RerunCIRun re-runs a GitHub Actions run (a gha: id) as its next
+// attempt: POST /api/ci/runs/{id}/rerun.
+func (c *HTTPClient) RerunCIRun(ctx context.Context, id string, req ActionsRerunRequest) (ActionsRerunResult, error) {
+	var res ActionsRerunResult
+	if err := c.do(ctx, http.MethodPost, "/api/ci/runs/"+url.PathEscape(id)+"/rerun", req, &res); err != nil {
+		return ActionsRerunResult{}, err
+	}
+	return res, nil
 }
 
 // CancelCIRun stops a run that is still going and returns it as it was

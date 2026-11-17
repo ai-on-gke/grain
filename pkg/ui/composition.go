@@ -211,6 +211,18 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 			Name: "priority", Values: []string{strconv.Itoa(c.Priority)}, Source: string(model.LayerTemplate),
 		})
 	}
+	// A template's sandbox shape (model.Template.Sandbox), only where it
+	// states one: the deployment's default is no news.
+	if !c.Sandbox.IsZero() {
+		fields = append(fields, ComposedField{
+			Name: "sandbox", Values: []string{c.Sandbox.Describe()}, Source: string(model.LayerTemplate),
+		})
+	}
+	if c.QAFlowRef != "" {
+		fields = append(fields, ComposedField{
+			Name: "qaFlow", Values: nonEmpty(c.QAFlowRef), Source: string(c.Sources.QAFlowRef),
+		})
+	}
 	return ComposedTask{
 		TemplateID:   c.TemplateID,
 		TemplateName: c.TemplateName,

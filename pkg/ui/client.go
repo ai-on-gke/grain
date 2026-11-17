@@ -657,27 +657,11 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 			return capability, true
 		}
 	}
-	if name, ok := model.GCPKeyName(id); ok && name != "" {
-		return Capability{
-			ID:   id,
-			Name: "GCP key (" + name + ", retired spelling)",
-			Description: "Read as https://grain.dev/capabilities/gcp#gcp-key with {permission_set: " + name + "}: mint a " +
-				"short-lived GCP service-account key for this task and place it in its sandbox",
-		}, true
-	}
 	// An agent API grant (agent_api.go), a repo-limited one included:
 	// the scopes and presets are offered rows of their own, but
 	// api:<scope>@<repo> is spelled per repository and so only here.
 	if row, ok := apiCapability(id); ok {
 		return row, true
-	}
-	if name, ok := localScriptsName(id); ok {
-		return Capability{
-			ID:   id,
-			Name: "Local scripts (" + name + ", retired spelling)",
-			Description: "Read as the host-script grants (https://grain.dev/capabilities/host-script#host-script) serving the " +
-				"scripts of the " + name + " local-scripts declaration on the node host (docs/local-scripts.md); never granted to a scheduled run",
-		}, true
 	}
 	return Capability{}, false
 }
@@ -797,7 +781,20 @@ func (r redBaseLookup) forTask(t model.Task) string {
 // (Store.OrderKeyForNewTask, Client.CreateTask). Either way the list is
 // this one order.
 func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
-	tasks, err := c.Store.ListTasks(ctx)
+	return c.listTasks(ctx, c.Store.ListTasks)
+}
+
+// ListOpenTasks is ListTasks without the closed tasks, read without
+// them rather than read and dropped: what GET /api/tasks' live list
+// holds (taskListLive). Every row says the same as it would in
+// ListTasks -- the states, blockers and holds it is projected with are
+// still read for the whole store.
+func (c *Client) ListOpenTasks(ctx context.Context) ([]Task, error) {
+	return c.listTasks(ctx, c.Store.ListOpenTasks)
+}
+
+func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]model.Task, error)) ([]Task, error) {
+	tasks, err := read(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -911,6 +908,14 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	// And once for the blockers only a person can close, which tell a
+	// queued task waiting on one apart from one waiting on dispatch
+	// (model.BlockerHoldOf): read off the list itself, plus one query
+	// for the deferrals a resume_later still holds.
+	holds, err := c.listBlockerHolds(ctx, tasks, states, pauses, goalKinds)
+	if err != nil {
+		return nil, err
+	}
 	var open, closedTasks []Task
 	for _, t := range tasks {
 		t.GoalKind = goalKinds[t.ID]
@@ -946,7 +951,8 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		if w, ok := grantWaits[t.ID]; ok {
 			wait = &w
 		}
-		task = c.withReasons(task, t, listObservation(mergeQueueStates[t.ID], blockedAt), wait)
+		task = c.withReasons(task, t, listObservation(mergeQueueStates[t.ID], blockedAt), wait,
+			model.HoldsOf(task.BlockedBy, holds))
 		if p, ok := pauses[t.ID]; ok {
 			task.withPause(p)
 		}
@@ -1019,8 +1025,11 @@ func (c *Client) stallNote(state model.State, times model.StateTimes, now time.T
 // for it (nil for none). The open dependencies are out's own BlockedBy,
 // which taskFrom has just resolved; an awaiting_reply task's ask is
 // out's own TurnStopped, AwaitingAccess and QuestionSummary
-// (Task.replyFacts), so the caller sets those first.
-func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wait *model.GrantWait) Task {
+// (Task.replyFacts), so the caller sets those first. holds is which of
+// out's open dependencies only a person can close (blockerHolds), nil
+// for none.
+func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wait *model.GrantWait,
+	holds []model.BlockerHold) Task {
 	if obs != nil && obs.MergeQueueState != "" && obs.MergeQueueReason != "" {
 		reason := Reason{Reason: obs.MergeQueueReason}
 		if c.Config.Reasons != nil {
@@ -1033,10 +1042,69 @@ func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wai
 	if c.Config.Reasons == nil {
 		return out
 	}
-	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, wait, out.replyFacts(obs)); reason.Reason != "" {
+	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, holds, wait, out.replyFacts(obs)); reason.Reason != "" {
 		out.Reason = &reason
 	}
 	return out
+}
+
+// blockerHolds is which of a queued task's open dependencies only a
+// person can close (model.Store.BlockerHolds), nil for a task in any
+// other state or with none: what withReasons tells queued/blocked_on_person
+// from queued/blocked_on_task by, for a read of one task.
+func (c *Client) blockerHolds(ctx context.Context, task Task) ([]model.BlockerHold, error) {
+	if task.State != model.StateQueued || len(task.BlockedBy) == 0 {
+		return nil, nil
+	}
+	holds, err := c.Store.BlockerHolds(ctx, task.BlockedBy)
+	if err != nil {
+		return nil, err
+	}
+	return model.HoldsOf(task.BlockedBy, holds), nil
+}
+
+// listBlockerHolds is blockerHolds for a whole list: every task some
+// queued task in it blocks on, judged from the list's own rows, states,
+// pauses and goals, keyed by blocker. The deferrals a resume_later
+// still holds are read only when a blocker is deferred with no wake
+// time, the one case that needs them.
+func (c *Client) listBlockerHolds(ctx context.Context, tasks []model.Task, states map[string]model.State,
+	pauses map[string]model.TaskPause, goalKinds map[string]model.GoalKind) (map[string]model.BlockerHold, error) {
+	byID := make(map[string]model.Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	var blockers []model.Task
+	for _, t := range tasks {
+		if states[t.ID] != model.StateQueued {
+			continue
+		}
+		for _, l := range t.Links {
+			if b, ok := byID[l.Target]; ok && l.Kind.Blocks() && states[l.Target] != model.StateClosed {
+				blockers = append(blockers, b)
+			}
+		}
+	}
+	if len(blockers) == 0 {
+		return nil, nil
+	}
+	var resumeHeld map[string]bool
+	out := map[string]model.BlockerHold{}
+	for _, b := range blockers {
+		state := states[b.ID]
+		if state == model.StateDeferred && b.DeferredUntil == nil && resumeHeld == nil {
+			var err error
+			if resumeHeld, err = c.Store.ResumeHeldTasks(ctx); err != nil {
+				return nil, err
+			}
+		}
+		_, paused := pauses[b.ID]
+		_, goal := goalKinds[b.ID]
+		if h, ok := model.BlockerHoldOf(b, state, paused, goal, resumeHeld[b.ID]); ok {
+			out[b.ID] = h
+		}
+	}
+	return out, nil
 }
 
 // replyFacts is which ask an awaiting_reply task is parked on, off what
@@ -1281,7 +1349,11 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 			return Task{}, err
 		}
 	}
-	task = c.withReasons(task, *t, obs, wait)
+	holds, err := c.blockerHolds(ctx, task)
+	if err != nil {
+		return Task{}, err
+	}
+	task = c.withReasons(task, *t, obs, wait, holds)
 	if err := c.attachPause(ctx, &task); err != nil {
 		return Task{}, err
 	}
@@ -1521,8 +1593,12 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 			task.UncountedAgentReplyID = cm.ID
 		}
 	}
+	holds, err := c.blockerHolds(ctx, task)
+	if err != nil {
+		return TaskDetail{}, err
+	}
 	detail := TaskDetail{
-		Task:          c.withReasons(task, *t, obs, wait),
+		Task:          c.withReasons(task, *t, obs, wait, holds),
 		Comments:      make([]Comment, 0, len(comments)),
 		OlderComments: olderComments,
 		OlderAttempts: olderAttempts,
@@ -1705,7 +1781,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 		}
 	}
 	detail.SuspendedSession = suspendedSessionFrom(obs)
-	if t.Origin.Reason == model.ReasonSuite {
+	if t.Filing.Reason == model.ReasonSuite {
 		origin, err := c.Store.SuiteRunOfTask(ctx, id)
 		if err != nil {
 			return TaskDetail{}, err
@@ -2222,6 +2298,11 @@ type CreateTaskRequest struct {
 	// branch it lands on, and is not ported to the repository's other
 	// paired branches.
 	NoPort bool `json:"noPort,omitempty"`
+	// FoundIn is the release this task is filed against, as a tag --
+	// vX.Y.Z or vX.Y.Z-rc.N (model.LinkFoundIn): the new-task form's
+	// "Found in" and propose_task's found_in. Left empty, grain records
+	// what the task's own title and branches say (model.DerivedFoundIn).
+	FoundIn string `json:"foundIn,omitempty"`
 	// FixesBaseBranch marks this task as fixing its own base branch while
 	// that branch is red (model.FixesBaseBranch, grain/task-3451): the
 	// "This fixes a red <base>" checkbox. It is never made to wait on the
@@ -2230,11 +2311,11 @@ type CreateTaskRequest struct {
 	// green branch closes it (design/design/durable-tasks.design.md#DT-4). Refused
 	// for a task with no repo.
 	FixesBaseBranch bool `json:"fixesBaseBranch,omitempty"`
-	// Origin is the GitHub pull request or issue this task's work comes
+	// WorkOrigin is the GitHub pull request or issue this task's work comes
 	// from (model.ParseWorkOrigin's forms), for a task filed from a chat
 	// that names one. A proposal whose parent already has a GitHub origin
 	// keeps that one instead (model.ExplicitOrigin); empty inherits.
-	Origin string `json:"origin,omitempty"`
+	WorkOrigin string `json:"origin,omitempty"`
 	// AgentFramework sets model.Task's own field of the same name -- a
 	// per-task override of the deployment's default agent framework
 	// (Settings' own "Agent framework"). "" (the default) means no
@@ -2464,6 +2545,16 @@ type CreateTaskRequest struct {
 	// task filed approved and deferred wakes onto the queue, and one
 	// filed for a human wakes back into proposed.
 	DeferredUntil *time.Time `json:"deferredUntil,omitempty"`
+	// Tags carries explicit QA experiment allocation / benchmark tags
+	// (qa-alloc:<key>, bench-spec:<id>) supplied by an operator filing work.
+	// Refused to agents and proposed tasks; internal tags are rejected.
+	Tags []string `json:"tags,omitempty"`
+	// QAFlowRef is the operator-only QA flow reference bound to this task.
+	// Refused to agents and proposed tasks.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
+
+	// GoalMode configures autonomous multi-pass Goal Mode posture on the task.
+	GoalMode *model.GoalModeConfig `json:"goalMode,omitempty"`
 
 	// modelFromTemplate is the model fromTemplate filled Model in with,
 	// "" when it filled in none. Never read off the wire: CreateTask
@@ -2490,7 +2581,7 @@ type CreateTaskRequest struct {
 	rawBody *string
 }
 
-func proposalTags(key string, held, holdRequested bool) []string {
+func proposalTags(key string, held, holdRequested bool, extra []string) []string {
 	var tags []string
 	if key != "" {
 		tags = append(tags, key)
@@ -2501,7 +2592,52 @@ func proposalTags(key string, held, holdRequested bool) []string {
 	if holdRequested {
 		tags = append(tags, model.HoldRequestedTag)
 	}
+	for _, t := range extra {
+		if !slices.Contains(tags, t) {
+			tags = append(tags, t)
+		}
+	}
 	return tags
+}
+
+func allowedClientTaskTags(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var out []string
+	for _, entry := range raw {
+		tag := strings.TrimSpace(entry)
+		if tag == "" {
+			continue
+		}
+		var rest string
+		switch {
+		case strings.HasPrefix(tag, "qa-alloc:"):
+			rest = strings.TrimPrefix(tag, "qa-alloc:")
+		case strings.HasPrefix(tag, "bench-spec:"):
+			rest = strings.TrimPrefix(tag, "bench-spec:")
+		default:
+			return nil, validationErrorf("unsupported task tag %q: only qa-alloc:<key> and bench-spec:<id> are accepted", tag)
+		}
+		if len(rest) == 0 || len(rest) > 64 || !isSafeClientTagValue(rest) {
+			return nil, validationErrorf("invalid task tag value in %q", tag)
+		}
+		if !slices.Contains(out, tag) {
+			out = append(out, tag)
+		}
+	}
+	return out, nil
+}
+
+func isSafeClientTagValue(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // defaultCapabilities is the capability ids a task filed on this
@@ -2707,6 +2843,25 @@ func (c *Client) defaultTaskHosting(ctx context.Context, target *model.RepoRef) 
 	return model.NormalizeHosting(h), nil
 }
 
+// refuseNonOperatorQAFlowRef refuses a qaFlowRef write from anyone but a
+// full-access operator: proposed tasks, agents (in-process or external), and
+// restricted access roles cannot bind or rebind a QA flow.
+func (c *Client) refuseNonOperatorQAFlowRef(ctx context.Context, proposedBy string) error {
+	if proposedBy != "" || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+		return validationErrorf("an agent or proposed task cannot set qaFlowRef")
+	}
+	if _, isAgent := agentCallFromContext(ctx); isAgent {
+		return forbiddenErrorf("an agent cannot set qaFlowRef")
+	}
+	if externalTokenFromContext(ctx) != nil {
+		return forbiddenErrorf("an external agent cannot set qaFlowRef")
+	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		return forbiddenErrorf("setting qaFlowRef requires an operator")
+	}
+	return nil
+}
+
 // No GitHub issue is created, and none is needed: Store.NewTaskID
 // allocates identity, so a task exists the moment this returns. That is
 // the whole inversion in one method -- this used to open an issue and let
@@ -2746,6 +2901,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, err
 		} else if existing != nil {
 			return c.Task(ctx, existing.ID)
+		}
+	}
+	if strings.TrimSpace(req.QAFlowRef) != "" {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, req.ProposedBy); err != nil {
+			return Task{}, err
 		}
 	}
 	req, err := c.fromTemplate(ctx, req)
@@ -2986,7 +3146,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 		}
 	}
-	explicitOrigin, err := model.ExplicitOrigin(req.Origin, target, proposedBy)
+	explicitOrigin, err := model.ExplicitOrigin(req.WorkOrigin, target, proposedBy)
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
@@ -3167,6 +3327,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	foundIn, err := model.NormalizeFoundIn(req.FoundIn)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
+	}
 	// Checked before the task is written and acted on after it, the way
 	// orchestrator.relayProposedTasks does the identical thing: the note
 	// for a supersede grain will not do belongs in the body a human
@@ -3195,6 +3359,39 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		links = append(links, model.Link{Kind: model.LinkGoogleChat, Target: strings.TrimSpace(req.GoogleChatSpace)})
 	}
 	now := c.now()
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI {
+		if req.ChangeTarget != nil || target == nil || !target.Same(ciCall.Repo) {
+			return Task{}, forbiddenErrorf("this CI token files tasks for %s only", ciCall.Repo)
+		}
+		for _, r := range reads {
+			if !r.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s reads %s", ciCall.Repo, req.TemplateID, r)
+			}
+		}
+		for _, w := range writes {
+			if !w.Repo.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s writes %s", ciCall.Repo, req.TemplateID, w.Repo)
+			}
+		}
+		for _, gr := range grants {
+			for _, cand := range append([]string{gr.Capability}, model.CanonicalLegacyGrants(gr.Capability)...) {
+				g, ok, err := model.ParseAPIGrant(cand)
+				if !ok || err != nil {
+					continue
+				}
+				if g.Repo != "" && !model.SameRepoText(g.Repo, ciCall.Repo.String()) {
+					return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s grants %s", ciCall.Repo, req.TemplateID, gr.Capability)
+				}
+				for _, repos := range g.ScopeRepos {
+					for _, r := range repos {
+						if !model.SameRepoText(r, ciCall.Repo.String()) {
+							return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s grants %s", ciCall.Repo, req.TemplateID, gr.Capability)
+						}
+					}
+				}
+			}
+		}
+	}
 	// Decoded before NewTaskID allocates anything: a bad attachment should
 	// fail this call with nothing written at all, not leave a task behind
 	// with none of the files it was supposed to carry.
@@ -3342,6 +3539,81 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	catalogueHold := false
+	var declHoldNote string
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI && proposedBy == nil {
+		declHeld := model.DeclaredCompositionHold(model.Composition{
+			Grants:        grants,
+			Admission:     taskAdmission,
+			NetworkAccess: model.NetworkAccess(req.NetworkAccess),
+		})
+		if len(declHeld) > 0 && c.Store != nil && model.IsRepoDeclaredID(filedFrom) {
+			accepted, widened, err := c.Store.NoteDeclaredTemplateHold(ctx, filedFrom, declHeld, now)
+			if err != nil {
+				return Task{}, err
+			}
+			var remaining []string
+			for _, g := range catalogueNeedsPerson {
+				if !slices.Contains(declHeld, g) {
+					remaining = append(remaining, g)
+				}
+			}
+			catalogueNeedsPerson = remaining
+			if !accepted {
+				declHoldNote = model.DeclarationAcceptanceNote(filedFrom, declHeld, widened)
+				req.Approved = false
+			}
+		}
+		var ciPersonOnly []string
+		for _, gr := range grants {
+			if slices.Contains(declHeld, gr.Capability) {
+				continue
+			}
+			needsHold := false
+			for _, cand := range append([]string{gr.Capability}, model.CanonicalLegacyGrants(gr.Capability)...) {
+				if strings.HasPrefix(model.CapabilityGrantRef(cand), model.GrainCapabilityServerID+"#") && !model.IsGrainCIGrant(cand) {
+					needsHold = true
+					break
+				}
+				g, ok, err := model.ParseAPIGrant(cand)
+				if !ok || err != nil {
+					continue
+				}
+				if g.RequiresPerson {
+					needsHold = true
+					break
+				}
+				for _, sc := range g.Scopes {
+					if model.CIAPIScopeRefusal(sc) != "" || (g.Repo == "" && len(g.ScopeRepos[sc]) == 0) {
+						needsHold = true
+						break
+					}
+				}
+				if needsHold {
+					break
+				}
+			}
+			if needsHold {
+				ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("grants %s beyond %s's CI API bounds, which requires a person's approval", gr.Capability, ciCall.Repo))
+			}
+		}
+		if declaredPush != nil {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("template %s carries a declared push set (%s), which requires a person's approval", filedFrom, declaredPush.Path))
+		}
+		if req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake) {
+			ciPersonOnly = append(ciPersonOnly, "it sets keep_running, which only a person may give")
+		}
+		if priority > model.DefaultTaskPriority {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("it sets priority %d above the default (%d), which only a person may give", priority, model.DefaultTaskPriority))
+		}
+		if len(ciPersonOnly) > 0 {
+			why := strings.Join(ciPersonOnly, "; ")
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
+	}
 	if needsPersonWhy != "" && proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
 		catalogueHold, req.Approved = true, false
 	}
@@ -3567,7 +3839,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// (grain/task-311).
 	// An owned external agent credential files on behalf of its owner
 	// (RequestActor, #XC-14).
-	origin := model.Origin{
+	origin := model.Filing{
 		Attribution: c.requestActor(ctx),
 		Reason:      model.ReasonDirect,
 	}
@@ -3577,16 +3849,26 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: proposedBy.ID},
 		}
 	}
+	clientTags, err := allowedClientTaskTags(req.Tags)
+	if err != nil {
+		return Task{}, err
+	}
+	if proposedBy != nil && len(clientTags) > 0 {
+		return Task{}, validationErrorf("a proposed task cannot set tags")
+	}
 	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
 	if err != nil {
 		return Task{}, err
+	}
+	if req.GoalMode != nil && req.GoalMode.Enabled && strings.TrimSpace(req.ProposedBy) == "" {
+		req.Interactive = false
 	}
 	task := model.Task{
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
-		Origin:               origin,
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.WorkOrigin, target, proposedBy),
+		Filing:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
 		Reviewers:            model.NormalizeReviewers(req.Reviewers),
@@ -3615,6 +3897,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
+		SourceTemplateID:     strings.TrimSpace(req.TemplateID),
+		QAFlowRef:            strings.TrimSpace(req.QAFlowRef),
 		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
 		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
@@ -3624,7 +3908,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Reads:                reads,
 		Writes:               writes,
 		CustomFields:         customFields,
-		Tags:                 proposalTags(req.ProposalKey, heldNote != "", req.HoldForApproval && proposedBy != nil),
+		Tags:                 proposalTags(req.ProposalKey, heldNote != "", req.HoldForApproval && proposedBy != nil, clientTags),
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
 		FiledVia:             filedViaFromContext(ctx),
@@ -3639,6 +3923,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			task.Owner = resolvedOwner
 		} else if strings.TrimSpace(req.Owner) != "" {
 			task.Owner = resolvedOwner
+		}
+	}
+	model.SetFoundIn(&task, foundIn)
+	model.ApplyDerivedFoundIn(&task)
+	if req.GoalMode != nil {
+		if err := model.SetGoalMode(&task, req.GoalMode); err != nil {
+			return Task{}, err
+		}
+	} else if proposedBy != nil {
+		if gm, ok := model.GoalModeOf(*proposedBy); ok && gm.Enabled {
+			_ = model.SetGoalMode(&task, &gm)
 		}
 	}
 	if req.DeclineAutoMerge && !req.AutoMerge {
@@ -3666,7 +3961,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	switch {
 	case catalogueHold:
-		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
+		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._" + declHoldNote
+	case declHoldNote != "":
+		task.Body += declHoldNote
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
 		approval := c.requestActor(ctx)
 		task.Approval = &approval
@@ -5097,6 +5394,8 @@ type UpdateTaskRequest struct {
 	// PriorityDispatch is a deprecated one-release alias that maps true to
 	// bypass admission and false back to standard admission.
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
+	// GoalMode updates or disables autonomous Goal Mode posture on the task.
+	GoalMode *model.GoalModeConfig `json:"goalMode,omitempty"`
 }
 
 // UnmarshalJSON accepts both camelCase and snake_case spellings for common
@@ -5627,6 +5926,10 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// grants either side of a Reads or Writes edit, for the grant
 	// attach/detach events it notes once it lands (unified-grants Q5).
 	var repoBefore, repoAfter []string
+	// priorityBefore and priorityAfter are the task's priority either
+	// side of a Priority edit, carried onto its open gating reviews once
+	// it lands (model.CarryPriorityToReviews).
+	var priorityBefore, priorityAfter int
 	if err := c.mutate(model.WithOwnerChange(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), c.requestActor(ctx)), id, func(task *model.Task) error {
 		if req.Reads != nil || req.Writes != nil {
 			repoBefore = model.TaskRepoAccessKeys(*task)
@@ -5697,10 +6000,19 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.Base = *req.Base
 		}
 		if req.Priority != nil {
+			priorityBefore = task.Priority
 			if *req.Priority == 0 {
 				task.Priority = model.DefaultTaskPriority
 			} else {
 				task.Priority = *req.Priority
+			}
+			priorityAfter = task.Priority
+			// A review's priority set by hand is the person's call, and a
+			// later edit to the reviewed task's must not lower it
+			// (model.CarryPriorityToReviews).
+			if task.Filing.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
+				!slices.Contains(task.Tags, model.ReviewPriorityHandSetTag) {
+				task.Tags = append(task.Tags, model.ReviewPriorityHandSetTag)
 			}
 		}
 		if forkPR != nil && !hasLinkTo(task.Links, forkPR.Link()) {
@@ -5945,6 +6257,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			}
 			task.Links = newLinks
 		}
+		if req.GoalMode != nil {
+			if err := model.SetGoalMode(task, req.GoalMode); err != nil {
+				return err
+			}
+		}
 		if req.Designs != nil || req.Context != nil {
 			var newLinks []model.Link
 			for _, l := range task.Links {
@@ -6068,6 +6385,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		return nil
 	}); err != nil {
 		return Task{}, err
+	}
+	if priorityBefore != priorityAfter {
+		if _, err := c.Store.CarryPriorityToReviews(ctx, id, priorityBefore, priorityAfter); err != nil {
+			return Task{}, err
+		}
 	}
 	c.noteGrantChanges(ctx, id, repoBefore, repoAfter)
 	if titleChanged || descriptionChanged {
@@ -6961,6 +7283,15 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 	if err != nil {
 		return err
 	}
+	if state == model.StateClosed {
+		// Refused before the comment is written, so it is not left on a
+		// task that will never be reopened to read it.
+		if task, err := c.Store.GetTask(ctx, id); err == nil && task != nil {
+			if err := rolledOverRefusal(*task); err != nil {
+				return err
+			}
+		}
+	}
 	if err := c.AddCommentWithAuthor(ctx, id, body, uploads, author); err != nil {
 		return err
 	}
@@ -6968,6 +7299,18 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 		return nil
 	}
 	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
+// rolledOverRefusal refuses to reopen a task that was rolled over: it has
+// handed its pull request, goal, dependents and parks to its successor,
+// and reopening it would put a second copy of the same durable work back
+// in the queue with none of them.
+func rolledOverRefusal(task model.Task) error {
+	if to := model.RolledOverTo(task); to != "" {
+		return validationErrorf("task %s was rolled over to task %s, which carries its work on; "+
+			"reopen or comment on task %s instead", task.ID, to, to)
+	}
+	return nil
 }
 
 // AddRelayedComment is a person's answer that a console session carries
@@ -7711,7 +8054,7 @@ func (c *Client) pullRequestHead(ref string) string {
 		// GitHub has none of them: CI's last commit is the answer there.
 		return ""
 	}
-	detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number)
+	detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number)
 	if err != nil {
 		return ""
 	}
@@ -7864,6 +8207,9 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	}
 	now := c.now()
 	if task.Approval == nil {
+		if err := ciOnlyGrantApprovalRefusal(*task); err != nil {
+			return err
+		}
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
@@ -8111,6 +8457,14 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	// A task rolled over has handed its pull request, goal, dependents
+	// and parks to its successor: reopening it would put a second copy
+	// of the same durable work back in the queue with none of them.
+	if !closed {
+		if err := rolledOverRefusal(*task); err != nil {
+			return err
+		}
+	}
 	now := c.now()
 	who := c.requestActor(ctx)
 	by := who.Actor
@@ -8135,6 +8489,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		}
 	}
 	var obs *model.Observation
+	var closedAt *time.Time
 	changed := false
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		changed = (o.ClosedAt == nil) == closed
@@ -8152,6 +8507,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 			obs = o
 			return
 		}
+		closedAt = o.ClosedAt
 		o.ClosedAt = nil
 		o.RunNowAt = nil
 	}); err != nil {
@@ -8159,7 +8515,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if !closed {
 		if changed {
-			detail := c.queueUndeliveredOnReopen(ctx, id, now)
+			detail := c.queueUndeliveredOnReopen(ctx, id, closedAt, now)
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
 				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: detail})
 		}
@@ -8216,7 +8572,13 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 // what agents and grain say never sends a task anywhere. Best-effort
 // like the event itself: the reopen is written, and failing it now
 // would say it was not.
-func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now time.Time) string {
+//
+// A task with no delivered mark (DeliveredCommentID nil: its only runs
+// failed yet still left an answer, or ran before the column existed)
+// falls back to timing, as that field's other readers do: a person's
+// comment posted at or after closedAt, the close this reopen undoes, was
+// left while the task was closed and no run has seen it.
+func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, closedAt *time.Time, now time.Time) string {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil || task == nil || !model.AwaitsAck(*task) {
 		return ""
@@ -8232,6 +8594,9 @@ func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now ti
 		return ""
 	}
 	pending := model.UndeliveredPersonComment(comments, obs)
+	if pending == nil && closedAt != nil && (obs == nil || obs.DeliveredCommentID == nil) {
+		pending = personCommentSince(comments, obs, *closedAt)
+	}
 	if pending == nil {
 		return ""
 	}
@@ -8248,6 +8613,24 @@ func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now ti
 		return detail + "; queued"
 	}
 	return detail
+}
+
+// personCommentSince is the newest person's comment created at or after
+// since and past any question the task is parked on, or nil.
+func personCommentSince(comments []model.Comment, obs *model.Observation, since time.Time) *model.Comment {
+	for i := len(comments) - 1; i >= 0; i-- {
+		cm := comments[i]
+		if cm.CreatedAt.Before(since) {
+			return nil
+		}
+		if obs != nil && obs.PendingQuestionCommentID != nil && cm.ID <= *obs.PendingQuestionCommentID {
+			return nil
+		}
+		if model.CommentByPerson(cm) {
+			return &comments[i]
+		}
+	}
+	return nil
 }
 
 // recordTaskEvent writes a close or reopen's event, and only logs a

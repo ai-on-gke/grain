@@ -99,7 +99,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -415,12 +414,14 @@ Commands:
   reopen <id>                          reopen a closed task
   retry <id>                           clear a failed task's retry cap so it dispatches again
   retry-merge <id>                     put a pull request the merge queue gave up on back on the queue
+  accept-findings -gate g <id> <reason...>
+                                       a person accepts one review's findings on gate g as they are (-review r,
+                                       -head sha), recorded with the reason; clears nothing else
   force-merge [-override-gates g] <id> <reason...>
-                                       merge this change anyway, overriding the queue's own decision --
-                                       an operator's action (merge:force), recorded with the reason on
-                                       the task and pull request, and refused if the branch does not
-                                       merge cleanly; -override-gates must explicitly name any skipped
-                                       review gate (e.g. security-review); -head <sha> pins the commit
+                                       merge anyway, overriding *every* gate it names and the queue's own
+                                       decision (merge:force), recorded with the reason on the task and pull
+                                       request, refused if the branch does not merge cleanly; -override-gates
+                                       names each skipped review gate; -head <sha> pins the commit
   pr adopt|review|status|submit <pr>   adopt (-mode review-only|finish), review (-design), report on
                                        (-threads), or approve/submit a pull request (see prcmd.go)
   run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
@@ -449,7 +450,7 @@ Commands:
                                        and the workers the remaining budget sustains (see usage_cmd.go)
   health                               the counters a layer built on grain keeps in the daemon, by
                                        section, since it started (-json: all of GET /api/sandboxes;
-                                       see health.go)
+                                       exits 1 when a check is FAILING; see health.go)
   pause [-lift|-set|-resume]           why nothing is dispatching, and stop or resume this deployment (see pause.go)
   pause [-now] <id>                    pause one task in any open state: release what it holds, keep its place
                                        (a running task is given 2m to push and write its handover; -now skips it)
@@ -467,7 +468,7 @@ Commands:
   ci wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]
                                        block until a run has a verdict (-timeout, default 30m), with each
                                        failing job and any shared fault: exit 0 green, 1 red, 5 timed out
-  ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache
+  ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache; a gha: run is re-run on GitHub
   ci test-history <test> [-repo r] [-limit N] [-provider grain|github-actions]
                                        pass, fail and flake history of one test across recent runs
   merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
@@ -492,6 +493,7 @@ Commands:
                                        git host with no forge API, whose login is git's credential helper
   default-model [-if-none | -if-unserved] <model>
                                        set the model tasks run on when nothing more specific chose one
+  qa [status|enable|disable]           inspect or configure the quality control engine and PR rollout (Settings -> Tasks)
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
@@ -698,10 +700,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdReopen(ctx, c, out, cmdArgs)
 	case "retry":
 		return cmdRetry(ctx, c, out, cmdArgs)
-	case "retry-merge":
-		return cmdRetryMerge(ctx, c, out, cmdArgs)
-	case "force-merge":
-		return cmdForceMerge(ctx, c, out, cmdArgs)
+	case "retry-merge", "accept-findings", "force-merge":
+		return mergeCommands[cmd](ctx, c, out, cmdArgs)
 	case "run-now":
 		return cmdRunNow(ctx, c, out, cmdArgs)
 	case "config":
@@ -730,6 +730,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":
 		return cmdSettings(ctx, c, out, cmdArgs)
+	case "qa":
+		return cmdQA(ctx, c, out, cmdArgs)
 	case "sandbox-budget":
 		return cmdSandboxBudget(ctx, c, out, cmdArgs)
 	case "sandbox":
@@ -759,55 +761,4 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	default:
 		return unknownCommandError{cmd}
 	}
-}
-
-// unknownCommandError is a command dispatchCLI does not have; Main prints
-// the usage for it (the sandbox CLI's, inside a sandbox).
-type unknownCommandError struct{ cmd string }
-
-func (e unknownCommandError) Error() string { return fmt.Sprintf("unknown command %q", e.cmd) }
-
-// taskID reads the task id positional argument. It is not parsed as a
-// number: ids are decimal today because that is what Store.NewTaskID
-// allocates, but Task.ID is an opaque string and nothing here is entitled
-// to assume otherwise.
-func taskID(s string) (string, error) {
-	if s == "" {
-		return "", usageErrorf("a task id is required")
-	}
-	return s, nil
-}
-
-// stringList is a repeatable flag.Value -- one -capability per capability
-// ID, rather than a single comma-joined flag a capability ID containing
-// a comma could never round-trip through.
-type stringList []string
-
-func (s *stringList) String() string { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error {
-	*s = append(*s, v)
-	return nil
-}
-
-// printer renders CLI output either as a human-readable table (the
-// default) or as JSON (-json) -- the same shape a script or another
-// program (the UI included, per this command's own doc comment) would
-// want instead of text meant for a terminal.
-type printer struct{ json bool }
-
-// note is a line about the listing rather than a line of it -- what was
-// left out of a task list and how to ask for it (list.go's hiddenNote).
-// It goes to stderr so that a listing stays a listing: `grain list |
-// wc -l` counts tasks, and -json emits JSON and nothing else.
-func (p *printer) note(text string) {
-	if p.json || text == "" {
-		return
-	}
-	fmt.Fprintln(os.Stderr, text)
-}
-
-func (p *printer) encode(v any) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(v)
 }

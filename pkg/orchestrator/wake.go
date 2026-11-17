@@ -79,6 +79,22 @@ func reconcileWake(ctx context.Context, deps Deps, now time.Time) error {
 		log.Printf("orchestrator: task %s has reached its wake time and is picked back up", id)
 	}
 
+	// A resume_later that waits on a message is released as the message
+	// is written (model.Store.WakeOnMessage), but not every post reaches
+	// that call -- one written while the run was still ending, or relayed
+	// from a pull request -- so the posts already there are read too.
+	posted, err := deps.Store.DueMessageResumes(ctx)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("orchestrator: listing tasks posted to since their resume_later: %w", err))
+	}
+	for _, id := range posted {
+		if err := deps.Store.SetDeferred(ctx, id, nil, nil, now); err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: waking task %s on the message it waited for: %w", id, err))
+			continue
+		}
+		log.Printf("orchestrator: task %s has been posted to since its resume_later and is picked back up", id)
+	}
+
 	// A resume_later that waits on CI is a deferral too, released when its
 	// gating CI verdict arrives (GitHub Actions / check runs on ci_mode:
 	// github, grain CI on ci_mode: grain) -- success, failure or
@@ -92,8 +108,11 @@ func reconcileWake(ctx context.Context, deps Deps, now time.Time) error {
 	for _, h := range held {
 		verdictReady, _, evalErr := evaluateCIResume(ctx, deps, h, now)
 		if evalErr != nil {
+			// Reported, and not a reason to skip the backstop below: a
+			// verdict grain cannot read, cycle after cycle, is exactly the
+			// wait it exists for.
 			errs = append(errs, fmt.Errorf("orchestrator: checking CI wake for task %s: %w", h.TaskID, evalErr))
-			continue
+			verdictReady = false
 		}
 		if verdictReady {
 			if err := deps.Store.SetDeferred(ctx, h.TaskID, nil, nil, now); err != nil {
@@ -277,7 +296,7 @@ func pollGitHubCIResume(
 	// or that is gone, is a verdict of its own -- whatever was being
 	// waited for is stale, and the task's next run is what should look.
 	var headSHA string
-	head, herr := deps.Client.GetBranchHead(h.Repo.Owner, h.Repo.Name, h.Branch)
+	head, herr := deps.Client.GetBranchHead(h.Repo.StoredOwner(), h.Repo.Name, h.Branch)
 	if herr == nil && head != nil {
 		headSHA = strings.TrimSpace(head.SHA)
 	}
@@ -300,7 +319,7 @@ func pollGitHubCIResume(
 		if !hasAR {
 			return false, false, nil
 		}
-		wfRun, gerr := ar.GetActionsRun(h.Repo.Owner, h.Repo.Name, runID)
+		wfRun, gerr := ar.GetActionsRun(h.Repo.StoredOwner(), h.Repo.Name, runID)
 		if gerr != nil {
 			return false, false, gerr
 		}
@@ -330,7 +349,7 @@ func pollGitHubCIResume(
 		extAfterHold int
 	)
 	if headSHA != "" {
-		checks, cerr := deps.Client.ListCheckRuns(h.Repo.Owner, h.Repo.Name, headSHA)
+		checks, cerr := deps.Client.ListCheckRuns(h.Repo.StoredOwner(), h.Repo.Name, headSHA)
 		if cerr != nil {
 			return false, false, cerr
 		}
@@ -372,7 +391,7 @@ func pollGitHubCIResume(
 		wfAfterHold int
 	)
 	if ar, ok := deps.Client.(github.ActionsReader); ok {
-		runs, rerr := ar.ListActionsRuns(h.Repo.Owner, h.Repo.Name, github.ActionsRunsQuery{Branch: h.Branch, Limit: 20})
+		runs, rerr := ar.ListActionsRuns(h.Repo.StoredOwner(), h.Repo.Name, github.ActionsRunsQuery{Branch: h.Branch, Limit: 20})
 		if rerr == nil && len(runs) > 0 {
 			hasHeadMatch := false
 			if headSHA != "" {
@@ -485,4 +504,21 @@ func recordConcludedActionsRunJob(ctx context.Context, store *model.Store, repo 
 		Via:         "poll",
 		UpdatedAt:   now,
 	})
+}
+
+// sendBackFromResumeLater undefers task when it is resting on its own
+// resume_later and grain is sending it back to an agent (why: the merge
+// queue's repair, new review threads): model.Store.ReleaseResumeLater.
+// Without it the send-back's RetryRequestedAt sat under the deferral, so
+// nothing ran, and the queue gave up on a repair it had never started.
+func sendBackFromResumeLater(ctx context.Context, store *model.Store, taskID, why string, now time.Time) error {
+	released, err := store.ReleaseResumeLater(ctx, taskID, now)
+	if err != nil {
+		return fmt.Errorf("orchestrator: taking %s off its resume_later for %s: %w", taskID, why, err)
+	}
+	if released {
+		_ = clearPipelineNotification(ctx, store, model.NotificationSubject(model.FamilyCIWakeStalled, taskID), wakeNotifier)
+		log.Printf("orchestrator: task %s was resting on resume_later; %s sends it back to an agent now", taskID, why)
+	}
+	return nil
 }

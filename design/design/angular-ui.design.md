@@ -1,5 +1,9 @@
 # A new UI in Angular, built beside the current one
 
+> How the Angular UI looks, behaves, is tested and is reviewed is in
+> [`ui-design-book.design.md`](ui-design-book.design.md). This document
+> covers why it exists, how it is served, and how pages move over.
+
 > **Proposal, with its first slice built.** This document describes how
 > grain's web UI is rewritten in Angular one page at a time, alongside the
 > React UI in `ui/`, until the old one can be retired. The foundation
@@ -72,11 +76,15 @@ everything that guards the old UI guards it too, with no change:
   so `Sec-Fetch-Site: same-origin` is what admits a write, as for the
   React UI. There is no token to carry.
 - The access-code gate and verified-identity admission. Signed out, a
-  request for `/next/inbox` gets the same "Enter access code" page with a
-  401, and signing in returns to `/next/inbox`
-  (`pkg/ui/server_next_test.go`). The session cookie is the one the old
-  UI uses, so moving between the two never asks the person to sign in
-  again.
+  request for `/next/inbox` (or `/next/` or `/next/index.html`) gets the
+  same "Enter access code" page with a 401, and signing in returns to
+  `/next/inbox` (`pkg/ui/server_next_test.go`). The session cookie is the
+  one the old UI uses, so moving between the two never asks the person to
+  sign in again. Exact-match requests for embedded content-hashed bundles
+  (`/next/<name>` and `/assets/<name>`) are served with immutable cache
+  headers before `verifyCallerNow` so a hard reload behind an
+  identity-aware proxy does not run an identity check per JS/CSS asset
+  (see [`authentication.design.md`](authentication.design.md) §4).
 - Role checks. Every API call is authorized by the server as before; the
   new UI only decides what to *offer* (see *Role-aware actions*).
 
@@ -315,3 +323,16 @@ decision, or any task entry whose task has a pull request.
 6. **Settings** -- many small forms, least urgent to restyle.
 7. **Retire the classic UI** as described in *Migrating one page at a
    time*.
+
+### Model connection setup and tests
+
+Settings → Models keeps credential writes separate from connection metadata.
+Saving a Codex subscription connection opens its existing write-only auth.json
+editor. Validation errors must never include JSON parser excerpts or credential
+contents. A failed upload preserves both the prior stored login and the draft
+for retry; successful upload clears the draft.
+
+Connection tests operate on saved rows, never implicitly save an edit, and use
+the per-backend credential check contract described in
+`docs/connections-and-models.md`. Show pending, accepted, refused and unavailable
+results inline. Catalog-only and local-file checks are not provider successes.

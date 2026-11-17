@@ -1,0 +1,13 @@
+1794655541.709390257 run parked in container grain-sandbox-2-1
+1794655541.972391736 deploy pending as lsa-1
+1794655541.992144326 deploy approved by the operator
+1794655542.249382631 rollback pending as lsa-2
+1794655542.270260234 rollback denied by the operator
+1794655542.534370165 migrate pending as lsa-3; the caller gives up at 1.5 s
+1794655545.799512291 slow pending as lsa-4 (2 s deadline); SIGSTOP host-script server pid 35921
+1794655548.822915793 past the deadline: a task read (GET /api/tasks/2) sweeps lsa-4
+1794655549.827344697 SIGCONT: the approver's own ghsa_ /expire arrives late
+1794655555.863882272 call-deploy: deployed:--env staging exit=0 
+1794655555.870901408 call-migrate: exit=124 
+1794655555.878214141 call-rollback: grain: rollback did not run (call 2): the call was denied exit=125 
+1794655555.885064325 call-slow: grain: slow was not approved within 2s (call 4), so it did not run exit=125 

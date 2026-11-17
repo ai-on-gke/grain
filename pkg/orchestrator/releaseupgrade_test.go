@@ -21,6 +21,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,9 @@ type releaseDeployment struct {
 	newest  string
 	started []string
 	status  upgrade.Status
+	// offset is Config.ReleaseUpgradeClockOffset: how far a
+	// grain_debugclock build's walkthrough has stepped the clock.
+	offset time.Duration
 }
 
 func (d *releaseDeployment) deps(store *model.Store, now time.Time) orchestrator.Deps {
@@ -61,8 +65,9 @@ func (d *releaseDeployment) deps(store *model.Store, now time.Time) orchestrator
 				d.status = upgrade.Status{Branch: branch, Phase: upgrade.PhaseRunning, StartedAt: &started}
 				return nil
 			},
-			UpgradeStatus: func() (upgrade.Status, error) { return d.status, nil },
-			LatestRelease: func(context.Context) (string, error) { return d.newest, nil },
+			UpgradeStatus:             func() (upgrade.Status, error) { return d.status, nil },
+			LatestRelease:             func(context.Context) (string, error) { return d.newest, nil },
+			ReleaseUpgradeClockOffset: func() time.Duration { return d.offset },
 		},
 	}
 }
@@ -450,4 +455,126 @@ func TestMinIntervalZeroTurnsItOffAndFailedOrUnchangedDoNotResetIt(t *testing.T)
 	if len(d.started) != 4 || d.started[3] != "v3.6.3" {
 		t.Fatalf("after failed v3.6.2, v3.6.3 should not wait another 4h: started %v", d.started)
 	}
+}
+
+// A minimum interval too large for a time.Duration
+// (autoUpgradeMinIntervalHours = math.MaxInt, which the settings API now
+// refuses above model.MaxAutoUpgradeMinIntervalHours but a hand-edited
+// config row or state repo can still carry) saturates rather than wrapping
+// negative: after one completed automatic upgrade no further release is
+// scheduled, however long it stands (docs/test-runs/2026-11-11-upgrades.md).
+func TestMinIntervalHugeValueDoesNotWrap(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	cfg := model.DefaultConfig()
+	cfg.AutoUpgradeOn = model.AutoUpgradeOnRelease
+	cfg.AutoUpgradeChannel = ""
+	cfg.AutoUpgradeMinIntervalHours = math.MaxInt
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("configuring: %v", err)
+	}
+	got, err := store.GetConfig(ctx)
+	if err != nil || got.AutoUpgradeMinIntervalHours != math.MaxInt {
+		t.Fatalf("stored interval = %v, %v; want math.MaxInt read back unchanged", got, err)
+	}
+	if d := got.AutoUpgradeMinInterval(); d <= 0 {
+		t.Fatalf("AutoUpgradeMinInterval() = %v, want a positive saturated duration", d)
+	}
+	t0 := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+
+	d := &releaseDeployment{newest: "v3.6.0"}
+	d.cycle(t, store, t0)
+	d.cycle(t, store, t0.Add(time.Hour))
+	finished := t0.Add(time.Hour + time.Minute)
+	d.end(upgrade.PhaseOK, "", "")
+	d.status.FinishedAt = &finished
+	d.cycle(t, store, finished)
+
+	d.newest = "v3.6.1"
+	for _, after := range []time.Duration{time.Hour, 2 * time.Hour, 24 * time.Hour, 50 * 365 * 24 * time.Hour} {
+		d.cycle(t, store, finished.Add(after))
+	}
+	if len(d.started) != 1 {
+		t.Fatalf("with a huge minimum interval started %v, want only [v3.6.0]", d.started)
+	}
+}
+
+// The walkthrough a grain_debugclock build makes possible
+// (Config.ReleaseUpgradeClockOffset, docs/test-plans/2026-11-11.md §8
+// item 3), with the real clock moving a minute a tick and only the
+// offset stepping hours: two releases inside the 6h interval give one
+// drain, a failed upgrade starts no cooldown, and 0 turns the interval
+// off. What is recorded against the upgrade itself -- when it was
+// scheduled, which its start is matched against -- stays on the real
+// clock, so the upgrade is still recognised when it ends.
+func TestDebugClockOffsetWalksTheMinimumInterval(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	releaseUpgradeOn(t, store, "")
+	t0 := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	tick := 0
+	d := &releaseDeployment{newest: "v3.6.0"}
+	step := func(offset time.Duration) {
+		t.Helper()
+		tick++
+		d.offset = offset
+		d.cycle(t, store, t0.Add(time.Duration(tick)*time.Minute))
+	}
+	wantStarted := func(when string, want ...string) {
+		t.Helper()
+		if strings.Join(d.started, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s: started %v, want %v", when, d.started, want)
+		}
+	}
+
+	step(0)
+	step(0)
+	wantStarted("a minute after v3.6.0, on the real clock", []string{}...)
+	step(time.Hour)
+	wantStarted("past the settle window on the debug clock", "v3.6.0")
+	d.end(upgrade.PhaseOK, "", "")
+	step(time.Hour)
+	record, err := store.GetAutoUpgradeRelease(ctx)
+	if err != nil || record == nil || record.Outcome != model.AutoUpgradeSucceeded || record.SucceededAt == nil {
+		t.Fatalf("after v3.6.0 succeeded the record is %+v, %v; want it recognised as succeeded", record, err)
+	}
+
+	// Two releases inside the interval: v3.6.1, then v3.6.2, each past
+	// its settle window but not 6h after v3.6.0 -- then one drain,
+	// straight to v3.6.2.
+	d.newest = "v3.6.1"
+	step(time.Hour)
+	step(2*time.Hour + 5*time.Minute)
+	d.newest = "v3.6.2"
+	step(2*time.Hour + 5*time.Minute)
+	step(3*time.Hour + 10*time.Minute)
+	wantStarted("inside the 6h interval", "v3.6.0")
+	step(8 * time.Hour)
+	wantStarted("6h after v3.6.0", "v3.6.0", "v3.6.2")
+
+	// It fails; v3.6.3 an hour later goes as soon as it settles, which a
+	// cooldown started by the failure would have held for 6h.
+	d.end(upgrade.PhaseFailed, "pull image", "manifest unknown")
+	step(8 * time.Hour)
+	d.newest = "v3.6.3"
+	step(8 * time.Hour)
+	step(9*time.Hour + 5*time.Minute)
+	wantStarted("an hour after a failed upgrade", "v3.6.0", "v3.6.2", "v3.6.3")
+	d.end(upgrade.PhaseOK, "", "")
+	step(9*time.Hour + 5*time.Minute)
+
+	// 0 turns the interval off: v3.6.4 goes once it settles, an hour
+	// after v3.6.3 succeeded.
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AutoUpgradeMinIntervalHours = 0
+	if err := store.PutConfig(ctx, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	d.newest = "v3.6.4"
+	step(9*time.Hour + 5*time.Minute)
+	step(10*time.Hour + 10*time.Minute)
+	wantStarted("with the interval 0", "v3.6.0", "v3.6.2", "v3.6.3", "v3.6.4")
 }

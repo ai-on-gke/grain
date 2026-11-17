@@ -42,6 +42,50 @@ const (
 // NothingNeededClose closed, after the agent's own reason.
 const NothingNeededClosedNote = "Closed: the agent found nothing needed."
 
+// ClosesOnAnswer reports whether a run of t that ends on a closing note
+// alone -- comment_on_issue, no pull request, no question -- closes t
+// rather than completing it into awaiting_reply.
+//
+// That is true for a task another task's run filed (propose_task, or the
+// agent API from a sandbox) whose NothingNeededAction is not
+// NothingNeededAck. Such a task is the parent's report-only sub-task: its
+// note is the parent's to read (WaitTarget.ClosingNote, which a parked
+// parent's next prompt quotes) and its dependents' to build on, and a
+// depends-on link is satisfied only by a close. Left in awaiting_reply,
+// every dependent sat queued/blocked_on_task until a person closed a
+// report nobody but the parent needed (grain/task-4384). A parent that
+// does want a person to read and close its child says so with
+// nothing_needed_action "ack", or a person-closes goal.
+//
+// A task a person filed, or a console session's proposal (which is a
+// person's request relayed), keeps completing into awaiting_reply: its
+// report is for the person who asked for it.
+//
+// So does a task that is not a report, whatever filed it: one a person
+// sits with (Interactive, or hosted on a console), one that restarts when
+// its run exits (KeepRunning), and one whose work is a change -- a review,
+// or a task with a pull request or changelist linked (AwaitsAck). A
+// changelist task's run can end on a summary note with no branch pushed,
+// and closing it then would skip its review and Submit gate and unblock
+// its dependents before the change landed.
+func ClosesOnAnswer(t Task) bool {
+	if t.NothingNeededAction.Resolved() == NothingNeededAck {
+		return false
+	}
+	if t.Interactive || t.HasConsole() || t.KeepRunning || !AwaitsAck(t) {
+		return false
+	}
+	p := t.Proposer
+	if p.TaskID == "" || p.Attribution.Actor.Kind != PrincipalAgent {
+		return false
+	}
+	return p.Attribution.Actor.Source != SourceSession
+}
+
+// AnsweredClosedNote is the sentence posted on a task ClosesOnAnswer
+// closed, after the agent's own closing note.
+const AnsweredClosedNote = "Closed: this report-only task answered; the task that filed it reads its closing note."
+
 // Resolved is a, with "" read as its default.
 func (a NothingNeededAction) Resolved() NothingNeededAction {
 	if a == "" {

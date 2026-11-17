@@ -51,4 +51,28 @@ describe("GrainEvents", () => {
     sub.unsubscribe();
     expect(src.closed).toBe(true);
   });
+
+  it("closes on pagehide and reconnects on pageshow", () => {
+    const events = TestBed.inject(GrainEvents);
+    let count = 0;
+    events.factory = (url) => {
+      count += 1;
+      return new FakeEventSource(url) as unknown as EventSource;
+    };
+    const sub = events.events().subscribe();
+    const first = FakeEventSource.last!;
+    expect(count).toBe(1);
+    expect(first.closed).toBe(false);
+
+    window.dispatchEvent(new Event("pagehide"));
+    expect(first.closed).toBe(true);
+
+    window.dispatchEvent(new Event("pageshow"));
+    expect(count).toBe(2);
+    expect(FakeEventSource.last).not.toBe(first);
+    expect(FakeEventSource.last!.closed).toBe(false);
+
+    sub.unsubscribe();
+    expect(FakeEventSource.last!.closed).toBe(true);
+  });
 });

@@ -599,6 +599,14 @@ func templateSchema() Schema {
 			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
 			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
 			{Model: "Skills", Keys: carried("skills"), Columns: []string{"skills"}},
+			// The sandbox shape every task it files asks for
+			// (model.Template.Sandbox, grain/task-4591): `cpus`,
+			// `memory-mb` and `disk-gb`, a workflow job's own `sandbox:`
+			// keys. Carried: it decides how big a machine the work runs
+			// on, not what that work may touch, and every dimension is
+			// held to the same ceiling a task's own shape is
+			// (model.ValidateTemplateSandbox).
+			{Model: "Sandbox", Keys: carried("sandbox"), Columns: []string{"sandbox"}},
 			// `hostd`, which a template once carried (schema 94 to 110):
 			// which grain hostd host work runs on is a model connection's
 			// or a capability server's, never what a template files, so
@@ -635,6 +643,7 @@ func templateSchema() Schema {
 				Keys:    carried("priority"),
 				Columns: []string{"priority"},
 			},
+			{Model: "QAFlowRef", Keys: []Key{settingsOnly("qa-flow", Authority)}, Columns: []string{"qa_flow_ref"}},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
 			// `grants:` is the unified spelling of a grant list
@@ -740,6 +749,7 @@ func suiteSchema() Schema {
 			// misunderstood the rule, and "field not found" would not
 			// tell them which.
 			{Keys: []Key{nowhere("target", Reach), nowhere("repo", Reach)}},
+			{Model: "QAFlowRef", Keys: []Key{settingsOnly("qa-flow", Authority)}, Columns: []string{"qa_flow_ref"}},
 
 			{Model: "ID", Keys: []Key{settingsOnly("id", Identity)}, Columns: []string{"id"}},
 			{Model: "CreatedAt", Keys: []Key{settingsOnly("created-at", Kept)}, Columns: []string{"created_at"}},
@@ -872,6 +882,7 @@ func scheduleSchema() Schema {
 			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "schedule_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "schedule_write"},
+			{Model: "QAFlowRef", Keys: []Key{settingsOnly("qa-flow", Authority)}, Columns: []string{"qa_flow_ref"}},
 			// Capabilities a declared schedule grants directly, beyond what
 			// its template or suite declares.
 			{
@@ -1227,6 +1238,7 @@ func RepoSettingsSchema() Schema {
 				Keys:    []Key{settingsOnly("upstream-repo", Authority)},
 				Columns: []string{"upstream_repo"},
 			},
+			{Model: "QAFlowRef", Keys: []Key{settingsOnly("qa-flow", Authority)}, Columns: []string{"qa_flow_ref"}},
 
 			// Which repository these settings are about. Grain read the
 			// file out of a repository it already had in hand, and a file

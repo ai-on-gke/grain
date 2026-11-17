@@ -62,42 +62,11 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
-// WithAPIBaseURL overrides the GitHub REST API base URL (for tests or GitHub Enterprise).
-func WithAPIBaseURL(baseURL string) Option {
-	return func(p *GitHubConfigRepos) {
-		if v := strings.TrimSpace(baseURL); v != "" {
-			p.apiBaseURL = strings.TrimRight(v, "/")
-		}
-	}
-}
-
-// WithBearerToken configures a static bearer token for GitHub API calls (for tests).
-func WithBearerToken(token string) Option {
-	return func(p *GitHubConfigRepos) {
-		p.staticToken = strings.TrimSpace(token)
-	}
-}
-
-// WithPrivateKey configures an RSA private key for GitHub App authentication.
-func WithPrivateKey(key *rsa.PrivateKey) Option {
-	return func(p *GitHubConfigRepos) {
-		p.appPrivKey = key
-	}
-}
-
 // WithSecretWriter wires a `registry.SecretWriter` so `EnsureRepo` automatically stores
 // the generated `ed25519` private deploy key under `<secret_prefix><name>-config-repo-key`.
 func WithSecretWriter(sw hub.SecretWriter) Option {
 	return func(p *GitHubConfigRepos) {
 		p.secretWriter = sw
-	}
-}
-
-// WithArchiveInsteadOfDelete configures `ArchiveRepo` to archive the repository via PATCH
-// rather than deleting it via DELETE.
-func WithArchiveInsteadOfDelete(archiveOnly bool) Option {
-	return func(p *GitHubConfigRepos) {
-		p.archiveOnly = archiveOnly
 	}
 }
 
@@ -110,11 +79,9 @@ type GitHubConfigRepos struct {
 	appID          int64
 	installationID int64
 	appPrivKey     *rsa.PrivateKey
-	staticToken    string
 	apiBaseURL     string
 	httpClient     *http.Client
 	secretWriter   hub.SecretWriter
-	archiveOnly    bool
 	nowFn          func() time.Time
 
 	tokenMu     sync.Mutex
@@ -244,7 +211,7 @@ func (p *GitHubConfigRepos) EnsureRepo(ctx context.Context, entryName, ownerEmai
 	}, nil
 }
 
-// ArchiveRepo deletes (or archives) `<org>/<repo_prefix><entryName>` after verifying prefix scope.
+// ArchiveRepo deletes `<org>/<repo_prefix><entryName>` after verifying prefix scope.
 func (p *GitHubConfigRepos) ArchiveRepo(ctx context.Context, entryName string) error {
 	repoName, err := p.RepoNameForEntry(entryName)
 	if err != nil {
@@ -253,7 +220,7 @@ func (p *GitHubConfigRepos) ArchiveRepo(ctx context.Context, entryName string) e
 	return p.DeleteOrArchiveRepoByName(ctx, repoName)
 }
 
-// DeleteOrArchiveRepoByName deletes (or archives) `repoName` after enforcing `CheckRepoScope`.
+// DeleteOrArchiveRepoByName deletes `repoName` after enforcing `CheckRepoScope`.
 func (p *GitHubConfigRepos) DeleteOrArchiveRepoByName(ctx context.Context, repoName string) error {
 	if err := p.CheckRepoScope(repoName); err != nil {
 		return err
@@ -261,9 +228,6 @@ func (p *GitHubConfigRepos) DeleteOrArchiveRepoByName(ctx context.Context, repoN
 	repoURL := fmt.Sprintf("%s/repos/%s/%s",
 		p.apiBaseURL, url.PathEscape(p.org), url.PathEscape(repoName))
 
-	if p.archiveOnly {
-		return p.doGitHubJSON(ctx, http.MethodPatch, repoURL, map[string]any{"archived": true}, nil, http.StatusNotFound)
-	}
 	return p.doGitHubJSON(ctx, http.MethodDelete, repoURL, nil, nil, http.StatusNotFound)
 }
 
@@ -337,9 +301,6 @@ func (p *GitHubConfigRepos) registerDeployKey(ctx context.Context, repoName, tit
 }
 
 func (p *GitHubConfigRepos) resolveToken(ctx context.Context) (string, error) {
-	if p.staticToken != "" {
-		return p.staticToken, nil
-	}
 	p.tokenMu.Lock()
 	defer p.tokenMu.Unlock()
 
@@ -348,7 +309,7 @@ func (p *GitHubConfigRepos) resolveToken(ctx context.Context) (string, error) {
 		return p.cachedToken, nil
 	}
 	if p.appPrivKey == nil || p.appID == 0 || p.installationID == 0 {
-		return "", errors.New("github config_repos: GitHub App credentials (app_id, installation_id, private_key) or static token required")
+		return "", errors.New("github config_repos: GitHub App credentials (app_id, installation_id, private_key) required")
 	}
 
 	appJWT, err := signGitHubAppJWT(p.appID, p.appPrivKey, now)

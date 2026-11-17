@@ -93,6 +93,19 @@ func (s *Server) lookup(id string) *proc {
 	return s.procs[id]
 }
 
+func (s *Server) claimAttach(id string) (*proc, int) {
+	s.init()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.procs[id]
+	if p == nil || !p.detached {
+		return nil, 0
+	}
+	p.attachGen++
+	p.info.Attached = true
+	return p, p.attachGen
+}
+
 // Processes is OpProcesses' listing: every process hostd is running, and
 // every detached one whose final spool no daemon has read yet.
 func (s *Server) Processes() []Process {
@@ -101,6 +114,9 @@ func (s *Server) Processes() []Process {
 	defer s.mu.Unlock()
 	out := make([]Process, 0, len(s.procs))
 	for _, p := range s.procs {
+		if !p.detached && p.info.Exited {
+			continue
+		}
 		info := p.info
 		if p.detached {
 			info.Cursor = spoolSizes(info.Spool)
@@ -163,6 +179,25 @@ func (s *Server) release(id, why string) {
 	}
 }
 
+// releaseReadExit atomically removes an ended detached process and its spool
+// only if gen is still the active attach generation, so a concurrent OpAttach
+// that superseded gen between Exit grace ending and release cannot have the
+// spool deleted from under it.
+func (s *Server) releaseReadExit(p *proc, gen int) {
+	s.mu.Lock()
+	if p.attachGen != gen || s.procs[p.info.ID] != p {
+		s.mu.Unlock()
+		return
+	}
+	info := p.info
+	delete(s.procs, info.ID)
+	s.mu.Unlock()
+	s.signalChanged()
+	if info.Spool != "" {
+		_ = os.RemoveAll(info.Spool)
+	}
+}
+
 func (s *Server) newDetachedProc(info Process, stdinOpen bool) *proc {
 	p := &proc{
 		info:      info,
@@ -193,7 +228,7 @@ func (s *Server) newDetachedProc(info Process, stdinOpen bool) *proc {
 // or reaches its deadline; only its stdin is closed. Across a handover
 // re-exec (StartHandover) the process keeps running and is adopted from
 // its spool by the replacement hostd (loadSpools).
-func (s *Server) startDetached(_ context.Context, conn net.Conn, req *Request, spec *Spec, onAdded func()) {
+func (s *Server) startDetached(ctx context.Context, conn net.Conn, req *Request, spec *Spec, onAdded func()) {
 	deadline := time.Now().Add(spec.MaxDuration)
 	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
 		deadline = req.Deadline
@@ -267,12 +302,14 @@ func (s *Server) startDetached(_ context.Context, conn net.Conn, req *Request, s
 	if b, err := json.Marshal(p.info); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, spoolProcess), b, 0o600)
 	}
+	p.attachGen = 1
+	p.info.Attached = true
 	s.add(id, p)
 	onAdded()
 	s.logf("hostd: started %s %q detached as pid %d (id %s, run %s, deadline %s, spool %s)",
 		req.Kind, req.Name, pid, id, req.Run, deadline.Format(time.RFC3339), dir)
 	go s.watchDetached(p)
-	s.attach(conn, p, Cursor{}, stdinW)
+	s.attach(ctx, conn, p, 1, Cursor{}, stdinW)
 }
 
 func (s *Server) watchDetached(p *proc) {
@@ -323,10 +360,13 @@ func (s *Server) reapDetached(info Process, ws syscall.WaitStatus, reaped bool, 
 		exit.Error = err.Error()
 	}
 	switch {
-	case killed == killDraining:
+	case killed == killDraining || killed == killStopping:
 		exit.Draining = true
 	case killed == killDeadline:
 		exit.Deadline = true
+	}
+	if killed == killStopping && exit.Error == "" {
+		exit.Error = stoppingError
 	}
 	exit.FinishedAt = time.Now().UTC()
 	if info.PID > 1 {
@@ -437,18 +477,17 @@ func writeExitFile(dir string, e Exit) error {
 }
 
 // attach streams p's spool to conn from cur until p has ended, then its
-// exit, after which p is released: the daemon has all of it. stdin, when
+// exit, after which p is released once the daemon hangs up: it has all of
+// it. A daemon that has not hung up within DrainExitGrace leaves p and its
+// spool kept for the next attach or the retention sweep. stdin, when
 // not nil, is the process's, fed from the connection's stdin frames and
 // closed when the connection ends. Signals act on the process's group.
 //
 // The connection going away, a newer attach superseding this one, or
 // hostd detaching streams for a handover ends the stream and leaves the
 // process running.
-func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser) {
+func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, gen int, cur Cursor, stdin io.WriteCloser) {
 	s.mu.Lock()
-	p.attachGen++
-	gen := p.attachGen
-	p.info.Attached = true
 	info := p.info
 	s.mu.Unlock()
 	defer func() {
@@ -457,6 +496,8 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			p.info.Attached = false
 		}
 		s.mu.Unlock()
+		// A drain waits for an ended process's stream to let go.
+		s.signalChanged()
 	}()
 	if err := writeJSON(conn, frameStarted, Started{PID: info.PID, ID: info.ID}); err != nil {
 		if stdin != nil {
@@ -468,10 +509,11 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 		}
 		return
 	}
+	var readErr error
 	gone := make(chan struct{})
 	go func() {
-		defer close(gone)
-		s.control(conn, p, stdin)
+		readErr = s.control(conn, p, stdin)
+		close(gone)
 	}()
 	pump := func(name string, typ byte, at *int64) error {
 		f, err := os.Open(filepath.Join(info.Spool, name))
@@ -525,10 +567,58 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			if !current {
 				return
 			}
+			// On a mux stream, an older daemon that detached before the
+			// process ended half-closed its write side only, so writeJSON
+			// below would still succeed even though nobody is reading anymore.
+			select {
+			case <-gone:
+				return
+			default:
+			}
 			if err := writeJSON(conn, frameExit, exit); err != nil {
 				return
 			}
-			s.release(info.ID, "its exit was read")
+			// Written is not yet read: a session closed now drops the
+			// frames the daemon's end has not read yet, Exit included. The
+			// daemon hangs up once it has the Exit, so until then -- or
+			// DrainExitGrace, or Serve stopping -- the process stays
+			// attached, which holds a drained hostd's exit
+			// (waitExitsDelivered) back for it. Any end other than a clean
+			// stream EOF on a live session (not a truncated frame, a stream
+			// reset, or a dropped mux session wrapping transport io.EOF)
+			// keeps the spool.
+			graceDur := s.exitGrace()
+			grace := time.NewTimer(graceDur)
+			var hungUp bool
+			select {
+			case <-gone:
+				hungUp = true
+			case <-ctx.Done():
+			case <-grace.C:
+				// Not known to have been read: keep the spool for the
+				// daemon to attach again, or for the retention sweep.
+				s.logf("hostd: the daemon did not hang up within %s of %s %q's exit (pid %d, id %s); keeping its spool",
+					graceDur, info.Kind, info.Name, info.PID, info.ID)
+			}
+			grace.Stop()
+			if !hungUp || ctx.Err() != nil {
+				return
+			}
+			if m := sessionMux(ctx); m != nil {
+				select {
+				case <-m.Done():
+					return
+				default:
+				}
+			}
+			if readErr != io.EOF {
+				return
+			}
+			// A daemon that lost this stream before reading the Exit may
+			// have attached again meanwhile; that stream delivers the Exit
+			// and releases the process, so this one must not remove the
+			// spool from under it.
+			s.releaseReadExit(p, gen)
 			return
 		}
 		if s.handedOverNow() {
@@ -557,7 +647,7 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 // control reads a detached process's connection: stdin, its close, and
 // signals, until the connection ends. stdin is closed then -- input that
 // arrives while no daemon is attached is not kept.
-func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
+func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) error {
 	s.mu.Lock()
 	info := p.info
 	s.mu.Unlock()
@@ -593,7 +683,7 @@ func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
 	for {
 		typ, payload, err := readFrame(conn)
 		if err != nil {
-			return
+			return err
 		}
 		switch typ {
 		case frameStdin:
@@ -619,6 +709,15 @@ func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
 			if !ok {
 				s.logf("hostd: refused signal %q for pid %d", m.Signal, info.PID)
 				continue
+			}
+			// Once reaped, the process group's id is free for reuse, and
+			// attach keeps this connection open after the Exit until the
+			// daemon hangs up: a signal sent then must not reach whatever
+			// group has taken the id since.
+			select {
+			case <-p.done:
+				continue
+			default:
 			}
 			_ = syscall.Kill(-info.PID, sig)
 		}

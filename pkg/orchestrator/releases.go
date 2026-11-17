@@ -110,7 +110,7 @@ func syncRelease(ctx context.Context, store *model.Store, client github.Client, 
 // doc comment) is what lets that happen in this same cycle rather than
 // the next one.
 func provisionOnGitHub(ctx context.Context, store *model.Store, client github.Client, r model.Release) error {
-	owner, repo := r.Repo.Owner, r.Repo.Name
+	owner, repo := r.Repo.StoredOwner(), r.Repo.Name
 
 	def, err := client.DefaultBranch(owner, repo)
 	if err != nil {
@@ -177,7 +177,7 @@ func provisionOnGitHub(ctx context.Context, store *model.Store, client github.Cl
 // the compare below, before asking, and the refusal itself, for the cycle
 // where the compare could not be read or the branches moved in between.
 func requestMergeOnGitHub(ctx context.Context, store *model.Store, client github.Client, r model.Release, now time.Time) error {
-	owner, repo := r.Repo.Owner, r.Repo.Name
+	owner, repo := r.Repo.StoredOwner(), r.Repo.Name
 
 	def, err := client.DefaultBranch(owner, repo)
 	if err != nil {
@@ -292,7 +292,7 @@ func syncCandidate(ctx context.Context, store *model.Store, client github.Client
 // "All agent commits go here," so a fresh cut always starts from
 // whatever has landed on LatestBranch since the previous one.
 func cutOnGitHub(ctx context.Context, store *model.Store, client github.Client, release model.Release, c model.Candidate) error {
-	owner, repo := c.Repo.Owner, c.Repo.Name
+	owner, repo := c.Repo.StoredOwner(), c.Repo.Name
 
 	head, err := client.GetBranchHead(owner, repo, release.LatestBranch())
 	if err != nil {
@@ -324,7 +324,7 @@ func cutOnGitHub(ctx context.Context, store *model.Store, client github.Client, 
 // bwsalmon/agents#398 once cut one at promotion time -- ProdBranch
 // (release.Name, unadorned) is the only branch a promotion touches.
 func promoteOnGitHub(ctx context.Context, store *model.Store, client github.Client, release model.Release, c model.Candidate, now time.Time) error {
-	owner, repo := c.Repo.Owner, c.Repo.Name
+	owner, repo := c.Repo.StoredOwner(), c.Repo.Name
 
 	head, err := client.GetBranchHead(owner, repo, c.Branch)
 	if err != nil {

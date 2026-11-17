@@ -41,8 +41,9 @@ import (
 
 // WithCIGoCacheWriters gives service's CI job sandboxes the package
 // cache's Go build-cache writer registry, and the rule for which refs may
-// write it. It is set after BuildCIService, as ReleaseRefRefusal is,
-// rather than widening that function's signature for every caller. A nil
+// write it. Pass it in BuildCIService's beforeAdopt hook, before
+// AdoptCIRuns launches resumed runs that read service.Engine.Sandboxes,
+// rather than mutating the engine after BuildCIService returns. A nil
 // jobs leaves every job a reader.
 func WithCIGoCacheWriters(service *ci.Service, jobs *pkgcache.JobTokenSet,
 	refRefusal func(ctx context.Context, repo, ref string) (string, error)) {

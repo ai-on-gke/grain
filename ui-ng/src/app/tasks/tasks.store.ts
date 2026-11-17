@@ -1,0 +1,848 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import {
+  Injectable,
+  NgZone,
+  OnDestroy,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
+import { GrainApi, loadTaskSummaryBatches } from "../api/grain-api.service";
+import { GrainEvents } from "../api/grain-events.service";
+import { InboxStore } from "../inbox/inbox.store";
+import type {
+  BaseBranchGate,
+  BaseBranchGatesResponse,
+  Board,
+  CreateBoardRequest,
+  Task,
+  TaskDetail,
+  TaskSummariesResponse,
+} from "../api/models";
+import { AccessService } from "../services/access.service";
+import { TaskFeedStore } from "../services/task-feed.service";
+import { isListCiPlaceholder } from "../shared/gates";
+import { errorText } from "../sessions/session-helpers";
+import {
+  type MovePlan,
+  type TabId,
+  TABS,
+  inTab,
+  isBlocked,
+  isWork,
+  neighbours,
+  priorityOf,
+} from "./task-view";
+
+export const POLL_MS = 3000;
+export const CLOSED_PAGE = 50;
+
+// A batch action's outcome: how many tasks it failed on and which ones it
+// changed, so the caller reports and undoes exactly those.
+export interface BatchResult {
+  failed: number;
+  landed: readonly string[];
+  // Never sent, because Stop was pressed before their turn.
+  skipped: readonly string[];
+}
+
+// BATCH_CONCURRENCY is how many calls of a bulk action are in flight at
+// once: enough that a batch is not one round trip per task, few enough
+// that Stop still leaves most of a long one unsent.
+const BATCH_CONCURRENCY = 4;
+
+// BatchProgress is the bulk action the selection bar is showing, counted
+// as each call settles, so the bar can say how far it has got.
+export interface BatchProgress {
+  seq: number;
+  key: string;
+  done: number;
+  total: number;
+  stopping: boolean;
+}
+
+// An undo is the call that puts things back, described for the snackbar.
+export interface Undo {
+  label: string;
+  run: () => Promise<void>;
+}
+
+// listReadError is the banner for a failed read of the task list. The
+// reason may already end in a full stop ("The server answered 503
+// Service Unavailable."), so it is dropped before the sentence goes on.
+function listReadError(reason: string | null): string {
+  return `The task list could not be read: ${(reason ?? "").replace(/\.+$/, "")}. This page tries again on its own.`;
+}
+
+// TasksStore is the Tasks page's state: the live task list (open tasks,
+// in backlog order, polled with ETags as the classic UI does), the closed
+// tasks a page at a time, and the calls that act on them. Every action
+// re-reads the list; nothing is shown that the server has not said.
+@Injectable({ providedIn: "root" })
+export class TasksStore implements OnDestroy {
+  private readonly api = inject(GrainApi);
+  private readonly events = inject(GrainEvents);
+  private readonly zone = inject(NgZone);
+  private readonly access = inject(AccessService);
+  private readonly feed = inject(TaskFeedStore);
+  // The shell's list feeds Next up and the Inbox badge; it is told to
+  // read again after every action here so neither lags behind.
+  private readonly inbox = inject(InboxStore);
+
+  readonly live = this.feed.tasks;
+  readonly details = signal<Record<string, TaskDetail>>({});
+  readonly baseBranchGates = signal<BaseBranchGate[]>([]);
+  readonly boards = signal<Board[]>([]);
+  readonly boardsError = signal<string | null>(null);
+  readonly closed = signal<Task[]>([]);
+  readonly closedCursor = signal<string | null>(null);
+  readonly closedLoaded = signal(false);
+  readonly closedTotal = signal<number | null>(null);
+  private readonly ownLoaded = signal(false);
+  readonly loaded = computed(() => this.ownLoaded() || this.feed.loaded());
+  readonly loadError = signal<string | null>(null);
+  readonly actionError = signal<string | null>(null);
+  readonly busy = signal<ReadonlySet<string>>(new Set());
+  // batch is the latest multi-task action still under way; Stop
+  // (stopBatch) reaches every one in flight through its own token.
+  readonly batch = signal<BatchProgress | null>(null);
+  private readonly running = new Set<{ stop: boolean }>();
+  private batchSeq = 0;
+
+  readonly work = computed(() => this.live().filter(isWork));
+  readonly backlog = computed(() =>
+    this.work().filter((t) => t.state === "queued"),
+  );
+  // ready is the backlog a free worker could take now: blocked tasks
+  // wait on a dependency and are not counted.
+  readonly ready = computed(() => this.backlog().filter((t) => !isBlocked(t)));
+  // An open tab's count is null until the list has been read once: a
+  // first read that failed has counted nothing, and "0" on every tab
+  // would say nothing is waiting when nobody knows yet.
+  readonly counts = computed(() => {
+    const c = {} as Record<TabId, number | null>;
+    const loaded = this.loaded();
+    for (const tab of TABS) {
+      c[tab.id] =
+        tab.id === "closed"
+          ? this.closedTotal()
+          : loaded
+            ? this.work().filter((t) => inTab(t, tab.id)).length
+            : null;
+    }
+    return c;
+  });
+
+  private eventSub: { unsubscribe(): void } | null = null;
+  private refreshing: Promise<void> | null = null;
+  private eventTimer: ReturnType<typeof setTimeout> | null = null;
+  private queuedRefresh: Promise<void> | null = null;
+  private configInFlight: Promise<void> | null = null;
+  private lastAccessConfig: unknown = null;
+  private readonly detailInFlight = new Set<string>();
+  private started = false;
+
+  constructor() {
+    effect(() => {
+      const rev = this.feed.revision();
+      const err = this.feed.loadError();
+      const feedLoaded = this.feed.loaded();
+      untracked(() => {
+        if (err) {
+          if (this.started) {
+            this.loadError.set(listReadError(err));
+          }
+          return;
+        }
+        if (rev === 0 && !feedLoaded) return;
+        this.loadError.set(null);
+        this.ownLoaded.set(true);
+        if (this.started) {
+          void this.ensureSubmitDetails(this.live());
+        }
+      });
+    });
+    effect(() => {
+      const cfg = this.access.rawConfig();
+      untracked(() => {
+        if (cfg === this.lastAccessConfig) return;
+        this.lastAccessConfig = cfg;
+        if (this.started && cfg !== null && !this.configInFlight) {
+          void this.loadAux();
+        }
+      });
+    });
+  }
+
+  start(): void {
+    const wasStarted = this.started;
+    if (!this.started) {
+      this.started = true;
+      this.feed.start(false);
+      this.feed.acquireFast();
+    }
+    // The shell's rail reads the feed before this page starts, so a cold
+    // failure may already stand -- and a retry failing the same way sets
+    // the same string, which the effect above never sees. Say so now
+    // rather than showing an empty list as if nothing were there.
+    const standing = this.feed.loadError();
+    if (!this.feed.loaded() && standing) {
+      this.loadError.set(listReadError(standing));
+    }
+    if (!wasStarted && this.feed.loaded()) {
+      void this.refresh();
+    } else if (this.feed.loaded()) {
+      void this.ensureSubmitDetails(this.live());
+      void this.loadAux();
+    } else {
+      void this.loadAux();
+    }
+    // TaskFeedStore owns task.* SSE refreshes and the 3s fast poll; here we
+    // only wake submit-gate detail checks on non-task events (e.g. ci.*).
+    this.eventSub ??= this.events.events().subscribe((ev) => {
+      if (!ev.type || ev.type.startsWith("task.")) return;
+      if (this.eventTimer) return;
+      this.zone.runOutsideAngular(() => {
+        this.eventTimer = setTimeout(() => {
+          this.eventTimer = null;
+          this.zone.run(() => {
+            void this.ensureSubmitDetails(this.live());
+            void this.loadBaseBranchGates();
+          });
+        }, 250);
+      });
+    });
+  }
+
+  stop(): void {
+    if (this.started) {
+      this.started = false;
+      this.feed.releaseFast();
+      this.feed.stop(false);
+    }
+    if (this.eventTimer) {
+      clearTimeout(this.eventTimer);
+      this.eventTimer = null;
+    }
+    this.eventSub?.unsubscribe();
+    this.eventSub = null;
+  }
+
+  ngOnDestroy(): void {
+    this.stop();
+  }
+
+  refresh(): Promise<void> {
+    if (!this.refreshing) {
+      this.refreshing = this.load().finally(() => {
+        this.refreshing = null;
+      });
+      return this.refreshing;
+    }
+    return (this.queuedRefresh ??= this.refreshing
+      .catch(() => undefined)
+      .then(() => {
+        this.queuedRefresh = null;
+        return this.refresh();
+      }));
+  }
+
+  private async load(): Promise<void> {
+    const ok = await this.feed.refresh();
+    if (ok) {
+      this.loadError.set(null);
+    } else if (this.feed.loadError()) {
+      // Only the feed's banner-worthy failures: one failed poll keeps
+      // the last good list and says nothing (request-trouble.ts).
+      this.loadError.set(listReadError(this.feed.loadError()));
+    }
+    this.ownLoaded.set(true);
+    if (ok) {
+      await Promise.all([
+        this.ensureSubmitDetails(this.live()),
+        this.loadAux(),
+      ]);
+    }
+  }
+
+  async loadAux(): Promise<void> {
+    await Promise.all([this.loadBaseBranchGates(), this.loadBoards()]);
+  }
+
+  private ensureConfig(): Promise<void> {
+    if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      return Promise.resolve();
+    }
+    return (this.configInFlight ??= Promise.resolve()
+      .then(() => this.api.config())
+      .then((cfg) => {
+        if (cfg && !this.access.configLoaded()) {
+          this.access.setConfig(cfg);
+        }
+        this.lastAccessConfig = this.access.rawConfig();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.configInFlight = null;
+      }));
+  }
+
+  async loadBaseBranchGates(): Promise<void> {
+    if (typeof this.api.get !== "function") {
+      this.baseBranchGates.set([]);
+      return;
+    }
+    await this.ensureConfig();
+    if (!this.access.can("GET /api/base-branch-gates")) {
+      this.baseBranchGates.set([]);
+      return;
+    }
+    try {
+      const r = await this.api.get<BaseBranchGatesResponse>(
+        "GET /api/base-branch-gates",
+        undefined,
+        "fields=full",
+      );
+      this.baseBranchGates.set(Array.isArray(r?.gates) ? r.gates : []);
+    } catch {
+      // Quietly keep previous reading on transient failure (matches server contract).
+    }
+  }
+
+  async loadBoards(): Promise<void> {
+    if (typeof this.api.get !== "function") {
+      this.boards.set([]);
+      return;
+    }
+    await this.ensureConfig();
+    if (!this.access.can("GET /api/boards")) {
+      this.boards.set([]);
+      this.boardsError.set(null);
+      return;
+    }
+    try {
+      const r = await this.api.get<
+        Board[] | { boards?: Board[]; items?: Board[] }
+      >("GET /api/boards");
+      const list = Array.isArray(r) ? r : (r?.items ?? r?.boards ?? []);
+      this.boards.set(Array.isArray(list) ? list : []);
+      this.boardsError.set(null);
+    } catch (err) {
+      // Keep any boards already held through a transient poll error, and
+      // record why the read failed so an empty menu never claims there are
+      // no saved boards yet.
+      this.boardsError.set(errorText(err));
+    }
+  }
+
+  async createBoard(req: CreateBoardRequest): Promise<Board | null> {
+    if (!this.access.can("POST /api/boards")) return null;
+    this.mark("board", true);
+    this.actionError.set(null);
+    try {
+      const created = await this.api.post<Board>(
+        "POST /api/boards",
+        undefined,
+        { kind: "list", ...req },
+      );
+      await this.loadBoards();
+      return created;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return null;
+    } finally {
+      this.mark("board", false);
+    }
+  }
+
+  async deleteBoard(id: string): Promise<boolean> {
+    if (!this.access.can("DELETE /api/boards/{id}")) return false;
+    this.mark("board", true);
+    this.actionError.set(null);
+    try {
+      if (typeof this.api.delete === "function") {
+        await this.api.delete("DELETE /api/boards/{id}", { id });
+      }
+      await this.loadBoards();
+      return true;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return false;
+    } finally {
+      this.mark("board", false);
+    }
+  }
+
+  private async ensureSubmitDetails(tasks: readonly Task[]): Promise<void> {
+    const liveIds = new Set(tasks.map((t) => t.id));
+    const cur = this.details();
+    if (Object.keys(cur).some((id) => !liveIds.has(id))) {
+      this.details.update((m) => {
+        const next: Record<string, TaskDetail> = {};
+        for (const id of Object.keys(m)) {
+          if (liveIds.has(id)) next[id] = m[id];
+        }
+        return next;
+      });
+    }
+    const ids = [
+      ...new Set(
+        tasks
+          .filter(
+            (t) =>
+              isWork(t) &&
+              !this.detailInFlight.has(t.id) &&
+              (t.state === "awaiting_submit" ||
+                t.reason?.reason === "base_repair" ||
+                t.reason?.reason === "awaiting_submit" ||
+                !!t.mergeGates?.some(isListCiPlaceholder)),
+          )
+          .map((t) => t.id),
+      ),
+    ];
+    await this.readSubmitDetails(ids);
+  }
+
+  private async readSubmitDetails(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    for (const id of ids) this.detailInFlight.add(id);
+    try {
+      const { tasks } = await loadTaskSummaryBatches(ids, 1, 1, (query) =>
+        this.api
+          .getIfChanged<TaskSummariesResponse>(
+            "GET /api/tasks/summaries",
+            undefined,
+            query,
+          )
+          .then((r) => r?.body?.tasks),
+      );
+      if (Object.keys(tasks).length > 0) {
+        this.details.update((m) => ({ ...m, ...tasks }));
+      }
+    } catch {
+      // Leave cached/list gates when detail fails.
+    } finally {
+      for (const id of ids) this.detailInFlight.delete(id);
+    }
+  }
+
+  // loadClosed reads the first page of closed tasks (or the next one).
+  async loadClosed(more = false): Promise<void> {
+    const cursor = more ? this.closedCursor() : null;
+    if (more && !cursor) return;
+    // cursor= is always sent: the server pages (newest closed first, with
+    // nextCursor and total) only when the parameter is present.
+    const q = `state=closed&limit=${CLOSED_PAGE}&cursor=${encodeURIComponent(cursor ?? "")}`;
+    try {
+      const r = await this.api.get<
+        { tasks?: Task[]; nextCursor?: string; total?: number } | Task[]
+      >("GET /api/tasks", undefined, q);
+      const page = (Array.isArray(r) ? r : (r.tasks ?? [])).filter(isWork);
+      const next = Array.isArray(r) ? null : (r.nextCursor ?? null);
+      if (!Array.isArray(r) && typeof r.total === "number") {
+        this.closedTotal.set(r.total);
+      }
+      this.closed.update((c) => (more ? [...c, ...page] : page));
+      this.closedCursor.set(next || null);
+      this.closedLoaded.set(true);
+      if (this.closedTotal() === null)
+        this.closedTotal.set(this.closed().length);
+    } catch (err) {
+      this.actionError.set(`Closed tasks could not be read: ${errorText(err)}`);
+    }
+  }
+
+  isBusy(key: string): boolean {
+    return this.busy().has(key);
+  }
+
+  // ---------- actions ----------
+
+  async approve(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("approve", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/approve", { id }),
+    );
+  }
+
+  async defer(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("defer", ids, (id) =>
+      this.api.post(
+        "POST /api/tasks/{id}/defer",
+        { id },
+        { deferredUntil: "" },
+      ),
+    );
+  }
+
+  async undefer(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("undefer", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/undefer", { id }),
+    );
+  }
+
+  async close(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("close", ids, (id) =>
+      this.api.post(
+        "POST /api/tasks/{id}/close",
+        { id },
+        { close_pull_request: false },
+      ),
+    );
+  }
+
+  async reopen(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("reopen", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/reopen", { id }),
+    );
+  }
+
+  async submit(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("submit", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/submit", { id }),
+    );
+  }
+
+  // retryMerge puts each pull request the merge queue gave up on back on
+  // it (ui.Client.RetryMerge); one with no pull request refuses.
+  async retryMerge(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("retry-merge", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/retry-merge", { id }),
+    );
+  }
+
+  // runNow starts each task ahead of the queue (ui.Client.RunNow),
+  // approving and bringing back any that need it. While the deployment
+  // is paused under a pause Run now passes, these are what start.
+  async runNow(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("run-now", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/run-now", { id }),
+    );
+  }
+
+  // setCapability attaches or detaches one capability on each task; the
+  // server no-ops a detach of one the task does not hold.
+  async setCapability(
+    ids: readonly string[],
+    capability: string,
+    attach: boolean,
+  ): Promise<BatchResult> {
+    return this.fanOut("capability", ids, (id) =>
+      this.api.post(
+        "POST /api/tasks/{id}/capabilities",
+        { id },
+        { id: capability, attach },
+      ),
+    );
+  }
+
+  // bulkEdit sends one PATCH body to every task. A running task refuses
+  // a change of base (ui.Client.UpdateTask) and is counted.
+  async bulkEdit(
+    ids: readonly string[],
+    patch: Record<string, unknown>,
+  ): Promise<BatchResult> {
+    return this.fanOut("edit", ids, (id) =>
+      this.api.patch("PATCH /api/tasks/{id}", { id }, patch),
+    );
+  }
+
+  // stopBatch lets the calls already sent finish and sends no more, for
+  // every bulk action in flight.
+  stopBatch(): void {
+    if (!this.running.size) return;
+    for (const token of this.running) token.stop = true;
+    this.batch.update((b) => (b ? { ...b, stopping: true } : b));
+  }
+
+  async retry(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("retry", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/retry", { id }),
+    );
+  }
+
+  // setPriority writes one priority to each task and returns how to put
+  // each one's old priority back.
+  async setPriority(
+    ids: readonly string[],
+    priority: number,
+  ): Promise<BatchResult & { undo: Undo }> {
+    const before = new Map(
+      ids.map((id) => [id, priorityOf(this.find(id) ?? ({} as Task))]),
+    );
+    const { failed, landed, skipped } = await this.fanOut(
+      "priority",
+      ids,
+      (id) => this.api.patch("PATCH /api/tasks/{id}", { id }, { priority }),
+    );
+    return {
+      failed,
+      landed,
+      skipped,
+      undo: {
+        label: "Undo",
+        run: async () => {
+          await Promise.all(
+            landed.map((id) =>
+              this.api.patch(
+                "PATCH /api/tasks/{id}",
+                { id },
+                { priority: before.get(id) },
+              ),
+            ),
+          );
+          await this.refresh();
+        },
+      },
+    };
+  }
+
+  // move applies a planned backlog move: the band's priority first when
+  // it changes, then the new neighbours. Undo restores both exactly.
+  async move(plan: MovePlan): Promise<Undo | null> {
+    const backlog = this.backlog();
+    const t = backlog.find((x) => x.id === plan.id);
+    if (!t) return null;
+    const was = neighbours(backlog, plan.id);
+    const oldPriority = priorityOf(t);
+    const ok = await this.run(`move:${plan.id}`, async () => {
+      if (plan.priority !== null) {
+        await this.api.patch(
+          "PATCH /api/tasks/{id}",
+          { id: plan.id },
+          { priority: plan.priority },
+        );
+      }
+      try {
+        await this.api.post("POST /api/tasks/reorder", undefined, {
+          ids: [plan.id],
+          afterId: plan.afterId,
+          beforeId: plan.beforeId,
+        });
+      } catch (err) {
+        // Half a move is worse than none: put the priority back.
+        if (plan.priority !== null) {
+          await this.api
+            .patch(
+              "PATCH /api/tasks/{id}",
+              { id: plan.id },
+              { priority: oldPriority },
+            )
+            .catch(() => undefined);
+        }
+        throw err;
+      }
+    });
+    if (!ok) return null;
+    return {
+      label: "Undo",
+      run: async () => {
+        if (plan.priority !== null) {
+          await this.api.patch(
+            "PATCH /api/tasks/{id}",
+            { id: plan.id },
+            { priority: oldPriority },
+          );
+        }
+        await this.api.post("POST /api/tasks/reorder", undefined, {
+          ids: [plan.id],
+          afterId: was.afterId,
+          beforeId: was.beforeId,
+        });
+        await this.refresh();
+      },
+    };
+  }
+
+  // moveToEnd puts the selected backlog tasks, in their current relative
+  // order, at the top or bottom of the backlog. A task outside the end
+  // band takes that band's priority, so the list never shows an order
+  // Grain would not follow.
+  async moveToEnd(
+    ids: readonly string[],
+    end: "top" | "bottom",
+  ): Promise<{ raised: number; undo: Undo } | null> {
+    const backlog = this.backlog();
+    const picked = backlog.filter((t) => ids.includes(t.id));
+    const rest = backlog.filter((t) => !ids.includes(t.id));
+    if (picked.length === 0) return null;
+    const edge = end === "top" ? rest[0] : rest[rest.length - 1];
+    const target = edge ? priorityOf(edge) : null;
+    const before = new Map(picked.map((t) => [t.id, priorityOf(t)]));
+    // Undo puts each picked task back after the task that preceded it,
+    // in the original order, so earlier restored picks anchor later ones.
+    const order = backlog.map((t) => t.id);
+    const needs = picked.filter(
+      (t) =>
+        target !== null &&
+        (end === "top" ? priorityOf(t) < target : priorityOf(t) > target),
+    );
+    const ok = await this.run(`move:${end}`, async () => {
+      await Promise.all(
+        needs.map((t) =>
+          this.api.patch(
+            "PATCH /api/tasks/{id}",
+            { id: t.id },
+            { priority: target },
+          ),
+        ),
+      );
+      await this.api.post("POST /api/tasks/reorder", undefined, {
+        ids: picked.map((t) => t.id),
+        afterId: end === "bottom" ? (edge?.id ?? "") : "",
+        beforeId: end === "top" ? (edge?.id ?? "") : "",
+      });
+    });
+    if (!ok) return null;
+    return {
+      raised: needs.length,
+      undo: {
+        label: "Undo",
+        run: async () => {
+          await Promise.all(
+            needs.map((t) =>
+              this.api.patch(
+                "PATCH /api/tasks/{id}",
+                { id: t.id },
+                { priority: before.get(t.id) },
+              ),
+            ),
+          );
+          for (const t of picked) {
+            const i = order.indexOf(t.id);
+            const after = i > 0 ? order[i - 1] : "";
+            const before = after
+              ? ""
+              : (order.slice(i + 1).find((id) => !ids.includes(id)) ?? "");
+            await this.api.post("POST /api/tasks/reorder", undefined, {
+              ids: [t.id],
+              afterId: after,
+              beforeId: before,
+            });
+          }
+          await this.refresh();
+        },
+      },
+    };
+  }
+
+  find(id: string): Task | undefined {
+    return (
+      this.live().find((t) => t.id === id) ??
+      this.closed().find((t) => t.id === id)
+    );
+  }
+
+  // fanOut makes one call per task (there are no batch endpoints), a
+  // few at a time so a long batch can be stopped part-way, reads the list
+  // once, and returns how many did not go through and which ones did or
+  // were never sent. The ids and the stop token belong to this call
+  // alone, so two batches in flight at once never report each other's
+  // tasks.
+  private async fanOut(
+    key: string,
+    ids: readonly string[],
+    call: (id: string) => Promise<unknown>,
+  ): Promise<BatchResult> {
+    this.mark(key, true);
+    this.actionError.set(null);
+    const token = { stop: false };
+    this.running.add(token);
+    const many = ids.length > 1;
+    const progress: BatchProgress = {
+      seq: ++this.batchSeq,
+      key,
+      done: 0,
+      total: ids.length,
+      stopping: false,
+    };
+    if (many) this.batch.set(progress);
+    const settled = new Map<string, boolean>();
+    const errors: unknown[] = [];
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < ids.length && !token.stop) {
+        const id = ids[next++];
+        // The handler goes on in the same chain as the call, so a refusal
+        // is never a rejection nobody is listening to yet.
+        await Promise.resolve()
+          .then(() => call(id))
+          .then(
+            () => void settled.set(id, true),
+            (err: unknown) => {
+              settled.set(id, false);
+              errors.push(err);
+            },
+          );
+        progress.done++;
+        if (many)
+          this.batch.update((b) =>
+            b?.seq === progress.seq ? { ...b, done: progress.done } : b,
+          );
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(BATCH_CONCURRENCY, ids.length) }, worker),
+    );
+    this.running.delete(token);
+    if (many) this.batch.update((b) => (b?.seq === progress.seq ? null : b));
+    const landed = ids.filter((id) => settled.get(id) === true);
+    const skipped = ids.slice(next);
+    const parts: string[] = [];
+    if (skipped.length)
+      parts.push(
+        `Stopped after ${settled.size} of ${ids.length}; ${skipped.length} left unchanged`,
+      );
+    if (errors.length)
+      parts.push(
+        ids.length === 1
+          ? errorText(errors[0])
+          : `${errors.length} of ${ids.length} ${ids.length === 1 ? "task" : "tasks"} failed: ${errorText(errors[0])}`,
+      );
+    if (parts.length) this.actionError.set(parts.join(". "));
+    await this.refresh();
+    void this.inbox.refresh();
+    if (key === "close" || key === "reopen") void this.loadClosed();
+    this.mark(key, false);
+    return { failed: errors.length, landed, skipped };
+  }
+
+  private async run(key: string, fn: () => Promise<unknown>): Promise<boolean> {
+    this.mark(key, true);
+    this.actionError.set(null);
+    try {
+      await fn();
+      return true;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return false;
+    } finally {
+      await this.refresh();
+      void this.inbox.refresh();
+      this.mark(key, false);
+    }
+  }
+
+  private mark(key: string, on: boolean): void {
+    this.busy.update((b) => {
+      const next = new Set(b);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+}

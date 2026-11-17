@@ -66,6 +66,7 @@ import { TimeZoneProvider } from "./TimeZoneContext.jsx";
 import { ViewerProvider } from "./ViewerContext.jsx";
 import {
   mergeFreshDetail,
+  fetchEarlier,
   prependEarlierPage,
   taskDetailPath,
   taskEarlierPath,
@@ -1726,7 +1727,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const loadTask = useCallback(
     async (id, fromUrl) => {
       const seq = ++openSeq.current;
-      setPendingTaskId(id);
+      // Reloading the task already on screen -- an in-page #comment= link
+      // fires popstate, which lands here -- refreshes it in place. Putting
+      // the loading pane up in front of it would unmount the pane while
+      // the fetch is out, and a remounted pane starts its own deep-link
+      // walk beside the one already paging back (CommentDeepLink;
+      // ui/e2e/comment-deep-link-long-thread.spec.js).
+      const reloading =
+        detailRef.current != null &&
+        String(detailRef.current.id) === String(id);
+      setPendingTaskId(reloading ? null : id);
       try {
         const d = await api(taskDetailPath(id));
         if (seq !== openSeq.current) return;
@@ -1778,7 +1788,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
         Array.isArray(current.attempts) &&
         current.attempts.length > 0;
       try {
-        const earlier = await api(path);
+        const earlier = await fetchEarlier(api, current, opts);
+        if (!earlier) return null;
         const merge = (prev) =>
           prev && String(prev.id) === String(targetId)
             ? prependEarlierPage(prev, earlier, {
@@ -2599,7 +2610,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
         const first = failed[0].reason;
         showError(
           new Error(
-            `${failed.length} of ${ids.length} task(s) failed: ${
+            `${failed.length} of ${ids.length} ${
+              ids.length === 1 ? "task" : "tasks"
+            } failed: ${
               isVerifierUnavailable(first)
                 ? VERIFIER_ACTION_REASON
                 : first?.message || first
@@ -2866,8 +2879,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
             console.warn("grain: task still failing to load", err);
           }
         } else if (openTaskId !== null) {
-          const detail = await api(taskDetailPath(openTaskId), { poll: true });
-          if (detail !== UNCHANGED) {
+          // A read that an act()'s own re-read (loadTask) overtook is
+          // dropped, as the session pane's is: answered from before the
+          // mutation, it would put back what the mutation just changed --
+          // a grant just removed reappearing, or one just given vanishing,
+          // until the next tick (task 4828). Dropping a full answer also
+          // drops the ETag it advanced, so the next poll is answered again.
+          const seq = openSeq.current;
+          const path = taskDetailPath(openTaskId);
+          const detail = await api(path, { poll: true });
+          if (detail !== UNCHANGED && seq !== openSeq.current) {
+            forgetETag(path);
+          } else if (detail !== UNCHANGED) {
             setDetail((prev) =>
               prev && String(prev.id) === String(detail?.id)
                 ? keepIfSame(prev, mergeFreshDetail(prev, detail))
@@ -3889,6 +3912,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       processTriggers={processTriggers}
       ciRuns={ciRuns}
       boards={boards}
+      boardsError={boardsError}
       openBoardId={openBoardId}
       onOpenBoard={openBoard}
       sessions={sessions}

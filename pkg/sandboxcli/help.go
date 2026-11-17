@@ -41,8 +41,10 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
                                          (time blocked is credited back to this run's deadline)
   grain ci run-job <job> [--timeout 9m] [--resume <run-id>]
                                          Run a single named CI job against the current branch commit and wait
+                                         (on GitHub Actions: re-run that job of your pull request's head)
   grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]
                                          Rerun failed (or named) jobs fresh and uncached
+                                         (on GitHub Actions: re-run your pull request's head, no commit pushed)
   grain pr status [--task <id> | --ref <branch> [--repo <r>]]
                                          Latest CI verdict on this task's branch (grain CI, or every GitHub Actions workflow), or another task's or branch's
   grain pr base-status                   Latest CI verdict on the base branch
@@ -128,9 +130,12 @@ SURFACE & APPROVAL:
     nobody looking at it, and the same is true of a standing chat session whose
     deployment allows that session to queue its own work. Set hold_for_approval
     on any proposal a human should look at first and it is filed unapproved
-    regardless. A proposal that sets keep_running, or a priority above both your
-    task's own and the default (5), always waits for a person: only a person may
-    give a task either. Read what the call returns to see whether it queued or held.
+    regardless. A proposal that sets keep_running, a sandbox dimension above
+    your task's own, or a priority above both your task's own and the default
+    (5) always waits for a person: only a person may give a task any of those
+    (and a sandbox dimension above the deployment's maximum is refused when filed
+    live, or clamped to that maximum when relayed at the end of a run).
+    Read what the call returns to see whether it queued or held.
 
 ARGUMENTS & FLAGS:
   --title <string>             Task title (required unless --template-id is set).
@@ -143,8 +148,10 @@ ARGUMENTS & FLAGS:
                                default branch). Unknown repos are filed against yours with a note.
   --branch <name>              Base branch to target (defaults to the repo's default/declared branch).
   --depends-on <id[,id...]>    Task IDs (including your current task or an earlier proposal's --id)
-                               that must close before this task can start. Standing chat sessions
-                               never complete and are dropped with a note.
+                               that must close before this task can start. A proposal that answers
+                               with a closing note and no pull request closes itself (see
+                               --nothing-needed-action). Standing chat sessions never complete and
+                               are dropped with a note.
   --supersedes <task-id>       (propose_task MCP tool only) Replace an existing task that has never
                                been dispatched and was filed in the same repository. Closes the old
                                task as superseded and moves its open dependents to this proposal;
@@ -161,6 +168,8 @@ ARGUMENTS & FLAGS:
                                task's own and the default, it waits for a person.
   --no-repo                    Standalone task with no git repository or branch.
   --no-port                    Change belongs only on the target branch; do not port to paired branches.
+  found_in <vX.Y.Z[-rc.N]>     (propose_task MCP tool parameter only) Release tag or release candidate a
+                               bug-fix proposal was found in (e.g. v2.5.0 or v2.5.0-rc.1).
   --keep-running               Immediately restart the task when its run exits instead of completing or parking.
                                Only a person may ask this, so the proposal waits for one.
   --fixes-base-branch          Marks this task as repairing a red base branch (gives it a base-green
@@ -186,6 +195,10 @@ ARGUMENTS & FLAGS:
   --template-field <k=v>       Template input field value (repeatable).
   --nothing-needed-action <close|ack>
                                Whether nothing_needed closes the task (default) or leaves it for ack.
+                               For a task your run files it also governs a closing note with no pull
+                               request: close (the default) makes it a report-only sub-task that
+                               closes when it answers, so tasks depending on it start and your next
+                               attempt reads its note; ack leaves its report for a person to close.
   --goal <json>                Goal spec JSON: {"kind":"base-green|pr-merged|tasks-closed|person-closes|pipeline-healthy|cl-submitted","spec":{...},"on_met":"close|rest","on_limit":"hold|notify"}.
 `
 
@@ -244,7 +257,7 @@ var sandboxCommandHelp = map[string]string{
 	"ci list":   "grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions] [--format github|github-jobs]\n\nList recent CI runs, newest first: grain CI's, and for a repository whose CI is GitHub Actions\n(ci_mode github) its workflow runs too, read through grain's own forge connection. The second\ncolumn is the provider, and for an Actions run its workflow file; an Actions run's id is\ngha:<owner>:<name>:<run id>. --workflow keeps one workflow's runs (e.g. nightly.yml). --provider\nkeeps one provider's runs. --ref @branch is this task's own branch; --task <id> is that task's\nbranch, in any repository this task may read CI for.\n\n--format github writes the GitHub Actions runs as JSON in GitHub's own shape, GET\n/repos/{owner}/{repo}/actions/runs' answer ({\"workflow_runs\": [...]}, up to --limit 500), and\n--format github-jobs every attempt of every job of each of them (at most 50 runs), GET\n.../actions/runs/{id}/jobs?filter=all's answer ({\"jobs\": [...]}): what scripts/candidate-gate.sh\nreads without a GitHub token. Runs grain knows only from its record of their jobs are left out,\nand grain_note says how many.\n",
 	"ci checks": "grain ci checks <sha> [--repo owner/name] [--name <check>] [--format github]\n\nEvery check run on a commit (every attempt of each, GitHub's filter=all), or of one --name, read\nthrough grain's own forge connection, with the App that posted each; \"(grain)\" marks grain's own.\n--format github writes GitHub's GET /repos/{owner}/{repo}/commits/{sha}/check-runs answer\n({\"check_runs\": [...]}) plus grain_app, the slug of the App grain posts its check runs as: what\nscripts/candidate-gate.sh check-qualification reads as --checks-json, and its\nCHECK_QUALIFICATION_APP.\n",
 	"ci show":   "grain ci show <run-id>\n\nOne run: its line from grain ci list, then every job and its steps with their conclusions.\nWorks for grain CI runs and GitHub Actions runs (gha:<owner>:<name>:<run id>) alike.\n",
-	"ci log": "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log. A GitHub Actions run\n(gha:..., or its bare GitHub run id) keeps one log per job: --job prints it, and --step the lines that step\nwrote, found by the step's start and end times (--tail and --lines work on either as on any log).\n\n" +
+	"ci log": "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log. A GitHub Actions run\n(gha:..., or its bare GitHub run id) keeps one log per job: --job prints it, and --step the lines that step\nwrote, found by the step's start and end times (--tail and --lines work on either as on any log).\n--job takes a job's name, its id, or the name as grain ls lists it: a \"/\" in a name lists as %2F\n(pkg%2Fcli stress under load), and either spelling reads it. --tail counts bytes; use --lines for lines.\n\n" +
 		byteRangeHelp + "\n" +
 		"  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n  grain ci log --job go --step Test -n 50\n",
 	"ci test-history": "grain ci test-history <test-name> [--limit N] [--repo owner/name] [--provider grain|github-actions]\n\nPass, fail and flake history of one test across recent CI runs. For a repository whose CI is\nGitHub Actions (ci_mode github) the runs are its workflow runs, with what grain recorded of\ntheir failed jobs' logs, and grain CI's older runs of it are left out (--provider grain reads\nthem). Grain keeps no log of an Actions job that passed, so there a test's failures are counted\nand its passes are not: the report names each source's runs and the window they span.\n",
@@ -265,10 +278,17 @@ var sandboxCommandHelp = map[string]string{
 		"  git push origin HEAD && grain ci wait\n  grain ci wait --jobs go,lint\n",
 	"ci run-job": "grain ci run-job <job> [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Run one named CI job (and its dependencies) against this branch's commit and wait for it,\n" +
-		"with the same 9m slice, resume and wait credit as grain ci wait.\n",
+		"with the same 9m slice, resume and wait credit as grain ci wait. On a repository GitHub\n" +
+		"Actions gates, re-run that job of your pull request's head instead, with no commit pushed,\n" +
+		"then wait for it with grain ci wait.\n",
 	"ci retrigger": "grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]\n\n" +
 		"Rerun this branch's failed jobs fresh and uncached (or the named ones, or --all of them).\n" +
-		"Then wait on it with grain ci wait --resume <run-id>.\n",
+		"Then wait on it with grain ci wait --resume <run-id>.\n\n" +
+		"On a repository GitHub Actions gates (ci_mode: github) it re-runs the GitHub Actions runs at\n" +
+		"your pull request's head instead -- their failed and cancelled jobs, the named jobs, or\n" +
+		"--all -- with no commit pushed, so the head, its approvals and reviews stay put. Each run at\n" +
+		"one commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault\n" +
+		"included. Then wait on it with grain ci wait.\n",
 	"pr open": "grain pr open\n\nOpen the pull request for this task's branch (or find the one already open) and\n" +
 		"report its checks. Its title and description come from the branch's commit messages.\n",
 	"pr reply": "grain pr reply <body|--file f> [--comment-id <id>]\n\n" +
@@ -360,6 +380,8 @@ const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <own
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
 	"The tasks this run may read (its own, or every task with https://grain.dev/capabilities/api#self-debug or https://grain.dev/capabilities/api#tasks:read), one line each:\n" +
 	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
+	"A task blocked on one only a person can close (failed, proposed, asking, awaiting Submit, paused,\n" +
+	"deferred with no wake time) reads \"blocked on <ids>, which needs a person\" and counts as --stalled.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +
 	"running, awaiting_reply, failed, awaiting_submit, completed, closed); --kind is one of\n" +

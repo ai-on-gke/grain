@@ -306,14 +306,14 @@ func (c *Client) reconcileTaskBase(ctx context.Context, task *model.Task) {
 	oldBase := task.Base
 	targetBase, _, merged, _ := c.Store.MergedUpstreamTaskBase(ctx, *task.Target, oldBase)
 	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo.Same(*task.Target) && c.Config.GitHubPullRequests != nil {
-		if detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number); err == nil && detail.BaseRef != "" && detail.BaseRef != oldBase {
+		if detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil && detail.BaseRef != "" && detail.BaseRef != oldBase {
 			if merged {
 				targetBase = detail.BaseRef
 			} else {
 				if checker, ok := c.Config.GitHubPullRequests.(interface {
 					BranchExists(owner, repo, branch string) (bool, error)
 				}); ok {
-					if exists, err := checker.BranchExists(task.Target.Owner, task.Target.Name, oldBase); err == nil && !exists {
+					if exists, err := checker.BranchExists(task.Target.StoredOwner(), task.Target.Name, oldBase); err == nil && !exists {
 						merged = true
 						targetBase = detail.BaseRef
 					}
@@ -328,7 +328,7 @@ func (c *Client) reconcileTaskBase(ctx context.Context, task *model.Task) {
 	// never classified on its own account (orchestrator's
 	// holdForTrustBoundary), so one moved onto that branch's base loses its
 	// AutoMerge and waits for a person, as the orchestrator's retarget does.
-	unattended := task.Origin.Reason == model.ReasonReview || task.Origin.Reason == model.ReasonFix
+	unattended := task.Filing.Reason == model.ReasonReview || task.Filing.Reason == model.ReasonFix
 	if err := c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		if t.Base == oldBase {
 			t.Base = targetBase
@@ -2010,7 +2010,7 @@ func resetPullRequestPolls(task model.Task) {
 			continue
 		}
 		if ref, err := model.ParsePullRequestRef(l.Target); err == nil {
-			github.Polls().Reset(github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number))
+			github.Polls().Reset(github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number))
 		}
 	}
 }

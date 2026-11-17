@@ -99,7 +99,7 @@ func goPrecedence() []string {
 func task(approved bool) Task {
 	t := Task{
 		ID: "a1b2", Intent: IntentImplement, Title: "t",
-		Origin: Origin{
+		Filing: Filing{
 			Attribution: Attribution{Actor: Principal{Kind: PrincipalHuman, ID: "someone"}},
 			Reason:      ReasonDirect,
 		},
@@ -217,7 +217,7 @@ func TestAwaitsAckIsAFinishedTaskWithNothingToLand(t *testing.T) {
 	// this one. orchestrator.SyncReviews files one as an implement task
 	// with ReasonReview, so the origin is the only thing that catches it.
 	filed := task(true)
-	filed.Origin.Reason = ReasonReview
+	filed.Filing.Reason = ReasonReview
 	if AwaitsAck(filed) {
 		t.Error("a review grain filed itself is read on the change under review")
 	}
@@ -502,12 +502,12 @@ func TestLandingStateIsDecidedByTheActorNotTheReason(t *testing.T) {
 	bot := Principal{Kind: PrincipalAutomation, ID: "grain"}
 	// Every reason, with a human actor: queued. With automation: not.
 	// A sixth reason cannot queue itself because reasons are not read.
-	for _, r := range []OriginReason{ReasonDirect, ReasonSchedule, ReasonFix,
+	for _, r := range []FilingReason{ReasonDirect, ReasonSchedule, ReasonFix,
 		ReasonReview, ReasonProposal} {
-		if !LandsQueued(Origin{Attribution{Actor: human}, r}) {
+		if !LandsQueued(Filing{Attribution{Actor: human}, r}) {
 			t.Errorf("human + %s should land queued", r)
 		}
-		if LandsQueued(Origin{Attribution{Actor: bot, OnBehalfOf: &human}, r}) {
+		if LandsQueued(Filing{Attribution{Actor: bot, OnBehalfOf: &human}, r}) {
 			t.Errorf("automation + %s must not land queued, even on a human's behalf", r)
 		}
 	}

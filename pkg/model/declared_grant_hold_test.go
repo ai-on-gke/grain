@@ -17,6 +17,7 @@ package model_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -67,15 +68,73 @@ func TestARepoDeclaredScheduleGrantingAGCPKeyFilesUnapproved(t *testing.T) {
 	}
 }
 
+// A named GitHub credential is the repo server's #credential method, not
+// a server of its own, so a repository's declaration asking for one --
+// in either spelling -- is held for a person like a GCP key is, on a
+// schedule's firing and on a CI job alike. The same declaration's read
+// of a repository and its push to its own branch still go ahead.
+func TestARepoDeclaredGitHubCredentialIsHeldForAPerson(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	for i, tc := range []struct {
+		grant string
+		held  bool
+	}{
+		{model.RepoCredentialGrant("release-bot"), true},
+		{`repo#credential={"credential":"release-bot"}`, true},
+		{model.GitPushAnyRefGrant, true},
+		{model.RepoWriteRef + `={"repo":"acme/widgets"}`, false},
+		{model.RepoReadRef + `={"repo":"acme/widgets"}`, false},
+	} {
+		t.Run(tc.grant, func(t *testing.T) {
+			stem := fmt.Sprintf("release-%d", i)
+			task := fireForTask(t, store, ctx, model.Schedule{
+				ID:         model.RepoDeclaredID(model.DeclaredSchedule, nightlyRepo, stem),
+				Title:      "Release",
+				Target:     nightlyRepo,
+				Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+				Enabled:    true,
+				NextRunAt:  firstNight,
+				CreatedAt:  firstNight.Add(-time.Hour),
+				Grants:     []model.Grant{{Capability: tc.grant}},
+			})
+			if held := task.Approval == nil; held != tc.held {
+				t.Fatalf("schedule granting %s: filed unapproved = %v, want %v (approval %+v)", tc.grant, held, tc.held, task.Approval)
+			}
+
+			accepted, items, err := store.NoteCIJobDeclaration(ctx, nightlyRepo, stem, "c0ffee", []string{tc.grant}, firstNight)
+			if err != nil {
+				t.Fatalf("noting CI job granting %s: %v", tc.grant, err)
+			}
+			if accepted == tc.held || slices.Contains(items, tc.grant) != tc.held {
+				t.Fatalf("CI job granting %s: accepted = %v, held items %q, want held = %v", tc.grant, accepted, items, tc.held)
+			}
+		})
+	}
+}
+
 func TestDeclaredGrantNeedsPerson(t *testing.T) {
 	for grant, want := range map[string]bool{
 		`gcp#gcp-key={"permission_set":"ar-writer"}`: true,
-		"host-script#run":          true,
-		"github-credential#token":  true,
-		"api:secrets:write":        true,
-		"api:ci-read@acme/widgets": false,
-		"grain-ci":                 false,
-		"":                         false,
+		"host-script#run":                                                  true,
+		model.RepoCredentialGrant("release-bot"):                           true,
+		`repo#credential={"credential":"release-bot"}`:                     true,
+		"repo#credential":                                                  true,
+		model.GitPushAnyRefGrant:                                           true,
+		`repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`:  true,
+		`repo#write={"repo":"acme/widgets","force":true}`:                  true,
+		`repo#write={"repo":"acme/widgets","refs":["refs/heads/release"]}`: true,
+		model.RepoCapabilityServerID:                                       true,
+		`repo={"credential":"release-bot"}`:                                true,
+		`repo#write={"repo":"acme/widgets"}`:                               false,
+		model.RepoWriteRef + `={"repo":"acme/widgets"}`:                    false,
+		`repo#read={"repo":"acme/widgets"}`:                                false,
+		model.RepoReadRef + `={"repo":"acme/widgets"}`:                     false,
+		"api:secrets:write":                                                true,
+		"api:ci-read@acme/widgets":                                         false,
+		"grain-ci":                                                         false,
+		"":                                                                 false,
 	} {
 		if got := model.DeclaredGrantNeedsPerson(grant); got != want {
 			t.Errorf("DeclaredGrantNeedsPerson(%q) = %v, want %v", grant, got, want)
@@ -144,6 +203,78 @@ func TestAnAcceptedDeclaredScheduleFiresApprovedUntilItWidens(t *testing.T) {
 	// -- a page left open across the widening -- is refused.
 	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", nil, []string{gcp}, firstNight); !errors.Is(err, model.ErrDeclarationMoved) {
 		t.Fatalf("accepting a stale set: %v, want ErrDeclarationMoved", err)
+	}
+}
+
+// Revoking a person's acceptance of a declared schedule's set (task 4604)
+// withdraws it: the next firing is held again and says nobody has
+// accepted the set, the record shows as awaiting acceptance with what it
+// asked for kept, and a firing filed approved before the revocation no
+// longer has a person standing behind it at dispatch.
+func TestARevokedDeclaredScheduleIsHeldAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	id := model.RepoDeclaredID(model.DeclaredSchedule, nightlyRepo, "rotate")
+	secrets := "api:secrets:write"
+	sched := model.Schedule{
+		ID:         id,
+		Title:      "Rotate",
+		Target:     nightlyRepo,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+		Enabled:    true,
+		NextRunAt:  firstNight,
+		CreatedAt:  firstNight.Add(-time.Hour),
+		Overlap:    model.OverlapAllow,
+		Grants:     []model.Grant{{Capability: secrets}},
+	}
+	fireForTask(t, store, ctx, sched)
+	acc, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || acc == nil {
+		t.Fatalf("no record after the first firing: %+v, %v", acc, err)
+	}
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", []string{"secrets:write"}, acc.Requested, firstNight); err != nil {
+		t.Fatalf("accepting: %v", err)
+	}
+	approved := fireForTask(t, store, ctx, sched)
+	if approved.Approval == nil {
+		t.Fatalf("a firing within the accepted set was held: %q", approved.Body)
+	}
+
+	accepted, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || accepted == nil {
+		t.Fatalf("the accepted record: %+v, %v", accepted, err)
+	}
+	// A revocation checked against a set other than the one accepted --
+	// one accepted wider since it was read -- is refused and withdraws
+	// nothing.
+	if _, err := store.RevokeDeclarationAcceptance(ctx, id, nil); !errors.Is(err, model.ErrAcceptanceMoved) {
+		t.Fatalf("revoking a set other than the accepted one: err = %v, want ErrAcceptanceMoved", err)
+	}
+	if still, _ := store.GetDeclarationAcceptance(ctx, id); still == nil || still.AcceptedAt == nil {
+		t.Fatalf("a refused revocation cleared the acceptance: %+v", still)
+	}
+	got, err := store.RevokeDeclarationAcceptance(ctx, id, accepted.Accepted)
+	if err != nil {
+		t.Fatalf("revoking: %v", err)
+	}
+	if _, err := store.RevokeDeclarationAcceptance(ctx, id, accepted.Accepted); !errors.Is(err, model.ErrAcceptanceMoved) {
+		t.Fatalf("revoking twice: err = %v, want ErrAcceptanceMoved", err)
+	}
+	if got.AcceptedAt != nil || got.AcceptedBy != "" || len(got.Accepted) != 0 || !got.Awaiting() ||
+		!slices.Equal(got.Requested, acc.Requested) {
+		t.Fatalf("after revoking the record is %+v, want nothing accepted and %v still asked for", got, acc.Requested)
+	}
+
+	task := fireForTask(t, store, ctx, sched)
+	if task.Approval != nil {
+		t.Fatalf("a firing after the revocation landed approved: %+v", task.Approval)
+	}
+	if !strings.Contains(task.Body, "Nobody has accepted that set yet") {
+		t.Errorf("a firing after the revocation does not say nobody has accepted: %q", task.Body)
+	}
+	if stands, err := store.PersonStandsBehind(ctx, *approved, []string{secrets}); err != nil || stands {
+		t.Errorf("PersonStandsBehind(the firing approved before the revocation) = %v, %v; want false", stands, err)
 	}
 }
 

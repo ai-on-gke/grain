@@ -6,6 +6,8 @@ carry `Design-Item: design/design/durable-tasks.design.md#DT-n` trailers, so the
 design planner (`docs/design-docs.md`) finds them already open when this
 doc merges and files nothing twice.
 
+Proposed extension: [Configurable built-in gates](gates.design.md) and its [normative contract](../spec/gates/gates.spec.md) generalize DT-4 into versioned compiled evaluators while retaining Grain-owned admission, suspension, progress and close/rest policy. They do not change current behavior until an explicit per-task authority handoff.
+
 ## Why
 
 Some work in grain has to keep going until a goal is met or a person stops
@@ -387,6 +389,12 @@ How it relates to what exists:
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
 - `wait_for_task(resume_at)` is `resume_later(when: {at})`.
 
+A park on tasks holds its task with `depends_on` links. The ones the park
+wrote itself are recorded on the suspension (`resume_on.links`), and the
+run that resumes the park removes them. A target that is reopened later
+then neither holds the task again nor shows up in later prompts as a
+declared dependency. Links the task already declared when it parked stay.
+
 Both tools keep their names and arguments, because agents and templates
 use them. Their implementation becomes one call into `Store.Suspend`, and
 `model.ParkedOutcome` becomes `suspend_kind = requested`. The new
@@ -494,6 +502,13 @@ A goal is set by the template (`Template.Goal`), by `propose_task`
   It rests until the goal check, a message, or a progress-limit
   notification moves it. The closing comment is posted as an ordinary
   comment.
+- **A report-only sub-task** (filed by another task's run, no goal)
+  that ends on a closing note alone closes rather than completing
+  (`model.ClosesOnAnswer`, docs/closing-a-task-from-a-run.md), so what
+  depends on it dispatches without a person's close. A parent that wants
+  a person to close its child gives it `nothing_needed_action: ack` or
+  this `person-closes` goal, which keeps `until: closed` meaning a
+  person's close.
 - **`nothing_needed`** on a goal task means "nothing to do *now*". The
   only things that close a goal task are the goal being met with
   `on_met: close`, or a person.
@@ -964,7 +979,9 @@ exactly as before.
   a new version.
 - **Age** is measured, not stored: the runs started and the comments
   posted since the handover was written or confirmed
-  (`model.HandoverAge`). Past `HandoverStaleRuns` (10) runs or
+  (`model.HandoverAge`). Only comments from people and agents count:
+  grain's own notices (automation on nobody's behalf, such as the park
+  notice every parked run leaves) do not. Past `HandoverStaleRuns` (10) runs or
   `HandoverStaleComments` (30) comments it is **stale**. The durable
   task's prompt then asks for a replacement or confirmation, and
   `GET /api/tasks/{id}/context` returns `handover_stale`.
@@ -1027,7 +1044,7 @@ nothing load the whole of it at once. Where that stands:
 | `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
 | `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
 | `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
-| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link (500 at a time, every page through the target merged and drawn once), and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
@@ -1065,7 +1082,9 @@ closed task.
   from [task N](/tasks/N)". It starts with a fresh `task_context`.
 - **The predecessor** closes with outcome `rolled_over` and the note
   "rolled over to #M". It keeps everything; nothing is copied or moved
-  except references.
+  except references. It is not reopened: Reopen and "Reopen and send"
+  are refused with a pointer to the successor, before any comment is
+  written, so the same durable work is never queued twice.
 - **References move** in one transaction: `depends_on` entries naming
   it, `wait_for_task` parks and `task_suspension.resume_on` targets,
   schedules whose standing task it is, notification subjects and
@@ -1111,9 +1130,17 @@ for the reason under "Routes and scopes"). As built:
   task, a running one (the reconciler
   tries again once the run ends) and a console session, whose session
   tag cannot be shared and which already rolls over by being closed and
-  refiled. Telling the director it is past the limit is not built yet.
-- The UI banner on `/tasks/N` is follow-up work under the deployment's
-  screenshot rule; the API already answers with `rolledOverTo`.
+  refiled. A session past a limit is told so instead
+  (`History.RolloverDue`, `contextUpkeepSection`, grain/task-4222): its
+  prompt names the limit and asks it to write a fresh handover and say,
+  when the conversation next rests, that it is due to be closed and
+  refiled.
+- The task page banners a rolled-over task's successor, and the
+  successor links back, in both UIs (`task-rolled-over-to` /
+  `task-rolled-over-from`, grain/task-4222); the task list and board
+  carry a "rolled over to M" chip beside "superseded by". The demo seeds
+  a pair, "Watch the acme/widgets nightly build"
+  (`ui-ng/e2e/next-task-rollover.spec.js`).
 
 ### Follow-up work
 
@@ -1128,7 +1155,7 @@ for the reason under "Routes and scopes"). As built:
   badge, Compact and Write handover…, and summarised comments collapsed
   in place in the timeline (`ui/src/components/detail/TaskContext.jsx`).
 - Rollover's task-page banner, and telling a console session past the
-  limit that it should be closed and refiled.
+  limit that it should be closed and refiled. Done in grain/task-4222.
 
 ## Store and schema changes (summary)
 
@@ -1163,7 +1190,7 @@ local, and pruned after 30 days.
 | `notify_operator(...)` | all (critical needs task-admin) | Raises or bumps a notification and does not park. |
 | `message_task(task, body)` | task-admin, or parent/child | A note to another task's agent. Never parks it. |
 | `read_pipeline_changes(after)` | self-debug | The delta feed. |
-| `write_handover` | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
+| `grain handover write` (was `write_handover`) | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
 | `compact_context(handover)` | all | Writes a fresh handover and moves the compaction cursor to the last comment before the run started (DT-15). |
 | `update_brief(brief, reason)` | all | Replaces the current brief that stands in for the description in prompts (DT-15). |
 

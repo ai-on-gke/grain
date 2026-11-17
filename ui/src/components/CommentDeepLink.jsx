@@ -15,7 +15,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Snackbar } from "@mui/material";
 import { commentIdFromHash, malformedCommentHash } from "../commentLinks.js";
-import { TASK_DEEP_LINK_COMMENTS_LIMIT } from "../taskDetailPages.js";
 
 // HIGHLIGHT_MS is how long a linked comment stays marked once it has
 // been scrolled to (.comment-highlight in style.css fades over the same).
@@ -96,15 +95,12 @@ function useCommentDeepLink(t, onLoadEarlier) {
   // scrolls twice.
   const [target, setTarget] = useState(() => linkedComment(t?.id));
   const [notice, setNotice] = useState("");
-  const fetchingBeforeRef = useRef("");
+  const loadingRef = useRef("");
 
   useEffect(() => {
     const read = () => {
       const next = linkedComment(taskId.current);
-      if (next) {
-        fetchingBeforeRef.current = "";
-        setTarget(next);
-      }
+      if (next) setTarget(next);
     };
     window.addEventListener("hashchange", read);
     window.addEventListener("popstate", read);
@@ -135,15 +131,17 @@ function useCommentDeepLink(t, onLoadEarlier) {
         Number.isFinite(targetNum) &&
         (oldestLoadedId === null || targetNum < oldestLoadedId);
       if (mayBeOlder) {
-        const cursorKey = `${t?.id}:${target.id}:${oldestLoadedId}`;
-        if (fetchingBeforeRef.current !== cursorKey) {
-          fetchingBeforeRef.current = cursorKey;
+        // One call pages back through the target (fetchEarlier's
+        // throughCommentId), so while it is out nothing asks again: not
+        // the renders its own pages cause, and not the second of the
+        // popstate and hashchange one in-page link fires.
+        const key = `${t?.id}:${target.id}`;
+        if (loadingRef.current !== key) {
+          loadingRef.current = key;
           Promise.resolve(
-            onLoadEarlier({
-              commentsLimit: TASK_DEEP_LINK_COMMENTS_LIMIT,
-              commentsOnly: true,
-            }),
+            onLoadEarlier({ commentsOnly: true, throughCommentId: targetNum }),
           ).then((loaded) => {
+            if (loadingRef.current === key) loadingRef.current = "";
             if (!loaded) {
               setNotice(
                 `Comment ${target.id} is not in this task's conversation.`,

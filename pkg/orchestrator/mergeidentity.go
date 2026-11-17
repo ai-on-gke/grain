@@ -41,7 +41,7 @@ func mergedAsDetail(client github.Client, ref model.PullRequestRef, detail githu
 	}
 	out := fmt.Sprintf("%s merged by %s", ref, detail.MergedBy)
 	if m, ok := client.(mergeIdentifier); ok {
-		if identity := m.MergeIdentity(ref.Repo.Owner, ref.Repo.Name); identity != "" {
+		if identity := m.MergeIdentity(ref.Repo.StoredOwner(), ref.Repo.Name); identity != "" {
 			out += " through " + identity
 		} else {
 			out += " through the repository's push credential"

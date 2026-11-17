@@ -139,6 +139,11 @@ var (
 	// rerunFailedJobsRe is POST .../actions/runs/{id}/rerun-failed-jobs
 	// (github.RESTClient.RerunFailedJobs).
 	rerunFailedJobsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/rerun-failed-jobs$`)
+	// rerunRunRe is POST .../actions/runs/{id}/rerun and rerunJobRe POST
+	// .../actions/jobs/{id}/rerun (github.RESTClient.RerunWorkflowRun and
+	// RerunWorkflowJob).
+	rerunRunRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/rerun$`)
+	rerunJobRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/rerun$`)
 	// workflowDispatchRe is POST .../actions/workflows/{workflow_id}/dispatches
 	// and cancelRunRe POST .../actions/runs/{id}/cancel (Sim.Dispatches,
 	// Sim.CancelledRuns).
@@ -488,6 +493,12 @@ type Sim struct {
 	// asked about, in order. The sim starts no new attempt: a test that
 	// wants one moves the seeded run's RunAttempt and Jobs on itself.
 	RerunFailedJobs []int64
+	// RerunRuns and RerunJobs are every run id POST .../runs/{id}/rerun,
+	// and every job id POST .../jobs/{id}/rerun, was asked about, in
+	// order. Like RerunFailedJobs they start no new attempt, and
+	// RerunRefused refuses them too.
+	RerunRuns []int64
+	RerunJobs []int64
 	// RerunRefused, when non-zero, is the status that endpoint answers
 	// with instead of 201 -- 403 for a credential without `actions: write`.
 	RerunRefused int
@@ -2113,6 +2124,22 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				return jsonResponse(s.RerunRefused, map[string]string{"message": "Resource not accessible by integration"}), nil
 			}
 			s.RerunFailedJobs = append(s.RerunFailedJobs, int64(mustAtoi(m[3])))
+			return jsonResponse(201, map[string]any{}), nil
+		}
+		if m := rerunRunRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.RerunRefused != 0 {
+				return jsonResponse(s.RerunRefused, map[string]string{"message": "Resource not accessible by integration"}), nil
+			}
+			s.RerunRuns = append(s.RerunRuns, int64(mustAtoi(m[3])))
+			return jsonResponse(201, map[string]any{}), nil
+		}
+		if m := rerunJobRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.RerunRefused != 0 {
+				return jsonResponse(s.RerunRefused, map[string]string{"message": "Resource not accessible by integration"}), nil
+			}
+			s.RerunJobs = append(s.RerunJobs, int64(mustAtoi(m[3])))
 			return jsonResponse(201, map[string]any{}), nil
 		}
 		if m := pullCommentRepliesRe.FindStringSubmatch(p); m != nil {

@@ -22,6 +22,7 @@ package ui_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -418,4 +419,75 @@ type ctxModelLister struct{}
 func (ctxModelLister) ListModels(ctx context.Context, _ string) (ui.AgentModelCatalog, error) {
 	<-ctx.Done()
 	return ui.AgentModelCatalog{}, ctx.Err()
+}
+
+// flippingModelLister answers with a different list on every call, so
+// every discovery pass has something to write.
+type flippingModelLister struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (l *flippingModelLister) ListModels(context.Context, string) (ui.AgentModelCatalog, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls++
+	id := "claude-sonnet-5-5"
+	if l.calls%2 == 0 {
+		id = "claude-opus-5-5"
+	}
+	return ui.AgentModelCatalog{Models: []ui.AgentModel{{ID: id}}}, nil
+}
+
+// A discovery pass writes the settings row its connections live in, and
+// the daemon runs one as it starts -- while a setup script is adding the
+// repos it is about to file work in. A pass that read the row and then
+// put it back whole lost any repo added in between, and the task filed
+// next was parked as off the target list.
+func TestModelDiscoveryKeepsReposAddedWhileItWrites(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	ctx := context.Background()
+	client.Config.ClaudeModels = &flippingModelLister{}
+	putBackends(t, client, model.AgentBackend{ID: "c", Framework: model.AgentFrameworkClaude})
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	// Stopped on every way out, a t.Fatal below among them: a pass still
+	// running once the test's store is closed would fail on it, and
+	// t.Error after the test has returned panics.
+	halt := sync.OnceFunc(func() { close(stop); wg.Wait() })
+	defer halt()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := client.AdvertiseDiscoveredModels(ctx); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	const repos = 60
+	for i := range repos {
+		if _, err := client.AddTargetRepo(ctx, fmt.Sprintf("acme/repo-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	halt()
+
+	stored, err := client.Store.TargetRepos(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range repos {
+		if want := fmt.Sprintf("acme/repo-%d", i); !slices.Contains(stored, want) {
+			t.Errorf("%s was added but is not on the target list %v", want, stored)
+		}
+	}
 }

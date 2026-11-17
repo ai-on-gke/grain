@@ -182,6 +182,10 @@ const (
 	// shapeSkills is a JSON-encoded model.SkillsConfig column, written as
 	// a mapping {enabled, folders} when canonical and verbatim otherwise.
 	shapeSkills
+	// shapeSandbox is a JSON-encoded model.SandboxShape column, written as
+	// the mapping {cpus, memory-mb, disk-gb} a declaration writes when it
+	// reads back as itself, and verbatim otherwise.
+	shapeSandbox
 )
 
 // declFieldShape is one field of a document.
@@ -276,6 +280,9 @@ func shapeOf(f declschema.Field, key string) (shape, error) {
 		}
 		if key == "skills" {
 			return shapeSkills, nil
+		}
+		if key == "sandbox" {
+			return shapeSandbox, nil
 		}
 		return shapeScalar, nil
 	case len(f.Columns) == 2 && f.Columns[0] == "target_owner":
@@ -415,7 +422,7 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		row := map[string]any{"id": id}
+		row := defaultMainRow(k, id)
 		for _, f := range k.fields {
 			if f.key == "id" {
 				continue
@@ -555,6 +562,27 @@ func (d declDocument) entryID(k declKind, i int, entry map[string]*yaml.Node) (s
 		return "", fmt.Errorf("staterepo: %s entry %d has an `id` that is not a name", d.path, i)
 	}
 	return node.Value, nil
+}
+
+// defaultMainRow initializes a declaration's main-table row with its id and,
+// for columns that are NOT NULL with no DDL default in pkg/model/schema.go,
+// their empty column values. That lets a hand-written entry in
+// settings/templates.yml omit target:, auto-merge:, created-at: (or
+// name/title/body) the way .grain/templates/<name>.yml omits target:, while
+// columns that do declare a DDL default remain absent when omitted so check.go
+// and resets.go still observe them.
+func defaultMainRow(k declKind, id string) map[string]any {
+	row := map[string]any{"id": id}
+	if k.schema.Kind == model.DeclaredTemplate {
+		row["name"] = ""
+		row["title"] = ""
+		row["body"] = ""
+		row["target_owner"] = ""
+		row["target_name"] = ""
+		row["auto_merge"] = json.Number("0")
+		row["created_at"] = "0001-01-01T00:00:00Z"
+	}
+	return row
 }
 
 // cadenceKeys is every key recurrenceNode writes a cadence under, and so
@@ -776,9 +804,21 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			continue
 		}
 		if f.table != "" {
-			node, err := companionNode(f, mine(companions[f.table], k.parent, id))
+			rows := mine(companions[f.table], k.parent, id)
+			if (f.shape == shapeRepos || f.shape == shapeWrites) && hasGrantsField(k) {
+				// unified-grants §3: a row grants: already spells as
+				// …/repo#read or …/repo#write is written there alone;
+				// reads:/writes: keep only the rows it cannot carry.
+				rows = slices.DeleteFunc(slices.Clone(rows), func(row map[string]any) bool {
+					return repoGrantEntry(f, row) != nil
+				})
+			}
+			node, err := companionNode(f, rows)
 			if err != nil {
 				return nil, err
+			}
+			if f.shape == shapeGrants {
+				node = withRepoGrants(node, repoGrantEntries(k, id, companions))
 			}
 			if node == nil {
 				continue
@@ -805,11 +845,92 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 	return out, nil
 }
 
+// repoGrantEntries is an entry's reads:/writes: spelt as the task-level
+// repository grants they are -- …/repo#read {repo} for each read row,
+// …/repo#write {repo, base} for each write row -- which the export writes
+// under grants: in their place (unified-grants §3). The import projects
+// them back into the read and write tables (projectedRepoRow). A row whose
+// repository is anything but a plain owner/name on the default host is
+// left to reads:/writes:.
+func repoGrantEntries(k declKind, id string, companions map[string][]map[string]any) []*yaml.Node {
+	var out []*yaml.Node
+	for _, f := range k.fields {
+		if f.shape != shapeRepos && f.shape != shapeWrites {
+			continue
+		}
+		for _, row := range mine(companions[f.table], k.parent, id) {
+			if entry := repoGrantEntry(f, row); entry != nil {
+				out = append(out, entry)
+			}
+		}
+	}
+	return out
+}
+
+// repoGrantEntry is one read (shapeRepos) or write (shapeWrites) row as
+// the grants: entry that stands for it, or nil when the row is not one a
+// grant can carry and so stays under reads:/writes:.
+func repoGrantEntry(f declFieldShape, row map[string]any) *yaml.Node {
+	repo, ok := plainRepo(row)
+	if !ok {
+		return nil
+	}
+	if f.shape == shapeRepos {
+		return str(model.TaskRepoReadGrant(repo).Key())
+	}
+	base, ok := textOf(row["base"])
+	if !ok {
+		return nil
+	}
+	return str(model.TaskRepoWriteGrant(model.WriteTarget{Repo: repo, Base: base}).Key())
+}
+
+// hasGrantsField reports whether k's entries have a grants: list, the
+// only place a plain read or write row can be written instead of
+// reads:/writes:.
+func hasGrantsField(k declKind) bool {
+	for _, f := range k.fields {
+		if f.shape == shapeGrants {
+			return true
+		}
+	}
+	return false
+}
+
+// plainRepo is a read or write row's repository when its owner and name
+// are a plain owner/name that parses back to exactly the columns it came
+// from, so the grant's {repo} projects back into the same row.
+func plainRepo(row map[string]any) (model.RepoRef, bool) {
+	owner, ownerOK := textOf(row["owner"])
+	name, nameOK := textOf(row["name"])
+	if !ownerOK || !nameOK || owner == "" || name == "" || strings.Contains(owner, "/") || strings.Contains(name, "/") {
+		return model.RepoRef{}, false
+	}
+	repo, err := model.ParseRepo(owner + "/" + name)
+	if err != nil || repo.OffDefaultHost() != "" || repo.Owner != owner || repo.Name != name {
+		return model.RepoRef{}, false
+	}
+	return repo, true
+}
+
+// withRepoGrants is the grants: list node with entries appended after the
+// entry's own grant rows, or a new list of them when it has none.
+func withRepoGrants(node *yaml.Node, entries []*yaml.Node) *yaml.Node {
+	if len(entries) == 0 {
+		return node
+	}
+	if node == nil {
+		node = &yaml.Node{Kind: yaml.SequenceNode}
+	}
+	node.Content = append(node.Content, entries...)
+	return node
+}
+
 // hasColumn reports whether row was read from a table that has f's
 // column. Only a one-column field can be missing that way: the cadence,
 // target and change target are older than any schema this build migrates.
 func hasColumn(f declFieldShape, row map[string]any) bool {
-	if f.shape != shapeBool && f.shape != shapeScalar && f.shape != shapeSkills {
+	if f.shape != shapeBool && f.shape != shapeScalar && f.shape != shapeSkills && f.shape != shapeSandbox {
 		return true
 	}
 	_, ok := row[f.columns[0]]
@@ -893,6 +1014,26 @@ func columnNode(f declFieldShape, row map[string]any) (string, *yaml.Node, error
 			return f.key, out, nil
 		}
 		return f.key, valueNode(v), nil
+	case shapeSandbox:
+		v := row[f.columns[0]]
+		text, ok := textOf(v)
+		if !ok || text == "" {
+			return f.key, valueNode(v), nil
+		}
+		sb := model.DecodeSandboxShape(text)
+		if sb.IsZero() || model.EncodeSandboxShape(sb) != text {
+			return f.key, valueNode(v), nil
+		}
+		out := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
+		for _, d := range []struct {
+			name string
+			v    int
+		}{{"cpus", sb.CPUs}, {"memory-mb", sb.MemoryMB}, {"disk-gb", sb.DiskGB}} {
+			if d.v > 0 {
+				out.Content = append(out.Content, key(d.name), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(d.v)})
+			}
+		}
+		return f.key, out, nil
 	default:
 		return f.key, valueNode(row[f.columns[0]]), nil
 	}
@@ -1293,6 +1434,10 @@ func nodeValue(n *yaml.Node) (any, error) {
 func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[string]any) error {
 	switch f.shape {
 	case shapeTarget:
+		if node.Kind == yaml.ScalarNode && node.Tag == "!!null" {
+			row["target_owner"], row["target_name"] = "", ""
+			return nil
+		}
 		return decodeRepoInto(path, id, node, row, "target_owner", "target_name")
 	case shapeChangeTarget:
 		return decodeChangeTargetInto(path, id, f.key, node, row)
@@ -1321,6 +1466,49 @@ func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[s
 		v, err := nodeValue(node)
 		if err != nil {
 			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+		}
+		row[f.columns[0]] = v
+		return nil
+	case shapeSandbox:
+		if node.Kind == yaml.MappingNode && !isBase64Mapping(node) {
+			// A key the mapping does not know (`disk_gb`, `memoryMb`) is
+			// refused by name rather than dropped, which would import the
+			// template at the deployment's default without a word.
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				switch k := node.Content[i].Value; k {
+				case "cpus", "memory-mb", "disk-gb":
+				default:
+					return fmt.Errorf("staterepo: %s, %s: %s: unknown key %q (want cpus, memory-mb or disk-gb)", path, id, f.key, k)
+				}
+			}
+			var raw struct {
+				CPUs     int `yaml:"cpus"`
+				MemoryMB int `yaml:"memory-mb"`
+				DiskGB   int `yaml:"disk-gb"`
+			}
+			if err := node.Decode(&raw); err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+			}
+			sb := model.SandboxShape{CPUs: raw.CPUs, MemoryMB: raw.MemoryMB, DiskGB: raw.DiskGB}
+			if err := model.ValidateTemplateSandbox(sb); err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %w", path, id, err)
+			}
+			row[f.columns[0]] = model.EncodeSandboxShape(sb)
+			return nil
+		}
+		v, err := nodeValue(node)
+		if err != nil {
+			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+		}
+		// Column text written verbatim is held to the same ceiling as the
+		// mapping above, so the verbatim spelling is no way around it.
+		if text, ok := textOf(v); ok && strings.TrimSpace(text) != "" {
+			var sb model.SandboxShape
+			if json.Unmarshal([]byte(text), &sb) == nil {
+				if err := model.ValidateTemplateSandbox(sb); err != nil {
+					return fmt.Errorf("staterepo: %s, %s: %w", path, id, err)
+				}
+			}
 		}
 		row[f.columns[0]] = v
 		return nil
@@ -1614,10 +1802,10 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			row := map[string]any{parent: id, "via": string(model.GrantByLabel), "folder": nil}
 			if entry.Kind == yaml.ScalarNode {
 				// A retired in-process capability is read as the canonical
-				// grant(s) it became (model.CanonicalLegacyGrants), so a
+				// grant(s) it became (model.RetiredGrantsBecame), so a
 				// grain/config exported before the store migration that
 				// rewrote it imports as what the store now holds.
-				for _, capID := range model.CanonicalLegacyGrants(entry.Value) {
+				for _, capID := range model.RetiredGrantsBecame(entry.Value) {
 					out = append(out, map[string]any{parent: id, "capability": capID, "via": string(model.GrantByLabel), "folder": nil})
 				}
 				continue
@@ -1672,7 +1860,7 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 					}
 					name = model.CanonicalGrant(encoded).Key()
 				}
-				for _, capID := range model.CanonicalLegacyGrants(name) {
+				for _, capID := range model.RetiredGrantsBecame(name) {
 					out = append(out, map[string]any{
 						parent:       id,
 						"capability": capID,

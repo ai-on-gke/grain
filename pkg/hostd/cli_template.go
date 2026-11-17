@@ -578,24 +578,8 @@ func FetchAllowlistTemplate(ctx context.Context, opts FetchTemplateOptions) (All
 	if err != nil {
 		return AllowlistTemplate{}, err
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(opts.ServerURL), "/")
 	httpClient := opts.HTTPClient
 	idToken := opts.IDToken
-	if httpClient == nil {
-		enrollHTTPMu.RLock()
-		prov := enrollHTTPProvider
-		enrollHTTPMu.RUnlock()
-		if prov != nil {
-			c, tokFn, err := prov(baseURL)
-			if err != nil {
-				return AllowlistTemplate{}, err
-			}
-			httpClient = c
-			if idToken == nil {
-				idToken = tokFn
-			}
-		}
-	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second

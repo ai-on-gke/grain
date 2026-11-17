@@ -478,7 +478,10 @@ export default function ProcessesList({
                   )}
                 </ChipStrip>
                 <span className="template-title hint">
-                  pass {run.pass} · {describeRunPlan(run)}
+                  {/* pass 0 is a run that has filed no pass yet (or
+                      ended before it could): there is no pass to name. */}
+                  {run.pass > 0 && `pass ${run.pass} · `}
+                  {describeRunPlan(run)}
                 </span>
                 {run.error && (
                   <span
@@ -699,7 +702,11 @@ function ProcessRow({
             />
           )}
           {isSchedule && (
-            <Chip size="small" label={describeRecurrence(s.recurrence)} />
+            <Chip
+              size="small"
+              label={describeRecurrence(s.recurrence)}
+              title={describeRecurrence(s.recurrence)}
+            />
           )}
           {isSchedule && s.suiteId && (
             <Chip
@@ -707,6 +714,7 @@ function ProcessRow({
               variant="outlined"
               icon={<ItemGlyph kind="suites" />}
               label={`Suite: ${s.suiteName || s.suiteId}`}
+              title={`Suite: ${s.suiteName || s.suiteId}`}
             />
           )}
           {isSchedule && s.templateId && (
@@ -715,6 +723,7 @@ function ProcessRow({
               variant="outlined"
               icon={<ItemGlyph kind="templates" />}
               label={`Template: ${s.templateName || s.templateId}`}
+              title={`Template: ${s.templateName || s.templateId}`}
             />
           )}
           {isSchedule && s.overlap === "allow" && (
@@ -740,7 +749,11 @@ function ProcessRow({
           )}
           {r.kind === "suite" && (
             <>
-              <Chip size="small" label={describeMode(s)} />
+              <Chip
+                size="small"
+                label={describeMode(s)}
+                title={describeMode(s)}
+              />
               <Chip
                 size="small"
                 variant="outlined"

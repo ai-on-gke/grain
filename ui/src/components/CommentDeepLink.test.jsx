@@ -177,7 +177,7 @@ describe("comment deep links (/tasks/<id>#comment=<id>)", () => {
     api.mockImplementation(async (path) => {
       if (
         path ===
-        "/api/tasks/12?comments_limit=200&comments_before=1030&attempts_limit=1"
+        "/api/tasks/12?comments_limit=500&comments_before=1030&attempts_limit=1"
       ) {
         return {
           id: "12",

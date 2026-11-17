@@ -252,7 +252,7 @@ func goModPin(store *model.Store, reader github.FileReader, repo model.RepoRef, 
 		e := v.(goModPinEntry)
 		return e.version, e.ok, nil
 	}
-	data, found, err := reader.ReadFile(repo.Owner, repo.Name, sha, "go.mod")
+	data, found, err := reader.ReadFile(repo.StoredOwner(), repo.Name, sha, "go.mod")
 	if err != nil {
 		return "", false, fmt.Errorf("reading go.mod at %s: %w", shortSHA(sha), err)
 	}
@@ -286,7 +286,7 @@ func syncedReleaseCandidate(store *model.Store, forge ReleaseQualificationForge,
 	if err != nil {
 		return qualificationCandidate{}, false, err
 	}
-	upTags, err := forge.ListTags(upstream.Owner, upstream.Name)
+	upTags, err := forge.ListTags(upstream.StoredOwner(), upstream.Name)
 	if err != nil {
 		return qualificationCandidate{}, false, fmt.Errorf("listing %s's tags: %w", upstream, err)
 	}
@@ -296,16 +296,16 @@ func syncedReleaseCandidate(store *model.Store, forge ReleaseQualificationForge,
 			releases[t.Name] = t.SHA
 		}
 	}
-	own, err := forge.ListTags(gate.repo.Owner, gate.repo.Name)
+	own, err := forge.ListTags(gate.repo.StoredOwner(), gate.repo.Name)
 	if err != nil {
 		return qualificationCandidate{}, false, fmt.Errorf("listing tags: %w", err)
 	}
 	tagged := tagCommits(own)
-	branch, err := forge.DefaultBranch(gate.repo.Owner, gate.repo.Name)
+	branch, err := forge.DefaultBranch(gate.repo.StoredOwner(), gate.repo.Name)
 	if err != nil || branch == "" {
 		branch = "main"
 	}
-	commits, err := lister.ListPathCommits(gate.repo.Owner, gate.repo.Name, branch, "go.mod")
+	commits, err := lister.ListPathCommits(gate.repo.StoredOwner(), gate.repo.Name, branch, "go.mod")
 	if err != nil {
 		return qualificationCandidate{}, false, fmt.Errorf("listing go.mod's commits on %s: %w", branch, err)
 	}
@@ -409,7 +409,7 @@ func stage1Green(forge ReleaseQualificationForge, repo model.RepoRef, sha string
 		if !ok {
 			return false, fmt.Errorf("this forge connection cannot read commit statuses, and Stage 1 is status %s", cfg.Stage1Status)
 		}
-		statuses, err := reader.CommitStatuses(repo.Owner, repo.Name, sha)
+		statuses, err := reader.CommitStatuses(repo.StoredOwner(), repo.Name, sha)
 		if err != nil {
 			return false, err
 		}
@@ -420,7 +420,7 @@ func stage1Green(forge ReleaseQualificationForge, repo model.RepoRef, sha string
 		}
 		return false, nil
 	}
-	runs, err := forge.ListWorkflowRuns(repo.Owner, repo.Name, sha)
+	runs, err := forge.ListWorkflowRuns(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
 		return false, err
 	}
@@ -437,7 +437,7 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 	gate qualificationGate, now time.Time) error {
 
 	repo := gate.repo
-	tags, err := forge.ListTags(repo.Owner, repo.Name)
+	tags, err := forge.ListTags(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		return fmt.Errorf("listing tags: %w", err)
 	}
@@ -507,7 +507,7 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	gate qualificationGate, commits map[string]string, cand qualificationCandidate, now time.Time) error {
 
 	repo, checkName, rcTag, sha := gate.repo, gate.cfg.Check, cand.label, cand.sha
-	app, err := forge.CheckRunApp(repo.Owner, repo.Name)
+	app, err := forge.CheckRunApp(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		return fmt.Errorf("reading which GitHub App posts %s on %s: %w", checkName, rcTag, err)
 	}
@@ -523,7 +523,7 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 		return errors.Join(stage1, fmt.Errorf("not qualifying %s: its forge connection is not a GitHub App grain can name, so its own %s could not be told from one anything else posted",
 			rcTag, checkName))
 	}
-	checks, err := forge.ListCheckRuns(repo.Owner, repo.Name, sha)
+	checks, err := forge.ListCheckRuns(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
@@ -681,7 +681,7 @@ func (q *rcQualification) start(ctx context.Context, items []string) error {
 		suite.Items = append(suite.Items, model.SuiteItem{TemplateID: item})
 	}
 	suite.Mode, suite.MaxPasses, suite.Count, suite.AutoMerge = model.SuiteUntilClean, 1, 0, false
-	base, err := q.forge.DefaultBranch(q.repo.Owner, q.repo.Name)
+	base, err := q.forge.DefaultBranch(q.repo.StoredOwner(), q.repo.Name)
 	if err != nil || base == "" {
 		base = "main"
 	}
@@ -740,7 +740,7 @@ func (q *rcQualification) attempt(ctx context.Context, st model.SuiteTaskStatus)
 		return a, err
 	}
 	a.Note = closingNote(comments, st.TaskID)
-	leaked, err := q.forge.BranchExists(q.repo.Owner, q.repo.Name, model.QualificationScratchBranch(st.TaskID))
+	leaked, err := q.forge.BranchExists(q.repo.StoredOwner(), q.repo.Name, model.QualificationScratchBranch(st.TaskID))
 	if err != nil {
 		return a, fmt.Errorf("checking %s's scratch branch: %w", st.TaskID, err)
 	}
@@ -851,12 +851,12 @@ func (q *rcQualification) post(status, conclusion, title, summary string) error 
 		run.StartedAt = &now
 	}
 	if q.checkID != 0 {
-		if err := q.forge.UpdateCheckRun(q.repo.Owner, q.repo.Name, q.checkID, run); err != nil {
+		if err := q.forge.UpdateCheckRun(q.repo.StoredOwner(), q.repo.Name, q.checkID, run); err != nil {
 			return fmt.Errorf("updating %s on %s: %w", q.check, q.rcTag, err)
 		}
 		return nil
 	}
-	id, err := q.forge.CreateCheckRun(q.repo.Owner, q.repo.Name, run)
+	id, err := q.forge.CreateCheckRun(q.repo.StoredOwner(), q.repo.Name, run)
 	if err != nil {
 		return fmt.Errorf("posting %s on %s: %w", q.check, q.rcTag, err)
 	}

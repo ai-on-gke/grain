@@ -514,6 +514,17 @@ expect "nothing newer" "says there is nothing to cut" has "no new LKG commit on 
 expect "nothing newer" "cuts no rc.2 on an older green commit" eq "$(remote_tag v2.3.0-rc.2)" ""
 expect "nothing newer" "only marks the dropped rc" images_were "discard-rc v2.3.0-rc.1"
 
+# --- nothing newer while main's red has an open repair: the reason names it ---
+setup "v2.3.0-rc.1"
+tag_remote v2.3.0-rc.1 "$c3" 40
+runs "$c2" "$c3"
+jq '. + {grain_note: "GitHub Actions: repair task 4801 is open for the red main; GitHub Actions: repair task 4801 is open for the red main"}' \
+  "$work/runs.json" > "$work/runs.noted.json" && mv "$work/runs.noted.json" "$work/runs.json"
+train
+expect "nothing newer, repair open" "exits 0" eq "$status" 0
+expect "nothing newer, repair open" "names the repair once" \
+  has "no new LKG commit on main since ${c3:0:12}; nothing to cut (repair task 4801 is open for the red main)"
+
 # --- grain/rc-hold: held while open, released after completion, absent cuts ---
 setup ""
 tag_remote v2.3.0-rc.1 "$c2" 3

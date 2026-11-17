@@ -226,6 +226,25 @@ func (a *actionsCache) put(key string, value any, ttl time.Duration, now time.Ti
 	a.entries[key] = actionsCacheEntry{value: value, expires: now.Add(ttl)}
 }
 
+// invalidateRun drops cached entries for runID (and any jobIDs) and repo's
+// run listings so reads after a re-run fetch the new attempt rather than
+// serving the finished attempt for actionsFinishedTTL.
+func (a *actionsCache) invalidateRun(repo model.RepoRef, runID int64, jobIDs ...int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.entries, fmt.Sprintf("run|%s|%d", repo, runID))
+	delete(a.entries, fmt.Sprintf("artifacts|%s|%d", repo, runID))
+	for _, jid := range jobIDs {
+		delete(a.entries, fmt.Sprintf("log|%s|%d", repo, jid))
+	}
+	prefix := fmt.Sprintf("runs|%s|", repo)
+	for k := range a.entries {
+		if strings.HasPrefix(k, prefix) {
+			delete(a.entries, k)
+		}
+	}
+}
+
 // errActionsBudgetLow is a forge read declined because the hour's
 // budget is low (github.BudgetLow): what is left goes to the merge queue.
 var errActionsBudgetLow = errors.New("the GitHub API budget is low, so grain is not spending it on reading Actions for an agent " +
@@ -897,7 +916,31 @@ func (a actionsExternalRuns) FindExternalRunsCounted(ctx context.Context, f ci.R
 		}
 		return nil, 0, refused.reason
 	}
-	return a.c.listActionsRunsCounted(ctx, repo, f, limit)
+	runs, matched, note := a.c.listActionsRunsCounted(ctx, repo, f, limit)
+	if repair := a.c.openBaseRepairNote(ctx, repo, f.Ref); repair != "" {
+		if note != "" {
+			note += "; "
+		}
+		note += repair
+	}
+	return runs, matched, note
+}
+
+// openBaseRepairNote is what a listing of ref's runs says about repo's
+// open default-branch repair (orchestrator's githubbaserepair.go), or "":
+// "repair task <id> is open for the red <ref>", which the release train
+// repeats when it has no known-good commit to cut (release-from-trunk.sh).
+func (c *Client) openBaseRepairNote(ctx context.Context, repo model.RepoRef, ref string) string {
+	ref = strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/")
+	if c.Store == nil || (ref != "main" && ref != "master") {
+		return ""
+	}
+	ids, err := c.Store.OpenTasksWithTag(ctx, model.GitHubBaseRepairTag(repo))
+	if err != nil || len(ids) == 0 {
+		return ""
+	}
+	sort.Strings(ids)
+	return fmt.Sprintf("repair task %s is open for the red %s", ids[0], ref)
 }
 
 var _ ci.ExternalRunsRepos = actionsExternalRuns{}
