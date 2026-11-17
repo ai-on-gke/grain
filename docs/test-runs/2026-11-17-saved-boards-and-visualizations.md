@@ -394,4 +394,5 @@ None newly filed.
 | `cd ui-ng && npx playwright test e2e/next-saved-boards.spec.js` (fix) | 12 passed |
 | `cd ui-ng && npx vitest run src/app/tasks/` | 4 files, 66 passed |
 | `cd ui-ng && npm run lint` / `npm run build` | clean |
-| `cd ui-ng && npx playwright test` (full `/next/` suite, fix) | see the PR's `ui-ng e2e` job and the closing note |
+| `cd ui-ng && npx playwright test` (full `/next/` suite across `desktop`, `phone`, `dark`, including `next-full-system.spec.js`; fix) | 411 passed, 2 skipped |
+| `go test ./tests/hygiene/` | passed |
