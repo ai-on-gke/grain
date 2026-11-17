@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -92,7 +93,9 @@ type StarvedScheduleFiring struct {
 	Notified bool
 	// HeldBy is the other schedule in the overlap group whose firing
 	// filed the task (ScheduleSkip.HeldByScheduleID), empty when the task
-	// is the schedule's own previous firing; Group is that group.
+	// is the schedule's own previous firing; Group is that group. A suite
+	// run that names no schedule but carries the group's tag leaves HeldBy
+	// empty and sets Group.
 	HeldBy, Group string
 }
 
@@ -100,6 +103,9 @@ type StarvedScheduleFiring struct {
 // after "#<id> from" or "suite run <id> from".
 func (f StarvedScheduleFiring) blocker() string {
 	if f.HeldBy == "" {
+		if f.Group != "" {
+			return fmt.Sprintf("a start outside any schedule in overlap group %q", f.Group)
+		}
 		return "its previous firing"
 	}
 	if f.Group == "" {
@@ -184,12 +190,29 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 			return StarvedScheduleFiring{}, err
 		}
 		out.SuiteRunID, out.Pass = run.ID, run.CurrentPass()
+		if run.ScheduleID != sched.ID {
+			// A peer's run, or one that names no schedule at all (the
+			// group-tag fallback in suiteRunHolding): either way it is not
+			// this schedule's previous firing.
+			out.HeldBy, out.Group = run.ScheduleID, strings.TrimSpace(sched.OverlapGroup)
+		}
 		taskIDs = ids
 		clear = &NotificationClear{Kind: ClearsOnSuiteRun, SuiteRun: run.ID}
 	} else {
 		started, err := s.startedOrNotQueued(ctx, k.TaskID)
 		if err != nil || started {
 			return StarvedScheduleFiring{}, err
+		}
+		if out.HeldBy == "" && strings.TrimSpace(sched.OverlapGroup) != "" {
+			// A group task that names no schedule (one a schedule-less
+			// suite run filed, say) is not this schedule's previous firing.
+			task, err := s.GetTask(ctx, k.TaskID)
+			if err != nil {
+				return StarvedScheduleFiring{}, err
+			}
+			if task != nil && !slices.Contains(task.Tags, ScheduleFiringTag(sched.ID)) {
+				out.Group = strings.TrimSpace(sched.OverlapGroup)
+			}
 		}
 		taskIDs = []string{k.TaskID}
 	}

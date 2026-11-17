@@ -1771,7 +1771,8 @@ skipped, so no release candidate was cut that day, and nothing said why.
   `model.ScheduleStarvedAfter` (1h) has passed since it came due, or once
   `model.ScheduleStarvedOccurrences` (3) occurrences are held behind the
   same task, whichever comes first. Three is the hour of a 20-minute
-  train. The blocker must be the skip's open task, still `queued`, and
+  train. The blocker must be the skip's open task (or a suite run: see
+  the grain/task-4609 update below), still `queued`, and
   have no run at all (`Store.Runs`). A task that started and is queued
   again (a retry or a resume) is waiting on its own backoff, which a
   priority does not fix. A running task, or one waiting on a person,
@@ -1796,6 +1797,36 @@ skipped, so no release candidate was cut that day, and nothing said why.
   worker. `admission: bypass` would also start the task past a full
   worker pool. It is not applied automatically, because only a person may
   grant an admission above `standard`.
+
+## Update: a firing held by a suite run that never started is raised too (grain/task-4609)
+
+The rule above covered only a skip whose blocker is one open task
+(`SuppressedByOpenTask`). A schedule held by a suite run
+(`SuppressedBySuiteRun`) stalled the same way when the run's tasks sat
+`queued`, and nothing raised them. It is now covered too:
+
+- **Which runs.** `Store.suiteRunHolding` finds the active suite run the
+  skip is held by: the schedule's own run, a peer's in its overlap group
+  (`ScheduleSkip.HeldByScheduleID`), or -- for a group held by a run
+  that names no schedule -- the oldest active run whose tasks carry the
+  group's tag. Workflow-run holders (`SuppressedByWorkflowRun`) are out
+  of scope: a CI run has no queued task a priority could raise.
+- **When.** The same starvation bound (1h, or 3 occurrences). The run's
+  current pass must have started none of its open tasks: every open task
+  of the pass is still `queued` with no run. While any open task in the
+  pass has started, the run is making progress and is left alone.
+- **What.** Every never-started task of the current pass is raised to
+  the highest queued priority, together. Each raised task gets the
+  comment, naming the suite run, its pass and the tasks raised.
+- **Naming the blocker.** The title, comment and notification say whose
+  run it is: "its previous firing" for the schedule's own, "schedule X's
+  firing in overlap group G" for a peer's, and "a start outside any
+  schedule in overlap group G" for a run (or a group task) that names no
+  schedule.
+- **Clearing.** The `pipeline.schedule-starved:<schedule id>`
+  notification carries `clears_when: {kind: suite-run, suiteRun: <id>}`
+  (`model.ClearsOnSuiteRun`). It clears when the suite run is no longer
+  active (finished, failed, or gone), not when one of its tasks closes.
 
 ## Update: a schedule can be held while its base branch's publishing is held (grain/task-4393)
 

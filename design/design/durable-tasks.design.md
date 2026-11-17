@@ -591,7 +591,8 @@ The rules:
   goes away (`Store.ClearNotification(subject, by)`). A notification with
   `clears_when` is checked each cycle by `reconcileNotifications`. The
   conditions are a `WaitTarget` (a task closed or merged, a CI verdict),
-  `base-green {repo, branch}`, or `ttl`. A cleared notification stays
+  `base-green {repo, branch}`, `ttl`, or `suite-run {suiteRun}` (the
+  suite run is no longer active: finished, failed, or gone). A cleared notification stays
   readable in history, and a later raise of the same subject is a new
   instance.
 - **Acknowledge is not clear.** Acknowledging hides it from the Alerts
