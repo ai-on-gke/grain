@@ -148,6 +148,20 @@ func AcceptableReviewFindings(t Task, gate, reviewTask string) (records []Review
 	return nil, false
 }
 
+// lastAcceptableReview is the most recently recorded review whose findings
+// on gate of t could be accepted, or "" when none could.
+func lastAcceptableReview(t Task, gate string) string {
+	records := ReviewFindings(t)
+	for i := len(records) - 1; i >= 0; i-- {
+		if id := records[i].ReviewTask; id != "" {
+			if _, ok := AcceptableReviewFindings(t, gate, id); ok {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
 // questionsGate is the gate ComputeMergeGates lists reviewTask's open
 // questions under: the security review's when it is t's security review,
 // the code review's otherwise.
