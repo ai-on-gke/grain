@@ -1,0 +1,49 @@
+=== schema 139 daemon (sqlite)
+environment up (sqlite): http://127.0.0.1:4273 (token in /var/tmp/walk-sched-upgrade-sqlite/data/local-api-token)
+--- own after the 139 build fired it
+id                              admission  hosting
+------------------------------  ---------  -------
+repo:schedule:acme:widgets:own  durable           
+schedule_id                     capability                                 via                         
+------------------------------  -----------------------------------------  ----------------------------
+repo:schedule:acme:widgets:own  https://grain.dev/capabilities/api#memory  .grain/templates/nightly.yml
+--- seed the rest in SQL
+id                               template_id                         admission  hosting
+-------------------------------  ----------------------------------  ---------  -------
+repo:schedule:acme:widgets:big   repo:template:acme:widgets:big      durable           
+repo:schedule:acme:widgets:free  repo:template:acme:widgets:plain    bypass     console
+repo:schedule:acme:widgets:held  repo:template:acme:widgets:plain                      
+repo:schedule:acme:widgets:own   repo:template:acme:widgets:nightly  durable           
+schedule_id                      capability                                 via                         
+-------------------------------  -----------------------------------------  ----------------------------
+repo:schedule:acme:widgets:free  https://grain.dev/capabilities/api#memory  operator                    
+repo:schedule:acme:widgets:own   https://grain.dev/capabilities/api#memory  .grain/templates/nightly.yml
+=== upgrade in place to HEAD
+daemon restarted: http://127.0.0.1:4273
+2026/11/13 04:10:19 grain: migrated the store in place from schema 139 to 146
+id                               template_id                         admission  hosting  skip_when
+-------------------------------  ----------------------------------  ---------  -------  ---------
+repo:schedule:acme:widgets:big   repo:template:acme:widgets:big      durable                      
+repo:schedule:acme:widgets:free  repo:template:acme:widgets:plain    bypass     console           
+repo:schedule:acme:widgets:held  repo:template:acme:widgets:plain                                 
+repo:schedule:acme:widgets:own   repo:template:acme:widgets:nightly                               
+schedule_id                      capability                                 via     
+-------------------------------  -----------------------------------------  --------
+repo:schedule:acme:widgets:free  https://grain.dev/capabilities/api#memory  operator
+id                                  sandbox
+----------------------------------  -------
+repo:template:acme:widgets:big             
+repo:template:acme:widgets:nightly         
+repo:template:acme:widgets:plain           
+=== own fires on HEAD: template's durable + api#memory, plus its own api#ci-read
+id  admission  hosting   
+--  ---------  ----------
+3   durable    unattended
+capability                                                          via                         
+------------------------------------------------------------------  ----------------------------
+https://grain.dev/capabilities/api#ci-read={"repo":"acme/widgets"}  default                     
+https://grain.dev/capabilities/api#memory                           .grain/templates/nightly.yml
+capability                                  via                         
+------------------------------------------  ----------------------------
+https://grain.dev/capabilities/api#ci-read  .grain/schedules/own.yml    
+https://grain.dev/capabilities/api#memory   .grain/templates/nightly.yml

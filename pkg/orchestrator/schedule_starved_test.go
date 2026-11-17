@@ -228,7 +228,7 @@ func TestStarvedWorkflowScheduleReviewIsRaisedAndNotified(t *testing.T) {
 	filed := firstMorning.Add(5 * time.Minute)
 	review := filedTask(t, ctx, store, "review-1", repo)
 	review.Title = sched.Title
-	review.Origin = model.Origin{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
+	review.Filing = model.Filing{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
 		Reason: model.ReasonSchedule}
 	review.Approval = &model.Attribution{Actor: model.SchedulePrincipal}
 	review.Tags = []string{model.ScheduleFiringTag(sched.ID)}
@@ -331,7 +331,7 @@ func TestStartedWorkflowScheduleReviewIsNotStarved(t *testing.T) {
 	busyQueue(t, store, "busy-9", 9)
 	filed := firstMorning.Add(5 * time.Minute)
 	review := filedTask(t, ctx, store, "review-1", repo)
-	review.Origin = model.Origin{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
+	review.Filing = model.Filing{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
 		Reason: model.ReasonSchedule}
 	review.Tags = []string{model.ScheduleFiringTag(sched.ID)}
 	review.CreatedAt = &filed
@@ -370,7 +370,7 @@ func workflowReview(t *testing.T, store *model.Store, sched model.Schedule, id s
 	ctx := t.Context()
 	review := filedTask(t, ctx, store, id, sched.Target)
 	review.Title = sched.Title
-	review.Origin = model.Origin{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
+	review.Filing = model.Filing{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
 		Reason: model.ReasonSchedule}
 	review.Approval = &model.Attribution{Actor: model.SchedulePrincipal}
 	review.Tags = []string{model.ScheduleFiringTag(sched.ID)}

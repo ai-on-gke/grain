@@ -41,7 +41,7 @@ func TestSingleTenantTaskGitCredentialIsTheDefaultTeams(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := st.PutTask(ctx, model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "fix the thing",
-		Origin: model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing: model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Target: &repo, Binding: model.BindingDirective,
 	}); err != nil {
 		t.Fatal(err)

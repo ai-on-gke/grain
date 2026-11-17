@@ -31,40 +31,46 @@ import (
 //
 // Unlike the one task list, details are keyed by task id. Keeping only the last
 // one would make several tabs thrash each other's cache; keeping every id would
-// retain an unbounded amount of comment and attempt history. Thirty-two entries
-// covers considerably more simultaneously open panes than a normal browser
-// session while placing a firm bound on retained response bodies. The least
-// recently used entry is evicted when that bound is crossed.
+// retain an unbounded amount of comment and attempt history. Full unpaged panes
+// are bounded to 32 entries, while compact paged head summaries (as served by
+// GET /api/tasks/summaries, up to 50 ids per request across /next/agents,
+// /next/tasks and /next/inbox) live in a separate 256-entry LRU so a 50-id
+// summary poll neither thrashes on every quiet 304 nor evicts open panes.
 //
 // As with taskListCache, a ChangeToken error disables this optimisation for the
 // request, and concurrent misses may build concurrently rather than serialising
 // callers behind a database read.
 type taskDetailCache struct {
-	mu      sync.Mutex
-	entries map[string]taskDetailCacheEntry
-	clock   uint64
-	builds  atomic.Int64
+	mu           sync.Mutex
+	entries      map[string]taskDetailCacheEntry
+	pagedEntries map[string]taskDetailCacheEntry
+	clock        uint64
+	builds       atomic.Int64
 }
 
 type taskDetailCacheEntry struct {
 	token string
+	repo  string
 	body  []byte
 	etag  string
 	used  uint64
 }
 
-const taskDetailCacheEntries = 32
+const (
+	taskDetailCacheEntries      = 32
+	taskDetailPagedCacheEntries = 256
+)
 
-// response is the body and ETag for GET /api/tasks/{id} (whole or head page).
-func (c *taskDetailCache) response(ctx context.Context, client *Client, id string) ([]byte, string, error) {
-	return c.responseFor(ctx, client, id, TaskPage{}, false)
+func taskDetailCacheKey(id string, page TaskPage, paged bool) string {
+	if paged {
+		return id + "?cl=" + strconv.Itoa(page.CommentsLimit) + "&al=" + strconv.Itoa(page.AttemptsLimit)
+	}
+	return id
 }
 
-func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id string, page TaskPage, paged bool) ([]byte, string, error) {
-	cacheKey := id
-	if paged {
-		cacheKey = id + "?cl=" + strconv.Itoa(page.CommentsLimit) + "&al=" + strconv.Itoa(page.AttemptsLimit)
-	}
+// tokenFor computes the current cache version token once for a request.
+// Empty if Store.ChangeToken cannot be read, which disables caching.
+func (c *taskDetailCache) tokenFor(ctx context.Context, client *Client) string {
 	token := ""
 	if client.Store != nil {
 		if t, err := client.Store.ChangeToken(ctx); err == nil {
@@ -78,7 +84,24 @@ func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id st
 		if v := client.dispatchConditionVersion(); v != 0 {
 			token = token + ":dc=" + strconv.FormatUint(v, 10)
 		}
-		if entry, ok := c.hit(cacheKey, token); ok {
+	}
+	return token
+}
+
+// response is the body and ETag for GET /api/tasks/{id} (whole or head page).
+func (c *taskDetailCache) response(ctx context.Context, client *Client, id string) ([]byte, string, error) {
+	return c.responseFor(ctx, client, id, TaskPage{}, false)
+}
+
+func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id string, page TaskPage, paged bool) ([]byte, string, error) {
+	token := c.tokenFor(ctx, client)
+	return c.responseForWithToken(ctx, client, id, page, paged, token)
+}
+
+func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Client, id string, page TaskPage, paged bool, token string) ([]byte, string, error) {
+	cacheKey := taskDetailCacheKey(id, page, paged)
+	if token != "" {
+		if entry, ok := c.hit(cacheKey, token, paged); ok {
 			return entry.body, entry.etag, nil
 		}
 	}
@@ -102,42 +125,57 @@ func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id st
 	}
 	etag := etagOf(body)
 	if token != "" {
-		c.store(cacheKey, taskDetailCacheEntry{token: token, body: body, etag: etag})
+		c.store(cacheKey, paged, taskDetailCacheEntry{token: token, repo: detail.Repo, body: body, etag: etag})
 	}
 	return body, etag, nil
 }
 
-func (c *taskDetailCache) hit(id, token string) (taskDetailCacheEntry, bool) {
+func (c *taskDetailCache) hit(key, token string, paged bool) (taskDetailCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[id]
+	m := c.entries
+	if paged {
+		m = c.pagedEntries
+	}
+	entry, ok := m[key]
 	if !ok || entry.token != token {
 		return taskDetailCacheEntry{}, false
 	}
 	c.clock++
 	entry.used = c.clock
-	c.entries[id] = entry
+	m[key] = entry
 	return entry, true
 }
 
-func (c *taskDetailCache) store(id string, entry taskDetailCacheEntry) {
+func (c *taskDetailCache) store(key string, paged bool, entry taskDetailCacheEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.entries == nil {
-		c.entries = make(map[string]taskDetailCacheEntry)
+	var m map[string]taskDetailCacheEntry
+	limit := taskDetailCacheEntries
+	if paged {
+		if c.pagedEntries == nil {
+			c.pagedEntries = make(map[string]taskDetailCacheEntry)
+		}
+		m = c.pagedEntries
+		limit = taskDetailPagedCacheEntries
+	} else {
+		if c.entries == nil {
+			c.entries = make(map[string]taskDetailCacheEntry)
+		}
+		m = c.entries
 	}
 	c.clock++
 	entry.used = c.clock
-	c.entries[id] = entry
-	if len(c.entries) <= taskDetailCacheEntries {
+	m[key] = entry
+	if len(m) <= limit {
 		return
 	}
-	var oldestID string
+	var oldestKey string
 	oldest := ^uint64(0)
-	for candidateID, candidate := range c.entries {
+	for candidateKey, candidate := range m {
 		if candidate.used < oldest {
-			oldestID, oldest = candidateID, candidate.used
+			oldestKey, oldest = candidateKey, candidate.used
 		}
 	}
-	delete(c.entries, oldestID)
+	delete(m, oldestKey)
 }

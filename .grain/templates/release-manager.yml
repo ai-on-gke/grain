@@ -109,8 +109,10 @@ body: |
   - **Train ticks.** The newest release-train tasks
     (`grain task list --search 'Run the release train' --limit 10`, then
     `grain task read <id>` on the newest few): their `phase` and `output`
-    lines, `release_waits=`, `promotion_waits=`, `rc_held=`, and "no new
-    LKG".
+    lines, `release_waits=`, `promotion_waits=`, `rc_held=`,
+    `held=publishing (cut skipped)` (publishing on `main` is held by a
+    base-branch triage task, so the tick judged/promoted/dropped any
+    qualifying rc and skipped cutting a new one), and "no new LKG".
   - **rc tags.** `git for-each-ref --sort=-creatordate --format='%(refname:short) %(creatordate:iso) %(*objectname:short)' 'refs/tags/vX.Y.Z*'`.
     For each `-discarded` tag, its reason (`git tag -l --format='%(contents)' vX.Y.Z-rc.N-discarded`).
     The same reason on two or more rcs is a blocker nobody fixed (v3.6.0

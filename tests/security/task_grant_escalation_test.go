@@ -849,7 +849,7 @@ func TestPath1SandboxShapeCeilings(t *testing.T) {
 	if err := rig.store.PutTask(ctx, model.Task{
 		ID: "930", Intent: model.IntentImplement, Title: "stale huge", Target: &widgets,
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 64,
-		Origin: model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect},
+		Filing: model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -861,11 +861,11 @@ func TestPath1SandboxShapeCeilings(t *testing.T) {
 
 	// An agent's proposal above its proposer's sandbox waits for an
 	// unlimited role: a limited one with tasks:admin cannot approve it.
-	agentOrigin := model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect}
+	agentOrigin := model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect}
 	if err := rig.store.PutTask(ctx, model.Task{
 		ID: "920", Intent: model.IntentImplement, Title: "parent", Target: &widgets,
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 2,
-		Origin: agentOrigin, Approval: &agentOrigin.Attribution,
+		Filing: agentOrigin, Approval: &agentOrigin.Attribution,
 		Grants: []model.Grant{
 			{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
 			{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel},
@@ -877,7 +877,7 @@ func TestPath1SandboxShapeCeilings(t *testing.T) {
 		ID: "921", Intent: model.IntentImplement, Title: "bigger child", Target: &widgets,
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 6,
 		Links: []model.Link{{Kind: model.LinkProposedBy, Target: "920"}},
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "920"},
 		}, Reason: model.ReasonProposal},
@@ -964,7 +964,7 @@ func TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings(t *testing.T) {
 			Intent: model.IntentImplement,
 			Title:  title,
 			Body:   "original operator prompt",
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}},
 				Reason:      model.ReasonProposal,
 			},
@@ -1126,7 +1126,7 @@ func TestPath2ExternalTokenApprovalCeiling(t *testing.T) {
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  "proposal with gcp-key",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonProposal,
 		},
@@ -1259,7 +1259,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		Intent:               model.IntentImplement,
 		Title:                "contrib agent task",
 		AutoApproveProposals: true,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "contrib@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonDirect,
 		},
@@ -1395,7 +1395,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 		ID:     "920",
 		Intent: model.IntentImplement,
 		Title:  "sandbox cli runner",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonDirect,
 		},
@@ -1528,7 +1528,7 @@ func TestPath4KnownGapAgentCrossTaskPromptSteering(t *testing.T) {
 		ID:     "930",
 		Intent: model.IntentImplement,
 		Title:  "triage helper",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "contrib@example.com", Source: model.SourceIAP}},
 			Reason:      model.ReasonDirect,
 		},
@@ -1586,6 +1586,8 @@ func TestPath5NonAdminMergeSubmitForceMergeAndHumanReviewRelease(t *testing.T) {
 			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#88"},
 			model.Link{Kind: model.LinkAutoMergeAwaitsPerson, Target: "trust-boundary"},
 		)
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{Gate: model.GateSecurityReview,
+			ReviewTask: "sec-review-1", Summary: "security review left findings", HeadSHA: strings.Repeat("a", 40), At: time.Now()})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -1624,6 +1626,10 @@ func TestPath5NonAdminMergeSubmitForceMergeAndHumanReviewRelease(t *testing.T) {
 			`{"reason":"ship anyway","head":"`+commitSHA+`"}`); c != http.StatusForbidden {
 			t.Errorf("%s force-merge = %d (%s), want 403", caller, c, b)
 		}
+		if c, b := rig.callAs(caller, http.MethodPost, "/api/tasks/"+prTask.ID+"/accept-findings",
+			`{"gate":"security-review","reviewTask":"sec-review-1","reason":"ship anyway"}`); c != http.StatusForbidden {
+			t.Errorf("%s accept-findings = %d (%s), want 403", caller, c, b)
+		}
 	}
 
 	// Verify human-review hold is still intact and AutoMerge did NOT flip to true!
@@ -1631,9 +1637,22 @@ func TestPath5NonAdminMergeSubmitForceMergeAndHumanReviewRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if afterHold.AutoMerge || !model.HumanReviewHeld(*afterHold) {
-		t.Fatalf("refused callers cleared HumanReviewHold or enabled AutoMerge: autoMerge=%v holds=%+v",
-			afterHold.AutoMerge, model.HumanReviewReasons(*afterHold))
+	if afterHold.AutoMerge || !model.HumanReviewHeld(*afterHold) || !model.HasReviewFindings(*afterHold) {
+		t.Fatalf("refused callers cleared HumanReviewHold or review findings, or enabled AutoMerge: autoMerge=%v holds=%+v findings=%+v",
+			afterHold.AutoMerge, model.HumanReviewReasons(*afterHold), model.ReviewFindings(*afterHold))
+	}
+
+	// Positive control: an unlimited operator CAN accept the review's
+	// findings, which clears them and nothing else -- the hold stands.
+	if c, b := rig.callAs("ops@example.com", http.MethodPost, "/api/tasks/"+prTask.ID+"/accept-findings",
+		`{"gate":"security-review","reviewTask":"sec-review-1","reason":"out of scope; follow-up filed"}`); c != http.StatusOK {
+		t.Fatalf("operator accept-findings = %d %s, want 200", c, b)
+	}
+	if accepted, err := rig.store.GetTask(ctx, prTask.ID); err != nil {
+		t.Fatal(err)
+	} else if model.HasReviewFindings(*accepted) || !model.HumanReviewHeld(*accepted) || accepted.AutoMerge {
+		t.Fatalf("accepting findings: findings=%+v held=%v autoMerge=%v, want findings cleared and the hold standing",
+			model.ReviewFindings(*accepted), model.HumanReviewHeld(*accepted), accepted.AutoMerge)
 	}
 
 	// Positive control: unlimited operator CAN release human-review hold.
@@ -1848,7 +1867,7 @@ func TestPath6NonAdminScheduleConsoleSessionAndLivePTYCeilings(t *testing.T) {
 		ID:            dirTaskID,
 		Intent:        model.IntentAnalyze,
 		Title:         dirSess.Title,
-		Origin:        model.Origin{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
+		Filing:        model.Filing{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
 		Tags:          []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Interactive:   true,
 		Approval:      &model.Attribution{Actor: model.ConsoleSessionPrincipal},

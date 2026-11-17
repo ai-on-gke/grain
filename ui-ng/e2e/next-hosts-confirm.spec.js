@@ -62,11 +62,28 @@ test("Settings -> Hosts asks before destructive actions and offers none on local
   await dialog.getByRole("button", { name: "Cancel" }).click();
   expect(hostWrites).toEqual([]);
 
-  // Accepting goes through, and says what was deleted.
+  // Accepting goes through, and says what was deleted along with the
+  // usage-limit pauses that went with it. The demo seeds no pause on a
+  // host, so the real answer is passed through with two added.
+  await page.route("**/api/hostds/old-laptop", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...body, clearedPauses: ["claude/opus", "gemini/pro"] },
+    });
+  });
   await page.getByTestId("delete-hostd-old-laptop").click();
   await expect(dialog).toContainText("Delete host old-laptop?");
   await dialog.getByRole("button", { name: "Delete host" }).click();
-  await expect(page.getByText("Deleted host old-laptop.")).toBeVisible();
+  const notice = page.getByTestId("hostd-delete-notice");
+  await expect(notice).toContainText(
+    "Deleted host old-laptop. Cleared its usage-limit pauses: claude/opus, gemini/pro.",
+  );
+  // The report stays up until it is dismissed.
+  await notice.getByRole("button", { name: "Dismiss" }).click();
+  await expect(notice).toBeHidden();
   await expect(page.getByTestId("hostd-row-old-laptop")).toHaveCount(0);
   expect(hostWrites).toEqual(["DELETE /api/hostds/old-laptop"]);
 });

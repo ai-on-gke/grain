@@ -1,0 +1,26 @@
+#### grain-head
+-- template_read
+template_id|owner|name
+template-1|acme|docs
+template-2|acme|docs
+template-2|ghe.example.com/acme|legacy
+{"error":null}
+-- template_read
+template_id|owner|name
+template-2|acme|docs
+template-2|ghe.example.com/acme|legacy
+template-3|acme|docs
+{"error":null,"mode":"external","head":"5aa16459104cdb3ea9f0922c28b5c84099fa7ea9"}
+#### grain-fix
+-- template_read
+template_id|owner|name
+template-1|acme|docs
+template-2|acme|docs
+template-2|ghe.example.com/acme|legacy
+{"error":"state repository holds changes grain could not apply: state repository was written by a newer build of grain: repository is at schema 147, this build knows 146"}
+-- template_read
+template_id|owner|name
+template-1|acme|docs
+template-2|acme|docs
+template-2|ghe.example.com/acme|legacy
+{"error":"state repository holds changes grain could not apply: state repository was written by a newer build of grain: repository is at schema 147, this build knows 146","mode":"external","head":"d33b67cfa16084c0f4ea3c97556e902a973f9114"}

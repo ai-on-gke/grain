@@ -1,0 +1,24 @@
+{
+  "id": "delivery",
+  "type": "delivery",
+  "version": 1,
+  "purpose": "completion",
+  "required": true,
+  "action": null,
+  "subject": {
+    "kind": "task",
+    "task_id": "57"
+  },
+  "config": {
+    "product": "report",
+    "semantics": "current_v1",
+    "shell": "echo success"
+  },
+  "freshness_seconds": 300,
+  "origin": {
+    "kind": "task",
+    "id": "57",
+    "revision": "1",
+    "imported": false
+  }
+}

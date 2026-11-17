@@ -250,7 +250,7 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 		t.Errorf("the release-train schedule's overlap is %q, want skip: two ticks would race for the same tags", sched.Overlap)
 	}
 	if sched.SkipWhen != model.SkipWhenPublishingHeld {
-		t.Errorf("the release-train schedule's skip-when is %q, want %q so ticks are held while main's publishing is held",
+		t.Errorf("the release-train schedule's skip-when is %q, want %q so ticks with nothing in qualification are held while main's publishing is held",
 			sched.SkipWhen, model.SkipWhenPublishingHeld)
 	}
 	var stage1Sched *model.Schedule
@@ -262,9 +262,9 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if stage1Sched == nil {
 		t.Fatal(".grain/schedules/release-train-on-stage1.yml is not declared")
 	}
-	if stage1Sched.SkipWhen != model.SkipWhenPublishingHeld {
-		t.Errorf("the release-train-on-stage1 schedule's skip-when is %q, want %q so Stage 1 ticks do not wake while main's publishing is held",
-			stage1Sched.SkipWhen, model.SkipWhenPublishingHeld)
+	if stage1Sched.SkipWhen != model.SkipWhenNever {
+		t.Errorf("the release-train-on-stage1 schedule's skip-when is %q, want %q so Stage 1 completions can still promote or drop a qualifying rc while main's publishing is held",
+			stage1Sched.SkipWhen, model.SkipWhenNever)
 	}
 	var trainTmpl *model.Template
 	for i := range decl.Templates {
@@ -275,12 +275,22 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if trainTmpl == nil {
 		t.Fatal(".grain/templates/release-train.yml is not declared")
 	}
+	var trainCaps []string
+	for _, g := range trainTmpl.Grants {
+		trainCaps = append(trainCaps, model.CanonicalGrantKey(g.Capability))
+	}
+	wantReleasesRead := model.APIGrantString("releases:read", model.GrainSourceRepo().String())
+	if !containsString(trainCaps, wantReleasesRead) {
+		t.Errorf(".grain/templates/release-train.yml grants = %v, want %q so scripts/release-train-task.sh can detect base-branch publishing holds",
+			trainCaps, wantReleasesRead)
+	}
 	if got := trainTmpl.NothingNeededAction.Resolved(); got != model.NothingNeededClose {
 		t.Errorf("release-train nothing-needed resolves to %q, want %q so acted/noop/failed ticks close and free the overlap: skip schedule",
 			got, model.NothingNeededClose)
 	}
 	body := trainTmpl.Body
 	contains(t, body, "bash ~/work/scripts/release-train-task.sh")
+	contains(t, body, "held=publishing (cut skipped)")
 	for _, outcome := range []string{"RELEASE_TRAIN_RESULT=noop", "RELEASE_TRAIN_RESULT=acted", "RELEASE_TRAIN_RESULT=failed"} {
 		contains(t, body, outcome)
 	}

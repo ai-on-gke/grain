@@ -94,7 +94,7 @@ func (c *Client) RequestHumanReview(ctx context.Context, reviewID string, req Hu
 	if review == nil {
 		return HumanReviewResult{}, &NotFoundError{ID: reviewID}
 	}
-	if review.Origin.Reason != model.ReasonReview {
+	if review.Filing.Reason != model.ReasonReview {
 		return HumanReviewResult{}, validationErrorf("task %s is not a review, so it has no change to hold: "+
 			"request_human_review is for security and template reviews. To put a decision to a person about "+
 			"your own work, use ask_question", reviewID)

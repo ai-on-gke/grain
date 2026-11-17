@@ -79,6 +79,15 @@ func DecideStop(interactive bool, finalText string, calls []ToolCall) StopDecisi
 	return stoprule.Decide(interactive, finalText, stopCalls(calls))
 }
 
+// DecideStopForRun applies either QATreatmentPolicy (when requireOpenPR is true)
+// or DefaultPolicy to a run that is about to end.
+func DecideStopForRun(interactive, requireOpenPR bool, finalText string, calls []ToolCall) StopDecision {
+	if requireOpenPR && !interactive {
+		return stoprule.DecideWith(stoprule.QATreatmentPolicy(), interactive, finalText, stopCalls(calls))
+	}
+	return stoprule.Decide(interactive, finalText, stopCalls(calls))
+}
+
 // PromisesMoreWork reports whether an agent's final message promises
 // further work it has not done (stoprule.PromisesMoreWork).
 func PromisesMoreWork(text string) bool { return stoprule.PromisesMoreWork(text) }

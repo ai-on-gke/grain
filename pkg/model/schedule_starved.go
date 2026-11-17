@@ -85,6 +85,13 @@ type StarvedScheduleFiring struct {
 	// be measured (reviewFiledAt), which holds it with no date to give.
 	Review      bool
 	ReviewUntil time.Time
+	// DeliberatelyHeld is true when the schedule is held by a declared
+	// condition (HoldReason, such as SuppressedByPublishingHeld) rather than
+	// starved behind a never-started firing: TaskID names the task holding it
+	// (baseBranchPublishing[].triageTaskID), no priority is raised, and no
+	// FamilyScheduleStarved notification is opened.
+	DeliberatelyHeld bool
+	HoldReason       ScheduleSuppressionReason
 }
 
 // blocker says whose firing the starved task came from, after "#<id> from".
@@ -138,11 +145,22 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 	if k.Outcome != ScheduleSkipHeld || k.TaskID == "" {
 		return StarvedScheduleFiring{}, nil
 	}
-	if k.Reason != SuppressedByOpenTask && k.Reason != SuppressedByOpenReview {
-		return StarvedScheduleFiring{}, nil
-	}
 	occurrences := 1 + foldedOccurrences(sched, now, loc)
 	if !ScheduleStarved(k.Occurrence, now, occurrences) {
+		return StarvedScheduleFiring{}, nil
+	}
+	if k.Reason == SuppressedByPublishingHeld {
+		// Deliberately held while base-branch publishing is held: name the
+		// holding triage task rather than staying silent or calling it starved.
+		return StarvedScheduleFiring{
+			TaskID:           k.TaskID,
+			HeldFor:          now.Sub(k.Occurrence),
+			Occurrences:      occurrences,
+			DeliberatelyHeld: true,
+			HoldReason:       k.Reason,
+		}, nil
+	}
+	if k.Reason != SuppressedByOpenTask && k.Reason != SuppressedByOpenReview {
 		return StarvedScheduleFiring{}, nil
 	}
 	st, err := s.State(ctx, k.TaskID)

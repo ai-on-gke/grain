@@ -387,7 +387,7 @@ func TestOpenStorePersistsAcrossReopen(t *testing.T) {
 	task := model.Task{
 		ID:      "restart-check",
 		Intent:  model.IntentImplement,
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}}, Reason: model.ReasonDirect},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}}, Reason: model.ReasonDirect},
 		Binding: model.BindingDirective,
 		Target:  &model.RepoRef{Owner: "acme", Name: "widgets"},
 	}
