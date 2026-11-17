@@ -169,15 +169,17 @@ func TestRolloverFilesASuccessorAndMovesTheReferences(t *testing.T) {
 
 // A successor rolled over again (A -> B -> C) hands C the brief and the
 // latest handover once, not B's whole RolloverBody nested inside C's:
-// with no handover of B's own, A's carries on; with one, B's replaces it.
+// with no handover of B's own, A's carries on (even when B's brief was
+// edited with SetTaskBrief); with one, B's replaces it.
 // docs/test-runs/2026-11-15-durable-rollover.md found the nesting on a
 // live daemon.
 func TestRolloverOfASuccessorDoesNotNestItsBody(t *testing.T) {
 	for _, tc := range []struct {
-		name, bHandover, want string
+		name, bBrief, bHandover, wantBrief, wantHandover string
 	}{
-		{"no handover of its own", "", "Night 1 was green."},
-		{"a handover of its own", "Night 2: shard 3 flaked.", "Night 2: shard 3 flaked."},
+		{"no handover of its own", "", "", "Watch the nightly build.", "Night 1 was green."},
+		{"a handover of its own", "", "Night 2: shard 3 flaked.", "Watch the nightly build.", "Night 2: shard 3 flaked."},
+		{"edited brief with no handover of its own", "Watch the nightly and release builds.", "", "Watch the nightly and release builds.", "Night 1 was green."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, ctx := open(t)
@@ -196,6 +198,11 @@ func TestRolloverOfASuccessorDoesNotNestItsBody(t *testing.T) {
 				t.Fatal(err)
 			}
 			b := ab.Successor
+			if tc.bBrief != "" {
+				if err := store.SetTaskBrief(ctx, b, tc.bBrief, "alice", "expand scope", now.Add(2*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if tc.bHandover != "" {
 				if _, err := store.AddComment(ctx, model.Comment{TaskID: b, Author: model.Attribution{Actor: bot},
 					Body: tc.bHandover, Handover: true, CreatedAt: now.Add(2 * time.Hour)}); err != nil {
@@ -210,7 +217,7 @@ func TestRolloverOfASuccessorDoesNotNestItsBody(t *testing.T) {
 			if err != nil || c == nil {
 				t.Fatalf("GetTask(C) = %v, %v", c, err)
 			}
-			want := model.RolloverBody(b, "Watch the nightly build.", tc.want)
+			want := model.RolloverBody(b, tc.wantBrief, tc.wantHandover)
 			if c.Body != want {
 				t.Errorf("C's body =\n%s\nwant\n%s", c.Body, want)
 			}
