@@ -25,7 +25,7 @@ empty or duplicate requirements and unsupported versions are rejected.
 | --- | --- |
 | `review/current_head_v1`, ordinary/security/path/takeover | An authenticated eligible review disposition for the exact assignment, head, policy and authorization version; complete findings/questions, base-owned diff classification and linked fix outcomes. Active reviews are pending; failed reviews and deferred/unintegrated/closed-unmerged fixes cannot pass. Missing/denied assignments and incomplete evidence are unknown. |
 | Exact-scope review carry-forward | The original review must remain eligible under the same assignment/policy/authorization. Carry-forward additionally names this destination head and policy and proves a complete base-owned scope comparison. A bare carried/cleared stamp cannot substitute. |
-| Findings acceptance | An authenticated eligible human's reason and disposition pin this review version, current findings/questions digest, head, policy and authorization version. New findings, reviews, head/policy/role changes invalidate it. Reviewer self-clear is refused. Acceptance cannot integrate outstanding fixes. A subsequent clean review clears only its own scope. |
+| Findings acceptance | An authenticated eligible human's reason and disposition pin this review ID/version, category, assignment, current findings/questions digest, head, policy and authorization version. New findings, reviews, head/policy/role changes invalidate it. Reviewer self-clear is refused. Acceptance cannot integrate outstanding fixes. A subsequent clean review clears only its own scope. |
 | `review/legacy_completion_v1` | Explicit imported shadow monitors only. Ordinary review uses the existing closed-or-completed-without-PR predicate, including the existing missing-reference success. Other comparisons label the existing aggregate security/code/targeted gate or takeover clearance; they never claim that an aggregate pass proves one individual assignment. |
 | `approval/exact_head_v1` | Every configured requirement has a verified human receipt for the exact rendered and current head, policy, requirement and authorization version. Partial eligibility covers only its named scopes. Missing receipt is pending when the scope/eligibility reads are complete; inaccessible identity/scope is unknown. Revoked/ineligible/stale receipts do not pass. |
 
@@ -86,7 +86,7 @@ handoff remain deferred.
 
 Collection is bounded to 31 review/approval scopes (at most 64 canonical
 bindings/results including report/receipt), 64 related tasks, 64 base trigger
-rows and 65536 characters per declaration. Overflow/malformed data is explicitly
+rows and 65536 characters per declaration. Each inspected task has at most 512 links and 65536 bytes of linked metadata admitted to diagnostic hashing. Overflow/malformed data is explicitly
 incomplete and cannot yield a current pass. Retention and load bounds remain
 60-second leases, the 250ms collection/50ms error budgets, 32 selected tasks,
 72 hours/1024 samples per task/32768 globally, newest 20 samples per read, and

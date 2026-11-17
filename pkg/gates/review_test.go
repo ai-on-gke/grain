@@ -27,9 +27,9 @@ func reviewFixture(category string) Facts {
 	return Facts{TaskID: "1", SourceVersion: "source-v1", ObservedAt: now, ValidUntil: now.Add(time.Minute),
 		Change: &ChangeFacts{Subject: Subject{Kind: "change", Authority: "github.com", Repository: "owner/repo", ChangeKind: "pr", ID: "42"},
 			Head: "head-1", PolicyVersion: "policy-1", AuthorizationVersion: "roles-1", Complete: true,
-			Reviews: map[string]ReviewFacts{"scope": {Category: category, AssignmentVersion: "assignment-1", AssignmentPresent: true, AssignmentReadable: true,
+			Reviews: map[string]ReviewFacts{"scope": {AssignedReviewID: "review-task", Category: category, AssignmentVersion: "assignment-1", AssignmentPresent: true, AssignmentReadable: true,
 				CollectionsComplete: true, DiffComplete: true, BaseOwned: true, FixesComplete: true, FindingsDigest: "findings-1",
-				Disposition: &ReviewDisposition{Version: "review-1", AssignmentVersion: "assignment-1", Head: "head-1", PolicyVersion: "policy-1", AuthorizationVersion: "roles-1",
+				Disposition: &ReviewDisposition{ReviewID: "review-task", Version: "review-1", AssignmentVersion: "assignment-1", Head: "head-1", PolicyVersion: "policy-1", AuthorizationVersion: "roles-1",
 					Reviewer: "reviewer", Authenticated: true, Eligible: true, Clean: true},
 				LegacyStatus: "met", LegacyDetail: "closed review task"}},
 			Approvals: map[string]ApprovalFacts{"alice-scope": {EligibleIdentityKnown: true, Receipt: &ApprovalReceipt{
@@ -53,6 +53,7 @@ func TestReviewDispositionPredicates(t *testing.T) {
 			{"forged-reviewer", "unknown", func(r *ReviewFacts, _ *ChangeFacts, _ *Facts) { r.Disposition.Reviewer = "" }},
 			{"role-revoked", "unknown", func(r *ReviewFacts, _ *ChangeFacts, _ *Facts) { r.Disposition.Eligible = false }},
 			{"roles-changed", "unknown", func(_ *ReviewFacts, c *ChangeFacts, _ *Facts) { c.AuthorizationVersion = "roles-2" }},
+			{"wrong-assigned-review", "unknown", func(r *ReviewFacts, _ *ChangeFacts, _ *Facts) { r.Disposition.ReviewID = "another-review" }},
 			{"new-assignment", "unknown", func(r *ReviewFacts, _ *ChangeFacts, _ *Facts) { r.AssignmentVersion = "assignment-2" }},
 			{"new-head", "unknown", func(_ *ReviewFacts, c *ChangeFacts, _ *Facts) { c.Head = "head-2" }},
 			{"path-policy-changed", "unknown", func(_ *ReviewFacts, c *ChangeFacts, _ *Facts) { c.PolicyVersion = "policy-2" }},
@@ -108,6 +109,10 @@ func TestExactScopeFindingsAcceptance(t *testing.T) {
 	}{
 		{"human-acceptance", "met", func(*ReviewFacts, *ChangeFacts) {}},
 		{"new-findings", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.FindingsDigest = "new-findings" }},
+		{"wrong-category", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.Acceptance.Category = "ordinary" }},
+		{"wrong-requirement", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.Acceptance.RequirementID = "other-scope" }},
+		{"reused-counter-other-review", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.Acceptance.ReviewID = "other-review" }},
+		{"new-assignment-same-review", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.Acceptance.AssignmentVersion = "old-assignment" }},
 		{"new-review", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.Disposition.Version = "review-2" }},
 		{"wrong-head", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.Acceptance.Head = "old-head" }},
 		{"old-policy", "unmet", func(r *ReviewFacts, _ *ChangeFacts) { r.Acceptance.PolicyVersion = "old-policy" }},
@@ -130,7 +135,7 @@ func TestExactScopeFindingsAcceptance(t *testing.T) {
 			r := f.Change.Reviews["scope"]
 			r.Findings = 1
 			r.Questions = 1
-			r.Acceptance = &FindingsDisposition{Version: "acceptance-1", ReviewVersion: "review-1", Head: "head-1", PolicyVersion: "policy-1", AuthorizationVersion: "roles-1",
+			r.Acceptance = &FindingsDisposition{RequirementID: "scope", Category: "security", ReviewID: "review-task", AssignmentVersion: "assignment-1", Version: "acceptance-1", ReviewVersion: "review-1", Head: "head-1", PolicyVersion: "policy-1", AuthorizationVersion: "roles-1",
 				FindingsDigest: "findings-1", By: "alice", Reason: "Accept this scoped risk", Human: true, Authenticated: true, Eligible: true}
 			tc.change(&r, f.Change)
 			f.Change.Reviews["scope"] = r

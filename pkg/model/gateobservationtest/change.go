@@ -322,6 +322,27 @@ func RunChangeScopeOverflow(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatal("truncated scope passed current mode")
 		}
 	}
+	oversized := task
+	oversized.ID = "review-metadata-overflow"
+	oversized.Links = []model.Link{{Kind: model.LinkFixes, Target: "owner/reviewed#78"}}
+	for i := range 400 {
+		oversized.Links = append(oversized.Links, model.Link{Kind: model.LinkReviewTask, Target: fmt.Sprintf("%s-%d", strings.Repeat("x", 200), i)})
+	}
+	if err := s.PutTask(ctx, oversized); err != nil {
+		t.Fatal(err)
+	}
+	large, _, err := s.ObserveTaskGates(ctx, oversized.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(large.Bindings) != 5 {
+		t.Fatal("oversized metadata was expanded instead of rejected as incomplete")
+	}
+	for i, binding := range large.Bindings {
+		if binding.Type == "review" && !binding.Origin.Imported && (large.Results[i].Result.Status != "unknown" || !strings.Contains(large.Results[i].Result.Summary, "metadata")) {
+			t.Fatal("oversized metadata did not produce an explained unknown")
+		}
+	}
 	b, _ := json.Marshal(v)
 	if len(b) > 512*1024 {
 		t.Fatalf("bounded view unexpectedly large: %d", len(b))

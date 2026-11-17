@@ -51,6 +51,7 @@ type ChangeFacts struct {
 // author in a forge comment. Carry-forward needs a complete, base-owned diff
 // proof for exactly this scope, policy and destination head.
 type ReviewDisposition struct {
+	ReviewID                                                              string
 	Version, AssignmentVersion, Head, PolicyVersion, AuthorizationVersion string
 	Reviewer                                                              string
 	Authenticated, Eligible, Clean                                        bool
@@ -58,11 +59,13 @@ type ReviewDisposition struct {
 	CarryForwardComplete, CarryForwardBaseOwned                           bool
 }
 type FindingsDisposition struct {
+	RequirementID, Category, ReviewID, AssignmentVersion              string
 	Version, ReviewVersion, Head, PolicyVersion, AuthorizationVersion string
 	FindingsDigest, By, Reason                                        string
 	Human, Authenticated, Eligible, SelfClear                         bool
 }
 type ReviewFacts struct {
+	AssignedReviewID                             string
 	Category, AssignmentVersion                  string
 	AssignmentPresent, AssignmentReadable        bool
 	Running, Failed                              bool
@@ -164,6 +167,9 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 	r.Dependencies[0] = Dependency{Key: "change/" + c.Subject.Repository + "/" + c.Subject.ID + "/" + b.ID, Subject: c.Subject, Head: headRef,
 		Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Config), Complete: complete,
 		ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}
+	if len(r.Dependencies[0].Key) > 220 {
+		r.Dependencies[0].Key = "change/" + Digest([]any{c.Subject, b.ID})[7:]
+	}
 	for _, version := range []struct{ key, value string }{{"head", c.Head}, {"policy", c.PolicyVersion}, {"authorization", c.AuthorizationVersion}} {
 		dep := r.Dependencies[0]
 		dep.Key += "/" + version.key
@@ -248,7 +254,7 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 			return r
 		}
 		d := s.Disposition
-		if d == nil || d.Version == "" || strings.TrimSpace(d.Reviewer) == "" || !d.Authenticated || !d.Eligible ||
+		if d == nil || d.Version == "" || d.ReviewID == "" || d.ReviewID != s.AssignedReviewID || strings.TrimSpace(d.Reviewer) == "" || !d.Authenticated || !d.Eligible ||
 			d.AssignmentVersion != s.AssignmentVersion || d.PolicyVersion != c.PolicyVersion || d.AuthorizationVersion != c.AuthorizationVersion {
 			r.Summary = prefix + "No authenticated eligible review disposition for the current assignment and policy."
 			return r
@@ -259,10 +265,10 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 			r.Summary = prefix + "Review is for another head; approved exact-scope carry-forward proof is absent."
 			return r
 		}
-		r.Evidence = append(r.Evidence, Evidence{Kind: "review", ID: cfg.RequirementID, Version: d.Version, Subject: c.Subject, Head: &head, Digest: Digest(d)})
+		r.Evidence = append(r.Evidence, Evidence{Kind: "review", ID: d.ReviewID, Version: d.Version, Subject: c.Subject, Head: &head, Digest: Digest(d)})
 		if s.Findings > 0 || s.Questions > 0 {
 			a := s.Acceptance
-			if a == nil || a.Version == "" || a.ReviewVersion != d.Version || a.Head != c.Head || a.PolicyVersion != c.PolicyVersion ||
+			if a == nil || a.Version == "" || a.RequirementID != cfg.RequirementID || a.Category != cfg.Category || a.ReviewID != d.ReviewID || a.AssignmentVersion != s.AssignmentVersion || a.ReviewVersion != d.Version || a.Head != c.Head || a.PolicyVersion != c.PolicyVersion ||
 				a.AuthorizationVersion != c.AuthorizationVersion || s.FindingsDigest == "" || a.FindingsDigest != s.FindingsDigest ||
 				strings.TrimSpace(a.By) == "" || strings.TrimSpace(a.Reason) == "" || !a.Human || !a.Authenticated || !a.Eligible || a.SelfClear || a.By == d.Reviewer {
 				r.Status = "unmet"

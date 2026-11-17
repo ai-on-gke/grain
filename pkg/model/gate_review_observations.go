@@ -59,6 +59,13 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		c.Complete = false
 		c.IncompleteReason = "Multiple change resources require separate complete provider reads; this primary-resource projection is incomplete."
 	}
+	if !boundedShadowLinks(t.Links) {
+		c.Complete = false
+		c.IncompleteReason = "Linked metadata exceeds the 512-link/65536-byte reader bound; exact source evidence is unavailable."
+		c.Reviews["collection"] = gates.ReviewFacts{Category: "ordinary", LegacyStatus: "unknown", LegacyDetail: c.IncompleteReason}
+		c.Approvals["domain:submit"] = gates.ApprovalFacts{LegacyDetail: c.IncompleteReason}
+		return c, gates.Digest([]any{t.ID, len(t.Links), "oversized-linked-metadata", gates.Implementation}), nil
+	}
 	var source []any
 	policySource := []any{t.ReviewTemplateID, trustboundary.Version}
 	for _, link := range t.Links {
@@ -82,7 +89,7 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 			c.IncompleteReason = "Review/approval scope exceeds the 31-scope reader bound; the displayed subset is incomplete."
 			return
 		}
-		c.Reviews[scope] = gates.ReviewFacts{Category: category, AssignmentReadable: true, AssignmentPresent: task != "",
+		c.Reviews[scope] = gates.ReviewFacts{AssignedReviewID: task, Category: category, AssignmentReadable: true, AssignmentPresent: task != "",
 			AssignmentVersion: gates.Digest([]any{scope, task, t.ReviewTemplateID}),
 			LegacyStatus:      "unknown", LegacyDetail: "No corresponding legacy clearance is recorded.", Evidence: []gates.Evidence{}}
 		assignments = append(assignments, assignment{scope, category, task})
@@ -316,6 +323,13 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		if err != nil {
 			return related{}, err
 		}
+		if !boundedShadowLinks(rt.Links) {
+			c.Complete = false
+			c.IncompleteReason = "Related task metadata exceeds the 512-link/65536-byte reader bound."
+			v := related{version: gates.Digest([]any{id, len(rt.Links), "oversized-linked-metadata"})}
+			relatedCache[id] = v
+			return v, nil
+		}
 		ro, err := getObservation(ctx, q, id)
 		if err != nil {
 			return related{}, err
@@ -384,7 +398,7 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 				r.AssignmentVersion = gates.Digest([]any{r.AssignmentVersion, v.version})
 				r.Running = v.state == StateRunning
 				r.Failed = v.state == StateFailed || v.failedRun
-				r.Evidence = append(r.Evidence, gates.Evidence{Kind: "review", ID: "legacy-task:" + a.task, Version: v.version, Subject: c.Subject, Digest: v.version})
+				r.Evidence = append(r.Evidence, gates.Evidence{Kind: "review", ID: shadowRequirementID("legacy-task:" + a.task), Version: v.version, Subject: c.Subject, Digest: v.version})
 				if a.category == "ordinary" {
 					if v.state == StateClosed || (v.state == StateCompleted && TaskPullRequest(*v.task) == nil) {
 						r.LegacyStatus = "met"
@@ -514,4 +528,20 @@ func observationBindings(id string, f gates.Facts) []gates.Binding {
 		b = append(b, gates.ChangeBindings(id, *f.Change)...)
 	}
 	return b
+}
+
+// Hash work is bounded even when a legacy task has accumulated many links.
+// A partial/truncated source is diagnostic unknown, never an empty passing set.
+func boundedShadowLinks(links []Link) bool {
+	if len(links) > 512 {
+		return false
+	}
+	size := 0
+	for _, link := range links {
+		size += len(link.Kind) + len(link.Target)
+		if size > 65536 {
+			return false
+		}
+	}
+	return true
 }
