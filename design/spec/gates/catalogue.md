@@ -20,3 +20,21 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 | `qa_stage` / change / guard, completion | `stage`: `s3`, `s4`, `s5`; `flow_revision`: approved flow ID/revision; `assignment`: `treatment`, `shadow` | Treatment requires authentic stage result for exact staged/main head, pinned flow/arm/engine and required stage disposition. Unmet stage/findings require bounded repair or eligible human triage; missing pin/result unknown, active stage pending. Shadow/control can monitor only and cannot satisfy an enforced treatment prerequisite. Existing trust/review/human floors remain. Custom stage/promotion effects cannot be enforced until typed adapter and exact-version proof are admitted. | Existing pre-PR QA checks, bounded QA repair and person triage; QA stage/head/assignment changes. No shell evaluator or credentials in config. Unsupported custom flow holds migration rather than pretending parity. |
 
 `legacy_*` profiles preserve predicate interpretation, not permission to bypass the new message/child/authority closure fences or credential admission. Complete-set limitations must be displayed. A result used by enforced action admission must meet current-head/current-policy/complete-collection rules even if an older cohort's monitoring uses a legacy reading. No passing check gate can waive a different failing review/approval or outcome.
+
+## Runtime coverage after the initial framework review
+
+The catalogue above remains the full v1 contract, not an implementation claim.
+Task #61's delivered slice and Task #64's independent repairs implement only:
+
+| Type/profile | Runtime evidence and scope |
+| --- | --- |
+| `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
+| `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
+
+All other profiles and the other ten types remain unsupported by this registry.
+These observations never add obligations, dispatch work, process messages or
+admit actions. See the [compatibility boundary](compatibility.md#implemented-observation-only-subset),
+[operator guide](../../../docs/gate-observations.md) and
+[review/extension guidance](../../../docs/gate-observation-review.md) for the
+implemented reads, regression coverage and source-specific blockers. No rollout,
+cutover or migration is implied by this coverage table.

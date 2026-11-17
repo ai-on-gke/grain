@@ -70,15 +70,8 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 		return v, d
 	}
 	// No raw database errors, comment bodies, principals or credentials escape.
-	v = &gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: gates.Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: gates.Bindings(id), Results: []gates.EvaluationState{}, Dirty: true}
-	for _, b := range v.Bindings {
-		r := gates.Evaluate(b, gates.Facts{TaskID: id, ObservedAt: now, ValidUntil: now.Add(time.Minute), SourceVersion: gates.Implementation}, now, 0)
-		r.Status = "error"
-		r.Summary = "Observation collection unavailable; legacy behavior is unaffected."
-		r.Error = &gates.EvaluationError{Code: "unavailable", Message: "Diagnostic read failed or timed out.", Retryable: true}
-		retry := now.Add(time.Minute)
-		v.Results = append(v.Results, gates.EvaluationState{EvaluationID: r.EvaluationID, Disposition: "rejected", Result: r, RetryAt: &retry})
-	}
+	unavailable := gates.UnavailableObservation(id, now)
+	v = &unavailable
 	// A fresh short budget can retain a failure even when the collection's
 	// own 250ms budget expired. Never delay an already canceled request.
 	if ctx.Err() == nil {

@@ -19,11 +19,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -98,6 +100,32 @@ func TestGateObservationsOrdinaryAPIReportReceiptAndLegacyReply(t *testing.T) {
 	b, _ := json.Marshal(d.GateObservationDiagnostics)
 	if strings.Contains(string(b), "Sensitive report") {
 		t.Fatal("diagnostics leaked body")
+	}
+	// UI pagination is not the gate's evidence collection. Put the report
+	// outside the visible page and poll cursor; it must remain complete.
+	for range 3 {
+		_, err = c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: model.GrainPrincipal, OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID}}, Body: "Standing handover", Handover: true, CreatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var source string
+	for _, query := range []string{"?comments_limit=1&attempts_limit=1", "?comments_since=" + now.Format(time.RFC3339Nano)} {
+		code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID+query, "")
+		if code != http.StatusOK || strings.Contains(body, "Sensitive report") {
+			t.Fatalf("paged read: %d %s", code, body)
+		}
+		var page ui.TaskDetail
+		if err := json.Unmarshal([]byte(body), &page); err != nil {
+			t.Fatal(err)
+		}
+		if page.GateObservations == nil || page.GateObservations.Results[0].Result.Status != "met" || !page.GateObservations.Results[0].Result.Dependencies[0].Complete {
+			t.Fatal("pagination truncated gate evidence")
+		}
+		if source != "" && page.GateObservations.SourceRevision != source {
+			t.Fatal("page/cursor changed the gate source fence")
+		}
+		source = page.GateObservations.SourceRevision
 	}
 	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP})
 	now = now.Add(time.Second)
@@ -192,5 +220,95 @@ func TestGateObservationSummariesBypassStableDomainCache(t *testing.T) {
 	}
 	if !envelope.Tasks[task.ID].GateObservations.ComparedAt.After(initial) {
 		t.Fatal("batch cache hid expired observation lease")
+	}
+}
+
+// A diagnostic storage outage must neither fail the ordinary task API nor
+// disappear as an apparently passing/complete observation.
+func TestGateObservationStorageOutageIsAnInertSidecar(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c := ui.NewClient(ui.Config{Actor: ui.DefaultActor("alice"), GateObservationTaskIDs: []string{}}, store)
+	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Observe through an outage", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Config.GateObservationTaskIDs = []string{task.ID, "missing-observation-task"}
+	now := baseTime.Add(time.Minute)
+	c.Now = func() time.Time { return now }
+	srv := ui.NewServerWithClient(c)
+	read := func() ui.TaskDetail {
+		t.Helper()
+		code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "")
+		if code != http.StatusOK {
+			t.Fatalf("ordinary task read failed: %d %s", code, body)
+		}
+		if strings.Contains(body, "no such table") || strings.Contains(body, "does not exist") {
+			t.Fatal("raw infrastructure error escaped")
+		}
+		var detail ui.TaskDetail
+		if err := json.Unmarshal([]byte(body), &detail); err != nil {
+			t.Fatal(err)
+		}
+		return detail
+	}
+	initial := read()
+	before, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wake := store.Changed()
+	if _, err := db.ExecContext(ctx, "DROP TABLE `gate_observation_shadow`"); err != nil {
+		t.Fatal(err)
+	}
+	failed := read()
+	v := failed.GateObservations
+	if v == nil || !v.Dirty || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover || failed.State != initial.State {
+		t.Fatalf("outage affected ordinary task state: %+v", failed)
+	}
+	for _, entry := range v.Results {
+		if entry.Disposition != "rejected" || entry.Result.Status != "error" || entry.AcceptedAt != nil || len(entry.Result.Evidence) != 0 || entry.Result.Dependencies[0].Complete || len(entry.Result.Work) != 0 || len(entry.Result.Actions) != 0 || len(entry.Result.Waits) != 0 {
+			t.Fatalf("unsafe unavailable projection: %+v", entry)
+		}
+	}
+	if path := os.Getenv("GRAIN_TEST_GATE_ERROR_FIXTURE"); path != "" {
+		raw, _ := json.Marshal(v)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("outage changed lifecycle/failure/question state")
+	}
+	select {
+	case <-wake:
+		t.Fatal("outage woke dispatch")
+	default:
+	}
+	code, body := serve(t, srv, http.MethodGet, "/api/tasks/missing-observation-task", "")
+	if code != http.StatusNotFound || strings.Contains(body, "gate_observations") {
+		t.Fatalf("missing task projection: %d %s", code, body)
+	}
+	// Repairing diagnostic storage resumes collection without touching task
+	// lifecycle or turning an outage into an agent failure/retry.
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	recovered := read()
+	if recovered.GateObservations == nil || recovered.GateObservations.Dirty || recovered.State != initial.State {
+		t.Fatal("diagnostic recovery changed task state")
 	}
 }

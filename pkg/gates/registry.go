@@ -29,7 +29,7 @@ var deliverySchema []byte
 //go:embed acknowledgment.schema.json
 var acknowledgmentSchema []byte
 
-const Implementation = "builtin-report-observer-v1"
+const Implementation = "builtin-report-observer-v2"
 
 type Descriptor struct {
 	Type           string
@@ -217,4 +217,20 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		}
 	}
 	return r
+}
+
+// UnavailableObservation constructs a safe rejected diagnostic, without reusing
+// evidence, waits or accepted metadata from a prior successful collection.
+// SourceRevision is an unavailable build sentinel, not a captured fact version.
+func UnavailableObservation(taskID string, now time.Time) ObservationView {
+	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: Bindings(taskID), Results: []EvaluationState{}, Dirty: true}
+	for _, b := range v.Bindings {
+		r := Evaluate(b, Facts{TaskID: taskID, ObservedAt: now, ValidUntil: now, SourceVersion: Implementation}, now, 0)
+		r.Status = "error"
+		r.Summary = "Observation collection unavailable; legacy behavior is unaffected."
+		r.Error = &EvaluationError{Code: "unavailable", Message: "Diagnostic read failed or timed out.", Retryable: true}
+		retry := now.Add(time.Second)
+		v.Results = append(v.Results, EvaluationState{EvaluationID: r.EvaluationID, Disposition: "rejected", Result: r, RetryAt: &retry})
+	}
+	return v
 }
