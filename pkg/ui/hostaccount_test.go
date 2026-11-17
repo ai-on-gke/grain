@@ -19,29 +19,43 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+var sockDirSeq atomic.Uint64
+
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	// Short: a socket's path has to fit in sun_path's 108 bytes even when
+	// TMPDIR is inside a deep CI workspace directory.
+	dir := filepath.Join(os.TempDir(), fmt.Sprintf("s%x", sockDirSeq.Add(1)))
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 // serveAPISocket serves srv on a unix socket the way the daemon does
 // (ListenAPISocket, HostAccountConnContext, HostAccountHandler) with
 // accounts as its map, and returns a client that dials it.
 func serveAPISocket(t *testing.T, srv *ui.Server, accounts ui.HostAccounts) *http.Client {
 	t.Helper()
-	// Short: a socket's path has to fit in sun_path's 108 bytes.
-	dir, err := os.MkdirTemp("", "gsock")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSocketDir(t)
 	path := ui.APISocketPath(dir)
 	ln, err := ui.ListenAPISocket(path)
 	if err != nil {
@@ -201,11 +215,7 @@ func TestParseHostAccounts(t *testing.T) {
 // mapped except the daemon's own, even after the documented setfacl
 // (docs/test-runs/2026-11-11-caller-identity.md, F4).
 func TestAPISocketIsOpenToAccountsItsDirectoryAdmits(t *testing.T) {
-	dir, err := os.MkdirTemp("", "gsock")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSocketDir(t)
 	path := ui.APISocketPath(dir)
 	ln, err := ui.ListenAPISocket(path)
 	if err != nil {
@@ -229,11 +239,7 @@ func TestAPISocketIsOpenToAccountsItsDirectoryAdmits(t *testing.T) {
 // group bits), and must not chmod a directory other accounts share: it
 // refuses one instead (docs/test-runs/2026-11-11-caller-identity.md, F5).
 func TestAPISocketKeepsGrantedSearchAndRefusesASharedDirectory(t *testing.T) {
-	dir, err := os.MkdirTemp("", "gsock")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSocketDir(t)
 	path := ui.APISocketPath(dir)
 	ln, err := ui.ListenAPISocket(path)
 	if err != nil {

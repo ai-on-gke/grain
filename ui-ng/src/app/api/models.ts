@@ -236,6 +236,40 @@ export interface TaskGoalView {
   [key: string]: unknown;
 }
 
+export interface GoalModeConfig {
+  enabled: boolean;
+  maxPasses?: number;
+  wallClockMinutes?: number;
+  mockMissingSecrets?: boolean;
+}
+
+export interface GoalAssumption {
+  id: string;
+  topic: string;
+  decision: string;
+  rationale?: string;
+  alternatives?: string;
+  pass?: number;
+  createdAt?: string;
+}
+
+export interface GoalDeliverable {
+  requirement: string;
+  evidence: string;
+  verified: boolean;
+}
+
+export interface GoalScorecard {
+  passesUsed: number;
+  maxPasses: number;
+  verified: boolean;
+  stoppedAtCap?: boolean;
+  stopReason?: string;
+  summary?: string;
+  deliverables?: GoalDeliverable[];
+  updatedAt?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -284,6 +318,7 @@ export interface Task {
   reviewTemplateName?: string;
   // The template the task was filed from, absent for one written from scratch.
   templateId?: string;
+  qaFlowRef?: string;
   sandboxCpus?: number;
   sandboxMemoryMb?: number;
   sandboxDiskGb?: number;
@@ -302,6 +337,9 @@ export interface Task {
   runNowAt?: string;
   runNowStale?: boolean;
   goal?: TaskGoalView | null;
+  goalMode?: GoalModeConfig | null;
+  goalAssumptions?: GoalAssumption[];
+  goalScorecard?: GoalScorecard | null;
   consoleSession?: unknown;
   interactive?: boolean;
   // What the current run is doing, in a sentence, and when it said so;
@@ -332,8 +370,13 @@ export interface Task {
   approvedByLabel?: string;
   approvedByKind?: string;
   approvedBySource?: string;
-  // The task that filed this one, and the work tree it belongs to.
+  // generatedFrom: the immediate parent proposer -- the task whose
+  // propose_task call filed this one; absent for a task nobody's run filed.
   generatedFrom?: string;
+  // origin: the root of this task's work tree ("owner/repo#N" or
+  // "task:<id>"), inherited at any depth, so it is usually not the parent.
+  // Neither field says who filed the task: that is its filing, the
+  // author* fields (docs/work-trees.md#glossary).
   origin?: string;
   stacked?: boolean;
   review?: boolean;
@@ -588,6 +631,7 @@ export interface Template {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   admission?: string;
@@ -920,4 +964,98 @@ export interface MemoryDocument {
 
 export interface MemoryDocumentsResponse {
   documents: MemoryDocument[];
+}
+
+export interface QARuleSpec {
+  id: string;
+  label: string;
+  stage: string;
+  severity: string;
+  summary: string;
+  targetPaths: string[];
+  enabled: boolean;
+}
+
+export interface QAFlowSpec {
+  id: string;
+  label: string;
+  summary: string;
+  injectSkill: boolean;
+  skillBytes: number;
+  stopNudge: boolean;
+  stagingIsolation: boolean;
+  enableS4: boolean;
+  maxS4RepairRounds: number;
+  strictDecoderPaths?: string[];
+  rules: QARuleSpec[];
+}
+
+export interface QAFlowsResponse {
+  flows: QAFlowSpec[];
+}
+
+export interface QAAssignment {
+  rootOrigin: string;
+  epoch: number;
+  regimeId: number;
+  arm: string;
+  flowId: string;
+  rolloutPctAtAssign: number;
+  complexityTier: string;
+  assignedAt: string;
+}
+
+export interface QACheckRun {
+  id: number;
+  taskId: string;
+  runId: string;
+  commitSha: string;
+  stage: string;
+  checkId: string;
+  arm: string;
+  shadow: boolean;
+  verdict: string;
+  durationMs: number;
+  blastTier?: string;
+  blastScore?: number;
+  complexityTier?: string;
+  triageDecision?: string;
+  repairedInNextSha?: number;
+  tokensIn: number;
+  tokensOut: number;
+  allocBytes: number;
+  detailJson?: string;
+  createdAt: string;
+}
+
+export interface QAFinding {
+  id: number;
+  checkRunId: number;
+  taskId: string;
+  stage: string;
+  ruleId: string;
+  severity: string;
+  filePath?: string;
+  line?: number;
+  summary: string;
+  evidence?: string;
+  humanVote: number;
+  votedBy?: string;
+  votedAt?: string;
+  createdAt: string;
+}
+
+export interface TaskQAResponse {
+  taskId: string;
+  enabled: boolean;
+  assignment?: QAAssignment;
+  checkRuns: QACheckRun[];
+  findings: QAFinding[];
+}
+
+export interface VoteQAFindingResponse {
+  findingId: number;
+  taskId: string;
+  vote: number;
+  votedBy?: string;
 }

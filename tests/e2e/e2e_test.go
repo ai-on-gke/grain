@@ -54,12 +54,12 @@ func fileIssue(w *world, id string, actor model.Principal, target model.RepoRef,
 	}
 	tk := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "issue " + id,
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: reason},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: reason},
 		Binding: model.BindingDirective,
 		Target:  &target,
 		Links:   links,
 	}
-	if model.LandsQueued(tk.Origin) {
+	if model.LandsQueued(tk.Filing) {
 		tk.Approval = &model.Attribution{Actor: actor}
 	}
 	if err := w.store.PutTask(w.ctx, tk); err != nil {
