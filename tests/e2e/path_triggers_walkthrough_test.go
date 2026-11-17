@@ -231,10 +231,10 @@ func (w *triggerWorld) heldBySensitive(subject model.Task) model.Task {
 		w.t.Fatalf("path-trigger-task links = %v, want the payments trigger's one review", gates)
 	}
 	review := w.task(strings.TrimPrefix(gates[0], "payments="))
-	if review.Origin.Reason != model.ReasonReview || review.Base != model.BranchName(subject.ID) ||
+	if review.Filing.Reason != model.ReasonReview || review.Base != model.BranchName(subject.ID) ||
 		!strings.Contains(review.Body, "`src/payments/x.go`") {
 		w.t.Fatalf("the payments trigger's task is not a review stacked on the change: base=%s reason=%s body=%s",
-			review.Base, review.Origin.Reason, review.Body)
+			review.Base, review.Filing.Reason, review.Body)
 	}
 	if !strings.Contains(review.Body, "security") {
 		w.t.Errorf("a sensitive trigger with no template did not file grain's security review:\n%s", review.Body)

@@ -184,7 +184,7 @@ func fileImportedIssue(ctx context.Context, store *model.Store, client github.Cl
 	task := model.Task{
 		ID:     id,
 		Intent: model.IntentImplement,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: IssueImportPrincipal},
 			Reason:      model.ReasonImported,
 		},

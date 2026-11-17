@@ -1,0 +1,86 @@
+NOTICE:  database "grain_walk" does not exist, skipping
+(a) task 2: awaiting_reply
+(b) task 3: awaiting_submit
+(c-parent) task 4: closed
+(c) child: 5, filed proposed
+(c) child task 5: closed
+(ask) task 6: awaiting_reply
+(secret) task 7: awaiting_reply
+(access) task 8: awaiting_reply
+(chat) task 9 while chat waits: awaiting_reply
+(chat) task 9 after the reply: awaiting_reply
+events (a) task 2: [{"type":"task.state","state":"proposed","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.comment","state":"queued","questionSummary":null,"commentId":2},{"type":"task.state","state":"awaiting_reply","questionSummary":"Report: widgets README needs no change","commentId":null}]
+events (b) task 3: [{"type":"task.state","state":"proposed","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.comment","state":"queued","questionSummary":null,"commentId":3},{"type":"task.state","state":"awaiting_submit","questionSummary":null,"commentId":null}]
+events (c-parent) task 4: [{"type":"task.state","state":"proposed","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.comment","state":"queued","questionSummary":null,"commentId":4},{"type":"task.state","state":"closed","questionSummary":null,"commentId":null},{"type":"task.comment","state":"closed","questionSummary":null,"commentId":5},{"type":"task.comment","state":"closed","questionSummary":null,"commentId":8}]
+events (c) task 5: [{"type":"task.state","state":"proposed","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.comment","state":"queued","questionSummary":null,"commentId":6},{"type":"task.state","state":"closed","questionSummary":null,"commentId":null},{"type":"task.comment","state":"closed","questionSummary":null,"commentId":7}]
+events (ask) task 6: [{"type":"task.state","state":"proposed","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.question","state":"queued","questionSummary":"Keep the v1 widget API alongside v2?","commentId":9},{"type":"task.state","state":"awaiting_reply","questionSummary":"Keep the v1 widget API alongside v2?","commentId":9}]
+events (secret) task 7: [{"type":"task.state","state":"proposed","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.question","state":"queued","questionSummary":"Set widgets-api-key so the sync job can authenticate","commentId":10},{"type":"task.state","state":"awaiting_reply","questionSummary":"Set widgets-api-key so the sync job can authenticate","commentId":10}]
+events (access) task 8: [{"type":"task.state","state":"proposed","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.question","state":"queued","questionSummary":"Open network access to fetch the widgets schema","commentId":11},{"type":"task.state","state":"awaiting_reply","questionSummary":"Open network access to fetch the widgets schema","commentId":11}]
+events (chat) task 9: [{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.question","state":"running","questionSummary":"Land the widgets fix on main or a release branch?","commentId":12},{"type":"task.state","state":"awaiting_reply","questionSummary":"Land the widgets fix on main or a release branch?","commentId":12},{"type":"task.comment","state":"awaiting_reply","questionSummary":null,"commentId":13},{"type":"task.state","state":"running","questionSummary":null,"commentId":null},{"type":"task.state","state":"queued","questionSummary":null,"commentId":null},{"type":"task.comment","state":"queued","questionSummary":null,"commentId":14},{"type":"task.state","state":"awaiting_reply","questionSummary":"Report: fix goes to main","commentId":null}]
+row (a): {"id":"2","state":"awaiting_reply","noteSummary":"Report: widgets README needs no change","questionSummary":null,"prUrl":null}
+row (b): {"id":"3","state":"awaiting_submit","noteSummary":null,"questionSummary":null,"prUrl":null}
+row (c): {"id":"5","state":"closed","noteSummary":null,"questionSummary":null,"prUrl":null}
+row (ask): {"id":"6","state":"awaiting_reply","noteSummary":null,"questionSummary":"Keep the v1 widget API alongside v2?","prUrl":null}
+row (secret): {"id":"7","state":"awaiting_reply","noteSummary":null,"questionSummary":"Set widgets-api-key so the sync job can authenticate","prUrl":null}
+row (access): {"id":"8","state":"awaiting_reply","noteSummary":null,"questionSummary":"Open network access to fetch the widgets schema","prUrl":null}
+row (chat): {"id":"9","state":"awaiting_reply","noteSummary":"Report: fix goes to main","questionSummary":null,"prUrl":null}
+--- chat platform got:
+{"task_id":"2","event_type":"task.state","text":"Task #2 transitioned to state proposed"}
+{"task_id":"2","event_type":"task.state","text":"Task #2 transitioned to state queued"}
+{"task_id":"2","event_type":"task.state","text":"Task #2 transitioned to state running"}
+{"task_id":"2","event_type":"task.state","text":"Task #2 transitioned to state queued"}
+{"task_id":"2","event_type":"task.comment","text":"Task #2 event task.comment"}
+{"task_id":"2","event_type":"task.state","text":"Task #2 transitioned to state awaiting_reply"}
+{"task_id":"3","event_type":"task.state","text":"Task #3 transitioned to state proposed"}
+{"task_id":"3","event_type":"task.state","text":"Task #3 transitioned to state queued"}
+{"task_id":"3","event_type":"task.state","text":"Task #3 transitioned to state running"}
+{"task_id":"3","event_type":"task.state","text":"Task #3 transitioned to state queued"}
+{"task_id":"3","event_type":"task.comment","text":"Task #3 event task.comment"}
+{"task_id":"3","event_type":"task.state","text":"Task #3 transitioned to state awaiting_submit (acme/widgets#9000)"}
+{"task_id":"4","event_type":"task.state","text":"Task #4 transitioned to state proposed"}
+{"task_id":"4","event_type":"task.state","text":"Task #4 transitioned to state queued"}
+{"task_id":"4","event_type":"task.state","text":"Task #4 transitioned to state running"}
+{"task_id":"4","event_type":"task.state","text":"Task #4 transitioned to state queued"}
+{"task_id":"5","event_type":"task.state","text":"Task #5 transitioned to state proposed"}
+{"task_id":"4","event_type":"task.comment","text":"Task #4 event task.comment"}
+{"task_id":"4","event_type":"task.state","text":"Task #4 transitioned to state closed"}
+{"task_id":"4","event_type":"task.comment","text":"Task #4 event task.comment"}
+{"task_id":"5","event_type":"task.state","text":"Task #5 transitioned to state queued"}
+{"task_id":"5","event_type":"task.state","text":"Task #5 transitioned to state running"}
+{"task_id":"5","event_type":"task.state","text":"Task #5 transitioned to state queued"}
+{"task_id":"5","event_type":"task.comment","text":"Task #5 event task.comment"}
+{"task_id":"5","event_type":"task.state","text":"Task #5 transitioned to state closed"}
+{"task_id":"5","event_type":"task.comment","text":"Task #5 event task.comment"}
+{"task_id":"4","event_type":"task.comment","text":"Task #4 event task.comment"}
+{"task_id":"6","event_type":"task.state","text":"Task #6 transitioned to state proposed"}
+{"task_id":"6","event_type":"task.state","text":"Task #6 transitioned to state queued"}
+{"task_id":"6","event_type":"task.state","text":"Task #6 transitioned to state running"}
+{"task_id":"6","event_type":"task.state","text":"Task #6 transitioned to state queued"}
+{"task_id":"6","event_type":"task.question","text":"Task #6 is parked on a question: Keep the v1 widget API alongside v2? — Keep the v1 widget API alongside v2?"}
+{"task_id":"6","event_type":"task.state","text":"Task #6 transitioned to state awaiting_reply"}
+{"task_id":"7","event_type":"task.state","text":"Task #7 transitioned to state proposed"}
+{"task_id":"7","event_type":"task.state","text":"Task #7 transitioned to state queued"}
+{"task_id":"7","event_type":"task.state","text":"Task #7 transitioned to state running"}
+{"task_id":"7","event_type":"task.state","text":"Task #7 transitioned to state queued"}
+{"task_id":"7","event_type":"task.question","text":"Task #7 is parked on a question: Set widgets-api-key so the sync job can authenticate — Set widgets-api-key so the sync job can authenticate"}
+{"task_id":"7","event_type":"task.state","text":"Task #7 transitioned to state awaiting_reply"}
+{"task_id":"8","event_type":"task.state","text":"Task #8 transitioned to state proposed"}
+{"task_id":"8","event_type":"task.state","text":"Task #8 transitioned to state queued"}
+{"task_id":"8","event_type":"task.state","text":"Task #8 transitioned to state running"}
+{"task_id":"8","event_type":"task.state","text":"Task #8 transitioned to state queued"}
+{"task_id":"8","event_type":"task.question","text":"Task #8 is parked on a question: Open network access to fetch the widgets schema — Open network access to fetch the widgets schema"}
+{"task_id":"8","event_type":"task.state","text":"Task #8 transitioned to state awaiting_reply"}
+{"task_id":"9","event_type":"task.state","text":"Task #9 transitioned to state queued"}
+{"task_id":"9","event_type":"task.state","text":"Task #9 transitioned to state running"}
+{"task_id":"9","event_type":"task.question","text":"Task #9 is parked on a question: Land the widgets fix on main or a release branch? — Land the widgets fix on main or a release branch?"}
+{"task_id":"9","event_type":"task.state","text":"Task #9 transitioned to state awaiting_reply"}
+{"task_id":"9","event_type":"task.comment","text":"Task #9 event task.comment"}
+{"task_id":"9","event_type":"task.state","text":"Task #9 transitioned to state running"}
+{"task_id":"9","event_type":"task.state","text":"Task #9 transitioned to state queued"}
+{"task_id":"9","event_type":"task.comment","text":"Task #9 event task.comment"}
+{"task_id":"9","event_type":"task.state","text":"Task #9 transitioned to state awaiting_reply"}
+--- parked-on-a-question messages per task:
+      1 6
+      1 7
+      1 8
+      1 9

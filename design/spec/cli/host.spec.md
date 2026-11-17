@@ -893,6 +893,165 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
+- `qa flow list [-key string] [-limit n]` lists published QA flow versions.
+- `qa flow show <REF> [-yaml]` prints a specific flow version.
+- `qa flow fork <SRC> -key <K> [-o <FILE>]` forks a flow.
+- `qa flow validate <FILE> [-dry-run n]` validates a flow declaration locally.
+- `qa flow publish <FILE>` publishes a flow declaration.
+- `qa flow retire <KEY@N|HASH>` retires a flow version.
+- `qa flow adopt -repo <O/R> -path <PATH> -commit <SHA> [-dry-run]` adopts a flow declaration from a pinned repository commit.
+- `qa flow probe [-flow <REF>] -title <TITLE> [-body <BODY>] [-files <CSV>] [-non-test-added <N>]` simulates complexity, blast radius, stages and S5 triage.
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow list -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-key` | string |  |  | filter by flow key |
+| `-limit` | int | `50` |  | maximum versions to return |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow show -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-yaml` | bool |  |  | output YAML declaration |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow fork -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-key` | string |  |  | new flow key |
+| `-o` | string |  |  | output file path (stdout if omitted) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow validate -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-dry-run` | int |  |  | dry run sampling count over recent PRs |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow publish -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow retire -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow adopt -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-commit` | string |  |  | 40-char commit SHA to read from |
+| `-dry-run` | bool |  |  | Validate and simulate adoption without saving |
+| `-path` | string |  |  | Path to the flow declaration inside the repository |
+| `-repo` | string |  |  | GitHub repository (owner/name) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa flow probe -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-body` | string |  |  | Simulated pull request body description |
+| `-files` | string |  |  | Comma-separated list of simulated changed file paths |
+| `-flow` | string |  |  | Flow hash or key@version to probe (default golden-v3@1) |
+| `-non-test-added` | int |  |  | Simulated non-test lines added |
+| `-title` | string |  |  | Simulated pull request title |
+<!-- END GENERATED FLAGS -->
+
+- `qa exp list [-state string] [-limit n]` lists quality experiments.
+- `qa exp show <ID> [-json]` shows an experiment's configuration, power preview and audit trail.
+- `qa exp create -f <FILE>` creates a draft experiment from JSON or YAML.
+- `qa exp edit <ID> -f <FILE>` edits a draft experiment.
+- `qa exp start <ID> [-override-notes string]` starts a draft experiment.
+- `qa exp halt-arm <ID> <ARM> -reason <TEXT>` halts one treatment arm on a multi-treatment experiment.
+- `qa exp resume-enrollment <ID>` resumes enrollment in a new segment after an engine-rev hold.
+- `qa exp stop <ID> -decision <ship|reject|inconclusive|invalid> [-arm <ARM>] -reason <TEXT>` stops a running experiment with a decision.
+- `qa exp archive <ID>` archives a draft or stopped experiment.
+- `qa exp results <ID> [-json]` reads an experiment's statistical readout.
+- `qa exp keys <ID>` prints opaque explicit allocation keys.
+- `qa judge run -experiment <ID> -judge-model <MODEL> [-raters n] [-budget-tokens n] [-dry-run] [-out-dir DIR] [-checkout DIR]` runs the blind cross-family readout judge batch.
+- `qa judge label -experiment <ID> [-readout-dir DIR]` records blind human calibration labels.
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp list -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-limit` | int | `50` |  | maximum experiments to return |
+| `-state` | string |  |  | filter by state (draft, running, stopped, archived) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp show -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-json` | bool |  |  | output raw JSON |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp create -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-f` | string |  |  | experiment definition file (JSON or YAML) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp edit -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-f` | string |  |  | updated draft experiment fields (JSON or YAML) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp start -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-override-notes` | string |  |  | reason for overriding prior not-helpful warning |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp halt-arm -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-reason` | string |  |  | reason for halting the treatment arm |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp resume-enrollment -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp stop -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-arm` | string |  |  | winning/referenced arm id |
+| `-decision` | string |  |  | terminal decision (ship\|reject\|inconclusive\|invalid) |
+| `-reason` | string |  |  | decision rationale |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp archive -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp results -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-json` | bool |  |  | output raw JSON |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa exp keys -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa judge run -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-budget-tokens` | int | `3000000` |  | maximum token budget across all judge calls |
+| `-checkout` | string |  |  | optional local git checkout directory for reading full diffs |
+| `-dry-run` | bool |  |  | print packet/chunk counts and token estimate without invoking models |
+| `-experiment` | string |  |  | experiment ID to evaluate |
+| `-judge-model` | string |  |  | judge model ID (must be from a different model family than coding models) |
+| `-out-dir` | string |  |  | directory to write readout bundle (defaults to ./qa-readout-<experiment>) |
+| `-raters` | int | `3` |  | number of independent blind raters per packet |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa judge label -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-experiment` | string |  |  | experiment ID |
+| `-readout-dir` | string |  |  | readout directory holding blind packets |
+<!-- END GENERATED FLAGS -->
+
+
 **Pinned by:** `pkg/cli/qa_test.go`: `TestQACommandStatusEnableDisableAndFlagPreservation`.
 
 ### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
@@ -2159,7 +2318,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks (SQLite by 
 
 ### 5.3 `grain mcpserver [flags]` {#CLI-45}
 
-Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks it, re-invoking its own binary, for each agent run.
+Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks it, re-invoking its own binary, for each agent run; `-no-tools` serves an empty registry with no sandbox, escape or daemon tools for single-round toolless verification.
 
 <!-- BEGIN GENERATED FLAGS: grain mcpserver -->
 | Flag | Type | Default | Env | Description |
@@ -2181,6 +2340,7 @@ Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks i
 | `-k8s-namespace` | string |  |  | namespace of -k8s-pod; empty is kubectl's own default |
 | `-k8s-pod` | value |  |  | name of a Kubernetes sandbox pod to run tools in, over kubectl exec (with -k8s-namespace and -workspace) |
 | `-mcp-surface` | value |  |  | which tools to serve: "control" (the sandbox tools, the run-ending and escalation tools and the model-only grants' tools; everything else is a grain CLI command inside the sandbox) or "full" (every tool, for a client that cannot shell out and for tests). Empty is control when a sandbox flag is set, full otherwise (design/design/sandbox-first-agent-surface.design.md §6) |
+| `-no-tools` | bool |  |  | serve an empty MCP registry with no sandbox, escape, or daemon tools |
 | `-pr-base` | string |  |  | branch -pr-branch merges into, which base_branch_status reads CI for so a run can tell a failure its own change caused from one it inherited (model.Task's own Base). Unset -- what an ordinary task has -- that tool reads -pr-repo's default branch instead, which is the base such a task really has. |
 | `-pr-base-incident` | string |  |  | notice of an active incident on the base branch, if any |
 | `-pr-branch` | string |  |  | branch within -pr-repo pull_request_status and wait_for_checks report on -- this run's own branch, and the only one they can ever read (required with -pr-repo) |

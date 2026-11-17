@@ -109,15 +109,15 @@ func TestStackedMergeDoesNotEnrolTheTaskBranch(t *testing.T) {
 		stacked bool
 	}{
 		{"fix", model.Task{ID: "200", Target: &repo, Base: taskBranch,
-			Origin: model.Origin{Reason: model.ReasonFix}}, true},
+			Filing: model.Filing{Reason: model.ReasonFix}}, true},
 		{"review", model.Task{ID: "201", Target: &repo, Base: taskBranch,
-			Origin: model.Origin{Reason: model.ReasonReview}}, true},
+			Filing: model.Filing{Reason: model.ReasonReview}}, true},
 		// Whatever the task says about itself, the branch is a task's.
 		{"unmarked", model.Task{ID: "202", Target: &repo, Base: taskBranch}, false},
 	} {
 		// syncEntry's own reading of the task, so this is the flag a
 		// real merge of it passes.
-		if want := tc.task.Origin.Reason == model.ReasonFix || isReviewTask(tc.task); want != tc.stacked {
+		if want := tc.task.Filing.Reason == model.ReasonFix || isReviewTask(tc.task); want != tc.stacked {
 			t.Fatalf("%s: syncEntry would read stacked = %v, the case says %v", tc.name, want, tc.stacked)
 		}
 		err := recordPostMergeCI(ctx, store, postMergeHeadClient{
@@ -862,7 +862,7 @@ func TestSyncEntryClosesAPullRequestEvenWhenItsHeadBranchIsGone(t *testing.T) {
 	completedAt := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	task := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "fix the thing", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &repo,
 		Binding:  model.BindingDirective,
@@ -1037,7 +1037,7 @@ func autoMergeQueueHead(t *testing.T) (*model.Store, context.Context, queueEntry
 	completedAt := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	task := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "fix the thing", Body: "please",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval:  &model.Attribution{Actor: human},
 		Target:    &repo,
 		Binding:   model.BindingDirective,

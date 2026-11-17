@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"log"
 	"runtime/debug"
 	"slices"
@@ -776,6 +777,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 	// and there is at most one of them per process.
 	started := time.Now()
 	timing := CycleTiming{Start: now}
+	_ = sweepStrandedQAStages(ctx, deps, now)
 	commitsBefore := uint64(0)
 	if deps.Store != nil {
 		commitsBefore = deps.Store.CommitCount()
@@ -896,6 +898,9 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 		if r.Name == dispatchReconciler {
 			timing.DispatchWait = wait
 		}
+	}
+	if deps.Store != nil && deps.Config.QA.Enabled && ctx.Err() == nil {
+		maybeEvaluateQACircuitBreakerThrottled(ctx, deps.Store, deps.Client, now)
 	}
 	return errors.Join(errs...)
 }
@@ -3040,7 +3045,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	obs, _ := deps.Store.GetObservation(ctx, task.ID)
 	var preRunBranchSHA string
 	if deps.Client != nil && task.Target != nil && (d.Attempt > 1 || obs.RepairInFlight() || hasFixesLink(*task)) {
-		if head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); err == nil && head != nil {
+		if head, err := effectiveTaskPushHead(ctx, deps.Store, deps.Client, *task); err == nil && head != nil {
 			preRunBranchSHA = head.SHA
 		}
 	}
@@ -3138,7 +3143,7 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 			// usage-limit-paused repair as completed.
 			salvage := true
 			if preRunBranchSHA != "" && deps.Client != nil && task.Target != nil {
-				head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
+				head, err := effectiveTaskPushHead(ctx, deps.Store, deps.Client, task)
 				salvage = err == nil && head != nil && head.SHA != preRunBranchSHA
 			} else if obs, err := deps.Store.GetObservation(ctx, task.ID); err == nil && obs.RepairInFlight() {
 				salvage = false
@@ -3293,4 +3298,67 @@ func usageCappedWorkers(ctx context.Context, deps Deps, now time.Time) int {
 		n = 1
 	}
 	return n
+}
+
+var sweptInactiveQAStage sync.Map // key: fmt.Sprintf("%p:%s", store, taskID)
+
+func originEverEnforcedTreatment(ctx context.Context, store *model.Store, rootOrigin string) bool {
+	if enr, err := store.GetQAEnrollment(ctx, rootOrigin); err == nil && enr != nil {
+		switch enr.ArmID {
+		case "", "baseline", "excluded", model.QAArmControl:
+		default:
+			if enr.FlowHash != "" && enr.FlowHash != "control" && enr.FlowHash != "baseline" {
+				return true
+			}
+		}
+	}
+	if leg, err := store.EarliestQAAssignment(ctx, rootOrigin); err == nil && leg != nil && leg.Arm == model.QAArmTreatment {
+		return true
+	}
+	return false
+}
+
+func sweepStrandedQAStages(ctx context.Context, deps Deps, now time.Time) error {
+	if deps.Client == nil || deps.Store == nil {
+		return nil
+	}
+	tasks, err := deps.Store.ListTasks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, task := range tasks {
+		if task.Target == nil || !model.TaskEligibleForQAStaging(task) {
+			continue
+		}
+		if closed, cErr := taskClosed(ctx, deps.Store, task.ID); cErr != nil || closed {
+			continue
+		}
+		root := model.ResolveQARootOrigin(task.WorkOrigin, task.ID)
+		if !originEverEnforcedTreatment(ctx, deps.Store, root) {
+			continue
+		}
+		sweepKey := fmt.Sprintf("%p:%s", deps.Store, task.ID)
+		assign, qaCfg, aErr := resolve.ActiveQAResolutionForTask(ctx, deps.Store, task.ID)
+		qaActive := aErr == nil && assign != nil && qaCfg.Enabled && assign.IsEnforcedTreatment()
+		if qaActive {
+			sweptInactiveQAStage.Delete(sweepKey)
+			continue
+		}
+		if _, done := sweptInactiveQAStage.Load(sweepKey); done {
+			continue
+		}
+		stageBranch := model.QAStageBranchName(task.ID)
+		exists, bErr := targetBranchExists(deps.Client, *task.Target, stageBranch)
+		if bErr != nil {
+			continue
+		}
+		if !exists {
+			sweptInactiveQAStage.Store(sweepKey, struct{}{})
+			continue
+		}
+		if err := PromoteStrandedQAStage(ctx, deps.Store, deps.Client, task, "Quality checks disabled or task no longer gated"); err == nil {
+			sweptInactiveQAStage.Store(sweepKey, struct{}{})
+		}
+	}
+	return nil
 }

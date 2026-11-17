@@ -79,7 +79,7 @@ func TestDurableImpliesPriorityDispatchAndIsAPersonsToGrant(t *testing.T) {
 func durableTestTask(id string, durable bool) model.Task {
 	tk := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: id,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: human},
 	}

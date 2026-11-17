@@ -71,7 +71,7 @@ func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grants ...string) (stri
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "335", Intent: model.IntentImplement, Title: "manage upgrades", Body: "please",
 		Grants:   taskGrants,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Binding:  model.BindingDirective,
 	}); err != nil {
@@ -366,7 +366,7 @@ func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "336", Intent: model.IntentImplement, Title: "work", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Binding:  model.BindingDirective,
 	}); err != nil {

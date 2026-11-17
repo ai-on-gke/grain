@@ -923,8 +923,8 @@ func TestAListedRepositorysCIAPITokenIsIsolatedEndToEnd(t *testing.T) {
 	if err != nil || storedPlain == nil {
 		t.Fatalf("reading stored plain task: %v", err)
 	}
-	if storedPlain.Origin.Attribution.Actor.Kind != model.PrincipalAutomation || storedPlain.Origin.Attribution.Actor.ID != "ci-api" {
-		t.Errorf("plain task Origin.Attribution = %+v, want automation:ci-api", storedPlain.Origin.Attribution)
+	if storedPlain.Filing.Attribution.Actor.Kind != model.PrincipalAutomation || storedPlain.Filing.Attribution.Actor.ID != "ci-api" {
+		t.Errorf("plain task Filing.Attribution = %+v, want automation:ci-api", storedPlain.Filing.Attribution)
 	}
 
 	// 4. Templates reaching another repository via reads, writes, or API grants are refused (403).

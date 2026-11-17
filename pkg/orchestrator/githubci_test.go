@@ -942,7 +942,7 @@ func TestForkPullRequestWorkflowRunIsNotTheBaseBranch(t *testing.T) {
 		Intent:     model.IntentImplement,
 		Title:      "Fix base branch release on acme/widgets main",
 		Body:       "Genuine failing release on main.",
-		Origin:     model.Origin{Attribution: model.Attribution{Actor: orchestrator.BaseReleaseTriager}, Reason: model.ReasonDirect},
+		Filing:     model.Filing{Attribution: model.Attribution{Actor: orchestrator.BaseReleaseTriager}, Reason: model.ReasonDirect},
 		Approval:   &model.Attribution{Actor: orchestrator.BaseReleaseTriager},
 		ApprovedAt: &created,
 		Target:     &repo,
