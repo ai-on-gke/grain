@@ -193,12 +193,13 @@ func ComputeQASummary(in QASummaryInput) QASummary {
 	tasksByOrigin := map[string][]model.Task{}
 	// Map reviewedTaskID -> whether a review task pushed fixes or opened a stacked fix PR onto it.
 	reviewerFixedTask := map[string]bool{}
+	rootOrigins := model.NewQARootOrigins(in.Tasks)
 	for _, t := range in.Tasks {
 		taskByID[t.ID] = t
 		if t.Target != nil {
 			taskRepoByID[t.ID] = t.Target.String()
 		}
-		originKey := model.ResolveQARootOrigin(t.WorkOrigin, t.ID)
+		originKey := rootOrigins.Of(t)
 		if originKey != "" {
 			tasksByOrigin[originKey] = append(tasksByOrigin[originKey], t)
 		}

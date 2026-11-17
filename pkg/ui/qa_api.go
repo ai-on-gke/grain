@@ -241,19 +241,24 @@ func (s *Server) handleGetTaskQA(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	rootOrigin, err := s.tasks.Store.ResolveTaskQARootOrigin(ctx, *task)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	var expID, armID string
 	if res != nil {
 		expID = res.ExperimentID
 		armID = res.ArmID
 	} else if resolve.RegistryResolver != nil {
-		if regRes, rErr := resolve.RegistryResolver(ctx, s.tasks.Store, *task, model.ResolveQARootOrigin(task.WorkOrigin, task.ID), qaCfg); rErr == nil && regRes != nil {
+		if regRes, rErr := resolve.RegistryResolver(ctx, s.tasks.Store, *task, rootOrigin, qaCfg); rErr == nil && regRes != nil {
 			expID = regRes.ExperimentID
 			armID = regRes.ArmID
 		}
 	}
 	var assign *model.QAAssignment
 	if res != nil || qaCfg.EpochOrDefault() >= 1 {
-		assign, _ = s.tasks.Store.QAAssignment(ctx, model.ResolveQARootOrigin(task.WorkOrigin, task.ID), qaCfg.EpochOrDefault())
+		assign, _ = s.tasks.Store.QAAssignment(ctx, rootOrigin, qaCfg.EpochOrDefault())
 	}
 
 	runs, err := s.tasks.Store.ListQACheckRunsForTask(ctx, taskID)

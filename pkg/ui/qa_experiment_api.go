@@ -1088,8 +1088,9 @@ func (s *Server) handlePostQAExperimentReadout(w http.ResponseWriter, r *http.Re
 				tasks, _ := s.tasks.Store.ListTasks(r.Context())
 				runTimings, _ := s.tasks.Store.RunTimings(r.Context())
 				enrolledTasks := map[string]bool{}
+				rootOrigins := model.NewQARootOrigins(tasks)
 				for _, t := range tasks {
-					if enrolledOrigins[model.ResolveQARootOrigin(t.WorkOrigin, t.ID)] {
+					if enrolledOrigins[rootOrigins.Of(t)] {
 						enrolledTasks[t.ID] = true
 					}
 				}
@@ -1396,8 +1397,9 @@ func (s *Server) handleGetQAExperimentResults(w http.ResponseWriter, r *http.Req
 		modelByArm[a.ID] = map[string]int{}
 	}
 	enrolledTaskIDs := map[string]string{} // taskID -> rootOrigin
+	rootOrigins := model.NewQARootOrigins(tasks)
 	for _, t := range tasks {
-		root := model.ResolveQARootOrigin(t.WorkOrigin, t.ID)
+		root := rootOrigins.Of(t)
 		arm := armByOrigin[root]
 		if arm == "" {
 			continue

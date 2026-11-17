@@ -95,6 +95,70 @@ func (s *Store) ResolveTaskQARootOrigin(ctx context.Context, task Task) (string,
 	return ResolveQARootOrigin(task.WorkOrigin, task.ID), nil
 }
 
+// QARootOrigins resolves sticky QA root-origin keys for many tasks at once
+// from an already-loaded task list, with no further queries. It agrees with
+// Store.ResolveTaskQARootOrigin key for key: a task with its own WorkOrigin
+// keeps it, and an originless task with a LinkProposedBy parent walks the
+// same tree Store.TreeOrigin does. Loops over Store.ListTasks (stranded-stage
+// rescue, experiment results, metrics) use it so an originless child lands
+// on the same enrollment/assignment row its dispatch wrote.
+type QARootOrigins struct {
+	byID map[string]Task
+}
+
+// NewQARootOrigins indexes tasks for QARootOrigins.Of.
+func NewQARootOrigins(tasks []Task) QARootOrigins {
+	byID := make(map[string]Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	return QARootOrigins{byID: byID}
+}
+
+// Of returns task's sticky QA root-origin key.
+func (r QARootOrigins) Of(task Task) string {
+	if strings.TrimSpace(string(task.WorkOrigin)) == "" && task.Parent() != "" {
+		if o := r.treeOrigin(task.ID); strings.TrimSpace(string(o)) != "" {
+			return ResolveQARootOrigin(o, task.ID)
+		}
+	}
+	return ResolveQARootOrigin(task.WorkOrigin, task.ID)
+}
+
+// treeOrigin mirrors the store's treeOrigin walk over the indexed tasks.
+// A task missing from the index ends the walk at its own id, as a missing
+// row does in the store.
+func (r QARootOrigins) treeOrigin(id string) WorkOrigin {
+	seen := map[string]bool{}
+	for {
+		if seen[id] {
+			return TaskOrigin(id)
+		}
+		seen[id] = true
+		t, ok := r.byID[id]
+		if !ok {
+			return TaskOrigin(id)
+		}
+		parent := ""
+		for _, l := range t.Links {
+			if l.Kind == LinkProposedBy && (parent == "" || l.Target < parent) {
+				parent = l.Target
+			}
+		}
+		o := t.WorkOrigin
+		switch {
+		case o.Task() != "" && o.Task() != id:
+			id = o.Task()
+		case o != "":
+			return o
+		case parent != "":
+			id = parent
+		default:
+			return TaskOrigin(id)
+		}
+	}
+}
+
 // TaskEligibleForQAStaging reports whether task pushes its own candidate PR branch (and is not
 // an interactive task, a priority-dispatch/durable session, an in-place review push, a comments-only review, or an external PR).
 func TaskEligibleForQAStaging(task Task) bool {
