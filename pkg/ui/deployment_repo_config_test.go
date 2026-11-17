@@ -299,3 +299,43 @@ func TestDeploymentRepoConfigOffTheTargetReposIsAPersonsNotAnAgents(t *testing.T
 		t.Fatalf("an agent asking about acme/gadgets: %v, want a refusal naming the target repos", err)
 	}
 }
+
+// A repository's gitCredential naming a credential the deployment does not
+// hold is refused with 400, as pinning its Git connection is, rather than
+// stored to fail the next clone (2026-11-16 repository walkthrough). The
+// credential already stored keeps the rest of the form saveable.
+func TestDeploymentRepoConfigRefusesUnknownGitCredential(t *testing.T) {
+	t.Parallel()
+	srv, client, creds := testServerWithCreds(t)
+	ctx := context.Background()
+	if rec := do(t, srv, "PUT", "/api/deployment", `{"targetRepos":["acme/widgets"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/deployment: %d %s", rec.Code, rec.Body)
+	}
+	if err := creds.SetToken("bot", "ghp_example"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, srv, "PUT", "/api/deployment/repos/acme/widgets/config", `{"gitCredential":"nope"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `gitCredential \"nope\" is not a git credential on this deployment (bot)`) {
+		t.Fatalf("unknown gitCredential: %d %s, want 400 naming it and the credentials held", rec.Code, rec.Body)
+	}
+	cfg, err := client.Store.GetRepoConfig(ctx, model.RepoRef{Owner: "acme", Name: "widgets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg != nil && cfg.GitCredential != "" {
+		t.Fatalf("refused gitCredential was stored: %q", cfg.GitCredential)
+	}
+
+	if rec := do(t, srv, "PUT", "/api/deployment/repos/acme/widgets/config", `{"gitCredential":"bot"}`); rec.Code != http.StatusOK {
+		t.Fatalf("held gitCredential: %d %s", rec.Code, rec.Body)
+	}
+
+	// A credential stored before it went away does not block the next save.
+	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, GitCredential: "gone"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, srv, "PUT", "/api/deployment/repos/acme/widgets/config", `{"cloneUrl":"","gitCredential":"gone","setupCommand":"make"}`); rec.Code != http.StatusOK {
+		t.Fatalf("resaving the stored gitCredential: %d %s", rec.Code, rec.Body)
+	}
+}

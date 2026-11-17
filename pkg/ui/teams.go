@@ -884,7 +884,18 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 		cfg.CloneURL = strings.TrimSpace(*req.CloneURL)
 	}
 	if req.GitCredential != nil {
+		// A credential the deployment does not hold is refused, as the
+		// deployment's own gitCredential and the repository's pinned
+		// connection (SetTeamRepoGitConnection) refuse it; stored, it
+		// only surfaced at the next clone. The one already stored is let
+		// through, so a save that does not touch it never makes the rest
+		// of the form unsaveable.
 		gitCred := strings.TrimSpace(*req.GitCredential)
+		if gitCred != "" && gitCred != cfg.GitCredential && !c.isGitHubCredentialSelector(gitCred) {
+			return DeploymentRepoConfigResponse{}, validationErrorf(
+				"gitCredential %q is not a git credential on this deployment (%s): add it under Settings -> Git connections first",
+				gitCred, strings.Join(c.gitHubCredentialNames(), ", "))
+		}
 		cfg.GitCredential = gitCred
 	}
 	if req.RequireBranchUpToDate != nil {
