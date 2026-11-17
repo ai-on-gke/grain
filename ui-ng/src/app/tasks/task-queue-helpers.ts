@@ -41,8 +41,14 @@ export function isWork(t: Task): boolean {
   return !t.consoleSession && !t.interactive;
 }
 
+// DEFAULT_TASK_PRIORITY is model.DefaultTaskPriority: what a task with
+// none runs at, and the most a caller without tasks:admin may set.
+export const DEFAULT_TASK_PRIORITY = 5;
+
 export function priorityOf(t: Task): number {
-  return typeof t.priority === "number" && t.priority > 0 ? t.priority : 5;
+  return typeof t.priority === "number" && t.priority > 0
+    ? t.priority
+    : DEFAULT_TASK_PRIORITY;
 }
 
 export function levelOf(p: number): Level {

@@ -85,6 +85,7 @@ import {
   stateLabel,
   timelineEndMs,
 } from "./task-view";
+import { DEFAULT_TASK_PRIORITY } from "./task-queue-helpers";
 import { type BatchResult, type Undo, TasksStore } from "./tasks.store";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 
@@ -1913,6 +1914,11 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       base: agreed((t) => t.base ?? ""),
       autoMerge: agreed((t) => (t.autoMerge ? "on" : "off")) as
         "on" | "off" | "",
+      maxPriority: rows.every((t) =>
+        this.access.canScope("tasks:admin", t.repo ?? null),
+      )
+        ? undefined
+        : DEFAULT_TASK_PRIORITY,
       capabilities: caps,
     });
   }
