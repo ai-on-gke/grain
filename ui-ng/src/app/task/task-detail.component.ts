@@ -1691,6 +1691,8 @@ export class TaskDetailComponent implements OnDestroy {
   // acted fires after an action went through, so a list beside the pane
   // can read again at once.
   readonly acted = output<void>();
+  // A queued message can post after the page has gone (TaskStore.send).
+  private destroyed = false;
   readonly closed = output<void>();
   readonly expand = output<void>();
   readonly openTask = output<string>();
@@ -2014,6 +2016,7 @@ export class TaskDetailComponent implements OnDestroy {
       this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
     win?.addEventListener("hashchange", onHash);
     inject(DestroyRef).onDestroy(() => {
+      this.destroyed = true;
       paneSub.unsubscribe();
       fragSub.unsubscribe();
       win?.removeEventListener("hashchange", onHash);
@@ -2935,7 +2938,9 @@ export class TaskDetailComponent implements OnDestroy {
         this.replyTarget.set(tgt);
         if (allowSecretWords) this.allowWordsOnParked.set(true);
       },
-      sent: () => this.acted.emit(),
+      sent: () => {
+        if (!this.destroyed) this.acted.emit();
+      },
     });
     if (queued) {
       this.replyTarget.set(null);
