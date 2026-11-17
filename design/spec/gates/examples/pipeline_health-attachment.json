@@ -1,0 +1,26 @@
+{
+  "id": "pipeline_health",
+  "type": "pipeline_health",
+  "version": 1,
+  "purpose": "completion",
+  "required": true,
+  "action": null,
+  "subject": {
+    "kind": "repository",
+    "repository": "ai-on-gke/grain",
+    "ref": "main"
+  },
+  "config": {
+    "repos": [
+      "ai-on-gke/grain"
+    ],
+    "semantics": "scoped_v1"
+  },
+  "freshness_seconds": 300,
+  "origin": {
+    "kind": "task",
+    "id": "57",
+    "revision": "1",
+    "imported": false
+  }
+}

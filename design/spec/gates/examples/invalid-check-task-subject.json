@@ -1,0 +1,25 @@
+{
+  "id": "checks",
+  "type": "checks",
+  "version": 1,
+  "purpose": "guard",
+  "required": true,
+  "action": "change.merge",
+  "subject": {
+    "kind": "task",
+    "task_id": "57"
+  },
+  "config": {
+    "mode": "effective",
+    "extra_jobs": [],
+    "empty": "unknown",
+    "semantics": "current_v1"
+  },
+  "freshness_seconds": 300,
+  "origin": {
+    "kind": "task",
+    "id": "57",
+    "revision": "1",
+    "imported": false
+  }
+}
