@@ -38,6 +38,32 @@ import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { pausedUntil } from "../../alerts.js";
 import ModelSelect from "../ModelSelect.jsx";
 
+const NAMED_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+// inferredFramework mirrors model.ModelFramework's prefix fallback
+// (pkg/model/model_selection.go) when no connection advertises id (or its
+// framework is unset).
+function inferredFramework(id) {
+  const lower = (id || "").trim().toLowerCase();
+  if (lower.startsWith("claude")) return "claude";
+  if (
+    lower.startsWith("gpt") ||
+    lower.startsWith("codex") ||
+    lower.startsWith("o3") ||
+    lower.startsWith("o4")
+  ) {
+    return "codex";
+  }
+  if (lower.startsWith("gemini")) return "antigravity";
+  return "";
+}
+
+function effectiveFramework(id, framework) {
+  const f = (framework || "").trim().toLowerCase();
+  if (f === "gemini") return "antigravity";
+  return f || inferredFramework(id);
+}
+
 // effortChoices is the reasoning-effort vocabulary a model's framework
 // takes, or [] for one that takes no effort at all (Claude: the CLI has
 // no flag).
@@ -51,16 +77,16 @@ function effortChoices(framework, efforts) {
 // or "" when it does -- the same rule as ui-ng's model-catalog.ts and the
 // runners: Claude has no effort flag, and agy refuses --effort with
 // "auto" and with a model whose name already spells its effort
-// (opus-5.5-high; antigravity.modelTakesNoEffort). Codex IDs never name
-// one: gpt-5.1-codex-max is a model.
+// (opus-5.5-high, opus-5.5-xhigh; antigravity.modelTakesNoEffort). Codex
+// IDs never name one: gpt-5.1-codex-max is a model.
 function noEffortReason(id, framework) {
-  if (framework === "claude") return "Claude takes no reasoning effort.";
   const lower = (id || "").trim().toLowerCase();
+  if (!lower) return "";
+  const fw = effectiveFramework(id, framework);
+  if (fw === "claude") return "Claude takes no reasoning effort.";
   if (lower === "auto") return "auto picks the model, and its effort, itself.";
-  if (framework === "codex") return "";
-  const named = ["low", "medium", "high", "max"].find((e) =>
-    lower.endsWith(`-${e}`),
-  );
+  if (fw === "codex") return "";
+  const named = NAMED_EFFORTS.find((e) => lower.endsWith(`-${e}`));
   return named ? `Effort is part of the model name: ${named}.` : "";
 }
 
@@ -112,11 +138,18 @@ export default function ModelDefaults({
   // are listed too, so the gap shows instead of hiding behind it.
   const rows = useMemo(() => {
     const out = [...advertised];
-    const known = new Set(out.map((m) => m.id));
+    const known = new Set(out.map((m) => m.id.toLowerCase()));
     const orphan = (id) => {
-      if (id && !known.has(id)) {
-        known.add(id);
-        out.push({ id, framework: "", connections: [], enabled: false });
+      const trimmed = (id || "").trim();
+      const key = trimmed.toLowerCase();
+      if (trimmed && !known.has(key)) {
+        known.add(key);
+        out.push({
+          id: trimmed,
+          framework: "",
+          connections: [],
+          enabled: false,
+        });
       }
     };
     for (const id of selectedDefaults) orphan(id);
@@ -379,9 +412,10 @@ export default function ModelDefaults({
       </Typography>
       <Stack spacing={1.25} sx={{ mb: 3 }}>
         {rows.map((m) => {
-          const choices = effortChoices(m.framework, efforts);
+          const fw = effectiveFramework(m.id, m.framework);
+          const choices = effortChoices(fw, efforts);
           const effort = effortFor(m.id);
-          const noEffort = noEffortReason(m.id, m.framework);
+          const noEffort = noEffortReason(m.id, fw);
           const offered = noEffort ? [] : choices;
           const defaultIndex = selectedDefaults.findIndex(
             (id) => id.toLowerCase() === m.id.toLowerCase(),
