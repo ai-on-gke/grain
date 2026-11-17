@@ -10,7 +10,7 @@ This document specifies how Grain deployments configure and connect to Capabilit
 
 The design this specifies is [`capabilities.design.md`](../../design/capabilities.design.md). A concise guide for capability authors is in [`docs/capabilities.md`](../../../docs/capabilities.md). Where the guide ever disagrees with this specification, **this document wins**.
 
-Proposed additive protocol: [MCP gates](../mcp-gates/mcp-gates.spec.md) defines explicitly attached `gate_*` read-only tools alongside capability methods. It does not change `mint_*`/`release_*` discovery or grant authority; gate evaluation has its own bounded request/result and error contracts. Its [v2 snapshot transport](../mcp-gates/mcp-gates.spec.md#MGS-11) uses repeated Grain-to-capability calls: non-final needs_data requests are fulfilled by Grain from retained, authorized snapshot pages. Snapshot IDs are selectors, not fetch URLs/credentials; no callback or new provider network route is introduced. This protocol is not yet implemented.
+Proposed integration: [configurable built-in gates](../gates/gates.spec.md) evaluate through ordinary in-process read helpers. They do not change capability `mint_*`/`release_*`/`configure` discovery, transport or grants. Earlier remote gate discovery, snapshot paging and capability back-call proposals are [deferred history](../gates/history/README.md), not prerequisites for the initial gate implementation.
 
 ## Contents
 
