@@ -1681,8 +1681,12 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   }
 
   protected pickTab(t: ContextTab): void {
+    const changed = this.tab() !== t;
     this.tab.set(t);
     this.syncUrl();
+    if (changed) {
+      this.splitEl()?.nativeElement.scrollTo?.({ top: 0 });
+    }
     if (t === "namespace" && this.fsEntries().length === 0) {
       void this.loadFsDir(this.fsDir());
     }
@@ -1806,6 +1810,7 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     this.docTextDraft.set("");
     this.loadedDocSummary.set("");
     this.loadedDocText.set("");
+    this.revealDetail();
   }
 
   protected async openDocument(doc: MemoryDocument): Promise<void> {

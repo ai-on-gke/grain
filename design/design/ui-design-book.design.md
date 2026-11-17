@@ -218,10 +218,11 @@ full length inside their pane's scroller rather than in fixed-height boxes;
 a CI log's search bar sticks to the top of the inspector. Stacked Context
 (below 840px) is one scroller for list and detail, and picking a row scrolls
 the detail's top into view. `e2e/next-task-one-scroller.spec.js` asserts the
-Conversation tab on the task page and in the Tasks and Agents inspectors,
-the phone task page, the Workstreams inspector as the only scroller, and
-stacked Context bringing the picked detail into view; the CI log bar and the
-Inbox transcript are not yet covered.
+Conversation tab on the task page (including the 320px floor that keeps an open
+editor's Save reachable) and in the Tasks and Agents inspectors, the phone task
+page, the Workstreams inspector as the only scroller, the CI log running in the
+inspector with a sticky `.ci-log-bar`, the Inbox live transcript growing inside
+the thread, and stacked Context bringing the picked detail into view.
 
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
