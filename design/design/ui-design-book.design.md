@@ -167,6 +167,13 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Into the classic UI:** a control here that can only be answered by a
+  classic page opens that page rather than doing something smaller in
+  place. It marks the jump with a muted `↗` hint after its label, which
+  stays on screen when the label ellipsizes, and its accessible name says
+  where it goes ("…, opens on the classic Boards page"). The Boards menu on
+  Tasks does this for every board that is not a list saved from here
+  (`tasks/board-labels.ts`'s `nextBoardParams`).
 - **Dispatch & quota alerts:** when dispatch is paused or model quotas are
   exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
