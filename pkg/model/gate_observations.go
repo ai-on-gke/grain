@@ -362,7 +362,11 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 		var old gates.ObservationView
 		if json.Unmarshal([]byte(raw), &old) == nil && old.Dirty && len(old.Results) > 0 && old.Results[0].Result.Error != nil {
 			if old.Results[0].RetryAt != nil {
-				delay = min(2*old.Results[0].RetryAt.Sub(old.ComparedAt), time.Minute)
+				// Recover the previous nominal delay before doubling it;
+				// retry jitter must not compound across generations.
+				prior := old.Results[0].RetryAt.Sub(old.ComparedAt)
+				nominal := prior * 100 / time.Duration(100+old.Results[0].DirtyGeneration%21)
+				delay = min(2*nominal, time.Minute)
 			}
 		}
 	} else {

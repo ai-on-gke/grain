@@ -294,4 +294,22 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 	if legacy() != beforeState {
 		t.Fatal("error changed progress")
 	}
+	// Backoff restores the nominal delay before adding fresh jitter. Replaying
+	// a persisted retry may never compound jitter beyond the 20% contract.
+	for step := 0; step < 8; step++ {
+		failure.ComparedAt = now
+		for i := range failure.Results {
+			failure.Results[i].Result.ObservedAt = now
+			failure.Results[i].Result.ValidUntil = now.Add(time.Minute)
+		}
+		must(s.RecordGateObservationFailure(ctx, task.ID, now, &failure))
+		stored, _, e := model.New(db).ObserveTaskGates(ctx, task.ID, now)
+		must(e)
+		delay := stored.Results[0].RetryAt.Sub(now)
+		nominal := min(time.Duration(1<<step)*time.Second, time.Minute)
+		if delay < nominal || delay > nominal+nominal/5 {
+			t.Fatalf("retry %d: %v outside [%v,%v]", step, delay, nominal, nominal+nominal/5)
+		}
+		now = *stored.Results[0].RetryAt
+	}
 }
