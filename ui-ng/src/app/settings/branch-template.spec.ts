@@ -22,6 +22,9 @@ describe("branchTemplateError", () => {
       "grain/task-{id}",
       "grain/{deployment}/task-{id}",
       "grain/{deployment}/task-{id}-{slug}",
+      " grain/task-{id} ",
+      "grain/task-{id}\n",
+      "   ",
     ]) {
       expect(branchTemplateError(t, "abcd1234"), t).toBeNull();
     }

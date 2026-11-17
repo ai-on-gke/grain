@@ -368,10 +368,16 @@ test("Branch name template is refused by its label before saving, and shows the 
   await expect(page.getByTestId("error-t-branch")).toContainText(
     "not a valid git branch name",
   );
-  await box.fill("grain/{deployment}/task-{id}-{slug}");
+  // The ID {deployment} expands to: the configured one, or grain's
+  // default for it while none is set (the demo sets none).
+  const settings = await (await page.request.get("/api/settings")).json();
+  const depId = settings.deploymentId || settings.deploymentIdDefault;
+  expect(depId).toBeTruthy();
+  // A stray space around a good template is trimmed, as the server does.
+  await box.fill(" grain/{deployment}/task-{id}-{slug} ");
   await expect(page.getByTestId("error-t-branch")).toHaveCount(0);
   await expect(page.getByTestId("t-branch-sample")).toHaveText(
-    /^Task 42's branch: grain\/[A-Za-z0-9._-]+\/task-42$/,
+    `Task 42's branch: grain/${depId}/task-42`,
   );
   await expect(page.getByTestId("settings-save-btn")).toBeEnabled();
   await page.getByTestId("settings-discard-btn").click();

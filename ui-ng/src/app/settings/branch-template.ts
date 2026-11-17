@@ -58,6 +58,8 @@ export function branchTemplateError(
   deploymentId: string,
 ): string | null {
   const label = "Branch name template";
+  // The server trims the template before it checks or stores it.
+  template = template.trim();
   if (template === "") return null;
   if (!template.includes("{id}")) {
     return `${label} must contain {id}, so every task gets its own branch.`;

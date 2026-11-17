@@ -1959,19 +1959,24 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
-  // setCount stages a whole-number setting, refusing a value under min
-  // by the field's own label before anything is sent (the server would
-  // refuse it too, naming the JSON key instead), and clearing the refusal
-  // once the box holds a good value again.
   // setBranchTemplate drafts the template, or refuses it by label with
   // the server's own rules (branch-template.ts) so Save stays off.
+  // The server stores the template trimmed (pkg/ui/settings.go), so a
+  // stray space or newline around it is no reason to refuse it.
   protected setBranchTemplate(raw: string): void {
-    const err = branchTemplateError(
-      raw,
-      String(this.state.val("deploymentId", "")),
-    );
+    const tpl = raw.trim();
+    const err = branchTemplateError(tpl, this.deploymentIdInEffect());
     this.state.setFieldError("taskBranchTemplate", err);
-    if (!err) this.state.setField("taskBranchTemplate", raw);
+    if (!err) this.state.setField("taskBranchTemplate", tpl);
+  }
+
+  // deploymentIdInEffect is what {deployment} expands to: the configured
+  // Deployment ID, or grain's own default for it while none is set.
+  private deploymentIdInEffect(): string {
+    return String(
+      this.state.val("deploymentId", "") ||
+        this.state.val("deploymentIdDefault", ""),
+    );
   }
 
   // branchSample is the branch the drafted template gives task 42, with
@@ -1979,10 +1984,14 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected branchSample(): string {
     const tpl = String(this.state.val("taskBranchTemplate", ""));
     return tpl
-      ? sampleBranchName(tpl, String(this.state.val("deploymentId", "")))
+      ? sampleBranchName(tpl, this.deploymentIdInEffect())
       : "grain/task-42";
   }
 
+  // setCount stages a whole-number setting, refusing a value under min
+  // by the field's own label before anything is sent (the server would
+  // refuse it too, naming the JSON key instead), and clearing the refusal
+  // once the box holds a good value again.
   protected setCount(key: string, min: number, label: string, ev: Event): void {
     const raw = String((ev.target as HTMLInputElement | null)?.value ?? "");
     const n = Number(raw.trim());
