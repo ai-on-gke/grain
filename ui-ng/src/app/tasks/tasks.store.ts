@@ -82,6 +82,13 @@ export interface Undo {
   run: () => Promise<void>;
 }
 
+// listReadError is the banner for a failed read of the task list. The
+// reason may already end in a full stop ("The server answered 503
+// Service Unavailable."), so it is dropped before the sentence goes on.
+function listReadError(reason: string | null): string {
+  return `The task list could not be read: ${(reason ?? "").replace(/\.+$/, "")}. This page tries again on its own.`;
+}
+
 // TasksStore is the Tasks page's state: the live task list (open tasks,
 // in backlog order, polled with ETags as the classic UI does), the closed
 // tasks a page at a time, and the calls that act on them. Every action
@@ -124,13 +131,19 @@ export class TasksStore implements OnDestroy {
   // ready is the backlog a free worker could take now: blocked tasks
   // wait on a dependency and are not counted.
   readonly ready = computed(() => this.backlog().filter((t) => !isBlocked(t)));
+  // An open tab's count is null until the list has been read once: a
+  // first read that failed has counted nothing, and "0" on every tab
+  // would say nothing is waiting when nobody knows yet.
   readonly counts = computed(() => {
     const c = {} as Record<TabId, number | null>;
+    const loaded = this.loaded();
     for (const tab of TABS) {
       c[tab.id] =
         tab.id === "closed"
           ? this.closedTotal()
-          : this.work().filter((t) => inTab(t, tab.id)).length;
+          : loaded
+            ? this.work().filter((t) => inTab(t, tab.id)).length
+            : null;
     }
     return c;
   });
@@ -152,9 +165,7 @@ export class TasksStore implements OnDestroy {
       untracked(() => {
         if (err) {
           if (this.started) {
-            this.loadError.set(
-              `The task list could not be read: ${err}. This page tries again on its own.`,
-            );
+            this.loadError.set(listReadError(err));
           }
           return;
         }
@@ -191,9 +202,7 @@ export class TasksStore implements OnDestroy {
     // rather than showing an empty list as if nothing were there.
     const standing = this.feed.loadError();
     if (!this.feed.loaded() && standing) {
-      this.loadError.set(
-        `The task list could not be read: ${standing}. This page tries again on its own.`,
-      );
+      this.loadError.set(listReadError(standing));
     }
     if (!wasStarted && this.feed.loaded()) {
       void this.refresh();
@@ -260,9 +269,7 @@ export class TasksStore implements OnDestroy {
     } else if (this.feed.loadError()) {
       // Only the feed's banner-worthy failures: one failed poll keeps
       // the last good list and says nothing (request-trouble.ts).
-      this.loadError.set(
-        `The task list could not be read: ${this.feed.loadError()}. This page tries again on its own.`,
-      );
+      this.loadError.set(listReadError(this.feed.loadError()));
     }
     this.ownLoaded.set(true);
     if (ok) {

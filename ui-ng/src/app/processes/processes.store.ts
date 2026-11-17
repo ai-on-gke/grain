@@ -16,7 +16,7 @@ import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import type { Subscription } from "rxjs";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { TaskDetail } from "../api/models";
+import type { QAFlowSpec, QAFlowsResponse, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { errorText } from "../sessions/session-helpers";
@@ -71,6 +71,14 @@ export class ProcessesStore {
   readonly suites = signal<Suite[]>([]);
   readonly suiteRuns = signal<SuiteRun[]>([]);
   readonly acceptances = signal<DeclarationAcceptanceView[]>([]);
+  readonly qaFlows = signal<QAFlowSpec[]>([]);
+  readonly qaFlowsLoaded = signal(false);
+  readonly qaRollout = signal<{
+    enabled: boolean;
+    flowId: string;
+    rolloutPct: number;
+    shadowOnControl: boolean;
+  } | null>(null);
   readonly configuredRepos = signal<string[]>([]);
   readonly hasTargetAllowlist = signal(false);
   readonly approvedByDefault = signal(false);
@@ -126,13 +134,21 @@ export class ProcessesStore {
   });
 
   // triggers is each .grain/triggers file a declaring repository's synced
-  // declarations name (RepoDeclarationsStatus.triggers).
+  // declarations name (RepoDeclarationsStatus.triggers), enriched with
+  // parsed PathTrigger metadata when triggerDetails is present.
   readonly triggers = computed(() => {
     const out: DeclaredTrigger[] = [];
     const defaults = this.repoDefaults();
     for (const repo of this.declaringRepos()) {
-      for (const path of defaults[repo]?.declarationsStatus?.triggers ?? []) {
-        out.push({ repo, path });
+      const status = defaults[repo]?.declarationsStatus;
+      const byPath = new Map(
+        (status?.triggerDetails ?? []).map((d) => [d.path, d]),
+      );
+      const paths =
+        status?.triggers ?? (status?.triggerDetails ?? []).map((d) => d.path);
+      for (const path of paths) {
+        const detail = byPath.get(path);
+        out.push(detail ? { repo, path, detail } : { repo, path });
       }
     }
     return out;
@@ -177,6 +193,40 @@ export class ProcessesStore {
     this.pollTimer = null;
   }
 
+  canReadGlobalSettings(): boolean {
+    return (
+      this.access.can("GET /api/qa/flows") &&
+      !this.access.repoLimits()["settings:read"]?.length
+    );
+  }
+
+  private async refreshQaRollout(): Promise<void> {
+    if (
+      !this.canReadGlobalSettings() ||
+      !this.access.can("GET /api/settings")
+    ) {
+      return;
+    }
+    try {
+      const s =
+        await this.api.get<Record<string, unknown>>("GET /api/settings");
+      if (this.activeCount > 0 && s) {
+        this.qaRollout.set({
+          enabled: !!s["qaEnabled"],
+          flowId:
+            typeof s["qaFlowId"] === "string" && s["qaFlowId"]
+              ? s["qaFlowId"]
+              : "golden-v1-minimal",
+          rolloutPct:
+            typeof s["qaRolloutPct"] === "number" ? s["qaRolloutPct"] : 0,
+          shadowOnControl: s["qaShadowOnControl"] !== false,
+        });
+      }
+    } catch {
+      // Non-fatal.
+    }
+  }
+
   private ensureConfig(): Promise<void> {
     if (this.configTask) return this.configTask;
     if (this.access.configLoaded() || typeof this.api.config !== "function") {
@@ -199,8 +249,25 @@ export class ProcessesStore {
         this.configuredRepos.set(summary.repos);
         if (this.loaded()) void this.loadDeclarationStatuses();
       }
+      if (this.canReadGlobalSettings()) {
+        try {
+          const flowsRes =
+            await this.api.get<QAFlowsResponse>("GET /api/qa/flows");
+          if (this.activeCount > 0 && Array.isArray(flowsRes?.flows)) {
+            this.qaFlows.set(flowsRes.flows);
+          }
+        } catch {
+          // Non-fatal on older servers.
+        }
+      }
+      if (this.activeCount > 0) {
+        this.qaFlowsLoaded.set(true);
+      }
+      await this.refreshQaRollout();
     } catch {
-      // Non-fatal.
+      if (this.activeCount > 0) {
+        this.qaFlowsLoaded.set(true);
+      }
     }
   }
 
@@ -249,6 +316,7 @@ export class ProcessesStore {
           unwrapList<DeclarationAcceptanceView>(accRes.body, "declarations"),
         );
       }
+      void this.refreshQaRollout();
 
       this.loadError.set(null);
       this.loaded.set(true);

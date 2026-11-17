@@ -312,7 +312,7 @@ func TestEmptyRepositoryLifecycleFromPrepareCheckoutThroughSalvagePushedBranch(t
 			Intent:   model.IntentImplement,
 			Title:    "bootstrap repository",
 			Body:     "please",
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: human},
 			Target:   &repo,
 			Base:     base,

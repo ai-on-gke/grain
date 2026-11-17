@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grain.dev/spec/mcp-gates/examples/evidence.schema.json",
+  "title": "Example-only registered evidence kinds",
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "suite",
+        "conclusion",
+        "observed_at"
+      ],
+      "properties": {
+        "head": {
+          "const": "a1"
+        },
+        "suite": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "conclusion": {
+          "enum": [
+            "success",
+            "failure",
+            "pending"
+          ]
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      }
+    },
+    "evaluation_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "contract_revision",
+        "authority_epoch",
+        "policy_revision",
+        "permission_revision",
+        "head",
+        "check_count",
+        "children",
+        "operations",
+        "waivers",
+        "required_suites"
+      ],
+      "properties": {
+        "task_id": {
+          "const": "47"
+        },
+        "contract_revision": {
+          "const": 4
+        },
+        "authority_epoch": {
+          "const": 1
+        },
+        "policy_revision": {
+          "const": 2
+        },
+        "permission_revision": {
+          "const": 7
+        },
+        "head": {
+          "const": "a1"
+        },
+        "check_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "children": {
+          "const": []
+        },
+        "operations": {
+          "const": []
+        },
+        "waivers": {
+          "const": []
+        },
+        "required_suites": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      }
+    }
+  }
+}

@@ -37,6 +37,10 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import type {
+  QAExperimentArm,
+  QAExperimentSummary,
+} from "../telemetry/qa-experiments.models";
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
@@ -409,51 +413,70 @@ export function listedSecrets(
             ></button>
           </div>
 
-          <div class="s-grid s-grid-qa">
-            <div class="s-field">
-              <span class="s-label">Quality flow package</span>
-              <g-pill-select
-                testid="pill-qa-flow"
-                ariaLabel="Quality flow package"
-                align="left"
-                [attr.title]="qaControlsDisabledReason()"
-                [options]="qaFlowOptions()"
-                [value]="qaFlowValue()"
-                [disabled]="!canEditQAControls()"
-                (valueChange)="setQAFlow($event)"
-              />
+          @if (runningExp()) {
+            <div
+              class="s-grid s-grid-qa"
+              data-testid="qa-running-experiment-notice"
+              style="padding: 12px 16px; background: var(--md-sys-color-surface-container-low); border-radius: var(--md-sys-shape-corner-small);"
+            >
+              <span class="s-toggle-name"
+                >Running: {{ runningExp()!.name }} ({{
+                  armSummary(runningExp()!)
+                }}) &middot;
+                <a
+                  [routerLink]="['/telemetry']"
+                  [queryParams]="{ tab: 'quality', exp: runningExp()!.id }"
+                  >Manage</a
+                ></span
+              >
             </div>
+          } @else {
+            <div class="s-grid s-grid-qa">
+              <div class="s-field">
+                <span class="s-label">Quality flow package</span>
+                <g-pill-select
+                  testid="pill-qa-flow"
+                  ariaLabel="Quality flow package"
+                  align="left"
+                  [attr.title]="qaControlsDisabledReason()"
+                  [options]="qaFlowOptions()"
+                  [value]="qaFlowValue()"
+                  [disabled]="!canEditQAControls()"
+                  (valueChange)="setQAFlow($event)"
+                />
+              </div>
 
-            <div class="s-field">
-              <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
-              <input
-                id="t-qa-rollout"
-                class="s-input s-num"
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                data-testid="input-qa-rollout-pct"
-                [value]="qaRolloutInputValue()"
-                [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
-                [attr.aria-describedby]="
-                  qaRolloutError() ? 't-qa-rollout-err' : null
-                "
-                [attr.title]="qaControlsDisabledReason()"
-                [disabled]="!canEditQAControls()"
-                (input)="onQARolloutInput($event)"
-                (blur)="onQARolloutBlur()"
-              />
-              @if (qaRolloutError(); as rolloutErr) {
-                <span
-                  id="t-qa-rollout-err"
-                  class="s-field-error"
-                  data-testid="error-qa-rollout-pct"
-                  >{{ rolloutErr }}</span
-                >
-              }
+              <div class="s-field">
+                <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
+                <input
+                  id="t-qa-rollout"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  data-testid="input-qa-rollout-pct"
+                  [value]="qaRolloutInputValue()"
+                  [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
+                  [attr.aria-describedby]="
+                    qaRolloutError() ? 't-qa-rollout-err' : null
+                  "
+                  [attr.title]="qaControlsDisabledReason()"
+                  [disabled]="!canEditQAControls()"
+                  (input)="onQARolloutInput($event)"
+                  (blur)="onQARolloutBlur()"
+                />
+                @if (qaRolloutError(); as rolloutErr) {
+                  <span
+                    id="t-qa-rollout-err"
+                    class="s-field-error"
+                    data-testid="error-qa-rollout-pct"
+                    >{{ rolloutErr }}</span
+                  >
+                }
+              </div>
             </div>
-          </div>
+          }
 
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
@@ -479,7 +502,6 @@ export function listedSecrets(
           </div>
         </div>
       }
-
       @case ("agents") {
         <div class="s-card" data-testid="card-agents-runtime">
           <h3 class="s-card-title">Agent turn limits &amp; default grants</h3>
@@ -875,6 +897,22 @@ export function listedSecrets(
               </button>
             </div>
           </div>
+          @if (policyError(); as e) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="cap-policy-error"
+            >
+              <span>{{ e }}</span>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="policyError.set(null)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
 
           @if (policyRules().length > 0) {
             <div class="s-table-wrap">
@@ -967,7 +1005,9 @@ export function listedSecrets(
               type="text"
               aria-label="Capability pattern"
               data-testid="input-policy-capability"
-              placeholder="gh-cli"
+              placeholder="https://github.com/acme/caps/cloud#*"
+              aria-describedby="policy-capability-hint"
+              [attr.aria-invalid]="newRuleCapInvalid() ? 'true' : null"
               [value]="newRuleCap()"
               [disabled]="
                 !access.can('PUT /api/capability-policy') ||
@@ -1024,6 +1064,7 @@ export function listedSecrets(
               data-testid="add-policy-rule-btn"
               [disabled]="
                 !newRuleCap().trim() ||
+                newRuleCapInvalid() ||
                 !access.can('PUT /api/capability-policy') ||
                 state.sectionLocked('capabilities')
               "
@@ -1032,6 +1073,23 @@ export function listedSecrets(
               Add rule
             </button>
           </div>
+          <!-- The server only takes a capability reference here
+               (model.CapabilityPolicy.Validate): a bare retired name
+               such as gh-cli is refused when the policy is saved. -->
+          <span
+            class="s-hint"
+            id="policy-capability-hint"
+            data-testid="policy-capability-hint"
+            [class.s-field-error]="newRuleCapInvalid()"
+          >
+            @if (newRuleCapInvalid()) {
+              A pattern is a capability reference starting with https://, not a
+              bare name.
+            } @else {
+              &lt;capability_id&gt;#&lt;method&gt;; * matches any run of
+              characters.
+            }
+          </span>
         </div>
 
         <div
@@ -1167,9 +1225,8 @@ export function listedSecrets(
                   fragment="capability-servers"
                   data-testid="credentials-gcp-link"
                   >gcp capability server's</a
-                >
-                <code>gcp-key</code> and <code>gemini-key</code> methods, and
-                the secrets grain stores.
+                >&ngsp;<code>gcp-key</code> and <code>gemini-key</code> methods,
+                and the secrets grain stores.
               </p>
             </div>
           </div>
@@ -1652,6 +1709,15 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
+  // newRuleCapInvalid is a typed pattern the server would refuse: every
+  // policy rule names a capability reference (https://...).
+  protected readonly newRuleCapInvalid = computed(() => {
+    const v = this.newRuleCap().trim();
+    return v !== "" && !v.startsWith("https://");
+  });
+  // policyError is a refused preview or save, shown in the policy card
+  // rather than in the page banner scrolled out of sight above it.
+  protected readonly policyError = signal<string | null>(null);
   protected readonly newRuleRepos = signal("");
   protected readonly newRuleEffect = signal("admit");
   protected readonly newRuleAllowUntrusted = signal(false);
@@ -1704,13 +1770,43 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected readonly memoryDocs = signal<string[]>([]);
 
+  readonly runningExp = signal<QAExperimentSummary | null>(null);
+
+  async loadRunningExp(): Promise<void> {
+    if (
+      this.section() !== "tasks" ||
+      !this.access.can("GET /api/qa/experiments")
+    ) {
+      return;
+    }
+    try {
+      const res = (await this.api
+        .get("GET /api/qa/experiments", undefined, "state=running&limit=1")
+        .catch(() => null)) as {
+        experiments?: QAExperimentSummary[];
+      } | null;
+      this.runningExp.set(res?.experiments?.[0] ?? null);
+    } catch {
+      this.runningExp.set(null);
+    }
+  }
+
+  armSummary(exp: QAExperimentSummary): string {
+    if (!exp.arms?.length) return "";
+    return exp.arms
+      .map((a: QAExperimentArm) => `${a.label} ${a.weight}%`)
+      .join(" / ");
+  }
+
   ngOnInit(): void {
     this.loadForSection();
+    this.loadRunningExp();
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes["section"] && !changes["section"].firstChange) {
       this.loadForSection();
+      this.loadRunningExp();
     }
   }
 
@@ -1799,11 +1895,11 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     const defaults: readonly PillOption[] = [
       {
         value: "golden-v1-minimal",
-        label: "golden-v1-minimal (S3 deterministic + S4 probe)",
+        label: "golden-v1-minimal (Recommended)",
       },
       {
         value: "deterministic-s3-only",
-        label: "deterministic-s3-only (local AST & vet only)",
+        label: "deterministic-s3-only (Zero-LLM Ablation)",
       },
       {
         value: "repo-custom",
@@ -2192,6 +2288,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   }
 
   protected async previewCapPolicy(): Promise<void> {
+    this.policyError.set(null);
     try {
       const res = await this.api.post<{
         denied?: CapabilityPolicyDenial[];
@@ -2213,18 +2310,19 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         );
       }
     } catch (err) {
-      this.state.recordError(err);
+      this.policyError.set(errText(err));
     }
   }
 
   protected async saveCapPolicy(): Promise<void> {
+    this.policyError.set(null);
     try {
       await this.api.put("PUT /api/capability-policy", undefined, {
         policy: { rules: this.policyRules() },
       });
       this.snackbar.show("Capability policy saved");
     } catch (err) {
-      this.state.recordError(err);
+      this.policyError.set(errText(err));
     }
   }
 

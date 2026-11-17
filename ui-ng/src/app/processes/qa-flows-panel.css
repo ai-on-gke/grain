@@ -1,0 +1,271 @@
+g-qa-flows-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: clip;
+}
+
+.qa-flows-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: clip;
+  container: wf-studio / inline-size;
+  background: var(--md-sys-color-surface);
+}
+
+.qa-flows-panel .qa-studio-columns {
+  display: grid;
+  grid-template-columns: clamp(260px, 21%, 320px) minmax(0, 1fr);
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.qa-flows-panel .qa-studio-columns.is-catalog-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.qa-flows-panel .qa-studio-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--md-sys-color-surface-container-low);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 6;
+}
+
+.qa-flows-panel .qa-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.qa-flows-panel .qa-toolbar-identity,
+.qa-flows-panel .qa-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.qa-flows-panel .qa-toolbar-title {
+  margin: 0;
+  font-family: var(--grain-font-display);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+}
+
+.qa-flows-panel .qa-flow-switcher-wrap {
+  display: none;
+}
+
+.qa-flows-panel .qa-studio-columns.is-catalog-collapsed .qa-flow-switcher-wrap {
+  display: inline-flex;
+}
+
+.qa-flows-panel .qa-mobile-back[hidden] {
+  display: none;
+}
+
+@media (min-width: 600px) {
+  .qa-flows-panel .qa-mobile-back {
+    display: none;
+  }
+}
+
+.qa-flows-panel .qa-prompt-budget {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: var(--md-sys-shape-corner-full);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+}
+
+.qa-flows-panel .qa-prompt-budget strong {
+  color: var(--md-sys-color-on-surface);
+}
+
+.qa-flows-panel .qa-prompt-budget.is-overflow {
+  border-color: var(--md-sys-color-error);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.qa-flows-panel .qa-prompt-budget.is-overflow strong {
+  color: var(--md-sys-color-on-error-container);
+}
+
+.qa-flows-panel .qa-budget-track {
+  width: 48px;
+  height: 6px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+
+.qa-flows-panel .qa-budget-fill {
+  display: block;
+  height: 100%;
+  background: var(--md-sys-color-primary);
+}
+
+.qa-flows-panel .qa-prompt-budget.is-overflow .qa-budget-fill {
+  background: var(--md-sys-color-error);
+}
+
+.qa-flows-panel .qa-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.qa-flows-panel .qa-more-btn {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--md-sys-shape-corner-full);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.qa-flows-panel .qa-more-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.qa-flows-panel .qa-action-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  z-index: 25;
+}
+
+.qa-flows-panel .qa-action-pop.align-left {
+  left: 0;
+  right: auto;
+}
+
+.qa-flows-panel .qa-action-pop button,
+.qa-flows-panel .qa-action-pop a {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: none;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font-size: 13px;
+  text-decoration: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.qa-flows-panel .qa-action-pop button:hover,
+.qa-flows-panel .qa-action-pop a:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.qa-flows-panel .qa-action-pop .is-danger {
+  color: var(--md-sys-color-error);
+}
+
+.qa-flows-panel .qa-more-btn:focus-visible,
+.qa-flows-panel .qa-action-pop button:focus-visible,
+.qa-flows-panel .qa-action-pop a:focus-visible,
+.qa-flows-panel .qa-mobile-back:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.qa-flows-panel .qa-empty-detail {
+  padding: 32px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
+@container wf-studio (max-width: 1179.95px) {
+  .qa-flows-panel .qa-studio-columns,
+  .qa-flows-panel .qa-studio-columns.is-catalog-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .qa-flows-panel .qa-studio-columns > g-qa-workflow-catalog {
+    display: none;
+  }
+
+  .qa-flows-panel .qa-flow-switcher-wrap {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 599.95px) {
+  .qa-flows-panel:not(.has-mobile-inspector) .qa-studio-columns {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .qa-flows-panel:not(.has-mobile-inspector)
+    .qa-studio-columns
+    > g-qa-workflow-catalog {
+    display: flex;
+    flex: 1;
+    border-right: none;
+  }
+
+  .qa-flows-panel:not(.has-mobile-inspector)
+    .qa-studio-columns
+    > g-qa-v3-studio,
+  .qa-flows-panel:not(.has-mobile-inspector) .qa-empty-detail {
+    display: none;
+  }
+
+  .qa-flows-panel.has-mobile-inspector .qa-studio-columns {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .qa-flows-panel.has-mobile-inspector
+    .qa-studio-columns
+    > g-qa-workflow-catalog {
+    display: none;
+  }
+
+  .qa-flows-panel.has-mobile-inspector .qa-studio-columns > g-qa-v3-studio {
+    height: auto;
+    flex: none;
+  }
+}

@@ -293,16 +293,16 @@ func TestCatalogueKindOf(t *testing.T) {
 	if got := model.CatalogueKindOf(model.Task{}); got != model.CatalogueKindTask {
 		t.Fatalf("plain task is %q", got)
 	}
-	if got := model.CatalogueKindOf(model.Task{Origin: model.Origin{Reason: model.ReasonReview}}); got != model.CatalogueKindReview {
+	if got := model.CatalogueKindOf(model.Task{Filing: model.Filing{Reason: model.ReasonReview}}); got != model.CatalogueKindReview {
 		t.Fatalf("review task is %q", got)
 	}
 	director := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag(model.DirectorSessionID)},
-		Origin: model.Origin{Reason: model.ReasonConsoleSession}}
+		Filing: model.Filing{Reason: model.ReasonConsoleSession}}
 	if got := model.CatalogueKindOf(director); got != model.CatalogueKindDirector {
 		t.Fatalf("director session is %q", got)
 	}
 	session := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag("ops")},
-		Origin: model.Origin{Reason: model.ReasonConsoleSession}}
+		Filing: model.Filing{Reason: model.ReasonConsoleSession}}
 	if got := model.CatalogueKindOf(session); got != model.CatalogueKindSession {
 		t.Fatalf("console session is %q", got)
 	}
