@@ -15,11 +15,14 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"slices"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // rerunRecordingClient is a forge client that can re-run Actions runs and
@@ -94,5 +97,69 @@ func TestStateRepoPullRequestClientRerunWithoutCapabilityRefuses(t *testing.T) {
 	}
 	if err := client.RerunWorkflowJob("acme", "widgets", 1); err == nil {
 		t.Fatal("RerunWorkflowJob through a client that cannot re-run succeeded")
+	}
+}
+
+// grain/config has no GitHub Actions grain may re-run, whether the
+// deployment keeps it on this host or mirrors it to an external remote:
+// each re-run asked of it is refused before it reaches the forge, while
+// one asked of any other repository still goes through.
+func TestStateRepoPullRequestClientRefusesActionsRerunsOnTheConfigRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	defer db.Close()
+	repo, err := OpenStateRepo(ctx, dataDir)
+	if err != nil {
+		t.Fatalf("opening state repo: %v", err)
+	}
+	if err := loadStateRepo(ctx, dataDir, repo, db, storeMigration{}); err != nil {
+		t.Fatalf("loading state repo: %v", err)
+	}
+	manager := NewStateManager(dataDir, db, repo, OpenSecrets(dataDir), nil, nil)
+
+	for _, tc := range []struct {
+		name     string
+		settings staterepo.Settings
+	}{
+		{name: "native", settings: staterepo.Settings{}},
+		{name: "external", settings: staterepo.Settings{Remote: "https://git.example.com/acme/grain-config.git"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := staterepo.SaveSettings(dataDir, tc.settings); err != nil {
+				t.Fatalf("saving state repo settings: %v", err)
+			}
+			inner := &rerunRecordingClient{}
+			client := &StateRepoPullRequestClient{Client: inner, Manager: manager, Store: store}
+			if !client.isLocal("grain", "config") && !client.isDisabledConfigRepo("grain", "config") {
+				t.Fatal("grain/config is neither the local nor a disabled config repository: the refusal is not under test")
+			}
+
+			if err := client.RerunFailedJobs("grain", "config", 1); err == nil {
+				t.Error("RerunFailedJobs on grain/config succeeded")
+			}
+			if err := client.RerunWorkflowRun("grain", "config", 1); err == nil {
+				t.Error("RerunWorkflowRun on grain/config succeeded")
+			}
+			if err := client.RerunWorkflowJob("grain", "config", 1); err == nil {
+				t.Error("RerunWorkflowJob on grain/config succeeded")
+			}
+			if len(inner.calls) != 0 {
+				t.Fatalf("re-runs of grain/config reached the forge: %q", inner.calls)
+			}
+
+			if err := client.RerunFailedJobs("acme", "widgets", 2); err != nil {
+				t.Fatalf("RerunFailedJobs on acme/widgets: %v", err)
+			}
+			if want := []string{"failed acme/widgets 2"}; !slices.Equal(inner.calls, want) {
+				t.Fatalf("re-runs reaching the forge = %q, want %q", inner.calls, want)
+			}
+		})
 	}
 }

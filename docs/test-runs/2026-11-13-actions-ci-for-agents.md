@@ -39,7 +39,7 @@ Both tasks were sent back with "its checks are failing … the merge queue has s
 
 **Fix** (`77e0c0d6e`): the wrapper now passes `RerunFailedJobs`, `RerunWorkflowRun` and `RerunWorkflowJob` through to the wrapped client. For the native config repository, or a client without re-runs, it refuses with a 404 `github.Error`. It also asserts `github.ActionsRerunner` at compile time.
 
-The regression test is `TestStateRepoPullRequestClientPassesActionsRerunsThrough` (`pkg/daemon/statepullrequests_rerun_test.go`). It covers the wrapper both bare and under `github.WithCaller`, plus the config-repository refusal.
+The regression tests are in `pkg/daemon/statepullrequests_rerun_test.go`. `TestStateRepoPullRequestClientPassesActionsRerunsThrough` covers the wrapper both bare and under `github.WithCaller`. `TestStateRepoPullRequestClientRefusesActionsRerunsOnTheConfigRepo` covers the config-repository refusal, for both a native and an external grain/config. `TestStateRepoPullRequestClientRerunWithoutCapabilityRefuses` covers a wrapped client without re-runs.
 
 After the fix the same walk logs:
 
