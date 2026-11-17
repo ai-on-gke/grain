@@ -147,6 +147,29 @@ g-confirm-dialog .scope-check {
   font-weight: 500;
 }
 
+g-confirm-dialog .confirm-reason {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+g-confirm-dialog .confirm-reason textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
 /* ---------- Tasks list | detail ( persistent 30/70 Inbox replica ) ---------- */
 
 g-tasks-page .tasks-split .tasks-list-pane {

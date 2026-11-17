@@ -23,22 +23,34 @@ import {
 } from "@angular/core";
 
 export const TIP_ID = "g-tip";
+export const TIP_REGION_ID = "g-tip-region";
 export const TIP_DELAY_MS = 400;
 // How long the tip waits after the pointer leaves its control, so the
 // pointer can move onto the tip itself (WCAG 1.4.13: hoverable).
 export const TIP_LEAVE_MS = 120;
 
 // One tooltip element for the whole app (spec D-16): created on first
-// use, reused by every [gTip], role="tooltip".
+// use, reused by every [gTip], role="tooltip", wrapped in a landmark
+// region so unfiltered axe region audits stay clean.
 function tipElement(doc: Document): HTMLElement {
   let el = doc.getElementById(TIP_ID);
   if (!el) {
+    let region = doc.getElementById(TIP_REGION_ID);
+    if (!region) {
+      region = doc.createElement("div");
+      region.id = TIP_REGION_ID;
+      region.setAttribute("role", "region");
+      region.setAttribute("aria-label", "Tooltip");
+      doc.body.appendChild(region);
+    }
     el = doc.createElement("div");
     el.id = TIP_ID;
     el.className = "g-tip";
     el.setAttribute("role", "tooltip");
+    el.style.animation = "none";
+    el.style.opacity = "1";
     el.hidden = true;
-    doc.body.appendChild(el);
+    region.appendChild(el);
   }
   return el;
 }
@@ -141,6 +153,18 @@ export class TipDirective implements OnDestroy {
   show(): void {
     const text = this.gTip();
     if (!text) return;
+    const hostEl = this.host.nativeElement;
+    if (!hostEl.isConnected) {
+      this.hide();
+      return;
+    }
+    const view = this.doc.defaultView;
+    for (let cur: HTMLElement | null = hostEl; cur; cur = cur.parentElement) {
+      if (cur.hidden || view?.getComputedStyle(cur).display === "none") {
+        this.hide();
+        return;
+      }
+    }
     if (owner && owner !== this) owner.hide();
     const el = tipElement(this.doc);
     el.textContent = text;

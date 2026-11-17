@@ -62,6 +62,9 @@ type Client struct {
 	allowedPrincipalsMigrateMu sync.Mutex
 	allowedPrincipalsMigrated  bool
 	deploymentOwnerSeeded      string
+	// clearNotification replaces Store.ClearNotificationByID in a bulk
+	// clear, for a test that needs one to fail partway; nil is the store.
+	clearNotification func(ctx context.Context, id int64, by string) (bool, error)
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
@@ -125,6 +128,9 @@ type Client struct {
 
 // NewClient builds a Client over a store.
 func NewClient(cfg Config, store *model.Store) *Client {
+	if cfg.GateObservationTaskIDs == nil {
+		cfg.GateObservationTaskIDs = observationEnvironment()
+	}
 	return &Client{Config: cfg, Store: store}
 }
 
@@ -1796,6 +1802,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if detail.DeploymentWide, err = c.deploymentWideGrants(ctx, *t); err != nil {
 		return TaskDetail{}, err
 	}
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, id)
 	return detail, nil
 }
 

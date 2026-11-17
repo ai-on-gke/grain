@@ -762,15 +762,36 @@ release train cuts only from a commit whose release published, and on
 skip-when: publishing-held
 ```
 
+**Split hold while an rc is in qualification.** Promoting or dropping a
+release candidate already in qualification (`vX.Y.Z-rc.N` with neither a
+`-discarded` marker nor a `vX.Y.Z` tag) does not depend on `main`'s
+newest commit publishing. While such an rc exists on the repository, the
+scheduler still fires a release-train schedule (overlap group
+`release-train` or the `release-train` template), keeping overlap and
+overlap-group holds in force, so the release train can run Phase 1
+(`judge,release`) and skip only cut (`held=publishing (cut skipped)`).
+Every other `skip-when: publishing-held` schedule stays held. A tick that
+cannot read the hold (`GET /api/repos/<repo>/release?branch=main` fails)
+skips cut too, reporting `held=publishing-unknown (cut skipped)`. Once no rc is in
+qualification, `skip-when: publishing-held` holds the schedule again. A
+Stage 1 trigger that fires only on `v*-rc.*` tags
+(`.grain/schedules/release-train-on-stage1.yml`) omits
+`skip-when: publishing-held` for the same reason.
+
 A held firing is recorded like an overlap skip, as `skipped at <time>:
 publishing held by task N (...)`, and the schedules page says the same
 while it lasts. It is held, not dropped: the cadence stays where it was,
 and the first cycle after the triage task closes fires it once, standing
 in for the occurrences that came round meanwhile. Run now is never held.
 A `github_workflow_run` trigger's firing has no occurrence to hold, so it
-is dropped and recorded. `publishing-held` is the only condition; any
-other value is refused. Settings rows carry the same key
-(`settings/schedules.yml`).
+is dropped and recorded when no rc is in qualification. Stale-schedule
+detection (`grain health` / `StaleSchedules`) marks a deliberately held
+schedule as `held: true` with `heldByTaskID` naming the triage task
+(shown as a warning rather than failing), and the starved-schedule
+detector (`pipeline.schedule-starved`) treats it as deliberately held
+naming that triage task rather than starved. `publishing-held` is the
+only condition; any other value is refused. Settings rows carry the same
+key (`settings/schedules.yml`).
 
 A daemon older than this key refuses a schedule file that says it, and a
 repository with a refused declaration keeps its last good commit's
