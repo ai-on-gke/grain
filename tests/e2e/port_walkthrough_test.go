@@ -348,7 +348,7 @@ func TestPortWalkthroughPairedBranches(t *testing.T) {
 			task := model.Task{
 				ID: id, Title: title, Body: "body of " + title,
 				Intent:   model.IntentImplement,
-				Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+				Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 				Approval: &model.Attribution{Actor: human("alice")}, ApprovedAt: &now,
 				Target: &repo, Base: "main", AutoMerge: true,
 				OrderKey: orderKey, CreatedAt: &now,

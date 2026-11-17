@@ -574,6 +574,23 @@ describe("TaskList", () => {
     expect(screen.getByText("superseded by 471")).toBeInTheDocument();
   });
 
+  it("names the successor on a rolled-over task's row", () => {
+    renderList({
+      narrowing: NO_NARROWING,
+      tasks: [
+        {
+          id: 901,
+          title: "Watch the nightly",
+          state: "closed",
+          rolledOverTo: "902",
+          capabilities: [],
+          blocked: false,
+        },
+      ],
+    });
+    expect(screen.getByText("rolled over to 902")).toBeInTheDocument();
+  });
+
   // A proposal its agent could have queued and held for a person
   // instead (propose_task's hold_for_approval) says so while it waits,
   // and stops saying so once somebody has approved it.

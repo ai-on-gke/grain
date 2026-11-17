@@ -27,6 +27,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import type { GrainPlanBlock } from "../director/director-draft";
+import { AccessService } from "../services/access.service";
 import { topologicalPlanOrder } from "./session-artifacts";
 import {
   DIRECTOR_ID,
@@ -59,6 +60,15 @@ export interface SessionRow {
   session: ConsoleSession;
   task: Task | null;
   line: string;
+}
+
+// PendingSend is a message in a session's outbox: shown in the chat as
+// sending, queued or, with failed set, not sent.
+export interface PendingSend {
+  key: number;
+  body: string;
+  attachments: AttachmentUpload[];
+  failed?: string;
 }
 
 export interface CreateSessionOptions {
@@ -96,6 +106,7 @@ const RUN_FIXED_KEYS: (keyof UpdateSessionPatch)[] = [
 export class SessionsStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
+  private readonly access = inject(AccessService);
   private readonly zone = inject(NgZone);
 
   readonly sessions = signal<ConsoleSession[]>([]);
@@ -115,6 +126,11 @@ export class SessionsStore {
   readonly detailError = signal<string | null>(null);
   readonly drafts = signal<Record<string, string>>({});
   readonly stagedAttachments = signal<Record<string, AttachmentUpload[]>>({});
+  // Messages sent from a session's composer that the server has not yet
+  // taken, oldest first (send).
+  readonly outbox = signal<Record<string, readonly PendingSend[]>>({});
+  private pendingSeq = 0;
+  private readonly draining = new Set<string>();
   // Tracks sessions whose running turn predates a run-fixed edit (grants, model, network).
   readonly staleRuns = signal<Record<string, string>>({});
 
@@ -239,6 +255,9 @@ export class SessionsStore {
   private async loadConfigModels(): Promise<void> {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
+      if (cfg && !this.access.configLoaded()) {
+        this.access.setConfig(cfg);
+      }
       if (Array.isArray(cfg?.models)) this.models.set(cfg.models);
       if (typeof cfg?.defaultModel === "string") {
         this.defaultModel.set(cfg.defaultModel);
@@ -435,11 +454,100 @@ export class SessionsStore {
     this.stagedAttachments.update((m) => ({ ...m, [id]: list }));
   }
 
-  async send(): Promise<boolean> {
+  outboxFor(id: string): readonly PendingSend[] {
+    return this.outbox()[id] ?? [];
+  }
+
+  // send queues the selected session's draft and posts it: the message
+  // shows at once as a pending bubble and the composer is cleared, so a
+  // second Enter while the first is still in flight queues behind it
+  // rather than being dropped. Queued messages post in order; one that
+  // fails stays put, marked, holding the ones behind it, until it is sent
+  // again (retry) or taken back into the composer (edit).
+  send(): boolean {
     const id = this.selectedId();
     const typed = this.draftFor(id);
     const attachments = this.attachmentsFor(id);
-    return this.sendTo(id, typed, attachments, true);
+    const body = typed.trim();
+    const row = this.rows().find((r) => r.session.id === id);
+    if (!row?.session.taskId || (!body && attachments.length === 0)) {
+      return false;
+    }
+    const pending: PendingSend = { key: ++this.pendingSeq, body, attachments };
+    this.outbox.update((m) => ({ ...m, [id]: [...(m[id] ?? []), pending] }));
+    this.setDraft(id, "");
+    this.setAttachments(id, []);
+    void this.drainOutbox(id);
+    return true;
+  }
+
+  retrySend(id: string, key: number): void {
+    this.patchPending(id, key, { failed: undefined });
+    void this.drainOutbox(id);
+  }
+
+  // editSend takes a message that failed to send back out of the queue
+  // and into the composer, ahead of whatever is typed there now.
+  editSend(id: string, key: number): void {
+    const p = this.outboxFor(id).find((x) => x.key === key);
+    if (!p) return;
+    this.dropPending(id, key);
+    const typed = this.draftFor(id);
+    this.setDraft(id, typed.trim() ? `${p.body}\n\n${typed}` : p.body);
+    this.setAttachments(id, [...p.attachments, ...this.attachmentsFor(id)]);
+    void this.drainOutbox(id);
+  }
+
+  private async drainOutbox(id: string): Promise<void> {
+    if (this.draining.has(id)) return;
+    this.draining.add(id);
+    try {
+      for (;;) {
+        const next = this.outboxFor(id)[0];
+        if (!next || next.failed) return;
+        const taskId = this.rows().find((r) => r.session.id === id)?.session
+          .taskId;
+        if (!taskId) {
+          this.patchPending(id, next.key, {
+            failed: "This session has no conversation to send to.",
+          });
+          return;
+        }
+        try {
+          await this.api.post(
+            "POST /api/tasks/{id}/comments",
+            { id: taskId },
+            { body: next.body, attachments: next.attachments },
+          );
+        } catch (err) {
+          this.patchPending(id, next.key, { failed: errorText(err) });
+          return;
+        }
+        // Read the conversation back before the bubble goes, so the sent
+        // message replaces it rather than leaving a gap between the two. A
+        // read already in flight may predate the post, so the one queued
+        // behind it is waited for too.
+        await this.refresh();
+        if (this.refreshing) await this.refreshing;
+        this.dropPending(id, next.key);
+      }
+    } finally {
+      this.draining.delete(id);
+    }
+  }
+
+  private patchPending(id: string, key: number, patch: Partial<PendingSend>) {
+    this.outbox.update((m) => ({
+      ...m,
+      [id]: (m[id] ?? []).map((p) => (p.key === key ? { ...p, ...patch } : p)),
+    }));
+  }
+
+  private dropPending(id: string, key: number): void {
+    this.outbox.update((m) => ({
+      ...m,
+      [id]: (m[id] ?? []).filter((p) => p.key !== key),
+    }));
   }
 
   async sendTo(
@@ -690,11 +798,14 @@ export class SessionsStore {
         delete p.tasksApproved;
         if (Object.keys(p).length === 0) return;
       }
-      if (!sessionObj?.taskId || p.readsAll !== undefined) {
-        await this.api.post("POST /api/settings", undefined, p);
-      } else {
-        await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
-      }
+      // Every setting here is the session's own row, which
+      // PUT /api/console-sessions/{id} edits whether or not a run is open
+      // (as the classic page does). A session between runs has no taskId;
+      // its edits used to go to POST /api/settings, the deployment's
+      // settings, which ignored them, so a ticked box or a picked model
+      // reverted on the next read.
+      if (!id) return;
+      await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
     });
   }
 

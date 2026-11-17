@@ -114,7 +114,7 @@ func makeTestTask(id string, director bool) model.Task {
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	tk := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "task " + id,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},
@@ -122,7 +122,7 @@ func makeTestTask(id string, director bool) model.Task {
 		Approval: &model.Attribution{Actor: human},
 	}
 	if director {
-		tk.Origin.Reason = model.ReasonConsoleSession
+		tk.Filing.Reason = model.ReasonConsoleSession
 		tk.Tags = []string{model.ConsoleSessionTag(id)}
 		tk.Interactive = true
 		tk.Admission = model.AdmissionDurable

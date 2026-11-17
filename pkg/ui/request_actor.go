@@ -121,6 +121,11 @@ func RequestActor(ctx context.Context) model.Attribution {
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceHub},
 		}
 	}
+	if _, ok := model.CIAPICallFromContext(ctx); ok {
+		return model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "ci-api", Source: model.SourceInProcess},
+		}
+	}
 	op := operatorActor(ctx)
 	op.Source = model.SourceInProcess
 	if ctx != nil {

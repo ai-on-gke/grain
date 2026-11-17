@@ -237,8 +237,8 @@ func TestPullRequestReviewDesignAndStatusThreads(t *testing.T) {
 		!strings.Contains(review.Body, "overlaps") {
 		t.Errorf("design review %q does not check design conventions:\n%s", review.Title, review.Body)
 	}
-	if review.Origin.Attribution.Actor.ID != adoptOperator.Actor.ID || review.Approval == nil {
-		t.Errorf("design review origin = %+v approval = %+v, want the operator's, approved", review.Origin, review.Approval)
+	if review.Filing.Attribution.Actor.ID != adoptOperator.Actor.ID || review.Approval == nil {
+		t.Errorf("design review origin = %+v approval = %+v, want the operator's, approved", review.Filing, review.Approval)
 	}
 
 	f.adopt(model.AdoptPullRequestInput{Approved: true}, baseTime)
@@ -497,7 +497,7 @@ func TestAdoptPullRequestEndToEndExternalAndUnapprovedShepherdRails(t *testing.T
 
 		// Self-approval rail: if external:admin filed the proposed shepherd itself, it is refused 403 even with reason.
 		if err := f.store.UpdateTask(f.ctx, sh.ID, func(tk *model.Task) error {
-			tk.Origin.Attribution.Actor = model.Principal{
+			tk.Filing.Attribution.Actor = model.Principal{
 				Kind: model.PrincipalAgent, ID: "external:admin", Source: model.SourceExternalToken,
 			}
 			return nil
@@ -511,7 +511,7 @@ func TestAdoptPullRequestEndToEndExternalAndUnapprovedShepherdRails(t *testing.T
 
 		// Person-hold rail: restore proposer origin, set AutoMerge=true on stored proposed task -> refused 403.
 		if err := f.store.UpdateTask(f.ctx, sh.ID, func(tk *model.Task) error {
-			tk.Origin.Attribution.Actor = model.Principal{
+			tk.Filing.Attribution.Actor = model.Principal{
 				Kind: model.PrincipalAgent, ID: "external:proposer", Source: model.SourceExternalToken,
 			}
 			tk.AutoMerge = true

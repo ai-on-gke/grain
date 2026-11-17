@@ -29,7 +29,7 @@ import {
 // is unit-tested on its own and shared by every view of the queue.
 
 export type Tone =
-  "reply" | "proposal" | "blast" | "error" | "healthy" | "neutral";
+  "reply" | "proposal" | "blast" | "warn" | "error" | "healthy" | "neutral";
 export type FilterId =
   | "all"
   | "asked"
@@ -271,7 +271,7 @@ export function awaitsHumanSubmit(t: Task): boolean {
     t.humanApprovedBy &&
     !t.reviewQuestions &&
     !(t.reviewFindings && t.reviewFindings.length > 0) &&
-    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+    !t.humanReviewHold?.some((r) => r.source === "security-findings")
   ) {
     return false;
   }
@@ -325,12 +325,34 @@ const INBOX_STATES = [
   "proposed",
 ];
 
+function isSilentGoalQuestion(t: Task): boolean {
+  return (
+    !!t.goalMode?.enabled &&
+    t.state === "awaiting_reply" &&
+    !t.awaitingAccess &&
+    !isStoppedTurn(t)
+  );
+}
+
+function isSilentGoalProposal(t: Task): boolean {
+  return (
+    t.state === "proposed" &&
+    !!t.goalMode?.enabled &&
+    !!t.proposedBy &&
+    !!t.autoApproveProposals
+  );
+}
+
 export function waitsOnUser(t: Task): boolean {
   if (t.consoleSession) return false;
+  const stateWait =
+    INBOX_STATES.includes(t.state) &&
+    !isSilentGoalQuestion(t) &&
+    !isSilentGoalProposal(t);
   return (
     waitingBaseRepair(t) ||
     awaitsHumanSubmit(t) ||
-    INBOX_STATES.includes(t.state) ||
+    stateWait ||
     awaitsGitHubApproval(t) ||
     mergeQueueStalled(t) ||
     !!t.stall ||
@@ -423,14 +445,24 @@ export function pendingReleaseOf(n: Notification): PendingRelease | null {
   };
 }
 
-function plain(line: string): string {
-  return line
+// plainMarkdownSummary strips common inline Markdown syntax and collapses
+// excess whitespace so left-rail queue rows stay clean single-line text.
+export function plainMarkdownSummary(text: string): string {
+  return text
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
     .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1")
-    .replace(/`([^`\n]+)`/g, "$1");
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/`/g, "")
+    .replace(/\*\*(\S(?:[^\n]*?\S)?)\*\*/g, "$1")
+    .replace(/__(\S(?:[^\n]*?\S)?)__/g, "$1")
+    .replace(/\*(\S(?:[^\n]*?\S)?)\*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function notificationSentence(n: Notification): string {
-  const body = plain((n.body || "").trim().split("\n")[0]);
+  const body = plainMarkdownSummary((n.body || "").trim().split("\n")[0]);
   const again = (n.raiseCount ?? 0) > 1 ? ` Raised ${n.raiseCount} times.` : "";
   return `${body || n.subject}${again}`;
 }
@@ -447,7 +479,7 @@ export function pendingReleaseSentence(n: Notification): string {
           !l.startsWith("Remedy: ") &&
           !l.startsWith("Run URL: "),
       ) || "";
-  return plain(line) || n.subject;
+  return plainMarkdownSummary(line) || n.subject;
 }
 
 export function approveReleaseLabel(r: {
@@ -510,6 +542,58 @@ function taskAction(
   };
 }
 
+// stallControl is the button a stuck task's sub-case names (the
+// orchestrator's liveness reason's control: Run now, Cancel, Undefer or
+// Retry merge), as the classic Inbox's reasonControl offers it. The
+// merge queue's own sub-case stands in when the task's names none. A
+// sub-case naming no control a row can press offers none.
+function stallControl(t: Task): InboxAction | null {
+  for (const r of [t.reason, t.mergeQueueReason]) {
+    switch (r?.control) {
+      case "Run now":
+        return taskAction(
+          t,
+          "run-now",
+          "Run now",
+          "POST /api/tasks/{id}/run-now",
+          "primary",
+        );
+      case "Cancel":
+        // "Cancel task", not the sub-case's bare "Cancel": the confirm
+        // dialog's own dismiss button is "Cancel", and two buttons of one
+        // name side by side leave a person guessing which one stops the run.
+        return taskAction(
+          t,
+          "cancel",
+          "Cancel task",
+          "POST /api/tasks/{id}/close",
+          "tonal",
+          {
+            confirm: `Cancel #${t.id}? The run in flight is stopped and the task is closed; it can be reopened later.`,
+            destructive: true,
+          },
+        );
+      case "Undefer":
+        return taskAction(
+          t,
+          "undefer",
+          "Undefer",
+          "POST /api/tasks/{id}/undefer",
+          "primary",
+        );
+      case "Retry merge":
+        return taskAction(
+          t,
+          "retry-merge",
+          "Retry merge",
+          "POST /api/tasks/{id}/retry-merge",
+          "primary",
+        );
+    }
+  }
+  return null;
+}
+
 function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
   return {
     key: `task:${t.id}:${kind}`,
@@ -558,12 +642,14 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     }
     return e;
   }
-  if (t.state === "awaiting_reply") {
+  if (t.state === "awaiting_reply" && !isSilentGoalQuestion(t)) {
     if (t.awaitingAccess) {
       const e = taskEntry(t, "access", "access");
       e.pillLabel = "Access request";
       e.pillTone = "blast";
-      e.summary = t.questionSummary || "This run asked for more access.";
+      e.summary =
+        plainMarkdownSummary(t.questionSummary || "") ||
+        "This run asked for more access.";
       e.rationale = "Only a person can widen what a run may reach.";
       return e;
     }
@@ -595,7 +681,9 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     const e = taskEntry(t, "reply", "reply");
     e.pillLabel = "Needs reply";
     e.pillTone = "reply";
-    e.summary = t.questionSummary || "Answered on the task itself.";
+    e.summary =
+      plainMarkdownSummary(t.questionSummary || "") ||
+      "Answered on the task itself.";
     e.rationale = "The run is parked until somebody answers it.";
     e.actions.push(
       taskAction(
@@ -614,6 +702,10 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
   }
   if (awaitsHumanSubmit(t)) {
     const review = !!t.reviewQuestions;
+    // A changelist's Submit submits it through the change system there
+    // and then, not a recorded approval, so it is pressed one row at a
+    // time and never joins "Submit all" -- as the classic Inbox keeps it.
+    const cl = !!t.clSubmit;
     const blocked = submitBlock(t, listOnly);
     const e = taskEntry(
       t,
@@ -621,14 +713,35 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       review ? "review" : "submit",
     );
     const red = gateSummary(t, listOnly).state === "failing";
-    e.pillLabel = review ? "Review questions" : red ? "CI failing" : "Submit";
-    e.pillTone = review ? "blast" : red ? "error" : "healthy";
+    e.pillLabel = review
+      ? "Review questions"
+      : red
+        ? "CI failing"
+        : t.goalScorecard?.verified
+          ? "Goal ready"
+          : t.goalScorecard?.stoppedAtCap
+            ? "Goal capped"
+            : "Submit";
+    e.pillTone = review
+      ? "blast"
+      : red
+        ? "error"
+        : t.goalScorecard?.verified
+          ? "healthy"
+          : t.goalScorecard?.stoppedAtCap
+            ? "warn"
+            : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
-      : blocked || "Approve the pull request; it merges once its gates pass.";
+      : blocked ||
+        (cl
+          ? "Submit this CL now: its review, presubmit and grain's reviews have all cleared."
+          : "Approve the pull request; it merges once its gates pass.");
     e.rationale = review
       ? "A fresh review clears the gate once your decision is carried out."
-      : "This repository waits for a person's approval before merging.";
+      : cl
+        ? "Submitting lands the change at once; it is not a recorded approval."
+        : "This repository waits for a person's approval before merging.";
     if (!t.humanApprovedBy) {
       e.actions.push(
         taskAction(
@@ -638,7 +751,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
           "POST /api/tasks/{id}/submit",
           review ? "tonal" : "primary",
           {
-            bulk: !review,
+            bulk: !review && !cl,
             ...(blocked ? { blocked } : {}),
           },
         ),
@@ -713,11 +826,13 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     const e = taskEntry(t, "stalled", "stalled");
     e.pillLabel = "Stuck";
     e.pillTone = "blast";
-    e.summary = t.stall;
+    e.summary = plainMarkdownSummary(t.stall) || t.stall;
     e.rationale = "Grain reads this as stuck rather than busy.";
+    const control = stallControl(t);
+    if (control) e.actions.push(control);
     return e;
   }
-  if (t.state === "proposed") {
+  if (t.state === "proposed" && !isSilentGoalProposal(t)) {
     const e = taskEntry(t, "proposal", "proposal");
     e.pillLabel = "Proposal";
     e.pillTone = "proposal";
@@ -758,12 +873,22 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
 
 export function classifyNotification(n: Notification): InboxEntry {
   const release = pendingReleaseOf(n);
+  const taskId =
+    n.taskId || n.investigationTaskId || n.clearsWhen?.task || null;
+  const title = n.title || n.subject || "Notification";
+  const ref = release
+    ? release.version
+    : n.title && n.subject && n.subject !== n.title
+      ? n.subject
+      : taskId
+        ? `#${taskId}`
+        : n.subject || n.family || "alert";
   const base: InboxEntry = {
     key: `notification:${n.id}`,
     kind: release ? "release" : "notification",
     groupId: release ? "release" : "notification",
-    ref: release ? release.version : n.subject,
-    title: release ? `${release.version} is ready to promote` : n.subject,
+    ref,
+    title: release ? `${release.version} is ready to promote` : title,
     repo: n.repo || release?.repo || "",
     owner: "",
     summary: release ? pendingReleaseSentence(n) : notificationSentence(n),
@@ -775,14 +900,12 @@ export function classifyNotification(n: Notification): InboxEntry {
           ? "Warning"
           : "Alert",
     pillTone: release ? "blast" : n.severity === "critical" ? "error" : "blast",
-    at: n.raisedAt || null,
+    at: n.lastRaisedAt || n.raisedAt || null,
     rationale: release
       ? "Promoting tags the release, moves latest onto it and publishes its images."
       : "An alert stays open until somebody acknowledges or clears it.",
-    taskId: n.investigationTaskId || null,
-    taskLink: n.investigationTaskId
-      ? `/task/${encodeURIComponent(n.investigationTaskId)}`
-      : null,
+    taskId,
+    taskLink: taskId ? `/task/${encodeURIComponent(taskId)}` : null,
     externalLink: null,
     notification: n,
     release: release ?? undefined,

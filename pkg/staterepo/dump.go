@@ -685,6 +685,18 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 	if err := plan.restore(ctx, tx); err != nil {
 		return err
 	}
+	// Bulk imports insert rows with explicit primary-key IDs across every path
+	// that lands here (Import, ImportTables, ImportMigrated, and live settings
+	// merges). SQLite AUTOINCREMENT follows explicit IDs on its own and needs
+	// nothing, whereas PostgreSQL serial sequences stay where they were unless
+	// setval moves them. Resynchronize now -- before data migrations below
+	// allocate new rows from sequences such as task_comment -- and once more
+	// before commit in case a migration wrote explicit IDs of its own.
+	if model.IsPostgresDB(db) {
+		if _, err := model.SyncPostgresSequences(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+	}
 	// A dump from before a migration that rewrites rows (the retired
 	// capability grants, 67 onwards) gets those rewrites here, keyed by the
 	// migration's own number: the rows were never in a store that ran them.
@@ -730,6 +742,11 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		}
 		for _, c := range changes {
 			log.Printf("staterepo: host placement: %s", c)
+		}
+	}
+	if model.IsPostgresDB(db) {
+		if _, err := model.SyncPostgresSequences(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
 		}
 	}
 	return tx.Commit()
@@ -779,6 +796,13 @@ func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bo
 		if table == "grain_config" && found > 0 && found < 78 {
 			if tpl, _ := row["task_branch_template"].(string); tpl == model.UnsluggedTaskBranchTemplate {
 				row["task_branch_template"] = model.DefaultTaskBranchTemplate
+			}
+		}
+		if found > 0 && found < model.SchemaVersion {
+			for _, col := range retiredGrantColumns[table] {
+				if list, ok := row[col].(string); ok && list != "" {
+					row[col] = upgradeRetiredCapabilityList(list)
+				}
 			}
 		}
 		if ext, ok := externalTexts[table]; ok {
@@ -831,6 +855,43 @@ func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bo
 		}
 	}
 	return nil
+}
+
+// retiredGrantColumns are the comma-separated capability columns an
+// import of a dump written by an older build (a lower schema-version)
+// upgrades through upgradeRetiredCapabilityList: the default sets
+// and a repository's CI capabilities, as tables/ holds them and as
+// settings/capabilities.yml's defaults overlay them (dumpRowsOf).
+var retiredGrantColumns = map[string][]string{
+	"grain_config": {"default_capabilities"},
+	"repo_config":  {"default_capabilities", "ci_capabilities"},
+}
+
+// upgradeRetiredCapabilityList reads each retired bare name in list as the
+// canonical grant(s) it became (model.RetiredGrantsBecame), as the
+// settings files' grant lists are read (shapeGrants in decl.go): a
+// grain/config exported, or edited by hand, before the retirement imports
+// as what the store holds now, and the next export writes only canonical
+// names. Anything else is kept as written, in order, once; a list with
+// no retired name is returned unchanged.
+func upgradeRetiredCapabilityList(list string) string {
+	var out []string
+	seen := map[string]bool{}
+	changed := false
+	for _, name := range model.SplitCapabilities(list) {
+		became := model.RetiredGrantsBecame(name)
+		changed = changed || len(became) != 1 || became[0] != name
+		for _, capID := range became {
+			if !seen[capID] {
+				seen[capID] = true
+				out = append(out, capID)
+			}
+		}
+	}
+	if !changed {
+		return list
+	}
+	return model.JoinCapabilities(out)
 }
 
 // resolveFileValue is value with a {"file": path} reference replaced by

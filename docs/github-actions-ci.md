@@ -235,7 +235,7 @@ The cost is that a superseded commit has no `docker.io/grainai/*:sha-<short>` im
 
 ## Mapping Grain CI Capabilities to GitHub Actions
 
-On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the bare names are one-release aliases, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
+On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the retired bare names are no longer accepted, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
 
 1. **`release#package-publish`**:
    - Mapped via `scripts/configure-dockerhub-auth.sh` to `PACKAGE_PUBLISH_REGISTRY` (default `docker.io`), `PACKAGE_PUBLISH_USERNAME` (from `vars.DOCKERHUB_USERNAME`, default `grainai`), and `PACKAGE_PUBLISH_TOKEN` (from `secrets.DOCKER_PAT`). Missing `DOCKER_PAT` or a failed `docker login` fails fast before any build or push step runs.
@@ -516,3 +516,18 @@ How the reads behave:
   a `gha:` id names whichever repository its caller wrote.
 - `grain ci wait` on a task's branch waits on the GitHub checks that
   gate it.
+- `grain ci retrigger` and `grain ci run-job <job>` on a `ci_mode: github`
+  task re-run the Actions runs at the head of the task's own pull request
+  (`--all` every job; `--jobs` or `run-job` one job) without pushing a
+  commit, up to 3 re-runs per run at one commit
+  (`ui.MaxActionsRerunsPerHead`, automatic runner-fault re-runs included).
+  Re-running any other `gha:` run is `POST /api/ci/runs/{id}/rerun` (or
+  the host CLI's `grain ci retrigger <gha:...>`), under `ci:write`.
+- On the default branch of any `ci_mode: github` repository, a concluded
+  `failure` of a gating workflow (`tests.yml`, `test.yml` or `ci.yml`)
+  automatically files one priority-9 repair task tagged
+  `github-base-repair:<repo>` (`pkg/orchestrator/githubbaserepair.go`),
+  appends further red runs to it, closes it on the next fully green push
+  run (`nightly-green` goal), and raises `pipeline.base-red-unattended`
+  when unattended or `pipeline.base-no-verdict` after 6 hours with runs in
+  flight and no finished verdict.

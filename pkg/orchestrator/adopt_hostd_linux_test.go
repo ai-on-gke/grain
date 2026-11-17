@@ -377,4 +377,159 @@ func TestAdoptedHostdRunCancelledAtDrainCapEndsInterruptedNotFailed(t *testing.T
 	if err != nil || st != model.StateQueued {
 		t.Fatalf("task state after drain_cap interruption = %q (%v), want %q", st, err, model.StateQueued)
 	}
+	if !strings.Contains(runs[0].Detail, "draining for its own upgrade") {
+		t.Errorf("drain_cap detail = %q, want draining for its own upgrade", runs[0].Detail)
+	}
+}
+
+func TestAdoptedHostdRunStoppedWithoutDrainIsRecordedInterruptedAsStopped(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no shell: %v", err)
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+	dir, err := os.MkdirTemp("", "adopt-hostd-stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	allow := filepath.Join(dir, "hostd.yaml")
+	if err := os.WriteFile(allow, []byte(fmt.Sprintf("clis:\n  sh:\n    path: %s\n", sh)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "run", "hostd.sock")
+	stateDir := filepath.Join(dir, "state")
+
+	launchHostd := func() func() {
+		srv := &hostd.Server{
+			Socket:          socket,
+			Allowlist:       allow,
+			AllowlistOwners: []uint32{uint32(os.Getuid())},
+			StateDir:        stateDir,
+			DisconnectGrace: 500 * time.Millisecond,
+			Env:             []string{"PATH=" + os.Getenv("PATH")},
+			Logf:            t.Logf,
+		}
+		srvCtx, cancelSrv := context.WithCancel(context.Background())
+		srvDone := make(chan error, 1)
+		go func() { srvDone <- srv.Serve(srvCtx) }()
+		client := hostd.Client{Socket: socket, Build: "test"}
+		for i := 0; ; i++ {
+			if _, err := client.Hello(context.Background()); err == nil {
+				break
+			} else if i > 100 {
+				cancelSrv()
+				<-srvDone
+				t.Fatalf("hostd never answered: %v", err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		stopped := false
+		stopFn := func() {
+			if stopped {
+				return
+			}
+			stopped = true
+			cancelSrv()
+			<-srvDone
+		}
+		t.Cleanup(stopFn)
+		return stopFn
+	}
+
+	stopFirst := launchHostd()
+	client := hostd.Client{Socket: socket, Build: "test"}
+
+	store, ctx := openStore(t)
+	_, gh := newSim(t, "acme", "widgets", "main")
+	task := filedTask(t, ctx, store, "t-stop", model.RepoRef{Owner: "acme", Name: "widgets"})
+	d := dispatch.Dispatch{TaskID: task.ID, RunID: "t-stop-1", Attempt: 1}
+	startRun(t, ctx, store, d, time.Now().UTC().Add(-time.Minute))
+
+	sandboxDir := t.TempDir()
+	if _, err := orchestrator.NewHostSandboxes(sandboxDir).Acquire(ctx, d.RunID, orchestrator.Shape{}); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := &runhost.Hostd{
+		Client:      client,
+		CursorEvery: time.Millisecond,
+		OnCursor: func(ctx context.Context, run string, n int64) {
+			_ = store.SetHostdCursor(ctx, run, n, time.Now().UTC())
+		},
+	}
+	var tee syncBuf
+	runCtx := runhost.WithRun(ctx, runhost.Run{Task: task.ID, Run: d.RunID, Deadline: time.Now().Add(time.Hour)})
+	detached := make(chan error, 1)
+	go func() {
+		_, err := previous.Host(agent.LocalHost{}, "sh").Run(runCtx, agent.Command{Args: []string{"-c", "echo started; sleep 60"}}, &tee)
+		detached <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); tee.String() != "started\n"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the CLI never started: %q", tee.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := previous.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-detached; !errors.Is(err, agent.ErrDetached) {
+		t.Fatalf("Run after Flush = %v, want ErrDetached", err)
+	}
+
+	// Stop and restart hostd without draining while no daemon is attached.
+	stopFirst()
+	_ = launchHostd()
+
+	sandboxes := orchestrator.NewHostSandboxes(sandboxDir)
+	var adopted []orchestrator.AdoptedRun
+	if _, err := orchestrator.RecoverHostd(ctx, store, gh, client, "test", time.Now().UTC(),
+		func(a runhost.Adoption, c int64) bool {
+			sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, a.Claim.Run)
+			if err != nil {
+				t.Errorf("readopting sandbox: %v", err)
+				return false
+			}
+			adopted = append(adopted, orchestrator.AdoptedRun{Adoption: a, Cursor: c, Sandbox: sb})
+			return true
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if len(adopted) != 1 {
+		t.Fatalf("adopted = %+v, want 1", adopted)
+	}
+
+	fw := antigravity.New("/usr/local/bin/agy", "/usr/local/bin/grain")
+	deps := orchestrator.Deps{
+		Store:     store,
+		Client:    gh,
+		Sandboxes: sandboxes,
+		Framework: orchestrator.StaticFramework(fw),
+		Config:    orchestrator.Config{TranscriptDir: t.TempDir()},
+	}
+	next := &runhost.Hostd{Client: client, CursorEvery: time.Millisecond}
+	_ = orchestrator.ResumeAdoptedRun(ctx, deps, next, adopted[0])
+
+	runs, err := store.Runs(ctx, task.ID)
+	if err != nil || len(runs) != 1 || runs[0].FinishedAt == nil {
+		t.Fatalf("runs = %+v (%v), want 1 finished run", runs, err)
+	}
+	if runs[0].Outcome != model.InterruptedOutcome {
+		t.Fatalf("adopted run after host stop outcome = %q (%s), want %q",
+			runs[0].Outcome, runs[0].Detail, model.InterruptedOutcome)
+	}
+	if !strings.Contains(runs[0].Detail, "the host agent stopped or restarted while the run was going") {
+		t.Errorf("detail = %q, want stopped or restarted reason", runs[0].Detail)
+	}
+	if strings.Contains(runs[0].Detail, "draining for its own upgrade") {
+		t.Errorf("detail = %q, must not say draining for its own upgrade", runs[0].Detail)
+	}
+	st, err := store.State(ctx, task.ID)
+	if err != nil || st != model.StateQueued {
+		t.Fatalf("task state after host stop interruption = %q (%v), want %q", st, err, model.StateQueued)
+	}
 }

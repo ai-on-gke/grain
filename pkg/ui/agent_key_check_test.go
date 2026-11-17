@@ -190,3 +190,41 @@ func TestSettingsAnnouncesAgentKeyChecksWhenWired(t *testing.T) {
 		t.Fatalf("agentKeyChecksEnabled = %v, want true", settings["agentKeyChecksEnabled"])
 	}
 }
+
+type backendKeyChecker struct {
+	fakeAgentKeyChecker
+	backend string
+}
+
+func (f *backendKeyChecker) CheckBackendKey(_ context.Context, id string) (ui.AgentKeyCheckResult, error) {
+	f.backend = id
+	return f.result, f.err
+}
+func TestCheckAgentKeyTargetsSavedBackend(t *testing.T) {
+	_, store, ctx := testClient(t)
+	cfg := model.DefaultConfig()
+	cfg.AgentBackends = []model.AgentBackend{{ID: "own", Framework: "codex"}}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	checker := &backendKeyChecker{}
+	srv := ui.NewServer(ui.Config{Actor: ui.DefaultActor("alice"), AgentKeyChecks: checker}, store)
+	for _, fail := range []bool{false, true} {
+		checker.err = nil
+		if fail {
+			checker.err = errors.New("provider refused; replace credential")
+		}
+		r := do(t, srv, http.MethodPost, "/api/agent-keys/codex/check?backend=own", "")
+		got := decode[ui.AgentKeyCheck](t, r)
+		if r.Code != 200 || got.OK == fail || checker.backend != "own" || len(checker.asked) != 0 {
+			t.Fatalf("wrong check: %+v", got)
+		}
+	}
+	for _, path := range []string{"/api/agent-keys/claude/check?backend=own", "/api/agent-keys/codex/check?backend=unknown"} {
+		checker.backend = ""
+		r := do(t, srv, http.MethodPost, path, "")
+		if r.Code != 400 || checker.backend != "" {
+			t.Fatal("invalid target reached checker")
+		}
+	}
+}

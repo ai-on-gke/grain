@@ -129,7 +129,7 @@ describe("Merge gates UI", () => {
           humanReviewHold: [
             {
               source: "security-findings",
-              category: "security-findings",
+              category: "security",
               reason: "security review #102 left findings",
               reviewTask: "102",
             },

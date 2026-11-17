@@ -236,7 +236,13 @@ the database (`allowed_principal`).
   whatever they hold.
 - **Routes outside the scope table:** the SPA's static pages are served
   to every admitted caller, and so are sign-in, `GET /api/config` and
-  `whoami`. Event streams, console terminals and file downloads are
+  `whoami`. The UIs' content-hashed bundles (`/next/<name>` and
+  `/assets/<name>`: the built `.js`, `.css`, fonts and images, never
+  `index.html` or a source map) are served before any of this, to
+  whoever can reach the port, with no access code or identity verifier
+  asked: they are the open-source build's own output and carry no
+  deployment data ([authentication.design.md](../design/design/authentication.design.md), *Content-hashed frontend
+  bundle exemption*). Event streams, console terminals and file downloads are
   ordinary scoped routes. `/api/mcp` and `/mcp` admit any signed-in role
   and check each tool call against the caller's role using the scope and
   repository rules of the route that tool maps to (filtering tool
@@ -529,7 +535,7 @@ file in a fresh 0700 directory, adds that directory to the paths
   `templates:write`, `schedules:write`, `suites:write`,
   `releases:write`, `boards:write`, `sessions:write`, `dispatch:write`,
   `teams:broadcast`, `tests:write`, `deployment:{reboot,restart,upgrade,src}`,
-  `merge:force` and `caches:write`. The one exception is
+  `merge:force`, `caches:write` and `qa:admin`. The one exception is
   `POST /api/tasks/{id}/sandbox/recreate` for the credential's own task,
   which `recreate_sandbox` calls. What stays open is what the mcpserver
   calls as itself: `tasks:write`, `merge:write` and `ci:write` for its

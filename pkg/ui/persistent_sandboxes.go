@@ -163,6 +163,7 @@ func (s *Server) handleStagingProxy(w http.ResponseWriter, r *http.Request) {
 	ps := s.tasks.Config.PersistentSandboxes
 	name := r.PathValue("name")
 	if ps == nil {
+		w.Header().Set("Cache-Control", cacheControlNoStore)
 		http.NotFound(w, r)
 		return
 	}
@@ -256,13 +257,27 @@ func requestLocalPort(r *http.Request) int {
 // cannot set its own under those names.
 const grainCookiePrefix = "grain_"
 
-// stripGrainCookies drops grain's own cookies (named grain_*) from a
+// isGrainCookie reports whether name is one of grain's own cookies:
+// grain_*, or grain_* behind a __Host- or __Secure- prefix (the verifier
+// session cookie, VerifierSessionCookieName). Browsers match those
+// prefixes case-insensitively, so this does too.
+func isGrainCookie(name string) bool {
+	for _, p := range []string{"__Host-", "__Secure-"} {
+		if len(name) >= len(p) && strings.EqualFold(name[:len(p)], p) {
+			name = name[len(p):]
+			break
+		}
+	}
+	return strings.HasPrefix(name, grainCookiePrefix)
+}
+
+// stripGrainCookies drops grain's own cookies (isGrainCookie) from a
 // request bound for a staging environment, keeping the environment's own.
 func stripGrainCookies(r *http.Request) {
 	cookies := r.Cookies()
 	r.Header.Del("Cookie")
 	for _, c := range cookies {
-		if !strings.HasPrefix(c.Name, grainCookiePrefix) {
+		if !isGrainCookie(c.Name) {
 			r.AddCookie(c)
 		}
 	}
@@ -272,8 +287,8 @@ func stripGrainCookies(r *http.Request) {
 // the staging environment served under prefix. The response is served
 // from grain's own origin, so a cookie it sets is set there: one named
 // like grain's own would replace it, and one with Path=/ would ride on
-// every request to grain. Cookies named grain_* (and any that do not
-// parse) are dropped; the rest lose their Domain and are confined to
+// every request to grain. grain's own cookies (isGrainCookie) and any
+// that do not parse are dropped; the rest lose their Domain and are confined to
 // prefix -- an app whose prefix is stripped thinks it is served from /,
 // so its paths are taken as relative to prefix.
 func scopeStagingCookies(h http.Header, prefix string, strip bool) {
@@ -281,7 +296,7 @@ func scopeStagingCookies(h http.Header, prefix string, strip bool) {
 	h.Del("Set-Cookie")
 	for _, line := range lines {
 		c, err := http.ParseSetCookie(line)
-		if err != nil || strings.HasPrefix(c.Name, grainCookiePrefix) {
+		if err != nil || isGrainCookie(c.Name) {
 			continue
 		}
 		c.Domain = ""

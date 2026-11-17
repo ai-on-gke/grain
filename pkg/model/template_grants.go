@@ -24,7 +24,7 @@ import (
 
 // TemplateWithinTask reports why tmpl hands out more than acting holds, or
 // nil when it does not: every one of the template's grants must be one
-// acting holds itself and none may be one only a person may give
+// acting holds itself (compared under HeldGrantKey) and none may be one only a person may give
 // (IsPersonOnlyGrant: a dangerous api grant, or priority-dispatch); every repository
 // it may push to must be one acting may push to (WriteTargetFor); every
 // repository it reads must be one acting may already fetch.
@@ -46,7 +46,7 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 	held := make([]string, 0, len(acting.Grants))
 	for _, g := range acting.Grants {
 		for _, c := range CanonicalLegacyGrants(g.Capability) {
-			held = append(held, CanonicalGrantKey(c))
+			held = append(held, HeldGrantKey(c))
 		}
 	}
 	for _, g := range tmpl.Grants {
@@ -57,7 +57,7 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 			if IsPersonOnlyGrant(needed) {
 				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 			}
-			if !slices.Contains(held, CanonicalGrantKey(needed)) {
+			if !slices.Contains(held, HeldGrantKey(needed)) {
 				return fmt.Errorf("template %s grants %s, which the agent's own task does not hold", tmpl.ID, g.Capability)
 			}
 		}
@@ -106,16 +106,13 @@ func ReviewTemplateRefusedNote(proposer, asked, fallback string, why error) stri
 }
 
 // IsDangerousGrant reports whether name is a dangerous grant that only a person
-// may grant: any dangerous api grant (including bare preset aliases), a retired
+// may grant: any dangerous api grant, a retired
 // dangerous capability (db-write, self-repair), or a capability-server reference whose
 // method or arguments require a person (protocol.GrantByPerson).
 func IsDangerousGrant(name string) bool {
 	s := strings.TrimSpace(StoredGrantSpelling(name))
 	if s == "db-write" || s == "self-repair" {
 		return true
-	}
-	if preset, ok := apiAliasCapabilities[s]; ok {
-		s = APIGrantPrefix + preset
 	}
 	if IsDangerousAPIGrant(s) {
 		return true
@@ -146,9 +143,9 @@ func IsDangerousGrant(name string) bool {
 // been edited since. Dropped names are returned beside the rest.
 func ReviewGrants(grants []Grant, reviewed Task) (kept []Grant, dropped []string) {
 	for _, g := range grants {
-		key := CanonicalGrantKey(g.Capability)
+		key := HeldGrantKey(g.Capability)
 		if IsPersonOnlyGrant(g.Capability) && !slices.ContainsFunc(reviewed.Grants, func(h Grant) bool {
-			return CanonicalGrantKey(h.Capability) == key
+			return HeldGrantKey(h.Capability) == key
 		}) {
 			dropped = append(dropped, g.Capability)
 			continue
@@ -176,11 +173,13 @@ func ReviewAdmission(tmplAdmission Admission, reviewed Task) (Admission, bool) {
 
 // declaredHeldServers are the capability servers whose grants hand a task
 // credentials or code that runs outside its sandbox: a GCP key, a script
-// on a host, a GitHub credential. Each is an operator's to give, so one
-// arriving in a repository's own declaration is held for a person
+// on a host. Each is an operator's to give, so one arriving in a
+// repository's own declaration is held for a person
 // (DeclaredGrantNeedsPerson) even where its server would let an agent
-// pass it on.
-var declaredHeldServers = map[string]bool{"gcp": true, "host-script": true, "github-credential": true}
+// pass it on. A named GitHub credential is a method of the repo server
+// beside its benign read and write, so it is held method by method
+// (declaredRepoGrantNeedsPerson) rather than here.
+var declaredHeldServers = map[string]bool{"gcp": true, "host-script": true}
 
 // DeclaredGrantNeedsPerson reports whether a grant written in a
 // repository's own `.grain/` declaration needs a person to accept it
@@ -198,11 +197,45 @@ func DeclaredGrantNeedsPerson(name string) bool {
 		return true
 	}
 	for _, c := range append([]string{s}, CanonicalLegacyGrants(s)...) {
-		if declaredHeldServers[grantServerID(c)] {
+		if declaredHeldServers[grantServerID(c)] || declaredRepoGrantNeedsPerson(c) {
 			return true
 		}
 	}
 	return false
+}
+
+// declaredRepoGrantNeedsPerson reports whether grant, a repo server grant
+// in its short ("repo#credential") or canonical spelling, is more than the
+// read of a repository or the ordinary push to its task's own branch that
+// a declaration names for itself: a named GitHub credential
+// (RepoCredentialRef), a push widened past one branch by refs or force
+// (IsGitPushAnyRefGrant and anything narrower than it), methodless server
+// shorthand, which could name any of its methods, or a method this check
+// does not know. Grants of any other server are false.
+func declaredRepoGrantNeedsPerson(grant string) bool {
+	base, method, hasMethod := strings.Cut(CapabilityGrantRef(grant), "#")
+	if base != "repo" && base != RepoCapabilityServerID {
+		return false
+	}
+	switch {
+	case !hasMethod:
+		return true
+	case method == RepoReadMethod:
+		return false
+	case method == RepoWriteMethod:
+		spec, err := CapabilityGrantSpec(grant)
+		if err != nil {
+			return true
+		}
+		for k := range spec.With {
+			if k != "repo" {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
 }
 
 // grantServerID is the capability server a server#method grant names, in

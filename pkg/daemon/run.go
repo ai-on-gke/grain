@@ -19,6 +19,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/ai-on-gke/grain/pkg/qa/checks"
+	qaresolve "github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"log"
 	"net"
 	"net/url"
@@ -29,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
@@ -330,6 +333,9 @@ func Run(ctx context.Context, cfg Config) error {
 	loadErr := loadStateRepo(ctx, cfg.DataDir, stateRepo, db, schemaMigrated)
 	if fatalStateRepoLoad(loadErr) {
 		return fmt.Errorf("loading the config repository: %w", loadErr)
+	}
+	if cfg.DbDriver == "postgres" {
+		syncBehindPostgresSequences(ctx, db)
 	}
 	// Init asked the startup guard (model.Store.CheckSingleTenant) of the
 	// store as it was opened. The load above can bring a multi-tenant
@@ -1429,6 +1435,152 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// pull request through POST /api/tasks/{id}/pull-request reaches this
 	// same client, and so opens exactly the pull request this loop's own
 	// finish path would have opened for it.
+	qaProfiler := qa.NewProfiler(qa.DefaultPerfLogPath(cfg.DataDir))
+	orchestrator.SetLiveQARuntime(&orchestrator.QARuntime{
+		DataDir:  cfg.DataDir,
+		Profiler: qaProfiler,
+		ResolveRemote: func(ctx context.Context, repo model.RepoRef) (string, string, error) {
+			if store != nil {
+				if rc, err := store.GetRepoConfig(ctx, repo); err == nil && rc != nil && strings.TrimSpace(rc.CloneURL) != "" {
+					var tok string
+					if githubRESTClient != nil && githubRESTClient.Tokens != nil {
+						if tp := githubRESTClient.Tokens.TokenFor(repo.Owner, repo.Name); tp != nil {
+							tok = *tp
+						}
+					}
+					return strings.TrimSpace(rc.CloneURL), tok, nil
+				}
+			}
+			host := repo.GitHost()
+			if host == "" {
+				host = cfg.GithubHost
+			}
+			if host == "" {
+				host = "github.com"
+			}
+			scheme := "https"
+			if cfg.GithubInsecureHTTP {
+				scheme = "http"
+			}
+			var tok string
+			if githubRESTClient != nil && githubRESTClient.Tokens != nil {
+				if tp := githubRESTClient.Tokens.TokenFor(repo.Owner, repo.Name); tp != nil {
+					tok = *tp
+				}
+			}
+			return fmt.Sprintf("%s://%s/%s/%s.git", scheme, host, repo.Owner, repo.Name), tok, nil
+		},
+		VerifyS4: func(ctx context.Context, task model.Task, prompt string) (string, int64, int64, error) {
+			fw, err := buildFramework(ctx, orchestrator.AgentChoice{
+				Framework: task.AgentFramework,
+				Model:     task.Model,
+			})
+			if err != nil || fw == nil {
+				return "", 0, 0, fmt.Errorf("qa s4 framework unavailable: %w", err)
+			}
+			if held, ok := fw.(*BackendFramework); ok {
+				defer held.Release()
+			}
+			res, err := fw.Run(ctx, agent.RunConfig{
+				Prompt:   prompt,
+				NoTools:  true,
+				RunID:    fmt.Sprintf("qa-s4-%s-%d", task.ID, time.Now().UnixNano()),
+				MaxTurns: 2,
+			})
+			if err != nil || res == nil {
+				return "", 0, 0, err
+			}
+			return res.FinalText, res.Usage.InputTokens, res.Usage.OutputTokens, nil
+		},
+		RunIsolatedPrompt: func(ctx context.Context, task model.Task, runPrefix, prompt string, maxTokens int) (string, int64, int64, error) {
+			fw, err := buildFramework(ctx, orchestrator.AgentChoice{
+				Framework: task.AgentFramework,
+				Model:     task.Model,
+			})
+			if err != nil || fw == nil {
+				return "", 0, 0, fmt.Errorf("qa isolated framework unavailable: %w", err)
+			}
+			if held, ok := fw.(*BackendFramework); ok {
+				defer held.Release()
+			}
+			res, err := fw.Run(ctx, agent.RunConfig{
+				Prompt:   prompt,
+				NoTools:  true,
+				RunID:    fmt.Sprintf("%s-%d", runPrefix, time.Now().UnixNano()),
+				MaxTurns: 2,
+			})
+			if err != nil || res == nil {
+				return "", 0, 0, err
+			}
+			return res.FinalText, res.Usage.InputTokens, res.Usage.OutputTokens, nil
+		},
+	})
+	qaresolve.SetRuntimeHooks(&qaresolve.RuntimeHooks{
+		DataDir: cfg.DataDir,
+		ReadRepoFileAtCommit: func(rCtx context.Context, repoStr, commitSHA, filePath string) ([]byte, error) {
+			parts := strings.Split(repoStr, "/")
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid repoStr: %s", repoStr)
+			}
+			repo := model.RepoRef{Owner: parts[0], Name: parts[1]}
+			host := cfg.GithubHost
+			if host == "" {
+				host = "github.com"
+			}
+			scheme := "https"
+			if cfg.GithubInsecureHTTP {
+				scheme = "http"
+			}
+			remoteURL := fmt.Sprintf("%s://%s/%s/%s.git", scheme, host, repo.Owner, repo.Name)
+			var tok string
+			if githubRESTClient != nil && githubRESTClient.Tokens != nil {
+				if tp := githubRESTClient.Tokens.TokenFor(repo.Owner, repo.Name); tp != nil {
+					tok = *tp
+				}
+			}
+			ws, err := checks.OpenMirrorWorkspace(rCtx, filepath.Join(cfg.DataDir, "qa-repos"), remoteURL, tok, commitSHA, commitSHA)
+			if err != nil {
+				return nil, err
+			}
+			return ws.ReadFileAtHead(rCtx, filePath)
+		},
+		PromoteExperimentStages: func(pCtx context.Context, experimentID, reason string) {
+			orchestrator.PromoteStrandedQAStagesForExperiment(pCtx, store, githubClient, experimentID, reason)
+		},
+		RunJudgeModel: func(jCtx context.Context, modelID, prompt string) (string, int64, int64, error) {
+			fw, err := buildFramework(jCtx, orchestrator.AgentChoice{
+				Model: strings.TrimSpace(modelID),
+			})
+			if err != nil || fw == nil {
+				return "", 0, 0, fmt.Errorf("qa judge model %q unavailable: %w", modelID, err)
+			}
+			if held, ok := fw.(*BackendFramework); ok {
+				defer held.Release()
+			}
+			res, err := fw.Run(jCtx, agent.RunConfig{
+				Prompt:   prompt,
+				NoTools:  true,
+				RunID:    fmt.Sprintf("qa-judge-%d", time.Now().UnixNano()),
+				MaxTurns: 2,
+			})
+			if err != nil || res == nil {
+				return "", 0, 0, err
+			}
+			return res.FinalText, res.Usage.InputTokens, res.Usage.OutputTokens, nil
+		},
+	})
+	if heldExp, hErr := store.HoldRunningExperimentForEngineRev(ctx, qa.QAEngineRev); hErr == nil && heldExp != nil {
+		_, _ = store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+			At: time.Now().UTC(),
+			By: model.Principal{
+				Kind:   model.PrincipalAutomation,
+				ID:     "qa-engine-rev-guard",
+				Source: model.SourceInternal,
+			},
+			Surface: "qa-experiment:" + heldExp.ID,
+			Summary: fmt.Sprintf("held enrollment on running experiment %s after QAEngineRev changed to %d", heldExp.ID, qa.QAEngineRev),
+		})
+	}
 	LivePullRequests.Store(&PullRequestOpener{Store: store, Client: githubClient})
 
 	// The same publication for the same reason, one question narrower:
@@ -1672,6 +1824,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// (persistentSandboxes' own doc comment).
 		PersistentSandboxes: persistentSandboxes,
 		Config: orchestrator.Config{
+			DataDir: cfg.DataDir,
 			// Every agent sandbox found OOM-killed is a decrease signal
 			// for auto overcommit (orchestrator.applySandboxOOM).
 			NoteOOM: overcommitNoteOOM(cfg.Overcommit),
@@ -1854,7 +2007,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// release-triggered automatic upgrade follows.
 			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
-			QAProfiler:         qa.NewProfiler(qa.DefaultPerfLogPath(cfg.DataDir)),
+			QAProfiler:         qaProfiler,
 			// nil in every build a deployment runs (debug_clock.go).
 			ReleaseUpgradeClockOffset: DebugClockOffset,
 		},

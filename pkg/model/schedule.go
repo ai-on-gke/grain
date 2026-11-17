@@ -360,6 +360,9 @@ type Schedule struct {
 	// the way an unfinished previous firing does (ScheduleSkipWhen,
 	// grain/task-4393). Empty, the default, holds nothing.
 	SkipWhen ScheduleSkipWhen
+	// QAFlowRef is the operator-configured quality-control flow reference
+	// bound to tasks composed from this schedule. Never set by in-repo declarations.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// Enabled is the pause/resume switch a UI toggles -- a disabled
 	// schedule stays around (with its own history in NextRunAt/LastRunAt)
 	// rather than being deleted, the same as closing a task keeps its row

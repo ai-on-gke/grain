@@ -207,10 +207,78 @@ describe("InboxPageComponent", () => {
       "first 1 of 9",
     );
 
-    // A proposal is not about a change yet: no diff is read for it.
+    // A repo-less proposal is not about a change yet: no diff is read for it.
     store.select("task:9:proposal");
     await f.whenStable();
     expect(api.diffReads).not.toContain("9");
+    expect(q(f, '[data-testid="inspector-diff"]')).toBeNull();
+
+    // A repository-scoped awaiting_submit decision without an external PR URL
+    // previews its diff and links to the task's Changes tab.
+    api.taskList = [
+      ...api.taskList,
+      {
+        id: "14",
+        title: "Branch ready without PR link",
+        state: "awaiting_submit",
+        repo: "acme/widgets",
+        branch: "grain/task-14",
+      },
+      {
+        id: "15",
+        title: "Proposed no branch",
+        state: "proposed",
+        repo: "acme/widgets",
+      },
+    ];
+    api.diffs["14"] = {
+      repo: "acme/widgets",
+      base: "main",
+      head: "grain/task-14",
+      totalFiles: 12,
+      totalHunks: 18,
+      truncated: true,
+      files: [
+        {
+          path: "pkg/proposal.go",
+          status: "added",
+          additions: 2,
+          deletions: 0,
+          hunks: [
+            {
+              header: "@@ -0,0 +1,2 @@",
+              lines: [
+                { kind: "add", text: "package proposal" },
+                { kind: "add", text: "const Ready = true" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    await store.refresh();
+    store.applyUpdates();
+    store.select("task:14:submit");
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    await f.whenStable();
+    expect(api.diffReads).toContain("14");
+    expect(q(f, '[data-testid="inspector-diff"]')?.textContent).toContain(
+      "pkg/proposal.go",
+    );
+    const truncLink = q(
+      f,
+      '[data-testid="diff-truncated"] a',
+    ) as HTMLAnchorElement | null;
+    expect(truncLink?.textContent).toContain("See the full diff");
+    expect(truncLink?.getAttribute("href")).toContain("/task/14");
+
+    // A proposal with no pushed branch skips diffPreview cleanly without 404s or an empty diff pane.
+    store.select("task:15:proposal");
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    await f.whenStable();
+    expect(api.diffReads).not.toContain("15");
     expect(q(f, '[data-testid="inspector-diff"]')).toBeNull();
   });
 
@@ -1733,6 +1801,104 @@ describe("inbox page helpers", () => {
       expect(store.selectedTranscript()).toBe("step 1: checking cluster...");
       f.destroy();
       expect(store.selectedTranscript()).toBeNull();
+    });
+
+    it("renders access and release summaries and remedies via g-capped-markdown while keeping queue rows plain", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "21",
+          title: "Needs write grant",
+          state: "awaiting_reply",
+          awaitingAccess: true,
+          questionSummary:
+            "## **Grant** `write` to [sidthe/grain](https://example.com)",
+        },
+        {
+          id: "22",
+          title: "Fallback access",
+          state: "awaiting_reply",
+          awaitingAccess: true,
+          questionSummary: "- Need *read* on `acme/lib`",
+        },
+      ];
+      api.details["21"] = {
+        id: "21",
+        title: "Needs write grant",
+        state: "awaiting_reply",
+        pendingAccess: {
+          summary:
+            "**Approve** `repo#write` for [sidthe/grain](https://example.com)",
+          reason: "to push the branch",
+          createdAt: "",
+          items: [{ kind: "write", repo: "sidthe/grain" }],
+        },
+      };
+      api.details["22"] = {
+        id: "22",
+        title: "Fallback access",
+        state: "awaiting_reply",
+      };
+      api.notes = [
+        {
+          id: 501,
+          subject: "release.pending:v2.5.0",
+          actions: ["approve-release"],
+          repo: "sidthe/grain",
+          body: [
+            "DISPATCH FAILED (401): token missing",
+            "Remedy: Set **GRAIN_RELEASE_APPROVAL_KEY** in `Settings`",
+            "Run URL: https://ci.example/runs/401",
+            "**v2.5.0-rc.1** passed its `soak`.",
+          ].join("\n"),
+        },
+      ];
+
+      const f = await render(api);
+      const rowSummaries = [
+        ...(f.nativeElement as HTMLElement).querySelectorAll(".row-summary"),
+      ].map((el) => el.textContent?.trim());
+      expect(rowSummaries).toEqual([
+        "v2.5.0-rc.1 passed its soak.",
+        "Grant write to sidthe/grain",
+        "Need read on acme/lib",
+      ]);
+
+      // Release entry is first (by group order).
+      const relSummary = q(f, '[data-testid="release-summary"]')!;
+      expect(relSummary.classList.contains("capped-md")).toBe(true);
+      expect(relSummary.textContent?.trim()).toBe(
+        "v2.5.0-rc.1 passed its soak.",
+      );
+      const relRemedy = q(f, '[data-testid="release-remedy"]')!;
+      expect(relRemedy.classList.contains("capped-md")).toBe(true);
+      expect(relRemedy.querySelector("strong")?.textContent).toBe(
+        "GRAIN_RELEASE_APPROVAL_KEY",
+      );
+      expect(relRemedy.querySelector("code")?.textContent).toBe("Settings");
+
+      const store = TestBed.inject(InboxStore);
+      store.select("task:21:access");
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+      const accessSummary = q(f, '[data-testid="access-summary"]')!;
+      expect(accessSummary.classList.contains("capped-md")).toBe(true);
+      expect(accessSummary.querySelector("strong")?.textContent).toBe(
+        "Approve",
+      );
+      expect(accessSummary.querySelector("code")?.textContent).toBe(
+        "repo#write",
+      );
+      expect(accessSummary.querySelector("a")?.textContent).toBe(
+        "sidthe/grain",
+      );
+
+      store.select("task:22:access");
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+      const fallbackSummary = q(f, '[data-testid="access-summary"]')!;
+      expect(fallbackSummary.classList.contains("capped-md")).toBe(true);
+      expect(fallbackSummary.textContent?.trim()).toBe("Need read on acme/lib");
     });
   });
 });

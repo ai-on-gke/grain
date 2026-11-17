@@ -488,6 +488,8 @@ func newFramework(run runner, grainBinaryPath string, opts ...Option) *Framework
 func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]string, error) {
 	var args []string
 	switch {
+	case cfg.NoTools:
+		return []string{"mcpserver", "-no-tools"}, nil
 	case cfg.SandboxRoot != "":
 		args = []string{"mcpserver", "-sandbox-root", cfg.SandboxRoot}
 	case cfg.GranuleVM != "":

@@ -42,7 +42,7 @@ func TestDelegatedTaskTrailersNameThePerson(t *testing.T) {
 	// and Approved-by, never the delegating service account.
 	delegatedTask := model.Task{
 		Creator: "alice@example.com",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor:      serviceActor,
 				OnBehalfOf: &alice,
@@ -63,7 +63,7 @@ func TestDelegatedTaskTrailersNameThePerson(t *testing.T) {
 	// Requested-by or Approved-by.
 	directServiceTask := model.Task{
 		Creator: "slack-bot@proj.iam.gserviceaccount.com",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: serviceActor,
 			},

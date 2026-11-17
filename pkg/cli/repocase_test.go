@@ -48,7 +48,7 @@ func divergentStore(t *testing.T) string {
 	created := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	if err := store.PutTask(ctx, model.Task{
 		ID: "a1b2", Intent: model.IntentImplement, Title: "fix the thing",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}},
 			Reason:      model.ReasonDirect,
 		},

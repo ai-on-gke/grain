@@ -26,7 +26,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +34,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -83,16 +81,8 @@ func metricsServer(t *testing.T) string {
 // under it for a test that has to break something in it.
 func metricsServerAndStore(t *testing.T) (string, *model.Store) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	for _, task := range []struct{ repo, author string }{
 		{"acme/widgets", "ada"},
 		{"acme/docs", "grace"},
@@ -447,6 +437,7 @@ func TestDaemonMetricsReadsTheDeploymentsOwnReport(t *testing.T) {
 // read_grain_metrics call fail, section=throughput included, because the
 // report read every input whichever section was asked for.
 func TestDaemonMetricsSurvivesAFailingPromptRead(t *testing.T) {
+	t.Parallel()
 	server, store := metricsServerAndStore(t)
 	// Store.RunPrompts reads task_run.prompt and nothing else in the
 	// report does, so taking the column away fails that one read.
@@ -487,6 +478,7 @@ func TestDaemonMetricsSurvivesAFailingPromptRead(t *testing.T) {
 // an input it does not need, or missed one it does, would fail here
 // (docs/test-runs/2026-10-07-daemon-demo-move.md).
 func TestDaemonMetricsEverySectionSurvivesAnotherSectionsFailingInput(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, breakSQL, fails string
 	}{
@@ -500,6 +492,7 @@ func TestDaemonMetricsEverySectionSurvivesAnotherSectionsFailingInput(t *testing
 		{"transcript sizes", "ALTER TABLE `task_run` RENAME COLUMN `transcript` TO `transcript_gone`", mcp.MetricsSectionMerges},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			server, store := metricsServerAndStore(t)
 			if _, err := store.DB().Exec(tc.breakSQL); err != nil {
 				t.Fatal(err)

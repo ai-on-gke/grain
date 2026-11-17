@@ -317,6 +317,7 @@ var runCredentialOperatorScopes = map[APIScope]bool{
 	"deployment:src":      true,
 	"merge:force":         true,
 	"caches:write":        true,
+	"qa:admin":            true,
 }
 
 // runCredentialOwnTaskRoutes are the routes under

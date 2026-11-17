@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"log"
 	"slices"
 	"sort"
@@ -231,6 +232,21 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err := relayProposedTasks(withRelayingRunID(ctx, runID), store, reach, client, task, result, now); err != nil {
 		return err
 	}
+	if _, ok := model.GoalModeOf(task); ok {
+		if assumptions := extractPassAssumptions(result, 1, now); len(assumptions) > 0 {
+			for _, a := range assumptions {
+				_ = model.AppendGoalAssumption(&task, a)
+			}
+			if store != nil && task.ID != "" {
+				_ = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+					for _, a := range assumptions {
+						_ = model.AppendGoalAssumption(t, a)
+					}
+					return nil
+				})
+			}
+		}
+	}
 
 	// Relayed up front, before either ending that used to return past it.
 	// What a comment_on_issue call means for the task's *state* depends on
@@ -242,9 +258,11 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// each call (mcp.AttachmentFiles) -- the calls' own arguments name
 	// the path and carry no bytes.
 	staged := stagedAttachments(ctx, store, runID)
+	goalSection := goalMarkdownSection(ctx, store, task)
 
 	comment, hasComment := effectiveCommentOnIssue(result)
 	if hasComment {
+		comment = appendGoalMarkdownToComment(comment, goalSection)
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "comment_on_issue"), staged)
 		// The note's own one line, when the run gave one: what the inbox
 		// and the task row show of a task resting on it (ui.Task.NoteSummary).
@@ -252,7 +270,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		// summary of what anybody has to do.
 		summary, _ := firstToolCallArg(result, "comment_on_issue", "summary")
 		summary = model.NormalizeQuestionSummary(summary)
-		if _, err := relayQuestion(ctx, store, task, withDroppedAttachments(comment, dropped), summary, attachments, now); err != nil {
+		if _, err := relayNote(ctx, store, task, withDroppedAttachments(comment, dropped), summary, attachments, now); err != nil {
 			return fmt.Errorf("orchestrator: posting comment for %s: %w", task.ID, err)
 		}
 		checkAndRecordStewardReportText(ctx, store, task, runID, comment, result, now)
@@ -435,7 +453,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if !staleBranch && !inPlace {
 		pushedCommit := true
 		if preRunBranchSHA != "" && client != nil && task.Target != nil {
-			if head, herr := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); herr == nil && head != nil {
+			if head, herr := effectiveTaskPushHead(ctx, store, client, task); herr == nil && head != nil {
 				pushedCommit = head.SHA != preRunBranchSHA
 			}
 		}
@@ -498,7 +516,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			}
 			if goal != nil {
 				if finalText {
-					posted := strings.TrimSpace(result.FinalText)
+					posted := appendGoalMarkdownToComment(strings.TrimSpace(result.FinalText), goalSection)
 					if _, err := relayCommentWithAttachments(ctx, store, task, posted, nil, now); err != nil {
 						return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 					}
@@ -556,8 +574,8 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// When comment_on_issue was absent, but the run completed an investigation /
 	// non-code task with a final assistant response (and did not push a branch or
 	// ask a question), use the final assistant text as the closing note.
-	if !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" {
-		comment := strings.TrimSpace(result.FinalText)
+	if !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && (strings.TrimSpace(result.FinalText) != "" || goalSection != "") {
+		comment := appendGoalMarkdownToComment(strings.TrimSpace(result.FinalText), goalSection)
 		if _, err := relayCommentWithAttachments(ctx, store, task, comment, nil, now); err != nil {
 			return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 		}
@@ -797,7 +815,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 	if sha == "" || client == nil || task.Target == nil {
 		return false, nil
 	}
-	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
+	head, err := effectiveTaskPushHead(ctx, store, client, task)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's branch head: %w", task.ID, err)
 	}
@@ -891,6 +909,11 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 		// (recordReviewerHead is this review's ending instead).
 		return false, nil
 	}
+	if !reviewCommentsOnly(task) {
+		if qaHandled, qaErr := salvageQAStageIfPresent(ctx, store, client, task, now); qaErr != nil || qaHandled {
+			return true, qaErr
+		}
+	}
 	pushed, err := targetBranchExists(client, *task.Target, task.BranchName())
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: checking %s's branch: %w", task.ID, err)
@@ -967,6 +990,10 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 			}
 		}
 		return true, err
+	}
+	MaybeRunPostPRQATriage(ctx, store, client, task)
+	if assign, qaCfg, aErr := resolve.ActiveQAResolutionForTask(ctx, store, task.ID); aErr == nil && qaCfg.Enabled && assign != nil && assign.ArmID == model.QAArmControl && (assign.Shadow || qaCfg.ShadowOnControlEnabled()) {
+		maybeRunControlShadowS3(store, client, task, assign)
 	}
 	return true, noteOrphanedIfClosed(ctx, store, client, task.ID, now)
 }
@@ -1167,6 +1194,13 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 	question, _ := firstToolCallArg(result, "ask_question", "question")
 	_, proposed := firstToolCallArg(result, "propose_config_change", "summary")
 	access := accessRequestOf(result, now)
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+		question = ""
+		access = nil
+		if gm.MockMissingSecrets {
+			secret = ""
+		}
+	}
 	if secret == "" && question == "" && !proposed && access == nil {
 		return false, nil
 	}
@@ -1387,6 +1421,20 @@ func relayCommentWithAttachments(ctx context.Context, store *model.Store, task m
 // ordinary comment.
 func relayQuestion(ctx context.Context, store *model.Store, task model.Task,
 	body, summary string, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
+	return relayAgentComment(ctx, store, task, body, summary, false, attachments, now)
+}
+
+// relayNote is relayQuestion for a comment_on_issue note: summary is the
+// note's own one line (Store.NoteSummary), and the comment is marked
+// model.Comment.Note so GET /api/events records it as task.comment
+// rather than as a question nobody asked.
+func relayNote(ctx context.Context, store *model.Store, task model.Task,
+	body, summary string, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
+	return relayAgentComment(ctx, store, task, body, summary, true, attachments, now)
+}
+
+func relayAgentComment(ctx context.Context, store *model.Store, task model.Task,
+	body, summary string, note bool, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
 
 	now, err := answeringTime(ctx, store, task.ID, now)
 	if err != nil {
@@ -1401,6 +1449,7 @@ func relayQuestion(ctx context.Context, store *model.Store, task model.Task,
 		},
 		Body:      body,
 		Summary:   summary,
+		Note:      note,
 		CreatedAt: now,
 	})
 	if err != nil {
@@ -1726,6 +1775,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	// a refusal that is only a log line leaves the person reading the
 	// runner's task one recommendation short with no word why.
 	var refusedTuning []refusedTuningProposal
+	// Proposals filed with something admission refused or lowered, said
+	// on task's own conversation once the batch is through
+	// (noteProposalAdmissionChanges): the note on each proposal reaches
+	// whoever opens it, but the run that asked has ended and its tool
+	// call only said "Recorded".
+	var changedProposals []proposalAdmissionChange
 
 	// The capability catalogue (settings/capabilities.yml), read once:
 	// each proposal is judged against it below, as ui.CreateTask judges
@@ -2016,6 +2071,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
 		var ciReads []model.RepoRef
+		// What admission changed about this proposal -- a CI capability
+		// refused or turned into reads, a sandbox shape lowered -- said
+		// again on the proposer's own conversation once the batch is
+		// through (noteProposalAdmissionChanges), where the run that
+		// asked for it and the person watching that task read it.
+		var admissionChanges []string
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
@@ -2032,6 +2093,15 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// itself (SyncCLReviews); the live call refused it too.
 			if model.GrantNamesReviewOf(cap) {
 				body += reviewOfGrantRefusedNote(cap)
+				continue
+			}
+			// A retired bare name grants nothing: the live call refused
+			// it, and a call recorded before that refusal existed is filed
+			// without it, saying what it became, rather than holding a row
+			// every dispatch would refuse after a person approved it.
+			if why, retired := model.RetiredTaskGrantRefusal(cap); retired {
+				body += fmt.Sprintf("\n\n_grain filed this proposal without `%s`: %s._", cap, why)
+				admissionChanges = append(admissionChanges, fmt.Sprintf("`%s` was left off: %s", cap, why))
 				continue
 			}
 			// grain-ci is passed over, as ui.CreateTask passes it over
@@ -2057,8 +2127,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					if repo, ok := model.RepoReadTarget(expanded); ok {
 						ciReads = append(ciReads, repo)
 						body += ciReadGrantAsReadsNote(cap, repo)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, so it was filed with `reads: [%q]` instead", cap, repo.String()))
 					} else {
 						body += ciOnlyGrantRefusedNote(cap, why)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, not a task grant, so it was filed without it", cap))
 					}
 					continue
 				}
@@ -2150,6 +2224,8 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// A dimension the proposal states keeps its value and the
 		// template fills the rest, one at a time, as ui.Client.fromTemplate
 		// does for a filing through the API.
+		templateFilledShape := (cpus == 0 && tmplSandbox.CPUs != 0) ||
+			(memoryMB == 0 && tmplSandbox.MemoryMB != 0) || (diskGB == 0 && tmplSandbox.DiskGB != 0)
 		if cpus == 0 {
 			cpus = tmplSandbox.CPUs
 		}
@@ -2166,9 +2242,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// approve. A shape above the proposer's own is held for a person
 		// below (model.ProposalSandboxShapeAbove), as filed live.
 		shape, shapeNote := clampProposalSandboxShape(ctx, store,
-			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB})
+			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}, templateFilledShape)
 		cpus, memoryMB, diskGB = shape.CPUs, shape.MemoryMB, shape.DiskGB
 		body += shapeNote
+		if shapeNote != "" {
+			admissionChanges = append(admissionChanges, fmt.Sprintf(
+				"its sandbox is above this deployment's maximum, so it was filed at %s",
+				model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}.Describe()))
+		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
 		// pin naming no connection as the model choice it used to be.
@@ -2235,7 +2316,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Intent: model.IntentImplement,
 			Title:  title,
 			Body:   body,
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{
 					Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 					OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID},
@@ -2277,11 +2358,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		model.SetFoundIn(&proposal, foundIn)
 		model.ApplyDerivedFoundIn(&proposal)
+		if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+			_ = model.SetGoalMode(&proposal, &gm)
+		}
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
 		var proposerBehalf *model.Principal
-		isSession := task.Origin.Reason == model.ReasonConsoleSession
+		isSession := task.Filing.Reason == model.ReasonConsoleSession
 		if isSession {
 			if sender := consoleSessionSender(ctx, store, task.ID); sender != nil {
 				if norm, nerr := model.NormalizeTaskOwner(sender.ID); nerr == nil {
@@ -2616,6 +2700,10 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if err := store.PutTask(ctx, proposal); err != nil {
 			return fmt.Errorf("orchestrator: filing proposed task %q: %w", title, err)
 		}
+		if len(admissionChanges) > 0 {
+			changedProposals = append(changedProposals, proposalAdmissionChange{
+				id: proposal.ID, title: title, changes: admissionChanges})
+		}
 		if goal != nil {
 			if err := store.SetTaskGoal(ctx, proposal.ID, *goal,
 				model.PrincipalString(model.Principal{Kind: model.PrincipalAgent, ID: task.ID}), now); err != nil {
@@ -2658,7 +2746,54 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			}
 		}
 	}
+	if err := noteProposalAdmissionChanges(ctx, store, task, changedProposals, now); err != nil {
+		return err
+	}
 	return noteRefusedTuningProposals(ctx, store, task, refusedTuning, now)
+}
+
+// proposalAdmissionChange is one proposal relayProposedTasks filed with
+// something its run asked for refused or lowered: changes are what
+// admission did, one line each.
+type proposalAdmissionChange struct {
+	id      string
+	title   string
+	changes []string
+}
+
+// noteProposalAdmissionChanges posts one comment on task naming each
+// proposal it filed with a CI capability refused (or turned into reads)
+// or a sandbox shape lowered to the deployment's maximum. Each proposal's
+// own body says so already, but the run that proposed it has ended and
+// its propose_task call answered only "Recorded": this is where that run,
+// on its next turn, and the person watching its task hear about it.
+// Nothing is posted when nothing was changed.
+func noteProposalAdmissionChanges(ctx context.Context, store *model.Store, task model.Task,
+	changed []proposalAdmissionChange, now time.Time) error {
+
+	if len(changed) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	if len(changed) == 1 {
+		b.WriteString("grain filed 1 proposal from this run without something it asked for:\n")
+	} else {
+		fmt.Fprintf(&b, "grain filed %d proposals from this run without something they asked for:\n", len(changed))
+	}
+	for _, c := range changed {
+		fmt.Fprintf(&b, "\n- task %s %q: %s.", c.id, c.title, strings.Join(c.changes, "; "))
+	}
+	b.WriteString("\n\nEach proposal's description says why. An operator can raise sandboxShapeLimits in settings; " +
+		"a CI capability is declared in the repository's CI workflow, not on a task.")
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+		Body:      b.String(),
+		CreatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("orchestrator: noting proposals filed with admission changes on %s: %w", task.ID, err)
+	}
+	return nil
 }
 
 // refusedTuningProposal is one propose_task call of the tuning runner that
@@ -3337,7 +3472,11 @@ func droppedCustomFieldNote(dropped []string) string {
 // a negative one is dropped to "not stated". The note, "" when nothing
 // changed, is what the proposal's body says about it. A settings row that
 // cannot be read is grain's default maximum, never no maximum.
-func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape) (model.SandboxShape, string) {
+//
+// fromTemplate says the proposal's template filled at least one dimension
+// (its `sandbox:`), so the note does not put the template's size down to
+// the run alone.
+func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape, fromTemplate bool) (model.SandboxShape, string) {
 	var limits model.SandboxShapeLimits
 	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
 		limits = cfg.SandboxShapeLimits
@@ -3361,10 +3500,14 @@ func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked mo
 	if len(changed) == 0 {
 		return out, ""
 	}
-	return out, fmt.Sprintf("\n\n---\n\ngrain: the run that proposed this asked for a sandbox this deployment "+
+	asker := "the run that proposed this asked for"
+	if fromTemplate {
+		asker = "this proposal, with its template's `sandbox:` filled in, asks for"
+	}
+	return out, fmt.Sprintf("\n\n---\n\ngrain: %s a sandbox this deployment "+
 		"does not give any task (most it allows: %s), so it was filed at what the deployment allows: %s. "+
 		"An operator can raise sandboxShapeLimits in settings if the work needs more.",
-		ceiling.Describe(), strings.Join(changed, ", "))
+		asker, ceiling.Describe(), strings.Join(changed, ", "))
 }
 
 // droppedNetworkAccessNote is what a human approving the proposal reads
@@ -3913,6 +4056,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 		title = "grain: " + task.ID
 	}
 	body := withLineage(pullRequestBody(describeCommits(commits), task.ID, task.Issue), taskLineage(ctx, store, task))
+	body = withGoalSummary(body, goalMarkdownSection(ctx, store, task))
 	if landed.partial() {
 		body = landed.partialSentence() + "\n\n" + body
 	}
@@ -4277,7 +4421,7 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 // never classifies, because it merges back into the branch it was stacked
 // on rather than into a branch of its own choosing.
 func skipsClassification(task model.Task) bool {
-	return task.Origin.Reason == model.ReasonReview || task.Origin.Reason == model.ReasonFix
+	return task.Filing.Reason == model.ReasonReview || task.Filing.Reason == model.ReasonFix
 }
 
 // noteEmptyBranch is what a task gets instead of a pull request when the

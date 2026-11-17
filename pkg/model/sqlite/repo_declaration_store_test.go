@@ -786,7 +786,7 @@ func TestOffDefaultHostRepoDeclarationsKeepTheirHost(t *testing.T) {
 	}
 }
 
-func TestSyncRepoDeclarationsCanonicalizesLegacyGrants(t *testing.T) {
+func TestSyncRepoDeclarationsKeepsRetiredBareNamesAsWritten(t *testing.T) {
 	t.Parallel()
 	store, _ := sqlitetest.Open(t)
 	ctx := context.Background()
@@ -818,10 +818,12 @@ func TestSyncRepoDeclarationsCanonicalizesLegacyGrants(t *testing.T) {
 	for _, g := range gotTmpl.Grants {
 		tmplCaps = append(tmplCaps, g.Capability)
 	}
+	// A retired bare name is no alias any longer: it is stored as
+	// written, and grants nothing.
 	wantTmplCaps := []string{
-		model.APIRef("self-debug"),
+		"bootstrap-playbooks",
 		model.BootstrapPlaybooksGrant,
-		model.GrainSourceGrant,
+		"self-debug",
 	}
 	if !reflect.DeepEqual(tmplCaps, wantTmplCaps) {
 		t.Errorf("template grants = %v, want %v", tmplCaps, wantTmplCaps)
@@ -831,7 +833,7 @@ func TestSyncRepoDeclarationsCanonicalizesLegacyGrants(t *testing.T) {
 	if err != nil || gotSched == nil {
 		t.Fatalf("GetSchedule: %v, %v", gotSched, err)
 	}
-	if len(gotSched.Grants) != 1 || gotSched.Grants[0].Capability != model.BootstrapPlaybooksGrant {
-		t.Errorf("schedule grants = %+v, want [%s]", gotSched.Grants, model.BootstrapPlaybooksGrant)
+	if len(gotSched.Grants) != 1 || gotSched.Grants[0].Capability != "bootstrap-playbooks" {
+		t.Errorf("schedule grants = %+v, want [bootstrap-playbooks] as written", gotSched.Grants)
 	}
 }

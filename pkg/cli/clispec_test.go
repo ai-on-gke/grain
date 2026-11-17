@@ -38,8 +38,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 )
 
-// The host CLI's spec (design/spec/cli/host.spec.md) carries one generated
-// flag table per command, between
+// The host CLI's spec (design/spec/cli/host.spec.md) carries a top-level
+// command index (#CLI-20) and one generated flag table per command, between
 //
 //	<!-- BEGIN GENERATED FLAGS: grain <path> -->
 //	<!-- END GENERATED FLAGS -->
@@ -47,9 +47,10 @@ import (
 // TestHostCLISpecCoversEveryCommandAndFlag walks the commands this binary
 // registers -- the argv[1] switches in Main and dispatchCLI, read out of
 // main.go so a new command cannot be missed, plus hostSpecSubcommands --
-// runs each with -h in a child of this test binary, and reads the flags
-// out of the flag package's own PrintDefaults output. A command or flag
-// the code has and the spec does not, or the reverse, fails it.
+// checks #CLI-20's command index against the top-level switches, runs each
+// command with -h in a child of this test binary, and reads the flags out of
+// the flag package's own PrintDefaults output. A command or flag the code has
+// and the spec does not, or the reverse, fails it.
 //
 // GRAIN_UPDATE_CLI_SPEC=1 rewrites the tables in place (a command the
 // spec has no table for is appended under "Unplaced commands", to be moved
@@ -59,7 +60,7 @@ const hostSpecPath = "../../design/spec/cli/host.spec.md"
 // hostSpecSubcommands are the verbs a command takes as its own first
 // argument, each with a flag set of its own.
 var hostSpecSubcommands = map[string][]string{
-	"access-code":        {"show", "rotate"},
+	"access-code":        {"show", "rotate", "mode"},
 	"capability-servers": {"list", "add", "remove", "enable", "disable", "bind-secret"},
 	"ci":                 {"run", "list", "show", "watch", "wait", "retrigger", "test-history", "cancel", "cache", "faults", "artifact"},
 	"connections":        {"import"},
@@ -71,7 +72,10 @@ var hostSpecSubcommands = map[string][]string{
 		"rename", "update", "revoke", "delete", "delete-revoked", "rekey", "register", "install", "set-owner"},
 	"init": {"workstation"},
 	"pr":   {"adopt", "review", "status", "submit"},
-	"qa":   {"status", "enable", "disable"},
+	"qa": {"status", "enable", "disable",
+		"flow list", "flow show", "flow fork", "flow validate", "flow publish", "flow retire", "flow adopt", "flow probe",
+		"exp list", "exp show", "exp create", "exp edit", "exp start", "exp halt-arm", "exp resume-enrollment", "exp stop", "exp archive", "exp results", "exp keys",
+		"judge run", "judge label"},
 	"hub": {"status", "list", "directory", "route", "show", "create", "register", "unregister",
 		"update", "scopes", "rotate-credential", "upgrade", "resize", "delete", "restore", "stop", "start", "transfer", "accept-transfer",
 		"delegating-apps list", "delegating-apps create", "delegating-apps disable", "delegating-apps enable",
@@ -228,68 +232,183 @@ func parseDefaults(out string) []specFlag {
 	return flags
 }
 
-// hostSpecHelp runs grain <path> -h in a child of this test binary.
-func hostSpecHelp(t *testing.T, dir string, path []string) string {
+// hostSpecHelpPaths is every command path whose -h the spec and wording
+// tests read: each top-level command main.go dispatches, and each of its
+// subcommands.
+func hostSpecHelpPaths(t *testing.T) [][]string {
 	t.Helper()
-	key := strings.Join(path, " ")
-	hostSpecHelpCache.Lock()
-	cached, ok := hostSpecHelpCache.m[key]
-	hostSpecHelpCache.Unlock()
-	if ok {
-		return cached
+	var paths [][]string
+	for _, top := range hostSpecTopLevel(t) {
+		if slices.Contains(hostSpecNoHelp, top) {
+			continue
+		}
+		paths = append(paths, []string{top})
+		for _, sub := range hostSpecSubcommands[top] {
+			paths = append(paths, append([]string{top}, strings.Fields(sub)...))
+		}
 	}
-	argv, _ := json.Marshal(append(slices.Clone(path), "-h"))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHostCLISpecHelper$")
-	// Anything the child left holding its output open must not keep
-	// CombinedOutput waiting past the deadline.
-	cmd.WaitDelay = 5 * time.Second
-	cmd.Dir = dir
-	cmd.Env = []string{
-		"GRAIN_CLISPEC_ARGV=" + string(argv),
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + filepath.Join(dir, "home"),
-		"GRAIN_SANDBOX_CLI=0",
-		"GRAIN_CLI_ENV=",
-		"GRAIN_DATA_DIR=" + filepath.Join(dir, "data"),
-		"XDG_CONFIG_HOME=" + filepath.Join(dir, "config"),
-	}
-	out, _ := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		// Say so, rather than leave a cut-off help to read as missing flags.
-		t.Errorf("grain %s -h did not finish within 30s; it printed:\n%s", key, out)
-		return string(out)
-	}
-	help := strings.ReplaceAll(strings.ReplaceAll(string(out), filepath.Join(dir, "data"), "$GRAIN_DATA_DIR"), dir, "<tmp>")
-	hostSpecHelpCache.Lock()
-	hostSpecHelpCache.m[key] = help
-	hostSpecHelpCache.Unlock()
-	return help
+	return paths
 }
 
-// hostSpecHelpCache keeps each command's -h, which hostSpecHelp has
-// already made independent of the directory it ran in, so the spec test
-// and the help-wording test (host_wording_test.go) start every child once
-// between them rather than once each: under -race on a loaded machine the
-// children are most of either test's time.
+// The child prints hostSpecBatchMarker and the path before each
+// command's help, and hostSpecBatchDone once the whole batch is through.
+const (
+	hostSpecBatchMarker = "\x00GRAIN_CLISPEC_BEGIN:"
+	hostSpecBatchDone   = "\x00GRAIN_CLISPEC_DONE\x00\n"
+)
+
+// hostSpecRunBatch runs grain <path> -h for every path in one child of
+// this test binary where it can. A command whose flag set returns
+// flag.ErrHelp hands control back and the child goes on to the next path;
+// one that exits (flag.ExitOnError) ends the child, and the paths after it
+// start again in a new one. Starting a -race binary is most of what each
+// -h used to cost: one child per path was ~200 children per test.
+func hostSpecRunBatch(dir string, paths [][]string) (map[string]string, []string) {
+	results := make(map[string]string, len(paths))
+	var errs []string
+	rem := paths
+	for len(rem) > 0 {
+		batch, _ := json.Marshal(rem)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHostCLISpecHelper$")
+		// Anything the child left holding its output open must not keep
+		// CombinedOutput waiting past the deadline.
+		cmd.WaitDelay = 5 * time.Second
+		cmd.Dir = dir
+		cmd.Env = []string{
+			"GRAIN_CLISPEC_BATCH=" + string(batch),
+			"PATH=" + os.Getenv("PATH"),
+			"HOME=" + filepath.Join(dir, "home"),
+			"GRAIN_SANDBOX_CLI=0",
+			"GRAIN_CLI_ENV=",
+			"GRAIN_DATA_DIR=" + filepath.Join(dir, "data"),
+			"XDG_CONFIG_HOME=" + filepath.Join(dir, "config"),
+		}
+		raw, _ := cmd.CombinedOutput()
+		timedOut := ctx.Err() != nil
+		cancel()
+
+		parts := strings.Split(strings.TrimSuffix(string(raw), hostSpecBatchDone), hostSpecBatchMarker)
+		done := 0
+		for i := 1; i < len(parts); i++ {
+			key, help, ok := strings.Cut(parts[i], "\x00\n")
+			if !ok {
+				break
+			}
+			done++
+			if timedOut && i == len(parts)-1 {
+				// Say so, rather than leave a cut-off help to read as missing flags.
+				errs = append(errs, fmt.Sprintf("grain %s -h did not finish within 2m; it printed:\n%s", key, help))
+			}
+			results[key] = strings.ReplaceAll(strings.ReplaceAll(help, filepath.Join(dir, "data"), "$GRAIN_DATA_DIR"), dir, "<tmp>")
+		}
+		if done == 0 {
+			errs = append(errs, fmt.Sprintf("grain %s -h printed nothing a batch child should (timed out: %v):\n%s",
+				strings.Join(rem[0], " "), timedOut, raw))
+			done = 1
+		}
+		rem = rem[done:]
+	}
+	return results, errs
+}
+
+// hostSpecHelp is grain <path> -h, from hostSpecHelpAll.
+func hostSpecHelp(t *testing.T, path []string) string {
+	t.Helper()
+	return hostSpecHelpAll(t)[strings.Join(path, " ")]
+}
+
+// hostSpecHelpAll is every path's -h, keyed by path. It runs the children
+// once per test binary, four batches at a time, so the spec test and the
+// help-wording test (host_wording_test.go) share them and can run in
+// parallel with the rest of the package.
+func hostSpecHelpAll(t *testing.T) map[string]string {
+	t.Helper()
+	paths := hostSpecHelpPaths(t)
+	hostSpecHelpCache.once.Do(func() {
+		root, err := os.MkdirTemp("", "grain-clispec-")
+		if err != nil {
+			hostSpecHelpCache.errs = append(hostSpecHelpCache.errs, err.Error())
+			return
+		}
+		defer os.RemoveAll(root)
+		const workers = 4
+		shards := make([][][]string, workers)
+		for i, p := range paths {
+			shards[i%workers] = append(shards[i%workers], p)
+		}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for w, shard := range shards {
+			if len(shard) == 0 {
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				dir := filepath.Join(root, strconv.Itoa(w))
+				for _, d := range []string{"home", "data", "config"} {
+					if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+						mu.Lock()
+						hostSpecHelpCache.errs = append(hostSpecHelpCache.errs, err.Error())
+						mu.Unlock()
+						return
+					}
+				}
+				res, errs := hostSpecRunBatch(dir, shard)
+				mu.Lock()
+				defer mu.Unlock()
+				for k, v := range res {
+					hostSpecHelpCache.m[k] = v
+				}
+				hostSpecHelpCache.errs = append(hostSpecHelpCache.errs, errs...)
+			}()
+		}
+		wg.Wait()
+	})
+	for _, msg := range hostSpecHelpCache.errs {
+		t.Error(msg)
+	}
+	return hostSpecHelpCache.m
+}
+
+// hostSpecHelpCache keeps each command's -h, made independent of the
+// directory it ran in. It is written only inside once, and read only
+// after it.
 var hostSpecHelpCache = struct {
-	sync.Mutex
-	m map[string]string
+	once sync.Once
+	m    map[string]string
+	errs []string
 }{m: map[string]string{}}
 
-// TestHostCLISpecHelper is the child hostSpecHelp runs: grain itself.
+// TestHostCLISpecHelper is grain itself, run as a child of this test
+// binary: GRAIN_CLISPEC_BATCH is hostSpecRunBatch asking for each path's
+// -h in turn, and GRAIN_CLISPEC_ARGV is one whole command line
+// (runHostGrain in upgrade_postgres_test.go).
 func TestHostCLISpecHelper(t *testing.T) {
-	raw := os.Getenv("GRAIN_CLISPEC_ARGV")
+	if raw := os.Getenv("GRAIN_CLISPEC_ARGV"); raw != "" {
+		var argv []string
+		if err := json.Unmarshal([]byte(raw), &argv); err != nil {
+			t.Fatal(err)
+		}
+		os.Args = append([]string{"grain"}, argv...)
+		Main()
+		os.Exit(0)
+	}
+	raw := os.Getenv("GRAIN_CLISPEC_BATCH")
 	if raw == "" {
 		t.Skip("only runs as TestHostCLISpecCoversEveryCommandAndFlag's child")
 	}
-	var argv []string
-	if err := json.Unmarshal([]byte(raw), &argv); err != nil {
+	var batch [][]string
+	if err := json.Unmarshal([]byte(raw), &batch); err != nil {
 		t.Fatal(err)
 	}
-	os.Args = append([]string{"grain"}, argv...)
-	Main()
+	for _, path := range batch {
+		fmt.Fprintf(os.Stdout, "%s%s\x00\n", hostSpecBatchMarker, strings.Join(path, " "))
+		os.Args = append([]string{"grain"}, append(slices.Clone(path), "-h")...)
+		Main()
+	}
+	fmt.Fprint(os.Stdout, hostSpecBatchDone)
 	os.Exit(0)
 }
 
@@ -317,43 +436,17 @@ func globalSpecFlags() []specFlag {
 
 // hostSpecTables is what the code says: every command path's flags.
 func hostSpecTables(t *testing.T) map[string][]specFlag {
-	dir := t.TempDir()
-	for _, d := range []string{"home", "data", "config"} {
-		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
 	tables := map[string][]specFlag{}
 	// The global flags runCLI parses before a task command.
 	tables["grain"] = globalSpecFlags()
-	var paths [][]string
 	for _, top := range hostSpecTopLevel(t) {
 		if slices.Contains(hostSpecNoHelp, top) {
 			tables["grain "+top] = nil
-			continue
-		}
-		paths = append(paths, []string{top})
-		for _, sub := range hostSpecSubcommands[top] {
-			paths = append(paths, append([]string{top}, strings.Fields(sub)...))
 		}
 	}
-	// One child per path, a few at a time: under -race each is slow.
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	for _, path := range paths {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			flags := parseDefaults(hostSpecHelp(t, dir, path))
-			mu.Lock()
-			tables["grain "+strings.Join(path, " ")] = flags
-			mu.Unlock()
-		}()
+	for _, path := range hostSpecHelpPaths(t) {
+		tables["grain "+strings.Join(path, " ")] = parseDefaults(hostSpecHelp(t, path))
 	}
-	wg.Wait()
 	for top := range hostSpecSubcommands {
 		if _, ok := tables["grain "+top]; !ok && !slices.ContainsFunc(hostSpecTopLevel(t), func(s string) bool { return s == top }) {
 			t.Errorf("hostSpecSubcommands names %q, which main.go does not dispatch", top)
@@ -474,16 +567,102 @@ func compareSpecBlocks(t *testing.T, specPath, spec string, want map[string][]st
 	}
 }
 
-func TestHostCLISpecCoversEveryCommandAndFlag(t *testing.T) {
-	if testing.Short() {
-		t.Skip("runs the grain binary once per command")
+var (
+	commandIndexSection = regexp.MustCompile(`(?ms)^## 1\. Command index \{#CLI-20\}\n(.*?)(?:\n---|\n## )`)
+	inlineCodeSpan      = regexp.MustCompile("`([^`]+)`")
+)
+
+// specCommandIndex reads the top-level command words listed in #CLI-20's
+// Command index table: the first whitespace-separated token of every
+// backticked span in the Commands column.
+func specCommandIndex(t *testing.T, specPath, spec string) []string {
+	t.Helper()
+	m := commandIndexSection.FindStringSubmatch(spec)
+	if m == nil {
+		t.Fatalf("%s: missing ## 1. Command index {#CLI-20} section", specPath)
 	}
-	tables := hostSpecTables(t)
+	seen := map[string]bool{}
+	for _, line := range strings.Split(m[1], "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		inner := strings.Trim(line, "|")
+		kind, cmds, ok := strings.Cut(inner, "|")
+		if !ok {
+			continue
+		}
+		kind = strings.TrimSpace(kind)
+		if kind == "" || kind == "Kind" || strings.Trim(kind, "-") == "" {
+			continue
+		}
+		for _, cm := range inlineCodeSpan.FindAllStringSubmatch(cmds, -1) {
+			if fields := strings.Fields(cm[1]); len(fields) > 0 {
+				seen[fields[0]] = true
+			}
+		}
+	}
+	var names []string
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// compareCommandIndex checks #CLI-20's Command index table against the
+// top-level commands main.go's two switches register.
+func compareCommandIndex(t *testing.T, specPath, spec string, want []string) ([]string, []string) {
+	t.Helper()
+	got := specCommandIndex(t, specPath, spec)
+	var missing, extra []string
+	for _, cmd := range want {
+		if !slices.Contains(got, cmd) {
+			missing = append(missing, cmd)
+		}
+	}
+	for _, cmd := range got {
+		if !slices.Contains(want, cmd) {
+			extra = append(extra, cmd)
+		}
+	}
+	return missing, extra
+}
+
+func TestCommandIndexParserCatchesDrift(t *testing.T) {
+	t.Parallel()
+	sample := "## 1. Command index {#CLI-20}\n\n" +
+		"| Kind | Commands |\n|---|---|\n" +
+		"| Task CLI: tasks | `list`, `get`/`show`, `close`/`delete` |\n" +
+		"| Task CLI: deployment | `upgrade …`, `release approve\\|reject\\|rollback` |\n\n---\n"
+	missing, extra := compareCommandIndex(t, "sample.spec.md", sample, []string{"list", "get", "show", "close", "delete", "upgrade", "qa"})
+	if !slices.Equal(missing, []string{"qa"}) || !slices.Equal(extra, []string{"release"}) {
+		t.Fatalf("compareCommandIndex = missing %v, extra %v; want [qa], [release]", missing, extra)
+	}
+}
+
+func TestHostCLISpecCoversEveryCommandAndFlag(t *testing.T) {
+	if os.Getenv("GRAIN_UPDATE_CLI_SPEC") != "1" {
+		t.Parallel()
+	}
 	raw, err := os.ReadFile(hostSpecPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	spec := string(raw)
+	if os.Getenv("GRAIN_UPDATE_CLI_SPEC") != "1" {
+		missing, extra := compareCommandIndex(t, hostSpecPath, spec, hostSpecTopLevel(t))
+		for _, cmd := range missing {
+			t.Errorf("%s: #CLI-20 Command index omits %q, which main.go registers", hostSpecPath, cmd)
+		}
+		for _, cmd := range extra {
+			t.Errorf("%s: #CLI-20 Command index lists %q, which main.go does not register", hostSpecPath, cmd)
+		}
+	}
+	if testing.Short() {
+		t.Skip("runs the grain binary once per command")
+	}
+	tables := hostSpecTables(t)
 	if os.Getenv("GRAIN_UPDATE_CLI_SPEC") == "1" {
 		rendered := map[string]string{}
 		for path, flags := range tables {
@@ -568,6 +747,7 @@ func staticFlagNames(t *testing.T) map[string]string {
 // Every flag pkg/cli defines is named in the host spec somewhere -- in a
 // generated table or in the prose of a command whose usage is its own.
 func TestHostCLISpecNamesEveryDefinedFlag(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(hostSpecPath)
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,27 @@
+{
+  "id": "qa_stage",
+  "type": "qa_stage",
+  "version": 1,
+  "purpose": "guard",
+  "required": true,
+  "action": "change.merge",
+  "subject": {
+    "kind": "change",
+    "authority": "github.com",
+    "repository": "ai-on-gke/grain",
+    "change_kind": "pr",
+    "id": "1710"
+  },
+  "config": {
+    "stage": "s3",
+    "flow_revision": "approved-qa-flow/7",
+    "assignment": "shadow"
+  },
+  "freshness_seconds": 300,
+  "origin": {
+    "kind": "task",
+    "id": "57",
+    "revision": "1",
+    "imported": false
+  }
+}
