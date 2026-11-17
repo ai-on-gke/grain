@@ -1,6 +1,9 @@
 # grain reviews every pull request, and that review is the reviewed merge
 
-Status: proposed (task 6022). Design only: nothing here is built yet.
+**Status:** proposed (task 6022). Normative; design only: nothing here is built yet.
+
+**Specifies:** [`review-every-pr.design.md`](../../design/review-every-pr.design.md)
+
 Supersedes deferred task 4270 ("PR review watcher").
 
 Core publishes images only for commits that reached `main` (or `release/v*`)
@@ -139,11 +142,23 @@ Reviews are keyed by head (`path-trigger-head:<sha>`), and grain's approval is
 only ever of one head (§2):
 
 - **A push** that adds commits files a fresh review for the new head,
-  debounced as gating reviews already are. Where the old head is an ancestor
-  of the new one, the review re-reads only the new commits.
-- **A force-push**, where the old head is not an ancestor of the new one, gets
-  a full review of `base...head`. A rewritten history has no incremental diff
-  to trust.
+  debounced as gating reviews already are (`pathtriggerreview.go`). An
+  incremental review never starts merely from the previous head when that head
+  had unaddressed findings: otherwise pushing an unrelated commit `B` on top of
+  an unapproved head `A` could pass on `A..B` alone and cause grain to post
+  `APPROVE` for `B` while `B`'s tree still contains `A`'s findings (which the
+  reviewed-merge gate cannot catch, since it sees only the approval on `B`).
+  Instead, an incremental review starts at the **last ancestor head grain
+  approved**, or the last ancestor head whose findings were all accepted under
+  RP-10 (within the existing `incrementalReviewMaxFiles` and watched-path
+  bounds). When no such cleared ancestor head exists, grain either runs a full
+  `base...head` review, or carries the earlier ancestor head's open findings
+  forward onto the new head as blocking gates that must each be verified
+  resolved in the new tree by the re-review (or accepted under RP-10) before
+  grain approves.
+- **A force-push or rebase**, where the incremental base (or the previous head)
+  is not an ancestor of the new head, always gets a full review of
+  `base...head`. A rewritten history has no incremental diff to trust.
 - **A base change** (retargeting, or a merge of `main` into the branch) is a
   new head like any other.
 - grain **dismisses its own approval** of the old head as soon as it sees the
@@ -179,12 +194,28 @@ merge.
 
 When the gates for a head clear, grain submits an `APPROVE` review of that
 head (`commit_id` = head) from a dedicated **review identity**. The gates that
-must clear are: every review filed for it passed, every `human: required`
-trigger was released by a person, and the security review is clean where it
-applies. `reviewedmerge.Policy` gains `Reviewers []string`, the forge logins
-grain reviews as. Their approvals count whatever their `author_association`
-says. GitHub may report an App's association as `NONE`, which
-`countsAsReviewer` would otherwise drop.
+must clear are: every review filed for it passed (or had its findings accepted
+under RP-10), no open findings carried forward from an earlier unapproved head
+remain unresolved (RP-5), every `human: required` trigger was released by a
+person, and the security review is clean where it applies.
+
+In `pkg/reviewedmerge`:
+
+- `Policy` gains `Reviewers []string`, the forge logins grain reviews as. Their
+  approvals count whatever their `author_association` says (GitHub may report
+  an App's association as `NONE`, which `countsAsReviewer` would otherwise
+  drop), while still refusing self-approval and honouring any outstanding
+  `CHANGES_REQUESTED`.
+- `Pull` gains `MergedAt time.Time`, and `REST.PullsForCommit` parses and
+  retains `merged_at` (RFC 3339) instead of reading it only to set `Merged` and
+  discarding the timestamp (`rest.go`).
+- `Review` gains `ID int64` and `SubmittedAt time.Time`, and `REST.Reviews`
+  decodes `id` and `submitted_at` from `/pulls/{number}/reviews` alongside
+  `user.login`, `state`, `commit_id` and `author_association`.
+- `Merge` gains optional `Review int64` (`json:"review,omitempty"`, the
+  deciding review's `ID`) and `PostMerge bool` (`json:"post_merge,omitempty"`,
+  `true` when both `Pull.MergedAt` and the deciding `Review.SubmittedAt` are
+  non-zero and `Review.SubmittedAt.After(Pull.MergedAt)`, §4).
 
 - **What it trusts.** That only grain holds the review identity's key, and
   that grain approves only when its gates clear. This is the same trust
@@ -219,11 +250,13 @@ says. GitHub may report an App's association as `NONE`, which
   not the merged head. grain also dismisses its old approval when the head
   moves (RP-5).
 - **`GRAIN_MERGE_LOGINS`.** Unchanged. grain's own merges still pass as `Via:
-  "grain"`. An approved pull request that a person merges by hand passes as a
-  new `Via: "grain-review"`, with `By` set to the review login. The
-  attestation `Record` keeps `RecordType` v1: `Via` is already a string, and
-  the new `Merge` fields (`Review`, the review id, and `PostMerge`, §4) are
-  optional.
+  "grain"`. A collaborator's approval still passes as `Via: "review"`. An
+  approved pull request that a person merges by hand on grain's approval passes
+  as a new `Via: "grain-review"`, with `By` set to the review login (and `Via:
+  "grain-review"` wins when both grain and a collaborator approved the merged
+  head, so RP-13 does not count it as a human-only exception). The attestation
+  `Record` keeps `RecordType` v1: `Via` is already a string, and `Merge.Review`
+  and `Merge.PostMerge` (`omitempty`, §4) are optional.
 - **`pkg/upgrade/reviewed.go`.** `ReviewedMergeConfig.Policy.Reviewers` comes
   from a new daemon flag, `-upgrade-reviewed-merge-reviewers`, next to
   `-upgrade-reviewed-merge-logins`. The upgrade check reads only that flag,
@@ -322,18 +355,23 @@ proposed for a person to approve.
 ### The owner accepts findings (with task 4752) {#RP-10}
 
 Task 4752 ("Let the owner accept a review's findings as-is without
-force-merging") adds **Accept findings** to a gate with findings. Accepting
-records, for each finding, who accepted it, the head, and an optional note,
-then clears the review gate for that head. This doc adds one rule to it. **On
-an intake pull request, acceptance by the pull request's author does not clear
-the gate.** The person accepting must be a grain user with `merge:write` on
-the repository who is not the author, or the forge login linked to them must
-differ from the author's. Otherwise an author could clear their own findings
+force-merging") adds **Accept findings** (`POST /api/tasks/{id}/accept-findings`)
+to a gate with findings. Accepting records, for each finding or review gate,
+who accepted it, the head, and a reason, then clears the review gate for that
+head. This doc adds one rule to it. **On an intake pull request, acceptance by
+the pull request's author does not clear the gate.** The person accepting must
+hold `merge:write` on the repository **and** have a verified forge login linked
+to their grain account that differs (case-insensitively) from the pull request
+author's forge login. An acceptor with no linked forge login (including an
+unverified access-code or loopback operator) does not clear the gate on an
+intake pull request, because grain cannot verify that they are not the pull
+request's author. Otherwise an author with grain access could clear their own
+findings from an unlinked grain account (or one linked to the same forge login)
 and have grain approve the result.
 
-grain's approval body then says "findings accepted by <person>", and the
-`approved-as` event carries it. Task 4752 builds the acceptance; the
-author-is-not-acceptor rule lands with intake.
+grain's approval body then says "findings accepted by <person> (@<forge-login>)",
+and the `approved-as` event carries both identities. Task 4752 builds the
+acceptance; the author-is-not-acceptor rule lands with intake.
 
 ### How the author and the operator see the state {#RP-11}
 
@@ -376,12 +414,13 @@ branch. When `reviewedmerge` would refuse one, grain does the following:
 3. If the review is clean, grain posts its `APPROVE` on the merged pull
    request at the merged head. The forge accepts reviews on merged pull
    requests, which is how task 5591 cleared #1488–#1501. The gate then passes
-   it on its next run (`Via: "grain-review"`, `PostMerge: true`, because the
-   review's `submitted_at` is after `merged_at`).
+   it on its next run (`Via: "grain-review"`, `PostMerge: true`, derived from
+   `Review.SubmittedAt.After(Pull.MergedAt)` via §2a's `submitted_at` and
+   `merged_at` decoding).
 4. If the review has findings, nothing is approved. The notification says so
    and offers *Revert* (`grain git revert`), *Fix forward* (a task) or *Accept
-   findings*. Accepting, by someone other than the author, leads to the
-   approval as in RP-10.
+   findings*. Accepting under RP-10 (by a user with `merge:write` and a linked
+   forge login different from the author's) leads to the approval.
 
 This automates what task 5591 did by hand. It does not loosen the gate: a
 commit is still published only once a review vouched for it.
@@ -456,9 +495,12 @@ protection and App permissions. **The daemon** needs
    and false-positive findings for two weeks. Close task 4270.
 2. **Approve.** Create or reuse the App, set `review_credential`, and set
    `GRAIN_REVIEW_LOGINS=<app>[bot]` and the daemon flag. Land the `Reviewers`
-   support in `pkg/reviewedmerge`, `cmd/reviewed-merge`, `release-images.sh`
-   and `pkg/upgrade`. Then set `pr_intake: approve`. Post-merge reviews
-   (RP-12) turn on with it.
+   and post-merge timestamp support in `pkg/reviewedmerge` (`Policy.Reviewers`,
+   `Pull.MergedAt`, `Review.ID`, `Review.SubmittedAt`, `Merge.Review`,
+   `Merge.PostMerge`, and the `REST` decoding of `merged_at`, `id` and
+   `submitted_at`), plus `-reviewers` / `-upgrade-reviewed-merge-reviewers` in
+   `cmd/reviewed-merge`, `release-images.sh` and `pkg/upgrade`. Then set
+   `pr_intake: approve`. Post-merge reviews (RP-12) turn on with it.
 3. **Protect.** Turn on the §2a branch protection with no bypass, once open
    question 1 is answered. If App approvals do not count toward *Require
    approvals*, keep protection at "require pull request" and rely on the gate
@@ -492,9 +534,13 @@ Per repository, on `/metrics` and in `grain health`:
 
 - `grain_pr_intake_adopted_total{author_kind}`, review latency (head to
   verdict), and runs and cost per head;
-- `grain_pr_merges_total{via}`: `grain`, `grain-review`,
-  `grain-review-post-merge`, `person-review`, or `unreviewed`. The goal is
-  `unreviewed` = 0 and `person-review` falling;
+- `grain_pr_merges_total{via, post_merge}`: `via` uses the attestation's exact
+  `Merge.Via` strings (`grain`, `grain-review`, `review`, where `"review"` is
+  `pkg/reviewedmerge`'s existing value for a human collaborator's approval)
+  plus `unreviewed` when `reviewedmerge` refuses the merge (which emits no
+  `Merge` record); `post_merge` is `"true"` or `"false"`, mirroring
+  `Merge.PostMerge`. The goal is `via="unreviewed"` = 0 and `via="review"`
+  falling;
 - `grain_publish_held_seconds`: how long the gate held publishing because of
   an unreviewed merge;
 - `grain_pr_intake_budget_refusals_total`, and
