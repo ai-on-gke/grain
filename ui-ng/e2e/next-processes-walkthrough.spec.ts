@@ -126,23 +126,47 @@ test("schedule dialog surfaces validation errors inside the modal, enforces 10-m
 
   try {
     await page.goto(`processes/schedules/${offSched.id}`);
-    await expect(
-      page.getByText("· next: suppressed", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText("Next: suppressed", { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText("2027-")).toHaveCount(0);
+    await expect(page.getByTestId(`sched-next-${offSched.id}`)).toHaveText(
+      "· next: suppressed",
+    );
+    await expect(page.getByTestId("sched-detail-next")).toHaveText(
+      "Next: suppressed",
+    );
+    await expect(page.getByText(/\d{4}-\d{2}-\d{2}T/)).toHaveCount(0);
 
-    // Pause and resume the off-target suppressed schedule.
+    // Pause and resume the off-target suppressed schedule: paused claims no next run.
     await page.getByRole("button", { name: "Pause", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Resume", exact: true }),
     ).toBeVisible();
+    await expect(page.getByTestId(`sched-next-${offSched.id}`)).toHaveCount(0);
+    await expect(page.getByTestId("sched-detail-next")).toHaveCount(0);
     await page.getByRole("button", { name: "Resume", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Pause", exact: true }),
     ).toBeVisible();
+    await expect(page.getByTestId(`sched-next-${offSched.id}`)).toHaveText(
+      "· next: suppressed",
+    );
+
+    // An enabled time-based schedule formats its own nextRunAt rather than raw RFC 3339.
+    const schedules: Array<{ id: string; nextRunAt: string }> = await (
+      await page.request.get("/api/schedules")
+    ).json();
+    const sched2 = schedules.find((s) => s.id === "sched-2")!;
+    expect(sched2?.nextRunAt).toBeTruthy();
+    const expectedYear = String(new Date(sched2.nextRunAt).getFullYear());
+
+    await page.getByTestId("sched-row-sched-2").click();
+    const rowNext = page.getByTestId("sched-next-sched-2");
+    await expect(rowNext).toContainText(expectedYear);
+    await expect(rowNext).not.toContainText("T06:00");
+    await expect(rowNext).not.toHaveText(/\d{4}-\d{2}-\d{2}T/);
+
+    const detailNext = page.getByTestId("sched-detail-next");
+    await expect(detailNext).toContainText(expectedYear);
+    await expect(detailNext).not.toContainText("T06:00");
+    await expect(detailNext).not.toHaveText(/\d{4}-\d{2}-\d{2}T/);
 
     // Open New schedule and verify forbidden git_ref error renders inside the dialog.
     await page.getByRole("button", { name: "New schedule" }).click();
@@ -280,20 +304,67 @@ test("templates with required parameters preview without 400, workflow Run now c
   ).toBeVisible();
   expect(fourHundreds).toEqual([]);
 
-  // Start a suite run and verify direct URL /next/processes/suites/runs/<id>.
-  const runRes = await page.request.post("/api/suite-runs", {
-    data: { suiteId: "suite-1", repo: "acme/widgets", base: "main" },
+  // A required selector field (one with options) and no default must preview
+  // with its first option: a "{{name}}" placeholder is not one of its options,
+  // so the server would refuse it.
+  const selectorCreated = await page.request.post("/api/templates", {
+    data: {
+      name: "e2e-required-selector",
+      title: "Fix {{area}}",
+      description: "Please fix {{area}}.",
+      params: ["area"],
+      fields: [{ name: "area", required: true, options: ["alpha", "beta"] }],
+    },
   });
-  expect(runRes.ok()).toBe(true);
-  const run = await runRes.json();
+  expect(selectorCreated.ok()).toBe(true);
+  const selectorTmpl = await selectorCreated.json();
+  try {
+    await page.goto(`processes/templates/${selectorTmpl.id}`);
+    await expect(page.getByTestId("tmpl-detail-title")).toContainText(
+      "e2e-required-selector",
+    );
+    const inspector = page.getByTestId("proc-inspector");
+    await expect(inspector).toContainText("Composition preview");
+    await expect(inspector).toContainText("Fix alpha");
+    expect(fourHundreds).toEqual([]);
+  } finally {
+    await page.request.delete(`/api/templates/${selectorTmpl.id}`);
+  }
 
-  await page.goto(`processes/suites/runs/${run.id}`);
+  // Start a suite run through the UI, verify direct and legacy URLs round-trip
+  // to /next/processes/suites/runs/<id>, then cancel its open tasks.
+  await page.goto("processes/suites/suite-1");
+  await page.getByTestId("suite-open-run-dialog-btn").click();
+  await page.getByTestId("run-suite-submit").click();
+  await expect(page.getByTestId("suite-run-inspector")).toBeVisible();
+  const runsPayload = await (await page.request.get("/api/suite-runs")).json();
+  const runList: Array<{ id: number }> = Array.isArray(runsPayload)
+    ? runsPayload
+    : runsPayload.runs;
+  const runId = Math.max(...runList.map((r) => r.id));
+
+  await page.goto("inbox");
+  await page.goto(`processes/suites/runs/${runId}`);
   await expect(
     page.getByRole("heading", {
       level: 2,
-      name: new RegExp(`Release Qualification Suite · Run #${run.id}`),
+      name: new RegExp(`Release Qualification Suite · Run #${runId}`),
     }),
   ).toBeVisible();
+
+  await page.goto(`suites/runs/${runId}`);
+  await expect(page).toHaveURL(
+    new RegExp(`/next/processes/suites/runs/${runId}$`),
+  );
+  await expect(page.getByTestId("suite-run-inspector")).toContainText(
+    `Run #${runId}`,
+  );
+
+  await page.getByTestId("suite-run-cancel-btn").click();
+  const cancelConfirm = page.getByTestId("confirm-dialog");
+  await expect(cancelConfirm).toContainText(`suite run #${runId}`);
+  await cancelConfirm.getByRole("button", { name: "Stop suite tasks" }).click();
+  await expect(cancelConfirm).toBeHidden();
 });
 
 test(

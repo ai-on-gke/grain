@@ -358,7 +358,7 @@ Rules:
   open is reported inside that dialog, above its actions, with
   `role="alert"`; a page banner behind the scrim is not seen, and Save then
   looks like it did nothing. Opening a dialog clears an error left from
-  before (`ui-ng/e2e/next-processes-walkthrough.spec.js`).
+  before (`ui-ng/e2e/next-processes-walkthrough.spec.ts`).
 
 ## 5. Interaction
 
