@@ -4,6 +4,22 @@ Task #59 follows the merged Task #57 / ai-on-gke/grain#1710 design. Audit baseli
 2ed47263f. This is documentation/schema work, not endpoint implementation,
 configuration, rollout authorization or automatically filed phases.
 
+## Initial rollout boundary
+
+The first implementation/display increment may ship only two selected gates as
+read-only observations while legacy lifecycle and action logic remain authoritative.
+The [observation-only API/display subset](http-api.spec.md#initial-observation-only-apidisplay-subset)
+and closed observation_view schema define that contract. It may reuse the ordinary
+task read's optional gate_observations field; it need not implement the full future
+mutation/enforcement API, policy storage/authority handoff or protected adapters.
+Diagnostics never drive closure, dispatch, permissions, approvals or merging.
+The full API remains specified for later implementation.
+
+The operator's day-or-two comparison window does not authorize automatic cutover.
+A separate explicit decision plus the relevant handoff/admission qualification is
+required. The blockers below concern authoritative/enforced use; they are not a
+demand that the first two observation-only gates implement every listed subsystem.
+
 ## Gaps found and decisions made
 
 | Gap in merged specification | Normative resolution |

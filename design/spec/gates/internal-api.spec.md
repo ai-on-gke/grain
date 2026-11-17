@@ -802,3 +802,39 @@ Missing is unknown; failed/canceled is unmet for success-required children. A
 complete empty task-change set cannot vacuously satisfy integration: it is unmet
 unless an authorized explicit no-work contract disposition removes/waives that
 obligation. Read projections cannot omit an inconvenient child or linked change.
+
+
+## Observation-only controller use
+
+The same read-only evaluator boundary may initially be used only to compare two
+selected gates with legacy outcomes. Controller observation_view is a separate
+diagnostic projection, with legacy authority and all lifecycle/action/dispatch/
+automatic-cutover flags fixed false. Its bindings are monitors, its results carry
+no work/actions, and no decision or protected-action admission consumes those
+cached IDs. Wait descriptors can explain existing pending processes, but the
+observation controller must not register them as holds, escalation or task wakes. Observation cache/audit writes are diagnostic state, not evaluator
+private state or a lifecycle writer. Missing complete generations/freshness must be
+reported honestly as unknown/incomplete; they do not force implementation of the
+entire enforcement store before a read-only display can ship.
+
+Registry/config, read and result interfaces retain their definitions; the controller
+chooses observational use, not an evaluator-supplied authority claim. Existing
+legacy services continue to own state and actions. A later cutover requires a
+separately authorized handoff/admission, never a timeout or passing observation.
+See [the exact wire projection](http-api.spec.md#initial-observation-only-apidisplay-subset)
+and api.schema.json $defs.observation_view.
+
+```go
+type ObservationView struct {
+    APIVersion string // grain.gates/v1
+    Mode string // observation_only
+    Authority string // legacy
+    LifecycleEffects, ActionEffects, DispatchEffects, AutomaticCutover bool // all false
+    SourceRevision string
+    ComparedAt time.Time
+    LegacyState string
+    Bindings []Binding // purpose=monitor, required=false, action=null
+    Results []EvaluationState // diagnostics only, not decision inputs
+    Dirty bool
+}
+```

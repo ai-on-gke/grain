@@ -90,6 +90,20 @@ def semantic(operation, where, value, contracts, gate_semantic):
                 require(body[field] == materialize[field], "filing preview input mismatch")
         return
 
+    if value.get("mode") == "observation_only":
+        bindings = value["bindings"]
+        ids = [v["origin"]["kind"] + "/" + v["origin"]["id"] + "/" + v["id"]
+               for v in bindings]
+        require(len(ids) == len(set(ids)), "duplicate observation binding")
+        for binding in bindings:
+            gate_semantic("attachment", binding)
+        observed = [v["result"]["binding_id"] for v in value["results"]]
+        require(len(observed) == len(set(observed)) and set(observed) <= set(ids),
+                "observation result must identify exactly one visible monitor")
+        require(value["dirty"] or set(observed) == set(ids),
+                "missing observations require dirty=true and unknown display")
+    if "gate_observations" in value:
+        semantic("observation", "response", value["gate_observations"], contracts, gate_semantic)
     if operation in {"registry", "schema"}:
         descriptors = value["items"] if operation == "registry" else [value]
         names = []
@@ -240,6 +254,13 @@ def validate(gate_semantic):
         gate_semantic("context", context)
     for binding in bindings:
         gate_semantic("attachment", binding)
+
+    observation = json.loads((ROOT / "api-observation-example.json").read_text())
+    require(not check("observation_view", observation), "invalid read-only observation example")
+    semantic("observation", "response", observation, contracts, gate_semantic)
+    observation_task = json.loads((ROOT / "api-observation-task-example.json").read_text())
+    require(not check("task_response", observation_task), "invalid observation task projection")
+    semantic("task", "response", observation_task, contracts, gate_semantic)
 
     exchanges = json.loads((ROOT / "api-examples.json").read_text())
     require({e["operation"] for e in exchanges} == set(indexed) and

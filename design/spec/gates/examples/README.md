@@ -60,3 +60,13 @@ See the [gap audit, coverage matrix and implementation blockers](../api-readines
 before treating schema coverage as runtime or enforcement readiness.
 
 The [history folder](../history/README.md) retains the old MCP page/round/action-profile examples with an explicit deferred status. They are not templates for initial built-in admission.
+
+
+The initial read-only rollout may expose optional gate_observations on the ordinary
+task read without implementing the full future mutation/enforcement API.
+[api-observation-example.json](../api-observation-example.json) defines the complete
+observation-only sidecar; [api-observation-task-example.json](../api-observation-task-example.json)
+shows the optional full gate-read profile with separate diagnostic results and
+empty authoritative/action slots. The fixture's monitor choice is illustrative,
+not a selection of the rollout's two gate types. Legacy controls remain
+authoritative; no elapsed-time cutover or effect is enabled by these examples.

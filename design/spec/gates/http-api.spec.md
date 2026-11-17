@@ -87,6 +87,93 @@ arguments) are MCP errors without an HTTP operation: isError=true and a diagnost
 text, no claimed accepted operation or effect. Once dispatched, the HTTP failure
 body is authoritative. SSE clients use HTTP; agent tools use JSON/long-poll.
 
+## Initial observation-only API/display subset
+
+The initial implementation increment may expose only the two selected built-in
+gate observations and read-only UI/agent display, while legacy logic remains
+authoritative. The full future API below is still specified; implementing every
+registry, mutation, waiver, reevaluation, action or enforcement endpoint is **not**
+a prerequisite for this first increment. This document does not select or deploy
+the two gate types: the same closed catalogue/config schemas apply to the selected
+subset. The observation example is illustrative, not a rollout configuration.
+
+Existing GET /api/tasks/{id} (api_get_task, tasks:read, existing task/repository
+visibility) may add optional gate_observations to its ordinary TaskDetail response,
+without adding request fields or replacing other existing task fields.
+gate_observations MUST validate as api.schema.json $defs.observation_view;
+[api-observation-example.json](api-observation-example.json) is its complete value.
+This permits the existing task API and ordinary generated tool to carry the first
+read-only display without implementing the future view-dependent mutation schemas
+or a separate agent API. The existing legacy-state projection remains authoritative.
+
+If the future GET /api/tasks/{id}?view=gates profile is exposed during this stage,
+it MUST use the same gate_observations value, authority=legacy,
+contract=decision=null, and empty top-level results/actions/exceptions as shown in
+[api-observation-task-example.json](api-observation-task-example.json).
+No observation result is published in an authoritative decision/result slot.
+Normal GET callers that do not support the additive field keep existing behavior.
+Omitting gate_observations means no observation projection is available, not that
+gates passed or were waived. A configured monitor with no cached result must be
+shown as unknown/pending collection with dirty=true; it cannot silently disappear
+into an apparently complete comparison. Other new read endpoints are optional conveniences
+for the first increment; unimplemented proposed routes are not advertised as
+available. Any full-index endpoint that is advertised must still honor its exact
+schema/authority contract; the ordinary task read plus sidecar is sufficient and
+does not require the full discovery catalogue to be implemented first. No gate
+mutation or enforcement endpoint is required in that increment.
+
+Every observation has explicit mode=observation_only, authority=legacy,
+lifecycle_effects=false, action_effects=false, dispatch_effects=false and
+automatic_cutover=false. source_revision identifies the compared legacy fact set;
+compared_at is its comparison time, and legacy_state is the legacy projection at
+that time. Existing TaskDetail state remains current authority if it has moved
+since. bindings are monitor-only (required=false, action=null), not newly admitted
+completion obligations or resource guards. Controller-derived provenance/config
+pins may be copied from existing legacy fields for comparison without creating a
+gate contract, migrating a task or exposing configuration mutation APIs.
+
+Observation results retain type/version, status, summary, evidence/dependency
+versions, collection/freshness and invalidation metadata. disposition=accepted here
+means a validated diagnostic observation, never an authoritative predicate or
+permit. Unavailable/denied/incomplete/stale evidence remains unknown/error or
+invalidated with safe display text; do not fabricate completeness, source time or
+authority. Missing version/freshness support may therefore limit diagnostics
+without requiring lifecycle/policy storage or enforcement to be implemented first.
+The controller MUST preserve observation-only provenance with cached results and
+reject their IDs as authoritative completion/action evidence. A later admitted
+evaluation may read the original domain facts under its own fresh authorized
+context; it cannot promote the sidecar's old results by copying them.
+
+Observation results MUST have empty work/actions arrays. Wait descriptors may
+identify an existing pending process/deadline for display, as BG-3 requires; they
+MUST NOT be registered as new task waits, holds, escalation or dispatch triggers.
+Existing collectors or display refresh may update diagnostic cache/versions; they MUST NOT install
+task holds, dispatch remediation, ask questions, grant permissions, process
+messages, acknowledge reports, alter goals/dependencies/counters, close/rest/reopen
+tasks, set approval/AutoMerge, change merge-queue decisions or invoke protected
+effects because of these observations. Existing legacy actions and authorization
+continue under their existing rules. The UI and agent MUST label these results
+“Observation only; legacy controls remain authoritative”, keep observed status
+separate from actual task/action readiness, and render no gate-driven mutation or
+enforcement buttons. A met observation never enables a legacy action; an
+unmet/unknown observation never disables one that legacy policy would allow.
+
+This initial shadow profile is distinct from admission of a built-in-protected
+resource cohort. action_preview.coverage=observation_only still means that the
+**new built-in-protected execution** path is unavailable; if that preview is
+implemented, available=false and its new submission action is disabled.
+It does not switch off existing legacy actions during the unconverted display
+increment or claim that those actions have a new enforcement guarantee.
+Existing separately admitted resource guards, if any, retain their own authority;
+diagnostic observations cannot add, remove or bypass them.
+
+The operator may inspect comparisons for a day or two before deciding whether to
+cut over. That is an observation window, not a timer-based rollout rule. Elapsed
+time, successful diagnostics or an evaluator retry MUST NOT activate mutations,
+migrate authority/epochs or enable action enforcement. Any cutover requires a
+separate explicit operator decision, authorized conditional handoff/admission and
+the applicable qualification in api-readiness.md. This PR changes no live settings.
+
 ## Authentication, authority and permission requests
 
 Scopes in the index are minimums, intersected with repository/task grants and current
@@ -270,9 +357,11 @@ dependency union, current expiry and no dirty gap can contribute; invalidated me
 is history. task_view.blockers also includes controller-owned pending questions,
 permissions, acknowledgment, child failures, live operations and message fences.
 The decision and legacy_state are projections, never writable completion authority.
-Legacy tasks return authority=legacy, contract/decision=null, results=[] unless
-shadow monitoring is explicitly installed. They retain existing concrete goal and
-finish semantics. Resource action policy still applies independently.
+Legacy completion-only tasks return authority=legacy and contract/decision=null.
+Initial shadow monitoring uses the separate gate_observations projection above,
+with empty authoritative result/action slots; it retains existing concrete goal
+and finish semantics. Separately admitted resource action policy still applies
+independently and must not be inferred from diagnostic observations.
 
 Reevaluate records an operation and marks selected bindings dirty; [] selects all.
 It does not launch an agent, CI or review, approve/merge, process messages or close

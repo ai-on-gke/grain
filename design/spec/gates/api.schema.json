@@ -710,6 +710,9 @@
         },
         "dirty": {
           "type": "boolean"
+        },
+        "gate_observations": {
+          "$ref": "#/$defs/observation_view"
         }
       },
       "required": [
@@ -727,6 +730,37 @@
         "actions",
         "legacy_state",
         "dirty"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "gate_observations"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authority": {
+                "const": "legacy"
+              },
+              "contract": {
+                "type": "null"
+              },
+              "decision": {
+                "type": "null"
+              },
+              "results": {
+                "maxItems": 0
+              },
+              "actions": {
+                "maxItems": 0
+              },
+              "exceptions": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
       ]
     },
     "history_item": {
@@ -5351,6 +5385,117 @@
       "required": [
         "content",
         "isError"
+      ]
+    },
+    "observation_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "grain.gates/v1"
+        },
+        "mode": {
+          "const": "observation_only"
+        },
+        "authority": {
+          "const": "legacy"
+        },
+        "lifecycle_effects": {
+          "const": false
+        },
+        "action_effects": {
+          "const": false
+        },
+        "dispatch_effects": {
+          "const": false
+        },
+        "automatic_cutover": {
+          "const": false
+        },
+        "source_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "compared_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "legacy_state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "contracts.schema.json#/$defs/attachment"
+              },
+              {
+                "properties": {
+                  "purpose": {
+                    "const": "monitor"
+                  },
+                  "required": {
+                    "const": false
+                  },
+                  "action": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/evaluation_state"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "properties": {
+                      "work": {
+                        "maxItems": 0
+                      },
+                      "actions": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "api_version",
+        "mode",
+        "authority",
+        "lifecycle_effects",
+        "action_effects",
+        "dispatch_effects",
+        "automatic_cutover",
+        "source_revision",
+        "compared_at",
+        "legacy_state",
+        "bindings",
+        "results",
+        "dirty"
       ]
     }
   }
