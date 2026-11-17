@@ -165,25 +165,26 @@ async function nextFrames(page) {
   );
 }
 
-// settledField waits until field is attached, enabled and is the same
+// settledField waits until field is attached, enabled (unless only to be
+// read: a ticked fixed-value checkbox stays disabled) and is the same
 // element across two frames -- not re-mounted -- once the schema request
 // is done. The locator is resolved afresh on each read, so an element
 // replaced under it carries no mark and the wait goes round again.
-async function settledField(page, field) {
+async function settledField(page, field, { enabled = true } = {}) {
   await grantsSettled(page);
   await expect(async () => {
     await expect(field).toBeAttached({ timeout: 2_000 });
-    await expect(field).toBeEnabled({ timeout: 2_000 });
+    if (enabled) await expect(field).toBeEnabled({ timeout: 2_000 });
     const mark = `${Date.now()}-${Math.random()}`;
     await field.evaluate((el, m) => (el.__matrixSettled = m), mark);
     await nextFrames(page);
-    await expect(field).toBeEnabled({ timeout: 0 });
+    if (enabled) await expect(field).toBeEnabled({ timeout: 0 });
     expect(await field.evaluate((el) => el.__matrixSettled)).toBe(mark);
   }).toPass({ timeout: 15_000 });
 }
 
 async function readField(page, field) {
-  await settledField(page, field);
+  await settledField(page, field, { enabled: false });
   return field.inputValue();
 }
 
@@ -191,16 +192,20 @@ async function readField(page, field) {
 // again if a re-render took the value away before it showed.
 async function fillSettled(page, field, value) {
   await expect(async () => {
+    await settledField(page, field, { enabled: false });
+    if ((await field.inputValue()) === value) return;
     await settledField(page, field);
-    if ((await field.inputValue()) !== value) await field.fill(value);
+    await field.fill(value);
     await expect(field).toHaveValue(value, { timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
 }
 
 async function checkSettled(page, box, checked) {
   await expect(async () => {
+    await settledField(page, box, { enabled: false });
+    if ((await box.isChecked()) === checked) return;
     await settledField(page, box);
-    if ((await box.isChecked()) !== checked) await box.click();
+    await box.click();
     if (checked) await expect(box).toBeChecked({ timeout: 1_000 });
     else await expect(box).not.toBeChecked({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
@@ -229,8 +234,9 @@ async function pickMuiSelect(page, section, selector, wantValue) {
   // click never lands on this one's fading backdrop.
   await expect(async () => {
     if ((await combo.getAttribute("aria-expanded")) !== "true") {
-      await settledField(page, hidden);
+      await settledField(page, hidden, { enabled: false });
       if ((await hidden.inputValue()) === wantValue) return;
+      await settledField(page, hidden);
       await combo.click({ timeout: 2_000 });
     }
     await option.click({ timeout: 2_000 });
@@ -289,7 +295,7 @@ async function fillField(
             : typeof options[idx] === "string"
               ? enumLabels[options[idx]] || options[idx]
               : JSON.stringify(options[idx]);
-        await settledField(page, box);
+        await settledField(page, box, { enabled: false });
         await chooseOption(box, wantVal === "" ? "Not set" : labelText);
         return;
       }
