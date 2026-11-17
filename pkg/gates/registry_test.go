@@ -38,6 +38,10 @@ func TestRegistryClosedProfilesAndSchemaPins(t *testing.T) {
 		{"acknowledgment", 1, `{"mode":"explicit_receipt","mode":"explicit_receipt"}`, false},
 		{"acknowledgment", 1, `{"mode":"explicit_receipt","callback":"secret"}`, false}, {"acknowledgment", 1, `{"mode":"explicit_receipt"} {}`, false},
 		{"delivery", 1, `null`, false}, {"acknowledgment", 1, `{"mode":null}`, false},
+		{"acknowledgment", 1, `{"Mode":"explicit_receipt"}`, false},
+		{"acknowledgment", 1, `{"mode":"legacy_report","MODE":"explicit_receipt"}`, false},
+		{"delivery", 1, `{"Product":"report","semantics":"current_v1"}`, false},
+		{"delivery", 1, `{"product":"change","PRODUCT":"report","semantics":"current_v1"}`, false},
 	} {
 		_, err := Validate(tc.typ, tc.v, []byte(tc.raw))
 		if (err == nil) != tc.valid {

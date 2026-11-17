@@ -53,7 +53,18 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	if version != 1 {
 		return nil, fmt.Errorf("unsupported gate version")
 	}
+	var allowedKeys map[string]bool
+	switch typ {
+	case "delivery":
+		allowedKeys = map[string]bool{"product": true, "semantics": true}
+	case "acknowledgment":
+		allowedKeys = map[string]bool{"mode": true}
+	default:
+		return nil, fmt.Errorf("unregistered gate type")
+	}
 	// Decode tokens separately so duplicate keys are rejected, not last-wins.
+	// encoding/json matches struct fields without regard to case, so enforce
+	// the closed schema's exact property names before typed decoding.
 	d := json.NewDecoder(bytes.NewReader(raw))
 	tok, err := d.Token()
 	if err != nil || tok != json.Delim('{') {
@@ -68,6 +79,9 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		k, ok := t.(string)
 		if !ok || keys[k] {
 			return nil, fmt.Errorf("duplicate config key")
+		}
+		if !allowedKeys[k] {
+			return nil, fmt.Errorf("unknown config key")
 		}
 		keys[k] = true
 		var v any
