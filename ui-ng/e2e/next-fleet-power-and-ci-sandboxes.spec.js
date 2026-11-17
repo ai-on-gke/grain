@@ -71,7 +71,7 @@ test("Fleet offers Reboot host and Shut down host only where /api/config enables
   expect(posts).toEqual([]);
 });
 
-test("Reboot host and Shut down host confirm first and report a request the host accepted", async ({
+test("Reboot host and Shut down host confirm first and report a request the host accepted @phone", async ({
   page,
   axe,
 }) => {
@@ -85,6 +85,20 @@ test("Reboot host and Shut down host confirm first and report a request the host
   const shutdown = page.getByTestId("host-shutdown-btn");
   await expect(reboot).toHaveText("Reboot host");
   await expect(shutdown).toHaveText("Shut down host");
+
+  // Each button sits inside the card, which fits the page at any width.
+  const card = page.getByTestId("fleet-host-power-card");
+  const cardBox = await card.boundingBox();
+  const viewport = page.viewportSize();
+  expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(viewport.width + 1);
+  for (const btn of [reboot, shutdown]) {
+    const b = await btn.boundingBox();
+    expect(b.x).toBeGreaterThanOrEqual(cardBox.x);
+    expect(b.x + b.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1);
+  }
+  expect(
+    await card.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+  ).toBe(true);
 
   // Cancelling sends nothing.
   await reboot.click();
