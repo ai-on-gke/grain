@@ -1,0 +1,22 @@
+{
+  "evaluation_id": "eval-1",
+  "binding_id": "task/57/checks",
+  "task_id": "57",
+  "attempt_id": "57-2",
+  "subject": {
+    "kind": "change",
+    "authority": "github.com",
+    "repository": "ai-on-gke/grain",
+    "change_kind": "pr",
+    "id": "1710"
+  },
+  "head": "H1",
+  "resource_version": "pr-v3",
+  "contract_revision": 1,
+  "authority_epoch": 1,
+  "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "authorization_revision": 4,
+  "implementation": "grain/build-1/checks-v1",
+  "now": "2026-11-17T00:15:00Z",
+  "deadline": "2026-11-17T00:15:10Z"
+}

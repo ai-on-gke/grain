@@ -157,7 +157,7 @@ UI's "Pause"/"Resume" button rather than "Delete" for that case.
   following `SecretsPanel.jsx`'s pattern exactly, opened from a new
   sidebar entry alongside Settings. A task the overlay's own
   schedule fired shows a "Scheduled" badge in the ordinary task list
-  (`Task.Scheduled`, off `Origin.Reason == ReasonSchedule` — the same
+  (`Task.Scheduled`, off `Filing.Reason == ReasonSchedule` — the same
   treatment `Task.Stacked` already gives `ReasonFix`).
 
 ## Tests present
@@ -213,7 +213,7 @@ fired."** `model.Schedule.Interval` (a bare `time.Duration`) is
 replaced by `Recurrence` (`pkg/model/schedule.go`), a small sum type: `Kind`
 is one of `RecurrenceEveryNHours`, `RecurrenceDaily`, `RecurrenceWeekly`, or
 `RecurrenceMonthly`, and the fields that apply depend on which -- the same
-"column per case, most left unset" shape `Task.Origin`/`Task.Approval`
+"column per case, most left unset" shape `Task.Filing`/`Task.Approval`
 already use for a different sum type. `Recurrence.Next(after)` is the
 whole of the new logic: the first occurrence strictly after `after`,
 wall-clock aligned for the three new kinds (a calendar month is not a
@@ -1809,18 +1809,37 @@ its release triage task (#4256) was open, and the release train
 (`schedule.skip_when`, schema version 141), declared
 `skip-when: publishing-held`, holds such a schedule:
 
-- **Check.** `Store.publishingHold` asks `BaseBranchPublishingFindings` --
+- **Check.** `Store.PublishingHold` asks `BaseBranchPublishingFindings` --
   the reading deployment health shows -- for a `Gated` finding with a
   triage task on the repository the firing goes into and its base branch.
   `fireTaskSchedule`, `fireSuiteSchedule` and `fireWorkflowSchedule` ask it
   after their overlap checks, cadence firings only; Run now is not held.
   The `github_workflow_run` trigger drops and records its firing
   (`PublishingHeldSkip`).
+- **Split hold while an rc is in qualification.** Promoting or dropping a
+  release candidate already in qualification (`vX.Y.Z-rc.N` with neither a
+  `-discarded` marker nor a `vX.Y.Z` tag) does not depend on `main`'s
+  newest commit publishing. Before holding a `SkipWhenPublishingHeld`
+  schedule, `reconcileSchedule` and `fireOneGitHubWorkflowRunSchedule`
+  check `qualifyingRCForRepo`; while an rc is in qualification, a
+  release-train schedule (`isReleaseTrainSchedule`; no other) still fires (`FireScheduleUnderPublishingHold`, keeping overlap
+  and overlap-group holds in force) so `scripts/release-train-task.sh` can
+  run Phase 1 (`RELEASE_TRAIN_PHASES=judge,release`,
+  `RELEASE_TRAIN_HOLD=publishing`) and skip only cut
+  (`held=publishing (cut skipped)`). Once no rc is in qualification, the
+  hold applies as usual.
 - **Record.** `SuppressedByPublishingHeld` (`publishingHeld`), with the
   triage task in `TaskID`: `skipped at <time>: publishing held by task N
   (<repo> <branch> has published nothing since <time>)`. One row per
-  occurrence, as for an overlap skip; it is never escalated as starved and
-  never noted on the triage task.
+  occurrence, as for an overlap skip; never noted on the triage task.
+- **Stale and starved reporting.** `Store.StaleSchedules` marks a
+  deliberately held schedule with `Held: true`, `HeldByTaskID: <triage
+  task>` and `Reason: "held: publishing held by task N (...)"` (shown by
+  `grain health` under `WARNING: schedules deliberately held:` instead of
+  failing exit 1). `Store.EscalateStarvedScheduleBlocker` returns
+  `DeliberatelyHeld: true` naming the triage task without raising priority
+  or `pipeline.schedule-starved`, and `checkReleaseLoopIdle` stands down
+  while `describeReleaseTrainTick` names the holding triage task.
 - **Resume.** Held, not dropped: `NextRunAt` stays, and the first cycle
   after the triage task closes fires once and records the occurrence as
   fired late.

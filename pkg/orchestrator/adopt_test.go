@@ -133,6 +133,10 @@ func TestResumeAdoptedRunCarriesTheRunToItsEnd(t *testing.T) {
 	if err := store.SetSpoolCursor(ctx, d.RunID, 6, time.Now().UTC().Add(-90*time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	// What the run is on, which its task -- naming neither -- does not say.
+	if err := store.SetRunModel(ctx, d.RunID, "opus-y", model.AgentFrameworkAntigravity); err != nil {
+		t.Fatal(err)
+	}
 
 	// The previous daemon's sandbox, and a stray one nothing claims.
 	sandboxDir := t.TempDir()
@@ -202,9 +206,13 @@ func TestResumeAdoptedRunCarriesTheRunToItsEnd(t *testing.T) {
 
 	fw := parsingFramework{parsed: make(chan string, 1), earlier: make(chan string, 1), result: toolResult(agent.ToolCall{
 		Name: "comment_on_issue", Arguments: map[string]any{"comment": "done"}})}
+	var built orchestrator.AgentChoice
 	deps := orchestrator.Deps{Store: store, Client: client, Sandboxes: sandboxes,
-		Framework: orchestrator.StaticFramework(fw),
-		Config:    orchestrator.Config{TranscriptDir: transcripts, Capabilities: model.NewCapabilityRegistry(capability)}}
+		Framework: func(_ context.Context, choice orchestrator.AgentChoice) (agent.Framework, error) {
+			built = choice
+			return fw, nil
+		},
+		Config: orchestrator.Config{TranscriptDir: transcripts, Capabilities: model.NewCapabilityRegistry(capability)}}
 	host := &runhost.Host{Driver: driver, Deployment: "d", Poll: 5 * time.Millisecond}
 	var tail []byte
 	host.OnCursor = func(context.Context, string, int64) {
@@ -212,6 +220,9 @@ func TestResumeAdoptedRunCarriesTheRunToItsEnd(t *testing.T) {
 	}
 	if err := orchestrator.ResumeAdoptedRun(ctx, deps, host, adopted[0]); err != nil {
 		t.Fatalf("ResumeAdoptedRun: %v", err)
+	}
+	if built.Framework != model.AgentFrameworkAntigravity || built.Model != "opus-y" {
+		t.Fatalf("the framework was built for %+v, want the run's own opus-y on antigravity", built)
 	}
 	if got := <-fw.parsed; got != "line1\nline2\n" {
 		t.Fatalf("the framework parsed %q, want the whole spool", got)

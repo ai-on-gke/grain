@@ -38,6 +38,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -302,6 +303,10 @@ func updatedCustomFields(ctx context.Context, c *ui.HTTPClient, id string, flags
 // asked: help is not worth failing over, and every flag it describes
 // goes on working.
 func declaredFieldHelp(ctx context.Context, c *ui.HTTPClient) string {
+	// Help that waits out the client's whole retry budget for a daemon
+	// that is not there is worse than help that is short.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	fields, err := c.CustomFields(ctx)
 	if err != nil || len(fields) == 0 {
 		return ""

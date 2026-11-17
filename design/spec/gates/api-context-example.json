@@ -1,0 +1,85 @@
+{
+  "api_version": "grain.gates/v1",
+  "contexts": [
+    {
+      "evaluation_id": "eval-1",
+      "binding_id": "task/57/checks",
+      "task_id": "57",
+      "attempt_id": "57-2",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "resource_version": "pr-v3",
+      "contract_revision": 1,
+      "authority_epoch": 1,
+      "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "authorization_revision": 4,
+      "implementation": "grain/build-1/checks-v1",
+      "now": "2026-11-17T00:15:00Z",
+      "deadline": "2026-11-17T00:15:10Z"
+    }
+  ],
+  "bindings": [
+    {
+      "id": "checks",
+      "type": "checks",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "config": {
+        "mode": "effective",
+        "extra_jobs": [],
+        "empty": "unknown",
+        "semantics": "current_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    }
+  ],
+  "actor": {
+    "id": "automation/merge-queue",
+    "kind": "automation",
+    "delegated_by": null
+  },
+  "read_scope": {
+    "task_ids": [
+      "57"
+    ],
+    "subjects": [
+      {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      }
+    ],
+    "repository_refs": [],
+    "authorization_revision": 4
+  },
+  "source_revisions": [
+    {
+      "source": "task/57",
+      "revision": "1"
+    }
+  ],
+  "registry_digest": "sha256:f61b811db2c6c4c4997bd1c0ecbf73c3468102f31fe793c0218ef7e7be03b918"
+}

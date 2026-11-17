@@ -311,4 +311,42 @@ g-sessions-page {
   .cap-note {
     margin-left: 0;
   }
+  /* The chat head, grants row and fresh-chat note wrap to several rows
+     here and, on a short phone, left the conversation 40px or pushed the
+     composer under the bottom bar. The pane scrolls as a whole instead:
+     the log keeps room for its messages and the composer stays pinned at
+     the pane's foot, Send on screen. */
+  .sessions-split.is-chat-open .chat-pane {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .chat-pane .chat-log {
+    flex: 1 0 0;
+    min-height: min(18rem, 45dvh);
+  }
+  .chat-pane .chat-composer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+  }
+}
+
+/* A message the server has not taken yet (sending, queued, not sent). */
+.msg.is-pending {
+  border-style: dashed;
+}
+
+.msg.is-failed {
+  border-color: var(--md-sys-color-error);
+}
+
+.msg-send-error {
+  margin: 6px 0 0;
+  color: var(--md-sys-color-error);
+}
+
+.msg-send-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
 }

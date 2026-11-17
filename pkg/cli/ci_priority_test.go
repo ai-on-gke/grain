@@ -87,7 +87,7 @@ func queuedTaskLinkedToAPullRequest(t *testing.T, ctx context.Context, store *mo
 	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "do the thing", Body: "please",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval:  &model.Attribution{Actor: human},
 		Target:    &repo,
 		Binding:   model.BindingDirective,

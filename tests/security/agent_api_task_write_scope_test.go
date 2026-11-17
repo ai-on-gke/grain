@@ -502,7 +502,7 @@ func TestSandboxChannelTaskWriteDoesNotReturnTaskRecord(t *testing.T) {
 			ID:     taskID,
 			Intent: model.IntentImplement,
 			Title:  "runner " + taskID,
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}},
 				Reason:      model.ReasonDirect,
 			},

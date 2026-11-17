@@ -65,7 +65,7 @@ func openStore(t testing.TB) (*model.Store, *sql.DB, context.Context) {
 func task(id string, approved bool) model.Task {
 	t := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "Rename the endpoint",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},
@@ -632,7 +632,7 @@ func TestAReviewWithNothingToLandStillReadsCompleted(t *testing.T) {
 	}
 
 	if got := stateOfReview("c3d4", func(tk *model.Task) {
-		tk.Origin.Reason = model.ReasonReview
+		tk.Filing.Reason = model.ReasonReview
 	}); got != model.StateCompleted {
 		t.Errorf("a review grain filed itself = %q, want %q", got, model.StateCompleted)
 	}
@@ -3667,7 +3667,7 @@ func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
 	session := task("sess1", true)
-	session.Origin.Reason = model.ReasonConsoleSession
+	session.Filing.Reason = model.ReasonConsoleSession
 	session.Interactive = true
 	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
 	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
@@ -3749,11 +3749,11 @@ func TestStartRunRefusesToExceedTheConcurrencyLimit(t *testing.T) {
 }
 
 // fixTask is a task the merge queue filed to repair a stuck queue head
-// (Origin.Reason == ReasonFix) -- the one kind whose runs count against
+// (Filing.Reason == ReasonFix) -- the one kind whose runs count against
 // model.Limits.Mergers rather than against the worker ceiling.
 func fixTask(id string) model.Task {
 	t := task(id, true)
-	t.Origin.Reason = model.ReasonFix
+	t.Filing.Reason = model.ReasonFix
 	return t
 }
 
@@ -4935,7 +4935,7 @@ func TestMoveToFrontOfBacklogStaysBehindAFixTaskAtTheHead(t *testing.T) {
 	store, _, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10, "queued": 20})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = -10
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)
@@ -4959,7 +4959,7 @@ func TestMoveToFrontOfBacklogIgnoresAFixTaskInsideTheBacklog(t *testing.T) {
 	store, _, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10, "queued": 30})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = 20
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)
@@ -5000,7 +5000,7 @@ func TestMoveToFrontOfBacklogRebalancesWhenTheFrontIsCrowded(t *testing.T) {
 	store, db, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10, "queued-1": 20, "queued-2": 30})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = 9.99999999
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)
@@ -5030,7 +5030,7 @@ func TestMoveToFrontOfBacklogRejectsAnUnknownID(t *testing.T) {
 }
 
 // TestReadyDispatchesAFixTaskInBacklogOrderLikeAnythingElse pins the
-// carve-out Store.Ready used to make for Origin.Reason == ReasonFix being
+// carve-out Store.Ready used to make for Filing.Reason == ReasonFix being
 // gone: a fix task is dispatched first because it was filed at the head
 // of the backlog, and one a human has since dragged behind other work
 // waits its turn there like anything else. Dispatch order is the order on screen, both ways round.
@@ -5039,7 +5039,7 @@ func TestReadyDispatchesAFixTaskInBacklogOrderLikeAnythingElse(t *testing.T) {
 	store, _, ctx := openStore(t)
 	putOrdered(t, store, ctx, map[string]float64{"ordinary": 10})
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	fix.OrderKey = 20
 	if err := store.PutTask(ctx, fix); err != nil {
 		t.Fatal(err)

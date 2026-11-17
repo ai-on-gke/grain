@@ -21,14 +21,12 @@ package cli
 import (
 	"context"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -36,16 +34,8 @@ import (
 // out of the rotation.
 func modelPoolServer(t *testing.T) string {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	if err := store.PutConfig(ctx, model.Config{AgentBackends: []model.AgentBackend{
 		{ID: "codex-day", Name: "Day account", Framework: model.AgentFrameworkCodex},
 		{ID: "claude-deep", Name: "Deep account", Framework: model.AgentFrameworkClaude, Disabled: true},
@@ -97,16 +87,7 @@ func TestCreateRefusesAModelThisDeploymentDoesNotHave(t *testing.T) {
 
 func TestCreateOnANonGitHubHostWithNoConnectionDoesNotMentionGitHub(t *testing.T) {
 	t.Parallel()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	creds, err := gitproxy.LoadCredentialSet(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
