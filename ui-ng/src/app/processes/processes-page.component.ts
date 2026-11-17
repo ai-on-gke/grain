@@ -1027,7 +1027,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1340,7 +1340,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1540,7 +1540,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1560,7 +1560,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-tonal"
-                          (click)="selectSuite(sr.suiteId, false)"
+                          (click)="selectSuite(sr.suiteId, true)"
                         >
                           Inspect suite definition
                         </button>
@@ -1664,7 +1664,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1807,7 +1807,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -3719,8 +3719,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return t ? t.name || t.title || t.id : "Select template";
   });
 
+  private writingQ = 0;
   private handledDeepLinkKey = "";
   private handledItemLinkKey = "";
+  private handledItemTab: ProcessTab | null = null;
+  private missingItemError: string | null = null;
 
   constructor() {
     afterNextRender(() => this.sp.attach());
@@ -3731,11 +3734,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     // in flight, the ?q= it passes through is an echo of what was typed,
     // possibly already overtaken by the next keystroke, so it must not
     // refill the box.
-    let writingQ = 0;
     effect(() => {
       const q = this.q() ?? "";
       untracked(() => {
-        if (writingQ === 0 && q !== this.filter.query()) {
+        if (this.writingQ === 0 && q !== this.filter.query()) {
           this.filter.query.set(q);
         }
       });
@@ -3744,14 +3746,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const typed = this.filter.query();
       untracked(() => {
         if (typed === (this.q() ?? "")) return;
-        writingQ++;
+        this.writingQ++;
         void this.router
           .navigate([], {
             queryParams: { q: typed || null },
             queryParamsHandling: "merge",
             replaceUrl: true,
           })
-          .finally(() => writingQ--);
+          .finally(() => this.writingQ--);
       });
     });
 
@@ -3761,15 +3763,33 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const tab = this.activeTab();
       const item = this.itemId();
       const run = this.runId();
-      const key = `${loaded}:${tab}:${item ?? ""}:${run ?? ""}`;
+      const key = this.itemLinkKey(tab, item, run);
       untracked(() => {
         if (!loaded) return;
         if (!item && !run) {
+          const prevTab = this.handledItemTab;
           this.handledItemLinkKey = "";
+          this.handledItemTab = null;
+          if (prevTab) {
+            this.mobileDetailOpen.set(false);
+            this.clearMissingItemError();
+            if (prevTab === "schedules") {
+              this.selectedScheduleId.set(null);
+              this.scheduleComposition.set(null);
+            } else if (prevTab === "templates") {
+              this.selectedTemplateId.set(null);
+              this.templateComposition.set(null);
+            } else if (prevTab === "suites") {
+              this.selectedSuiteRunId.set(null);
+              this.selectedSuiteId.set(null);
+              this.suiteComposition.set(null);
+            }
+          }
           return;
         }
         if (key === this.handledItemLinkKey) return;
         this.handledItemLinkKey = key;
+        this.handledItemTab = tab;
         if (run) {
           this.suitesView.set("runs");
           const parsed = Number(run);
@@ -3778,46 +3798,49 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
             parsed > 0 &&
             this.store.suiteRuns().some((r) => r.id === parsed)
           ) {
-            this.selectSuiteRun(parsed, true);
+            this.selectSuiteRun(parsed, true, false);
           } else {
-            this.store.actionError.set(`No suite run "${run}".`);
+            this.setMissingItemError(`No suite run "${run}".`);
           }
           return;
         }
         if (!item) return;
         if (tab === "schedules") {
           if (this.store.schedules().some((s) => s.id === item)) {
-            this.selectSchedule(item, true);
+            this.selectSchedule(item, true, false);
           } else {
-            this.store.actionError.set(`No schedule "${item}".`);
+            this.setMissingItemError(`No schedule "${item}".`);
           }
         } else if (tab === "templates") {
           if (this.store.templates().some((t) => t.id === item)) {
-            this.selectTemplate(item, true);
+            this.selectTemplate(item, true, false);
           } else {
-            this.store.actionError.set(`No template "${item}".`);
+            this.setMissingItemError(`No template "${item}".`);
           }
         } else if (tab === "suites") {
           this.suitesView.set("suites");
           if (this.store.suites().some((s) => s.id === item)) {
-            this.selectSuite(item, true);
+            this.selectSuite(item, true, false);
           } else {
-            this.store.actionError.set(`No suite "${item}".`);
+            this.setMissingItemError(`No suite "${item}".`);
           }
         }
       });
     });
 
-    // Auto-select top item per tab on desktop when data loads.
+    // Auto-select top item per tab on desktop when data loads or returns to a
+    // bare tab route.
     effect(() => {
       const tab = this.activeTab();
       const loaded = this.store.loaded();
+      const item = this.itemId();
+      const run = this.runId();
       const scheds = this.sortedSchedules();
       const tmpls = this.sortedTemplates();
       const suites = this.sortedSuites();
       const repos = this.filteredDeclRepos();
       untracked(() => {
-        if (!loaded || this.itemId() || this.runId()) return;
+        if (!loaded || item || run) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
         if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
@@ -4122,9 +4145,101 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.store.suites().find((x) => x.id === id)?.name ?? "";
   }
 
-  protected selectSchedule(id: string, fromClick: boolean): void {
+  private itemLinkKey(
+    tab: ProcessTab,
+    itemId?: string,
+    runId?: string,
+  ): string {
+    return `${this.store.loaded()}:${tab}:${itemId ?? ""}:${runId ?? ""}`;
+  }
+
+  private preserveQueryExtras() {
+    return this.writingQ > 0
+      ? {
+          queryParams: { q: this.filter.query() || null },
+          queryParamsHandling: "merge" as const,
+        }
+      : { queryParamsHandling: "preserve" as const };
+  }
+
+  private setMissingItemError(msg: string): void {
+    this.missingItemError = msg;
+    this.store.actionError.set(msg);
+  }
+
+  private clearMissingItemError(): void {
+    if (
+      this.missingItemError &&
+      this.store.actionError() === this.missingItemError
+    ) {
+      this.store.actionError.set(null);
+    }
+    this.missingItemError = null;
+  }
+
+  // Push a history entry for an explicit row or item selection so reload,
+  // copy/paste, and Back/Forward land on that item while keeping ?q=, ?sort=,
+  // and ?kind=. Auto-selection on arrival passes fromClick: false and leaves
+  // the URL alone so Back out of Processes or across ?sort= stays predictable.
+  private syncItemUrl(
+    tab: "schedules" | "templates" | "suites",
+    itemId?: string,
+    runId?: number,
+  ): void {
+    if (runId !== undefined) {
+      const runStr = String(runId);
+      const targetKey = this.itemLinkKey("suites", undefined, runStr);
+      if (this.runId() === runStr && this.handledItemLinkKey === targetKey) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = "suites";
+      void this.router.navigate(
+        ["/processes", "suites", "runs", runStr],
+        this.preserveQueryExtras(),
+      );
+      return;
+    }
+    if (itemId !== undefined) {
+      const targetKey = this.itemLinkKey(tab, itemId);
+      if (
+        this.tab() === tab &&
+        this.itemId() === itemId &&
+        !this.runId() &&
+        this.handledItemLinkKey === targetKey
+      ) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = tab;
+      void this.router.navigate(
+        ["/processes", tab, itemId],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected closeMobileDetail(): void {
+    this.mobileDetailOpen.set(false);
+    if (this.itemId() || this.runId()) {
+      void this.router.navigate(
+        ["/processes", this.activeTab()],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected selectSchedule(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedScheduleId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("schedules", id);
     this.scheduleComposition.set(null);
     if (this.access.can("GET /api/schedules/{id}/composition")) {
       void this.store
@@ -4136,9 +4251,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectTemplate(id: string, fromClick: boolean): void {
+  protected selectTemplate(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedTemplateId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("templates", id);
     this.templateComposition.set(null);
     const tmpl = this.store.templates().find((t) => t.id === id);
     if (tmpl && this.access.can("GET /api/templates/{id}/composition")) {
@@ -4168,10 +4291,19 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuite(id: string, fromClick: boolean): void {
+  protected selectSuite(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(null);
     this.selectedSuiteId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("suites");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", id);
     this.suiteComposition.set(null);
     if (this.access.can("GET /api/suites/{id}/composition")) {
       void this.store
@@ -4183,9 +4315,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuiteRun(id: number, fromClick: boolean): void {
+  protected selectSuiteRun(
+    id: number,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("runs");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", undefined, id);
     if (this.access.can("GET /api/suite-runs/{id}")) {
       void this.store.fetchSuiteRunDetail(id).catch(() => undefined);
     }
@@ -4450,6 +4591,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteSchedule(s.id);
         if (this.selectedScheduleId() === s.id) {
           this.selectedScheduleId.set(null);
+          this.scheduleComposition.set(null);
+        }
+        if (this.activeTab() === "schedules" && this.itemId() === s.id) {
+          void this.router.navigate(["/processes", "schedules"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Schedule deleted.");
       },
@@ -4715,7 +4863,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         const created = await this.store.createSchedule(
           this.buildScheduleCreatePayload(),
         );
-        this.selectSchedule(created.id, false);
+        this.selectSchedule(created.id, true);
         this.snackbar.show("Schedule created.");
       }
       this.closeScheduleDialog();
@@ -4905,7 +5053,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           createReq.qaFlowRef = qaFlowRef;
         }
         const created = await this.store.createTemplate(createReq);
-        this.selectTemplate(created.id, false);
+        this.selectTemplate(created.id, true);
         this.snackbar.show("Template created.");
       }
       this.tmplDialogOpen.set(false);
@@ -4926,6 +5074,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteTemplate(t.id);
         if (this.selectedTemplateId() === t.id) {
           this.selectedTemplateId.set(null);
+          this.templateComposition.set(null);
+        }
+        if (this.activeTab() === "templates" && this.itemId() === t.id) {
+          void this.router.navigate(["/processes", "templates"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Template deleted.");
       },
@@ -5062,7 +5217,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         this.snackbar.show("Suite updated.");
       } else {
         const created = await this.store.createSuite(payload);
-        this.selectSuite(created.id, false);
+        this.selectSuite(created.id, true);
         this.snackbar.show("Suite created.");
       }
       this.suiteDialogOpen.set(false);
@@ -5081,7 +5236,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         await this.store.deleteSuite(st.id);
-        if (this.selectedSuiteId() === st.id) this.selectedSuiteId.set(null);
+        if (this.selectedSuiteId() === st.id) {
+          this.selectedSuiteId.set(null);
+          this.suiteComposition.set(null);
+        }
+        if (this.activeTab() === "suites" && this.itemId() === st.id) {
+          void this.router.navigate(["/processes", "suites"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
+        }
         this.snackbar.show("Suite deleted.");
       },
     });
