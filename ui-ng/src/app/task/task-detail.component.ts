@@ -183,8 +183,10 @@ export function duration(from?: string, to?: string): string {
   },
   template: `
     <section
+      #taskPage
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
+      (scroll)="rememberTabScroll()"
       [class.is-details-view]="current() === 'details'"
       [attr.tabindex]="current() === 'details' ? 0 : null"
       aria-labelledby="task-title"
@@ -875,7 +877,9 @@ export function duration(from?: string, to?: string): string {
             </nav>
 
             <div
+              #tabBody
               class="task-tab-body"
+              (scroll)="rememberTabScroll()"
               [attr.role]="current() === 'details' ? 'region' : null"
               [attr.aria-label]="
                 current() === 'details' ? 'Task details' : null
@@ -1625,6 +1629,30 @@ export class TaskDetailComponent implements OnDestroy {
   // tasks select them in the pane.
   readonly pane = input(false);
 
+  private readonly taskPage = viewChild<ElementRef<HTMLElement>>("taskPage");
+  private readonly tabBody = viewChild<ElementRef<HTMLElement>>("tabBody");
+  private scrollTaskId: string | null = null;
+  private scrollTab: TaskTab | null = null;
+  private readonly tabScroll = new Map<
+    TaskTab,
+    { page: number; body: number }
+  >();
+
+  protected rememberTabScroll(): void {
+    // Read while the user scrolls: by the time a tab has rendered, the old
+    // layout's offsets may already have been clamped by the browser.
+    if (this.scrollTaskId !== this.id() || this.scrollTab !== this.current())
+      return;
+    const page = this.taskPage()?.nativeElement;
+    const body = this.tabBody()?.nativeElement;
+    if (page && body && this.scrollTab) {
+      this.tabScroll.set(this.scrollTab, {
+        page: page.scrollTop,
+        body: body.scrollTop,
+      });
+    }
+  }
+
   // "Defer until…": the day picked, in the deployment's display zone.
   protected readonly deferUntilOpen = signal(false);
   protected readonly deferDate = signal("");
@@ -2006,6 +2034,29 @@ export class TaskDetailComponent implements OnDestroy {
         dlg.removeEventListener("mousedown", onDown);
         dlg.removeEventListener("click", onClick);
       });
+    });
+    afterRenderEffect((onCleanup) => {
+      const id = this.id();
+      const tab = this.current();
+      const page = this.taskPage()?.nativeElement;
+      const body = this.tabBody()?.nativeElement;
+      if (this.scrollTaskId !== id) {
+        this.tabScroll.clear();
+        this.scrollTaskId = id;
+      }
+      this.scrollTab = null;
+      if (!page || !body || !win) return;
+      // Both scrollers are shared by all tabs. Wait for the browser to lay out
+      // the new reader before restoring its position. Polling task data must
+      // not move a reader or steal focus.
+      const position = this.tabScroll.get(tab);
+      const frame = win.requestAnimationFrame(() => {
+        if (this.id() !== id || this.current() !== tab) return;
+        page.scrollTop = position?.page ?? 0;
+        body.scrollTop = position?.body ?? 0;
+        this.scrollTab = tab;
+      });
+      onCleanup(() => win.cancelAnimationFrame(frame));
     });
     afterRenderEffect(() => {
       const open = this.docModalOpen() && !!this.modalDoc();
