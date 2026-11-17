@@ -1,5 +1,5 @@
 {
-  "operation_id": "op-1",
+  "operation_id": "merge-1",
   "request": {
     "request_id": "merge-1",
     "idempotency_key": "merge/pr1710/H1",
@@ -16,12 +16,15 @@
     "expected_contract_revision": 1,
     "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "reason": null
+    "reason": null,
+    "expected_authority_epoch": 1,
+    "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "actor": "automation/merge-queue",
   "disposition": "outcome_unknown",
   "result_version": null,
   "recorded_at": "2026-11-17T00:20:00Z",
   "evidence": [],
-  "exception_ids": []
+  "exception_ids": [],
+  "intent": "execute"
 }

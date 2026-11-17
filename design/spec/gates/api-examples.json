@@ -1,0 +1,4389 @@
+[
+  {
+    "operation": "registry",
+    "request": {},
+    "response_status": 200,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "registry_digest": "sha256:f61b811db2c6c4c4997bd1c0ecbf73c3468102f31fe793c0218ef7e7be03b918",
+      "build": "grain/build-1",
+      "items": [
+        {
+          "type": "acknowledgment",
+          "version": 1,
+          "schema_digest": "sha256:f8ed4ecd9d7f72f0ceb4b3d5b16fe55147a0609826d487724f06ff34337b804c",
+          "implementation": "grain/build-1/acknowledgment-v1",
+          "subjects": [
+            "task"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "task"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "explicit_receipt",
+                  "legacy_report",
+                  "legacy_child_answer",
+                  "legacy_nothing_needed_ack"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "approval",
+          "version": 1,
+          "schema_digest": "sha256:d900e20bb77ab29a258eb328190abf858e9ee52e380209f351a714d43e00aa11",
+          "implementation": "grain/build-1/approval-v1",
+          "subjects": [
+            "change"
+          ],
+          "purposes": [
+            "completion",
+            "monitor",
+            "guard"
+          ],
+          "reads": [
+            "policy",
+            "change"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requirement_ids",
+              "semantics"
+            ],
+            "properties": {
+              "requirement_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              },
+              "semantics": {
+                "const": "exact_head_v1"
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "base_health",
+          "version": 1,
+          "schema_digest": "sha256:49fa9a233b57dd56e775789f44b4ed6fa171323fc8e33415e7c24519c47239a7",
+          "implementation": "grain/build-1/base_health-v1",
+          "subjects": [
+            "repository"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "health"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "semantics",
+              "allow_nonreproduction"
+            ],
+            "properties": {
+              "semantics": {
+                "enum": [
+                  "current_tip_v1",
+                  "legacy_recorded_v1"
+                ]
+              },
+              "allow_nonreproduction": {
+                "type": "boolean"
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "checks",
+          "version": 1,
+          "schema_digest": "sha256:7052d2b016ac24abc17bb06458bb49608f48146121b73f02e80b2f983f45c243",
+          "implementation": "grain/build-1/checks-v1",
+          "subjects": [
+            "change"
+          ],
+          "purposes": [
+            "completion",
+            "monitor",
+            "guard"
+          ],
+          "reads": [
+            "policy",
+            "change"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mode",
+              "extra_jobs",
+              "empty",
+              "semantics"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "effective",
+                  "github",
+                  "grain",
+                  "both",
+                  "provider",
+                  "none"
+                ]
+              },
+              "extra_jobs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "minItems": 0,
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "empty": {
+                "enum": [
+                  "unknown",
+                  "explicit_none",
+                  "legacy_settled"
+                ]
+              },
+              "semantics": {
+                "enum": [
+                  "current_v1",
+                  "legacy_ci_v1"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "children",
+          "version": 1,
+          "schema_digest": "sha256:26069cb9ce29acc87da2be34cba97db16d8c72e3cceecb5e5694f4771b656a39",
+          "implementation": "grain/build-1/children-v1",
+          "subjects": [
+            "task"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "task"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tasks",
+              "predicate"
+            ],
+            "properties": {
+              "tasks": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              },
+              "predicate": {
+                "enum": [
+                  "success",
+                  "closed",
+                  "merged"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "delivery",
+          "version": 1,
+          "schema_digest": "sha256:9a0d89db5c6e8af2e3b6a5833ed16aaa6d24a6cbc12214173b6724710b628087",
+          "implementation": "grain/build-1/delivery-v1",
+          "subjects": [
+            "task"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "task"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "product",
+              "semantics"
+            ],
+            "properties": {
+              "product": {
+                "enum": [
+                  "report",
+                  "change",
+                  "nothing_needed",
+                  "review",
+                  "any"
+                ]
+              },
+              "semantics": {
+                "enum": [
+                  "current_v1",
+                  "legacy_finish_v1"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "integration",
+          "version": 1,
+          "schema_digest": "sha256:8910b97eda3528ae331e44818296021993e9400555b3cb3456d3ea30401c2a6e",
+          "implementation": "grain/build-1/integration-v1",
+          "subjects": [
+            "change"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "change"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "semantics"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "pr_merged",
+                  "cl_submitted"
+                ]
+              },
+              "semantics": {
+                "const": "positive_v1"
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "nightly_health",
+          "version": 1,
+          "schema_digest": "sha256:0360d083b1b68b27a9fd2b473b272c2414c52aa2062c6c48a14ec7b15712b883",
+          "implementation": "grain/build-1/nightly_health-v1",
+          "subjects": [
+            "repository"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "health"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "workflow",
+              "since",
+              "window_seconds",
+              "semantics"
+            ],
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "since": {
+                "type": "string",
+                "format": "date-time",
+                "maxLength": 35
+              },
+              "window_seconds": {
+                "type": "integer",
+                "minimum": 60,
+                "maximum": 604800
+              },
+              "semantics": {
+                "enum": [
+                  "window_v1",
+                  "legacy_500_v1",
+                  "legacy_verified_push_v1"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "pipeline_health",
+          "version": 1,
+          "schema_digest": "sha256:5cf34afa81910c483d0c5000010acd761e215ee6a3449ed02b3049f48183a86e",
+          "implementation": "grain/build-1/pipeline_health-v1",
+          "subjects": [
+            "repository"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "health"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repos",
+              "semantics"
+            ],
+            "properties": {
+              "repos": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              },
+              "semantics": {
+                "enum": [
+                  "scoped_v1",
+                  "legacy_quiet_v1"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "publishing_health",
+          "version": 1,
+          "schema_digest": "sha256:27cdd41ec6f94866ddbe9c5d0e567b8ce47ed5800e586c2c563aa83afb7a0608",
+          "implementation": "grain/build-1/publishing_health-v1",
+          "subjects": [
+            "repository"
+          ],
+          "purposes": [
+            "completion",
+            "monitor"
+          ],
+          "reads": [
+            "policy",
+            "health"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "semantics",
+              "expected_commit"
+            ],
+            "properties": {
+              "semantics": {
+                "enum": [
+                  "positive_current_v1",
+                  "legacy_no_finding_v1"
+                ]
+              },
+              "expected_commit": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "qa_stage",
+          "version": 1,
+          "schema_digest": "sha256:81e067313a33bf97efe6faab1fbba0d885a2a4163de0c74afa54c20fe7727645",
+          "implementation": "grain/build-1/qa_stage-v1",
+          "subjects": [
+            "change"
+          ],
+          "purposes": [
+            "completion",
+            "monitor",
+            "guard"
+          ],
+          "reads": [
+            "policy",
+            "change"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "stage",
+              "flow_revision",
+              "assignment"
+            ],
+            "properties": {
+              "stage": {
+                "enum": [
+                  "s3",
+                  "s4",
+                  "s5"
+                ]
+              },
+              "flow_revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "assignment": {
+                "enum": [
+                  "treatment",
+                  "shadow"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        },
+        {
+          "type": "review",
+          "version": 1,
+          "schema_digest": "sha256:3821113c6acf90e222eb3e5d23c43a0f23df124136562fbf32d57fd979791dfa",
+          "implementation": "grain/build-1/review-v1",
+          "subjects": [
+            "change"
+          ],
+          "purposes": [
+            "completion",
+            "monitor",
+            "guard"
+          ],
+          "reads": [
+            "policy",
+            "change"
+          ],
+          "actions": [
+            "reevaluate"
+          ],
+          "config_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "category",
+              "requirement_id",
+              "semantics"
+            ],
+            "properties": {
+              "category": {
+                "enum": [
+                  "ordinary",
+                  "security",
+                  "path",
+                  "takeover"
+                ]
+              },
+              "requirement_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "semantics": {
+                "enum": [
+                  "current_head_v1",
+                  "legacy_completion_v1"
+                ]
+              }
+            }
+          },
+          "private_state": false
+        }
+      ]
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"registry_digest\":\"sha256:f61b811db2c6c4c4997bd1c0ecbf73c3468102f31fe793c0218ef7e7be03b918\",\"build\":\"grain/build-1\",\"items\":[{\"type\":\"acknowledgment\",\"version\":1,\"schema_digest\":\"sha256:f8ed4ecd9d7f72f0ceb4b3d5b16fe55147a0609826d487724f06ff34337b804c\",\"implementation\":\"grain/build-1/acknowledgment-v1\",\"subjects\":[\"task\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"task\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"mode\"],\"properties\":{\"mode\":{\"enum\":[\"explicit_receipt\",\"legacy_report\",\"legacy_child_answer\",\"legacy_nothing_needed_ack\"]}}},\"private_state\":false},{\"type\":\"approval\",\"version\":1,\"schema_digest\":\"sha256:d900e20bb77ab29a258eb328190abf858e9ee52e380209f351a714d43e00aa11\",\"implementation\":\"grain/build-1/approval-v1\",\"subjects\":[\"change\"],\"purposes\":[\"completion\",\"monitor\",\"guard\"],\"reads\":[\"policy\",\"change\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"requirement_ids\",\"semantics\"],\"properties\":{\"requirement_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"minItems\":1,\"maxItems\":64,\"uniqueItems\":true},\"semantics\":{\"const\":\"exact_head_v1\"}}},\"private_state\":false},{\"type\":\"base_health\",\"version\":1,\"schema_digest\":\"sha256:49fa9a233b57dd56e775789f44b4ed6fa171323fc8e33415e7c24519c47239a7\",\"implementation\":\"grain/build-1/base_health-v1\",\"subjects\":[\"repository\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"health\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"semantics\",\"allow_nonreproduction\"],\"properties\":{\"semantics\":{\"enum\":[\"current_tip_v1\",\"legacy_recorded_v1\"]},\"allow_nonreproduction\":{\"type\":\"boolean\"}}},\"private_state\":false},{\"type\":\"checks\",\"version\":1,\"schema_digest\":\"sha256:7052d2b016ac24abc17bb06458bb49608f48146121b73f02e80b2f983f45c243\",\"implementation\":\"grain/build-1/checks-v1\",\"subjects\":[\"change\"],\"purposes\":[\"completion\",\"monitor\",\"guard\"],\"reads\":[\"policy\",\"change\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"mode\",\"extra_jobs\",\"empty\",\"semantics\"],\"properties\":{\"mode\":{\"enum\":[\"effective\",\"github\",\"grain\",\"both\",\"provider\",\"none\"]},\"extra_jobs\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"minItems\":0,\"maxItems\":100,\"uniqueItems\":true},\"empty\":{\"enum\":[\"unknown\",\"explicit_none\",\"legacy_settled\"]},\"semantics\":{\"enum\":[\"current_v1\",\"legacy_ci_v1\"]}}},\"private_state\":false},{\"type\":\"children\",\"version\":1,\"schema_digest\":\"sha256:26069cb9ce29acc87da2be34cba97db16d8c72e3cceecb5e5694f4771b656a39\",\"implementation\":\"grain/build-1/children-v1\",\"subjects\":[\"task\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"task\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"tasks\",\"predicate\"],\"properties\":{\"tasks\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"minItems\":1,\"maxItems\":64,\"uniqueItems\":true},\"predicate\":{\"enum\":[\"success\",\"closed\",\"merged\"]}}},\"private_state\":false},{\"type\":\"delivery\",\"version\":1,\"schema_digest\":\"sha256:9a0d89db5c6e8af2e3b6a5833ed16aaa6d24a6cbc12214173b6724710b628087\",\"implementation\":\"grain/build-1/delivery-v1\",\"subjects\":[\"task\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"task\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"product\",\"semantics\"],\"properties\":{\"product\":{\"enum\":[\"report\",\"change\",\"nothing_needed\",\"review\",\"any\"]},\"semantics\":{\"enum\":[\"current_v1\",\"legacy_finish_v1\"]}}},\"private_state\":false},{\"type\":\"integration\",\"version\":1,\"schema_digest\":\"sha256:8910b97eda3528ae331e44818296021993e9400555b3cb3456d3ea30401c2a6e\",\"implementation\":\"grain/build-1/integration-v1\",\"subjects\":[\"change\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"change\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"semantics\"],\"properties\":{\"kind\":{\"enum\":[\"pr_merged\",\"cl_submitted\"]},\"semantics\":{\"const\":\"positive_v1\"}}},\"private_state\":false},{\"type\":\"nightly_health\",\"version\":1,\"schema_digest\":\"sha256:0360d083b1b68b27a9fd2b473b272c2414c52aa2062c6c48a14ec7b15712b883\",\"implementation\":\"grain/build-1/nightly_health-v1\",\"subjects\":[\"repository\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"health\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"workflow\",\"since\",\"window_seconds\",\"semantics\"],\"properties\":{\"workflow\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"since\":{\"type\":\"string\",\"format\":\"date-time\",\"maxLength\":35},\"window_seconds\":{\"type\":\"integer\",\"minimum\":60,\"maximum\":604800},\"semantics\":{\"enum\":[\"window_v1\",\"legacy_500_v1\",\"legacy_verified_push_v1\"]}}},\"private_state\":false},{\"type\":\"pipeline_health\",\"version\":1,\"schema_digest\":\"sha256:5cf34afa81910c483d0c5000010acd761e215ee6a3449ed02b3049f48183a86e\",\"implementation\":\"grain/build-1/pipeline_health-v1\",\"subjects\":[\"repository\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"health\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"repos\",\"semantics\"],\"properties\":{\"repos\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"minItems\":1,\"maxItems\":64,\"uniqueItems\":true},\"semantics\":{\"enum\":[\"scoped_v1\",\"legacy_quiet_v1\"]}}},\"private_state\":false},{\"type\":\"publishing_health\",\"version\":1,\"schema_digest\":\"sha256:27cdd41ec6f94866ddbe9c5d0e567b8ce47ed5800e586c2c563aa83afb7a0608\",\"implementation\":\"grain/build-1/publishing_health-v1\",\"subjects\":[\"repository\"],\"purposes\":[\"completion\",\"monitor\"],\"reads\":[\"policy\",\"health\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"semantics\",\"expected_commit\"],\"properties\":{\"semantics\":{\"enum\":[\"positive_current_v1\",\"legacy_no_finding_v1\"]},\"expected_commit\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256}}},\"private_state\":false},{\"type\":\"qa_stage\",\"version\":1,\"schema_digest\":\"sha256:81e067313a33bf97efe6faab1fbba0d885a2a4163de0c74afa54c20fe7727645\",\"implementation\":\"grain/build-1/qa_stage-v1\",\"subjects\":[\"change\"],\"purposes\":[\"completion\",\"monitor\",\"guard\"],\"reads\":[\"policy\",\"change\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"stage\",\"flow_revision\",\"assignment\"],\"properties\":{\"stage\":{\"enum\":[\"s3\",\"s4\",\"s5\"]},\"flow_revision\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"assignment\":{\"enum\":[\"treatment\",\"shadow\"]}}},\"private_state\":false},{\"type\":\"review\",\"version\":1,\"schema_digest\":\"sha256:3821113c6acf90e222eb3e5d23c43a0f23df124136562fbf32d57fd979791dfa\",\"implementation\":\"grain/build-1/review-v1\",\"subjects\":[\"change\"],\"purposes\":[\"completion\",\"monitor\",\"guard\"],\"reads\":[\"policy\",\"change\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"category\",\"requirement_id\",\"semantics\"],\"properties\":{\"category\":{\"enum\":[\"ordinary\",\"security\",\"path\",\"takeover\"]},\"requirement_id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"semantics\":{\"enum\":[\"current_head_v1\",\"legacy_completion_v1\"]}}},\"private_state\":false}]}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_list_builtin_gates failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "schema",
+    "request": {
+      "type": "checks",
+      "version": "1"
+    },
+    "response_status": 200,
+    "response": {
+      "type": "checks",
+      "version": 1,
+      "schema_digest": "sha256:7052d2b016ac24abc17bb06458bb49608f48146121b73f02e80b2f983f45c243",
+      "implementation": "grain/build-1/checks-v1",
+      "subjects": [
+        "change"
+      ],
+      "purposes": [
+        "completion",
+        "monitor",
+        "guard"
+      ],
+      "reads": [
+        "policy",
+        "change"
+      ],
+      "actions": [
+        "reevaluate"
+      ],
+      "config_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "extra_jobs",
+          "empty",
+          "semantics"
+        ],
+        "properties": {
+          "mode": {
+            "enum": [
+              "effective",
+              "github",
+              "grain",
+              "both",
+              "provider",
+              "none"
+            ]
+          },
+          "extra_jobs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "minItems": 0,
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "empty": {
+            "enum": [
+              "unknown",
+              "explicit_none",
+              "legacy_settled"
+            ]
+          },
+          "semantics": {
+            "enum": [
+              "current_v1",
+              "legacy_ci_v1"
+            ]
+          }
+        }
+      },
+      "private_state": false
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"type\":\"checks\",\"version\":1,\"schema_digest\":\"sha256:7052d2b016ac24abc17bb06458bb49608f48146121b73f02e80b2f983f45c243\",\"implementation\":\"grain/build-1/checks-v1\",\"subjects\":[\"change\"],\"purposes\":[\"completion\",\"monitor\",\"guard\"],\"reads\":[\"policy\",\"change\"],\"actions\":[\"reevaluate\"],\"config_schema\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"mode\",\"extra_jobs\",\"empty\",\"semantics\"],\"properties\":{\"mode\":{\"enum\":[\"effective\",\"github\",\"grain\",\"both\",\"provider\",\"none\"]},\"extra_jobs\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"minItems\":0,\"maxItems\":100,\"uniqueItems\":true},\"empty\":{\"enum\":[\"unknown\",\"explicit_none\",\"legacy_settled\"]},\"semantics\":{\"enum\":[\"current_v1\",\"legacy_ci_v1\"]}}},\"private_state\":false}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_get_builtin_gate failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "task",
+    "request": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "task_id": "57",
+      "authority": "builtins",
+      "authority_epoch": 1,
+      "revision": 1,
+      "contract": {
+        "api_version": "grain.gates/v1",
+        "task_id": "57",
+        "revision": 1,
+        "authority": "builtins",
+        "authority_epoch": 1,
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        },
+        "attachments": [
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "57"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "acknowledgment",
+            "type": "acknowledgment",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "57"
+            },
+            "config": {
+              "mode": "explicit_receipt"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "checks",
+            "type": "checks",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "mode": "effective",
+              "extra_jobs": [],
+              "empty": "unknown",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "review",
+            "type": "review",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "category": "security",
+              "requirement_id": "security/default",
+              "semantics": "current_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "approval",
+            "type": "approval",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "requirement_ids": [
+                "owners"
+              ],
+              "semantics": "exact_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "integration",
+            "type": "integration",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "kind": "pr_merged",
+              "semantics": "positive_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "children",
+            "type": "children",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "57"
+            },
+            "config": {
+              "tasks": [
+                "58"
+              ],
+              "predicate": "success"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "base_health",
+            "type": "base_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "semantics": "current_tip_v1",
+              "allow_nonreproduction": true
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "nightly_health",
+            "type": "nightly_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "workflow": "nightly",
+              "since": "2026-11-17T00:15:00Z",
+              "window_seconds": 86400,
+              "semantics": "window_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "publishing_health",
+            "type": "publishing_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "semantics": "positive_current_v1",
+              "expected_commit": "current_tip"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "pipeline_health",
+            "type": "pipeline_health",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "repository",
+              "repository": "ai-on-gke/grain",
+              "ref": "main"
+            },
+            "config": {
+              "repos": [
+                "ai-on-gke/grain"
+              ],
+              "semantics": "scoped_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          },
+          {
+            "id": "qa_stage",
+            "type": "qa_stage",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "config": {
+              "stage": "s3",
+              "flow_revision": "approved-qa-flow/7",
+              "assignment": "treatment"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "1",
+              "imported": false
+            }
+          }
+        ],
+        "source_revisions": [
+          {
+            "source": "template/change",
+            "revision": "7"
+          },
+          {
+            "source": "repo/ai-on-gke/grain",
+            "revision": "9"
+          }
+        ]
+      },
+      "decision": null,
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task-gates-v1"
+      },
+      "results": [
+        {
+          "evaluation_id": "eval-1",
+          "revision": 1,
+          "disposition": "accepted",
+          "result": {
+            "evaluation_id": "eval-1",
+            "binding_id": "task/57/checks",
+            "type": "checks",
+            "version": 1,
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "status": "met",
+            "summary": "Complete required checks passed for H1.",
+            "human_text": null,
+            "agent_text": null,
+            "evidence": [
+              {
+                "kind": "check",
+                "id": "go/run-7",
+                "version": "attempt-1",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            ],
+            "dependencies": [
+              {
+                "key": "checks/pr1710",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "version": "obs-4",
+                "collection_generation": "checks-set-7",
+                "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "complete": true,
+                "observed_at": "2026-11-17T00:15:00Z",
+                "valid_until": "2026-11-17T00:20:00Z",
+                "authorization_revision": 4,
+                "dirty_generation": 3,
+                "covered_generation": 3
+              }
+            ],
+            "blockers": [],
+            "work": [],
+            "waits": [],
+            "actions": [],
+            "observed_at": "2026-11-17T00:15:00Z",
+            "valid_until": "2026-11-17T00:20:00Z",
+            "error": null
+          },
+          "accepted_at": "2026-11-17T00:15:00Z",
+          "invalidated_at": null,
+          "invalidation_reason": null,
+          "retry_at": null,
+          "dirty_generation": 3,
+          "covered_generation": 3
+        }
+      ],
+      "blockers": [],
+      "exceptions": [],
+      "actions": [
+        {
+          "method": "POST",
+          "path": "/api/tasks/57/submit?view=gates",
+          "tool": "api_submit",
+          "action": "submit",
+          "permission": {
+            "scopes": [
+              "tasks:write"
+            ],
+            "person_required": true,
+            "allowed": true,
+            "reason": null
+          },
+          "enabled": true,
+          "disabled_reason": null,
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          },
+          "submit_intent": "approve_and_queue"
+        }
+      ],
+      "legacy_state": "awaiting_submit",
+      "dirty": false
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"task_id\":\"57\",\"authority\":\"builtins\",\"authority_epoch\":1,\"revision\":1,\"contract\":{\"api_version\":\"grain.gates/v1\",\"task_id\":\"57\",\"revision\":1,\"authority\":\"builtins\",\"authority_epoch\":1,\"lifecycle\":{\"intent\":\"finite\",\"on_met\":\"close\",\"on_limit\":\"hold\",\"max_resumes\":5,\"max_stall_seconds\":43200},\"attachments\":[{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"57\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"acknowledgment\",\"type\":\"acknowledgment\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"57\"},\"config\":{\"mode\":\"explicit_receipt\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"checks\",\"type\":\"checks\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"config\":{\"mode\":\"effective\",\"extra_jobs\":[],\"empty\":\"unknown\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"review\",\"type\":\"review\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"config\":{\"category\":\"security\",\"requirement_id\":\"security/default\",\"semantics\":\"current_head_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"approval\",\"type\":\"approval\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"config\":{\"requirement_ids\":[\"owners\"],\"semantics\":\"exact_head_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"integration\",\"type\":\"integration\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"config\":{\"kind\":\"pr_merged\",\"semantics\":\"positive_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"children\",\"type\":\"children\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"57\"},\"config\":{\"tasks\":[\"58\"],\"predicate\":\"success\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"base_health\",\"type\":\"base_health\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"repository\",\"repository\":\"ai-on-gke/grain\",\"ref\":\"main\"},\"config\":{\"semantics\":\"current_tip_v1\",\"allow_nonreproduction\":true},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"nightly_health\",\"type\":\"nightly_health\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"repository\",\"repository\":\"ai-on-gke/grain\",\"ref\":\"main\"},\"config\":{\"workflow\":\"nightly\",\"since\":\"2026-11-17T00:15:00Z\",\"window_seconds\":86400,\"semantics\":\"window_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"publishing_health\",\"type\":\"publishing_health\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"repository\",\"repository\":\"ai-on-gke/grain\",\"ref\":\"main\"},\"config\":{\"semantics\":\"positive_current_v1\",\"expected_commit\":\"current_tip\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"pipeline_health\",\"type\":\"pipeline_health\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"repository\",\"repository\":\"ai-on-gke/grain\",\"ref\":\"main\"},\"config\":{\"repos\":[\"ai-on-gke/grain\"],\"semantics\":\"scoped_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}},{\"id\":\"qa_stage\",\"type\":\"qa_stage\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"config\":{\"stage\":\"s3\",\"flow_revision\":\"approved-qa-flow/7\",\"assignment\":\"treatment\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}}],\"source_revisions\":[{\"source\":\"template/change\",\"revision\":\"7\"},{\"source\":\"repo/ai-on-gke/grain\",\"revision\":\"9\"}]},\"decision\":null,\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"task-gates-v1\"},\"results\":[{\"evaluation_id\":\"eval-1\",\"revision\":1,\"disposition\":\"accepted\",\"result\":{\"evaluation_id\":\"eval-1\",\"binding_id\":\"task/57/checks\",\"type\":\"checks\",\"version\":1,\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"status\":\"met\",\"summary\":\"Complete required checks passed for H1.\",\"human_text\":null,\"agent_text\":null,\"evidence\":[{\"kind\":\"check\",\"id\":\"go/run-7\",\"version\":\"attempt-1\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"dependencies\":[{\"key\":\"checks/pr1710\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"version\":\"obs-4\",\"collection_generation\":\"checks-set-7\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"complete\":true,\"observed_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"authorization_revision\":4,\"dirty_generation\":3,\"covered_generation\":3}],\"blockers\":[],\"work\":[],\"waits\":[],\"actions\":[],\"observed_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"error\":null},\"accepted_at\":\"2026-11-17T00:15:00Z\",\"invalidated_at\":null,\"invalidation_reason\":null,\"retry_at\":null,\"dirty_generation\":3,\"covered_generation\":3}],\"blockers\":[],\"exceptions\":[],\"actions\":[{\"method\":\"POST\",\"path\":\"/api/tasks/57/submit?view=gates\",\"tool\":\"api_submit\",\"action\":\"submit\",\"permission\":{\"scopes\":[\"tasks:write\"],\"person_required\":true,\"allowed\":true,\"reason\":null},\"enabled\":true,\"disabled_reason\":null,\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"submit_intent\":\"approve_and_queue\"}],\"legacy_state\":\"awaiting_submit\",\"dirty\":false}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_get_task failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "edit",
+    "request": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "gate_edit": {
+          "mutation": {
+            "idempotency_key": "request-59-1",
+            "reason": "Evaluate the current contract for this exact evidence.",
+            "expected": {
+              "contract_revision": 1,
+              "authority_epoch": 1,
+              "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "head": null,
+              "resource_version": "task-gates-v1"
+            }
+          },
+          "attachments": [
+            {
+              "id": "delivery",
+              "type": "delivery",
+              "version": 1,
+              "purpose": "completion",
+              "required": true,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "57"
+              },
+              "config": {
+                "product": "report",
+                "semantics": "current_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "task",
+                "id": "57",
+                "revision": "1",
+                "imported": false
+              }
+            }
+          ],
+          "lifecycle": {
+            "intent": "finite",
+            "on_met": "close",
+            "on_limit": "hold",
+            "max_resumes": 5,
+            "max_stall_seconds": 43200
+          },
+          "authority_handoff": null
+        }
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "task_id": "57",
+      "authority": "builtins",
+      "authority_epoch": 1,
+      "revision": 2,
+      "contract": {
+        "api_version": "grain.gates/v1",
+        "task_id": "57",
+        "revision": 2,
+        "authority": "builtins",
+        "authority_epoch": 1,
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        },
+        "attachments": [
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "57"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "57",
+              "revision": "2",
+              "imported": false
+            }
+          }
+        ],
+        "source_revisions": [
+          {
+            "source": "task/57",
+            "revision": "2"
+          }
+        ]
+      },
+      "decision": null,
+      "expected": {
+        "contract_revision": 2,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task-gates-v1"
+      },
+      "results": [],
+      "blockers": [],
+      "exceptions": [],
+      "actions": [],
+      "legacy_state": "awaiting_submit",
+      "dirty": true
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"task_id\":\"57\",\"authority\":\"builtins\",\"authority_epoch\":1,\"revision\":2,\"contract\":{\"api_version\":\"grain.gates/v1\",\"task_id\":\"57\",\"revision\":2,\"authority\":\"builtins\",\"authority_epoch\":1,\"lifecycle\":{\"intent\":\"finite\",\"on_met\":\"close\",\"on_limit\":\"hold\",\"max_resumes\":5,\"max_stall_seconds\":43200},\"attachments\":[{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"57\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"2\",\"imported\":false}}],\"source_revisions\":[{\"source\":\"task/57\",\"revision\":\"2\"}]},\"decision\":null,\"expected\":{\"contract_revision\":2,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"task-gates-v1\"},\"results\":[],\"blockers\":[],\"exceptions\":[],\"actions\":[],\"legacy_state\":\"awaiting_submit\",\"dirty\":true}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_update_task failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "evidence",
+    "request": {
+      "query": {
+        "id": "go/run-7",
+        "version": "attempt-1"
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "reference": {
+        "kind": "check",
+        "id": "go/run-7",
+        "version": "attempt-1",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "dependencies": [
+        {
+          "key": "checks/pr1710",
+          "subject": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "head": "H1",
+          "version": "obs-4",
+          "collection_generation": "checks-set-7",
+          "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "complete": true,
+          "observed_at": "2026-11-17T00:15:00Z",
+          "valid_until": "2026-11-17T00:20:00Z",
+          "authorization_revision": 4,
+          "dirty_generation": 3,
+          "covered_generation": 3
+        }
+      ],
+      "collected_at": "2026-11-17T00:15:00Z",
+      "valid_until": "2026-11-17T00:20:00Z",
+      "facts": {
+        "job_id": "go",
+        "suite_id": "required",
+        "app_id": "github-actions",
+        "provider": "github",
+        "run_id": "run-7",
+        "attempt": 1,
+        "required": true,
+        "applicable": true,
+        "status": "completed",
+        "conclusion": "success",
+        "issuer": {
+          "id": "github/app/actions",
+          "kind": "automation",
+          "delegated_by": null
+        },
+        "completed_at": "2026-11-17T00:15:00Z"
+      }
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"reference\":{\"kind\":\"check\",\"id\":\"go/run-7\",\"version\":\"attempt-1\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"dependencies\":[{\"key\":\"checks/pr1710\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"version\":\"obs-4\",\"collection_generation\":\"checks-set-7\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"complete\":true,\"observed_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"authorization_revision\":4,\"dirty_generation\":3,\"covered_generation\":3}],\"collected_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"facts\":{\"job_id\":\"go\",\"suite_id\":\"required\",\"app_id\":\"github-actions\",\"provider\":\"github\",\"run_id\":\"run-7\",\"attempt\":1,\"required\":true,\"applicable\":true,\"status\":\"completed\",\"conclusion\":\"success\",\"issuer\":{\"id\":\"github/app/actions\",\"kind\":\"automation\",\"delegated_by\":null},\"completed_at\":\"2026-11-17T00:15:00Z\"}}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_get_gate_evidence failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "history",
+    "request": {
+      "id": "57",
+      "query": {
+        "limit": 20
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "items": [
+        {
+          "sequence": 1,
+          "at": "2026-11-17T00:15:00Z",
+          "actor": "controller",
+          "kind": "result_accepted",
+          "binding_id": "task/57/checks",
+          "operation_id": null,
+          "before_revision": null,
+          "after_revision": 1,
+          "summary": "Accepted complete H1 checks; does not execute merge.",
+          "result": {
+            "evaluation_id": "eval-1",
+            "revision": 1,
+            "disposition": "accepted",
+            "result": {
+              "evaluation_id": "eval-1",
+              "binding_id": "task/57/checks",
+              "type": "checks",
+              "version": 1,
+              "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "status": "met",
+              "summary": "Complete required checks passed for H1.",
+              "human_text": null,
+              "agent_text": null,
+              "evidence": [
+                {
+                  "kind": "check",
+                  "id": "go/run-7",
+                  "version": "attempt-1",
+                  "subject": {
+                    "kind": "change",
+                    "authority": "github.com",
+                    "repository": "ai-on-gke/grain",
+                    "change_kind": "pr",
+                    "id": "1710"
+                  },
+                  "head": "H1",
+                  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              ],
+              "dependencies": [
+                {
+                  "key": "checks/pr1710",
+                  "subject": {
+                    "kind": "change",
+                    "authority": "github.com",
+                    "repository": "ai-on-gke/grain",
+                    "change_kind": "pr",
+                    "id": "1710"
+                  },
+                  "head": "H1",
+                  "version": "obs-4",
+                  "collection_generation": "checks-set-7",
+                  "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "complete": true,
+                  "observed_at": "2026-11-17T00:15:00Z",
+                  "valid_until": "2026-11-17T00:20:00Z",
+                  "authorization_revision": 4,
+                  "dirty_generation": 3,
+                  "covered_generation": 3
+                }
+              ],
+              "blockers": [],
+              "work": [],
+              "waits": [],
+              "actions": [],
+              "observed_at": "2026-11-17T00:15:00Z",
+              "valid_until": "2026-11-17T00:20:00Z",
+              "error": null
+            },
+            "accepted_at": "2026-11-17T00:15:00Z",
+            "invalidated_at": null,
+            "invalidation_reason": null,
+            "retry_at": null,
+            "dirty_generation": 3,
+            "covered_generation": 3
+          },
+          "exception": null,
+          "receipt": null
+        }
+      ],
+      "next_cursor": null,
+      "snapshot_revision": 1
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"items\":[{\"sequence\":1,\"at\":\"2026-11-17T00:15:00Z\",\"actor\":\"controller\",\"kind\":\"result_accepted\",\"binding_id\":\"task/57/checks\",\"operation_id\":null,\"before_revision\":null,\"after_revision\":1,\"summary\":\"Accepted complete H1 checks; does not execute merge.\",\"result\":{\"evaluation_id\":\"eval-1\",\"revision\":1,\"disposition\":\"accepted\",\"result\":{\"evaluation_id\":\"eval-1\",\"binding_id\":\"task/57/checks\",\"type\":\"checks\",\"version\":1,\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"status\":\"met\",\"summary\":\"Complete required checks passed for H1.\",\"human_text\":null,\"agent_text\":null,\"evidence\":[{\"kind\":\"check\",\"id\":\"go/run-7\",\"version\":\"attempt-1\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"dependencies\":[{\"key\":\"checks/pr1710\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"version\":\"obs-4\",\"collection_generation\":\"checks-set-7\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"complete\":true,\"observed_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"authorization_revision\":4,\"dirty_generation\":3,\"covered_generation\":3}],\"blockers\":[],\"work\":[],\"waits\":[],\"actions\":[],\"observed_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"error\":null},\"accepted_at\":\"2026-11-17T00:15:00Z\",\"invalidated_at\":null,\"invalidation_reason\":null,\"retry_at\":null,\"dirty_generation\":3,\"covered_generation\":3},\"exception\":null,\"receipt\":null}],\"next_cursor\":null,\"snapshot_revision\":1}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_list_gate_history failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "reevaluate",
+    "request": {
+      "id": "57",
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": null,
+            "resource_version": "task-gates-v1"
+          }
+        },
+        "binding_ids": []
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "eval-request-1",
+      "task_id": "57",
+      "kind": "reevaluate",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task-gates-v1"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"eval-request-1\",\"task_id\":\"57\",\"kind\":\"reevaluate\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"task-gates-v1\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_evaluate_task_gates failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "operation",
+    "request": {
+      "id": "merge-1"
+    },
+    "response_status": 200,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "approve_and_queue"
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"merge-1\",\"task_id\":\"57\",\"kind\":\"submit\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":\"approve_and_queue\"}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_get_gate_operation failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "action_preview",
+    "request": {
+      "body": {
+        "action": "change.merge",
+        "target": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "task_id": "57"
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "action": "change.merge",
+      "target": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "task_id": "57",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "permission": {
+        "scopes": [
+          "tasks:write"
+        ],
+        "person_required": true,
+        "allowed": true,
+        "reason": null
+      },
+      "coverage": "enforced",
+      "bindings": [
+        {
+          "id": "checks",
+          "type": "checks",
+          "version": 1,
+          "purpose": "guard",
+          "required": true,
+          "action": "change.merge",
+          "subject": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "config": {
+            "mode": "effective",
+            "extra_jobs": [],
+            "empty": "unknown",
+            "semantics": "current_v1"
+          },
+          "freshness_seconds": 300,
+          "origin": {
+            "kind": "task",
+            "id": "57",
+            "revision": "1",
+            "imported": false
+          }
+        }
+      ],
+      "results": [
+        {
+          "evaluation_id": "eval-1",
+          "revision": 1,
+          "disposition": "accepted",
+          "result": {
+            "evaluation_id": "eval-1",
+            "binding_id": "task/57/checks",
+            "type": "checks",
+            "version": 1,
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "status": "met",
+            "summary": "Complete required checks passed for H1.",
+            "human_text": null,
+            "agent_text": null,
+            "evidence": [
+              {
+                "kind": "check",
+                "id": "go/run-7",
+                "version": "attempt-1",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            ],
+            "dependencies": [
+              {
+                "key": "checks/pr1710",
+                "subject": {
+                  "kind": "change",
+                  "authority": "github.com",
+                  "repository": "ai-on-gke/grain",
+                  "change_kind": "pr",
+                  "id": "1710"
+                },
+                "head": "H1",
+                "version": "obs-4",
+                "collection_generation": "checks-set-7",
+                "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "complete": true,
+                "observed_at": "2026-11-17T00:15:00Z",
+                "valid_until": "2026-11-17T00:20:00Z",
+                "authorization_revision": 4,
+                "dirty_generation": 3,
+                "covered_generation": 3
+              }
+            ],
+            "blockers": [],
+            "work": [],
+            "waits": [],
+            "actions": [],
+            "observed_at": "2026-11-17T00:15:00Z",
+            "valid_until": "2026-11-17T00:20:00Z",
+            "error": null
+          },
+          "accepted_at": "2026-11-17T00:15:00Z",
+          "invalidated_at": null,
+          "invalidation_reason": null,
+          "retry_at": null,
+          "dirty_generation": 3,
+          "covered_generation": 3
+        }
+      ],
+      "blockers": [],
+      "exceptions": [],
+      "available": true,
+      "submission": {
+        "method": "POST",
+        "path": "/api/tasks/57/submit?view=gates",
+        "tool": "api_submit",
+        "action": "submit",
+        "permission": {
+          "scopes": [
+            "tasks:write"
+          ],
+          "person_required": true,
+          "allowed": true,
+          "reason": null
+        },
+        "enabled": true,
+        "disabled_reason": null,
+        "expected": {
+          "contract_revision": 1,
+          "authority_epoch": 1,
+          "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head": "H1",
+          "resource_version": "pr-v3"
+        },
+        "submit_intent": "approve_and_queue"
+      }
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"action\":\"change.merge\",\"target\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"task_id\":\"57\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"permission\":{\"scopes\":[\"tasks:write\"],\"person_required\":true,\"allowed\":true,\"reason\":null},\"coverage\":\"enforced\",\"bindings\":[{\"id\":\"checks\",\"type\":\"checks\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"config\":{\"mode\":\"effective\",\"extra_jobs\":[],\"empty\":\"unknown\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"57\",\"revision\":\"1\",\"imported\":false}}],\"results\":[{\"evaluation_id\":\"eval-1\",\"revision\":1,\"disposition\":\"accepted\",\"result\":{\"evaluation_id\":\"eval-1\",\"binding_id\":\"task/57/checks\",\"type\":\"checks\",\"version\":1,\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"status\":\"met\",\"summary\":\"Complete required checks passed for H1.\",\"human_text\":null,\"agent_text\":null,\"evidence\":[{\"kind\":\"check\",\"id\":\"go/run-7\",\"version\":\"attempt-1\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}],\"dependencies\":[{\"key\":\"checks/pr1710\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"1710\"},\"head\":\"H1\",\"version\":\"obs-4\",\"collection_generation\":\"checks-set-7\",\"scope_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"complete\":true,\"observed_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"authorization_revision\":4,\"dirty_generation\":3,\"covered_generation\":3}],\"blockers\":[],\"work\":[],\"waits\":[],\"actions\":[],\"observed_at\":\"2026-11-17T00:15:00Z\",\"valid_until\":\"2026-11-17T00:20:00Z\",\"error\":null},\"accepted_at\":\"2026-11-17T00:15:00Z\",\"invalidated_at\":null,\"invalidation_reason\":null,\"retry_at\":null,\"dirty_generation\":3,\"covered_generation\":3}],\"blockers\":[],\"exceptions\":[],\"available\":true,\"submission\":{\"method\":\"POST\",\"path\":\"/api/tasks/57/submit?view=gates\",\"tool\":\"api_submit\",\"action\":\"submit\",\"permission\":{\"scopes\":[\"tasks:write\"],\"person_required\":true,\"allowed\":true,\"reason\":null},\"enabled\":true,\"disabled_reason\":null,\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"submit_intent\":\"approve_and_queue\"}}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_preview_guarded_action failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "submit",
+    "request": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "intent": "approve_and_queue",
+        "action_request": {
+          "request_id": "merge-1",
+          "idempotency_key": "request-59-1",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "approve_and_queue"
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"merge-1\",\"task_id\":\"57\",\"kind\":\"submit\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":\"approve_and_queue\"}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_submit failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "pr_submit",
+    "request": {
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "pr": "ai-on-gke/grain#1710",
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "intent": "approve_and_queue",
+        "action_request": {
+          "request_id": "merge-1",
+          "idempotency_key": "request-59-1",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "approve_and_queue"
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"merge-1\",\"task_id\":\"57\",\"kind\":\"submit\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":\"approve_and_queue\"}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_submit_pull_request failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "exceptions",
+    "request": {
+      "query": {
+        "task_id": "57"
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "items": [
+        {
+          "id": "exception-1",
+          "kind": "completion_waiver",
+          "binding_ids": [
+            "task/57/children"
+          ],
+          "target": {
+            "kind": "task",
+            "task_id": "57"
+          },
+          "head": null,
+          "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contract_revision": 1,
+          "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "operation_id": null,
+          "actor": "person/owner",
+          "reason": "Accept this explicit child outcome exception for this delivery.",
+          "issued_at": "2026-11-17T00:15:00Z",
+          "expires_at": "2026-11-18T00:15:00Z",
+          "revoked_at": null,
+          "revision": 1
+        }
+      ],
+      "next_cursor": null,
+      "snapshot_revision": 1
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"items\":[{\"id\":\"exception-1\",\"kind\":\"completion_waiver\",\"binding_ids\":[\"task/57/children\"],\"target\":{\"kind\":\"task\",\"task_id\":\"57\"},\"head\":null,\"config_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contract_revision\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"operation_id\":null,\"actor\":\"person/owner\",\"reason\":\"Accept this explicit child outcome exception for this delivery.\",\"issued_at\":\"2026-11-17T00:15:00Z\",\"expires_at\":\"2026-11-18T00:15:00Z\",\"revoked_at\":null,\"revision\":1}],\"next_cursor\":null,\"snapshot_revision\":1}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_list_gate_exceptions failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "issue",
+    "request": {
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": null,
+            "resource_version": "task-gates-v1"
+          }
+        },
+        "kind": "completion_waiver",
+        "binding_ids": [
+          "task/57/children"
+        ],
+        "target": {
+          "kind": "task",
+          "task_id": "57"
+        },
+        "head": null,
+        "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expires_at": "2026-11-18T00:15:00Z",
+        "operation_id": null,
+        "action_request": null,
+        "task_id": "57"
+      },
+      "reason": "Evaluate the current contract for this exact evidence."
+    },
+    "response_status": 201,
+    "response": {
+      "id": "exception-1",
+      "kind": "completion_waiver",
+      "binding_ids": [
+        "task/57/children"
+      ],
+      "target": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "head": null,
+      "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "contract_revision": 1,
+      "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "operation_id": null,
+      "actor": "person/owner",
+      "reason": "Accept this explicit child outcome exception for this delivery.",
+      "issued_at": "2026-11-17T00:15:00Z",
+      "expires_at": "2026-11-18T00:15:00Z",
+      "revoked_at": null,
+      "revision": 1
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"id\":\"exception-1\",\"kind\":\"completion_waiver\",\"binding_ids\":[\"task/57/children\"],\"target\":{\"kind\":\"task\",\"task_id\":\"57\"},\"head\":null,\"config_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contract_revision\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"operation_id\":null,\"actor\":\"person/owner\",\"reason\":\"Accept this explicit child outcome exception for this delivery.\",\"issued_at\":\"2026-11-17T00:15:00Z\",\"expires_at\":\"2026-11-18T00:15:00Z\",\"revoked_at\":null,\"revision\":1}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_issue_gate_exception failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "revoke",
+    "request": {
+      "id": "exception-1",
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": null,
+            "resource_version": "task-gates-v1"
+          }
+        },
+        "expected_exception_revision": 1
+      },
+      "reason": "Evaluate the current contract for this exact evidence."
+    },
+    "response_status": 200,
+    "response": {
+      "id": "exception-1",
+      "kind": "completion_waiver",
+      "binding_ids": [
+        "task/57/children"
+      ],
+      "target": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "head": null,
+      "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "contract_revision": 1,
+      "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "operation_id": null,
+      "actor": "person/owner",
+      "reason": "Accept this explicit child outcome exception for this delivery.",
+      "issued_at": "2026-11-17T00:15:00Z",
+      "expires_at": "2026-11-18T00:15:00Z",
+      "revoked_at": "2026-11-17T00:16:00Z",
+      "revision": 2
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"id\":\"exception-1\",\"kind\":\"completion_waiver\",\"binding_ids\":[\"task/57/children\"],\"target\":{\"kind\":\"task\",\"task_id\":\"57\"},\"head\":null,\"config_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contract_revision\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"operation_id\":null,\"actor\":\"person/owner\",\"reason\":\"Accept this explicit child outcome exception for this delivery.\",\"issued_at\":\"2026-11-17T00:15:00Z\",\"expires_at\":\"2026-11-18T00:15:00Z\",\"revoked_at\":\"2026-11-17T00:16:00Z\",\"revision\":2}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_revoke_gate_exception failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "repo_read",
+    "request": {
+      "owner": "ai-on-gke",
+      "name": "grain",
+      "query": {
+        "view": "gates"
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "policy": {
+        "api_version": "grain.gates/v1",
+        "revision": 9,
+        "source": "repository",
+        "source_id": "ai-on-gke/grain",
+        "attachments": [
+          {
+            "id": "checks",
+            "type": "checks",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "*"
+            },
+            "config": {
+              "mode": "effective",
+              "extra_jobs": [],
+              "empty": "unknown",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "repository",
+              "id": "ai-on-gke/grain",
+              "revision": "9",
+              "imported": false
+            }
+          },
+          {
+            "id": "review",
+            "type": "review",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "*"
+            },
+            "config": {
+              "category": "security",
+              "requirement_id": "security/default",
+              "semantics": "current_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "repository",
+              "id": "ai-on-gke/grain",
+              "revision": "9",
+              "imported": false
+            }
+          },
+          {
+            "id": "approval",
+            "type": "approval",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "*"
+            },
+            "config": {
+              "requirement_ids": [
+                "owners"
+              ],
+              "semantics": "exact_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "repository",
+              "id": "ai-on-gke/grain",
+              "revision": "9",
+              "imported": false
+            }
+          }
+        ],
+        "unguarded_actions": []
+      },
+      "expected": {
+        "contract_revision": 9,
+        "authority_epoch": 0,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "repo-policy-v9"
+      }
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"policy\":{\"api_version\":\"grain.gates/v1\",\"revision\":9,\"source\":\"repository\",\"source_id\":\"ai-on-gke/grain\",\"attachments\":[{\"id\":\"checks\",\"type\":\"checks\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"*\"},\"config\":{\"mode\":\"effective\",\"extra_jobs\":[],\"empty\":\"unknown\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"repository\",\"id\":\"ai-on-gke/grain\",\"revision\":\"9\",\"imported\":false}},{\"id\":\"review\",\"type\":\"review\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"*\"},\"config\":{\"category\":\"security\",\"requirement_id\":\"security/default\",\"semantics\":\"current_head_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"repository\",\"id\":\"ai-on-gke/grain\",\"revision\":\"9\",\"imported\":false}},{\"id\":\"approval\",\"type\":\"approval\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"*\"},\"config\":{\"requirement_ids\":[\"owners\"],\"semantics\":\"exact_head_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"repository\",\"id\":\"ai-on-gke/grain\",\"revision\":\"9\",\"imported\":false}}],\"unguarded_actions\":[]},\"expected\":{\"contract_revision\":9,\"authority_epoch\":0,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"repo-policy-v9\"}}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_get_repo_settings failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "repo_edit",
+    "request": {
+      "owner": "ai-on-gke",
+      "name": "grain",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 9,
+            "authority_epoch": 0,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": null,
+            "resource_version": "repo-policy-v9"
+          }
+        },
+        "gate_policy": {
+          "api_version": "grain.gates/v1",
+          "revision": 9,
+          "source": "repository",
+          "source_id": "ai-on-gke/grain",
+          "attachments": [
+            {
+              "id": "checks",
+              "type": "checks",
+              "version": 1,
+              "purpose": "guard",
+              "required": true,
+              "action": "change.merge",
+              "subject": {
+                "kind": "change",
+                "authority": "github.com",
+                "repository": "ai-on-gke/grain",
+                "change_kind": "pr",
+                "id": "*"
+              },
+              "config": {
+                "mode": "effective",
+                "extra_jobs": [],
+                "empty": "unknown",
+                "semantics": "current_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "repository",
+                "id": "ai-on-gke/grain",
+                "revision": "9",
+                "imported": false
+              }
+            },
+            {
+              "id": "review",
+              "type": "review",
+              "version": 1,
+              "purpose": "guard",
+              "required": true,
+              "action": "change.merge",
+              "subject": {
+                "kind": "change",
+                "authority": "github.com",
+                "repository": "ai-on-gke/grain",
+                "change_kind": "pr",
+                "id": "*"
+              },
+              "config": {
+                "category": "security",
+                "requirement_id": "security/default",
+                "semantics": "current_head_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "repository",
+                "id": "ai-on-gke/grain",
+                "revision": "9",
+                "imported": false
+              }
+            },
+            {
+              "id": "approval",
+              "type": "approval",
+              "version": 1,
+              "purpose": "guard",
+              "required": true,
+              "action": "change.merge",
+              "subject": {
+                "kind": "change",
+                "authority": "github.com",
+                "repository": "ai-on-gke/grain",
+                "change_kind": "pr",
+                "id": "*"
+              },
+              "config": {
+                "requirement_ids": [
+                  "owners"
+                ],
+                "semantics": "exact_head_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "repository",
+                "id": "ai-on-gke/grain",
+                "revision": "9",
+                "imported": false
+              }
+            }
+          ],
+          "unguarded_actions": []
+        },
+        "retire_guard_bindings": []
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "policy": {
+        "api_version": "grain.gates/v1",
+        "revision": 10,
+        "source": "repository",
+        "source_id": "ai-on-gke/grain",
+        "attachments": [
+          {
+            "id": "checks",
+            "type": "checks",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "*"
+            },
+            "config": {
+              "mode": "effective",
+              "extra_jobs": [],
+              "empty": "unknown",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "repository",
+              "id": "ai-on-gke/grain",
+              "revision": "9",
+              "imported": false
+            }
+          },
+          {
+            "id": "review",
+            "type": "review",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "*"
+            },
+            "config": {
+              "category": "security",
+              "requirement_id": "security/default",
+              "semantics": "current_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "repository",
+              "id": "ai-on-gke/grain",
+              "revision": "9",
+              "imported": false
+            }
+          },
+          {
+            "id": "approval",
+            "type": "approval",
+            "version": 1,
+            "purpose": "guard",
+            "required": true,
+            "action": "change.merge",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "*"
+            },
+            "config": {
+              "requirement_ids": [
+                "owners"
+              ],
+              "semantics": "exact_head_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "repository",
+              "id": "ai-on-gke/grain",
+              "revision": "9",
+              "imported": false
+            }
+          }
+        ],
+        "unguarded_actions": []
+      },
+      "expected": {
+        "contract_revision": 10,
+        "authority_epoch": 0,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "repo-policy-v10"
+      }
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"policy\":{\"api_version\":\"grain.gates/v1\",\"revision\":10,\"source\":\"repository\",\"source_id\":\"ai-on-gke/grain\",\"attachments\":[{\"id\":\"checks\",\"type\":\"checks\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"*\"},\"config\":{\"mode\":\"effective\",\"extra_jobs\":[],\"empty\":\"unknown\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"repository\",\"id\":\"ai-on-gke/grain\",\"revision\":\"9\",\"imported\":false}},{\"id\":\"review\",\"type\":\"review\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"*\"},\"config\":{\"category\":\"security\",\"requirement_id\":\"security/default\",\"semantics\":\"current_head_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"repository\",\"id\":\"ai-on-gke/grain\",\"revision\":\"9\",\"imported\":false}},{\"id\":\"approval\",\"type\":\"approval\",\"version\":1,\"purpose\":\"guard\",\"required\":true,\"action\":\"change.merge\",\"subject\":{\"kind\":\"change\",\"authority\":\"github.com\",\"repository\":\"ai-on-gke/grain\",\"change_kind\":\"pr\",\"id\":\"*\"},\"config\":{\"requirement_ids\":[\"owners\"],\"semantics\":\"exact_head_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"repository\",\"id\":\"ai-on-gke/grain\",\"revision\":\"9\",\"imported\":false}}],\"unguarded_actions\":[]},\"expected\":{\"contract_revision\":10,\"authority_epoch\":0,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"repo-policy-v10\"}}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_set_repo_settings failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "template_read",
+    "request": {
+      "id": "report-v1",
+      "query": {
+        "view": "gates"
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "template_id": "report-v1",
+      "template_revision": "7",
+      "gate_defaults": {
+        "policy": {
+          "api_version": "grain.gates/v1",
+          "revision": 7,
+          "source": "template",
+          "source_id": "report-v1",
+          "attachments": [
+            {
+              "id": "delivery",
+              "type": "delivery",
+              "version": 1,
+              "purpose": "completion",
+              "required": true,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "self"
+              },
+              "config": {
+                "product": "report",
+                "semantics": "current_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "template",
+                "id": "report-v1",
+                "revision": "7",
+                "imported": false
+              }
+            },
+            {
+              "id": "acknowledgment",
+              "type": "acknowledgment",
+              "version": 1,
+              "purpose": "completion",
+              "required": true,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "self"
+              },
+              "config": {
+                "mode": "explicit_receipt"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "template",
+                "id": "report-v1",
+                "revision": "7",
+                "imported": false
+              }
+            }
+          ],
+          "unguarded_actions": []
+        },
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        }
+      },
+      "expected": {
+        "contract_revision": 7,
+        "authority_epoch": 0,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "7"
+      }
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"template_id\":\"report-v1\",\"template_revision\":\"7\",\"gate_defaults\":{\"policy\":{\"api_version\":\"grain.gates/v1\",\"revision\":7,\"source\":\"template\",\"source_id\":\"report-v1\",\"attachments\":[{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"self\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}},{\"id\":\"acknowledgment\",\"type\":\"acknowledgment\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"self\"},\"config\":{\"mode\":\"explicit_receipt\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}}],\"unguarded_actions\":[]},\"lifecycle\":{\"intent\":\"finite\",\"on_met\":\"close\",\"on_limit\":\"hold\",\"max_resumes\":5,\"max_stall_seconds\":43200}},\"expected\":{\"contract_revision\":7,\"authority_epoch\":0,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"7\"}}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_template_composition failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "template_edit",
+    "request": {
+      "id": "report-v1",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 7,
+            "authority_epoch": 0,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": null,
+            "resource_version": "7"
+          }
+        },
+        "expected_template_revision": "7",
+        "gate_defaults": {
+          "policy": {
+            "api_version": "grain.gates/v1",
+            "revision": 7,
+            "source": "template",
+            "source_id": "report-v1",
+            "attachments": [
+              {
+                "id": "delivery",
+                "type": "delivery",
+                "version": 1,
+                "purpose": "completion",
+                "required": true,
+                "action": null,
+                "subject": {
+                  "kind": "task",
+                  "task_id": "self"
+                },
+                "config": {
+                  "product": "report",
+                  "semantics": "current_v1"
+                },
+                "freshness_seconds": 300,
+                "origin": {
+                  "kind": "template",
+                  "id": "report-v1",
+                  "revision": "7",
+                  "imported": false
+                }
+              },
+              {
+                "id": "acknowledgment",
+                "type": "acknowledgment",
+                "version": 1,
+                "purpose": "completion",
+                "required": true,
+                "action": null,
+                "subject": {
+                  "kind": "task",
+                  "task_id": "self"
+                },
+                "config": {
+                  "mode": "explicit_receipt"
+                },
+                "freshness_seconds": 300,
+                "origin": {
+                  "kind": "template",
+                  "id": "report-v1",
+                  "revision": "7",
+                  "imported": false
+                }
+              }
+            ],
+            "unguarded_actions": []
+          },
+          "lifecycle": {
+            "intent": "finite",
+            "on_met": "close",
+            "on_limit": "hold",
+            "max_resumes": 5,
+            "max_stall_seconds": 43200
+          }
+        }
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "template_id": "report-v1",
+      "template_revision": "8",
+      "gate_defaults": {
+        "policy": {
+          "api_version": "grain.gates/v1",
+          "revision": 8,
+          "source": "template",
+          "source_id": "report-v1",
+          "attachments": [
+            {
+              "id": "delivery",
+              "type": "delivery",
+              "version": 1,
+              "purpose": "completion",
+              "required": true,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "self"
+              },
+              "config": {
+                "product": "report",
+                "semantics": "current_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "template",
+                "id": "report-v1",
+                "revision": "8",
+                "imported": false
+              }
+            },
+            {
+              "id": "acknowledgment",
+              "type": "acknowledgment",
+              "version": 1,
+              "purpose": "completion",
+              "required": true,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "self"
+              },
+              "config": {
+                "mode": "explicit_receipt"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "template",
+                "id": "report-v1",
+                "revision": "8",
+                "imported": false
+              }
+            }
+          ],
+          "unguarded_actions": []
+        },
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        }
+      },
+      "expected": {
+        "contract_revision": 8,
+        "authority_epoch": 0,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "8"
+      }
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"template_id\":\"report-v1\",\"template_revision\":\"8\",\"gate_defaults\":{\"policy\":{\"api_version\":\"grain.gates/v1\",\"revision\":8,\"source\":\"template\",\"source_id\":\"report-v1\",\"attachments\":[{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"self\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"8\",\"imported\":false}},{\"id\":\"acknowledgment\",\"type\":\"acknowledgment\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"self\"},\"config\":{\"mode\":\"explicit_receipt\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"8\",\"imported\":false}}],\"unguarded_actions\":[]},\"lifecycle\":{\"intent\":\"finite\",\"on_met\":\"close\",\"on_limit\":\"hold\",\"max_resumes\":5,\"max_stall_seconds\":43200}},\"expected\":{\"contract_revision\":8,\"authority_epoch\":0,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"8\"}}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_update_template failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "preview",
+    "request": {
+      "body": {
+        "repo": "ai-on-gke/grain",
+        "template_id": "report-v1",
+        "template_revision": "7",
+        "fields": {},
+        "task_policy": {
+          "api_version": "grain.gates/v1",
+          "revision": 1,
+          "source": "task",
+          "source_id": "self",
+          "attachments": [
+            {
+              "id": "delivery",
+              "type": "delivery",
+              "version": 1,
+              "purpose": "completion",
+              "required": true,
+              "action": null,
+              "subject": {
+                "kind": "task",
+                "task_id": "self"
+              },
+              "config": {
+                "product": "report",
+                "semantics": "current_v1"
+              },
+              "freshness_seconds": 300,
+              "origin": {
+                "kind": "task",
+                "id": "self",
+                "revision": "1",
+                "imported": false
+              }
+            }
+          ],
+          "unguarded_actions": []
+        },
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        },
+        "no_repo": false
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "contract": {
+        "api_version": "grain.gates/v1",
+        "task_id": "preview:self",
+        "revision": 1,
+        "authority": "builtins",
+        "authority_epoch": 1,
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        },
+        "attachments": [
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "preview:self"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "template",
+              "id": "report-v1",
+              "revision": "7",
+              "imported": false
+            }
+          },
+          {
+            "id": "acknowledgment",
+            "type": "acknowledgment",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "preview:self"
+            },
+            "config": {
+              "mode": "explicit_receipt"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "template",
+              "id": "report-v1",
+              "revision": "7",
+              "imported": false
+            }
+          },
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "preview:self"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "self",
+              "revision": "1",
+              "imported": false
+            }
+          }
+        ],
+        "source_revisions": [
+          {
+            "source": "repository/ai-on-gke/grain",
+            "revision": "9"
+          },
+          {
+            "source": "template/report-v1",
+            "revision": "7"
+          },
+          {
+            "source": "task/self",
+            "revision": "1"
+          }
+        ]
+      },
+      "preview_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_revisions": [
+        {
+          "source": "repository/ai-on-gke/grain",
+          "revision": "9"
+        },
+        {
+          "source": "template/report-v1",
+          "revision": "7"
+        },
+        {
+          "source": "task/self",
+          "revision": "1"
+        }
+      ],
+      "registry_digest": "sha256:f61b811db2c6c4c4997bd1c0ecbf73c3468102f31fe793c0218ef7e7be03b918",
+      "expires_at": "2026-11-17T00:20:00Z",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "preview-v1"
+      }
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"contract\":{\"api_version\":\"grain.gates/v1\",\"task_id\":\"preview:self\",\"revision\":1,\"authority\":\"builtins\",\"authority_epoch\":1,\"lifecycle\":{\"intent\":\"finite\",\"on_met\":\"close\",\"on_limit\":\"hold\",\"max_resumes\":5,\"max_stall_seconds\":43200},\"attachments\":[{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"preview:self\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}},{\"id\":\"acknowledgment\",\"type\":\"acknowledgment\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"preview:self\"},\"config\":{\"mode\":\"explicit_receipt\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}},{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"preview:self\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"self\",\"revision\":\"1\",\"imported\":false}}],\"source_revisions\":[{\"source\":\"repository/ai-on-gke/grain\",\"revision\":\"9\"},{\"source\":\"template/report-v1\",\"revision\":\"7\"},{\"source\":\"task/self\",\"revision\":\"1\"}]},\"preview_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_revisions\":[{\"source\":\"repository/ai-on-gke/grain\",\"revision\":\"9\"},{\"source\":\"template/report-v1\",\"revision\":\"7\"},{\"source\":\"task/self\",\"revision\":\"1\"}],\"registry_digest\":\"sha256:f61b811db2c6c4c4997bd1c0ecbf73c3468102f31fe793c0218ef7e7be03b918\",\"expires_at\":\"2026-11-17T00:20:00Z\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"preview-v1\"}}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_preview_gate_contract failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "file",
+    "request": {
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "title": "Deliver the report and obtain receipt",
+        "description": "Report delivery and acknowledgment are separate obligations.",
+        "repo": "ai-on-gke/grain",
+        "template_id": "report-v1",
+        "fields": {},
+        "gate_admission": {
+          "preview_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "materialize": {
+            "repo": "ai-on-gke/grain",
+            "template_id": "report-v1",
+            "template_revision": "7",
+            "fields": {},
+            "task_policy": {
+              "api_version": "grain.gates/v1",
+              "revision": 1,
+              "source": "task",
+              "source_id": "self",
+              "attachments": [
+                {
+                  "id": "delivery",
+                  "type": "delivery",
+                  "version": 1,
+                  "purpose": "completion",
+                  "required": true,
+                  "action": null,
+                  "subject": {
+                    "kind": "task",
+                    "task_id": "self"
+                  },
+                  "config": {
+                    "product": "report",
+                    "semantics": "current_v1"
+                  },
+                  "freshness_seconds": 300,
+                  "origin": {
+                    "kind": "task",
+                    "id": "self",
+                    "revision": "1",
+                    "imported": false
+                  }
+                }
+              ],
+              "unguarded_actions": []
+            },
+            "lifecycle": {
+              "intent": "finite",
+              "on_met": "close",
+              "on_limit": "hold",
+              "max_resumes": 5,
+              "max_stall_seconds": 43200
+            },
+            "no_repo": false
+          },
+          "idempotency_key": "file-report-1"
+        },
+        "no_repo": false
+      }
+    },
+    "response_status": 201,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "task_id": "60",
+      "authority": "builtins",
+      "authority_epoch": 1,
+      "revision": 1,
+      "contract": {
+        "api_version": "grain.gates/v1",
+        "task_id": "60",
+        "revision": 1,
+        "authority": "builtins",
+        "authority_epoch": 1,
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        },
+        "attachments": [
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "60"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "template",
+              "id": "report-v1",
+              "revision": "7",
+              "imported": false
+            }
+          },
+          {
+            "id": "acknowledgment",
+            "type": "acknowledgment",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "60"
+            },
+            "config": {
+              "mode": "explicit_receipt"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "template",
+              "id": "report-v1",
+              "revision": "7",
+              "imported": false
+            }
+          },
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "60"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "60",
+              "revision": "1",
+              "imported": false
+            }
+          }
+        ],
+        "source_revisions": [
+          {
+            "source": "repository/ai-on-gke/grain",
+            "revision": "9"
+          },
+          {
+            "source": "template/report-v1",
+            "revision": "7"
+          },
+          {
+            "source": "task/60",
+            "revision": "1"
+          }
+        ]
+      },
+      "decision": null,
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task/60/gates-v1"
+      },
+      "results": [],
+      "blockers": [],
+      "exceptions": [],
+      "actions": [],
+      "legacy_state": "proposed",
+      "dirty": true
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"task_id\":\"60\",\"authority\":\"builtins\",\"authority_epoch\":1,\"revision\":1,\"contract\":{\"api_version\":\"grain.gates/v1\",\"task_id\":\"60\",\"revision\":1,\"authority\":\"builtins\",\"authority_epoch\":1,\"lifecycle\":{\"intent\":\"finite\",\"on_met\":\"close\",\"on_limit\":\"hold\",\"max_resumes\":5,\"max_stall_seconds\":43200},\"attachments\":[{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"60\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}},{\"id\":\"acknowledgment\",\"type\":\"acknowledgment\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"60\"},\"config\":{\"mode\":\"explicit_receipt\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}},{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"60\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"60\",\"revision\":\"1\",\"imported\":false}}],\"source_revisions\":[{\"source\":\"repository/ai-on-gke/grain\",\"revision\":\"9\"},{\"source\":\"template/report-v1\",\"revision\":\"7\"},{\"source\":\"task/60\",\"revision\":\"1\"}]},\"decision\":null,\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"task/60/gates-v1\"},\"results\":[],\"blockers\":[],\"exceptions\":[],\"actions\":[],\"legacy_state\":\"proposed\",\"dirty\":true}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_create_task failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "from_template",
+    "request": {
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "repo": "ai-on-gke/grain",
+        "fields": {},
+        "gate_admission": {
+          "preview_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "materialize": {
+            "repo": "ai-on-gke/grain",
+            "template_id": "report-v1",
+            "template_revision": "7",
+            "fields": {},
+            "task_policy": {
+              "api_version": "grain.gates/v1",
+              "revision": 1,
+              "source": "task",
+              "source_id": "self",
+              "attachments": [
+                {
+                  "id": "delivery",
+                  "type": "delivery",
+                  "version": 1,
+                  "purpose": "completion",
+                  "required": true,
+                  "action": null,
+                  "subject": {
+                    "kind": "task",
+                    "task_id": "self"
+                  },
+                  "config": {
+                    "product": "report",
+                    "semantics": "current_v1"
+                  },
+                  "freshness_seconds": 300,
+                  "origin": {
+                    "kind": "task",
+                    "id": "self",
+                    "revision": "1",
+                    "imported": false
+                  }
+                }
+              ],
+              "unguarded_actions": []
+            },
+            "lifecycle": {
+              "intent": "finite",
+              "on_met": "close",
+              "on_limit": "hold",
+              "max_resumes": 5,
+              "max_stall_seconds": 43200
+            },
+            "no_repo": false
+          },
+          "idempotency_key": "file-report-1"
+        },
+        "template": "report-v1",
+        "approved": false
+      }
+    },
+    "response_status": 201,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "task_id": "60",
+      "authority": "builtins",
+      "authority_epoch": 1,
+      "revision": 1,
+      "contract": {
+        "api_version": "grain.gates/v1",
+        "task_id": "60",
+        "revision": 1,
+        "authority": "builtins",
+        "authority_epoch": 1,
+        "lifecycle": {
+          "intent": "finite",
+          "on_met": "close",
+          "on_limit": "hold",
+          "max_resumes": 5,
+          "max_stall_seconds": 43200
+        },
+        "attachments": [
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "60"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "template",
+              "id": "report-v1",
+              "revision": "7",
+              "imported": false
+            }
+          },
+          {
+            "id": "acknowledgment",
+            "type": "acknowledgment",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "60"
+            },
+            "config": {
+              "mode": "explicit_receipt"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "template",
+              "id": "report-v1",
+              "revision": "7",
+              "imported": false
+            }
+          },
+          {
+            "id": "delivery",
+            "type": "delivery",
+            "version": 1,
+            "purpose": "completion",
+            "required": true,
+            "action": null,
+            "subject": {
+              "kind": "task",
+              "task_id": "60"
+            },
+            "config": {
+              "product": "report",
+              "semantics": "current_v1"
+            },
+            "freshness_seconds": 300,
+            "origin": {
+              "kind": "task",
+              "id": "60",
+              "revision": "1",
+              "imported": false
+            }
+          }
+        ],
+        "source_revisions": [
+          {
+            "source": "repository/ai-on-gke/grain",
+            "revision": "9"
+          },
+          {
+            "source": "template/report-v1",
+            "revision": "7"
+          },
+          {
+            "source": "task/60",
+            "revision": "1"
+          }
+        ]
+      },
+      "decision": null,
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task/60/gates-v1"
+      },
+      "results": [],
+      "blockers": [],
+      "exceptions": [],
+      "actions": [],
+      "legacy_state": "proposed",
+      "dirty": true
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"task_id\":\"60\",\"authority\":\"builtins\",\"authority_epoch\":1,\"revision\":1,\"contract\":{\"api_version\":\"grain.gates/v1\",\"task_id\":\"60\",\"revision\":1,\"authority\":\"builtins\",\"authority_epoch\":1,\"lifecycle\":{\"intent\":\"finite\",\"on_met\":\"close\",\"on_limit\":\"hold\",\"max_resumes\":5,\"max_stall_seconds\":43200},\"attachments\":[{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"60\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}},{\"id\":\"acknowledgment\",\"type\":\"acknowledgment\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"60\"},\"config\":{\"mode\":\"explicit_receipt\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"template\",\"id\":\"report-v1\",\"revision\":\"7\",\"imported\":false}},{\"id\":\"delivery\",\"type\":\"delivery\",\"version\":1,\"purpose\":\"completion\",\"required\":true,\"action\":null,\"subject\":{\"kind\":\"task\",\"task_id\":\"60\"},\"config\":{\"product\":\"report\",\"semantics\":\"current_v1\"},\"freshness_seconds\":300,\"origin\":{\"kind\":\"task\",\"id\":\"60\",\"revision\":\"1\",\"imported\":false}}],\"source_revisions\":[{\"source\":\"repository/ai-on-gke/grain\",\"revision\":\"9\"},{\"source\":\"template/report-v1\",\"revision\":\"7\"},{\"source\":\"task/60\",\"revision\":\"1\"}]},\"decision\":null,\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"task/60/gates-v1\"},\"results\":[],\"blockers\":[],\"exceptions\":[],\"actions\":[],\"legacy_state\":\"proposed\",\"dirty\":true}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_create_task_from_template failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "review",
+    "request": {
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "pr": "ai-on-gke/grain#1710",
+        "design": false,
+        "spec": "",
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "requirement_id": "ordinary-review"
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "review-request-1",
+      "task_id": "57",
+      "kind": "request_review",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"review-request-1\",\"task_id\":\"57\",\"kind\":\"request_review\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_review_pull_request failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "ci",
+    "request": {
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "taskId": "57",
+        "repo": "ai-on-gke/grain",
+        "ref": "feature",
+        "commit": "H1",
+        "event": "push",
+        "workflow": "",
+        "jobs": [],
+        "recheck": true,
+        "recheckFailed": false,
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "ci-request-1",
+      "task_id": "57",
+      "kind": "run_ci",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"ci-request-1\",\"task_id\":\"57\",\"kind\":\"run_ci\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_start_ci_run failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "rerun",
+    "request": {
+      "id": "run-7",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "jobs": [],
+        "all": false,
+        "workflow": "",
+        "commit": "H1",
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "ci-retry-1",
+      "task_id": "57",
+      "kind": "run_ci",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"ci-retry-1\",\"task_id\":\"57\",\"kind\":\"run_ci\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_rerun_ci_run failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "reply",
+    "request": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "body": "Use the proposed report scope.",
+        "question_id": "question-2",
+        "question_version": "message-4",
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": null,
+            "resource_version": "task-gates-v1"
+          }
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "answer-1",
+      "task_id": "57",
+      "kind": "reply",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task-gates-v1"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"answer-1\",\"task_id\":\"57\",\"kind\":\"reply\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"task-gates-v1\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_reply_task failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "ack",
+    "request": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "disposition": "acknowledge",
+        "report_id": "report-1",
+        "report_version": "delivery-2",
+        "close_pull_request": false,
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": null,
+            "resource_version": "task-gates-v1"
+          }
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "ack-1",
+      "task_id": "57",
+      "kind": "acknowledge",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": null,
+        "resource_version": "task-gates-v1"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"ack-1\",\"task_id\":\"57\",\"kind\":\"acknowledge\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":null,\"resource_version\":\"task-gates-v1\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_close failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "findings",
+    "request": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "gate": "review",
+        "reviewTask": "58",
+        "review_version": "review-v3",
+        "reason": "Accept this documented low-risk finding on H1.",
+        "head": "H1",
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "findings-1",
+      "task_id": "57",
+      "kind": "accept_findings",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "person_required",
+        "message": "Request rejected without changing the protected resource.",
+        "retryable": false,
+        "recovery": "ask_person",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"findings-1\",\"task_id\":\"57\",\"kind\":\"accept_findings\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_accept_findings failed: HTTP 403: {\"error\":{\"code\":\"person_required\",\"message\":\"Request rejected without changing the protected resource.\",\"retryable\":false,\"recovery\":\"ask_person\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "reconcile",
+    "request": {
+      "id": "merge-1",
+      "body": {
+        "mutation": {
+          "idempotency_key": "request-59-1",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "reconcile-1",
+      "task_id": "57",
+      "kind": "reconcile",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": null
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"api_version\":\"grain.gates/v1\",\"operation_id\":\"reconcile-1\",\"task_id\":\"57\",\"kind\":\"reconcile\",\"state\":\"requested\",\"revision\":1,\"created_at\":\"2026-11-17T00:15:00Z\",\"updated_at\":\"2026-11-17T00:15:00Z\",\"actor\":\"person/owner\",\"idempotency_key\":\"request-59-1\",\"expected\":{\"contract_revision\":1,\"authority_epoch\":1,\"policy_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"context_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence_digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"head\":\"H1\",\"resource_version\":\"pr-v3\"},\"result_ids\":[],\"external_ids\":[],\"receipt\":null,\"error\":null,\"retry_at\":null,\"submit_intent\":null}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_reconcile_gate_operation failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  },
+  {
+    "operation": "events",
+    "request": {
+      "query": {
+        "since": "0",
+        "types": "task.gates,task.gate_operation",
+        "limit": 20,
+        "wait": 0,
+        "stream": "0"
+      }
+    },
+    "response_status": 200,
+    "response": {
+      "events": [
+        {
+          "id": "41",
+          "type": "task.gates",
+          "at": "2026-11-17T00:15:00Z",
+          "taskId": "57",
+          "repo": "ai-on-gke/grain",
+          "summary": "Current gate evidence invalidated; refresh gates view."
+        }
+      ],
+      "cursor": "41"
+    },
+    "error_status": 403,
+    "error": {
+      "error": {
+        "code": "forbidden",
+        "message": "Caller lacks the scoped operation authority.",
+        "retryable": false,
+        "recovery": "request_access",
+        "operation_id": null,
+        "field": null,
+        "current": null
+      }
+    },
+    "tool_success": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"events\":[{\"id\":\"41\",\"type\":\"task.gates\",\"at\":\"2026-11-17T00:15:00Z\",\"taskId\":\"57\",\"repo\":\"ai-on-gke/grain\",\"summary\":\"Current gate evidence invalidated; refresh gates view.\"}],\"cursor\":\"41\"}"
+        }
+      ],
+      "isError": false
+    },
+    "tool_error": {
+      "content": [
+        {
+          "type": "text",
+          "text": "api_events failed: HTTP 403: {\"error\":{\"code\":\"forbidden\",\"message\":\"Caller lacks the scoped operation authority.\",\"retryable\":false,\"recovery\":\"request_access\",\"operation_id\":null,\"field\":null,\"current\":null}}"
+        }
+      ],
+      "isError": true
+    }
+  }
+]
