@@ -1106,6 +1106,11 @@ export class TaskChangesTabComponent {
         t0.state === "proposed"
           ? "Proposals do not have a branch diff yet."
           : "No branch associated with this task yet.";
+    } else if (!t0.repo) {
+      // The server previews only a repository branch (it answers 404
+      // for a task with no repository), so a changelist has none here.
+      skipDiff =
+        "This task's change is a changelist, with no repository branch to preview.";
     } else if (t0.repo && t0.branch) {
       const present = await this.branchRefs.hasBranch(t0.repo, t0.branch);
       if (this.task().id !== id) return;
