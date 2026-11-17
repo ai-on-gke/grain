@@ -361,6 +361,9 @@ func Start(opts Options) (_ *Server, err error) {
 	// starts ends with it, when Close cancels it.
 	bg, cancel := context.WithCancel(context.Background())
 	s := &Server{cancel: cancel}
+	// Its CLs' state is the process's (demoCLState): shared with any demo
+	// alive beside it, and reset when the last of them closes.
+	s.cleanups = append(s.cleanups, demoCLState.acquire())
 	defer func() {
 		if err != nil {
 			s.Close()
@@ -1850,7 +1853,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	// Its primary CL's presubmit failed; four more CL tasks show the
 	// badge's other states (changelists.md §3). What a poll would have
 	// recorded is remembered directly: the demo has no provider to poll.
-	change.Remember(change.Observation{Target: "cl/612400001", Health: change.HealthFailing,
+	clObs := []change.Observation{{Target: "cl/612400001", Health: change.HealthFailing,
 		Presubmit: change.PresubmitFailed, Snapshot: 3, Checks: []change.Check{
 			{Name: "//devtools/grain/retry:budget_test", State: "failed"},
 			{Name: "//devtools/grain/retry:lint", State: "failed"},
@@ -1858,7 +1861,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		},
 		// And its reviewer asked for changes (changelists.md §5); the four
 		// below show the review badge's other states.
-		ReviewState: change.ReviewStateChangesRequested})
+		ReviewState: change.ReviewStateChangesRequested}}
 	for i, seed := range []struct {
 		title, cl, presubmit string
 		health               change.Health
@@ -1896,7 +1899,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		}
 		obs := seed.review
 		obs.Target, obs.Health, obs.Presubmit, obs.Snapshot = seed.cl, seed.health, seed.presubmit, 1
-		change.Remember(obs)
+		clObs = append(clObs, obs)
 	}
 	// One more, approved and passing but behind head: its Submit is
 	// disabled with that reason and its Sync is offered, where the
@@ -1920,12 +1923,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	}); err != nil {
 		return fmt.Errorf("seeding a changelist task: %w", err)
 	}
-	change.Remember(change.Observation{Target: "cl/612400105", Health: change.HealthBehind, Presubmit: change.PresubmitPassed,
+	clObs = append(clObs, change.Observation{Target: "cl/612400105", Health: change.HealthBehind, Presubmit: change.PresubmitPassed,
 		Snapshot: 2, ReviewState: change.ReviewStateApproved, LGTM: []string{"carol"}})
 	registerDemoChangelists()
 	// The failed CL's run left two replies to its reviewer as drafts, so
 	// its Publish replies button has something to publish (§5).
-	demoDrafts.leave(clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
+	demoCLState.seed(clObs, clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
 
 	if err := seedDemoDurableTask(ctx, store, create, ago); err != nil {
 		return err
@@ -1944,6 +1947,89 @@ type demoChangelists struct{}
 // demoDrafts is the replies runs left as drafts on the demo's CLs, per
 // task and CL, until a publish clears them.
 var demoDrafts = &demoDraftStore{byTask: map[string]map[string]int{}}
+
+// demoCLState is the demo's share of pkg/change's process-wide state: the
+// observations its CLs are remembered with (change.Remember), the drafts
+// left on them (demoDrafts, change.RememberPublish) and its provider. A
+// provider is looked up by kind and its state keyed by CL and task id, the
+// same in every demo's seed, so two demos in one process cannot each
+// have their own. Instead every demo Start holds a lease on it: the first
+// seeds it, demos alive beside it share what that seeded (and see each
+// other's Submit, Sync, Mail and Publish replies), and when the last
+// closes it is reset, so the next Start seeds afresh -- two waiting drafts
+// on the failed CL, however many demos this process has started before.
+var demoCLState = &demoCLLease{}
+
+type demoCLLease struct {
+	mu     sync.Mutex
+	live   int // demo Starts not yet closed
+	seeded bool
+	cls    []string
+}
+
+// acquire is a demo Start taking the lease; the func it answers releases
+// it, once.
+func (l *demoCLLease) acquire() func() {
+	l.mu.Lock()
+	l.live++
+	l.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(l.release) }
+}
+
+func (l *demoCLLease) release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.live--
+	if l.live == 0 {
+		l.resetLocked()
+	}
+}
+
+// seed remembers obs and leaves n drafts on cl for taskID -- exactly n,
+// whatever an earlier seed left -- unless another live demo already
+// seeded what this one would share. A seedDemo outside any Start (the
+// package's own tests) always seeds.
+func (l *demoCLLease) seed(obs []change.Observation, taskID, cl string, n int, reason string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.seeded && l.live > 1 {
+		return
+	}
+	l.resetLocked()
+	for _, o := range obs {
+		change.Remember(o)
+		l.cls = append(l.cls, o.Target)
+	}
+	demoDrafts.leave(taskID, cl, n, reason)
+	l.seeded = true
+}
+
+// reset forgets everything the demo's CLs left in pkg/change.
+func (l *demoCLLease) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.resetLocked()
+}
+
+func (l *demoCLLease) resetLocked() {
+	for _, cl := range l.cls {
+		change.Forget(cl)
+	}
+	l.cls, l.seeded = nil, false
+	demoDrafts.reset()
+}
+
+// reset drops every draft left, and what change.RememberPublish holds
+// for them.
+func (d *demoDraftStore) reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for taskID := range d.byTask {
+		change.RememberPublish(taskID, change.PublishResult{})
+	}
+	clear(d.byTask)
+}
 
 type demoDraftStore struct {
 	mu     sync.Mutex
