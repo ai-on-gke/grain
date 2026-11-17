@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // Asserted here rather than at the one call site that type-asserts for it
@@ -71,6 +72,7 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 		return nil, fmt.Errorf("claude: grainBinaryPath is required")
 	}
 	mcpArgs, err := f.mcpServerArgs(ctx, cfg)
+	ctx = mcp.WithServerEnv(ctx, agent.RunCredentialEnv(cfg)...)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +239,7 @@ func setupVertexCredentials(ctx context.Context, host agent.Host, cred string) (
 // agent.TerminalCommand.Cleanup in a session's, where "when this function
 // returns" is far too early.
 func writeMCPConfig(ctx context.Context, host agent.Host, grainBinaryPath string, mcpArgs []string, servers ...agent.CapabilityMCPServer) (string, error) {
-	configJSON, err := mcpConfigJSON(grainBinaryPath, mcpArgs, servers...)
+	configJSON, err := mcpConfigJSONEnv(grainBinaryPath, mcpArgs, mcp.ServerEnvMap(ctx), servers...)
 	if err != nil {
 		return "", fmt.Errorf("claude: building mcp config: %w", err)
 	}

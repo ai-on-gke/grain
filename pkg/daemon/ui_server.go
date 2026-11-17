@@ -348,6 +348,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		Consoles:              consoleSessions,
 		Secrets:               uiSecrets,
 		LocalScriptApprovals:  localScriptApprovals,
+		// What each run's mcpserver reaches this API with instead of
+		// the access code (runCredentialMinter).
+		RunCredentialKey: runCredentialKey(cfg.DataDir),
 		// The registry run() attaches capability servers into, for the
 		// status column of Settings' Capability servers pane.
 		CapabilityServers: capabilityServerStatuses(live),
@@ -1039,17 +1042,25 @@ func restartAdoption(report *orchestrator.AdoptionReport) *ui.RestartAdoption {
 }
 
 // controllerMCPTransport carries a run's grain-controller calls to this
-// daemon's own POST /api/mcp as the daemon itself: in-process through
-// LiveAPI (which startUIServer publishes whether or not -ui-addr opens a
-// listener), as an authenticated loopback request that runs the same
-// gates a TCP one does (LoopbackRoundTrip) -- so it needs no listener to
-// be reachable, no IAP to admit it, and sends the access code nowhere.
+// daemon's own POST /api/mcp: in-process through LiveAPI (which
+// startUIServer publishes whether or not -ui-addr opens a listener), as an
+// authenticated loopback request that runs the same gates a TCP one does
+// (LoopbackRoundTrip) -- so it needs no listener to be reachable, no IAP
+// to admit it, and sends no credential anywhere. It authenticates with
+// the run's own credential (runCredentialMinter), which is what lets its
+// X-Grain-Acting-Task be believed, and with the access code only where
+// the run was minted none.
 type controllerMCPTransport struct {
-	dataDir string
+	dataDir    string
+	credential string
 }
 
 func (t controllerMCPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	out := req.Clone(req.Context())
+	if t.credential != "" {
+		out.Header.Set("Authorization", "Bearer "+t.credential)
+		return LiveAPI.LoopbackRoundTrip(out)
+	}
 	// Read per request rather than once: the access code rotates
 	// (RotateLocalAPIToken) and a run outlives a rotation.
 	if t.dataDir != "" {
@@ -1064,10 +1075,10 @@ func (t controllerMCPTransport) RoundTrip(req *http.Request) (*http.Response, er
 
 // controllerMCPProxy returns orchestrator.Config.ControllerMCP for this daemon:
 // a host-side capability proxy targeting POST /api/mcp with daemon auth
-// (X-Grain-Access-Code) and X-Grain-Acting-Task: <taskID> injected.
-func controllerMCPProxy(cfg Config) func(taskID string) (*protocol.Proxy, error) {
-	client := &http.Client{Transport: controllerMCPTransport{dataDir: cfg.DataDir}}
-	return func(taskID string) (*protocol.Proxy, error) {
+// (the run's credential) and X-Grain-Acting-Task: <taskID> injected.
+func controllerMCPProxy(cfg Config) func(taskID, credential string) (*protocol.Proxy, error) {
+	return func(taskID, credential string) (*protocol.Proxy, error) {
+		client := &http.Client{Transport: controllerMCPTransport{dataDir: cfg.DataDir, credential: credential}}
 		taskID = strings.TrimSpace(taskID)
 		if taskID == "" {
 			// Without an acting task the endpoint would answer as the
@@ -1076,5 +1087,35 @@ func controllerMCPProxy(cfg Config) func(taskID string) (*protocol.Proxy, error)
 		}
 		// The URL's host is nominal: the transport never dials it.
 		return protocol.NewEndpointProxy("http://127.0.0.1/api/mcp", map[string]string{ui.ActingTaskHeader: taskID}, client)
+	}
+}
+
+// runCredentialKey is the key this deployment signs its run credentials
+// with (ui.RunCredentialKeyPath under dataDir, written on first use), nil
+// with no data directory or none that can be written -- a daemon that then
+// mints no run credentials, and whose runs carry the access code.
+func runCredentialKey(dataDir string) []byte {
+	if dataDir == "" {
+		return nil
+	}
+	key, err := ui.EnsureRunCredentialKey(ui.RunCredentialKeyPath(dataDir))
+	if err != nil {
+		log.Printf("grain daemon: WARNING: run credential key: %v -- runs will reach the API with the access code", err)
+		return nil
+	}
+	return key
+}
+
+// runCredentialMinter is orchestrator.Config.MintRunCredential for a
+// daemon keeping dataDir: each run's credential, signed with
+// runCredentialKey. Nil where there is no key, so that runs and the API
+// agree on whether run credentials are in use.
+func runCredentialMinter(dataDir string) func(taskID, runID string) (string, error) {
+	key := runCredentialKey(dataDir)
+	if key == nil {
+		return nil
+	}
+	return func(taskID, runID string) (string, error) {
+		return ui.MintRunCredential(key, taskID, runID)
 	}
 }

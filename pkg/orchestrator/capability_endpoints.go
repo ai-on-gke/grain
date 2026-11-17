@@ -250,7 +250,7 @@ func (m *passMaterialization) closeEndpoints() {
 // wireControllerMCP returns cfg.capabilityMCPServers with "grain-controller"
 // (POST /api/mcp) appended beside grain-sandbox when cfg.ControllerMCP is set
 // and task holds at least one api:* grant.
-func wireControllerMCP(ctx context.Context, cfg Config, store *model.Store, task model.Task) ([]agent.CapabilityMCPServer, *protocol.Endpoint, error) {
+func wireControllerMCP(ctx context.Context, cfg Config, store *model.Store, task model.Task, credential string) ([]agent.CapabilityMCPServer, *protocol.Endpoint, error) {
 	if cfg.ControllerMCP == nil {
 		return cfg.capabilityMCPServers, nil, nil
 	}
@@ -266,7 +266,7 @@ func wireControllerMCP(ctx context.Context, cfg Config, store *model.Store, task
 			return cfg.capabilityMCPServers, nil, nil
 		}
 	}
-	proxy, err := cfg.ControllerMCP(task.ID)
+	proxy, err := cfg.ControllerMCP(task.ID, credential)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building grain-controller proxy: %w", err)
 	}

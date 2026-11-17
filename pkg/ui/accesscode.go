@@ -485,7 +485,8 @@ func accessCodeName(r *http.Request, cfg IAPConfig) string {
 // singleTenantTrusted reports whether r came from somewhere this daemon
 // trusts as much as it trusts itself, so that a request naming nobody
 // runs as the deployment's own actor: a request carrying the access code, as a bearer token or an access
-// session, from wherever it came; or one handed to Server in-process
+// session, from wherever it came; one a live run's own credential admitted
+// (authenticateRunCredential); or one handed to Server in-process
 // (no RemoteAddr). Loopback and a network address
 // count for nothing here: every caller on the network,
 // this host's own included, shows the code (grain/task-4343). A
@@ -493,6 +494,9 @@ func accessCodeName(r *http.Request, cfg IAPConfig) string {
 // forwarding or identity headers beside it neither help nor hinder.
 func singleTenantTrusted(r *http.Request) bool {
 	if externalTokenFromContext(r.Context()) != nil {
+		return true
+	}
+	if _, ok := runCredentialFromContext(r.Context()); ok {
 		return true
 	}
 	cfg, _ := IAPConfigFromContext(r.Context())
