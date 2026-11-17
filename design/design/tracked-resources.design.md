@@ -10,7 +10,7 @@ The [companion normative specification](../spec/tracked-resources/tracked-resour
 
 ## Terminology and coordination
 
-[Task #39](/tasks/39), merged as [PR #1666](https://github.com/ai-on-gke/grain/pull/1666), designed MCP completion evaluators. [Task #44](/tasks/44), merged as [PR #1699](https://github.com/ai-on-gke/grain/pull/1699) in base commit `befe68b54`, names that **new extension** gates, with `gate_*`, `gate_state` and `completion_authority=gates`. The canonical references are now [mcp-gates.design.md](mcp-gates.design.md), [mcp-gates.spec.md](../spec/mcp-gates/mcp-gates.spec.md) and [wire.schema.json](../spec/mcp-gates/wire.schema.json). This proposal reconciles with that inspected merge; the gate protocol remains proposed and unimplemented.
+Tasks #39/#44/#47 introduced the earlier remote evaluator proposal. The canonical [gate design](gates.design.md) and [specification](../spec/gates/gates.spec.md) now start with configurable compiled Go evaluators. Remote gate MCP hosting/paging/broker protocols are deferred; resource providers retain their independent capability-backed proposal. Initial built-ins use existing database/forge clients and do not require this resource-provider rollout. Task #48's completed provider contracts below remain independently applicable.
 
 Gate names, state, attachment IDs and authority discriminators name only the new extension. Future implementation must pin the actual supported evaluator protocol and explicitly migrate or reject incompatible versions; a documentation merge does not make old endpoints accept new wire spellings. Do not rename concrete `TaskGoal`, `GoalKind`, `task_goal`, `ResumeOn.Goal`, `SetTaskGoal`, `ClearTaskGoal`, `PUT/DELETE /api/tasks/{id}/goal`, or their existing semantics as part of this work. Autonomous Goal Mode's `record_assumption`/`complete_goal` tools in [goal_tools.go](../../pkg/mcp/goal_tools.go) are also distinct and remain unchanged.
 
@@ -52,7 +52,7 @@ flowchart LR
   O -->|Resolve / Observe / Watch| P
   P -->|facts and change hints| O
   O --> J[Observation journal, cursors and durable timers]
-  J --> S[Versioned task evidence snapshot]
+  J --> S[Versioned authorized evidence reads]
   S --> G[Read-only gates]
   G --> L[Grain lifecycle and action arbitration]
   L -->|useful authorized work| A[Agent dispatch]
@@ -68,7 +68,7 @@ For CITC, distinguish persistent workspace identity, mutable workspace contents,
 
 ## Providers and authority {#TDD-3}
 
-Use capability server configuration, schema validation, encrypted secrets and policy admission. Discover a versioned Resolve/Observe/Watch tool trio alongside `mint_*`/`release_*` and `gate_*`, with explicit registration metadata and immutable pins. The spec defines exact names. Discovery never grants credentials, attaches a reference or adds gates. Providers are read-only with respect to resources; Watch may maintain delivery infrastructure within a separately granted watch scope. Commenting, submitting, merging and closing are typed actions in the gates action registry, with independent permissions and precondition checks.
+Use capability server configuration, schema validation, encrypted secrets and policy admission for resource acquisition. Discover the versioned Resolve/Observe/Watch trio with the exact descriptor, schema pins and transport in TDS-11. Gate evaluation is separate and in-process; it does not require gate MCP tools.
 
 Current capability leases are attempt-scoped. Durable observation outlives an agent run, so the completed contract defines a distinct revocable controller grant/lease attached to the task, exact registration pin, source scope and field projection. A lease defaults to 15 minutes, expires within one hour and renews under current authority. Do not keep a run's credential after release or mint an immortal controller credential. Configuration changes in this deployment belong to grain/config, not this repository; this proposal changes neither.
 
@@ -86,7 +86,7 @@ Watch v1 returns authenticated change hints in bounded replies to Grain-initiate
 
 Each wait names a resource, driver, freshness/reconciliation timer and escalation. A timeout, expired cursor, deleted resource, access denial or provider outage never satisfies a required condition. Errors wake evaluators only as needed to change blockers; repeated errors back off and escalate without running an agent to poll. Freshness expiration wakes the evaluator even without an event. A deadline rechecks or escalates, never auto-passes.
 
-Gates consume immutable, authorized observation records in the Task #39 versioned task snapshot. All results in a closure bundle use one contract/evidence revision, authority epoch, policy revision and message watermark. Required evidence must be fresh at the closure transaction. Relevant changes invalidate results, buttons, action preconditions and evidence-scoped waivers; a PR head or workspace snapshot change requires new evidence. Settle/fence live writers and pending observation invalidations before atomic closure. External systems cannot participate in Grain's SQL transaction: closure records the fresh observed evidence and external cutoff, not a claim of linearizable remote truth. Later discovered changes follow the explicit historical regression/reopen policy.
+Built-in gates may consume authorized immutable observations through focused internal reads under BG-4: reference/observation versions, collection completeness, dirty/covered generation, freshness and policy/authorization fences. No universal task snapshot or remote gate transport is required. Revalidate at action/closure, fencing live writers and observation invalidations. External sources do not join Grain SQL transactions; preserve observed cutoff and explicit regression policy.
 
 ## Tasks, UI and agent surface {#TDD-5}
 
@@ -145,7 +145,7 @@ This is a phased implementation breakdown, not tasks to file or work to implemen
 |---|---|---|
 | 1. Contracts and storage | Merged Task #44 terminology; independent of gate runtime implementation | Additive resource/reference/view/observation/subscription/timer records, pins, limits and audit, built-in task adapter fixtures. Readers understand authority/version fields before writers. No lifecycle authority change. |
 | 2. Shadow read/watch | 1 | Capability controller read/watch leases, fenced reconciler, authorization partitions, crash/revocation tests and shadow legacy comparisons. Optional GitHub adapter only with configured access. No gate or dispatch effects. |
-| 3. Gates integration | 2 and Task #39 central lifecycle/snapshot ownership implemented using Task #44 gates protocol | Include immutable tracked-resource evidence, expiry, invalidation and waivers in snapshots/atomic close. One completion authority per task. Verify head/snapshot races and independent work. |
+| 3. Optional gates integration | 2 plus the central built-in lifecycle owner for authoritative outcomes | Expose authorized versioned observation dependencies to BG-4/5 decisions; no remote gate protocol. Provider rollout is not a prerequisite for initial built-ins. Qualify one completion authority, head/subject races and independent useful work. |
 | 4. Task links and API/UI | 3 for authoritative rollout; UI prototype can follow 1 | Explicit per-task import of depends_on, park ownership, child roles and concrete goals; API authorization and Angular views. Verify all producer paths and Go/SQL state parity. |
 | 5. Additional adapters and adoption | 2 for shadow; 3–4 for required gates | Provider conformance suite, quotas and audited pins. CITC/Buganizer require owner-approved access, documented semantics, deployment configuration and implemented/tested adapters. No support promised here. |
 
