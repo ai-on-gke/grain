@@ -1,0 +1,28 @@
+INFO 2 server: {"pathTriggerHold":"required","pathTriggerTasks":["walk-declarations=5"],"gates":["ci:running","security-review:passed","targeted-review:running","approval:passed"]}
+INFO 2 desktop-admin callout: "Held by this repository's gating triggers human: required This change touches paths a person must release: it merges only after an approver's Submit. .grain/triggers/walk-declarations.yml Review task #5 trigger:walk-declarations .grain/triggers/walk-declarations.yml approved by alice@example.com Decided under repo-rules@a34f1fba70aa4b61dc64d5358f282fc088a633a9:sha256-eea9d034cc694cde"
+PASS 2 desktop-admin names human: required and the trigger file: 
+PASS 2 desktop-admin links the review task: Review task #5
+PASS 2 desktop-admin callout inside the viewport: {"x":92,"y":266,"width":1328,"height":164}
+INFO 2 desktop-admin approval rule: "trigger:walk-declarations\n.grain/triggers/walk-declarations.yml\napproved by alice@example.com"
+PASS 2 review link opens the review task: /next/task/5
+PASS 2 desktop-admin no page errors: []
+INFO 2 phone-admin callout: "Held by this repository's gating triggers human: required This change touches paths a person must release: it merges only after an approver's Submit. .grain/triggers/walk-declarations.yml Review task #5 trigger:walk-declarations .grain/triggers/walk-declarations.yml approved by alice@example.com Decided under repo-rules@a34f1fba70aa4b61dc64d5358f282fc088a633a9:sha256-eea9d034cc694cde"
+PASS 2 phone-admin names human: required and the trigger file: 
+PASS 2 phone-admin links the review task: Review task #5
+PASS 2 phone-admin callout inside the viewport: {"x":12,"y":458,"width":366,"height":336}
+INFO 2 phone-admin approval rule: "trigger:walk-declarations\n.grain/triggers/walk-declarations.yml\napproved by alice@example.com"
+PASS 2 phone-admin no page errors: []
+INFO 2 desktop-writer callout: "Held by this repository's gating triggers human: required This change touches paths a person must release: it merges only after an approver's Submit. .grain/triggers/walk-declarations.yml Review task #5 trigger:walk-declarations .grain/triggers/walk-declarations.yml approved by alice@example.com Decided under repo-rules@a34f1fba70aa4b61dc64d5358f282fc088a633a9:sha256-eea9d034cc694cde"
+PASS 2 desktop-writer names human: required and the trigger file: 
+PASS 2 desktop-writer links the review task: Review task #5
+PASS 2 desktop-writer callout inside the viewport: {"x":92,"y":266,"width":1328,"height":164}
+INFO 2 desktop-writer approval rule: "trigger:walk-declarations\n.grain/triggers/walk-declarations.yml\napproved by alice@example.com"
+PASS 2 desktop-writer no page errors: []
+INFO 3 display zone: "America/Los_Angeles"
+INFO 3 picker: {"min":"2026-11-18","pick":"2026-11-20","hint":"Wakes Fri, Nov 20, 2026, 12:00 AM PST"}
+PASS 3 picker fits 390 px: {"db":{"x":79.390625,"y":385,"width":142,"height":40},"sb":{"x":229.390625,"y":385,"width":93.25,"height":40}}
+INFO 3 stored: {"sent":"2026-11-20T08:00:00.000Z","stored":"2026-11-20T08:00:00Z","inZone":"2026-11-20, 00:00"}
+PASS 3 server stores the start of the picked day in the display zone: 2026-11-20T08:00:00Z is 2026-11-20, 00:00 America/Los_Angeles
+INFO 3 page says: "Picks itself back up on Fri, Nov 20, 2026, 12:00 AM PST, back into Needs approval for someone to approve."
+PASS 3 wakes on the live daemon: left deferred 2.579s after the store was set 3 s ahead; now proposed
+PASS 3 no page errors: []

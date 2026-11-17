@@ -1,0 +1,9 @@
+INFO 5k start: pane open: 0
+PASS 5k Tab reaches the agent card: ARTICLE agent-38 
+PASS 5k Enter opens the inspector: /next/agents?task=38
+PASS 5k Escape closes it to the full-width cards: /next/agents
+PASS 5k focus returns to the card: ARTICLE agent-38
+PASS 5k Tab reaches a Close inspector button: agents-pane-close
+PASS 5k Enter on Close closes the inspector: 
+PASS 5k focus lands on the card after Close: ARTICLE agent-38
+PASS 5k no page errors: []
