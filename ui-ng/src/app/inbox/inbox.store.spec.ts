@@ -416,4 +416,30 @@ describe("InboxStore", () => {
     expect(store.actionError()).toContain("No permission");
     expect(postCalls).toEqual([]);
   });
+  it("names the task on an answer that finds its row moved on", async () => {
+    localStorage.clear();
+    const api = new FakeApi();
+    api.tasksList = [
+      {
+        id: "310",
+        title: "Proposal 310",
+        state: "proposed",
+        repo: "acme/web",
+        updatedAt: "2026-11-13T00:00:00Z",
+      } as Task,
+    ];
+    TestBed.configureTestingModule({
+      providers: [{ provide: GrainApi, useValue: api }],
+    });
+    const store = TestBed.inject(InboxStore);
+    store.start();
+    await new Promise((r) => setTimeout(r, 40));
+    const entry = store.liveEntries().find((e) => e.taskId === "310");
+    expect(entry).toBeDefined();
+
+    // Approved elsewhere before the re-read: the error says which task.
+    api.tasksList = [];
+    expect(await store.actByKey(entry!.key, "approve")).toBe(false);
+    expect(store.actionError()).toBe("#310: This item moved on.");
+  });
 });

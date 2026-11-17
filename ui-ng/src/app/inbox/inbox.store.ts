@@ -138,6 +138,11 @@ export class InboxStore implements OnDestroy {
   );
   private lastReadFailed = false;
   readonly actionError = signal<string | null>(null);
+  // errorFrom is the rows whose answer set actionError, while it still
+  // shows their message. Answers overlap and share the one banner, so
+  // starting an answer clears only its own rows' error, never the reason
+  // another row's answer just failed.
+  private errorFrom: { msg: string; keys: ReadonlySet<string> } | null = null;
   // busy is the reply, talk or undo call in flight, if any.
   readonly busy = signal<string | null>(null);
   // inFlight holds the keys of the rows whose answer (a grant, an
@@ -984,6 +989,24 @@ export class InboxStore implements OnDestroy {
     });
   }
 
+  private setRowError(keys: Iterable<string>, msg: string): void {
+    this.actionError.set(msg);
+    this.errorFrom = { msg, keys: new Set(keys) };
+  }
+
+  // clearRowError clears the banner as an answer to keys starts, unless
+  // it shows another row's error.
+  private clearRowError(keys: Iterable<string>): void {
+    const from = this.errorFrom;
+    const own =
+      !from ||
+      this.actionError() !== from.msg ||
+      [...keys].some((k) => from.keys.has(k));
+    if (!own) return;
+    this.actionError.set(null);
+    this.errorFrom = null;
+  }
+
   // actByKey answers one row. By default it reads the queue again first
   // and checks the entry, the action, its gate (blocked) and access still
   // hold before posting; server 409 preconditions close the remaining
@@ -1000,41 +1023,37 @@ export class InboxStore implements OnDestroy {
     body?: unknown,
     opts: { skipVerify?: boolean } = {},
   ): Promise<boolean> {
-    if (typeof actionOrId !== "string" && actionOrId.blocked) {
-      this.actionError.set(actionOrId.blocked);
+    // Several answers may be in flight; every error names its own task,
+    // read from the row as the person saw it until it is read again.
+    const labelOf = (e: InboxEntry | undefined) =>
+      e?.taskId ? `#${e.taskId}: ` : "";
+    let label = labelOf(this.liveEntries().find((e) => e.key === entryKey));
+    const fail = (msg: string) => {
+      this.setRowError([entryKey], label + msg);
       return false;
+    };
+    if (typeof actionOrId !== "string" && actionOrId.blocked) {
+      return fail(actionOrId.blocked);
     }
     if (this.isInFlight(entryKey)) return false;
     this.markInFlight([entryKey], true);
-    this.actionError.set(null);
-    let label = "";
+    this.clearRowError([entryKey]);
     try {
       if (!opts.skipVerify) {
         await this.refresh();
-        if (this.lastReadFailed) {
-          this.actionError.set(READ_FAILED);
-          return false;
-        }
+        if (this.lastReadFailed) return fail(READ_FAILED);
       }
       const entry = this.liveEntries().find((e) => e.key === entryKey);
+      if (entry) label = labelOf(entry);
       const action =
         typeof actionOrId === "string"
           ? entry?.actions.find((a) => a.id === actionOrId)
           : actionOrId;
-      if (!entry || !action) {
-        this.actionError.set("This item moved on.");
-        return false;
-      }
-      if (action.blocked) {
-        this.actionError.set(action.blocked);
-        return false;
-      }
+      if (!entry || !action) return fail("This item moved on.");
+      if (action.blocked) return fail(action.blocked);
       if (!this.canAct(action.route, action.repo)) {
-        this.actionError.set("No permission for this action.");
-        return false;
+        return fail("No permission for this action.");
       }
-      // Several answers may be in flight; a failure names its own task.
-      label = entry.taskId ? `#${entry.taskId}: ` : "";
       await this.api.post(action.route, action.params, body ?? action.body);
       this.noteAnswered(action);
       await this.refresh();
@@ -1043,8 +1062,7 @@ export class InboxStore implements OnDestroy {
       this.applyUpdates();
       return true;
     } catch (err) {
-      this.actionError.set(label + errorText(err));
-      return false;
+      return fail(errorText(err));
     } finally {
       this.markInFlight([entryKey], false);
     }
@@ -1089,11 +1107,11 @@ export class InboxStore implements OnDestroy {
     );
     const locked = new Set(lockKeys);
     this.markInFlight(lockKeys, true);
-    this.actionError.set(null);
+    this.clearRowError(lockKeys);
     try {
       await this.refresh();
       if (this.lastReadFailed) {
-        this.actionError.set(READ_FAILED);
+        this.setRowError(lockKeys, READ_FAILED);
         return { count: 0, failed: 0, undo: null };
       }
       const pool = this.scopedLiveEntries().filter((e) => locked.has(e.key));
@@ -1129,7 +1147,8 @@ export class InboxStore implements OnDestroy {
       });
       const failed = results.length - landed.size;
       if (failed > 0) {
-        this.actionError.set(
+        this.setRowError(
+          lockKeys,
           `${failed} of ${targets.length} failed; they stay selected.`,
         );
       }
