@@ -88,7 +88,10 @@ case "$sub $sub2" in
     fi
     ;;
   "api GET")
-    if [ -f "$FAKE_DIR/release.json" ]; then
+    if [ -n "${FAKE_RELEASE_API_FAIL:-}" ]; then
+      echo "grain: forbidden: GET /api/repos/ai-on-gke/grain/release" >&2
+      exit 3
+    elif [ -f "$FAKE_DIR/release.json" ]; then
       cat "$FAKE_DIR/release.json"
     else
       echo '{"repo":"ai-on-gke/grain","enabled":true}'
@@ -424,6 +427,30 @@ expect_has "unheld green rc: acted" "$out" "RELEASE_TRAIN_RESULT=acted"
 expect_eq "unheld green rc: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
 expect_eq "unheld green rc: cuts v2.3.0-rc.1 on c2" "$(remote_tag v2.3.0-rc.1)" "$c2"
 expect_not_has "unheld green rc: not held" "$out" "held=publishing"
+
+# 13. A tick that cannot read the publishing hold fails closed on cut: it
+#     still promotes the green rc in qualification, but cuts nothing, since a
+#     hold it could not see would otherwise let a tick cut while main's
+#     publishing is held.
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" success
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:22, name:"grain/release-qualification", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+run_tick RELEASE_MAX_PER_DAY=0 FAKE_RELEASE_API_FAIL=1
+expect_eq "hold probe fails: exit 0" "$status" 0
+expect_has "hold probe fails: acted" "$out" "RELEASE_TRAIN_RESULT=acted"
+expect_eq "hold probe fails: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
+expect_eq "hold probe fails: does not cut v2.3.0-rc.1" "$(remote_tag v2.3.0-rc.1)" ""
+expect_has "hold probe fails: says cut skipped" "$out" "held=publishing-unknown (cut skipped)"
+expect_has "hold probe fails: warns" "$out" "WARNING: could not check publishing hold"
 
 echo
 echo "$((cases - failures))/$cases passed"

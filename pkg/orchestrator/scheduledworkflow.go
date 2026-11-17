@@ -1091,12 +1091,16 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 	// And a condition the schedule declared, such as its base branch's
 	// publishing being held (model.Schedule.SkipWhen, grain/task-4393).
 	// While a release candidate is currently in qualification on run.Repo,
-	// let the firing through so the train can still judge, release or drop
-	// that rc without cutting a new one.
+	// let a release-train schedule's firing through so the train can still
+	// judge, release or drop that rc without cutting a new one; every other
+	// schedule stays held.
 	if skip, held, err := deps.Store.PublishingHeldSkip(ctx, sched, run.Repo, sched.Base, now); err != nil {
 		return err
 	} else if held {
-		rcTag, rcErr := qualifyingRCForRepo(deps.Store, deps.Client, run.Repo, now)
+		rcTag, rcErr := "", error(nil)
+		if isReleaseTrainSchedule(sched) {
+			rcTag, rcErr = qualifyingRCForRepo(deps.Store, deps.Client, run.Repo, now)
+		}
 		if rcErr != nil {
 			log.Printf("orchestrator: schedule %s: checking qualifying rc on %s while publishing is held by task %s: %v",
 				sched.ID, run.Repo, skip.TaskID, rcErr)

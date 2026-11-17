@@ -128,7 +128,11 @@ func reconcileSchedule(ctx context.Context, deps Deps, now time.Time) error {
 			qualifyingRC         string
 			holdRepo             model.RepoRef
 		)
-		if sched.SkipWhen == model.SkipWhenPublishingHeld {
+		// Only the release train is let through a publishing hold: its tick
+		// judges, promotes or drops the rc in qualification and cuts
+		// nothing (scripts/release-train-task.sh). Every other
+		// `skip-when: publishing-held` schedule stays held, rc or no rc.
+		if sched.SkipWhen == model.SkipWhenPublishingHeld && isReleaseTrainSchedule(sched) {
 			if hold, herr := deps.Store.PublishingHold(ctx, sched, now); herr == nil && hold != nil {
 				if parsedRepo, perr := model.ParseRepo(hold.Repo); perr == nil {
 					holdRepo = parsedRepo

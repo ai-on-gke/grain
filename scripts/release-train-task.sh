@@ -199,8 +199,15 @@ if [ -z "$train_phases" ] && [ -z "$train_hold" ]; then
       train_hold_detail="triage task $pub_triage"
       say "main publishing is held by triage task $pub_triage; running RELEASE_TRAIN_PHASES=$train_phases (held=publishing (cut skipped))"
     fi
-  elif [ "$api_status" != 0 ] && [ -s "$out/release.err" ]; then
-    say "WARNING: could not check publishing hold via \`grain api GET /api/repos/$api_repo/release\` (exit $api_status): $(head -n 1 "$out/release.err")"
+  else
+    # Fail closed: before a tick could run under a hold, skip-when kept every
+    # tick from cutting while main's publishing was held. A tick that cannot
+    # tell whether it is held still judges, promotes or drops the rc in
+    # qualification, but cuts nothing until the probe answers again.
+    train_phases="judge,release"
+    train_hold="publishing-unknown"
+    train_hold_detail="could not read the publishing hold: grain api exit $api_status"
+    say "WARNING: could not check publishing hold via \`grain api GET /api/repos/$api_repo/release\` (exit $api_status): $(head -n 1 "$out/release.err" 2>/dev/null); cut skipped until it can"
   fi
 elif [ "$train_hold" = publishing ] && [ -z "$train_phases" ]; then
   train_phases="judge,release"

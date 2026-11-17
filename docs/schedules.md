@@ -1821,8 +1821,8 @@ its release triage task (#4256) was open, and the release train
   `-discarded` marker nor a `vX.Y.Z` tag) does not depend on `main`'s
   newest commit publishing. Before holding a `SkipWhenPublishingHeld`
   schedule, `reconcileSchedule` and `fireOneGitHubWorkflowRunSchedule`
-  check `qualifyingRCForRepo`; while an rc is in qualification, the
-  schedule still fires (`FireScheduleUnderPublishingHold`, keeping overlap
+  check `qualifyingRCForRepo`; while an rc is in qualification, a
+  release-train schedule (`isReleaseTrainSchedule`; no other) still fires (`FireScheduleUnderPublishingHold`, keeping overlap
   and overlap-group holds in force) so `scripts/release-train-task.sh` can
   run Phase 1 (`RELEASE_TRAIN_PHASES=judge,release`,
   `RELEASE_TRAIN_HOLD=publishing`) and skip only cut

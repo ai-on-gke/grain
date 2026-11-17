@@ -267,3 +267,69 @@ func TestReleaseLoopIdleRespectsPublishingHoldAndDescribesTriageTask(t *testing.
 		t.Errorf("describeReleaseTrainTick = (%q, %q), want deliberately held naming task %s", note, taskID, triageID)
 	}
 }
+
+// Only the release train is let through a publishing hold while an rc
+// qualifies: any other `skip-when: publishing-held` schedule -- one that may
+// itself publish from main -- stays held, rc or no rc.
+func TestPublishingHeldNonTrainScheduleStaysHeldWhileRCQualifies(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	now := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	triageID := seedPublishingHold(t, ctx, store, repo, now)
+
+	sched := model.Schedule{
+		ID: "nightly-publish", Title: "Publish nightly", Body: "Publish main.",
+		Target: repo, Base: "main",
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 20},
+		SkipWhen:   model.SkipWhenPublishingHeld,
+		Enabled:    true, NextRunAt: now, CreatedAt: now.Add(-48 * time.Hour),
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+	forge := newFakeReleaseLoopForge()
+	forge.setTags(
+		github.Tag{Name: "v3.7.0", SHA: loopRelSHA},
+		github.Tag{Name: "v3.8.0-rc.1", SHA: loopRC1SHA},
+	)
+	deps := Deps{Store: store, Client: forge}
+	if err := reconcileSchedule(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileSchedule: %v", err)
+	}
+	if tasks := tasksWithTag(t, ctx, store, model.ScheduleFiringTag(sched.ID)); len(tasks) != 0 {
+		t.Fatalf("tasks = %+v; want none: a non-train schedule stays held while main's publishing is held", tasks)
+	}
+	skips, err := store.ScheduleSkips(ctx, sched.ID)
+	if err != nil || len(skips) != 1 || skips[0].Reason != model.SuppressedByPublishingHeld || skips[0].TaskID != triageID {
+		t.Fatalf("skips = %+v, %v; want one SuppressedByPublishingHeld skip naming triage task %s", skips, err, triageID)
+	}
+
+	wfSched := sched
+	wfSched.ID = "nightly-publish-on-ci"
+	wfSched.NextRunAt = time.Time{}
+	wfSched.Recurrence = model.Recurrence{
+		Kind: model.RecurrenceGitHubWorkflowRun,
+		GitHubWorkflowRun: &model.GitHubWorkflowRunTrigger{
+			Workflow: "tests.yml", Branches: []string{"main"}, Conclusions: []string{"success"},
+		},
+	}
+	if err := store.PutSchedule(ctx, wfSched); err != nil {
+		t.Fatal(err)
+	}
+	started := now.Add(-time.Hour)
+	run := ConcludedGitHubWorkflowRun{
+		Repo: repo, RunID: 7101, Attempt: 1,
+		WorkflowName: "tests", WorkflowPath: ".github/workflows/tests.yml",
+		Ref: "main", HeadSHA: loopFeatSHA, HeadRepo: repo.String(),
+		Event: "push", Conclusion: "success",
+		StartedAt: &started, CompletedAt: &now,
+	}
+	if err := fireOneGitHubWorkflowRunSchedule(ctx, deps, wfSched, run, nil, now); err != nil {
+		t.Fatalf("fireOneGitHubWorkflowRunSchedule: %v", err)
+	}
+	if tasks := tasksWithTag(t, ctx, store, model.ScheduleFiringTag(wfSched.ID)); len(tasks) != 0 {
+		t.Fatalf("workflow-run tasks = %+v; want none while main's publishing is held", tasks)
+	}
+}

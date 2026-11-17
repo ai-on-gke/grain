@@ -766,9 +766,13 @@ skip-when: publishing-held
 release candidate already in qualification (`vX.Y.Z-rc.N` with neither a
 `-discarded` marker nor a `vX.Y.Z` tag) does not depend on `main`'s
 newest commit publishing. While such an rc exists on the repository, the
-scheduler still fires the schedule (keeping overlap and overlap-group
-holds in force) so the release train can run Phase 1 (`judge,release`)
-and skip only cut (`held=publishing (cut skipped)`). Once no rc is in
+scheduler still fires a release-train schedule (overlap group
+`release-train` or the `release-train` template), keeping overlap and
+overlap-group holds in force, so the release train can run Phase 1
+(`judge,release`) and skip only cut (`held=publishing (cut skipped)`).
+Every other `skip-when: publishing-held` schedule stays held. A tick that
+cannot read the hold (`GET /api/repos/<repo>/release?branch=main` fails)
+skips cut too, reporting `held=publishing-unknown (cut skipped)`. Once no rc is in
 qualification, `skip-when: publishing-held` holds the schedule again. A
 Stage 1 trigger that fires only on `v*-rc.*` tags
 (`.grain/schedules/release-train-on-stage1.yml`) omits
