@@ -321,3 +321,22 @@ Bounding boxes on the fixed build, at 1400 and 390 px:
   on the final build: 27 passed.
 - In `ui-ng/`: `npm run lint`, `npx vitest run` (62 files, 623 tests) and
   `npx prettier --check src e2e` all pass.
+
+## Review follow-up (2026-11-17)
+
+The review of this change (task 6512) found two gaps in fix 2. Both are
+fixed:
+
+- The branch sample expanded `{deployment}` with the configured
+  `deploymentId` only. That is empty until someone sets one, so the demo
+  showed `grain/deployment/task-42`. It now falls back to
+  `deploymentIdDefault`, and the e2e asserts the demo's own ID.
+- The box checked the template untrimmed, while the server trims it
+  first. `" grain/task-{id} "` is now accepted and saved trimmed, and a
+  whitespace-only box means the default.
+
+`main` was merged in again; its new `processesLeaveGuard` sits beside
+`settingsLeaveGuard` in `app.routes.ts`. After the merge,
+`next-settings-walkthrough`, `next-settings-filter`,
+`next-processes-forms` and `next-qa-settings` (22 tests) pass, as do
+`vitest` for `src/app/settings` and `npm run lint`.
