@@ -329,6 +329,24 @@ var runCredentialOwnTaskRoutes = map[string]bool{
 	"POST /api/tasks/{id}/sandbox/recreate": true,
 }
 
+// runCredentialRefusedInternalRoutes are the internal routes a run
+// credential naming no task never reaches: deployment controls a person
+// uses (enrolling and admitting hosts, accepting or revoking a
+// repository's declarations, repointing the config repository) and a
+// persistent sandbox's service, none of which a run's mcpserver calls.
+var runCredentialRefusedInternalRoutes = map[string]bool{
+	"GET /api/hostds/enrollment-codes":                true,
+	"POST /api/hostds/enrollment-codes":               true,
+	"POST /api/hostds/enrollment-codes/{name}/rotate": true,
+	"POST /api/hostds/enrollment-codes/{name}/revoke": true,
+	"GET /api/hostds/pending":                         true,
+	"POST /api/hostds/pending/{id}/accept":            true,
+	"POST /api/hostds/pending/{id}/reject":            true,
+	"POST /api/declarations/accept":                   true,
+	"POST /api/declarations/revoke":                   true,
+	"/staging/{name}/{path...}":                       true,
+}
+
 // runCredentialScopeError refuses a request a run credential admitted,
 // naming no acting task, on a route under one of
 // runCredentialOperatorScopes; nil for any other request.
@@ -337,7 +355,24 @@ func runCredentialScopeError(r *http.Request, pattern string, scope APIScope) er
 	if !ok {
 		return nil
 	}
-	if strings.TrimSpace(r.Header.Get(ActingTaskHeader)) != "" || !runCredentialOperatorScopes[scope] {
+	if strings.TrimSpace(r.Header.Get(ActingTaskHeader)) != "" {
+		return nil
+	}
+	if scope == scopeInternal {
+		// An internal route names no agent scope, but the person-facing
+		// decisions among them (granting an access request, approving a
+		// configuration change, answering a host-script approval) take an
+		// operator scope of a person's role (humanRouteScopes), and that
+		// is the scope the cap holds them to. The operator-only internal
+		// routes no mcpserver calls are refused outright.
+		if runCredentialRefusedInternalRoutes[pattern] {
+			return fmt.Errorf("a run credential cannot call %s as the deployment (docs/access-code.md)", pattern)
+		}
+		if human, ok := humanRouteScopes[pattern]; ok {
+			scope = human
+		}
+	}
+	if !runCredentialOperatorScopes[scope] {
 		return nil
 	}
 	if runCredentialOwnTaskRoutes[pattern] && taskIDInPath(r.URL.Path) == cred.TaskID {

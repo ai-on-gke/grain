@@ -537,7 +537,12 @@ file in a fresh 0700 directory, adds that directory to the paths
   `teams:broadcast`, `tests:write`, `deployment:{reboot,restart,upgrade,src}`,
   `merge:force`, `caches:write` and `qa:admin`. The one exception is
   `POST /api/tasks/{id}/sandbox/recreate` for the credential's own task,
-  which `recreate_sandbox` calls. What stays open is what the mcpserver
+  which `recreate_sandbox` calls. The same cap covers the internal
+  routes that are a person's decisions, at the scope a person's role
+  needs for them (granting an access request, approving a configuration
+  change, answering a host-script approval), and refuses outright the
+  host enrollment and admission routes, accepting or revoking a
+  repository's declarations, and a persistent sandbox's service. What stays open is what the mcpserver
   calls as itself: `tasks:write`, `merge:write` and `ci:write` for its
   own task, plus the notification, memory and release-notes writes.
   On `POST /api/mcp` and `/mcp` it always acts for its own task. This

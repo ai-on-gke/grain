@@ -50,8 +50,8 @@ treat it like a password.
                        sign in with a verified identity (IAP or an identity
                        proxy), the code only manages access and settings,
                        and every use raises an Inbox notification
-             off       the code is refused everywhere; only a run's own
-                       plumbing still uses it
+             off       the code is refused on every request; runs reach
+                       the daemon with their own run credential instead
            Recommended: recovery, once your own verified sign-in works.
            Only this command, on this host, changes the mode.
 `

@@ -194,6 +194,14 @@ func TestARunCredentialNamingNoTaskIsRefusedTheDeploymentsControls(t *testing.T)
 		{http.MethodPost, "/api/schedules", `{}`},
 		{http.MethodPost, "/api/pipeline-pause", `{}`},
 		{http.MethodPost, "/api/deployment/broadcast", `{}`},
+		// Internal routes that are a person's decisions or the
+		// deployment's own controls.
+		{http.MethodPost, "/api/tasks/2/access-request/grant", `{}`},
+		{http.MethodPost, "/api/tasks/2/config-change/approve", `{}`},
+		{http.MethodPost, "/api/tasks/2/local-script-approvals/a-1/answer", `{"approve":true}`},
+		{http.MethodPost, "/api/hostds/enrollment-codes", `{}`},
+		{http.MethodPost, "/api/hostds/pending/p-1/accept", `{}`},
+		{http.MethodPost, "/api/declarations/accept", `{}`},
 	} {
 		rec := serveFrom(srv, networkAddr, c.method, c.path, c.body, map[string]string{"Authorization": auth, "Content-Type": "application/json"})
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "run credential") {

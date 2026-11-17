@@ -347,10 +347,12 @@ const AccessCodeActorPrefix = "access-code:"
 // admitAccessCodeRequest is serveHTTP's step for a request the access
 // code admitted (and no verified identity): it names the request's actor
 // after whoever presented the code, holds a recovery-mode code to
-// recovery routes, and records the use. A run's own plumbing
-// (ActingTaskHeader) is the acting task's agent, held to its grants and
-// recorded as that task, so it is let through as it was. It reports
-// whether serveHTTP should go on, with r's context carrying the name.
+// recovery routes, and records the use. A request naming an acting task
+// (ActingTaskHeader) is let through to the agent gate, which holds it to
+// that task's grants -- and, on a daemon issuing run credentials, refuses
+// it outright, since the code alone does not say which task it is
+// (actingTaskCredentialError). It reports whether serveHTTP should go on,
+// with r's context carrying the name.
 func (s *Server) admitAccessCodeRequest(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	if strings.TrimSpace(r.Header.Get(ActingTaskHeader)) != "" {
 		return r, true
