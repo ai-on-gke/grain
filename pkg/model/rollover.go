@@ -360,13 +360,14 @@ func rolloverCarry(ctx context.Context, tx *sql.Tx, t Task) (brief, handover str
 		return "", "", fmt.Errorf("reading task %s's brief: %w", t.ID, err)
 	}
 	var carried string
+	if from := rolledOverFrom(t); from != "" {
+		// A successor rolled over again: its description is still the
+		// RolloverBody it was filed with, so unwrap its brief and carried
+		// handover before current_brief replaces the brief half.
+		brief, carried = unwrapRolloverBody(brief, from)
+	}
 	if strings.TrimSpace(current) != "" {
 		brief = current
-	} else if from := rolledOverFrom(t); from != "" {
-		// A successor rolled over again: its description is still the
-		// RolloverBody it was filed with, so carry what that body carried
-		// rather than nesting it inside the next one.
-		brief, carried = unwrapRolloverBody(brief, from)
 	}
 	err = tx.QueryRowContext(ctx,
 		"SELECT `body` FROM `task_comment` WHERE `task_id` = ? AND `handover` = ? ORDER BY `id` DESC LIMIT 1",
