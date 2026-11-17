@@ -12,424 +12,244 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Component, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { provideRouter } from "@angular/router";
-import { GrainApi, type RouteParams } from "../api/grain-api.service";
-import type { CapabilityMethod, CapabilityOption } from "../api/models";
+import { GrainApi } from "../api/grain-api.service";
+import type { CapabilityMethod } from "../api/models";
 import { AccessService } from "../services/access.service";
 import {
   GrantsPickerComponent,
   REPO_ACCESS_DOC,
-  REPO_ACCESS_DOC_LABEL,
-  policyVerdictText,
-  resolveMethodPolicy,
-  type GrantAttachEvent,
-  type GrantRunKind,
+  grantRef,
+  policyVerdictFor,
 } from "./grants-picker.component";
 
-const GCP_KEY_REF = "https://grain.dev/capabilities/gcp#gcp-key";
-const REPO_READ_REF = "https://grain.dev/capabilities/repo#read";
-const API_ADMIN_REF = "https://grain.dev/capabilities/api#tasks-admin";
-const SAFE_REF = "https://grain.dev/capabilities/docs#lookup";
-
-interface ApiCall {
-  method: "GET" | "POST";
-  key: string;
-  query?: string;
-  body?: unknown;
-}
-
-class FakeApi {
-  calls: ApiCall[] = [];
-  methodsHandler: (query?: string) => Promise<CapabilityMethod[]> =
-    async () => [];
-  scopeSets = [
-    { name: "tasks-read", description: "Read tasks" },
-    { name: "tasks-admin", description: "Admin tasks" },
-  ];
-  checkResult: unknown[] = [{ ok: true, recorded: `${SAFE_REF}={}` }];
-
-  get = (key: string, _params?: RouteParams, query?: string) => {
-    this.calls.push({ method: "GET", key, query });
-    if (key === "GET /api/capability-methods") {
-      return this.methodsHandler(query);
-    }
-    if (key === "GET /api/api-scope-sets") {
-      return Promise.resolve({ sets: this.scopeSets });
-    }
-    return Promise.resolve({});
-  };
-
-  post = (key: string, _params?: RouteParams, body?: unknown) => {
-    this.calls.push({ method: "POST", key, body });
-    if (key === "POST /api/capability-grants/check") {
-      return Promise.resolve(this.checkResult);
-    }
-    return Promise.resolve({});
-  };
-}
-
-class FakeAccess {
-  can = () => true;
-}
-
-@Component({
-  imports: [GrantsPickerComponent],
-  template: `
-    <g-grants-picker
-      testid="gp"
-      [offered]="offered()"
-      [held]="held()"
-      [repo]="repo()"
-      [runKind]="runKind()"
-      [disabled]="disabled()"
-      (heldChange)="heldChanges.push($event); held.set($event)"
-      (attachGrant)="attached.push($event)"
-    />
-  `,
-})
-class HostComponent {
-  readonly offered = signal<CapabilityOption[]>([]);
-  readonly held = signal<string[]>([]);
-  readonly repo = signal<string | undefined>("");
-  readonly runKind = signal<GrantRunKind>("task");
-  readonly disabled = signal(false);
-  heldChanges: string[][] = [];
-  attached: GrantAttachEvent[] = [];
-}
-
-async function mount(api: FakeApi, init?: (h: HostComponent) => void) {
-  TestBed.configureTestingModule({
-    imports: [HostComponent],
-    providers: [
-      provideRouter([]),
-      { provide: GrainApi, useValue: api },
-      { provide: AccessService, useValue: new FakeAccess() },
-    ],
-  });
-  const fixture = TestBed.createComponent(HostComponent);
-  init?.(fixture.componentInstance);
-  fixture.autoDetectChanges(true);
-  await fixture.whenStable();
-  await Promise.resolve();
-  await fixture.whenStable();
-  const el = fixture.nativeElement as HTMLElement;
-  const q = <T extends Element = HTMLElement>(sel: string) =>
-    el.querySelector<T & Element>(sel) as T | null;
-  return { fixture, el, q, host: fixture.componentInstance };
-}
-
-describe("resolveMethodPolicy & policyVerdictText", () => {
-  it("formats verdict copy for each run kind and keeps ci_only distinct from capability policy", () => {
-    expect(policyVerdictText("denied", "task")).toBe(
-      "denied by the capability policy for agent tasks",
+describe("grantRef", () => {
+  it("strips arguments and reads an api grant as its capability ref", () => {
+    expect(grantRef('github#read-issues={"repo":"a/b"}')).toBe(
+      "github#read-issues",
     );
-    expect(policyVerdictText("may_be_refused", "ci")).toBe(
-      "may be refused by the capability policy for CI jobs",
+    expect(grantRef("api:tasks-read")).toBe(
+      "https://grain.dev/capabilities/api#tasks-read",
     );
-    const ciOnlyText = policyVerdictText("ci_only", "task");
-    expect(ciOnlyText).toContain("CI only");
-    expect(ciOnlyText).not.toContain("capability policy");
-
-    const ciOnlyInfo = resolveMethodPolicy(
-      {
-        ref: REPO_READ_REF,
-        capability: "https://grain.dev/capabilities/repo",
-        method: "read",
-        policy: { task: "ci_only" },
-        policyRefusal: "should not override ci_only",
-      },
-      "task",
-      true,
+    expect(grantRef("api:ci-read@acme/widgets")).toBe(
+      "https://grain.dev/capabilities/api#ci-read",
     );
-    expect(ciOnlyInfo).toMatchObject({
-      verdict: "ci_only",
-      refused: true,
-      ciOnly: true,
-      badge: "CI only",
-      linkKind: "repo_access_doc",
-    });
-  });
-
-  it("drops kind-level may_be_refused when kindVerdictShown is false unless policyRefusal is present", () => {
-    const method: CapabilityMethod = {
-      ref: GCP_KEY_REF,
-      capability: "https://grain.dev/capabilities/gcp",
-      method: "gcp-key",
-      policy: { task: "may_be_refused" },
-    };
-    expect(resolveMethodPolicy(method, "task", true)?.verdict).toBe(
-      "may_be_refused",
-    );
-    expect(resolveMethodPolicy(method, "task", false)).toBeNull();
-
-    const refusedMethod: CapabilityMethod = {
-      ...method,
-      policyRefusal: "denied by rule #1 for acme/app",
-    };
-    expect(resolveMethodPolicy(refusedMethod, "task", false)).toMatchObject({
-      verdict: "denied",
-      refused: true,
-      note: "denied by rule #1 for acme/app",
-      linkKind: "policy",
-    });
   });
 });
 
-describe("GrantsPickerComponent policy verdicts", () => {
+describe("policyVerdictFor", () => {
+  const m = (over: Partial<CapabilityMethod>): CapabilityMethod => ({
+    ref: "x#y",
+    capability: "x",
+    method: "y",
+    ...over,
+  });
+
+  it("says may be refused for a repo-scoped rule while no repo is known", () => {
+    const v = policyVerdictFor(
+      m({ policy: { task: "may_be_refused" } }),
+      "task",
+      false,
+    );
+    expect(v?.badge).toBe("may be refused");
+    // Once the run is known the listing has judged it: admitted is silent.
+    expect(
+      policyVerdictFor(m({ policy: { task: "may_be_refused" } }), "task", true),
+    ).toBeNull();
+  });
+
+  it("prefers the run's own refusal, and names CI-only methods", () => {
+    expect(
+      policyVerdictFor(m({ policyRefusal: "denied here" }), "task", true)
+        ?.badge,
+    ).toBe("denied by policy");
+    expect(
+      policyVerdictFor(m({ policy: { task: "ci_only" } }), "task", true)?.badge,
+    ).toBe("CI only");
+  });
+});
+
+describe("GrantsPickerComponent with policyVerdicts", () => {
+  let gets: { route: string; query?: string }[];
+  let posts: unknown[];
+  let methods: CapabilityMethod[];
+
+  beforeEach(() => {
+    gets = [];
+    posts = [];
+    methods = [];
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        {
+          provide: GrainApi,
+          useValue: {
+            get: (route: string, _p?: unknown, query?: string) => {
+              gets.push({ route, query });
+              if (route === "GET /api/capability-methods") {
+                return Promise.resolve({ items: structuredClone(methods) });
+              }
+              return Promise.resolve({ sets: [] });
+            },
+            post: (_route: string, _p: unknown, body: unknown) => {
+              posts.push(body);
+              return Promise.resolve([{ recorded: "x" }]);
+            },
+          },
+        },
+      ],
+    });
+    TestBed.inject(AccessService).setConfig({
+      access: { role: "grain/operator", roles: [], full: true, scopes: [] },
+    });
+  });
+
   afterEach(() => TestBed.resetTestingModule());
 
-  it("marks denied capabilities, warns on may_be_refused, marks repo#read CI only, and refuses denied add", async () => {
-    const api = new FakeApi();
-    api.methodsHandler = async () => [
+  async function settle(f: {
+    detectChanges(): void;
+    whenStable(): Promise<unknown>;
+  }) {
+    f.detectChanges();
+    await new Promise((r) => setTimeout(r, 300));
+    await f.whenStable();
+    f.detectChanges();
+  }
+
+  it("asks nothing of a run with no whole repository, and the run once it has one", async () => {
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("repo", "acme");
+    await settle(f);
+    const first = gets.filter((g) => g.route === "GET /api/capability-methods");
+    expect(first).toHaveLength(1);
+    expect(first[0].query).toBeUndefined();
+
+    f.componentRef.setInput("repo", "acme/widgets");
+    await settle(f);
+    const all = gets.filter((g) => g.route === "GET /api/capability-methods");
+    expect(all.at(-1)?.query).toBe("kind=task&repo=acme%2Fwidgets");
+  });
+
+  it("badges a held api grant the policy denies, matched through its alias", async () => {
+    methods = [
       {
-        ref: GCP_KEY_REF,
+        ref: "https://grain.dev/capabilities/api#grain/task-admin",
+        capability: "https://grain.dev/capabilities/api",
+        method: "grain/task-admin",
+        aliasOf: ["https://grain.dev/capabilities/api#task-admin"],
+        policyRefusal:
+          "the capability policy denies task-admin to acme/widgets",
+      },
+    ];
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("repo", "acme/widgets");
+    f.componentRef.setInput("held", ["api:task-admin@acme/widgets"]);
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="held-grant-policy-0"]')?.textContent,
+    ).toContain("denied by policy");
+    expect(el.textContent).toContain("denies task-admin to acme/widgets");
+  });
+
+  it("never selects or attaches a method the policy refuses", async () => {
+    methods = [
+      {
+        ref: "repo#read",
+        capability: "repo",
+        method: "read",
+        policy: { task: "ci_only" },
+      },
+      { ref: "notes#write", capability: "notes", method: "write" },
+    ];
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("repo", "acme/widgets");
+    const emitted: string[][] = [];
+    f.componentInstance.heldChange.subscribe((v) => emitted.push(v));
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    el.querySelector<HTMLElement>('[data-testid="gp-add-open"]')!.click();
+    await settle(f);
+    el.querySelector<HTMLElement>('[data-testid="gp-mode-method"]')!.click();
+    await settle(f);
+    // The default is the first method that may be granted, not the CI-only one.
+    expect(
+      el.querySelector('[data-testid="gp-method-ref"]')?.textContent,
+    ).toContain("notes#write");
+
+    // Even when chosen directly, a refused method is reported, not attached.
+    (
+      f.componentInstance as unknown as {
+        selectedMethod: { set(v: string): void };
+      }
+    ).selectedMethod.set("repo#read");
+    await settle(f);
+    // The selection is moved off the refused method at once...
+    expect(
+      el.querySelector('[data-testid="gp-method-ref"]')?.textContent,
+    ).toContain("notes#write");
+    el.querySelector<HTMLElement>('[data-testid="gp-attach"]')!.click();
+    await settle(f);
+    expect(emitted.at(-1)).toEqual(["x"]);
+    expect(JSON.stringify(posts.at(-1))).toContain("notes#write");
+    expect(JSON.stringify(posts)).not.toContain("repo#read");
+  });
+  it("links a denied grant to #capability-policy and a CI-only one to the repository access docs, never blaming policy for it", async () => {
+    methods = [
+      {
+        ref: "https://grain.dev/capabilities/gcp#gcp-key",
         capability: "https://grain.dev/capabilities/gcp",
         method: "gcp-key",
         policy: { task: "denied" },
       },
       {
-        ref: REPO_READ_REF,
+        ref: "https://grain.dev/capabilities/repo#read",
         capability: "https://grain.dev/capabilities/repo",
         method: "read",
         policy: { task: "ci_only" },
       },
       {
-        ref: API_ADMIN_REF,
-        capability: "https://grain.dev/capabilities/api",
-        method: "tasks-admin",
-        policy: { task: "may_be_refused" },
-      },
-      {
-        ref: SAFE_REF,
+        ref: "https://grain.dev/capabilities/docs#lookup",
         capability: "https://grain.dev/capabilities/docs",
         method: "lookup",
+        policy: { task: "may_be_refused" },
       },
     ];
-
-    const { q, el, fixture, host } = await mount(api, (h) => {
-      h.offered.set([{ id: GCP_KEY_REF, name: "GCP key" }]);
-      h.held.set([`${GCP_KEY_REF}={}`, `${REPO_READ_REF}={}`]);
-    });
-
-    // Offered toggle pill for denied gcp-key is disabled and tagged denied.
-    const toggle = q<HTMLButtonElement>(
-      `[data-testid="gp-cap-${GCP_KEY_REF}"]`,
-    )!;
-    expect(toggle.disabled).toBe(true);
-    expect(toggle.dataset["policyVerdict"]).toBe("denied");
-    expect(toggle.dataset["policyDenied"]).toBe("true");
-    toggle.click();
-    expect(host.heldChanges.length).toBe(0);
-
-    // Held policy warnings link gcp-key to #capability-policy and repo#read to Repository access docs.
-    const heldGcpNote = q<HTMLElement>('[data-testid="gp-held-policy-0"]')!;
-    expect(heldGcpNote.dataset["policyVerdict"]).toBe("denied");
-    const policyLink = heldGcpNote.querySelector<HTMLAnchorElement>("a")!;
-    expect(policyLink.getAttribute("href")).toContain(
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("held", [
+      "https://grain.dev/capabilities/gcp#gcp-key={}",
+      "https://grain.dev/capabilities/repo#read={}",
+      "https://grain.dev/capabilities/docs#lookup={}",
+    ]);
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    const items = [
+      ...el.querySelectorAll<HTMLLIElement>(
+        '[data-testid="gp-policy-notes"] li',
+      ),
+    ];
+    expect(items.map((li) => li.dataset["policyVerdict"])).toEqual([
+      "denied",
+      "ci_only",
+      "may_be_refused",
+    ]);
+    expect(items[0].querySelector("a")?.getAttribute("href")).toBe(
       "/settings/capabilities#capability-policy",
     );
-
-    const heldRepoNote = q<HTMLElement>('[data-testid="gp-held-policy-1"]')!;
-    expect(heldRepoNote.dataset["ciOnly"]).toBe("true");
-    expect(heldRepoNote.dataset["policyDenied"]).toBeUndefined();
-    expect(heldRepoNote.textContent).not.toContain("capability policy");
-    const docLink = heldRepoNote.querySelector<HTMLAnchorElement>("a")!;
-    expect(docLink.getAttribute("href")).toBe(REPO_ACCESS_DOC);
-    expect(docLink.textContent?.trim()).toBe(REPO_ACCESS_DOC_LABEL);
-
-    // Open builder and switch to Capability method mode.
-    q<HTMLButtonElement>('[data-testid="gp-add-open"]')!.click();
-    await fixture.whenStable();
-    await Promise.resolve();
-    await fixture.whenStable();
-
-    q<HTMLButtonElement>('[data-testid="gp-mode-method"]')!.click();
-    await fixture.whenStable();
-
-    // Flagged methods summary shows denied, ci_only, and may_be_refused rows.
-    const verdictsList = q<HTMLElement>('[data-testid="gp-policy-verdicts"]')!;
-    expect(verdictsList).not.toBeNull();
-    const gcpRow = verdictsList.querySelector<HTMLElement>(
-      `[data-method="${GCP_KEY_REF}"]`,
-    )!;
-    expect(gcpRow.dataset["policyVerdict"]).toBe("denied");
-    expect(gcpRow.querySelector("a")?.getAttribute("href")).toContain(
-      "/settings/capabilities#capability-policy",
-    );
-
-    const repoRow = verdictsList.querySelector<HTMLElement>(
-      `[data-method="${REPO_READ_REF}"]`,
-    )!;
-    expect(repoRow.dataset["ciOnly"]).toBe("true");
-    expect(repoRow.textContent).not.toContain("capability policy");
-    expect(repoRow.querySelector("a")?.getAttribute("href")).toBe(
+    expect(items[1].textContent).not.toContain("capability policy");
+    expect(items[1].querySelector("a")?.getAttribute("href")).toBe(
       REPO_ACCESS_DOC,
     );
-
-    const mayRow = verdictsList.querySelector<HTMLElement>(
-      `[data-method="${API_ADMIN_REF}"]`,
-    )!;
-    expect(mayRow.dataset["policyVerdict"]).toBe("may_be_refused");
-
-    // In raw mode, typing a denied ref shows selected policy and disables Add grant.
-    q<HTMLButtonElement>('[data-testid="gp-mode-raw"]')!.click();
-    await fixture.whenStable();
-    const rawInput = q<HTMLInputElement>('[data-testid="gp-raw-input"]')!;
-    rawInput.value = GCP_KEY_REF;
-    rawInput.dispatchEvent(new Event("input"));
-    await fixture.whenStable();
-
-    const selPol = q<HTMLElement>('[data-testid="gp-selected-policy"]')!;
-    expect(selPol.dataset["policyVerdict"]).toBe("denied");
-    const addBtn = q<HTMLButtonElement>('[data-testid="gp-attach"]')!;
-    expect(addBtn.disabled).toBe(true);
-
-    // Typing a may_be_refused API grant warns but still allows Add grant.
-    rawInput.value = "api:tasks-admin";
-    rawInput.dispatchEvent(new Event("input"));
-    await fixture.whenStable();
-    expect(
-      el.querySelector<HTMLElement>('[data-testid="gp-selected-policy"]')
-        ?.dataset["policyVerdict"],
-    ).toBe("may_be_refused");
-    expect(addBtn.disabled).toBe(false);
-  });
-
-  it("queries repo-scoped policyRefusal, drops unrelated may_be_refused for tasks, and keeps kind verdict for ci", async () => {
-    const api = new FakeApi();
-    api.methodsHandler = async (query) => {
-      if (query === "kind=task&repo=acme%2Fapp") {
-        return [
-          {
-            ref: GCP_KEY_REF,
-            capability: "https://grain.dev/capabilities/gcp",
-            method: "gcp-key",
-            policy: { task: "may_be_refused" },
-          },
-          {
-            ref: SAFE_REF,
-            capability: "https://grain.dev/capabilities/docs",
-            method: "lookup",
-            policyRefusal: "blocked for acme/app",
-          },
-        ];
-      }
-      if (query === "kind=ci&repo=acme%2Fapp") {
-        return [
-          {
-            ref: GCP_KEY_REF,
-            capability: "https://grain.dev/capabilities/gcp",
-            method: "gcp-key",
-            policy: { ci: "may_be_refused" },
-          },
-        ];
-      }
-      return [];
-    };
-
-    const { q, fixture, host } = await mount(api, (h) => {
-      h.repo.set("acme/app");
-      h.held.set([`${GCP_KEY_REF}={}`, `${SAFE_REF}={}`]);
-    });
-
-    // For task with repo, gcp-key's kind-wide may_be_refused is suppressed, while SAFE_REF's policyRefusal is shown.
-    expect(q<HTMLElement>(`[data-method="${GCP_KEY_REF}"]`)).toBeNull();
-    const refusedNote = q<HTMLElement>(`[data-method="${SAFE_REF}"]`)!;
-    expect(refusedNote.textContent).toContain("blocked for acme/app");
-
-    // Switching runKind to "ci" keeps kind-level may_be_refused even with repo set,
-    // and POST /api/capability-grants/check omits subject.repo for CI.
-    host.runKind.set("ci");
-    await fixture.whenStable();
-    await Promise.resolve();
-    await fixture.whenStable();
-
-    expect(
-      q<HTMLElement>(`[data-method="${GCP_KEY_REF}"]`)?.dataset[
-        "policyVerdict"
-      ],
-    ).toBe("may_be_refused");
-
-    q<HTMLButtonElement>('[data-testid="gp-add-open"]')!.click();
-    await fixture.whenStable();
-    await Promise.resolve();
-    await fixture.whenStable();
-    q<HTMLButtonElement>('[data-testid="gp-mode-raw"]')!.click();
-    await fixture.whenStable();
-    const rawInput = q<HTMLInputElement>('[data-testid="gp-raw-input"]')!;
-    rawInput.value = `${GCP_KEY_REF}={}`;
-    rawInput.dispatchEvent(new Event("input"));
-    await fixture.whenStable();
-    q<HTMLButtonElement>('[data-testid="gp-attach"]')!.click();
-    await fixture.whenStable();
-    await Promise.resolve();
-
-    const checkCall = api.calls.find(
-      (c) => c.key === "POST /api/capability-grants/check",
+    expect(items[2].querySelector("a")?.getAttribute("href")).toBe(
+      "/settings/capabilities#capability-policy",
     );
-    expect(checkCall?.body).toEqual({
-      grants: [{ grant: `${GCP_KEY_REF}={}` }],
-    });
-  });
-
-  it("ignores stale out-of-order /api/capability-methods responses and invalid repo strings", async () => {
-    let resolveFirst!: (v: CapabilityMethod[]) => void;
-    let resolveSecond!: (v: CapabilityMethod[]) => void;
-    let callCount = 0;
-
-    const api = new FakeApi();
-    api.methodsHandler = (query) => {
-      callCount += 1;
-      if (callCount === 1) {
-        expect(query).toBeUndefined();
-        return new Promise((r) => {
-          resolveFirst = r;
-        });
-      }
-      expect(query).toBe("kind=task&repo=acme%2Fapp");
-      return new Promise((r) => {
-        resolveSecond = r;
-      });
-    };
-
-    const { q, fixture, host } = await mount(api, (h) => {
-      h.repo.set("not a valid repo");
-      h.held.set([`${GCP_KEY_REF}={}`]);
-    });
-
-    // Change to a valid repo before the first request finishes.
-    host.repo.set("acme/app");
-    await fixture.whenStable();
-
-    // Resolve second (fresh) before first (stale).
-    resolveSecond([
-      {
-        ref: GCP_KEY_REF,
-        capability: "https://grain.dev/capabilities/gcp",
-        method: "gcp-key",
-        policyRefusal: "fresh refusal",
-      },
-    ]);
-    await fixture.whenStable();
-    await Promise.resolve();
-    await fixture.whenStable();
-
-    resolveFirst([
-      {
-        ref: GCP_KEY_REF,
-        capability: "https://grain.dev/capabilities/gcp",
-        method: "gcp-key",
-        policyRefusal: "stale refusal",
-      },
-    ]);
-    await fixture.whenStable();
-    await Promise.resolve();
-    await fixture.whenStable();
-
     expect(
-      q<HTMLElement>('[data-testid="gp-held-policy-0"]')?.textContent,
-    ).toContain("fresh refusal");
+      el.querySelector('[data-testid="held-grant-policy-2"]')?.classList,
+    ).toContain("is-warn");
   });
 });

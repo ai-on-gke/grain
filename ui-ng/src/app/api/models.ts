@@ -279,6 +279,10 @@ export interface Task {
   updatedAt?: string;
   proposedBy?: string;
   questionSummary?: string;
+  // The one line a run gave the closing note an awaiting_reply task
+  // rests on (comment_on_issue's summary); set only when the task asked
+  // nothing (pkg/ui Task.NoteSummary).
+  noteSummary?: string;
   questionCommentId?: number;
   awaitingAccess?: boolean;
   turnStopped?: boolean;
@@ -318,6 +322,7 @@ export interface Task {
   reviewTemplateName?: string;
   // The template the task was filed from, absent for one written from scratch.
   templateId?: string;
+  qaFlowRef?: string;
   sandboxCpus?: number;
   sandboxMemoryMb?: number;
   sandboxDiskGb?: number;
@@ -369,8 +374,13 @@ export interface Task {
   approvedByLabel?: string;
   approvedByKind?: string;
   approvedBySource?: string;
-  // The task that filed this one, and the work tree it belongs to.
+  // generatedFrom: the immediate parent proposer -- the task whose
+  // propose_task call filed this one; absent for a task nobody's run filed.
   generatedFrom?: string;
+  // origin: the root of this task's work tree ("owner/repo#N" or
+  // "task:<id>"), inherited at any depth, so it is usually not the parent.
+  // Neither field says who filed the task: that is its filing, the
+  // author* fields (docs/work-trees.md#glossary).
   origin?: string;
   stacked?: boolean;
   review?: boolean;
@@ -553,6 +563,9 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
+  // kind is admitted (ui.CapabilityMethod.Policy).
   policy?: Record<string, CapabilityPolicyVerdict>;
   aliasOf?: string[];
 }
@@ -624,6 +637,7 @@ export interface Template {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   admission?: string;
@@ -956,4 +970,98 @@ export interface MemoryDocument {
 
 export interface MemoryDocumentsResponse {
   documents: MemoryDocument[];
+}
+
+export interface QARuleSpec {
+  id: string;
+  label: string;
+  stage: string;
+  severity: string;
+  summary: string;
+  targetPaths: string[];
+  enabled: boolean;
+}
+
+export interface QAFlowSpec {
+  id: string;
+  label: string;
+  summary: string;
+  injectSkill: boolean;
+  skillBytes: number;
+  stopNudge: boolean;
+  stagingIsolation: boolean;
+  enableS4: boolean;
+  maxS4RepairRounds: number;
+  strictDecoderPaths?: string[];
+  rules: QARuleSpec[];
+}
+
+export interface QAFlowsResponse {
+  flows: QAFlowSpec[];
+}
+
+export interface QAAssignment {
+  rootOrigin: string;
+  epoch: number;
+  regimeId: number;
+  arm: string;
+  flowId: string;
+  rolloutPctAtAssign: number;
+  complexityTier: string;
+  assignedAt: string;
+}
+
+export interface QACheckRun {
+  id: number;
+  taskId: string;
+  runId: string;
+  commitSha: string;
+  stage: string;
+  checkId: string;
+  arm: string;
+  shadow: boolean;
+  verdict: string;
+  durationMs: number;
+  blastTier?: string;
+  blastScore?: number;
+  complexityTier?: string;
+  triageDecision?: string;
+  repairedInNextSha?: number;
+  tokensIn: number;
+  tokensOut: number;
+  allocBytes: number;
+  detailJson?: string;
+  createdAt: string;
+}
+
+export interface QAFinding {
+  id: number;
+  checkRunId: number;
+  taskId: string;
+  stage: string;
+  ruleId: string;
+  severity: string;
+  filePath?: string;
+  line?: number;
+  summary: string;
+  evidence?: string;
+  humanVote: number;
+  votedBy?: string;
+  votedAt?: string;
+  createdAt: string;
+}
+
+export interface TaskQAResponse {
+  taskId: string;
+  enabled: boolean;
+  assignment?: QAAssignment;
+  checkRuns: QACheckRun[];
+  findings: QAFinding[];
+}
+
+export interface VoteQAFindingResponse {
+  findingId: number;
+  taskId: string;
+  vote: number;
+  votedBy?: string;
 }

@@ -170,9 +170,11 @@ func listRow(t Task) Task {
 // repository-scoped caller on the strength of the ?repo= it names
 // (agentCallRepo, externalAgentCallRepo), so the list must hold no task
 // outside it.
-func (c *taskListCache) response(ctx context.Context, client *Client, repo string, view taskListView) ([]byte, string, error) {
-	// Before the build, never after -- see the type's own doc comment for
-	// what reading it afterwards would cost.
+// cacheToken is the version token under which taskListCache entries are valid:
+// the store's ChangeToken plus dispatchConditionVersion (a dispatch condition
+// changes every queued row's reason without a store write). Empty if
+// ChangeToken cannot be read, which disables caching for the request.
+func (c *taskListCache) cacheToken(ctx context.Context, client *Client) string {
 	token := ""
 	if client.Store != nil {
 		if t, err := client.Store.ChangeToken(ctx); err == nil {
@@ -190,6 +192,13 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 	if v := client.dispatchConditionVersion(); token != "" && v != 0 {
 		token = token + ":dc=" + strconv.FormatUint(v, 10)
 	}
+	return token
+}
+
+func (c *taskListCache) response(ctx context.Context, client *Client, repo string, view taskListView) ([]byte, string, error) {
+	// Before the build, never after -- see the type's own doc comment for
+	// what reading it afterwards would cost.
+	token := c.cacheToken(ctx, client)
 	key := taskListKey(view, repo)
 	var tasks []Task
 	if token != "" {

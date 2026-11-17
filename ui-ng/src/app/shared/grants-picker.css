@@ -120,97 +120,40 @@
   font-size: 12px;
 }
 
+/* The capability policy's word on a grant (policyVerdicts). */
 .grant-policy-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 6px;
-  border-radius: var(--md-sys-shape-corner-full);
+  padding: 0 6px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
   font-family: var(--grain-font-body);
   font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-  background: var(--md-sys-color-warning-container);
-  color: var(--md-sys-color-on-warning-container);
-}
-
-.grant-policy-badge.is-denied {
-  background: var(--md-sys-color-error-container);
-  color: var(--md-sys-color-on-error-container);
-}
-
-.grant-policy-note .grant-policy-badge,
-.grant-held-chip .grant-policy-badge {
-  background: transparent;
-  color: inherit;
-  border: 1px solid currentColor;
-}
-
-.grant-policy-note {
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--md-sys-shape-corner-small);
-  background: var(--md-sys-color-warning-container);
-  color: var(--md-sys-color-on-warning-container);
-  font-size: 12.5px;
+  font-weight: 500;
   line-height: 18px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
-.grant-policy-note.is-denied {
-  background: var(--md-sys-color-error-container);
-  color: var(--md-sys-color-on-error-container);
-}
-
-.grant-policy-note a {
-  color: inherit;
-  font-weight: 600;
-  text-decoration: underline;
-}
-
-.grant-policy-list {
-  list-style: none;
+.grant-policy-notes {
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.grant-policy-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 10px;
-  border-radius: var(--md-sys-shape-corner-small);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-lowest);
+  padding: 0 0 0 18px;
+  color: var(--md-sys-color-on-surface-variant);
   font-size: 12px;
-  line-height: 17px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
-.grant-policy-item-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+.grant-policy-badge.is-warn {
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
 }
 
-.grant-policy-item-name {
-  font-family: var(--grain-font-mono);
-  font-weight: 600;
-  color: var(--md-sys-color-on-surface);
-}
-
-.grant-policy-item-name.is-refused {
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.grant-policy-item-note {
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.grant-policy-item-note a {
+.grant-policy-notes a {
   color: var(--md-sys-color-primary);
   font-weight: 500;
+}
+
+.grant-policy-notes li.is-denied code {
+  color: var(--md-sys-color-error);
 }

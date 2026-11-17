@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
@@ -46,6 +47,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/qa/checks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
@@ -68,23 +70,77 @@ import (
 // by task id, and the daemon reads the repo and the branch out of that
 // task's own record; nothing in a tool call reaches GitHub as data.
 type DaemonPullRequests struct {
-	Client *ui.HTTPClient
-	TaskID string
+	Client      *ui.HTTPClient
+	TaskID      string
+	BaseBranch  string
+	CheckoutDir string
+	Tools       []mcp.Tool
+	attempts    *atomic.Int32
 }
 
 func (d DaemonPullRequests) OpenPullRequest(ctx context.Context) (mcp.PullRequestReport, error) {
-	return d.OpenChange(ctx, "", "")
+	return d.OpenChangeWithNotes(ctx, "", "", "")
+}
+
+func (d DaemonPullRequests) OpenPullRequestWithNotes(ctx context.Context, callerNotes string) (mcp.PullRequestReport, error) {
+	return d.OpenChangeWithNotes(ctx, "", "", callerNotes)
 }
 
 // OpenChange is open_pull_request with a change description, which a
 // changelist task's CL is built from (mcp.ChangeOpener).
 func (d DaemonPullRequests) OpenChange(ctx context.Context, summary, body string) (mcp.PullRequestReport, error) {
+	return d.OpenChangeWithNotes(ctx, summary, body, "")
+}
+
+// OpenChangeWithNotes runs in-sandbox S3 pre-PR quality checks for treatment-arm git tasks
+// before delegating to the daemon's pull-request / changelist endpoint.
+func (d DaemonPullRequests) OpenChangeWithNotes(ctx context.Context, summary, body, callerNotes string) (mcp.PullRequestReport, error) {
+	req := ui.OpenChangeRequest{
+		Summary:     summary,
+		Body:        body,
+		CallerNotes: strings.TrimSpace(callerNotes),
+	}
+	if d.Client != nil && len(d.Tools) > 0 {
+		if taskQA, err := d.Client.TaskQA(ctx, d.TaskID); err == nil &&
+			taskQA.Enabled && taskQA.Assignment != nil && taskQA.Assignment.Arm == model.QAArmTreatment {
+			attempt := 1
+			if d.attempts != nil {
+				attempt = int(d.attempts.Add(1))
+			}
+			ws := &checks.SandboxWorkspace{
+				CheckoutDir: d.CheckoutDir,
+				BaseBranch:  d.BaseBranch,
+				ReadFile:    checks.FileReaderFunc(mcp.SandboxFileReaderOf(d.Tools)),
+				RunCommand:  sandboxQACommandRunner(d.Tools),
+			}
+			if flow, fErr := checks.ResolveEffectiveFlow(ctx, ws, taskQA.Assignment.FlowID); fErr == nil {
+				if rep, s3Err := checks.RunS3(ctx, ws, flow, checks.RunOptions{
+					TaskID:      d.TaskID,
+					Arm:         model.QAArmTreatment,
+					Attempt:     attempt,
+					CallerNotes: callerNotes,
+				}, nil); s3Err == nil {
+					persistSandboxS3ViaAPI(ctx, d.Client, d.TaskID, callerNotes, rep)
+					if !rep.Passed {
+						if attempt <= 2 {
+							return mcp.PullRequestReport{}, errors.New(rep.FormatAgentFailure())
+						}
+						req.AllowHoldAfterS3Cap = true
+					}
+				}
+			}
+		}
+	}
+	return d.openWithRequest(ctx, req)
+}
+
+func (d DaemonPullRequests) openWithRequest(ctx context.Context, req ui.OpenChangeRequest) (mcp.PullRequestReport, error) {
 	var status ui.PullRequestStatus
 	var err error
-	if summary == "" && body == "" {
+	if req.Summary == "" && req.Body == "" && req.CallerNotes == "" && !req.AllowHoldAfterS3Cap {
 		status, err = d.Client.OpenPullRequest(ctx, d.TaskID)
 	} else {
-		status, err = d.Client.OpenChange(ctx, d.TaskID, ui.OpenChangeRequest{Summary: summary, Body: body})
+		status, err = d.Client.OpenChange(ctx, d.TaskID, req)
 	}
 	if err != nil {
 		return mcp.PullRequestReport{}, err
@@ -103,6 +159,62 @@ func (d DaemonPullRequests) OpenChange(ctx context.Context, summary, body string
 		})
 	}
 	return report, nil
+}
+
+func sandboxQACommandRunner(tools []mcp.Tool) checks.CommandRunner {
+	for _, t := range tools {
+		if t.Name == "run_command" && t.Handler != nil {
+			h := t.Handler
+			return func(ctx context.Context, command string) (string, bool, error) {
+				res := h(ctx, map[string]any{"command": command, "description": "Running pre-PR quality checks"})
+				return res.Text, res.IsError, nil
+			}
+		}
+	}
+	return nil
+}
+
+func persistSandboxS3ViaAPI(ctx context.Context, client *ui.HTTPClient, taskID, callerNotes string, rep checks.Report) {
+	detailMap := map[string]any{
+		"blastTier": rep.BlastTier,
+	}
+	if strings.TrimSpace(callerNotes) != "" {
+		detailMap["callerNotes"] = strings.TrimSpace(callerNotes)
+	}
+	detailBytes, _ := json.Marshal(detailMap)
+
+	entries := make([]ui.RecordQACheckRunEntry, 0, len(rep.Results))
+	for _, cr := range rep.Results {
+		var fs []model.QAFinding
+		for _, f := range cr.Findings {
+			fs = append(fs, model.QAFinding{
+				TaskID:   taskID,
+				Stage:    "S3",
+				RuleID:   f.RuleID,
+				Severity: f.Severity,
+				FilePath: f.FilePath,
+				Line:     f.Line,
+				Summary:  f.Summary,
+				Evidence: f.Evidence,
+			})
+		}
+		entries = append(entries, ui.RecordQACheckRunEntry{
+			Run: model.QACheckRun{
+				TaskID:     taskID,
+				CommitSHA:  rep.HeadSHA,
+				Stage:      "S3",
+				CheckID:    cr.CheckID,
+				Arm:        model.QAArmTreatment,
+				Shadow:     false,
+				Verdict:    cr.Verdict,
+				DurationMS: cr.DurationMS,
+				AllocBytes: cr.AllocBytes,
+				DetailJSON: string(detailBytes),
+			},
+			Findings: fs,
+		})
+	}
+	_ = client.RecordTaskQACheckRuns(ctx, taskID, entries)
 }
 
 // DaemonChangeChecks implements mcp.ChangeChecksReader by asking the
@@ -1906,7 +2018,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		Goal:                p.Goal,
 		NoPort:              p.NoPort,
 		FixesBaseBranch:     p.FixesBaseBranch,
-		Origin:              p.Origin,
+		WorkOrigin:          p.Origin,
 		DeferredUntil:       p.NotBefore,
 		HoldForApproval:     p.HoldForApproval,
 	})
@@ -2129,6 +2241,8 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			"to carry the pipeline-changes cursor (agent.RunConfig.ToolBudgetPipelineCursor)")
 	recordedTools := fs.String("recorded-tools", "",
 		"path to append full tool call records (JSON lines) as tools run")
+	noTools := fs.Bool("no-tools", false,
+		"serve an empty MCP registry with no sandbox, escape, or daemon tools")
 	surface := fs.String("mcp-surface", "",
 		"which tools to serve: \"control\" (the sandbox tools, the run-ending and escalation tools and the "+
 			"model-only grants' tools; everything else is a `grain` CLI command inside the sandbox) or \"full\" "+
@@ -2136,6 +2250,9 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			"flag is set, full otherwise (design/design/sandbox-first-agent-surface.design.md §6)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *noTools {
+		return mcp.Serve(context.Background(), mcp.NewRegistry(), bufio.NewReader(in), bufio.NewWriter(out))
 	}
 	if *surface == "" {
 		*surface = os.Getenv(MCPSurfaceEnv)
@@ -2303,7 +2420,14 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	if client != nil {
 		status := daemonStatus{client: client, taskID: *taskID}
 		registry.Register(mcp.NewOpenPullRequestTools(
-			DaemonPullRequests{Client: client, TaskID: *taskID})...)
+			DaemonPullRequests{
+				Client:      client,
+				TaskID:      *taskID,
+				BaseBranch:  *prBase,
+				CheckoutDir: orchestrator.CheckoutDir,
+				Tools:       tools,
+				attempts:    &atomic.Int32{},
+			})...)
 		registry.Register(mcp.NewRecreateSandboxTools(
 			daemonSandbox{client: client, taskID: *taskID})...)
 		registry.Register(mcp.NewStatusTools(status)...)

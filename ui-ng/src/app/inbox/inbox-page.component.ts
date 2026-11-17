@@ -72,6 +72,13 @@ import { InboxStore } from "./inbox.store";
 import { replyRefusal, whyGone } from "./departure";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 
+function qaTriageChip(t: Task): string | null {
+  const hr = t.humanReviewHold?.find((h) => h.source === "qa-triage");
+  if (!hr) return null;
+  const m = hr.reason?.match(/\[(T[0-3])\b/);
+  return m ? `[${m[1]} · Review]` : "[T2 · Review]";
+}
+
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: "all", label: "All" },
   { id: "asked", label: "Asked" },
@@ -374,7 +381,7 @@ const ONE_KEY = new Set(["approve"]);
                               <span [class]="'status-pill ' + e.pillTone"
                                 ><g-status-icon
                                   [tone]="e.pillTone"
-                                  [kind]="e.kind"
+                                  [kind]="e.iconKind ?? e.kind"
                                 />{{ e.pillLabel }}</span
                               >
                               <span class="row-summary muted">{{
@@ -413,6 +420,15 @@ const ONE_KEY = new Set(["approve"]);
                                     [attr.title]="c.tip"
                                     >{{ c.text }}</span
                                   >
+                                }
+                                @if (e.task && qaTriageChip(e.task); as qc) {
+                                  <span
+                                    class="gate-chip"
+                                    style="margin-left: 6px; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: var(--md-sys-color-surface-container-high);"
+                                    data-testid="row-qa-triage"
+                                  >
+                                    {{ qc }}
+                                  </span>
                                 }
                                 @if (e.gone) {
                                   <span class="muted row-gone"
@@ -526,9 +542,10 @@ const ONE_KEY = new Set(["approve"]);
               <div class="inspector-header-row1">
                 <div class="inspector-meta-cluster">
                   <span [class]="'status-pill ' + sel.pillTone"
-                    ><g-status-icon [tone]="sel.pillTone" [kind]="sel.kind" />{{
-                      sel.pillLabel
-                    }}</span
+                    ><g-status-icon
+                      [tone]="sel.pillTone"
+                      [kind]="sel.iconKind ?? sel.kind"
+                    />{{ sel.pillLabel }}</span
                   >
                   @if (sel.taskLink) {
                     <a
@@ -1276,6 +1293,8 @@ const ONE_KEY = new Set(["approve"]);
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
+  protected readonly qaTriageChip = qaTriageChip;
+
   protected readonly store = inject(InboxStore);
   protected readonly actionErrorShown = computed(() => {
     const err = this.store.actionError();

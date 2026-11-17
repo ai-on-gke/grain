@@ -15,6 +15,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ViewEncapsulation,
   computed,
   effect,
@@ -31,7 +32,6 @@ import type {
   APIScopeSetsResponse,
   CapabilityMethod,
   CapabilityOption,
-  CapabilityPolicyVerdict,
   GrantCheck,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
@@ -40,10 +40,99 @@ import {
   grantName,
   isApiCapability,
 } from "../sessions/session-helpers";
-import { methodMenuLabel, parseGrant } from "./capability-args";
 import { type PillOption, PillSelectComponent } from "./pill-select.component";
 
-export type GrantRunKind = "task" | "process" | "ci";
+// What the capability policy says about one grant for this form's run,
+// as the classic GrantsPicker words it (ui/src/components/GrantsPicker.jsx).
+export interface GrantPolicyVerdict {
+  // denied and ci_only are refused here; may_be_refused is a warning.
+  kind: "denied" | "may_be_refused" | "ci_only";
+  badge: string;
+  note: string;
+}
+
+// Where a CI-only method is explained: it is declared by the repository's
+// workflow, so the capability policy is not the reason (classic
+// GrantsPicker's REPO_ACCESS_DOC).
+export const REPO_ACCESS_DOC =
+  "https://github.com/ai-on-gke/grain/blob/main/docs/ci-capabilities.md#repository-access-declared-in-the-repository-enforced-by-the-teams-credential";
+
+const RUN_KIND_LABELS: Record<string, string> = {
+  task: "agent tasks",
+  process: "processes",
+  ci: "CI jobs",
+};
+
+// A repository still being typed is no run to ask about.
+const REPO_RE = /^[^/\s]+\/[^/\s]+$/;
+
+const API_CAPABILITY = "https://grain.dev/capabilities/api#";
+
+/**
+ * grantRef is the method a held grant names: its text before any "=",
+ * with an agent API grant in its stored spelling (`api:<name>` or
+ * `api:<name>@<repo>`, model.StoredGrantSpelling) read as the
+ * capability-method ref the listing names it by
+ * (https://grain.dev/capabilities/api#<name>) -- the reference the
+ * capability policy judges it under.
+ */
+export function grantRef(grant: string): string {
+  const eq = grant.indexOf("=");
+  const ref = eq < 0 ? grant : grant.slice(0, eq);
+  if (ref.startsWith("api:")) {
+    const name = ref.slice("api:".length).split("@")[0];
+    return API_CAPABILITY + name;
+  }
+  return ref;
+}
+
+/**
+ * policyVerdictFor is the capability policy's word on a grant of method m
+ * for runKind: refused outright for this run (policyRefusal, on a listing
+ * that named the repository), CI only, or -- where no repository is known
+ * yet -- the kind's own "denied" / "may be refused".
+ */
+export function policyVerdictFor(
+  m: CapabilityMethod | undefined,
+  runKind: string,
+  repoKnown: boolean,
+): GrantPolicyVerdict | null {
+  if (!m) return null;
+  const forKind = RUN_KIND_LABELS[runKind]
+    ? ` for ${RUN_KIND_LABELS[runKind]}`
+    : "";
+  const kindVerdict = m.policy?.[runKind] ?? "";
+  if (kindVerdict === "ci_only") {
+    return {
+      kind: "ci_only",
+      badge: "CI only",
+      note: `CI only: not a grant${forKind}; a CI job declares it in its workflow's capabilities:.`,
+    };
+  }
+  if (m.policyRefusal) {
+    return {
+      kind: "denied",
+      badge: "denied by policy",
+      note: `${m.policyRefusal}. Remove this grant, or change the capability policy.`,
+    };
+  }
+  if (repoKnown && runKind !== "ci") return null;
+  if (kindVerdict === "denied") {
+    return {
+      kind: "denied",
+      badge: "denied by policy",
+      note: `Denied by the capability policy${forKind}.`,
+    };
+  }
+  if (kindVerdict === "may_be_refused") {
+    return {
+      kind: "may_be_refused",
+      badge: "may be refused",
+      note: `May be refused by the capability policy${forKind}.`,
+    };
+  }
+  return null;
+}
 
 export interface GrantAttachEvent {
   // Simple capability toggle id (when toggling offered capabilities).
@@ -53,100 +142,6 @@ export interface GrantAttachEvent {
   with?: Record<string, unknown>;
   grant?: string;
   recorded: string;
-}
-
-export interface MethodPolicyInfo {
-  verdict: CapabilityPolicyVerdict;
-  refused: boolean;
-  ciOnly: boolean;
-  badge: string;
-  note: string;
-  linkKind: "policy" | "repo_access_doc";
-}
-
-const VALID_REPO_RE = /^([^/\s]+\/)?[^/\s]+\/[^/\s]+$/;
-
-const RUN_KIND_LABELS: Readonly<Record<GrantRunKind, string>> = {
-  task: "agent tasks",
-  process: "processes",
-  ci: "CI jobs",
-};
-
-const API_CAPABILITY_SERVER = "https://grain.dev/capabilities/api";
-
-export const REPO_ACCESS_DOC =
-  "https://github.com/ai-on-gke/grain/blob/main/docs/ci-capabilities.md#repository-access-declared-in-the-repository-enforced-by-the-teams-credential";
-export const REPO_ACCESS_DOC_LABEL = "Repository access docs";
-
-export function policyVerdictText(
-  verdict: CapabilityPolicyVerdict | undefined,
-  runKind: GrantRunKind,
-): string {
-  if (!verdict) return "";
-  const forKind = RUN_KIND_LABELS[runKind]
-    ? ` for ${RUN_KIND_LABELS[runKind]}`
-    : "";
-  if (verdict === "ci_only") {
-    return `CI only: not a grant${forKind}; a CI job declares it in its workflow's capabilities:`;
-  }
-  if (verdict === "denied") {
-    return `denied by the capability policy${forKind}`;
-  }
-  if (verdict === "may_be_refused") {
-    return `may be refused by the capability policy${forKind}`;
-  }
-  return "";
-}
-
-export function resolveMethodPolicy(
-  method: CapabilityMethod | undefined,
-  runKind: GrantRunKind,
-  kindVerdictShown: boolean,
-): MethodPolicyInfo | null {
-  if (!method) return null;
-  if (method.policy?.[runKind] === "ci_only") {
-    return {
-      verdict: "ci_only",
-      refused: true,
-      ciOnly: true,
-      badge: "CI only",
-      note: policyVerdictText("ci_only", runKind),
-      linkKind: "repo_access_doc",
-    };
-  }
-  if (method.policyRefusal) {
-    return {
-      verdict: "denied",
-      refused: true,
-      ciOnly: false,
-      badge: "denied by policy",
-      note: method.policyRefusal,
-      linkKind: "policy",
-    };
-  }
-  const verdict = kindVerdictShown ? method.policy?.[runKind] : undefined;
-  if (!verdict) return null;
-  if (verdict === "denied") {
-    return {
-      verdict: "denied",
-      refused: true,
-      ciOnly: false,
-      badge: "denied by policy",
-      note: policyVerdictText("denied", runKind),
-      linkKind: "policy",
-    };
-  }
-  if (verdict === "may_be_refused") {
-    return {
-      verdict: "may_be_refused",
-      refused: false,
-      ciOnly: false,
-      badge: "may be refused",
-      note: policyVerdictText("may_be_refused", runKind),
-      linkKind: "policy",
-    };
-  }
-  return null;
 }
 
 @Component({
@@ -161,27 +156,26 @@ export function resolveMethodPolicy(
         <div class="grants-toggle-list" role="group" aria-label="Capabilities">
           @for (c of toggleItems(); track c.id) {
             @let on = heldSet().has(c.id);
-            @let pol = policyForGrant(c.id);
+            @let pv = verdictOf(c.id);
             <button
               type="button"
               class="grant-pill"
+              [class.has-policy]="!!pv"
               [attr.aria-pressed]="on"
-              [disabled]="disabled() || (!on && !!pol?.refused)"
-              [attr.data-testid]="(testid() || 'gp') + '-cap-' + c.id"
-              [attr.data-policy-verdict]="pol?.verdict || null"
-              [attr.data-policy-denied]="
-                pol && pol.refused && !pol.ciOnly ? 'true' : null
+              [disabled]="
+                disabled() || (!on && !!pv && pv.kind !== 'may_be_refused')
               "
-              [attr.data-ci-only]="pol?.ciOnly ? 'true' : null"
-              [attr.title]="pol ? pol.note : c.description || null"
+              [attr.title]="pv?.note || null"
+              [attr.data-testid]="(testid() || 'gp') + '-cap-' + c.id"
               (click)="onToggle(c.id, !on)"
             >
               {{ on ? "✓ " : "" }}{{ c.name || c.id }}
-              @if (pol) {
+              @if (pv) {
                 <span
                   class="grant-policy-badge"
-                  [class.is-denied]="pol.verdict === 'denied'"
-                  >{{ pol.badge }}</span
+                  [class.is-warn]="pv.kind === 'may_be_refused'"
+                  [attr.data-testid]="(testid() || 'gp') + '-policy-' + c.id"
+                  >{{ pv.badge }}</span
                 >
               }
             </button>
@@ -195,28 +189,19 @@ export function resolveMethodPolicy(
           aria-label="Attached method and API grants"
         >
           @for (g of extraHeld(); track g) {
-            @let pol = policyForGrant(g);
+            @let hv = verdictOf(g);
             <li
               class="grant-held-chip"
-              [class.is-policy-denied]="pol?.verdict === 'denied'"
-              [class.is-policy-warn]="
-                pol?.verdict === 'may_be_refused' || pol?.verdict === 'ci_only'
-              "
+              [class.has-policy]="!!hv"
               [attr.data-testid]="'held-grant-' + $index"
-              [attr.data-policy-verdict]="pol?.verdict || null"
-              [attr.data-policy-denied]="
-                pol && pol.refused && !pol.ciOnly ? 'true' : null
-              "
-              [attr.data-ci-only]="pol?.ciOnly ? 'true' : null"
             >
-              <span [title]="pol ? g + ' — ' + pol.note : g">{{
-                shortGrant(g)
-              }}</span>
-              @if (pol) {
+              <span [title]="g">{{ shortGrant(g) }}</span>
+              @if (hv) {
                 <span
                   class="grant-policy-badge"
-                  [class.is-denied]="pol.verdict === 'denied'"
-                  >{{ pol.badge }}</span
+                  [class.is-warn]="hv.kind === 'may_be_refused'"
+                  [attr.data-testid]="'held-grant-policy-' + $index"
+                  >{{ hv.badge }}</span
                 >
               }
               @if (!disabled()) {
@@ -235,43 +220,33 @@ export function resolveMethodPolicy(
         </ul>
       }
 
-      @for (item of heldPolicyWarnings(); track item.grant) {
-        <p
-          class="grant-policy-note"
-          [class.is-denied]="item.policy.verdict === 'denied'"
-          [attr.data-testid]="(testid() || 'gp') + '-held-policy-' + $index"
-          [attr.data-method]="item.ref"
-          [attr.data-policy-verdict]="item.policy.verdict"
-          [attr.data-policy-denied]="
-            item.policy.refused && !item.policy.ciOnly ? 'true' : null
-          "
-          [attr.data-ci-only]="item.policy.ciOnly ? 'true' : null"
+      @if (heldVerdicts().length) {
+        <ul
+          class="grant-policy-notes"
+          aria-label="Capability policy"
+          [attr.data-testid]="(testid() || 'gp') + '-policy-notes'"
         >
-          <strong>{{ shortGrant(item.grant) }}:</strong>
-          @if (item.policy.ciOnly) {
-            This grant is {{ item.policy.note }}. Remove this grant: a CI job
-            that needs it declares it in its own
-            <code>.grain/workflows</code> file (<a
-              [href]="repoAccessDoc"
-              target="_blank"
-              rel="noreferrer"
-              >{{ repoAccessDocLabel }}</a
-            >).
-          } @else if (item.policy.refused) {
-            {{ item.policy.note }}. Remove this grant, or change the capability
-            policy (<a
-              [routerLink]="['/settings', 'capabilities']"
-              fragment="capability-policy"
-              >Settings → Capabilities</a
-            >).
-          } @else {
-            This grant is {{ item.policy.note }} (<a
-              [routerLink]="['/settings', 'capabilities']"
-              fragment="capability-policy"
-              >Settings → Capabilities</a
-            >).
+          @for (n of heldVerdicts(); track n.grant) {
+            <li
+              [attr.data-policy-verdict]="n.verdict.kind"
+              [class.is-denied]="n.verdict.kind !== 'may_be_refused'"
+            >
+              <code>{{ shortGrant(n.grant) }}</code
+              >: {{ n.verdict.note }}
+              @if (n.verdict.kind === "ci_only") {
+                (<a [href]="repoAccessDoc" target="_blank" rel="noreferrer"
+                  >Repository access docs</a
+                >)
+              } @else {
+                (<a
+                  [routerLink]="['/settings', 'capabilities']"
+                  fragment="capability-policy"
+                  >Settings → Capabilities</a
+                >)
+              }
+            </li>
           }
-        </p>
+        </ul>
       }
 
       @if (!disabled() && canReadCatalogue()) {
@@ -381,91 +356,6 @@ export function resolveMethodPolicy(
               }
             }
 
-            @if (activeBuilderPolicy(); as pol) {
-              <p
-                class="grant-policy-note"
-                [class.is-denied]="pol.verdict === 'denied'"
-                [attr.data-testid]="(testid() || 'gp') + '-selected-policy'"
-                [attr.data-method]="activeBuilderRef()"
-                [attr.data-policy-verdict]="pol.verdict"
-                [attr.data-policy-denied]="
-                  pol.refused && !pol.ciOnly ? 'true' : null
-                "
-                [attr.data-ci-only]="pol.ciOnly ? 'true' : null"
-              >
-                <span
-                  class="grant-policy-badge"
-                  [class.is-denied]="pol.verdict === 'denied'"
-                  >{{ pol.badge }}</span
-                >
-                {{ " " }}{{ pol.note }}
-                @if (pol.linkKind === "repo_access_doc") {
-                  (<a [href]="repoAccessDoc" target="_blank" rel="noreferrer">{{
-                    repoAccessDocLabel
-                  }}</a
-                  >)
-                } @else {
-                  (<a
-                    [routerLink]="['/settings', 'capabilities']"
-                    fragment="capability-policy"
-                    >Settings → Capabilities</a
-                  >)
-                }
-              </p>
-            }
-
-            @if (mode() === "method" && flaggedMethods().length > 0) {
-              <ul
-                class="grant-policy-list"
-                aria-label="Capability policy notices"
-                [attr.data-testid]="(testid() || 'gp') + '-policy-verdicts'"
-              >
-                @for (row of flaggedMethods(); track row.method.ref) {
-                  <li
-                    class="grant-policy-item"
-                    [attr.data-method]="row.method.ref"
-                    [attr.data-policy-verdict]="row.policy.verdict"
-                    [attr.data-policy-denied]="
-                      row.policy.refused && !row.policy.ciOnly ? 'true' : null
-                    "
-                    [attr.data-ci-only]="row.policy.ciOnly ? 'true' : null"
-                  >
-                    <div class="grant-policy-item-head">
-                      <span
-                        class="grant-policy-item-name"
-                        [class.is-refused]="row.policy.refused"
-                        >{{
-                          methodLabel(row.method.ref, row.method.method)
-                        }}</span
-                      >
-                      <span
-                        class="grant-policy-badge"
-                        [class.is-denied]="row.policy.verdict === 'denied'"
-                        >{{ row.policy.badge }}</span
-                      >
-                    </div>
-                    <span class="grant-policy-item-note">
-                      {{ row.policy.note }}
-                      @if (row.policy.linkKind === "repo_access_doc") {
-                        (<a
-                          [href]="repoAccessDoc"
-                          target="_blank"
-                          rel="noreferrer"
-                          >{{ repoAccessDocLabel }}</a
-                        >)
-                      } @else {
-                        (<a
-                          [routerLink]="['/settings', 'capabilities']"
-                          fragment="capability-policy"
-                          >Settings → Capabilities</a
-                        >)
-                      }
-                    </span>
-                  </li>
-                }
-              </ul>
-            }
-
             @if (checkError(); as err) {
               <p
                 class="banner banner-error"
@@ -480,16 +370,15 @@ export function resolveMethodPolicy(
               <button
                 type="button"
                 class="btn-tonal"
-                [disabled]="checking() || !!activeBuilderPolicy()?.refused"
+                [disabled]="checking()"
                 [attr.data-testid]="(testid() || 'gp') + '-attach'"
                 (click)="attachFromBuilder()"
               >
-                {{ checking() ? "Checking…" : "Add grant" }}
+                Add grant
               </button>
               <button
                 type="button"
                 class="btn-text"
-                [attr.data-testid]="(testid() || 'gp') + '-add-close'"
                 (click)="builderOpen.set(false)"
               >
                 Done
@@ -506,15 +395,23 @@ export class GrantsPickerComponent {
   private readonly access = inject(AccessService);
 
   protected readonly repoAccessDoc = REPO_ACCESS_DOC;
-  protected readonly repoAccessDocLabel = REPO_ACCESS_DOC_LABEL;
 
   readonly offered = input<readonly CapabilityOption[]>([]);
   readonly held = input<readonly string[]>([]);
-  readonly repo = input<string | undefined>("");
-  readonly runKind = input<GrantRunKind>("task");
+  readonly repo = input<string | undefined>(undefined);
   readonly disabled = input<boolean>(false);
   readonly testid = input<string>("");
+  /**
+   * policyVerdicts has the picker read the capability policy's verdict on
+   * each method for runKind on repo, flag a held grant the policy denies
+   * or may refuse, and list a refused method disabled with the policy's
+   * reason -- the classic GrantsPicker's policyRepo/runKind.
+   */
+  readonly policyVerdicts = input<boolean>(false);
+  readonly runKind = input<string>("task");
 
+  // Emits full updated string[] for state-list forms (Sessions, New Task),
+  // AND granular attach/detach events for TaskDetail's POST .../capabilities!
   readonly heldChange = output<string[]>();
   readonly attachGrant = output<GrantAttachEvent>();
   readonly detachGrant = output<{ id?: string; grant?: string }>();
@@ -530,29 +427,108 @@ export class GrantsPickerComponent {
   protected readonly rawGrant = signal("");
   protected readonly checking = signal(false);
   protected readonly checkError = signal<string | null>(null);
-  private loadedScopeSets = false;
-  private methodsSeq = 0;
+  private loadedCatalogue = false;
+  private methodsFor: string | null = null;
+  private methodsTimer: ReturnType<typeof setTimeout> | null = null;
 
   protected readonly subjectRepo = computed(() => {
     const r = (this.repo() ?? "").trim();
-    return VALID_REPO_RE.test(r) ? r : "";
+    return REPO_RE.test(r) ? r : "";
   });
 
-  // With the repo known, the listing has judged a task's or process's one
-  // run, so a method without policyRefusal is admitted: a kind-wide
-  // "may_be_refused" from some other repo would only mislead. A CI job's
-  // trigger event is still unknown, so it keeps the kind verdict.
-  protected readonly kindVerdictShown = computed(() => {
-    const kind = this.runKind();
-    return Boolean(kind) && (!this.subjectRepo() || kind === "ci");
-  });
+  constructor() {
+    // Read the method listing for this run as soon as the form knows
+    // the repository, so a held grant is flagged before anybody opens
+    // "Add". Debounced: the repository box is typed a letter at a time.
+    effect(() => {
+      if (!this.policyVerdicts()) return;
+      const repo = this.subjectRepo();
+      const kind = this.runKind();
+      untracked(() => {
+        if (!this.access.can("GET /api/capability-methods", repo || undefined))
+          return;
+        const key = `${kind}|${repo}`;
+        if (key === this.methodsFor) return;
+        if (this.methodsTimer) clearTimeout(this.methodsTimer);
+        this.methodsTimer = setTimeout(() => {
+          this.methodsTimer = null;
+          void this.loadMethods(kind, repo);
+        }, 250);
+      });
+    });
+    // A repository chosen after a method was picked can make the policy
+    // refuse it: move the selection to one that may still be granted.
+    effect(() => {
+      const opts = this.methodOptions();
+      const cur = this.selectedMethod();
+      if (!cur || !opts.find((o) => o.value === cur)?.disabled) return;
+      const next = this.firstEnabledMethod();
+      untracked(() => this.selectedMethod.set(next));
+    });
+    inject(DestroyRef).onDestroy(() => {
+      if (this.methodsTimer) clearTimeout(this.methodsTimer);
+    });
+  }
 
-  protected readonly methodsByRef = computed(() => {
-    const map = new Map<string, CapabilityMethod>();
-    for (const m of this.methods()) {
-      map.set(m.ref, m);
+  /**
+   * methodsQuery is the listing's question for this run. With a whole
+   * owner/name the listing judges that one run (policyRefusal). With
+   * none, a form that has policyVerdicts on (a schedule or template whose
+   * repository is not chosen yet) asks nothing of the run: `kind` alone
+   * would be judged as a repository-less task and refuse a method a
+   * repo-scoped rule admits, where the kind's own "may be refused" is
+   * the truth (GrantsPicker.jsx's `subject`). Other pickers keep asking
+   * for `kind` alone, as they always have.
+   */
+  private methodsQuery(kind: string, repo: string): string | undefined {
+    const k = encodeURIComponent(kind);
+    if (repo) return `kind=${k}&repo=${encodeURIComponent(repo)}`;
+    return this.policyVerdicts() ? undefined : `kind=${k}`;
+  }
+
+  private async loadMethods(kind: string, repo: string): Promise<void> {
+    const key = `${kind}|${repo}`;
+    this.methodsFor = key;
+    const query = this.methodsQuery(kind, repo);
+    try {
+      const val = (await this.api.get<unknown>(
+        "GET /api/capability-methods",
+        undefined,
+        query,
+      )) as
+        | CapabilityMethod[]
+        | { items?: CapabilityMethod[]; methods?: CapabilityMethod[] };
+      if (this.methodsFor !== key) return;
+      const list = Array.isArray(val)
+        ? val
+        : (val?.items ?? val?.methods ?? []);
+      this.methods.set(list.filter((m) => typeof m?.ref === "string"));
+    } catch {
+      // No verdicts beats a picker that will not open: filing still
+      // reports a refused grant.
+      if (this.methodsFor === key) this.methodsFor = null;
     }
-    return map;
+  }
+
+  /** verdictOf is the policy's word on grant g, or null. */
+  protected verdictOf(g: string): GrantPolicyVerdict | null {
+    if (!this.policyVerdicts()) return null;
+    const ref = grantRef(g);
+    const m = this.methods().find(
+      (x) => x.ref === ref || (x.aliasOf?.includes(ref) ?? false),
+    );
+    return policyVerdictFor(m, this.runKind(), !!this.subjectRepo());
+  }
+
+  protected readonly heldVerdicts = computed(() => {
+    if (!this.policyVerdicts()) return [];
+    this.methods();
+    const out: { grant: string; verdict: GrantPolicyVerdict }[] = [];
+    for (const g of this.held()) {
+      const v = this.verdictOf(g);
+      if (v) out.push({ grant: g, verdict: v });
+    }
+    return out;
   });
 
   protected readonly heldSet = computed(() => new Set(this.held()));
@@ -569,111 +545,52 @@ export class GrantsPickerComponent {
     return this.held().filter((g) => !shown.has(g));
   });
 
-  protected readonly heldPolicyWarnings = computed(() => {
-    const out: { grant: string; ref: string; policy: MethodPolicyInfo }[] = [];
-    for (const g of this.held()) {
-      const ref = this.grantRef(g);
-      const policy = this.policyForRef(ref);
-      if (policy) {
-        out.push({ grant: g, ref, policy });
-      }
-    }
-    return out;
-  });
-
   protected readonly apiOptions = computed<PillOption[]>(() => {
     const sets = this.scopeSets();
-    const list: APIScopeSetRow[] = sets.length
-      ? sets.filter((s) => !s.catalogue?.disabled)
-      : [{ name: "tasks-read" }, { name: "ci-read" }, { name: "repos-read" }];
-    return list.map((s) => {
-      const pol = this.policyForRef(`${API_CAPABILITY_SERVER}#${s.name}`);
-      return {
+    if (!sets.length) {
+      return [
+        { value: "tasks-read", label: "api:tasks-read" },
+        { value: "ci-read", label: "api:ci-read" },
+        { value: "repos-read", label: "api:repos-read" },
+      ];
+    }
+    return sets
+      .filter((s) => !s.catalogue?.disabled)
+      .map((s) => ({
         value: s.name,
         label: s.description
           ? `api:${s.name} — ${s.description}`
           : `api:${s.name}`,
-        ...(pol ? { hint: `${pol.badge} — ${pol.note}` } : {}),
-      };
-    });
+      }));
   });
 
   protected readonly methodOptions = computed<PillOption[]>(() =>
-    this.methods().map((m) => {
-      const pol = resolveMethodPolicy(
-        m,
-        this.runKind(),
-        this.kindVerdictShown(),
-      );
-      return {
-        value: m.ref,
-        label: m.description ? `${m.ref} — ${m.description}` : m.ref,
-        ...(pol ? { hint: `${pol.badge} — ${pol.note}` } : {}),
-      };
-    }),
+    this.methods()
+      .filter((m) => this.policyVerdicts() || !m.policyRefusal)
+      .map((m) => {
+        const v = this.policyVerdicts()
+          ? policyVerdictFor(m, this.runKind(), !!this.subjectRepo())
+          : null;
+        return {
+          value: m.ref,
+          label: m.description ? `${m.ref} — ${m.description}` : m.ref,
+          ...(v ? { hint: v.note } : {}),
+          ...(v && v.kind !== "may_be_refused" ? { disabled: true } : {}),
+        };
+      }),
   );
 
-  protected readonly flaggedMethods = computed(() => {
-    const kind = this.runKind();
-    const showKind = this.kindVerdictShown();
-    const out: { method: CapabilityMethod; policy: MethodPolicyInfo }[] = [];
-    for (const m of this.methods()) {
-      const policy = resolveMethodPolicy(m, kind, showKind);
-      if (policy) out.push({ method: m, policy });
-    }
-    return out;
-  });
-
-  protected readonly activeBuilderRef = computed(() => {
-    const mode = this.mode();
-    if (mode === "api") {
-      const set = (
-        this.selectedApiSet() ||
-        this.apiOptions()[0]?.value ||
-        ""
-      ).trim();
-      return set ? `${API_CAPABILITY_SERVER}#${set}` : "";
-    }
-    if (mode === "method") {
-      return (
-        this.selectedMethod() ||
-        this.methodOptions()[0]?.value ||
-        ""
-      ).trim();
-    }
-    const raw = this.rawGrant().trim();
-    return raw ? this.grantRef(raw) : "";
-  });
-
-  protected readonly activeBuilderPolicy = computed<MethodPolicyInfo | null>(
-    () => {
-      const ref = this.activeBuilderRef();
-      return ref ? this.policyForRef(ref) : null;
-    },
+  /** The first method a grant may be made of here, or "". */
+  protected readonly firstEnabledMethod = computed(
+    () => this.methodOptions().find((o) => !o.disabled)?.value ?? "",
   );
-
-  constructor() {
-    effect(() => {
-      const kind = this.runKind();
-      const repo = this.subjectRepo();
-      const want =
-        this.builderOpen() ||
-        this.held().length > 0 ||
-        this.offered().length > 0;
-      if (!want) return;
-      untracked(() => void this.loadMethods(kind, repo));
-    });
-  }
-
-  protected methodLabel(ref: string, method: string): string {
-    return methodMenuLabel(ref, method);
-  }
 
   protected canReadCatalogue(): boolean {
+    const repo = this.subjectRepo() || undefined;
     return (
-      this.access.can("GET /api/capability-methods", this.repo()) ||
-      this.access.can("GET /api/api-scope-sets", this.repo()) ||
-      this.access.can("POST /api/capability-grants/check", this.repo())
+      this.access.can("GET /api/capability-methods", repo) ||
+      this.access.can("GET /api/api-scope-sets", repo) ||
+      this.access.can("POST /api/capability-grants/check", repo)
     );
   }
 
@@ -682,29 +599,8 @@ export class GrantsPickerComponent {
     return grantName(g);
   }
 
-  protected grantRef(g: string): string {
-    const trimmed = g.trim();
-    if (trimmed.startsWith("api:")) {
-      const body = trimmed.slice(4);
-      const name = body.split("@")[0];
-      return name ? `${API_CAPABILITY_SERVER}#${name}` : trimmed;
-    }
-    return parseGrant(trimmed).ref;
-  }
-
-  protected policyForRef(ref: string): MethodPolicyInfo | null {
-    if (!ref) return null;
-    const m = this.methodsByRef().get(ref);
-    return resolveMethodPolicy(m, this.runKind(), this.kindVerdictShown());
-  }
-
-  protected policyForGrant(g: string): MethodPolicyInfo | null {
-    return this.policyForRef(this.grantRef(g));
-  }
-
   protected onToggle(id: string, nextOn: boolean): void {
     if (this.disabled()) return;
-    if (nextOn && this.policyForGrant(id)?.refused) return;
     const cur = this.held();
     const method = this.methods().find((m) => m.ref === id);
     const idsToAdd =
@@ -736,72 +632,55 @@ export class GrantsPickerComponent {
   protected async openBuilder(): Promise<void> {
     this.builderOpen.set(true);
     this.checkError.set(null);
-    const repo = this.subjectRepo();
-    const jobs: Promise<unknown>[] = [this.loadMethods(this.runKind(), repo)];
-    if (!this.loadedScopeSets) {
-      this.loadedScopeSets = true;
-      if (this.access.can("GET /api/api-scope-sets", repo || this.repo())) {
-        jobs.push(
-          this.api
-            .get<APIScopeSetsResponse>("GET /api/api-scope-sets")
-            .then((res) => {
-              const sets = res?.sets ?? [];
-              this.scopeSets.set(sets);
-              if (!this.selectedApiSet() && sets[0]) {
-                this.selectedApiSet.set(sets[0].name);
-              }
-            })
-            .catch(() => {
-              // Fall back to default API set list.
-            }),
-        );
+    if (this.loadedCatalogue) return;
+    // Set while the read is in flight so a second click does not ask
+    // again; cleared below if it fails, so the next open retries.
+    this.loadedCatalogue = true;
+    const repo = this.subjectRepo() || undefined;
+    const query = this.methodsQuery(this.runKind(), repo ?? "");
+    const [setsRes, methodsRes] = await Promise.allSettled([
+      this.access.can("GET /api/api-scope-sets", repo)
+        ? this.api.get<APIScopeSetsResponse>("GET /api/api-scope-sets")
+        : Promise.resolve({ sets: [] }),
+      this.access.can("GET /api/capability-methods", repo)
+        ? this.api.get<{ items?: CapabilityMethod[] }>(
+            "GET /api/capability-methods",
+            undefined,
+            query,
+          )
+        : Promise.resolve({ items: [] }),
+    ]);
+    if (setsRes.status === "fulfilled") {
+      const sets = setsRes.value?.sets ?? [];
+      this.scopeSets.set(sets);
+      if (!this.selectedApiSet() && sets[0]) {
+        this.selectedApiSet.set(sets[0].name);
       }
     }
-    await Promise.allSettled(jobs);
-    if (!this.selectedApiSet()) {
-      this.selectedApiSet.set(this.apiOptions()[0]?.value ?? "tasks-read");
-    }
-  }
-
-  private async loadMethods(kind: GrantRunKind, repo: string): Promise<void> {
-    if (!this.access.can("GET /api/capability-methods", repo || this.repo())) {
-      return;
-    }
-    const seq = ++this.methodsSeq;
-    const query = repo
-      ? `kind=${encodeURIComponent(kind)}&repo=${encodeURIComponent(repo)}`
-      : undefined;
-    try {
-      const val = await this.api.get<
-        | CapabilityMethod[]
-        | { items?: CapabilityMethod[]; methods?: CapabilityMethod[] }
-      >("GET /api/capability-methods", undefined, query);
-      if (seq !== this.methodsSeq) return;
+    if (methodsRes.status === "fulfilled") {
+      const val = methodsRes.value as {
+        items?: CapabilityMethod[];
+        methods?: CapabilityMethod[];
+      };
       const list = Array.isArray(val)
         ? val
         : (val?.items ?? val?.methods ?? []);
-      this.methods.set(list.filter((m) => typeof m?.ref === "string"));
-      const cur = this.selectedMethod();
-      if (!cur || !list.some((m) => m.ref === cur)) {
-        const firstAllowed = list.find(
-          (m) =>
-            !resolveMethodPolicy(m, kind, this.kindVerdictShown())?.refused,
-        );
-        this.selectedMethod.set(firstAllowed?.ref ?? list[0]?.ref ?? "");
+      this.methods.set(list);
+      if (!this.selectedMethod() && this.firstEnabledMethod()) {
+        this.selectedMethod.set(this.firstEnabledMethod());
       }
-    } catch {
-      // Leave existing list untouched on transient load error.
+    }
+    if (setsRes.status === "rejected" || methodsRes.status === "rejected") {
+      this.loadedCatalogue = false;
+    }
+    if (!this.selectedApiSet()) {
+      this.selectedApiSet.set(this.apiOptions()[0]?.value ?? "tasks-read");
     }
   }
 
   protected async attachFromBuilder(): Promise<void> {
     if (this.checking()) return;
     this.checkError.set(null);
-    const activePol = this.activeBuilderPolicy();
-    if (activePol?.refused) {
-      this.checkError.set(activePol.note);
-      return;
-    }
     const mode = this.mode();
     let reqItem: {
       capability?: string;
@@ -825,13 +704,16 @@ export class GrantsPickerComponent {
       reqItem = { grant };
       fallbackRecorded = grant;
     } else if (mode === "method") {
-      const ref = (
-        this.selectedMethod() ||
-        this.methodOptions()[0]?.value ||
-        ""
-      ).trim();
+      const ref = (this.selectedMethod() || this.firstEnabledMethod()).trim();
       if (!ref) {
         this.checkError.set("Choose a capability method.");
+        return;
+      }
+      // A method the policy refuses here is listed so the reader can see
+      // it exists, never granted: the grant check does not judge policy.
+      const opt = this.methodOptions().find((o) => o.value === ref);
+      if (opt?.disabled) {
+        this.checkError.set(opt.hint || `${ref} cannot be granted here.`);
         return;
       }
       let parsedWith: Record<string, unknown> | undefined;
@@ -869,18 +751,18 @@ export class GrantsPickerComponent {
     this.checking.set(true);
     try {
       let recorded = fallbackRecorded;
-      const repo = this.subjectRepo();
+      const subject = this.subjectRepo();
       if (
         this.access.can(
           "POST /api/capability-grants/check",
-          repo || this.repo(),
+          subject || undefined,
         )
       ) {
         const res = await this.api.post<
           GrantCheck[] | { checks?: GrantCheck[] }
         >("POST /api/capability-grants/check", undefined, {
           grants: [reqItem],
-          ...(repo && this.runKind() !== "ci" ? { subject: { repo } } : {}),
+          ...(subject ? { subject: { repo: subject } } : {}),
         });
         const list = Array.isArray(res) ? res : (res?.checks ?? []);
         const check = list[0];

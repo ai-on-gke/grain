@@ -1,0 +1,6 @@
+{
+  "expected_contract_revision": 5,
+  "idempotency_key": "mutation-1",
+  "reason": "Track the task outcome",
+  "expected_grant_revision": 1
+}

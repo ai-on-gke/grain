@@ -382,7 +382,18 @@ test("Phone 390x844: Docs tab, Details scroll, and full-screen doc-reader-modal 
     await expect(modal).not.toHaveAttribute("open", "");
 
     await page.getByTestId("task-tab-details").click();
-    await advanceScroll(page.locator(".task-tab-body"));
+    // Narrow Details scrolls the whole task page, keeping one vertical owner.
+    const detailsPage = page.locator(".task-page");
+    await expect(page.getByRole("region", { name: "Task details" })).toHaveCSS(
+      "overflow-y",
+      "visible",
+    );
+    await advanceScroll(detailsPage);
+    await detailsPage.focus();
+    await detailsPage.press("Control+End");
+    await expect(
+      page.getByRole("textbox", { name: "Add dependency task ID" }),
+    ).toBeInViewport();
   }
 });
 
