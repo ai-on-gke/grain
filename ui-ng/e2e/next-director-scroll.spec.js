@@ -88,6 +88,19 @@ test("Director drawer keeps long history scrollable and composer visible @phone"
     await expect
       .poll(() => thread.evaluate((el) => el.scrollTop))
       .toBeGreaterThan(10);
+    // A touch swipe flings: the thread keeps coasting after touchEnd. Wait
+    // for it to come to rest, or the coast carries it off the top again
+    // after it is put back there (it read 8 instead of 0 in CI).
+    await expect
+      .poll(
+        async () => {
+          const a = await thread.evaluate((el) => el.scrollTop);
+          await page.waitForTimeout(250);
+          return (await thread.evaluate((el) => el.scrollTop)) - a;
+        },
+        { timeout: 10000 },
+      )
+      .toBe(0);
     await expect
       .poll(async () => {
         await thread.evaluate((el) =>
