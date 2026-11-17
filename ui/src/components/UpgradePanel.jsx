@@ -1322,49 +1322,30 @@ export function ExternallyManagedUpgradeNotice({
   );
 }
 
-function shortPreviousLabel(status) {
-  if (!status) return "";
-  if (status.previousImageLabel) return status.previousImageLabel;
-  if (status.previousImage) {
-    const [named, digest] = status.previousImage.split("@");
-    if (!digest) return named;
-    const shortDigest = digest.startsWith("sha256:")
-      ? `sha256:${digest.slice(7, 19)}`
-      : digest;
-    const tag = imageTagOf(status.previousImage);
-    const targetTag = (status.branch || "").replaceAll("/", "..");
-    if (!tag || (targetTag && tag === targetTag)) {
-      return `${named}@${shortDigest}`;
-    }
-    return named;
-  }
-  if (status.previousRelease) return status.previousRelease;
-  if (status.previousCommit) return status.previousCommit.slice(0, 7);
-  return "";
-}
-
+// The daemon says what the one-click rollback would go back to
+// (GET /api/upgrade's `rollback`), and sends it only when the rollback
+// would be taken: the build the last upgrade that cut over replaced --
+// which after a cancelled or failed upgrade is not that upgrade's
+// previousImage, the build still running -- and never an image recorded
+// by tag alone, which it refuses.
 function hasRollbackTarget(status) {
-  if (!status || status.phase !== "ok" || status.unchanged) return false;
-  if (status.previousImage) {
-    return status.previousImage !== status.running?.image;
-  }
-  // A source deployment rolls back to the commit it replaced, by object
-  // id; a release recorded without one has nothing the rollback can
-  // check out, so it is shown only as the commit's label.
-  if (status.previousCommit) {
-    return status.previousCommit !== status.running?.commit;
-  }
+  const target = status?.rollback;
+  if (!target) return false;
+  if (target.image) return target.image !== status.running?.image;
+  if (target.commit) return target.commit !== status.running?.commit;
   return false;
 }
 
 function RollbackPreviousAlert({ status, disabled, rollingBack, onRollback }) {
   if (disabled || !hasRollbackTarget(status)) return null;
+  const target = status.rollback;
   const fullPrevious =
-    status.previousImage ||
-    status.previousRelease ||
-    (status.previousCommit ? status.previousCommit.slice(0, 7) : "");
-  const label = shortPreviousLabel(status);
+    target.image ||
+    target.release ||
+    (target.commit ? target.commit.slice(0, 7) : "");
+  const label = target.label || fullPrevious;
   if (!fullPrevious || !label) return null;
+  const cutOver = status.phase === "ok" && !status.unchanged;
   return (
     <Alert
       id="upgrade-rollback"
@@ -1380,7 +1361,7 @@ function RollbackPreviousAlert({ status, disabled, rollingBack, onRollback }) {
         justifyContent="space-between"
       >
         <Box sx={{ minWidth: 0 }}>
-          Replaced{" "}
+          {cutOver ? "Replaced" : "The last completed upgrade replaced"}{" "}
           <Box
             component="code"
             sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
