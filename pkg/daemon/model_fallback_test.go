@@ -178,13 +178,13 @@ func TestPauseClockNamesTheLocalZone(t *testing.T) {
 	// DST transitions in America/Los_Angeles (spring-forward Mar 8 2026 and
 	// fall-back Nov 1 2026) name the reset instant's own PST/PDT offset.
 	la := model.LoadLocation("America/Los_Angeles")
-	springNow := time.Date(2026, 3, 8, 9, 0, 0, 0, time.UTC)   // 1:00 AM PST
-	springAt := time.Date(2026, 3, 8, 10, 30, 0, 0, time.UTC)  // 3:30 AM PDT (same day)
+	springNow := time.Date(2026, 3, 8, 9, 0, 0, 0, time.UTC)  // 1:00 AM PST
+	springAt := time.Date(2026, 3, 8, 10, 30, 0, 0, time.UTC) // 3:30 AM PDT (same day)
 	if got, want := pauseClock(springNow, springAt, la), "3:30 AM PDT"; got != want {
 		t.Errorf("pauseClock across spring-forward = %q, want %q", got, want)
 	}
-	fallNow := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)  // 1:00 AM PDT
-	fallAt := time.Date(2026, 11, 1, 9, 30, 0, 0, time.UTC)  // 1:30 AM PST (same day)
+	fallNow := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC) // 1:00 AM PDT
+	fallAt := time.Date(2026, 11, 1, 9, 30, 0, 0, time.UTC) // 1:30 AM PST (same day)
 	if got, want := pauseClock(fallNow, fallAt, la), "1:30 AM PST"; got != want {
 		t.Errorf("pauseClock across fall-back = %q, want %q", got, want)
 	}
