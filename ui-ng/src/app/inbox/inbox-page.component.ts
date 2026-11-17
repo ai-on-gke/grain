@@ -740,7 +740,7 @@ const ONE_KEY = new Set(["approve"]);
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
                     <g-capped-markdown
-                      class="resolution-question"
+                      class="resolution-question dock-summary"
                       testid="access-summary"
                       noun="request"
                       label="Access request"
@@ -998,7 +998,9 @@ const ONE_KEY = new Set(["approve"]);
                       sel.kind === 'notification' ? 'The alert' : 'Summary'
                     "
                     [text]="
-                      (sel.kind === 'notification' && sel.notification?.body) ||
+                      (sel.kind === 'notification' &&
+                        (store.selectedNotificationBody() ||
+                          sel.notification?.body)) ||
                       sel.summary
                     "
                   />

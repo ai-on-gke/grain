@@ -224,6 +224,10 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
+- A page with a split calls `sp.attach()` once drawn (and `sp.detach()`
+  on destroy): only a measured split clamps a remembered share, so the
+  detail pane keeps its 320px floor whatever share a wider window stored
+  (`ui-ng/e2e/next-prompt-panes.spec.js`).
 - The detail pane is always there on desktop; it is not a modal. The
   exception is Agents, whose cards are a dashboard in their own right:
   its inspector opens only on the agent `?task=` names. With none (on
@@ -548,7 +552,10 @@ Rules:
   matching headings) into one block with Side by side / Before / After /
   Stacked / Source (Before alone on a phone). `mermaid` is imported only
   when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
-  before it reaches the DOM. A diagram never shrinks below 75% of its
+  before it reaches the DOM. Mermaid runs in strict mode, and a
+  diagram's own `%%{init}%%` may change neither security settings nor its
+  theme, palette, fonts or CSS (`secure` in `mermaidConfigForMode`), so
+  every diagram follows the theme switch. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
   the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render

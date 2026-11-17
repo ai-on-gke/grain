@@ -585,6 +585,21 @@ export class GrainApi implements OnDestroy {
     );
   }
 
+  // openNotificationsInFamily answers one family's open notifications with
+  // their bodies whole: the list above cuts each body to its first line.
+  openNotificationsInFamily(family: string): Promise<Notification[]> {
+    return this.get<
+      | Notification[]
+      | { notifications?: Notification[]; items?: Notification[] }
+    >(
+      "GET /api/notifications",
+      undefined,
+      `open=1&family=${encodeURIComponent(family)}`,
+    ).then((r) =>
+      Array.isArray(r) ? r : (r?.notifications ?? r?.items ?? []),
+    );
+  }
+
   diffPreview(id: string, max = 6): Promise<DiffPreview> {
     return this.get<DiffPreview>(
       "GET /api/tasks/{id}/diff-preview",
