@@ -134,4 +134,13 @@ describe("InfoPopoverComponent", () => {
     await fixture.whenStable();
     expect(panel()).toBeNull();
   });
+  it("stays open when focusing its button scrolls the page", async () => {
+    const { btn, panel, fixture } = await mount();
+    btn()!.dispatchEvent(new FocusEvent("focus"));
+    await fixture.whenStable();
+    expect(panel()).not.toBeNull();
+    window.dispatchEvent(new Event("scroll"));
+    await fixture.whenStable();
+    expect(panel()).not.toBeNull();
+  });
 });

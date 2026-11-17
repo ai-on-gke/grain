@@ -144,7 +144,10 @@ export class InfoPopoverComponent implements OnDestroy {
 
   private readonly onReposition = (): void => {
     if (!this.open()) return;
-    if (!this.pinned()) {
+    // A hover-only popover closes on scroll; one pinned or held open by
+    // keyboard focus follows its button (focusing it can itself scroll
+    // the page, which must not close what the focus just opened).
+    if (!this.pinned() && !this.focusOpen()) {
       this.zone.run(() => this.close());
       return;
     }
