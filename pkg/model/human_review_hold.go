@@ -77,6 +77,8 @@ const (
 	// HumanReviewHumanOnly is a change touching a trust-boundary path only
 	// a human may release (LinkHumanOnlyHold).
 	HumanReviewHumanOnly HumanReviewSource = "human-only"
+	// HumanReviewQATriage is a QA finding that tripped S5 merge triage to require a human review.
+	HumanReviewQATriage HumanReviewSource = "qa-triage"
 )
 
 // The categories a reason may name.
@@ -234,12 +236,12 @@ func AddHumanReviewReason(t *Task, r HumanReviewReason) (HumanReviewReason, bool
 	if r.Source == HumanReviewRequested && fromReview >= MaxHumanReviewRequestsPerReview {
 		return r, false, ErrHumanReviewRateLimited
 	}
-	if r.Source == HumanReviewHumanOnly {
-		// One path-held reason at a time: a head classified again says
-		// afresh which paths hold it.
+	if r.Source == HumanReviewHumanOnly || r.Source == HumanReviewQATriage {
+		// One path-held or QA triage reason at a time: a head classified again says
+		// afresh which paths or QA rules hold it.
 		t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 			e, ok := ParseHumanReviewReason(l.Target)
-			return l.Kind == LinkHumanReviewHold && ok && e.Source == HumanReviewHumanOnly
+			return l.Kind == LinkHumanReviewHold && ok && e.Source == r.Source
 		})
 	}
 	if !r.AutoMerge {
@@ -248,6 +250,9 @@ func AddHumanReviewReason(t *Task, r HumanReviewReason) (HumanReviewReason, bool
 	}
 	t.AutoMerge = false
 	r.At = r.At.UTC().Truncate(time.Second)
+	if r.Source == HumanReviewQATriage && !slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkQATriageHold }) {
+		t.Links = append(t.Links, Link{Kind: LinkQATriageHold, Target: r.Reason})
+	}
 	t.Links = append(t.Links, r.Link())
 	return r, true, nil
 }
@@ -265,7 +270,7 @@ func DropHumanReviewHold(t *Task) []HumanReviewReason {
 		}
 	}
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
-		if l.Kind == LinkHumanOnlyHold {
+		if l.Kind == LinkHumanOnlyHold || l.Kind == LinkQATriageHold {
 			return true
 		}
 		if l.Kind != LinkHumanReviewHold {
@@ -281,15 +286,30 @@ func DropHumanReviewHold(t *Task) []HumanReviewReason {
 // only while LinkHumanOnlyHold does, so a later head classified clear of
 // that path takes them with it -- the human-only hold's semantics, kept.
 func normalizeHumanReviewHold(t *Task) {
-	if slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkHumanOnlyHold }) {
-		return
+	var humanOnly bool
+	var qaTriage bool
+	for _, l := range t.Links {
+		if l.Kind == LinkHumanOnlyHold {
+			humanOnly = true
+		} else if l.Kind == LinkQATriageHold {
+			qaTriage = true
+		}
 	}
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 		if l.Kind != LinkHumanReviewHold {
 			return false
 		}
 		r, ok := ParseHumanReviewReason(l.Target)
-		return ok && r.Source == HumanReviewHumanOnly
+		if !ok {
+			return false
+		}
+		if r.Source == HumanReviewHumanOnly && !humanOnly {
+			return true
+		}
+		if r.Source == HumanReviewQATriage && !qaTriage {
+			return true
+		}
+		return false
 	})
 }
 

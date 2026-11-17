@@ -33,7 +33,7 @@ func TestResumeLaterPullRequestLinksAreTheTasksRestingOnTheirOwnWait(t *testing.
 	pr := func(id string) model.Task {
 		tk := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "t " + id,
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 			Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
 			Links:  []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#" + id}},

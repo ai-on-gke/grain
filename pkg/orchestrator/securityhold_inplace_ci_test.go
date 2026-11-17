@@ -171,7 +171,7 @@ func TestStackedReviewStillGetsItsOwnCI(t *testing.T) {
 	head := branchSHA(t, sim.BareRepo, own)
 	review := grantCI(t, ctx, store, model.Task{ID: "stacked-review", Intent: model.IntentImplement,
 		Title: "review it", Target: task.Target, Base: reviewed, Approval: task.Approval,
-		Origin: model.Origin{Reason: model.ReasonReview}})
+		Filing: model.Filing{Reason: model.ReasonReview}})
 
 	runner := newFakeCI()
 	deps := orchestrator.Deps{Store: store, Client: client, CI: runner}

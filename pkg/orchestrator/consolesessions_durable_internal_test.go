@@ -136,7 +136,7 @@ func TestConsoleSessionHasNo8hDeadline(t *testing.T) {
 		Intent:      model.IntentAnalyze,
 		Title:       director.Title,
 		Body:        director.Body,
-		Origin:      director.Origin,
+		Filing:      director.Filing,
 		Tags:        director.Tags,
 		Grants:      []model.Grant{{Capability: model.APIRef("self-debug"), Via: model.GrantByGrain}},
 		Interactive: true,

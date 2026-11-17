@@ -140,3 +140,57 @@ test("holds Create on a malformed fork head in Base branch and explains a well-f
     sheetRect.x + sheetRect.width + 1,
   );
 });
+
+test("says a malformed Base branch beside Create when More options holds it collapsed @phone @dark", async ({
+  page,
+}) => {
+  // settings/new-task-form.yml may place Base branch under More options.
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: {
+        ...body,
+        newTaskForm: {
+          default: { fields: { base: { visibility: "more" } } },
+        },
+      },
+    });
+  });
+  const sheet = await openSheet(page);
+  await sheet.getByTestId("nt-title").fill("Hidden fork head");
+  const more = sheet.getByTestId("more-options");
+  await more.click();
+  await sheet.getByTestId("nt-base").fill("bad:label:here");
+  await more.click();
+  await expect(sheet.getByTestId("nt-base")).toHaveCount(0);
+
+  const submit = sheet.getByTestId("new-task-submit");
+  const blocker = sheet.getByTestId("nt-submit-blocker");
+  await expect(submit).toBeDisabled();
+  await expect(blocker).toContainText(
+    `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
+  );
+  // The reason sits in the foot, inside the sheet, above Create.
+  const blockRect = await blocker.boundingBox();
+  const sheetRect = await sheet.boundingBox();
+  expect(blockRect.x + blockRect.width).toBeLessThanOrEqual(
+    sheetRect.x + sheetRect.width + 1,
+  );
+  expect(blockRect.y + blockRect.height).toBeLessThanOrEqual(
+    (await submit.boundingBox()).y + 1,
+  );
+  const dir = process.env.GRAIN_E2E_SHOTS || test.info().outputPath("shots");
+  await page.screenshot({
+    path: `${dir}/base-blocker-${test.info().project.name}.png`,
+  });
+
+  await sheet.getByTestId("nt-submit-blocker-show").click();
+  await expect(more).toHaveAttribute("aria-expanded", "true");
+  await expect(sheet.getByTestId("nt-base")).toBeFocused();
+  await expect(blocker).toHaveCount(0);
+  await page.screenshot({
+    path: `${dir}/base-blocker-shown-${test.info().project.name}.png`,
+  });
+});

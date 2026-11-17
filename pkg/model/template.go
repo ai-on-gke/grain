@@ -197,6 +197,11 @@ type Template struct {
 	// sandboxShapeLimits, as a hand-sized task is.
 	Sandbox SandboxShape
 
+	// QAFlowRef is the operator-configured quality-control flow reference
+	// (`<key>`, `<key>@v<N>`, or `sha256:<hex>`) bound to tasks composed from
+	// this template. Never set by in-repo declarations.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
+
 	CreatedAt time.Time
 }
 

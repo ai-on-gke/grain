@@ -1,0 +1,47 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "observe-2",
+  "reference": {
+    "version": "1",
+    "provider": {
+      "capability_id": "https://example.org/capabilities/tasks",
+      "method": "tasks"
+    },
+    "resource_kind": "example.task",
+    "identifier": {
+      "installation_id": "instance-a",
+      "task_id": "72"
+    },
+    "tracking": {
+      "facet": "outcome",
+      "mode": "follow_latest",
+      "selector": null
+    }
+  },
+  "observation_generation": 2,
+  "availability": "available",
+  "revision": "opaque:state-A",
+  "fact_version": "1",
+  "facts": {
+    "lifecycle": "terminal",
+    "disposition": "succeeded",
+    "subject_revision": "receipt:closure-72"
+  },
+  "details": {
+    "state": "closed"
+  },
+  "evidence": [
+    {
+      "handle": "opaque:unresolved",
+      "version": "1",
+      "kind": "example.task"
+    }
+  ],
+  "display": {
+    "summary": "Task 72 succeeded",
+    "url": null
+  },
+  "observed_at": "2026-11-16T21:00:01Z",
+  "valid_until": "2026-11-16T21:05:01Z",
+  "error": null
+}

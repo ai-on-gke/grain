@@ -1,0 +1,5502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grain.dev/spec/gates/api.schema.json",
+  "title": "Built-in gates operator and controller API v1 (proposed)",
+  "$defs": {
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "policy_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "context_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "evidence_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "head": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "contract_revision",
+        "authority_epoch",
+        "policy_digest",
+        "context_digest",
+        "evidence_digest",
+        "head",
+        "resource_version"
+      ]
+    },
+    "mutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "reason",
+        "expected"
+      ]
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "enum": [
+                "invalid",
+                "unauthenticated",
+                "forbidden",
+                "person_required",
+                "not_found",
+                "conflict",
+                "stale_head",
+                "stale_evidence",
+                "revision_conflict",
+                "idempotency_conflict",
+                "blocked",
+                "unsupported",
+                "incomplete",
+                "boundary_unavailable",
+                "outcome_unknown",
+                "rate_limited",
+                "unavailable",
+                "deadline",
+                "too_large",
+                "upgrade_required",
+                "cursor_expired",
+                "evidence_expired"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "recovery": {
+              "enum": [
+                "fix_request",
+                "authenticate",
+                "request_access",
+                "ask_person",
+                "refresh",
+                "same_key",
+                "poll_operation",
+                "wait",
+                "upgrade"
+              ]
+            },
+            "operation_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "field": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "current": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/expected"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "recovery",
+            "operation_id",
+            "field",
+            "current"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "delivery",
+            "acknowledgment",
+            "checks",
+            "review",
+            "approval",
+            "integration",
+            "children",
+            "base_health",
+            "nightly_health",
+            "publishing_health",
+            "pipeline_health",
+            "qa_stage"
+          ]
+        },
+        "version": {
+          "const": 1
+        },
+        "schema_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "implementation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "task",
+              "change",
+              "repository"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 3
+        },
+        "purposes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "completion",
+              "guard",
+              "monitor"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 3
+        },
+        "reads": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "task",
+              "messages",
+              "children",
+              "change",
+              "policy",
+              "health"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 6
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "reevaluate",
+              "retry_checks",
+              "request_review",
+              "answer",
+              "request_access",
+              "acknowledge",
+              "submit",
+              "accept_findings",
+              "waive_completion",
+              "override_action",
+              "reconcile_operation"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 11
+        },
+        "config_schema": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "private_state": {
+          "const": false
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "schema_digest",
+        "implementation",
+        "subjects",
+        "purposes",
+        "reads",
+        "actions",
+        "config_schema",
+        "private_state"
+      ]
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "grain.gates/v1"
+        },
+        "registry_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "build": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/descriptor"
+          },
+          "minItems": 12,
+          "maxItems": 12
+        }
+      },
+      "required": [
+        "api_version",
+        "registry_digest",
+        "build",
+        "items"
+      ]
+    },
+    "evaluation_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "evaluation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "disposition": {
+          "enum": [
+            "candidate",
+            "accepted",
+            "invalidated",
+            "rejected"
+          ]
+        },
+        "result": {
+          "$ref": "contracts.schema.json#/$defs/result"
+        },
+        "accepted_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invalidated_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invalidation_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dirty_generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "covered_generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "evaluation_id",
+        "revision",
+        "disposition",
+        "result",
+        "accepted_at",
+        "invalidated_at",
+        "invalidation_reason",
+        "retry_at",
+        "dirty_generation",
+        "covered_generation"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "status": {
+                    "const": "error"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "disposition": {
+                "const": "rejected"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "permission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 16
+        },
+        "person_required": {
+          "type": "boolean"
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scopes",
+        "person_required",
+        "allowed",
+        "reason"
+      ]
+    },
+    "operation_link": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PATCH",
+            "PUT"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "permission": {
+          "$ref": "#/$defs/permission"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        },
+        "submit_intent": {
+          "anyOf": [
+            {
+              "enum": [
+                "approve_and_queue",
+                "execute"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "tool",
+        "action",
+        "permission",
+        "enabled",
+        "disabled_reason",
+        "expected",
+        "submit_intent"
+      ]
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "binding_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "target": {
+          "$ref": "contracts.schema.json#/$defs/subject"
+        },
+        "person_required": {
+          "type": "boolean"
+        },
+        "remediation": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/operation_link"
+          },
+          "minItems": 0,
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "binding_id",
+        "code",
+        "summary",
+        "target",
+        "person_required",
+        "remediation"
+      ]
+    },
+    "task_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "grain.gates/v1"
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "authority": {
+          "enum": [
+            "legacy",
+            "builtins"
+          ]
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "contract": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/contract"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/decision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evaluation_state"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/blocker"
+          },
+          "minItems": 0,
+          "maxItems": 128
+        },
+        "exceptions": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/exception"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/operation_link"
+          },
+          "minItems": 0,
+          "maxItems": 16
+        },
+        "legacy_state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "gate_observations": {
+          "$ref": "#/$defs/observation_view"
+        }
+      },
+      "required": [
+        "api_version",
+        "task_id",
+        "authority",
+        "authority_epoch",
+        "revision",
+        "contract",
+        "decision",
+        "expected",
+        "results",
+        "blockers",
+        "exceptions",
+        "actions",
+        "legacy_state",
+        "dirty"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "gate_observations"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authority": {
+                "const": "legacy"
+              },
+              "contract": {
+                "type": "null"
+              },
+              "decision": {
+                "type": "null"
+              },
+              "results": {
+                "maxItems": 0
+              },
+              "actions": {
+                "maxItems": 0
+              },
+              "exceptions": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "history_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "enum": [
+            "contract_edited",
+            "evaluation_requested",
+            "result_accepted",
+            "result_rejected",
+            "result_invalidated",
+            "action_requested",
+            "action_blocked",
+            "action_dispatched",
+            "action_settled",
+            "exception_issued",
+            "exception_revoked",
+            "message_received",
+            "message_processed",
+            "authority_changed"
+          ]
+        },
+        "binding_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "before_revision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "after_revision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/evaluation_state"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exception": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/exception"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/action_receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sequence",
+        "at",
+        "actor",
+        "kind",
+        "binding_id",
+        "operation_id",
+        "before_revision",
+        "after_revision",
+        "summary",
+        "result",
+        "exception",
+        "receipt"
+      ]
+    },
+    "history_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/history_item"
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor",
+        "snapshot_revision"
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "grain.gates/v1"
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "reevaluate",
+            "submit",
+            "request_review",
+            "run_ci",
+            "reply",
+            "acknowledge",
+            "accept_findings",
+            "reconcile"
+          ]
+        },
+        "state": {
+          "enum": [
+            "requested",
+            "executing",
+            "completed",
+            "failed",
+            "blocked",
+            "outcome_unknown",
+            "canceled"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        },
+        "result_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "external_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/action_receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/failure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "submit_intent": {
+          "anyOf": [
+            {
+              "enum": [
+                "approve_and_queue",
+                "execute"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "api_version",
+        "operation_id",
+        "task_id",
+        "kind",
+        "state",
+        "revision",
+        "created_at",
+        "updated_at",
+        "actor",
+        "idempotency_key",
+        "expected",
+        "result_ids",
+        "external_ids",
+        "receipt",
+        "error",
+        "retry_at",
+        "submit_intent"
+      ]
+    },
+    "action_preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "change.merge",
+            "change.submit"
+          ]
+        },
+        "target": {
+          "$ref": "contracts.schema.json#/$defs/subject"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        },
+        "permission": {
+          "$ref": "#/$defs/permission"
+        },
+        "coverage": {
+          "enum": [
+            "enforced",
+            "observation_only",
+            "unknown",
+            "explicit_unguarded"
+          ]
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/attachment"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evaluation_state"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/blocker"
+          },
+          "minItems": 0,
+          "maxItems": 128
+        },
+        "exceptions": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/exception"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "submission": {
+          "$ref": "#/$defs/operation_link"
+        }
+      },
+      "required": [
+        "action",
+        "target",
+        "task_id",
+        "expected",
+        "permission",
+        "coverage",
+        "bindings",
+        "results",
+        "blockers",
+        "exceptions",
+        "available",
+        "submission"
+      ]
+    },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mutation": {
+          "$ref": "#/$defs/mutation"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/attachment"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "lifecycle": {
+          "$ref": "contracts.schema.json#/$defs/lifecycle"
+        },
+        "authority_handoff": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "authority": {
+                  "enum": [
+                    "legacy",
+                    "builtins"
+                  ]
+                },
+                "expected_authority_epoch": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "authority",
+                "expected_authority_epoch"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mutation",
+        "attachments",
+        "lifecycle",
+        "authority_handoff"
+      ]
+    },
+    "policy_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "$ref": "contracts.schema.json#/$defs/policy"
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        }
+      },
+      "required": [
+        "policy",
+        "expected"
+      ]
+    },
+    "defaults_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "template_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "template_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "gate_defaults": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/template_defaults"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        }
+      },
+      "required": [
+        "template_id",
+        "template_revision",
+        "gate_defaults",
+        "expected"
+      ]
+    },
+    "materialize": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "template_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "template_revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fields": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 8192
+          }
+        },
+        "task_policy": {
+          "$ref": "contracts.schema.json#/$defs/policy"
+        },
+        "lifecycle": {
+          "$ref": "contracts.schema.json#/$defs/lifecycle"
+        },
+        "no_repo": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repo",
+        "template_id",
+        "template_revision",
+        "fields",
+        "task_policy",
+        "lifecycle",
+        "no_repo"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "template_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "template_revision": {
+                "type": "null"
+              },
+              "fields": {
+                "maxProperties": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "template_revision": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "repo": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "no_repo": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "no_repo": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "$ref": "contracts.schema.json#/$defs/contract"
+        },
+        "preview_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "source_revisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "revision"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "registry_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        }
+      },
+      "required": [
+        "contract",
+        "preview_digest",
+        "source_revisions",
+        "registry_digest",
+        "expires_at",
+        "expected"
+      ]
+    },
+    "exception_issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mutation": {
+          "$ref": "#/$defs/mutation"
+        },
+        "kind": {
+          "enum": [
+            "completion_waiver",
+            "action_override"
+          ]
+        },
+        "binding_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "target": {
+          "$ref": "contracts.schema.json#/$defs/subject"
+        },
+        "head": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "config_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "evidence_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "action_request": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/action_request"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mutation",
+        "kind",
+        "binding_ids",
+        "target",
+        "head",
+        "config_digest",
+        "evidence_digest",
+        "expires_at",
+        "operation_id",
+        "action_request",
+        "task_id"
+      ]
+    },
+    "exception_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/exception"
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor",
+        "snapshot_revision"
+      ]
+    },
+    "registry_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "registry_response": {
+      "$ref": "#/$defs/registry"
+    },
+    "schema_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,9}$",
+          "maxLength": 10
+        }
+      },
+      "required": [
+        "type",
+        "version"
+      ]
+    },
+    "schema_response": {
+      "$ref": "#/$defs/descriptor"
+    },
+    "task_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "query"
+      ]
+    },
+    "task_response": {
+      "$ref": "#/$defs/task_view"
+    },
+    "edit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gate_edit": {
+              "$ref": "#/$defs/edit"
+            }
+          },
+          "required": [
+            "gate_edit"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "body"
+      ]
+    },
+    "edit_response": {
+      "$ref": "#/$defs/task_view"
+    },
+    "history_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "binding_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": []
+        }
+      },
+      "required": [
+        "id",
+        "query"
+      ]
+    },
+    "history_response": {
+      "$ref": "#/$defs/history_page"
+    },
+    "reevaluate_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            },
+            "binding_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "minItems": 0,
+              "maxItems": 64,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "mutation",
+            "binding_ids"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ]
+    },
+    "reevaluate_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "operation_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "operation_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "action_preview_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "enum": [
+                "change.merge",
+                "change.submit"
+              ]
+            },
+            "target": {
+              "$ref": "contracts.schema.json#/$defs/subject"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "action",
+            "target",
+            "task_id"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "body"
+      ]
+    },
+    "action_preview_response": {
+      "$ref": "#/$defs/action_preview"
+    },
+    "submit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            },
+            "intent": {
+              "enum": [
+                "approve_and_queue",
+                "execute"
+              ]
+            },
+            "action_request": {
+              "$ref": "contracts.schema.json#/$defs/action_request"
+            }
+          },
+          "required": [
+            "mutation",
+            "intent",
+            "action_request"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "body"
+      ]
+    },
+    "submit_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "pr_submit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pr": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            },
+            "intent": {
+              "enum": [
+                "approve_and_queue",
+                "execute"
+              ]
+            },
+            "action_request": {
+              "$ref": "contracts.schema.json#/$defs/action_request"
+            }
+          },
+          "required": [
+            "pr",
+            "mutation",
+            "intent",
+            "action_request"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "query",
+        "body"
+      ]
+    },
+    "pr_submit_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "exceptions_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "default": 20
+                },
+                "kind": {
+                  "enum": [
+                    "completion_waiver",
+                    "action_override"
+                  ]
+                },
+                "active": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "task_id"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "authority": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "repository": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "change_kind": {
+                  "enum": [
+                    "pr",
+                    "cl"
+                  ]
+                },
+                "change_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "default": 20
+                },
+                "kind": {
+                  "enum": [
+                    "completion_waiver",
+                    "action_override"
+                  ]
+                },
+                "active": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "authority",
+                "repository",
+                "change_kind",
+                "change_id"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "exceptions_response": {
+      "$ref": "#/$defs/exception_page"
+    },
+    "issue_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/exception_issue"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "body",
+        "reason"
+      ]
+    },
+    "issue_response": {
+      "$ref": "contracts.schema.json#/$defs/exception"
+    },
+    "revoke_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            },
+            "expected_exception_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "mutation",
+            "expected_exception_revision"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "id",
+        "body",
+        "reason"
+      ]
+    },
+    "revoke_response": {
+      "$ref": "contracts.schema.json#/$defs/exception"
+    },
+    "repo_read_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        }
+      },
+      "required": [
+        "owner",
+        "name",
+        "query"
+      ]
+    },
+    "repo_read_response": {
+      "$ref": "#/$defs/policy_view"
+    },
+    "repo_edit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            },
+            "gate_policy": {
+              "$ref": "contracts.schema.json#/$defs/policy"
+            },
+            "retire_guard_bindings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "binding_id",
+                  "target",
+                  "action"
+                ],
+                "properties": {
+                  "binding_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "target": {
+                    "$ref": "contracts.schema.json#/$defs/subject"
+                  },
+                  "action": {
+                    "enum": [
+                      "change.merge",
+                      "change.submit"
+                    ]
+                  }
+                }
+              },
+              "minItems": 0,
+              "maxItems": 64,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "mutation",
+            "gate_policy",
+            "retire_guard_bindings"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "owner",
+        "name",
+        "query",
+        "body"
+      ]
+    },
+    "repo_edit_response": {
+      "$ref": "#/$defs/policy_view"
+    },
+    "template_read_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "query"
+      ]
+    },
+    "template_read_response": {
+      "$ref": "#/$defs/defaults_view"
+    },
+    "template_edit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            },
+            "expected_template_revision": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "gate_defaults": {
+              "$ref": "contracts.schema.json#/$defs/template_defaults"
+            }
+          },
+          "required": [
+            "mutation",
+            "expected_template_revision",
+            "gate_defaults"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "body"
+      ]
+    },
+    "template_edit_response": {
+      "$ref": "#/$defs/defaults_view"
+    },
+    "preview_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/materialize"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "body"
+      ]
+    },
+    "preview_response": {
+      "$ref": "#/$defs/preview"
+    },
+    "file_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "description": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 65536
+            },
+            "repo": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "template_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fields": {
+              "type": "object",
+              "maxProperties": 64,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 8192
+              }
+            },
+            "gate_admission": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "preview_digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "materialize": {
+                  "$ref": "#/$defs/materialize"
+                },
+                "idempotency_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "preview_digest",
+                "materialize",
+                "idempotency_key"
+              ]
+            },
+            "no_repo": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "title",
+            "description",
+            "repo",
+            "template_id",
+            "fields",
+            "gate_admission",
+            "no_repo"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "query",
+        "body"
+      ]
+    },
+    "file_response": {
+      "$ref": "#/$defs/task_view"
+    },
+    "review_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pr": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "design": {
+              "type": "boolean",
+              "default": false
+            },
+            "spec": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 1024,
+              "default": ""
+            },
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            },
+            "requirement_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "pr",
+            "mutation",
+            "requirement_id"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "query",
+        "body"
+      ]
+    },
+    "review_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "ci_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repo": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "commit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "event": {
+              "enum": [
+                "push",
+                "pull_request",
+                "workflow_dispatch"
+              ],
+              "default": "workflow_dispatch"
+            },
+            "workflow": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 1024,
+              "default": ""
+            },
+            "jobs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "minItems": 0,
+              "maxItems": 100,
+              "default": []
+            },
+            "recheck": {
+              "type": "boolean",
+              "default": false
+            },
+            "recheckFailed": {
+              "type": "boolean",
+              "default": false
+            },
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            }
+          },
+          "required": [
+            "taskId",
+            "repo",
+            "ref",
+            "commit",
+            "mutation"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "query",
+        "body"
+      ]
+    },
+    "ci_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "rerun_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "minItems": 0,
+              "maxItems": 100,
+              "default": []
+            },
+            "all": {
+              "type": "boolean",
+              "default": false
+            },
+            "workflow": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 1024,
+              "default": ""
+            },
+            "commit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            }
+          },
+          "required": [
+            "commit",
+            "mutation"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "body"
+      ]
+    },
+    "rerun_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "reply_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "question_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "question_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            }
+          },
+          "required": [
+            "body",
+            "question_id",
+            "question_version",
+            "mutation"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "body"
+      ]
+    },
+    "reply_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "ack_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "disposition": {
+              "enum": [
+                "acknowledge",
+                "succeed",
+                "cancel"
+              ]
+            },
+            "report_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "report_version": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "close_pull_request": {
+              "const": false
+            },
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            }
+          },
+          "required": [
+            "disposition",
+            "report_id",
+            "report_version",
+            "close_pull_request",
+            "mutation"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "body"
+      ]
+    },
+    "ack_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "findings_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          },
+          "required": [
+            "view"
+          ]
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gate": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "reviewTask": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "review_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "head": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            }
+          },
+          "required": [
+            "gate",
+            "reviewTask",
+            "review_version",
+            "reason",
+            "head",
+            "mutation"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "body"
+      ]
+    },
+    "findings_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "reconcile_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mutation": {
+              "$ref": "#/$defs/mutation"
+            }
+          },
+          "required": [
+            "mutation"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ]
+    },
+    "reconcile_response": {
+      "$ref": "#/$defs/operation"
+    },
+    "gate_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "type": {
+          "enum": [
+            "task.gates",
+            "task.gate_contract",
+            "task.gate_exception",
+            "task.gate_operation"
+          ]
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "actorKind": {
+          "enum": [
+            "human",
+            "agent",
+            "automation",
+            "service"
+          ]
+        },
+        "externalRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "at",
+        "taskId"
+      ]
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gate_event"
+          },
+          "minItems": 0,
+          "maxItems": 500
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 32
+        },
+        "nextCursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "timedOut": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "events",
+        "cursor"
+      ]
+    },
+    "events_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "since": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 32
+            },
+            "types": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repo": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            },
+            "wait": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 25,
+              "default": 0
+            },
+            "stream": {
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false"
+              ]
+            }
+          },
+          "required": [
+            "types"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "events_response": {
+      "$ref": "#/$defs/events"
+    },
+    "principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "automation",
+            "service"
+          ]
+        },
+        "delegated_by": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "delegated_by"
+      ]
+    },
+    "report_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "enum": [
+            "report",
+            "change",
+            "nothing_needed",
+            "review"
+          ]
+        },
+        "settled": {
+          "type": "boolean"
+        },
+        "producer": {
+          "$ref": "#/$defs/principal"
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "delivery_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "delivered_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      },
+      "required": [
+        "product",
+        "settled",
+        "producer",
+        "content_digest",
+        "delivery_ref",
+        "delivered_at"
+      ]
+    },
+    "acknowledgment_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "report_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "report_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "recipient": {
+          "$ref": "#/$defs/principal"
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "report_id",
+        "report_version",
+        "recipient",
+        "received_at",
+        "revoked_at"
+      ]
+    },
+    "check_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "suite_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "app_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider": {
+          "enum": [
+            "github",
+            "grain",
+            "cl"
+          ]
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "applicable": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "completed"
+          ]
+        },
+        "conclusion": {
+          "anyOf": [
+            {
+              "enum": [
+                "success",
+                "neutral",
+                "skipped",
+                "failure",
+                "timed_out",
+                "startup_failure",
+                "cancelled",
+                "action_required",
+                "stale"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issuer": {
+          "$ref": "#/$defs/principal"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "job_id",
+        "suite_id",
+        "app_id",
+        "provider",
+        "run_id",
+        "attempt",
+        "required",
+        "applicable",
+        "status",
+        "conclusion",
+        "issuer",
+        "completed_at"
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "state": {
+          "enum": [
+            "open",
+            "resolved",
+            "accepted"
+          ]
+        },
+        "disposition_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "state",
+        "disposition_id"
+      ]
+    },
+    "review_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "review_task": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "requirement_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "category": {
+          "enum": [
+            "ordinary",
+            "security",
+            "path",
+            "takeover"
+          ]
+        },
+        "reviewer": {
+          "$ref": "#/$defs/principal"
+        },
+        "assignment_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "disposition": {
+          "enum": [
+            "pending",
+            "clean",
+            "findings",
+            "accepted"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          },
+          "minItems": 0,
+          "maxItems": 128
+        },
+        "complete_diff": {
+          "type": "boolean"
+        },
+        "carry_forward": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "from_head": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "to_head": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "rule_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "policy_revision": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "from_head",
+                "to_head",
+                "rule_id",
+                "policy_revision"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "review_task",
+        "requirement_id",
+        "category",
+        "reviewer",
+        "assignment_version",
+        "disposition",
+        "findings",
+        "complete_diff",
+        "carry_forward"
+      ]
+    },
+    "approval_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requirement_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "approver": {
+          "$ref": "#/$defs/principal"
+        },
+        "eligible": {
+          "type": "boolean"
+        },
+        "rendered_head": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "policy_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "approved_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "requirement_id",
+        "approver",
+        "eligible",
+        "rendered_head",
+        "policy_digest",
+        "approved_at",
+        "revoked_at"
+      ]
+    },
+    "integration_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": [
+            "grain",
+            "external"
+          ]
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "integrated_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "canonical_target": {
+          "$ref": "contracts.schema.json#/$defs/subject"
+        },
+        "integrated_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      },
+      "required": [
+        "source",
+        "operation_id",
+        "integrated_version",
+        "canonical_target",
+        "integrated_at"
+      ]
+    },
+    "child_outcome_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "succeeded",
+                "failed",
+                "canceled"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "integrated": {
+          "type": "boolean"
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "task_id",
+        "outcome",
+        "outcome_version",
+        "integrated",
+        "authority_epoch"
+      ]
+    },
+    "base_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conclusion": {
+          "anyOf": [
+            {
+              "enum": [
+                "success",
+                "failure",
+                "running",
+                "cancelled",
+                "skipped"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nonreproduction_disposition": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ref",
+        "commit",
+        "run_id",
+        "conclusion",
+        "nonreproduction_disposition"
+      ]
+    },
+    "nightly_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "event": {
+          "enum": [
+            "push",
+            "pull_request",
+            "workflow_dispatch",
+            "schedule"
+          ]
+        },
+        "verified_default_push": {
+          "type": "boolean"
+        },
+        "eligible": {
+          "type": "boolean"
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check_fact"
+          },
+          "minItems": 0,
+          "maxItems": 8192
+        }
+      },
+      "required": [
+        "workflow",
+        "run_id",
+        "event",
+        "verified_default_push",
+        "eligible",
+        "jobs"
+      ]
+    },
+    "publication_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "artifact_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "release_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      },
+      "required": [
+        "commit",
+        "artifact_digest",
+        "release_version",
+        "target",
+        "receipt_id",
+        "published_at"
+      ]
+    },
+    "pipeline_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "expected_bases": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/subject"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "base_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/evidence"
+          },
+          "minItems": 0,
+          "maxItems": 128
+        },
+        "notifications": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 8192
+        },
+        "stalled_tasks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 8192
+        },
+        "blocked_queue_entries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 8192
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repositories",
+        "expected_bases",
+        "base_evidence",
+        "notifications",
+        "stalled_tasks",
+        "blocked_queue_entries",
+        "complete"
+      ]
+    },
+    "qa_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stage": {
+          "enum": [
+            "s3",
+            "s4",
+            "s5"
+          ]
+        },
+        "flow_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "assignment": {
+          "enum": [
+            "treatment",
+            "shadow"
+          ]
+        },
+        "engine": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "triage_disposition": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "stage",
+        "flow_revision",
+        "assignment",
+        "engine",
+        "passed",
+        "triage_disposition"
+      ]
+    },
+    "operation_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "state": {
+          "enum": [
+            "requested",
+            "executing",
+            "completed",
+            "failed",
+            "blocked",
+            "outcome_unknown",
+            "canceled"
+          ]
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "contracts.schema.json#/$defs/action_receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "state",
+        "receipt"
+      ]
+    },
+    "policy_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_revisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "revision"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "required_binding_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "coverage_complete": {
+          "type": "boolean"
+        },
+        "explicit_unguarded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_revisions",
+        "required_binding_ids",
+        "coverage_complete",
+        "explicit_unguarded"
+      ]
+    },
+    "evidence_record": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "report"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "task"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/report_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "acknowledgment"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "task"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/acknowledgment_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "check"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "change"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/check_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "review"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "change"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/review_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "approval"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "change"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/approval_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "integration"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "change"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/integration_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "child_outcome"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "task"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/child_outcome_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "base"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "repository"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/base_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "nightly"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "repository"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/nightly_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "publication"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "repository"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/publication_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "pipeline"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "repository"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/pipeline_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "qa"
+                    },
+                    "subject": {
+                      "properties": {
+                        "kind": {
+                          "const": "change"
+                        }
+                      }
+                    },
+                    "head": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/qa_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "operation"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/operation_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "allOf": [
+                {
+                  "$ref": "contracts.schema.json#/$defs/evidence"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "policy"
+                    }
+                  }
+                }
+              ]
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "contracts.schema.json#/$defs/dependency"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "collected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "valid_until": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 35
+            },
+            "facts": {
+              "$ref": "#/$defs/policy_fact"
+            }
+          },
+          "required": [
+            "reference",
+            "dependencies",
+            "collected_at",
+            "valid_until",
+            "facts"
+          ]
+        }
+      ]
+    },
+    "evidence_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "evidence_response": {
+      "$ref": "#/$defs/evidence_record"
+    },
+    "gate_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "grain.gates/v1"
+        },
+        "authority": {
+          "enum": [
+            "legacy",
+            "builtins"
+          ]
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "activity": {
+          "enum": [
+            "running",
+            "ready",
+            "waiting",
+            "needs_answer",
+            "needs_permission",
+            "needs_acknowledgment",
+            "terminal"
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "succeeded",
+                "failed",
+                "canceled"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "with_waivers": {
+          "type": "boolean"
+        },
+        "blocker_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "api_version",
+        "authority",
+        "authority_epoch",
+        "revision",
+        "activity",
+        "outcome",
+        "with_waivers",
+        "blocker_count",
+        "dirty"
+      ]
+    },
+    "operation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PATCH",
+            "PUT"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^api_[a-z0-9_]+$"
+        },
+        "status": {
+          "enum": [
+            "existing",
+            "changed",
+            "proposed"
+          ]
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "tasks:read",
+              "tasks:write",
+              "tasks:admin",
+              "repos:read",
+              "repos:write",
+              "templates:read",
+              "templates:write",
+              "ci:read",
+              "ci:write",
+              "merge:force",
+              "tasks:from-template"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true
+        },
+        "human_only": {
+          "type": "boolean"
+        },
+        "conditional_authority": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "condition": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "scopes": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "tasks:read",
+                    "tasks:write",
+                    "tasks:admin",
+                    "repos:read",
+                    "repos:write",
+                    "templates:read",
+                    "templates:write",
+                    "ci:read",
+                    "ci:write",
+                    "merge:force"
+                  ]
+                },
+                "minItems": 0,
+                "maxItems": 8,
+                "uniqueItems": true
+              },
+              "human_only": {
+                "type": "boolean"
+              },
+              "ownership_rule": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "condition",
+              "scopes",
+              "human_only",
+              "ownership_rule"
+            ]
+          },
+          "maxItems": 8
+        },
+        "request": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "response": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "success_status": {
+          "enum": [
+            200,
+            201,
+            202
+          ]
+        },
+        "error": {
+          "const": "failure"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "tool_result": {
+          "const": "tool_result"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "path",
+        "tool",
+        "status",
+        "scopes",
+        "human_only",
+        "conditional_authority",
+        "request",
+        "response",
+        "success_status",
+        "error",
+        "notes",
+        "tool_result"
+      ]
+    },
+    "from_template_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query",
+        "body"
+      ],
+      "properties": {
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "view"
+          ],
+          "properties": {
+            "view": {
+              "const": "gates"
+            }
+          }
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo",
+            "template",
+            "fields",
+            "approved",
+            "gate_admission"
+          ],
+          "properties": {
+            "repo": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "template": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "fields": {
+              "type": "object",
+              "maxProperties": 64,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 8192
+              }
+            },
+            "approved": {
+              "const": false
+            },
+            "gate_admission": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "preview_digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "materialize": {
+                  "$ref": "#/$defs/materialize"
+                },
+                "idempotency_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "preview_digest",
+                "materialize",
+                "idempotency_key"
+              ]
+            }
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      }
+    },
+    "from_template_response": {
+      "$ref": "#/$defs/task_view"
+    },
+    "read_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_ids",
+        "subjects",
+        "repository_refs",
+        "authorization_revision"
+      ],
+      "properties": {
+        "task_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/subject"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "repository_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/subject"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "authorization_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "context_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "contexts",
+        "bindings",
+        "actor",
+        "read_scope",
+        "source_revisions",
+        "registry_digest"
+      ],
+      "properties": {
+        "api_version": {
+          "const": "grain.gates/v1"
+        },
+        "contexts": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/context"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "contracts.schema.json#/$defs/attachment"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "read_scope": {
+          "$ref": "#/$defs/read_scope"
+        },
+        "source_revisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "revision"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "registry_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "task_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "title_prefix": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": []
+    },
+    "tool_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "text"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16777216
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ]
+          }
+        },
+        "isError": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "content",
+        "isError"
+      ]
+    },
+    "observation_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "grain.gates/v1"
+        },
+        "mode": {
+          "const": "observation_only"
+        },
+        "authority": {
+          "const": "legacy"
+        },
+        "lifecycle_effects": {
+          "const": false
+        },
+        "action_effects": {
+          "const": false
+        },
+        "dispatch_effects": {
+          "const": false
+        },
+        "automatic_cutover": {
+          "const": false
+        },
+        "source_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "compared_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "legacy_state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "contracts.schema.json#/$defs/attachment"
+              },
+              {
+                "properties": {
+                  "purpose": {
+                    "const": "monitor"
+                  },
+                  "required": {
+                    "const": false
+                  },
+                  "action": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/evaluation_state"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "properties": {
+                      "work": {
+                        "maxItems": 0
+                      },
+                      "actions": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "api_version",
+        "mode",
+        "authority",
+        "lifecycle_effects",
+        "action_effects",
+        "dispatch_effects",
+        "automatic_cutover",
+        "source_revision",
+        "compared_at",
+        "legacy_state",
+        "bindings",
+        "results",
+        "dirty"
+      ]
+    }
+  }
+}
