@@ -174,4 +174,70 @@ describe("dispatch-status", () => {
     expect(res?.headline).toContain("no fallback models left");
     expect(res?.subline).toContain("work falls back to nothing");
   });
+
+  it("ignores connectionless framework pauses when modelQuotaOnly is set", () => {
+    const fwOnly = {
+      agentPause: {
+        paused: true,
+        until: "2026-11-13T21:00:00Z",
+        reason: "Paused by operator for known-bad CLI release",
+        pauses: [
+          {
+            team: "core",
+            framework: "codex",
+            until: "2026-11-13T21:00:00Z",
+            reason: "Paused by operator for known-bad CLI release",
+            secondsRemaining: 10800,
+            canLift: true,
+          },
+        ],
+      },
+    };
+    expect(
+      summarizeDispatchStatus(fwOnly, null, nowMs, "UTC", {
+        modelQuotaOnly: true,
+      }),
+    ).toBeNull();
+    expect(
+      summarizeDispatchStatus(fwOnly, null, nowMs, "UTC")?.headline,
+    ).toContain("codex development paused");
+
+    const mixed = summarizeDispatchStatus(
+      {
+        agentPause: {
+          paused: true,
+          until: "2026-11-13T21:00:00Z",
+          reason: "Paused by operator for known-bad CLI release",
+          pauses: [
+            {
+              connection: "vertex-main",
+              connectionName: "Vertex Main",
+              model: "gemini-2.5-pro",
+              team: "core",
+              until: "2026-11-13T19:00:00Z",
+              reason: "HTTP 429 quota exceeded",
+              secondsRemaining: 3600,
+              canLift: true,
+            },
+            {
+              team: "core",
+              framework: "codex",
+              until: "2026-11-13T21:00:00Z",
+              reason: "Paused by operator for known-bad CLI release",
+              secondsRemaining: 10800,
+              canLift: true,
+            },
+          ],
+        },
+      },
+      null,
+      nowMs,
+      "UTC",
+      { modelQuotaOnly: true },
+    );
+    expect(mixed?.tone).toBe("warn");
+    expect(mixed?.headline).toContain("Vertex Main · gemini-2.5-pro");
+    expect(mixed?.subline).toBe("HTTP 429 quota exceeded");
+    expect(mixed?.resetText).toContain("in 1h");
+  });
 });

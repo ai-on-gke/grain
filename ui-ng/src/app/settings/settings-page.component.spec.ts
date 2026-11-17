@@ -71,6 +71,8 @@ class FakeSettingsApi {
     agentBackends: [{ id: "vertex-main", framework: "antigravity" }],
   };
 
+  usageBody: Record<string, unknown> = {};
+
   config = () => Promise.resolve(structuredClone(this.configBody));
 
   get = (key: string, params?: RouteParams, query?: string) => {
@@ -153,6 +155,9 @@ class FakeSettingsApi {
         reason: "1 repository reachable",
       });
     }
+    if (key === "GET /api/usage") {
+      return Promise.resolve(structuredClone(this.usageBody));
+    }
     return Promise.resolve({});
   };
 
@@ -220,10 +225,73 @@ class FakeSettingsApi {
   delete = (
     key: string,
     params?: RouteParams,
-    query?: string,
     body?: unknown,
+    query?: string,
   ) => {
-    this.calls.push({ method: "DELETE", key, params, query, body });
+    this.calls.push({ method: "DELETE", key, params, body, query });
+    if (key === "DELETE /api/pause") {
+      const q = new URLSearchParams(query ?? "");
+      const conn = q.get("connection") ?? "";
+      const model = q.get("model") ?? "";
+      const team = q.get("team") ?? "";
+      const framework = q.get("framework") ?? "";
+      const matches = (p: {
+        connection?: string;
+        model?: string;
+        team?: string;
+        framework?: string;
+      }) => {
+        if (conn && p.connection !== conn) return false;
+        if (
+          model &&
+          (!p.model || p.model.toLowerCase() !== model.toLowerCase())
+        ) {
+          return false;
+        }
+        if (team && (p.team ?? "").toLowerCase() !== team.toLowerCase()) {
+          return false;
+        }
+        if (
+          framework &&
+          (p.connection ||
+            (p.framework ?? "").toLowerCase() !== framework.toLowerCase())
+        ) {
+          return false;
+        }
+        return true;
+      };
+      const cur = this.configBody.agentPause?.pauses ?? [];
+      const kept = cur.filter((p) => !matches(p));
+      const pause = {
+        paused: kept.length > 0,
+        ...(kept[0]?.until ? { until: kept[0].until } : {}),
+        ...(kept[0]?.reason ? { reason: kept[0].reason } : {}),
+        pauses: kept,
+      };
+      this.configBody.agentPause = pause;
+      const scopes = this.usageBody["scopes"];
+      if (Array.isArray(scopes)) {
+        this.usageBody["scopes"] = scopes.map((s: Record<string, unknown>) =>
+          matches({
+            connection:
+              typeof s["connection"] === "string" ? s["connection"] : "",
+            model: typeof s["model"] === "string" ? s["model"] : "",
+          })
+            ? { ...s, pausedUntil: undefined }
+            : s,
+        );
+      }
+      if (Array.isArray(this.usageBody["warnings"])) {
+        this.usageBody["warnings"] = (
+          this.usageBody["warnings"] as string[]
+        ).filter((w) => !/\bis paused until\b/i.test(w));
+      }
+      return Promise.resolve({
+        enabled: true,
+        pause,
+        lifted: kept.length < cur.length,
+      });
+    }
     return Promise.resolve({ ok: true });
   };
 }
@@ -1321,5 +1389,131 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = orig;
     }
+  });
+
+  it("scopes Settings -> Models Resume to the named model/connection pause without clearing operator framework pauses", async () => {
+    const api = new FakeSettingsApi();
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    const fwUntil = new Date(Date.now() + 7_200_000).toISOString();
+    api.configBody.agentPause = {
+      paused: true,
+      until: fwUntil,
+      reason: "Paused by operator for known-bad CLI release",
+      pauses: [
+        {
+          connection: "vertex-main",
+          connectionName: "Vertex Main",
+          model: "gemini-2.5-pro",
+          team: "core",
+          until,
+          secondsRemaining: 3600,
+          reason: "HTTP 429 quota exceeded",
+          canLift: true,
+        },
+        {
+          team: "core",
+          framework: "codex",
+          until: fwUntil,
+          secondsRemaining: 7200,
+          reason: "Paused by operator for known-bad CLI release",
+          canLift: true,
+        },
+      ],
+    };
+
+    const { el, harness } = await mountSettings("/settings/models", api);
+    const banner = el.querySelector('[data-testid="models-quota-banner"]');
+    expect(banner?.textContent).toContain("Vertex Main · gemini-2.5-pro");
+    expect(banner?.textContent).not.toContain("known-bad CLI release");
+
+    const resumeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="resume-paused-models-btn"]',
+    );
+    expect(resumeBtn).not.toBeNull();
+    resumeBtn!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    const pauseDeletes = api.calls.filter((c) => c.key === "DELETE /api/pause");
+    expect(pauseDeletes.map((c) => c.query)).toEqual([
+      "connection=vertex-main&model=gemini-2.5-pro",
+    ]);
+    // Operator's connectionless framework pause remains untouched on the server.
+    expect(api.configBody.agentPause?.pauses).toEqual([
+      expect.objectContaining({ framework: "codex", team: "core" }),
+    ]);
+    expect(el.querySelector('[data-testid="models-quota-banner"]')).toBeNull();
+  });
+
+  it("confirms multi-target model quota lifts with their scope and lifts usageSnapshot connection pauses", async () => {
+    const api = new FakeSettingsApi();
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    api.usageBody = {
+      mode: "auto",
+      warnings: [],
+      scopes: [
+        {
+          connection: "vertex-main",
+          connectionName: "Vertex Main",
+          model: "gemini-2.5-pro",
+          pausedUntil: until,
+        },
+        {
+          connection: "claude-team",
+          connectionName: "Claude Team",
+          pausedUntil: until,
+        },
+      ],
+    };
+
+    const { el, harness } = await mountSettings("/settings/models", api);
+    const resumeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="resume-paused-models-btn"]',
+    );
+    expect(resumeBtn).not.toBeNull();
+    resumeBtn!.click();
+    harness.fixture.detectChanges();
+
+    // Multi-target lift opens ConfirmDialog listing every pause it will clear.
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain("Claude Team");
+    expect(dialog?.textContent).toContain("Vertex Main · gemini-2.5-pro");
+    expect(api.calls.some((c) => c.key === "DELETE /api/pause")).toBe(false);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    const queries = api.calls
+      .filter((c) => c.key === "DELETE /api/pause")
+      .map((c) => c.query);
+    expect(queries).toEqual([
+      "connection=claude-team",
+      "connection=vertex-main&model=gemini-2.5-pro",
+    ]);
+    expect(el.querySelector('[data-testid="models-quota-banner"]')).toBeNull();
+  });
+
+  it("hides Resume on Settings -> Models when the banner is only an upcoming burn-rate warning", async () => {
+    const api = new FakeSettingsApi();
+    api.usageBody = {
+      mode: "advisory",
+      warnings: [
+        "default model gemini-2.5-pro on Vertex Main runs out in ~2h, before its reset; next on the default list: nothing — last model",
+      ],
+      scopes: [{ connection: "vertex-main", model: "gemini-2.5-pro" }],
+    };
+
+    const { el } = await mountSettings("/settings/models", api);
+    expect(
+      el.querySelector('[data-testid="models-quota-banner"]')?.textContent,
+    ).toContain("runs out in ~2h");
+    expect(
+      el.querySelector('[data-testid="resume-paused-models-btn"]'),
+    ).toBeNull();
   });
 });

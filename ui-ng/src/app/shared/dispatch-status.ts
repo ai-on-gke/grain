@@ -277,6 +277,7 @@ export function summarizeDispatchStatus(
   const ap = cfg?.agentPause;
   const rawEntries = ap?.pauses ?? [];
   const entries = rawEntries.filter((p) => {
+    if (opts?.modelQuotaOnly && !p.connection?.trim()) return false;
     const ms = parseResetMs(p.until, p.secondsRemaining, nowMs);
     return ms === null || ms > nowMs;
   });
@@ -285,7 +286,7 @@ export function summarizeDispatchStatus(
     !!ap?.paused &&
     (rawEntries.length > 0
       ? entries.length > 0
-      : apMs === null || apMs > nowMs);
+      : !opts?.modelQuotaOnly && (apMs === null || apMs > nowMs));
   if (ap && apActive) {
     const wholeConnPaused =
       entries.length === 0 || entries.some((p) => !p.model);
@@ -303,8 +304,7 @@ export function summarizeDispatchStatus(
         tone: !p.model ? "error" : "warn",
       });
     }
-    if (apMs !== null && (latestMs === null || apMs > latestMs))
-      latestMs = apMs;
+    if (latestMs === null && apMs !== null) latestMs = apMs;
     const apReset = formatLocalReset(
       latestMs !== null ? new Date(latestMs).toISOString() : ap.until,
       latestMs === null ? ap.secondsRemaining : undefined,
@@ -318,12 +318,19 @@ export function summarizeDispatchStatus(
           ? `Model quota exceeded — ${pauseEntryLabel(p)} development paused`
           : `Model quota exceeded on ${pauseEntryLabel(p)} (fallback active)`;
         primarySubline =
-          p.reason || ap.reason || "Usage limit pause active for agent runs";
+          p.reason ||
+          (!opts?.modelQuotaOnly ? ap.reason : undefined) ||
+          "Usage limit pause active for agent runs";
       } else {
         primaryHeadline = wholeConnPaused
           ? `Model quota exceeded — development paused across ${Math.max(1, entries.length)} targets`
           : `Model quota exceeded on ${entries.length} models (fallback active)`;
-        primarySubline = ap.reason || "Usage limit pause active for agent runs";
+        primarySubline =
+          (opts?.modelQuotaOnly
+            ? entries.find((p) => p.reason)?.reason
+            : ap.reason) ||
+          entries.find((p) => p.reason)?.reason ||
+          "Usage limit pause active for agent runs";
       }
       primaryReset = apReset ? `resets ${apReset}` : "";
       shortLabel = wholeConnPaused ? "Quota paused" : "Model fallback";
