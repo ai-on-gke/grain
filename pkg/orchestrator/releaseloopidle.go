@@ -333,14 +333,10 @@ func leftBehind(byName map[string]string, rc model.RCTag, newestPromoted string)
 	return superseded(byName, rc) || (newestPromoted != "" && !semverLess(newestPromoted, rc.Version()))
 }
 
-func checkReleaseLoopIdle(ctx context.Context, store *model.Store, rawClient github.Client,
-	forge releaseLoopIdleForge, repo model.RepoRef, branch string, now time.Time) (releaseLoopCheck, error) {
-
-	owner, name := repo.StoredOwner(), repo.Name
-	tags, err := forge.ListTags(owner, name)
-	if err != nil {
-		return releaseLoopCheck{}, err
-	}
+// qualifyingRCTag returns the newest vX.Y.Z-rc.N tag currently in
+// qualification (no -discarded, no vX.Y.Z or vX.Y.Z-pending, and not left
+// behind by a newer rc or release), or "" when nothing is in qualification.
+func qualifyingRCTag(tags []github.Tag) string {
 	byName := make(map[string]string, len(tags))
 	newestPromoted := ""
 	for _, t := range tags {
@@ -352,9 +348,8 @@ func checkReleaseLoopIdle(ctx context.Context, store *model.Store, rawClient git
 			newestPromoted = t.Name
 		}
 	}
-
-	// 1. An rc with no -discarded, release or -pending marker, that nothing
-	//    has left behind, is in qualification right now.
+	var best model.RCTag
+	var bestName string
 	for _, t := range tags {
 		rc, ok := model.ParseRCTag(t.Name)
 		if !ok || t.SHA == "" {
@@ -369,7 +364,36 @@ func checkReleaseLoopIdle(ctx context.Context, store *model.Store, rawClient git
 		if leftBehind(byName, rc, newestPromoted) {
 			continue
 		}
+		if bestName == "" || best.Less(rc) {
+			best, bestName = rc, t.Name
+		}
+	}
+	return bestName
+}
+
+func checkReleaseLoopIdle(ctx context.Context, store *model.Store, rawClient github.Client,
+	forge releaseLoopIdleForge, repo model.RepoRef, branch string, now time.Time) (releaseLoopCheck, error) {
+
+	owner, name := repo.StoredOwner(), repo.Name
+	tags, err := forge.ListTags(owner, name)
+	if err != nil {
+		return releaseLoopCheck{}, err
+	}
+	// 1. An rc with no -discarded, release or -pending marker, that nothing
+	//    has left behind, is in qualification right now.
+	if qualifyingRCTag(tags) != "" {
 		return releaseLoopCheck{}, nil
+	}
+	byName := make(map[string]string, len(tags))
+	newestPromoted := ""
+	for _, t := range tags {
+		if t.Name == "" || t.SHA == "" {
+			continue
+		}
+		byName[t.Name] = t.SHA
+		if releaseTagPattern.MatchString(t.Name) && (newestPromoted == "" || semverLess(newestPromoted, t.Name)) {
+			newestPromoted = t.Name
+		}
 	}
 
 	// 2. A staged vX.Y.Z-pending past the newest release waits on a person.
@@ -419,6 +443,16 @@ func checkReleaseLoopIdle(ctx context.Context, store *model.Store, rawClient git
 		}
 		if held {
 			return releaseLoopCheck{}, nil
+		}
+	}
+
+	// 3b. Base-branch publishing is held by an open release triage task:
+	//     cutting a new rc is deliberately held while that triage task is open.
+	if findings, err := store.BaseBranchPublishingFindings(ctx, now); err == nil {
+		for _, f := range findings {
+			if f.Repo == repo.String() && f.Gated && f.TriageTaskID != "" && (f.Branch == "" || f.Branch == branch) {
+				return releaseLoopCheck{}, nil
+			}
 		}
 	}
 
@@ -789,6 +823,8 @@ func describeReleaseTrainTick(ctx context.Context, store *model.Store, schedules
 	var newestSched model.Schedule
 	var failedSkip *model.ScheduleSkip
 	var failedSkipSched model.Schedule
+	var heldSkip *model.ScheduleSkip
+	var heldSkipSched model.Schedule
 
 	for _, s := range schedules {
 		t, err := store.NewestTaskWithTag(ctx, model.ScheduleFiringTag(s.ID))
@@ -807,6 +843,10 @@ func describeReleaseTrainTick(ctx context.Context, store *model.Store, schedules
 			if sk.Reason == model.SkippedFiringFailed && sk.Outcome == model.ScheduleSkipHeld &&
 				(failedSkip == nil || sk.Occurrence.After(failedSkip.Occurrence)) {
 				failedSkip, failedSkipSched = &sk, s
+			}
+			if sk.Reason == model.SuppressedByPublishingHeld && sk.Outcome == model.ScheduleSkipHeld && sk.TaskID != "" &&
+				(heldSkip == nil || sk.Occurrence.After(heldSkip.Occurrence)) {
+				heldSkip, heldSkipSched = &sk, s
 			}
 		}
 	}
@@ -833,6 +873,14 @@ func describeReleaseTrainTick(ctx context.Context, store *model.Store, schedules
 			what += ": " + detail
 		}
 		return what, "", nil
+	}
+	if heldSkip != nil && (newestTask == nil || newestTask.CreatedAt == nil || !heldSkip.Occurrence.Before(*newestTask.CreatedAt)) {
+		what := fmt.Sprintf("schedule %q (%s) is deliberately held while publishing is held by [task %s](/tasks/%s)",
+			scheduleLabel(heldSkipSched), heldSkipSched.ID, heldSkip.TaskID, heldSkip.TaskID)
+		if detail := strings.TrimSpace(heldSkip.Detail); detail != "" {
+			what += ": " + detail
+		}
+		return what, heldSkip.TaskID, nil
 	}
 	if newestTask == nil {
 		return "no release-train tick has been filed yet", "", nil

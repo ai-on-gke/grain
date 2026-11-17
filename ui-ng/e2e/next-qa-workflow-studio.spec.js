@@ -274,6 +274,12 @@ test("Telemetry tab-strip active border, Processes full-width composition body w
   );
   await expect(page.getByTestId("qa-workflow-guide")).toBeVisible();
 
+  // Toolbar Guide button opens the accessible Workflow Studio Guide reference modal and closes cleanly.
+  await page.getByTestId("qa-open-guide-btn").click();
+  await expect(page.getByTestId("qa-guide-dialog")).toBeVisible();
+  await page.getByTestId("qa-guide-got-it-btn").click();
+  await expect(page.getByTestId("qa-guide-dialog")).toHaveCount(0);
+
   // Customize & publish engineering-workflow-v4 (V4): verify Customize as v1 override CTA, exclude fixture survival, zero-JSON jsonschema check, and historical dry-run.
   await expect(page.getByTestId("qa-new-version-btn")).toHaveText(
     "Customize as v1 override",

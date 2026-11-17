@@ -87,6 +87,20 @@ case "$sub $sub2" in
       printf '{"total_count":0,"check_runs":[],"grain_app":%s}\n' "${FAKE_APP_JSON:-\"grain-forge\"}"
     fi
     ;;
+  "api GET")
+    if [ "${FAKE_RELEASE_API_GARBLED:-}" = empty ]; then
+      :
+    elif [ -n "${FAKE_RELEASE_API_GARBLED:-}" ]; then
+      echo '<html>bad gateway</html>'
+    elif [ -n "${FAKE_RELEASE_API_FAIL:-}" ]; then
+      echo "grain: forbidden: GET /api/repos/ai-on-gke/grain/release" >&2
+      exit 3
+    elif [ -f "$FAKE_DIR/release.json" ]; then
+      cat "$FAKE_DIR/release.json"
+    else
+      echo '{"repo":"ai-on-gke/grain","enabled":true}'
+    fi
+    ;;
   *)
     echo "unexpected grain call: $sub $sub2 $*" >&2
     exit 1
@@ -435,6 +449,152 @@ run_tick FAKE_APP_JSON='""'
 expect_eq "pat opt-out release: exit" "$status" 0
 expect_has "pat opt-out release: skips Stage 2" "$out" "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none"
 expect_eq "pat opt-out release: releases on Stage 1" "$(remote_tag v2.2.0)" "$c_none"
+
+# 9. Held tick promotes a green rc and does not cut (detected via
+#    `grain api GET /api/repos/<repo>/release?branch=main`).
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" success
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:20, name:"grain/release-qualification", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+cat > "$work/fixtures/release.json" <<'JSON'
+{"repo":"ai-on-gke/grain","enabled":true,"baseBranchPublishing":{"repo":"ai-on-gke/grain","branch":"main","failures":3,"triageTaskID":"4256","gated":true}}
+JSON
+run_tick RELEASE_MAX_PER_DAY=0
+expect_eq "held green rc: exit 0" "$status" 0
+expect_has "held green rc: acted" "$out" "RELEASE_TRAIN_RESULT=acted"
+expect_eq "held green rc: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
+expect_eq "held green rc: moves latest" "$(remote_tag latest)" "$c1"
+expect_eq "held green rc: does not cut v2.3.0-rc.1" "$(remote_tag v2.3.0-rc.1)" ""
+expect_has "held green rc: outputs held=publishing (cut skipped)" "$out" "held=publishing (cut skipped)"
+expect_has "held green rc: names holding triage task" "$out" "triage task 4256"
+expect_has "held green rc: probes release API" "$calls" "api GET /api/repos/ai-on-gke/grain/release?branch=main"
+expect_not_has "held green rc: skips main runs" "$calls" "--ref main --workflow"
+expect_not_has "held green rc: skips rc-hold lookup" "$calls" "grain/rc-hold"
+
+# 10. Held tick with nothing in qualification is a noop that reports
+#     `held=publishing (cut skipped)` and cuts nothing.
+run_tick RELEASE_MAX_PER_DAY=0
+expect_eq "held noop: exit 0" "$status" 0
+expect_has "held noop: noop" "$out" "RELEASE_TRAIN_RESULT=noop"
+expect_eq "held noop: cuts no rc" "$(remote_tag v2.3.0-rc.1)" ""
+expect_has "held noop: outputs held=publishing (cut skipped)" "$out" "held=publishing (cut skipped)"
+expect_not_has "held noop: skips main runs" "$calls" "--ref main --workflow"
+
+# 11. Held tick with a red rc drops it and does not cut rc.2.
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" failure failure
+cat > "$work/fixtures/release.json" <<'JSON'
+{"repo":"ai-on-gke/grain","enabled":true,"baseBranchPublishing":{"repo":"ai-on-gke/grain","branch":"main","failures":3,"triageTaskID":"4256","gated":true}}
+JSON
+run_tick RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none
+expect_eq "held red rc: exit 0" "$status" 0
+expect_has "held red rc: acted" "$out" "RELEASE_TRAIN_RESULT=acted"
+expect_eq "held red rc: drops v2.2.0-rc.1" "$(remote_tag v2.2.0-rc.1-discarded)" "$c1"
+expect_eq "held red rc: does not cut v2.2.0-rc.2" "$(remote_tag v2.2.0-rc.2)" ""
+expect_has "held red rc: outputs held=publishing (cut skipped)" "$out" "held=publishing (cut skipped)"
+expect_not_has "held red rc: skips main runs" "$calls" "--ref main --workflow"
+expect_not_has "held red rc: skips rc-hold lookup" "$calls" "grain/rc-hold"
+
+# 12. Unheld tick is unchanged: promotes green rc and cuts the next rc in the
+#     same tick (when RELEASE_MAX_PER_DAY=0).
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" success
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:21, name:"grain/release-qualification", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+echo '{"repo":"ai-on-gke/grain","enabled":true}' > "$work/fixtures/release.json"
+run_tick RELEASE_MAX_PER_DAY=0
+expect_eq "unheld green rc: exit 0" "$status" 0
+expect_has "unheld green rc: acted" "$out" "RELEASE_TRAIN_RESULT=acted"
+expect_eq "unheld green rc: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
+expect_eq "unheld green rc: cuts v2.3.0-rc.1 on c2" "$(remote_tag v2.3.0-rc.1)" "$c2"
+expect_not_has "unheld green rc: not held" "$out" "held=publishing"
+
+# 13. A tick that cannot read the publishing hold fails closed on cut: it
+#     still promotes the green rc in qualification, but cuts nothing, since a
+#     hold it could not see would otherwise let a tick cut while main's
+#     publishing is held.
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" success
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:22, name:"grain/release-qualification", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+run_tick RELEASE_MAX_PER_DAY=0 FAKE_RELEASE_API_FAIL=1
+expect_eq "hold probe fails: exit 0" "$status" 0
+expect_has "hold probe fails: acted" "$out" "RELEASE_TRAIN_RESULT=acted"
+expect_eq "hold probe fails: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
+expect_eq "hold probe fails: does not cut v2.3.0-rc.1" "$(remote_tag v2.3.0-rc.1)" ""
+expect_has "hold probe fails: says cut skipped" "$out" "held=publishing-unknown (cut skipped)"
+expect_has "hold probe fails: warns" "$out" "WARNING: could not check publishing hold"
+
+# 14. An answer that is not JSON fails closed on cut the same way, rather
+#     than reading as "not held".
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" success
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:23, name:"grain/release-qualification", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+run_tick RELEASE_MAX_PER_DAY=0 FAKE_RELEASE_API_GARBLED=1
+expect_eq "garbled hold probe: exit 0" "$status" 0
+expect_eq "garbled hold probe: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
+expect_eq "garbled hold probe: does not cut v2.3.0-rc.1" "$(remote_tag v2.3.0-rc.1)" ""
+expect_has "garbled hold probe: says cut skipped" "$out" "held=publishing-unknown (cut skipped)"
+
+# 15. An empty answer with exit 0 fails closed on cut too (jq -e alone would
+#     pass it, and the tick would read it as "not held").
+setup_repo
+(
+  cd "$work/seed"
+  GIT_COMMITTER_DATE="@$((now - 1800)) +0000" git tag -a v2.2.0-rc.1 "$c1" -m "rc1"
+  git push -q origin --tags
+)
+green_workflow main tests.yml "$c1" "$c2"
+green_workflow main release.yml "$c1" "$c2"
+stage1_jobs "$c1" success
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:23, name:"grain/release-qualification", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
+  > "$work/fixtures/checks-$c1-grain_release-qualification.json"
+run_tick RELEASE_MAX_PER_DAY=0 FAKE_RELEASE_API_GARBLED=empty
+expect_eq "empty hold probe: exit 0" "$status" 0
+expect_eq "empty hold probe: promotes v2.2.0" "$(remote_tag v2.2.0)" "$c1"
+expect_eq "empty hold probe: does not cut v2.3.0-rc.1" "$(remote_tag v2.3.0-rc.1)" ""
+expect_has "empty hold probe: says cut skipped" "$out" "held=publishing-unknown (cut skipped)"
 
 echo
 echo "$((cases - failures))/$cases passed"

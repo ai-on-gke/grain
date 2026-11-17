@@ -709,10 +709,22 @@ schedules are gone.
   `staging-ui-exploration` or `staging-state-cleanup` schedule and no
   24-hour wait: an rc is qualified by Stage 1 and Stage 2 (section 4), and
   the train judges it as soon as both have a verdict.
-- **Release train** (`.grain/schedules/release-train.yml`): every 20
-  minutes, `overlap: skip`, one tick of `.grain/templates/release-train.yml`
-  (`scripts/release-train-task.sh`): judge the rc, release or drop it, or cut
-  the next. A tick with nothing to do closes as `nothing_needed`.
+- **Release train** (`.grain/schedules/release-train.yml` every 20 minutes
+  with `skip-when: publishing-held`, plus
+  `.grain/schedules/release-train-on-stage1.yml` triggered when `nightly.yml`
+  concludes on `v*-rc.*`, sharing `overlap: skip` group `release-train`): one
+  tick of `.grain/templates/release-train.yml` (`scripts/release-train-task.sh`):
+  judge the rc, release or drop it, or cut the next. A tick with nothing to do
+  closes as `nothing_needed`. While `main`'s publishing is held by a base-branch
+  triage task (`baseBranchPublishing[].triageTaskID`), ticks still fire whenever
+  an rc is already in qualification so it can be judged, promoted or dropped
+  without waiting on `main`'s newest commit: `scripts/release-train-task.sh`
+  runs Phase 1 only (`RELEASE_TRAIN_PHASES=judge,release`,
+  `RELEASE_TRAIN_HOLD=publishing`), skips cutting a new rc, and prints
+  `held=publishing (cut skipped)`. Once nothing is in qualification,
+  `release-train.yml` holds until the triage task closes, and `grain health`
+  reports it as deliberately held naming that triage task rather than failing
+  stale or starved.
 - **Release manager** (`.grain/templates/release-manager.yml`): one task
   per version, which checks in every hour from the first rc to published
   core and Google edition images. It is started by
@@ -761,7 +773,10 @@ rcs themselves are the pipeline steward's (`docs/pipeline-steward.md`).
   `main`'s `nightly.yml` and live suites. It proposes a repair task when an rc
   has been qualifying for more than 4 hours, when a stage has not started 30
   minutes after the one before it finished, or when `main` has releasable
-  commits but the train has cut nothing. It also checks that a flake budget
+  commits but the train has cut nothing (checking tick output such as
+  `release_waits=`, `rc_held=`, or `held=publishing (cut skipped)`, and
+  whether `grain health` reports `release-train` as deliberately held by a
+  publishing triage task). It also checks that a flake budget
   that was overspent, and a retracted release, have their notification and
   their follow-up task.
 - **Release process review** (Mondays, 07:00 UTC) measures the week:

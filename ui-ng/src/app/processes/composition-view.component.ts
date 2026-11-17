@@ -143,6 +143,21 @@ const BODY_LINE_LIMIT = 12;
                             ? 'auto'
                             : null
                         "
+                        [attr.tabindex]="
+                          isLongBody(body) && !isBodyExpanded($index)
+                            ? '0'
+                            : null
+                        "
+                        [attr.role]="
+                          isLongBody(body) && !isBodyExpanded($index)
+                            ? 'region'
+                            : null
+                        "
+                        [attr.aria-label]="
+                          isLongBody(body) && !isBodyExpanded($index)
+                            ? body.name || 'Task prompt preview'
+                            : null
+                        "
                         data-testid="composition-body-well"
                       >
                         {{ bodyText(body) || "—" }}
