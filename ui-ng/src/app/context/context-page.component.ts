@@ -2014,7 +2014,11 @@ export class ContextPageComponent implements OnInit, OnDestroy {
       () => {
         const split = this.splitEl()?.nativeElement;
         const win = this.doc.defaultView;
-        if (!split || !win?.matchMedia("(max-width: 839.95px)").matches) {
+        if (
+          !split ||
+          typeof win?.matchMedia !== "function" ||
+          !win.matchMedia("(max-width: 839.95px)").matches
+        ) {
           return;
         }
         const detail = split.querySelector<HTMLElement>(".ctx-detail-pane");
