@@ -1251,4 +1251,37 @@ describe("AgentsPageComponent CPU", () => {
     const current = el.querySelector("g-task-detail .task-tabs [aria-current]");
     expect(current?.getAttribute("data-testid")).toBe("task-tab-runs");
   });
+
+  it("renders the embedded g-task-detail containment hierarchy inside .tasks-detail-pane", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    api.details = {
+      "123": {
+        id: "123",
+        title: "Task 123",
+        state: "running",
+        attempts: [{ number: 1, startedAt: iso(60_000), outcome: "" }],
+        comments: [],
+      } as unknown as TaskDetail,
+    };
+    const { harness } = await renderRouted(api, "/agents?task=123");
+    const el = harness.routeNativeElement as HTMLElement;
+    const pane = el.querySelector<HTMLElement>(".tasks-detail-pane");
+    const detail = pane?.querySelector<HTMLElement>("g-task-detail");
+    const taskPage = detail?.querySelector<HTMLElement>(".task-page.is-pane");
+    const taskMain = taskPage?.querySelector<HTMLElement>(
+      ".task-layout > .task-main",
+    );
+    const tabBody = taskMain?.querySelector<HTMLElement>(".task-tab-body");
+    const convo = tabBody?.querySelector<HTMLElement>(
+      "g-conversation .convo-thread",
+    );
+
+    expect(pane).not.toBeNull();
+    expect(detail).not.toBeNull();
+    expect(taskPage).not.toBeNull();
+    expect(taskMain).not.toBeNull();
+    expect(tabBody).not.toBeNull();
+    expect(convo).not.toBeNull();
+  });
 });

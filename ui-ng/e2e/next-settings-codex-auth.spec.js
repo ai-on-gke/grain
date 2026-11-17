@@ -178,8 +178,7 @@ test.describe("Settings → Models Codex subscription login", () => {
       await expect(card.getByTestId(`backend-row-${newId}`)).toContainText(
         "subscription",
       );
-      // The row is re-read from the server after the save.
-      await card.getByTestId(`toggle-cred-${newId}`).click();
+      // Saving subscription setup opens its write-only credential editor.
       await expect(card.getByTestId(`codex-auth-${newId}`)).toBeVisible();
     } finally {
       await request.delete(`/api/deployment/agent-backends/${newId}`);

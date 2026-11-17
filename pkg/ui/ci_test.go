@@ -1545,7 +1545,7 @@ func TestTaskScopedCIRunRetargetedReviewLosesAutoMerge(t *testing.T) {
 		Target:    &repo,
 		Base:      "grain/049f1e09/task-732",
 		AutoMerge: true,
-		Origin:    model.Origin{Reason: model.ReasonReview},
+		Filing:    model.Filing{Reason: model.ReasonReview},
 		Grants:    []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)

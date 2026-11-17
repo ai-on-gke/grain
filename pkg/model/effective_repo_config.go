@@ -36,6 +36,7 @@ type EffectiveRepoConfig struct {
 	WatchDefaultBranch    bool          `json:"watchDefaultBranch,omitempty"`
 	ReleaseSecrets        []string      `json:"releaseSecrets,omitempty"`
 	Skills                *SkillsConfig `json:"skills,omitempty"`
+	QAFlowRef             string        `json:"qaFlowRef,omitempty"`
 }
 
 // Empty returns true if all configuration fields are zero-valued.
@@ -53,7 +54,8 @@ func (c EffectiveRepoConfig) Empty() bool {
 		!c.RequireBranchUpToDate &&
 		!c.WatchDefaultBranch &&
 		len(c.ReleaseSecrets) == 0 &&
-		c.Skills.IsZero()
+		c.Skills.IsZero() &&
+		c.QAFlowRef == ""
 }
 
 // EffectiveRepoConfigFor resolves the effective configuration from the
@@ -71,6 +73,7 @@ func EffectiveRepoConfigFor(global Config, repoCfg *RepoConfig) EffectiveRepoCon
 		eff.RequireBranchUpToDate = repoCfg.RequireBranchUpToDate
 		eff.WatchDefaultBranch = repoCfg.WatchDefaultBranch
 		eff.ReleaseSecrets = append([]string(nil), repoCfg.ReleaseSecrets...)
+		eff.QAFlowRef = repoCfg.QAFlowRef
 		eff.CIMode = repoCfg.CIMode
 		if eff.CIMode == "" && repoCfg.IgnoreGitHubCI {
 			eff.CIMode = CIModeGrain

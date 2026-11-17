@@ -220,18 +220,18 @@ func defaultOwnerForTaskTx(ctx context.Context, tx *sql.Tx, t Task) string {
 		return norm
 	}
 	var obKind, obID string
-	if t.Origin.Attribution.OnBehalfOf != nil {
-		obKind = string(t.Origin.Attribution.OnBehalfOf.Kind)
-		obID = t.Origin.Attribution.OnBehalfOf.ID
+	if t.Filing.Attribution.OnBehalfOf != nil {
+		obKind = string(t.Filing.Attribution.OnBehalfOf.Kind)
+		obID = t.Filing.Attribution.OnBehalfOf.ID
 	}
-	if norm := ownerFromPrincipalFields(obKind, obID, string(t.Origin.Attribution.Actor.Kind), t.Origin.Attribution.Actor.ID); norm != "" {
+	if norm := ownerFromPrincipalFields(obKind, obID, string(t.Filing.Attribution.Actor.Kind), t.Filing.Attribution.Actor.ID); norm != "" {
 		return norm
 	}
 	return deploymentOwnerTx(ctx, tx)
 }
 
 // AutomationProposerID names the automation actor for an automation-filed task.
-func AutomationProposerID(origin Origin, workOrigin WorkOrigin, tags []string) string {
+func AutomationProposerID(origin Filing, workOrigin WorkOrigin, tags []string) string {
 	actorID := strings.TrimSpace(origin.Attribution.Actor.ID)
 	if actorID != "" && actorID != "grain" {
 		return actorID
@@ -298,13 +298,13 @@ func InferTaskProposer(t Task) TaskProposer {
 			break
 		}
 	}
-	actor := t.Origin.Attribution.Actor
-	behalf := t.Origin.Attribution.OnBehalfOf
-	reason := strings.TrimSpace(string(t.Origin.Reason))
+	actor := t.Filing.Attribution.Actor
+	behalf := t.Filing.Attribution.OnBehalfOf
+	reason := strings.TrimSpace(string(t.Filing.Reason))
 
 	// Run-proposed task: LinkProposedBy with ReasonProposal or an agent actor/on-behalf-of
 	// (distinct from automation reviews/triggers that also attach LinkProposedBy).
-	isRunProposal := proposedByTask != "" && (t.Origin.Reason == ReasonProposal || reason == "proposed" ||
+	isRunProposal := proposedByTask != "" && (t.Filing.Reason == ReasonProposal || reason == "proposed" ||
 		(actor.Kind == PrincipalAgent && actor.Source != SourceExternalToken) ||
 		(behalf != nil && behalf.Kind == PrincipalAgent))
 	if !isRunProposal && proposedByTask == "" && actor.Kind == PrincipalAgent && actor.Source == SourceSandbox && strings.TrimSpace(actor.ID) != "" {
@@ -359,8 +359,8 @@ func InferTaskProposer(t Task) TaskProposer {
 		}
 	}
 
-	if actor.Kind == PrincipalAutomation || (reason != "" && t.Origin.Reason != ReasonDirect) {
-		autoID := AutomationProposerID(t.Origin, t.WorkOrigin, t.Tags)
+	if actor.Kind == PrincipalAutomation || (reason != "" && t.Filing.Reason != ReasonDirect) {
+		autoID := AutomationProposerID(t.Filing, t.WorkOrigin, t.Tags)
 		src := actor.Source
 		if src == "" {
 			src = SourceInternal
@@ -411,7 +411,7 @@ func InferTaskProposer(t Task) TaskProposer {
 	if strings.HasPrefix(string(t.WorkOrigin), "github:") {
 		return TaskProposer{
 			Attribution: Attribution{
-				Actor: Principal{Kind: PrincipalAutomation, ID: AutomationProposerID(t.Origin, t.WorkOrigin, t.Tags), Source: SourceInternal},
+				Actor: Principal{Kind: PrincipalAutomation, ID: AutomationProposerID(t.Filing, t.WorkOrigin, t.Tags), Source: SourceInternal},
 			},
 		}
 	}
@@ -706,12 +706,12 @@ func MigrateTaskOwnerAndProposer(ctx context.Context, tx *sql.Tx) error {
 			ID:      r.id,
 			Owner:   own,
 			Creator: r.creator,
-			Origin: Origin{
+			Filing: Filing{
 				Attribution: Attribution{
 					Actor:      Principal{Kind: PrincipalKind(r.oaKind), ID: r.oaID, Source: AuthSource(r.oaSource)},
 					OnBehalfOf: principalFrom(r.obKind, r.obID, r.obSource),
 				},
-				Reason: OriginReason(r.oReason),
+				Reason: FilingReason(r.oReason),
 			},
 			WorkOrigin: WorkOrigin(r.originRef),
 			Links:      links,

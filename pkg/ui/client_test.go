@@ -145,8 +145,8 @@ func TestCreateTaskFilesStraightIntoTheStore(t *testing.T) {
 	if stored == nil {
 		t.Fatal("task is not in the store")
 	}
-	if stored.Origin.Attribution.Actor.ID != "alice" {
-		t.Fatalf("origin actor = %q, want the configured actor", stored.Origin.Attribution.Actor.ID)
+	if stored.Filing.Attribution.Actor.ID != "alice" {
+		t.Fatalf("origin actor = %q, want the configured actor", stored.Filing.Attribution.Actor.ID)
 	}
 
 	// Dispatchable means dispatchable: task_ready is the view
@@ -3942,7 +3942,7 @@ func TestAuthorKindCarriesTheFilingPrincipalsKind(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "nightly sweep",
 		Body:   "filed by a schedule",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 			Reason:      model.ReasonSchedule,
 		},
@@ -3979,7 +3979,7 @@ func TestGeneratedFromReadsOffTheProposedByLink(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "proposed child",
 		Body:   "filed by the parent's own run",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 			Reason:      model.ReasonDirect,
 		},
@@ -4019,7 +4019,7 @@ func TestExternalPullRequestsReadOffTheExternalPRLinks(t *testing.T) {
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  "fix the contributor's typo",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
 			Reason:      model.ReasonDirect,
 		},
@@ -4045,7 +4045,7 @@ func TestExternalPullRequestsReadOffTheExternalPRLinks(t *testing.T) {
 	}
 }
 
-// Stacked is true only for a task whose Origin.Reason is model.ReasonFix
+// Stacked is true only for a task whose Filing.Reason is model.ReasonFix
 // -- the merge queue's own automatic fix for another task's pull
 // request (bwsalmon/agents#378) -- and false for an ordinary
 // propose_task child, even though both carry a GeneratedFrom link. The
@@ -4065,7 +4065,7 @@ func TestStackedIsTrueOnlyForAFixTask(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "fix",
 		Body:   "filed by the merge queue",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "merge-queue"}},
 			Reason:      model.ReasonFix,
 		},
@@ -4085,7 +4085,7 @@ func TestStackedIsTrueOnlyForAFixTask(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "proposed child",
 		Body:   "filed by the parent's own run",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 			Reason:      model.ReasonDirect,
 		},

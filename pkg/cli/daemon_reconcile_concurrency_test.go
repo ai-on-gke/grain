@@ -247,7 +247,7 @@ func seedReconcileTask(t *testing.T, store *model.Store, id, owner, repoName str
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "tester"}
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "a task", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &model.RepoRef{Owner: owner, Name: repoName},
 		Binding:  model.BindingDirective,

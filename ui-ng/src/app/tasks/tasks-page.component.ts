@@ -1215,6 +1215,13 @@ function needsApproval(t: Task): boolean {
           >Repair</span
         >
       }
+      @if (hasGoalBadge(t)) {
+        <span
+          [class]="'status-pill ' + goalBadgeTone(t)"
+          [attr.data-testid]="'goal-badge-' + t.id"
+          >{{ goalBadgeText(t) }}</span
+        >
+      }
       @if (t.rolledOverTo) {
         <span
           class="status-pill neutral"
@@ -1732,6 +1739,21 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       "POST /api/tasks/{id}/close",
       t.repo ?? null,
     );
+  }
+  protected hasGoalBadge(t: Task): boolean {
+    return !!(t.goalMode?.enabled || t.goalScorecard);
+  }
+  protected goalBadgeTone(t: Task): string {
+    if (t.goalScorecard?.verified) return "healthy";
+    if (t.goalScorecard?.stoppedAtCap) return "warn";
+    return "setup";
+  }
+  protected goalBadgeText(t: Task): string {
+    if (t.goalScorecard?.verified) return "Goal ✓";
+    if (t.goalScorecard?.stoppedAtCap) return "Goal capped";
+    const cur = t.goalScorecard?.passesUsed || 1;
+    const max = t.goalScorecard?.maxPasses || t.goalMode?.maxPasses || 8;
+    return `Goal · ${cur}/${max}`;
   }
   protected canApproveSelected(): boolean {
     const rows = this.selectedRows();

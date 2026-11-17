@@ -969,7 +969,7 @@ func fileBaseBranchReleaseTriage(ctx context.Context, deps Deps, row model.BaseB
 		Intent: model.IntentImplement,
 		Title:  title,
 		Body:   body,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: BaseReleaseTriager},
 			Reason:      model.ReasonDirect,
 		},
