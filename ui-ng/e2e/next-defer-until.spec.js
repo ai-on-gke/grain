@@ -133,3 +133,53 @@ test("the selection bar's Defer until… fits a phone width without scrolling si
     await closeAll(demoServer, accessCode, [t.id]);
   }
 });
+
+test("the selection bar's Defer until… date input inverts color-scheme in light and dark themes @dark", async ({
+  page,
+  demoServer,
+  accessCode,
+  axe,
+}) => {
+  const call = api(demoServer, accessCode);
+  const t = await call("POST", "/api/tasks", {
+    title: `Batch defer until theme ${Date.now()}`,
+    approved: true,
+  });
+  try {
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.goto("/next/tasks");
+    await expect(page.locator('html[data-theme="light"]')).toHaveCount(1);
+    await page.getByLabel(`Select #${t.id}`, { exact: true }).check();
+    const bar = page.getByTestId("batch-bar");
+    await bar.getByTestId("batch-defer-until-open").click();
+    const dateInput = bar.getByTestId("batch-defer-date");
+
+    await expect
+      .poll(() => dateInput.evaluate((el) => getComputedStyle(el).colorScheme))
+      .toBe("dark");
+    expect(
+      await bar.evaluate((el) => getComputedStyle(el).backgroundColor),
+    ).toBe("rgb(40, 44, 53)");
+    expect(await axe()).toEqual([]);
+
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect(page.locator('html[data-theme="dark"]')).toHaveCount(1);
+    await expect
+      .poll(() => dateInput.evaluate((el) => getComputedStyle(el).colorScheme))
+      .toBe("light");
+    expect(
+      await bar.evaluate((el) => getComputedStyle(el).backgroundColor),
+    ).toBe("rgb(228, 230, 235)");
+    // .pill-select-btn.is-inverse's dark specificity fix landed on main
+    // after this branch forked; exclude it here so axe checks batch-bar and
+    // batch-defer-until contrast on both this branch and main.
+    expect(await axe({ exclude: [".is-inverse"] })).toEqual([]);
+
+    const { day } = wakeDay();
+    await dateInput.fill(day);
+    await expect(bar.getByTestId("batch-defer-until-yes")).toBeEnabled();
+    expect(await axe({ exclude: [".is-inverse"] })).toEqual([]);
+  } finally {
+    await closeAll(demoServer, accessCode, [t.id]);
+  }
+});
