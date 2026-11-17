@@ -27,7 +27,7 @@ type ObsoleteReview struct {
 	ReviewedID string
 }
 
-// ObsoleteReviews lists every review grain filed (Origin.Reason
+// ObsoleteReviews lists every review grain filed (Filing.Reason
 // ReasonReview) whose reviewed task -- the one its LinkProposedBy names --
 // has closed, while the review itself has not settled and is not running,
 // and opened no pull request of its own.

@@ -22,7 +22,6 @@ import {
   viewChild,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
-import type { Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { summarizeDispatchStatus } from "../shared/dispatch-status";
@@ -30,12 +29,10 @@ import {
   isBlocked,
   isWork,
   jumpsQueue,
-  levelOf,
   nextUp,
   priorityOf,
 } from "../tasks/task-queue-helpers";
-
-const SHOWN = 7;
+import { NextUpPopoverComponent } from "./next-up-popover.component";
 
 // NextUpComponent is the persistent top-bar Next up split chip (spec D-28):
 // always rendered at 36px height so top-bar layout never shifts. When the
@@ -44,7 +41,7 @@ const SHOWN = 7;
 // popover linking to the backlog.
 @Component({
   selector: "g-next-up",
-  imports: [RouterLink],
+  imports: [RouterLink, NextUpPopoverComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:click)": "onDocClick($event)",
@@ -126,74 +123,16 @@ const SHOWN = 7;
           <path d="m7 10 5 5 5-5z" fill="currentColor" />
         </svg>
       </button>
-      @if (open()) {
-        <div
-          class="next-up-pop top-next-pop"
-          id="top-next-pop"
-          role="region"
-          aria-label="What runs next"
-          data-testid="next-up-pop"
-        >
-          <div class="next-pop-head">
-            <span class="next-pop-title">What runs next</span>
-            <span class="muted tabular"
-              >{{ backlog().length }} in backlog ·
-              {{ feed.runningCount() }} running</span
-            >
-          </div>
-          @if (dispatchPaused(); as dp) {
-            <p
-              class="banner banner-info next-up-note"
-              data-testid="next-up-paused-note"
-            >
-              {{ dp.headline }}
-              @if (dp.resetText) {
-                · {{ dp.resetText }}
-              }
-            </p>
-          }
-          @if (backlog().length === 0) {
-            <p class="muted next-up-note" data-testid="next-up-empty-note">
-              Nothing is waiting to run. Approved tasks appear here in the order
-              Grain will start them.
-            </p>
-          } @else {
-            <ol class="next-up-list">
-              @for (t of shown(); track t.id; let i = $index) {
-                <li
-                  [class.is-head]="head()?.id === t.id"
-                  [class.is-blocked]="blocked(t)"
-                >
-                  <a [routerLink]="['/task', t.id]" (click)="open.set(false)">
-                    <span class="tabular muted">{{ i + 1 }}</span>
-                    <span class="next-up-row-title"
-                      >#{{ t.id }} {{ t.title }}</span
-                    >
-                    <span class="muted">{{ levelName(t) }}</span>
-                  </a>
-                </li>
-              }
-            </ol>
-            @if (more() > 0) {
-              <p class="muted next-up-more">and {{ more() }} more</p>
-            }
-            <p class="muted next-up-note">
-              Queue order is priority, then manual order. Tasks admitted past
-              worker limits start first; a task waiting on a dependency is
-              skipped.
-            </p>
-          }
-          <div class="next-pop-foot">
-            <a
-              class="btn-tonal"
-              routerLink="/tasks"
-              [queryParams]="{ tab: 'backlog' }"
-              data-testid="next-up-open-backlog"
-              (click)="open.set(false)"
-              >Open the backlog</a
-            >
-          </div>
-        </div>
+      @defer (when open()) {
+        @if (open()) {
+          <g-next-up-popover
+            [backlog]="backlog()"
+            [headId]="head()?.id ?? null"
+            [runningCount]="feed.runningCount()"
+            [dispatchPaused]="dispatchPaused()"
+            (closed)="open.set(false)"
+          />
+        }
       }
     </span>
   `,
@@ -220,10 +159,6 @@ export class NextUpComponent {
   protected readonly blockedCount = computed(
     () => this.backlog().filter((t) => isBlocked(t)).length,
   );
-  protected readonly shown = computed(() => this.backlog().slice(0, SHOWN));
-  protected readonly more = computed(() =>
-    Math.max(0, this.backlog().length - SHOWN),
-  );
   protected readonly why = computed(() => {
     const h = this.head();
     if (!h) {
@@ -241,15 +176,6 @@ export class NextUpComponent {
       (skipped > 0 ? `; ${skipped} ahead of it wait on dependencies` : "")
     );
   });
-
-  protected blocked(t: Task): boolean {
-    return isBlocked(t);
-  }
-
-  protected levelName(t: Task): string {
-    const p = priorityOf(t);
-    return `${levelOf(p).name} ${p}`;
-  }
 
   protected toggle(ev: Event): void {
     ev.stopPropagation();

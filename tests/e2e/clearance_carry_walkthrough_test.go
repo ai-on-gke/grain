@@ -72,7 +72,7 @@ func (a *carryAgent) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Resul
 	if err != nil || task == nil {
 		return nil, fmt.Errorf("carryAgent: reading %s: %v", cfg.TaskID, err)
 	}
-	if task.Origin.Reason == model.ReasonReview {
+	if task.Filing.Reason == model.ReasonReview {
 		return antigravity.NewForTest(antigravity.Steps(finalText("no findings"))).Run(ctx, cfg)
 	}
 	branch := task.BranchName()
@@ -245,7 +245,7 @@ func (w *carryWorld) file(title, script string) string {
 	now := w.now
 	if err := w.store.PutTask(w.ctx, model.Task{
 		ID: id, Title: title, Body: "body of " + title, Intent: model.IntentImplement,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")}, ApprovedAt: &now,
 		Target: &w.repo, Base: "main", AutoMerge: true,
 		OrderKey: orderKey, CreatedAt: &now,
@@ -285,7 +285,7 @@ func (w *carryWorld) reviewsOf(id string) []model.Task {
 	}
 	var out []model.Task
 	for _, task := range all {
-		if task.Origin.Reason == model.ReasonReview && task.Base == string(model.BranchName(id)) &&
+		if task.Filing.Reason == model.ReasonReview && task.Base == string(model.BranchName(id)) &&
 			strings.HasPrefix(task.Title, "Security review: ") {
 			out = append(out, task)
 		}

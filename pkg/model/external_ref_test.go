@@ -258,7 +258,7 @@ func TestExternalRefInheritanceAndClearing(t *testing.T) {
 		Intent: model.IntentImplement,
 		Title:  "proposal-supersedes-bounce",
 		Target: &widgets,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 				OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "widgets-reader-proposer"},

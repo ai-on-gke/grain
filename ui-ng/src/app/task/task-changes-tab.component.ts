@@ -16,6 +16,7 @@ import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   NgZone,
   ViewEncapsulation,
   computed,
@@ -35,7 +36,10 @@ import type {
   DiffPreview,
   DiffPreviewFile,
   MergeGate,
+  QAFinding,
   TaskDetail,
+  TaskQAResponse,
+  VoteQAFindingResponse,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { BranchRefsService } from "../services/branch-refs.service";
@@ -44,12 +48,13 @@ import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { submitBlock, unsatisfiedGates } from "../shared/gates";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskStore } from "./task.store";
 
 @Component({
   selector: "g-task-changes-tab",
-  imports: [RouterLink, DiffViewerComponent, TipDirective],
+  imports: [RouterLink, DiffViewerComponent, StatusIconComponent, TipDirective],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-changes-tab.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -91,7 +96,7 @@ import { TaskStore } from "./task.store";
         }
         @if (task().changelists?.length) {
           <dt>Changelists</dt>
-          <dd class="mono">{{ task().changelists!.join(", ") }}</dd>
+          <dd class="mono">{{ task().changelists?.join(", ") ?? "" }}</dd>
         }
       </dl>
 
@@ -109,6 +114,7 @@ import { TaskStore } from "./task.store";
               [gTip]="g.detail || g.state"
               [attr.data-gate]="g.id"
             >
+              <g-status-icon [tone]="gateTone(g)" [kind]="g.state" />
               <span class="gate-chip-label">{{ g.label || g.id }}: </span>
               <span class="gate-chip-detail">{{ gateText(g) }}</span>
             </span>
@@ -246,6 +252,211 @@ import { TaskStore } from "./task.store";
           </button>
         }
       </div>
+
+      <!-- Pre-PR Quality Checks (shown only when QA is active or recorded on this task) -->
+      @if (showQaCard()) {
+        <section
+          class="ci-runs-card"
+          aria-labelledby="task-qa-h"
+          data-testid="task-qa-section"
+        >
+          <div class="ci-card-head">
+            <h3 id="task-qa-h" class="section-title">Pre-PR quality checks</h3>
+            @if (taskQa()?.assignment; as assign) {
+              <span
+                class="mono muted"
+                data-testid="task-qa-arm"
+                gTip="Work-tree A/B arm and quality flow package assigned to this task"
+              >
+                {{ assign.arm }} · {{ assign.flowId }}
+              </span>
+            }
+          </div>
+
+          @if (visibleQaCheckRuns().length === 0 && qaFindings().length === 0) {
+            <p class="muted" style="margin: 0" data-testid="task-qa-empty">
+              @if (taskQa()?.assignment?.arm === "control") {
+                Control arm — baseline path (no pre-PR gate applied).
+              } @else {
+                No pre-PR quality check runs recorded yet.
+              }
+            </p>
+          }
+
+          @if (qaSummaryStats(); as stats) {
+            <div
+              class="tc-run-row"
+              data-testid="qa-summary-stats"
+              style="gap: 12px; background: var(--md-sys-color-surface-container-lowest);"
+            >
+              @if (stats.complexityTier) {
+                <span
+                  class="status-pill info"
+                  gTip="Task complexity assessment"
+                >
+                  Complexity: {{ stats.complexityTier }}
+                </span>
+              }
+              @if (stats.blastTier) {
+                <span
+                  class="status-pill warning"
+                  gTip="Blast radius assessment"
+                >
+                  Blast: {{ stats.blastTier }} &middot;
+                  {{ stats.blastScore }}/100
+                </span>
+              }
+              @if (stats.triageDecision) {
+                <span
+                  class="status-pill"
+                  [class.success]="stats.triageDecision === 'auto_merge'"
+                  [class.error]="stats.triageDecision !== 'auto_merge'"
+                  gTip="Triage decision"
+                >
+                  {{
+                    stats.triageDecision === "auto_merge"
+                      ? "Auto-merge eligible"
+                      : "Human review required"
+                  }}
+                </span>
+              }
+              @if (stats.repairedInNextSha === 1) {
+                <span
+                  class="badge"
+                  style="background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container);"
+                  gTip="Issues repaired in next push"
+                >
+                  Repaired in next push
+                </span>
+              }
+            </div>
+          }
+
+          @for (chk of visibleQaCheckRuns(); track chk.id) {
+            <div class="tc-run-row" [attr.data-testid]="'qa-check-' + chk.id">
+              <div class="ci-run-summary">
+                <span [class]="'status-pill ' + qaVerdictTone(chk.verdict)">
+                  <g-status-icon
+                    [tone]="qaVerdictTone(chk.verdict)"
+                    [kind]="chk.verdict"
+                  />
+                  {{ chk.verdict }}
+                </span>
+                <strong class="mono">{{ chk.checkId }}</strong>
+                <span
+                  class="ci-provider-tag"
+                  [gTip]="qaStageTooltip(chk.stage)"
+                  >{{ chk.stage }}</span
+                >
+                @if (chk.shadow) {
+                  <span
+                    class="ci-provider-tag"
+                    gTip="Passive control-arm shadow run — recorded for A/B comparison without blocking PR creation"
+                    >shadow</span
+                  >
+                }
+                @if (chk.commitSha) {
+                  <span class="mono muted">{{
+                    chk.commitSha.slice(0, 8)
+                  }}</span>
+                }
+                <span class="muted tabular">{{ chk.durationMs }} ms</span>
+              </div>
+            </div>
+          }
+
+          @if (qaFindings().length > 0) {
+            <div class="tc-qa-findings-list" data-testid="task-qa-findings">
+              @for (f of qaFindings(); track f.id) {
+                <div
+                  class="tc-qa-finding-row"
+                  [attr.data-testid]="'qa-finding-' + f.id"
+                >
+                  <div class="tc-qa-finding-main">
+                    <div class="ci-step-head">
+                      @let fTone = qaFindingTone(f);
+                      <span
+                        [class]="'status-pill ' + fTone"
+                        [gTip]="qaStageTooltip(f.stage)"
+                      >
+                        <g-status-icon
+                          [tone]="fTone"
+                          [kind]="fTone === 'error' ? 'failed' : fTone"
+                        />
+                        {{ f.stage }}
+                      </span>
+                      <code class="mono">{{ f.ruleId }}</code>
+                      @if (isShadowFinding(f)) {
+                        <span
+                          class="ci-provider-tag"
+                          gTip="Passive shadow finding — did not block pull request creation"
+                          >shadow</span
+                        >
+                      }
+                      @if (f.filePath) {
+                        <span class="mono muted">
+                          {{ f.filePath }}{{ f.line ? ":" + f.line : "" }}
+                        </span>
+                      }
+                    </div>
+                    <p class="tc-qa-finding-summary">{{ f.summary }}</p>
+                    @if (f.evidence) {
+                      <button
+                        type="button"
+                        class="btn-text"
+                        [attr.aria-expanded]="openQaEvidence().has(f.id)"
+                        [attr.data-testid]="'qa-evidence-btn-' + f.id"
+                        (click)="toggleQaEvidence(f.id)"
+                      >
+                        {{
+                          openQaEvidence().has(f.id)
+                            ? "Hide details"
+                            : "Show details"
+                        }}
+                      </button>
+                      @if (openQaEvidence().has(f.id)) {
+                        <pre class="ci-step-log">{{ f.evidence }}</pre>
+                      }
+                    }
+                  </div>
+                  @if (
+                    can("POST /api/tasks/{id}/qa/findings/{finding}/feedback")
+                  ) {
+                    <div
+                      class="tc-qa-vote-group"
+                      role="group"
+                      aria-label="Finding usefulness feedback"
+                    >
+                      <button
+                        type="button"
+                        class="filter-chip"
+                        gTip="Mark this finding as a helpful catch"
+                        [attr.aria-pressed]="f.humanVote === 1"
+                        [attr.data-testid]="'qa-vote-up-' + f.id"
+                        [disabled]="votingFindingIds().has(f.id)"
+                        (click)="voteFinding(f, f.humanVote === 1 ? 0 : 1)"
+                      >
+                        Helpful
+                      </button>
+                      <button
+                        type="button"
+                        class="filter-chip"
+                        gTip="Mark this finding as unhelpful or a false positive"
+                        [attr.aria-pressed]="f.humanVote === -1"
+                        [attr.data-testid]="'qa-vote-down-' + f.id"
+                        [disabled]="votingFindingIds().has(f.id)"
+                        (click)="voteFinding(f, f.humanVote === -1 ? 0 : -1)"
+                      >
+                        Not helpful
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </section>
+      }
 
       <!-- CI Runs & Step Breakdown -->
       <section
@@ -483,6 +694,27 @@ import { TaskStore } from "./task.store";
   `,
 })
 export class TaskChangesTabComponent {
+  protected readonly qaSummaryStats = computed<{
+    complexityTier?: string;
+    blastTier?: string;
+    blastScore?: number;
+    triageDecision?: string;
+    repairedInNextSha?: number;
+  } | null>(() => {
+    const runs = this.visibleQaCheckRuns();
+    const withTiers = runs.find((x) => x.complexityTier || x.blastTier);
+    const withTriage = runs.find((x) => x.triageDecision);
+    const withRepair = runs.find((x) => x.repairedInNextSha === 1);
+    if (!withTiers && !withTriage && !withRepair) return null;
+    return {
+      complexityTier: withTiers?.complexityTier,
+      blastTier: withTiers?.blastTier,
+      blastScore: withTiers?.blastScore,
+      triageDecision: withTriage?.triageDecision,
+      repairedInNextSha: withRepair?.repairedInNextSha,
+    };
+  });
+
   protected readonly store = inject(TaskStore);
   private readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
@@ -490,8 +722,10 @@ export class TaskChangesTabComponent {
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly task = input.required<TaskDetail>();
+  private readonly taskId = computed(() => this.task().id);
   readonly prUrl = input<string | null>(null);
   readonly prLabel = input<string>("");
   readonly acted = output<void>();
@@ -511,6 +745,31 @@ export class TaskChangesTabComponent {
   protected readonly openStepLogs = signal<ReadonlySet<string>>(new Set());
   protected readonly ciLoading = signal(false);
   protected readonly ciError = signal<string | null>(null);
+
+  protected readonly taskQa = signal<TaskQAResponse | null>(null);
+  protected readonly openQaEvidence = signal<ReadonlySet<number>>(new Set());
+  protected readonly votingFindingIds = signal<ReadonlySet<number>>(new Set());
+
+  protected readonly qaFindings = computed<QAFinding[]>(
+    () => this.taskQa()?.findings ?? [],
+  );
+
+  protected readonly visibleQaCheckRuns = computed(() =>
+    (this.taskQa()?.checkRuns ?? []).filter(
+      (r) => r.checkId !== "skill-inject",
+    ),
+  );
+
+  protected readonly showQaCard = computed(() => {
+    const q = this.taskQa();
+    if (!q) return false;
+    return !!(
+      q.enabled ||
+      q.assignment ||
+      q.checkRuns.length > 0 ||
+      q.findings.length > 0
+    );
+  });
 
   readonly forceMerge =
     output<import("./force-merge-dialog.component").ForceMergeRequest>();
@@ -660,6 +919,8 @@ export class TaskChangesTabComponent {
     unsatisfiedGates(this.task()),
   );
 
+  private lastQaStateKey = "";
+  private qaReqSeq = 0;
   private lastBranchKey = "";
 
   constructor() {
@@ -671,6 +932,8 @@ export class TaskChangesTabComponent {
       untracked(() => {
         const branchChanged = this.lastBranchKey !== branchKey;
         this.lastBranchKey = branchKey;
+        this.lastQaStateKey = `${id}:${t.state}:${t.attempts?.length ?? 0}:${t.pullRequest ?? ""}`;
+        this.qaReqSeq++;
         if (branchChanged) {
           this.preview.set(null);
           this.fullDiffFiles.set(null);
@@ -678,12 +941,37 @@ export class TaskChangesTabComponent {
           this.ciRuns.set([]);
           this.expandedRunId.set(null);
           this.ciError.set(null);
+          this.taskQa.set(null);
+          this.openQaEvidence.set(new Set());
+          this.votingFindingIds.set(new Set());
         }
         this.diffError.set(null);
         this.diffSkipReason.set(null);
         this.branchPresent.set(null);
         void this.loadInitial(id);
       });
+    });
+
+    effect(() => {
+      const t = this.task();
+      const key = `${t.id}:${t.state}:${t.attempts?.length ?? 0}:${t.pullRequest ?? ""}`;
+      untracked(() => {
+        if (this.lastQaStateKey && this.lastQaStateKey !== key) {
+          this.lastQaStateKey = key;
+          void this.refreshTaskQa(t.id);
+        }
+      });
+    });
+
+    // Live-poll QA check runs while viewing a non-closed task so in-turn S3 checks and
+    // async control-arm shadow runs appear in place without collapsing open evidence.
+    this.zone.runOutsideAngular(() => {
+      const timer = setInterval(() => {
+        const t = untracked(() => this.task());
+        if (!t?.id || t.state === "closed" || t.state === "merged") return;
+        this.zone.run(() => void this.refreshTaskQa(t.id));
+      }, 3000);
+      this.destroyRef.onDestroy(() => clearInterval(timer));
     });
   }
 
@@ -721,6 +1009,107 @@ export class TaskChangesTabComponent {
     }
     if (conclusion === "running" || conclusion === "queued") return "setup";
     return "neutral";
+  }
+
+  protected qaVerdictTone(verdict?: string): string {
+    if (verdict === "pass" || verdict === "passed") return "healthy";
+    if (verdict === "fail" || verdict === "failed" || verdict === "error") {
+      return "error";
+    }
+    return "neutral";
+  }
+
+  protected isShadowFinding(f: QAFinding): boolean {
+    const runs = this.taskQa()?.checkRuns ?? [];
+    const run = runs.find((r) => r.id === f.checkRunId);
+    return !!(run?.shadow || this.taskQa()?.assignment?.arm === "control");
+  }
+
+  protected qaFindingTone(f: QAFinding): "error" | "proposal" | "neutral" {
+    if (f.severity === "info") return "neutral";
+    if (this.isShadowFinding(f) || f.severity === "warning") return "proposal";
+    return "error";
+  }
+
+  protected qaStageTooltip(stage: string): string {
+    if (stage === "S3") {
+      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
+    }
+    if (stage === "S4") {
+      return "Stage S4 — 1-round fresh-context orthogonal diff verifier on T2/T3 changes";
+    }
+    return `Quality stage ${stage}`;
+  }
+
+  protected toggleQaEvidence(id: number): void {
+    this.openQaEvidence.update((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  protected async voteFinding(finding: QAFinding, vote: number): Promise<void> {
+    const taskId = this.task().id;
+    this.votingFindingIds.update((s) => new Set(s).add(finding.id));
+    try {
+      const res = await this.api.post<VoteQAFindingResponse>(
+        "POST /api/tasks/{id}/qa/findings/{finding}/feedback",
+        { id: taskId, finding: String(finding.id) },
+        { vote },
+      );
+      if (this.task().id !== taskId) return;
+      this.taskQa.update((cur) => {
+        if (!cur) return cur;
+        return {
+          ...cur,
+          findings: cur.findings.map((item) =>
+            item.id === finding.id
+              ? { ...item, humanVote: res.vote, votedBy: res.votedBy }
+              : item,
+          ),
+        };
+      });
+      this.snackbar.show(
+        vote === 1
+          ? "Marked finding as helpful"
+          : vote === -1
+            ? "Marked finding as not helpful"
+            : "Cleared finding feedback",
+      );
+    } catch (err) {
+      if (this.task().id === taskId) {
+        this.snackbar.show(`Could not save feedback: ${errorText(err)}`);
+      }
+    } finally {
+      this.votingFindingIds.update((s) => {
+        const next = new Set(s);
+        next.delete(finding.id);
+        return next;
+      });
+    }
+  }
+
+  private async refreshTaskQa(id: string): Promise<void> {
+    if (
+      typeof this.api.get !== "function" ||
+      !this.can("GET /api/tasks/{id}/qa")
+    ) {
+      return;
+    }
+    const seq = ++this.qaReqSeq;
+    try {
+      const qaRes = await this.api.get<TaskQAResponse>(
+        "GET /api/tasks/{id}/qa",
+        { id },
+      );
+      if (seq === this.qaReqSeq && this.task().id === id && qaRes) {
+        this.taskQa.set(qaRes);
+      }
+    } catch {
+      // Older server or QA disabled.
+    }
   }
 
   private async loadInitial(id: string): Promise<void> {
@@ -781,6 +1170,8 @@ export class TaskChangesTabComponent {
         if (this.task().id === id) this.diffLoading.set(false);
       }
     }
+
+    await this.refreshTaskQa(id);
 
     if (typeof this.api.get === "function" && this.can("GET /api/ci/runs")) {
       this.ciLoading.set(true);

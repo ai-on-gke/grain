@@ -157,7 +157,7 @@ UI's "Pause"/"Resume" button rather than "Delete" for that case.
   following `SecretsPanel.jsx`'s pattern exactly, opened from a new
   sidebar entry alongside Settings. A task the overlay's own
   schedule fired shows a "Scheduled" badge in the ordinary task list
-  (`Task.Scheduled`, off `Origin.Reason == ReasonSchedule` — the same
+  (`Task.Scheduled`, off `Filing.Reason == ReasonSchedule` — the same
   treatment `Task.Stacked` already gives `ReasonFix`).
 
 ## Tests present
@@ -213,7 +213,7 @@ fired."** `model.Schedule.Interval` (a bare `time.Duration`) is
 replaced by `Recurrence` (`pkg/model/schedule.go`), a small sum type: `Kind`
 is one of `RecurrenceEveryNHours`, `RecurrenceDaily`, `RecurrenceWeekly`, or
 `RecurrenceMonthly`, and the fields that apply depend on which -- the same
-"column per case, most left unset" shape `Task.Origin`/`Task.Approval`
+"column per case, most left unset" shape `Task.Filing`/`Task.Approval`
 already use for a different sum type. `Recurrence.Next(after)` is the
 whole of the new logic: the first occurrence strictly after `after`,
 wall-clock aligned for the three new kinds (a calendar month is not a
@@ -1560,9 +1560,12 @@ one answer all four places ask: true under grain's own modes, false under
 - **Starting and collecting.** `scheduledWorkflowGrainCIOff` reads the
   firing's schedule (`ScheduledWorkflowRun.ScheduleID`) when the repository
   disables grain CI, and lets an opted-in one through.
-- **The cancel sweep.** `scheduledRunKeepsGrainCI` leaves a running run
+- **The cancel sweep.** `scheduledOrRepoCancelReason` leaves a running run
   alone when its `RequestedBy` is `workflow-schedule:<id>` (or an infra
-  re-run of one) and that schedule opts in.
+  re-run of one) and that schedule opts in, and if that schedule has been
+  renamed or withdrawn while the run is in flight, cancels it naming the
+  withdrawn schedule (`scheduleGoneCancelReason`) rather than blaming a
+  repository switch.
 
 Nothing else changes, because nothing else was ever on this path: the run
 is a `schedule` event, which judges no pull request, and the only check

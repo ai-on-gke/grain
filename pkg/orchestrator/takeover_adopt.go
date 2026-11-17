@@ -260,7 +260,7 @@ func fileAdoptedShepherd(ctx context.Context, deps Deps, in model.AdoptPullReque
 		}
 	}
 
-	origin := model.Origin{Attribution: in.Requester, Reason: model.ReasonDirect}
+	origin := model.Filing{Attribution: in.Requester, Reason: model.ReasonDirect}
 	var approval *model.Attribution
 	var approvedAt *time.Time
 	if in.Approved {
@@ -300,7 +300,7 @@ func fileAdoptedShepherd(ctx context.Context, deps Deps, in model.AdoptPullReque
 		ID:         id,
 		Branch:     branch,
 		Intent:     model.IntentImplement,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -401,7 +401,7 @@ func updateAdoptedShepherd(ctx context.Context, deps Deps, task model.Task, in m
 			t.Links = withoutLinks(t.Links, model.LinkFixes)
 		}
 		t.Title = strings.Replace(t.Title, "Adopt ", "Take over ", 1)
-		t.Body = adoptTaskBody(ref, ref, detail, requesterName(t.Origin.Attribution), t.Branch, false,
+		t.Body = adoptTaskBody(ref, ref, detail, requesterName(t.Filing.Attribution), t.Branch, false,
 			model.TakeoverFinish, linkTarget(*t, model.LinkImplementsSpec), linkTarget(*t, model.LinkDesignDoc))
 		return nil
 	}); err != nil {

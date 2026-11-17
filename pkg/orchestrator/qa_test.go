@@ -53,8 +53,8 @@ func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *
 	if err != nil {
 		t.Fatalf("resolveTaskQAAssignment off: %v", err)
 	}
-	if offAssign.Arm != model.QAArmOff {
-		t.Fatalf("off Arm = %q, want %q", offAssign.Arm, model.QAArmOff)
+	if offAssign.ArmID != model.QAArmOff {
+		t.Fatalf("off Arm = %q, want %q", offAssign.ArmID, model.QAArmOff)
 	}
 	stored, err := store.QAAssignment(ctx, "task:700", 1)
 	if err != nil || stored != nil {
@@ -77,7 +77,7 @@ func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *
 	if err != nil {
 		t.Fatalf("resolveTaskQAAssignment on: %v", err)
 	}
-	if onAssign.Arm != model.QAArmTreatment || onAssign.ComplexityTier != model.QAComplexityHigh {
+	if onAssign.ArmID != model.QAArmTreatment {
 		t.Fatalf("unexpected assignment: %+v", onAssign)
 	}
 	storedOn, err := store.QAAssignment(ctx, "task:700", 1)

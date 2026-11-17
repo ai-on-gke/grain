@@ -48,7 +48,7 @@ func seedReviewed(t *testing.T, client *ui.Client, reviewedID, reviewID, templat
 	seedAPITask(t, client, reviewID, "acme/widgets")
 	approve(t, client, reviewID)
 	if err := client.Store.UpdateTask(ctx, reviewID, func(tk *model.Task) error {
-		tk.Origin.Reason = model.ReasonReview
+		tk.Filing.Reason = model.ReasonReview
 		tk.TemplateID = template
 		tk.Links = append(tk.Links, model.Link{Kind: model.LinkProposedBy, Target: reviewedID})
 		return nil

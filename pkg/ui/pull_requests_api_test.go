@@ -399,7 +399,7 @@ func TestAdoptPullRequestEnforcesAutoMergeRoleApprovalWithinAndExternalApprovalR
 
 	// 3c. tasks:admin token cannot self-approve a shepherd it filed itself, or one held for a person.
 	selfFiledID := seedShepherd(42, func(tk *model.Task) {
-		tk.Origin.Attribution.Actor = model.Principal{
+		tk.Filing.Attribution.Actor = model.Principal{
 			Kind: model.PrincipalAgent, ID: "external:admin-bot", Source: model.SourceExternalToken,
 		}
 	})
@@ -434,7 +434,7 @@ func TestAdoptPullRequestEnforcesAutoMergeRoleApprovalWithinAndExternalApprovalR
 
 	// 3d. tasks:admin token with X-Grain-Acting-Reason approves a plain unapproved shepherd filed by someone else.
 	okExtID := seedShepherd(45, func(tk *model.Task) {
-		tk.Origin.Attribution.Actor = model.Principal{Kind: model.PrincipalHuman, ID: "contributor@example.com"}
+		tk.Filing.Attribution.Actor = model.Principal{Kind: model.PrincipalHuman, ID: "contributor@example.com"}
 	})
 	rec = fileAsExternal(t, h.srv, adminTok, "/api/pull-requests/adopt", `{"pr":"acme/widgets#45"}`,
 		map[string]string{ui.ActingReasonHeader: "approving contributor shepherd"})

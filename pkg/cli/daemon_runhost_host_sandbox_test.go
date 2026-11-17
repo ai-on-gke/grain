@@ -142,7 +142,7 @@ func TestRunHostAgentCannotReachAHostDirectorySandbox(t *testing.T) {
 	task := model.Task{
 		ID: taskID, Intent: model.IntentImplement,
 		Title: "read the attachment", Body: "the stub agent reads its attachment through its sandbox tools",
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding: model.BindingDirective,
 		Target:  &model.RepoRef{Owner: owner, Name: repoName},
 	}

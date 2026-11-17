@@ -269,15 +269,8 @@ func TestCICapabilitiesDefaultDoesNotResolveProviders(t *testing.T) {
 
 func TestCIRepoCapabilitiesUseLiveRepoSettingsOnly(t *testing.T) {
 	t.Parallel()
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatal(err)
-	}
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	config := model.RepoConfig{Repo: repo, DefaultCapabilities: []string{"unrelated-agent-default"}, CICapabilities: []string{"gcp-key"}}
 	if err := store.PutRepoConfig(ctx, config); err != nil {

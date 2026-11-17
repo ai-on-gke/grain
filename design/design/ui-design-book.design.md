@@ -194,6 +194,14 @@ instead. Agents does this with a size container query on the list pane (narrower
 than 480px or shorter than 700px). `e2e/next-agents-grid-scroll.spec.js`
 asserts the rule with bounding boxes.
 
+Task Details follows the same rule in a full task page or the Tasks/Agents
+inspector: below 600px of pane width or 700px of pane height, the header,
+tabs and Details document scroll together. Roomier panes keep the header
+and tabs fixed above the Details scroller. Both scroll surfaces are
+keyboard focusable; the final attributes, grants and dependency controls
+must be reachable without chaining between nested vertical scrollers
+(`e2e/next-agent-details-scroll.spec.ts`).
+
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
 only forms and reading measures that need it (Settings sections at 1180px).
@@ -273,7 +281,23 @@ inspector and Task Detail. Sessions shares its message styles.
   chat bubbles.
 - The composer is `box-sizing: border-box; width: 100%`; attach, hint and
   Send share one row. A "New messages ↓" pill appears when something arrives
-  while you are scrolled up.
+  at the end while you are scrolled up; older history paged in above is not
+  news and never raises it.
+- **Sessions on a phone:** the chat pane scrolls as a whole, the log keeps a
+  floor of `min(18rem, 45dvh)` and the composer is sticky at the pane's
+  foot, so Send stays above the bottom bar however many rows the chat head
+  wraps to (320×568 included). Only a person's own send scrolls the pane.
+- **Sending is never blocked by sending.** In Sessions a sent message shows
+  at once (dashed: `Sending…`, then `Queued` behind it) and the composer
+  clears; a refused one stays as `Not sent` with its reason, Retry and Edit.
+- **Comment links (`#comment=<id>`)** open Conversation on any tab. A cold
+  load reads 500 comments and pages back 500 at a time to the comment
+  before rendering, so the thread draws once (a 3,000-comment task is at most
+  six reads); a link followed on an open page pages the same way. The comment
+  is scrolled to the middle instantly (no long smooth travel), takes focus,
+  and wears `primary-container` with a `primary` border for four seconds:
+  on at once, fading out over 600 ms (no fade under reduced motion). A malformed or missing comment says
+  so in a snackbar rather than silently landing at the end.
 
 ### Settings
 
@@ -322,8 +346,22 @@ hand-written list: a choice the daemon cannot use stays listed as a `disabled`
 `PillOption` with the server's reason as its `hint`. A number whose stored `0`
 means grain's default shows blank with the server's `<key>Default` as its
 placeholder, and a cleared box saves that default again. A card a link points
-at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+at carries an `id` (`#capability-policy`, `#credentials`, `#other-secrets`), and the page
 scrolls to the URL's fragment once the section has rendered.
+
+A card follows the scope of the routes it writes through, not its section's:
+Settings → Capabilities' Deployment credentials holds its fields to
+`settings:write` and its stored secrets to `secrets:write`, whatever
+`capabilities:admin` says. A config-repo lock disables and dims (`.s-dimmed`,
+with the `on-surface-variant` colour rather than opacity) the settings it
+covers but never the secrets beside them, which the API keeps writable. A
+secret is listed by name and key only, never its value. Its value
+box is `type="password"`, with "From file…" for multi-line values such as
+PEMs, never a textarea masked by CSS. Every removal of a secret, key, scope
+set or server asks first through `<g-confirm-dialog>`, saying what stops
+working. A table cell holding a list (scopes, repositories) stays on one line,
+truncates with the full list in its `title`, and drops secondary columns
+(`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
 
 A setting kept in the secret store rather than in grain/config (the Hub's
 `grc_…` registration token) stays editable while a config-repo lock
@@ -343,6 +381,25 @@ Where a stored `0` is a value of its own rather than "grain's default"
 where 0 holds nothing back), a typed `0` saves 0 and says what it means
 beside the box, and a cleared box saves the server's `<key>Default` --
 so the greyed placeholder is always what Save stores.
+
+### Pre-PR quality checks
+
+Quality control stays inside existing destinations rather than adding new rail
+items or topbar chrome:
+
+- **Settings → Tasks:** opt-in rollout switch, flow package `<g-pill-select>`,
+  rollout percentage, and control shadow-measurement toggle inside `.s-card`.
+- **Processes → Quality checks (`/processes/quality`):** standard 30/70 split
+  listing built-in and `.grain/qa-flow.yml` flow packages on the left and stage
+  checks, path scopes, and isolation settings in `.proc-card` panels on the
+  right, with a `Configure rollout` link to `/settings/tasks`.
+- **Task Detail → Changes & CI:** a `.ci-runs-card` (`Pre-PR quality checks`)
+  shown above `CI checks & runs` only when quality control is active or
+  recorded on that task. Each check run uses `<g-status-icon>` inside
+  `.status-pill`, finding evidence expands on demand in `.ci-step-log`, and
+  `Helpful` / `Not helpful` `.filter-chip` toggles (`aria-pressed`) are shown
+  only when the viewer holds `tasks:write`.
+- **Telemetry (`/telemetry`):** Two tabs (`Overview` | `Quality checks`) using the standard WAI-ARIA `.tab-strip` pattern. The `Overview` tab shows operational throughput cards and a compact Quality checks digest card. The `Quality checks` tab shows rollout results and check health (gated by `deployment:read`), with the header window control replaced by a read-only epoch chip to explain origins are grouped by enrollment time.
 
 ### Breakpoints
 
@@ -367,6 +424,7 @@ it rather than copy it.
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
+| Prompt and attributes panes | `shared/detail-panes.css` (`.g-panes`, `.g-pane`, `.g-attrs`) | what an agent is told beside the facts about it: task detail, Processes schedule and template inspectors |
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
@@ -391,6 +449,35 @@ Rules:
   loaded. Prefix page-specific classes, and search for a name before you use
   it. Example: Task Detail's `.gate-card` restyled the Backlog's approval
   card until it was renamed `.intake-card`.
+- **A prompt has its own pane.** Wherever a page shows the prompt an agent
+  is (or will be) given -- task detail on the full page and in every
+  inspector pane, and the Processes schedule and template inspectors -- it
+  sits in a `.g-pane` headed "Prompt", rendered with `[gMarkdown]`, never
+  as a raw monospace text well. The facts about it (priority, repository,
+  cadence, overlap, ...) go in a second `.g-pane` below, headed
+  "Attributes" for tasks and "Configuration" for processes, as a `.g-attrs`
+  key-value list. The key column is capped at 40% of the pane and the list
+  stacks key over value when the pane is under 260px, so no value clips or
+  overlaps its key at any split width (`ui-ng/e2e/next-prompt-panes.spec.js`).
+- **A time is shown as a date, never as the wire's string.** An instant
+  the server sends (`2026-11-17T10:24:14.543896659Z`) reaches the page
+  through `formatStamp` (`shared/dispatch-status.ts`), so a row and the
+  pane beside it say the same time the same way
+  (`ui-ng/e2e/next-processes-run-times.spec.ts`).
+- **Task detail container layout, Docs tab, and full-screen document reader.**
+  `.task-page` is an inline-size container (`container: task-page / inline-size`);
+  at `@container task-page (max-width: 1060px)` `.task-layout` collapses its
+  right-hand `.task-aside` so opening the coplanar Director drawer automatically
+  gives `.task-main` full width. The `Details` tab stays visible at every width
+  without redirecting back to `Conversation`. A dedicated `Docs` tab
+  (`g-task-docs-tab`, `task/task-docs.ts`) pairs a document picker with a clean
+  `surface` Markdown reader (`76ch` measure, independent vertical scrolling)
+  across the task prompt, PR Markdown/doc diffs, and structured report comments.
+  Prompt headers and the Docs reader offer `Open Docs` and `Full screen` (`⤢`)
+  triggers that open a native top-layer `<dialog class="doc-reader-modal">`
+  (`aria-modal="true"`, backdrop click & Escape dismissal, `Prev` / `Next`
+  document navigation, `76ch` measure, independent scroll)
+  (`ui-ng/e2e/next-task-docs-scroll.spec.ts`).
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
@@ -412,7 +499,11 @@ Rules:
   before it reaches the DOM. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
-  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`).
+  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
+  user-written Markdown through `[gMarkdown]`, never `renderMarkdown()`
+  into `[innerHTML]`, so previews draw diagrams too (the Context page's
+  previews, `ui-ng/e2e/next-context-doc-mermaid.spec.ts`); a page that
+  hosts it loads `shared/code-highlight.css` and `shared/mermaid.css`.
 - **Say a wire code in words.** A reason or state code from the API
   (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
   A code nobody has mapped yet shows as itself, which beats showing nothing.
@@ -668,3 +759,74 @@ Rules:
 - [ ] This book updated if the change sets or changes a rule.
 - [ ] No internal hostnames, people's names or credentials in code, fixtures,
       screenshots or commit messages.
+
+## 12. V3 Studio, Telemetry, & Inbox Badges
+
+The **V3 Studio** (`/next/processes`) separates pipeline stages (S0 Intent, S2 Plan Critic, S5 Merge Triage) and custom checks (pattern, diff-budget, companion, jsonschema) into a dedicated component (`g-qa-v3-studio`), maintaining strict component constraints (`< 6,500` bytes CSS). It also introduces the "Adopt from repo commit" modal and a "What-if probe" drawer to simulate pipeline execution.
+
+The **Telemetry Cards** (`/next/telemetry?tab=quality`) adds three new compact elements in `g-quality-v3-cards`:
+- A **Diff Strip** to highlight pipeline modifications against the reference arm (`+S0`, `+custom checks`, `Verifier changed`).
+- A **Stage Funnel & Cost Attribution** ops-card, measuring `p95 latency`, `runs`, and `tokensMedian` per stage and arm.
+- A **Human-Review Triage (S5)** ops-card highlighting escape rates, human-routed precision, and reviews saved.
+
+The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage chip natively in queue rows (via `qaTriageChip()`), reducing UI noise while ensuring safety-critical `qa-triage` tasks are immediately identifiable in `<span class="row-line3">`. The Task Changes tab also explicitly flags `Complexity` and `Blast` tiers.
+
+## 13. V4 Software Workflow & QA Studio, Tab-Strip Underline, & Full-Width Composition Body Well
+
+1. **Flush `3px` Active Tab Underline (`button.tab-link` & `.stage-header:has(> .tab-strip:last-child)`):**
+   - Both `<a class="tab-link">` and `<button class="tab-link">` reset top/left/right borders (`border-top: 0; border-right: 0; border-left: 0`) and reserve a `3px` bottom border (`border-bottom: 3px solid transparent`), switching to `border-bottom-color: var(--md-sys-color-primary)` and `color: var(--md-sys-color-primary)` when `[aria-current="page"]` or `[aria-selected="true"]`.
+   - When `.tab-strip` is the last child of `.stage-header` (such as on `/next/telemetry` and `/next/processes`), `.stage-header:has(> .tab-strip:last-child) { padding-bottom: 0 }` removes the bottom header padding so the active tab's `3px` underline sits flush against `.stage-header`'s `1px` bottom border with zero horizontal overflow at both `1440×900` and `390×844`.
+
+2. **`CompositionViewComponent` Full-Width `.comp-body-well` Rule (`processes-detail.css`):**
+   - In `g-composition-view` (`[data-testid="composition-preview"]`), scalar metadata fields flow in `.comp-meta-grid` (`grid-template-columns: repeat(auto-fill, minmax(170px, 1fr))`), while list fields (`reads`, `writes`, `capabilities`, `customFields`) and the `body` prompt row use `.comp-row-full` (`grid-column: 1 / -1; width: 100%`).
+   - `.comp-body-well` (`[data-testid="composition-body-well"]`) spans `grid-column: 1 / -1; width: 100%; box-sizing: border-box` (`>= 85%` of `.comp-task` `clientWidth`, never crushed into a narrow `~220px` single grid column), with a `320px` max-height scroll clamp (`.is-clamped`) and an `Expand full prompt` / `Collapse prompt` toggle (`[data-testid="composition-body-toggle"]`) for long task prompts.
+
+3. **`30/70` 8-Stage `Software Workflow & QA` Studio Layout & Operator `qaFlowRef` Pickers:**
+   - Under `/next/processes/quality`, the tab is titled **`Software Workflow & QA`** (`[data-testid="proc-tab-quality"]`) and renders a full-bleed workbench (`g-qa-flows-panel` + `g-qa-v3-studio`) without the narrow master-detail list pane.
+   - A top sub-header toolbar (`[data-testid="qa-studio-toolbar"]`) houses the flow package switcher (`<g-pill-select testid="qa-flow-switcher">`), active/schema badges (`v2`, `v3`, `v4`), live prompt-budget meter (`[data-testid="qa-prompt-budget"]`, `<= 8,192 B`), flow version quick-select strip (`[data-testid="quality-flows-list"]`), and studio actions (`What-if probe`, `Dry run`, `Adopt from commit`, `Fork flow`, `New version`).
+   - Below the toolbar, `.qa-workbench-split` uses a `30/70` split (`grid-template-columns: clamp(300px, 30%, 440px) minmax(0, 1fr)`) on desktop (`>= 900px`) and collapses cleanly to a single-column vertical stack (`grid-template-columns: 1fr`, with `.qa-stage-tree` switching its right border to a bottom border and `.qa-ordered-steps` scrolling horizontally inside its card) on viewports `< 900px` (`390×844`) with zero horizontal page overflow:
+     - **Left `30%` Stage & Step Tree (`[data-testid="qa-stage-tree"]`):** search input (`[data-testid="qa-step-search"]`), step-kind filter chips (`All`, `Skills`, `Checks`, `Agents`), and the collapsible 8-stage software lifecycle tree (`1. Decompose & Contract` through `8. Merge & Post-Merge`, plus custom stages).
+     - **Right `70%` Full-Width Stage / Step Inspector & Live Editor (`[data-testid="qa-step-inspector"]`):** stage summary bar (`[data-testid="qa-flow-detail-card"]`) and three inspector tabs (`Definition & fixtures`, `Empirical stats & dry-run`, `Lineage & YAML`).
+   - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus active/built-in flows such as `engineering-workflow-v4@1`, `golden-v3-enforced@1`, `golden-v3@1`, `golden-v2@1`), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
+
+## 14. Autonomous Goal Mode
+
+Autonomous Goal Mode lets an operator hand Grain a multi-pass outcome ("Prototype a goal") and step back until the work is verified and ready to submit or reaches a hard safety/budget boundary.
+
+### 14.1 Intake (`+ Create` menu & `NewTaskSheetComponent`)
+
+- The `+ Create` menu in the shell (`AppComponent`) offers a third rich 2-line entry after **New task** and **Start a workstream**:
+  - **Prototype a goal** (`data-testid="create-prototype-goal"`): *"Hammer through autonomously — logs assumptions, verifies deliverables, opens a PR"*.
+  - Selecting it opens `NewTaskSheetComponent` pre-filled with `goalMode: { enabled: true, maxPasses: 8, wallClockMinutes: 120, mockMissingSecrets: true }` and `autoApproveProposals: true`.
+- Inside `NewTaskSheetComponent`, **Execution posture** (`<g-pill-select testid="nt-posture">`) switches between `Supervised` and `Autonomous goal`.
+- When `Autonomous goal` is active, a compact `.nt-section-card` (`data-testid="nt-goal-config"`) reveals:
+  - A calm one-sentence explanation of Inbox silence and bounded verification passes.
+  - **Max verification passes** (`data-testid="nt-max-passes"`, `1..20`, default `8`).
+  - **Wall-clock budget (min)** (`data-testid="nt-wall-clock"`, `5..720`, default `120`).
+  - **Mock missing external secrets locally** (`data-testid="nt-mock-secrets"`, `role="switch"`).
+  - Primary submit action label updates to **Start autonomous goal** (`data-testid="new-task-submit"`).
+- `.sheet-body` carries `32px` bottom padding and `scroll-padding-bottom: 32px` (with `flex-shrink: 0` on direct children) so bottom controls scroll comfortably clear of the sticky `.sheet-foot`. Active snackbars anchor above `--grain-bottombar-height` (`+ 16px` desktop, `+ 84px` phone, `+ 80px` landscape short) and dismiss/suppress overlapping bottom-bar tooltips on open.
+
+### 14.2 Inbox Silence & Terminal Surfacing (`inbox-classifier.ts`)
+
+- While `t.goalMode?.enabled` is true, mid-flight `awaiting_reply` questions (`!t.awaitingAccess && !isStoppedTurn(t)`) and auto-approved child proposals (`t.state === "proposed" && !!t.proposedBy && !!t.autoApproveProposals`) are suppressed from `waitsOnUser` and `classifyTask`.
+- Terminal and safety states always surface in the Inbox:
+  - `awaiting_submit`: renders pill **Goal ready** (`healthy`) when `t.goalScorecard?.verified` is true, or **Goal capped** (`warn`) when `t.goalScorecard?.stoppedAtCap` is true.
+  - `awaitingAccess`, `isStoppedTurn`, `failed`, `waitingBaseRepair`, `mergeBlocked`, `mergeQueueStalled`, and `stall` surface in their standard priority groups.
+
+### 14.3 Goal Scorecard, Assumptions Ledger & Revise Loop (`<g-task-goal-card>`)
+
+- `<g-task-goal-card>` (`data-testid="task-goal-card"`) renders above `<g-conversation>` in `TaskDetailComponent` (`/next/task/:id` and split-pane inspectors) and inside `InboxPageComponent`'s inspector whenever `goalMode?.enabled`, `goalScorecard`, or `goalAssumptions` is present.
+- Header (`data-testid="goal-status-pill"`):
+  - `Goal verified · N passes` (`healthy`), `Stopped at cap · N / M passes` (`warn`), or `Autonomous goal · Pass N / M` (`setup`).
+- Operator controls:
+  - **Switch to supervised** (`data-testid="act-switch-supervised"`): sends `PATCH /api/tasks/{id}` with `{ goalMode: { enabled: false } }` so the operator can take over mid-flight.
+  - **Revise…** (`data-testid="act-revise-goal"`): opens `NewTaskSheetComponent` pre-filled as a follow-up autonomous goal targeting the task's branch (`base: t.branch || t.base`), linked via `generatedFrom: t.id`, with prior summary and assumptions pre-populated in the description.
+- Body:
+  - **Deliverables checklist** (`data-testid="goal-deliverables"` / `data-testid="goal-deliverable"`): each requirement, verification mark (`✓` / `!`), and evidence citation.
+  - **Assumptions ledger** (`data-testid="goal-assumptions"` / `data-testid="goal-assumption"`): each autonomous decision (`topic`, `decision`, `rationale`, `alternatives`).
+
+### 14.4 Cross-Surface Badges
+
+- **Tasks (`/next/tasks`)** and **Agents (`/next/agents`)**: render compact status pills (`data-testid="goal-badge-<id>"`) showing `Goal ✓` (`healthy`), `Goal capped` (`warn`), or `Goal · N/M` (`setup`).
+- **Workstreams (`/next/workstreams`)**: streams whose root or member tasks run in Autonomous Goal Mode display an `Autonomous goal` chip (`data-testid="ws-goal-chip-<key>"`).
