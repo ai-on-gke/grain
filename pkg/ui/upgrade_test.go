@@ -79,7 +79,11 @@ type upgradeResponse struct {
 	PreviousImageLabel  string          `json:"previousImageLabel"`
 	PreviousRelease     string          `json:"previousRelease"`
 	PreviousCommit      string          `json:"previousCommit"`
-	Cancelled           bool            `json:"cancelled"`
+	Rollback            *struct {
+		Image string `json:"image"`
+		Label string `json:"label"`
+	} `json:"rollback"`
+	Cancelled bool `json:"cancelled"`
 
 	ImageRepo        string               `json:"imageRepo"`
 	DefaultImageRepo string               `json:"defaultImageRepo"`
@@ -1041,4 +1045,54 @@ func TestCancelCurrentUpgradeRouteAuditAndConflict(t *testing.T) {
 	close(stopping)
 	_ = os.WriteFile(releaseRestart, []byte("1"), 0o644)
 	<-up.Done()
+}
+
+// GET /api/upgrade offers a rollback only where StartRollback would take
+// it, and names what it would go back to: the last upgrade that cut
+// over's previous image, past a cancelled one since, and nothing for an
+// image recorded by tag alone (F5 and F6 of
+// docs/test-runs/2026-11-13-upgrade-cancel.md).
+func TestUpgradeStatusOffersOnlyARollbackThatWouldBeTaken(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	running := "docker.io/grainai/grain:v2@sha256:" + strings.Repeat("2", 64)
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+running+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	statusFile := filepath.Join(dir, "upgrade-status.json")
+	srv := testServerWithUpgrader(t, upgrade.New(upgrade.Config{
+		Image:      &upgrade.ImageConfig{Repository: "docker.io/grainai/grain", RefFile: refFile},
+		StatusFile: statusFile,
+	}))
+	v1 := "docker.io/grainai/grain:v1@sha256:" + strings.Repeat("1", 64)
+	for _, tc := range []struct {
+		name   string
+		status upgrade.Status
+		want   string
+	}{
+		{"completed", upgrade.Status{Branch: "v2", Phase: upgrade.PhaseOK, PreviousImage: v1}, v1},
+		{"cancelled since", upgrade.Status{Branch: "v1", Phase: upgrade.PhaseCancelled, PreviousImage: running, RollbackImage: v1}, v1},
+		{"cancelled, nothing carried", upgrade.Status{Branch: "v1", Phase: upgrade.PhaseCancelled, PreviousImage: running}, ""},
+		{"previous by tag", upgrade.Status{Branch: "v2", Phase: upgrade.PhaseOK, PreviousImage: "docker.io/grainai/grain:v1"}, ""},
+	} {
+		raw, err := json.Marshal(tc.status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(statusFile, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rec := do(t, srv, http.MethodGet, "/api/upgrade", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: GET /api/upgrade = %d: %s", tc.name, rec.Code, rec.Body)
+		}
+		got := decode[upgradeResponse](t, rec)
+		switch {
+		case tc.want == "" && got.Rollback != nil:
+			t.Errorf("%s: rollback = %+v, want none offered", tc.name, *got.Rollback)
+		case tc.want != "" && (got.Rollback == nil || got.Rollback.Image != tc.want || got.Rollback.Label == ""):
+			t.Errorf("%s: rollback = %+v, want %s with a label", tc.name, got.Rollback, tc.want)
+		}
+	}
 }

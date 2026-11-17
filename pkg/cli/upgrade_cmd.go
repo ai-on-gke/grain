@@ -217,7 +217,14 @@ func cmdUpgradeRollback(ctx context.Context, c *ui.HTTPClient, out *printer, arg
 	if !cur.Enabled {
 		return errors.New("in-place upgrades are not enabled on this deployment")
 	}
-	label := cur.PreviousImageLabel
+	// Asked of the daemon rather than worked out here: after a cancelled
+	// or failed upgrade the target is not that upgrade's previous build,
+	// and an image not pinned by digest is refused (StartRollback). An
+	// older daemon that does not say is left to answer the request.
+	label := cur.RollbackLabel
+	if label == "" {
+		label = cur.PreviousImageLabel
+	}
 	if label == "" {
 		label = cur.PreviousImage
 	}
@@ -278,7 +285,15 @@ func printUpgradeStatus(st ui.UpgradeStatus) {
 		} else if st.CancelBlockedReason != "" {
 			fmt.Printf("cancellable: no (%s)\n", st.CancelBlockedReason)
 		}
-		if st.Phase == "ok" && !st.Unchanged && (st.PreviousImage != "" || st.PreviousRelease != "" || st.PreviousCommit != "") {
+		cutOver := st.Phase == "ok" && !st.Unchanged
+		switch {
+		case cutOver && st.RollbackLabel != "":
+			fmt.Printf("replaced: %s (run \"grain upgrade rollback\" to go back)\n", st.RollbackLabel)
+		case st.RollbackLabel != "":
+			// This upgrade changed nothing, so the rollback still goes
+			// back past the last one that did.
+			fmt.Printf("rollback: %s, which the last completed upgrade replaced (run \"grain upgrade rollback\" to go back)\n", st.RollbackLabel)
+		case cutOver && (st.PreviousImage != "" || st.PreviousRelease != "" || st.PreviousCommit != ""):
 			prev := st.PreviousImageLabel
 			if prev == "" {
 				prev = st.PreviousImage
@@ -289,7 +304,9 @@ func printUpgradeStatus(st ui.UpgradeStatus) {
 			if prev == "" {
 				prev = st.PreviousCommit
 			}
-			fmt.Printf("replaced: %s (run \"grain upgrade rollback\" to go back)\n", prev)
+			// Not offered: the daemon would refuse it, most often for an
+			// image recorded by tag rather than digest.
+			fmt.Printf("replaced: %s\n", prev)
 		}
 	}
 }

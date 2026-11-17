@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gitOutput is runGit for a command whose output the test needs.
@@ -188,5 +189,135 @@ func TestStartRollbackRefusesAnythingButAFullCommitID(t *testing.T) {
 		if st, _ := readStatus(statusFile); st.Phase != PhaseOK {
 			t.Errorf("StartRollback to %q started an upgrade (phase %q)", prev, st.Phase)
 		}
+	}
+}
+
+// The rollback target outlives upgrades that never cut over (F5 of
+// docs/test-runs/2026-11-13-upgrade-cancel.md). Each upgrade records the
+// build running when it began, so a cancelled one recorded the build the
+// last upgrade had just put there, and "rolling back" went nowhere while
+// what that upgrade replaced was forgotten. A cancelled upgrade and a
+// failed one after it both carry the first upgrade's previous image
+// forward, and the rollback goes back to it.
+func TestRollbackOutlivesACancelledAndAFailedUpgrade(t *testing.T) {
+	shortRestartGrace(t)
+	dir := t.TempDir()
+	prevDigest := "sha256:" + strings.Repeat("c", 64)
+	newDigest := "sha256:" + strings.Repeat("d", 64)
+	prevRef := "docker.io/grainai/grain:v1@" + prevDigest
+	refFile := filepath.Join(dir, "grain-image.env")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+prevRef+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	u := newUpgrader(t, Config{
+		Image: &ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+			PullCmd:    []string{"true"},
+			DigestCmd:  []string{"sh", "-c", `case "$1" in *:v1*) echo "docker.io/grainai/grain@` + prevDigest + `";; *) echo "docker.io/grainai/grain@` + newDigest + `";; esac`, "sh"},
+			RunCmd:     []string{"true"},
+			ListCmd:    []string{"true"},
+		},
+		HealthCheckArgs: []string{"schema-version"},
+		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+	})
+
+	if err := u.Start("main"); err != nil {
+		t.Fatalf("Start(main): %v", err)
+	}
+	waitForPhase(t, u, PhaseOK)
+	waitForIdle(t, u)
+	upgraded, err := u.Running()
+	if err != nil || upgraded.Ref == prevRef {
+		t.Fatalf("Running after the upgrade = (%+v, %v), want something other than %q", upgraded, err, prevRef)
+	}
+
+	// Cancelled in its grace window: nothing changes, and the record's
+	// PreviousImage is the build running now.
+	u.cfg.GraceWindow = time.Hour
+	if err := u.Start("main"); err != nil {
+		t.Fatalf("Start(main) to cancel: %v", err)
+	}
+	if ok, err := u.Cancel("alice@example.com", "changed my mind"); !ok || err != nil {
+		t.Fatalf("Cancel = (%v, %v), want it cancelled", ok, err)
+	}
+	st := waitForPhase(t, u, PhaseCancelled)
+	waitForIdle(t, u)
+	if st.PreviousImage != upgraded.Ref {
+		t.Errorf("the cancelled upgrade's PreviousImage = %q, want the build it found running, %q", st.PreviousImage, upgraded.Ref)
+	}
+	if got := st.Rollback().Image; got != prevRef {
+		t.Errorf("after a cancelled upgrade Rollback().Image = %q, want the first upgrade's previous image %q", got, prevRef)
+	}
+
+	// Failed at its pull: still nothing to go back to but prevRef.
+	u.cfg.GraceWindow = 0
+	u.cfg.Image.PullCmd = []string{"false"}
+	if err := u.Start("main"); err != nil {
+		t.Fatalf("Start(main) to fail: %v", err)
+	}
+	st = waitForPhase(t, u, PhaseFailed)
+	waitForIdle(t, u)
+	if got := st.Rollback().Image; got != prevRef {
+		t.Errorf("after a failed upgrade Rollback().Image = %q, want %q", got, prevRef)
+	}
+	if target, err := u.RollbackTarget(st); err != nil || target.Image != prevRef {
+		t.Errorf("RollbackTarget = (%+v, %v), want %q", target, err, prevRef)
+	}
+
+	u.cfg.Image.PullCmd = []string{"true"}
+	if err := u.StartRollback(); err != nil {
+		t.Fatalf("StartRollback: %v", err)
+	}
+	st = waitForPhase(t, u, PhaseOK)
+	waitForIdle(t, u)
+	if running, err := u.Running(); err != nil || running.Ref != prevRef {
+		t.Fatalf("Running after the rollback = (%+v, %v), want %q", running, err, prevRef)
+	}
+	// The rollback cut over itself, so what it replaced is next.
+	if got := st.Rollback().Image; got != upgraded.Ref {
+		t.Errorf("after the rollback Rollback().Image = %q, want the build it replaced, %q", got, upgraded.Ref)
+	}
+}
+
+// Which record a rollback reads: its own Previous* once an upgrade cut
+// over (a restart that failed after staging included -- the ref file
+// already names the new build), and what it carried otherwise.
+func TestStatusRollbackPicksTheLastCutOver(t *testing.T) {
+	prev := RollbackTarget{Image: "example/grain:v2@sha256:" + strings.Repeat("a", 64)}
+	carried := RollbackTarget{Image: "example/grain:v1@sha256:" + strings.Repeat("b", 64)}
+	for _, tc := range []struct {
+		name string
+		s    Status
+		want RollbackTarget
+	}{
+		{"ok", Status{Phase: PhaseOK}, prev},
+		{"unchanged", Status{Phase: PhaseOK, Unchanged: true}, carried},
+		{"cancelled", Status{Phase: PhaseCancelled}, carried},
+		{"failed", Status{Phase: PhaseFailed, Steps: []Step{{Name: stepPull, State: StepFailed}, {Name: stepRestart, State: StepPending}}}, carried},
+		{"restart failed", Status{Phase: PhaseFailed, Steps: []Step{{Name: stepRestart, State: StepFailed}}}, prev},
+		{"running", Status{Phase: PhaseRunning}, carried},
+	} {
+		tc.s.PreviousImage, tc.s.RollbackImage = prev.Image, carried.Image
+		if got := tc.s.Rollback(); got != tc.want {
+			t.Errorf("%s: Rollback() = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A rollback is offered only where StartRollback would take it (F6): an
+// image not pinned by digest is what a tag names today, not what this
+// deployment ran.
+func TestRollbackTargetRefusesAnImageNotPinnedByDigest(t *testing.T) {
+	dir := t.TempDir()
+	u := newUpgrader(t, Config{
+		Image:      &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: filepath.Join(dir, "grain-image.env")},
+		StatusFile: filepath.Join(dir, "upgrade-status.json"),
+	})
+	if _, err := u.RollbackTarget(Status{Phase: PhaseOK, PreviousImage: "docker.io/grainai/grain:v1"}); !errors.Is(err, ErrNothingToRollBackTo) || !strings.Contains(err.Error(), "not pinned by digest") {
+		t.Errorf("RollbackTarget(tag only) = %v, want ErrNothingToRollBackTo naming the digest", err)
+	}
+	if _, err := u.RollbackTarget(Status{Phase: PhaseCancelled, PreviousImage: "docker.io/grainai/grain:v1@sha256:" + strings.Repeat("a", 64)}); !errors.Is(err, ErrNothingToRollBackTo) {
+		t.Errorf("RollbackTarget(cancelled, nothing carried) = %v, want ErrNothingToRollBackTo", err)
 	}
 }

@@ -70,6 +70,9 @@ type UpgradeStatus struct {
 	PreviousImageLabel  string
 	PreviousRelease     string
 	PreviousCommit      string
+	// RollbackLabel names what `grain upgrade rollback` would go back to,
+	// "" when the daemon would refuse it (upgradeStatusResponse.Rollback).
+	RollbackLabel string
 	// InFlightRuns is every live run, which is what an immediate upgrade
 	// would discard.
 	InFlightRuns int
@@ -220,6 +223,9 @@ func upgradeStatusFrom(resp upgradeStatusResponse) UpgradeStatus {
 		PreviousRelease:     resp.PreviousRelease,
 		PreviousCommit:      resp.PreviousCommit,
 		InFlightRuns:        resp.InFlightRuns,
+	}
+	if resp.Rollback != nil {
+		status.RollbackLabel = resp.Rollback.Label
 	}
 	if resp.Running != nil {
 		status.RunningImage = resp.Running.Image

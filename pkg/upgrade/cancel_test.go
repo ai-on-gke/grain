@@ -631,3 +631,51 @@ func TestRollbackByReleaseOrCommitStillNeedsTheAllowList(t *testing.T) {
 		t.Error("a recorded previous image with no digest counted as a rollback that skips the allow-lists")
 	}
 }
+
+// Cancelling removes only the tag the upgrade itself pulled (F7 of
+// docs/test-runs/2026-11-13-upgrade-cancel.md): a :main an earlier
+// upgrade or rollback left on the host stays, and one that was not there
+// before goes.
+func TestCancelKeepsATagThatWasAlreadyOnTheHost(t *testing.T) {
+	for _, onHost := range []bool{true, false} {
+		t.Run("on_host="+boolStr(onHost), func(t *testing.T) {
+			dir := t.TempDir()
+			pulling := filepath.Join(dir, "pulling")
+			removedFile := filepath.Join(dir, "removed")
+			refFile := filepath.Join(dir, "grain-image.env")
+			prevRef := "docker.io/grainai/grain:v1@sha256:" + strings.Repeat("c", 64)
+			if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+prevRef+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			list := []string{"true"}
+			if onHost {
+				list = []string{"sh", "-c", `echo "grainai/grain:main grainai/grain@sha256:` + strings.Repeat("e", 64) + `"`, "sh"}
+			}
+			u := newUpgrader(t, Config{
+				Image: &ImageConfig{
+					Repository: "docker.io/grainai/grain",
+					RefFile:    refFile,
+					PullCmd:    []string{"sh", "-c", `touch ` + pulling + `; exec sleep 30`, "sh"},
+					ListCmd:    list,
+					RemoveCmd:  []string{"sh", "-c", `printf '%s\n' "$1" >> ` + removedFile, "sh"},
+				},
+				StatusFile: filepath.Join(dir, "upgrade-status.json"),
+			})
+			if err := u.Start("main"); err != nil {
+				t.Fatalf("Start(main): %v", err)
+			}
+			if !waitFor(func() bool { _, err := os.Stat(pulling); return err == nil }) {
+				t.Fatal("the pull never started")
+			}
+			if ok, err := u.Cancel("alice@example.com", "not now"); !ok || err != nil {
+				t.Fatalf("Cancel = (%v, %v), want it cancelled", ok, err)
+			}
+			waitForPhase(t, u, PhaseCancelled)
+			waitForIdle(t, u)
+			removed := strings.Join(readLinesTrimmed(removedFile), "\n")
+			if gotRemoved := strings.Contains(removed, "grain:main"); gotRemoved == onHost {
+				t.Errorf("removed %q with :main already on the host %v; want it removed only when the upgrade pulled it", removed, onHost)
+			}
+		})
+	}
+}

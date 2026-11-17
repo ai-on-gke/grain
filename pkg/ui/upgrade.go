@@ -136,6 +136,13 @@ type upgradeStatusResponse struct {
 	PreviousImageLabel  string                `json:"previousImageLabel,omitempty"`
 	PreviousRelease     string                `json:"previousRelease,omitempty"`
 	PreviousCommit      string                `json:"previousCommit,omitempty"`
+	// Rollback is what the one-click rollback would go back to now
+	// (upgrade.Upgrader.RollbackTarget): the build the last upgrade that
+	// cut over replaced, which after a cancelled or failed upgrade is not
+	// that upgrade's Previous*. Nil when StartRollback would refuse --
+	// nothing recorded, or an image not pinned by digest -- so the pane
+	// and `grain upgrade status` offer a rollback only where it works.
+	Rollback *upgradeRollbackResponse `json:"rollback,omitempty"`
 	// InFlightRuns is how many runs are going right now, so the pane can
 	// say what pressing the button costs before it is pressed
 	// (grain/task-213). An upgrade ends in a restart, and a restart
@@ -359,6 +366,16 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 		// The record that this upgrade crossed editions on purpose.
 		EditionSwitch: status.EditionSwitch,
 	}
+	if rt, ok := up.(rollbackTargeter); ok {
+		if target, err := rt.RollbackTarget(status); err == nil && !target.Empty() {
+			resp.Rollback = &upgradeRollbackResponse{
+				Image:   target.Image,
+				Release: target.Release,
+				Commit:  target.Commit,
+				Label:   target.Label(status.Branch),
+			}
+		}
+	}
 	if cu, ok := up.(cancellableUpgrader); ok {
 		resp.Cancellable, resp.CancelBlockedReason = cu.CancelState(status)
 		if gw := cu.GraceWindow(); gw > 0 {
@@ -403,6 +420,21 @@ type retractedReleaseReporter interface {
 type imageUpgrader interface {
 	StartImageWith(branch, image string, opts upgrade.ImageOptions) error
 	ImageTarget() (upgrade.ImageTarget, bool)
+}
+
+// upgradeRollbackResponse is upgradeStatusResponse.Rollback.
+type upgradeRollbackResponse struct {
+	Image   string `json:"image,omitempty"`
+	Release string `json:"release,omitempty"`
+	Commit  string `json:"commit,omitempty"`
+	// Label is the short form the button names it by.
+	Label string `json:"label"`
+}
+
+// rollbackTargeter is the optional half of Upgrader that says what the
+// one-click rollback would go back to, or why it would refuse.
+type rollbackTargeter interface {
+	RollbackTarget(status upgrade.Status) (upgrade.RollbackTarget, error)
 }
 
 // rollbackUpgrader is the optional half of Upgrader that starts the
@@ -783,8 +815,8 @@ type startUpgradeRequest struct {
 	SwitchEdition bool `json:"switchEdition,omitempty"`
 	// Rollback is the one-click rollback: an upgrade back onto the build
 	// the last upgrade replaced (upgrade.Upgrader.StartRollback). It
-	// names no target -- the daemon reads PreviousImage or PreviousCommit
-	// from its own status -- so Branch and Image must be left empty, and
+	// names no target -- the daemon reads what its own status records the
+	// last upgrade that cut over replaced (upgradeStatusResponse.Rollback) -- so Branch and Image must be left empty, and
 	// it cannot be scheduled. It is the only request that may go back to
 	// a previous commit outside -upgrade-allowed-branches, and only to
 	// that one commit, checked out by object id.

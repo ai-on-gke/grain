@@ -146,6 +146,16 @@ type Status struct {
 	PreviousImage   string `json:"previousImage,omitempty"`
 	PreviousRelease string `json:"previousRelease,omitempty"`
 	PreviousCommit  string `json:"previousCommit,omitempty"`
+	// RollbackImage, RollbackRelease and RollbackCommit are the Previous*
+	// of the last upgrade that cut over, carried forward by every upgrade
+	// since that did not (Status.Rollback). Previous* alone is not enough:
+	// an upgrade records what was running when it began, so one that was
+	// cancelled, failed or found nothing to do recorded the build still
+	// running, and "rolling back" from it went nowhere while the build the
+	// last real upgrade replaced was forgotten.
+	RollbackImage   string `json:"rollbackImage,omitempty"`
+	RollbackRelease string `json:"rollbackRelease,omitempty"`
+	RollbackCommit  string `json:"rollbackCommit,omitempty"`
 	// Process identifies the process running this upgrade (processID),
 	// so a later one reading "running" can tell a live upgrade from one
 	// a restart cut short -- see Upgrader.Status.
@@ -1263,6 +1273,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 
 	var (
 		tag            string
+		tagWasOnHost   bool
 		ref            string
 		sandbox        string
 		mirroredTarget string
@@ -1284,7 +1295,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		if sandbox != "" && !imageKeptBy(sandbox, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
 			u.removeImageForCancel(cleanupCtx, p, sandbox)
 		}
-		if tag != "" && !imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
+		if tag != "" && !tagWasOnHost && !imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
 			(ref == "" || !imageKeptBy(ref, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin)) {
 			u.removeImageForCancel(cleanupCtx, p, tag)
 		}
@@ -1306,6 +1317,9 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		}
 	}
 
+	// Asked before the pull, which would make it so: a cancelled upgrade
+	// removes only the tag it pulled itself, never one already here.
+	tagWasOnHost = u.imageOnHost(ctx, p, stepPull, tag)
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
 	if pullErr == nil {
 		ref, pullErr = u.pinImage(ctx, p, stepPull, tag)

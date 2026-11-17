@@ -950,14 +950,15 @@ func containsImageID(ids []string, id string) bool {
 	return false
 }
 
-// listImages lists the images on this host for repository.
-func (u *Upgrader) listImages(ctx context.Context, p *progress, repository string) ([]listedImage, error) {
+// listImages lists the images on this host for repository, asked as part
+// of step.
+func (u *Upgrader) listImages(ctx context.Context, p *progress, step, repository string) ([]listedImage, error) {
 	argv := u.cfg.Image.ListCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}} {{.Repository}}@{{.Digest}} {{.ID}}"}
 	}
 	argv = append(append([]string{}, argv...), repository)
-	out, err := runAsked(ctx, p, stepRecord, imageRunTimeout, argv)
+	out, err := runAsked(ctx, p, step, imageRunTimeout, argv)
 	if err != nil {
 		return nil, err
 	}
@@ -974,6 +975,30 @@ func (u *Upgrader) listImages(ctx context.Context, p *progress, repository strin
 		images = append(images, img)
 	}
 	return images, nil
+}
+
+// imageOnHost reports whether this host already holds ref -- its tag, or
+// its digest when it is pinned -- before an upgrade pulls it, so that
+// cancelling the upgrade removes only what the upgrade itself brought
+// (cleanupOnCancel): a tag an earlier upgrade or rollback left here is not
+// this one's to take away. A list that cannot be read answers false, which
+// is what cancel cleanup assumed of every tag before it asked.
+func (u *Upgrader) imageOnHost(ctx context.Context, p *progress, step, ref string) bool {
+	images, err := u.listImages(ctx, p, step, repositoryOf(ref))
+	if err != nil {
+		return false
+	}
+	for _, img := range images {
+		for _, name := range img.names {
+			if strings.HasSuffix(name, ":<none>") || strings.HasSuffix(name, "@<none>") {
+				continue
+			}
+			if imageKeptBy(ref, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // containerImageIDs lists the IDs of the images running containers use.
@@ -1150,7 +1175,7 @@ func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef
 	listed := make(map[string][]listedImage)
 	var keptIDs []string
 	for repo := range repos {
-		images, err := u.listImages(ctx, p, repo)
+		images, err := u.listImages(ctx, p, stepRecord, repo)
 		if err != nil {
 			p.logf("%s: listing older images for %s to remove: %v", stepRecord, repo, err)
 			continue
