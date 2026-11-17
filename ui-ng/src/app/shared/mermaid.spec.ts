@@ -19,7 +19,9 @@ import { renderMarkdown } from "../sessions/session-view";
 import { ThemeService } from "../services/theme.service";
 import { MarkdownDirective, sanitizeMarkdownHtml } from "./code-highlight";
 import {
+  hasExternalStyleUrl,
   hasImageShape,
+  mermaidConfigForMode,
   parseMermaidFenceMeta,
   renderMermaidSvg,
   sanitizeMermaidSvg,
@@ -212,28 +214,90 @@ describe("sanitizeMermaidSvg", () => {
     const host = document.createElement("div");
     host.innerHTML = sanitizeMermaidSvg(
       `<svg>
-        <filter><feImage href="https://t.example/f.png"></feImage></filter>
-        <use href="https://t.example/u.svg#x"></use>
-        <pattern xlink:href="https://t.example/p.svg"></pattern>
+        <image href="https://evil.example/p.png"/>
+        <filter><feImage href="https://evil.example/f.png"></feImage></filter>
+        <use href="https://evil.example/u.svg#x"></use>
+        <pattern xlink:href="https://evil.example/p.svg"></pattern>
+        <rect fill="url(https://evil.example/g.svg#grad)" filter="url(#shadow)"></rect>
+        <path style="fill: \\75 rl(https://evil.example/s.png)"></path>
+        <style>rect { background: u/**/rl(https://evil.example/c.png); }</style>
+        <a href="https://grain.dev/" ping="https://evil.example/ping"><text>ok</text></a>
         <use href="#arrowhead"></use>
       </svg>`,
     );
-    expect(host.innerHTML).not.toContain("t.example");
+    expect(host.innerHTML).not.toContain("evil.example");
+    expect(host.getElementsByTagName("image").length).toBe(0);
     expect(host.getElementsByTagName("feImage").length).toBe(0);
+    expect(host.getElementsByTagName("style").length).toBe(0);
+    expect(host.querySelector("rect")?.getAttribute("fill")).toBeNull();
+    expect(host.querySelector("rect")?.getAttribute("filter")).toBe(
+      "url(#shadow)",
+    );
+    expect(host.querySelector("path")?.getAttribute("style")).toBeNull();
+    expect(host.querySelector("a")?.getAttribute("ping")).toBeNull();
+    expect(host.querySelector("a")?.getAttribute("href")).toBe(
+      "https://grain.dev/",
+    );
     expect(host.querySelectorAll("use")[1].getAttribute("href")).toBe(
       "#arrowhead",
     );
   });
 });
 
-describe("image shapes", () => {
-  it("are never drawn: Mermaid would fetch the img: URL itself", async () => {
-    const src = 'flowchart LR\n  A@{ img: "https://t.example/p.png" }';
-    expect(hasImageShape(src)).toBe(true);
-    expect(hasImageShape("flowchart LR\n  A@{ shape: rect }")).toBe(false);
-    await expect(renderMermaidSvg(src, "light", document)).rejects.toThrow(
-      /images/,
-    );
+describe("image shapes and pre-render fetches", () => {
+  it("refuses every YAML/JSON image shape and remote actor icon before mermaid.render", async () => {
+    const blocked = [
+      'flowchart LR\n  A@{ img: "https://evil.example/p.png" }',
+      'flowchart LR\n  A@{ "img": "https://evil.example/p.png", "label": "x" }',
+      "flowchart LR\n  A@{ 'img': 'https://evil.example/p.png' }",
+      'flowchart LR\n  A@{ label: "a}b", img: "https://evil.example/p.png" }',
+      'flowchart LR\n  A@{ "\\u0069mg": "https://evil.example/p.png" }',
+      'flowchart LR\n  A@{ "\\x69mg": "https://evil.example/p.png" }',
+      'flowchart LR\n  A@{\n    shape: rect\n    "img": "https://evil.example/p.png"\n  }',
+      'sequenceDiagram\n  participant A\n  properties A: {"icon": "https://evil.example/p.png"}\n  A->>A: hi',
+      "sequenceDiagram\n  participant A\n  properties A: {&quot;icon&quot;: &quot;https://evil.example/p.png&quot;}\n  A->>A: hi",
+    ];
+    for (const src of blocked) {
+      expect(hasImageShape(src), src).toBe(true);
+      await expect(
+        renderMermaidSvg(src, "light", document),
+        src,
+      ).rejects.toThrow(/images/);
+    }
+
+    const safe = [
+      "flowchart LR\n  A@{ shape: rect }",
+      'flowchart LR\n  A@{ shape: rect, label: "img: local caption" }',
+      'sequenceDiagram\n  participant A\n  properties A: {"icon": "@clock"}\n  A->>A: hi',
+    ];
+    for (const src of safe) {
+      expect(hasImageShape(src), src).toBe(false);
+    }
+  });
+
+  it("refuses external style URLs before layout and locks themeCSS in config", async () => {
+    expect(mermaidConfigForMode("light").secure).toContain("themeCSS");
+    const blockedStyles = [
+      "flowchart LR\n  A[hi]:::x\n  classDef x background:url(https://evil.example/p.png)",
+      "flowchart LR\n  A[hi]\n  style A fill:\\75 rl(https://evil.example/p.png)",
+      "flowchart LR\n  A --> B\n  linkStyle 0 stroke:url('https://evil.example/p.png')",
+      'C4Context\n  Person(a, "A")\n  UpdateElementStyle(a, $bgColor="url(https://evil.example/p.png)")',
+    ];
+    for (const src of blockedStyles) {
+      expect(hasExternalStyleUrl(src), src).toBe(true);
+      await expect(
+        renderMermaidSvg(src, "light", document),
+        src,
+      ).rejects.toThrow(/style URLs/);
+    }
+    expect(
+      hasExternalStyleUrl("flowchart LR\n  A[hi]\n  style A fill:url(#grad)"),
+    ).toBe(false);
+    expect(
+      hasExternalStyleUrl(
+        'flowchart LR\n  A["See style url(https://grain.dev)"]',
+      ),
+    ).toBe(false);
   });
 });
 
