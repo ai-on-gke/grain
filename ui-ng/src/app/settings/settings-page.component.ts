@@ -347,7 +347,10 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                     />
                   }
                   @case ("work") {
-                    <g-settings-work [section]="activeSection()" />
+                    <g-settings-work
+                      [section]="activeSection()"
+                      [item]="routeItem()"
+                    />
                   }
                   @case ("security") {
                     <g-settings-security [section]="activeSection()" />
@@ -444,6 +447,9 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   protected readonly filterQuery = signal("");
   protected readonly ready = signal(false);
   private readonly routeSection = signal<string | null>(null);
+  // routeItem is the one thing under the section the address names:
+  // the capability server of /settings/capabilities/<id>.
+  protected readonly routeItem = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
 
   private subs: Subscription[] = [];
@@ -510,6 +516,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
             return;
           }
           this.routeSection.set(sec);
+          this.routeItem.set(pm.get("item"));
           this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
         },
       ),

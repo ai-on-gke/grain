@@ -242,6 +242,10 @@ async function mountSettings(url: string, api = new FakeSettingsApi()) {
         [
           { path: "settings", component: SettingsPageComponent },
           { path: "settings/:section", component: SettingsPageComponent },
+          {
+            path: "settings/:section/:item",
+            component: SettingsPageComponent,
+          },
           { path: "repos/:owner/:name", children: [] },
           { path: "repos/:owner/:name/:tab", children: [] },
         ],
@@ -1571,6 +1575,20 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(chip("broken-mcp").textContent?.trim()).toBe("failed");
     expect(chip("broken-mcp").classList.contains("error")).toBe(true);
     expect(chip("broken-mcp").getAttribute("title")).toBe("connection refused");
+  });
+
+  it("shows a capability server's own page at /settings/capabilities/<id>", async () => {
+    const { el } = await mountSettings(
+      `/settings/capabilities/${encodeURIComponent("github-mcp")}`,
+    );
+    expect(
+      el
+        .querySelector('[data-testid="capability-server-title"]')
+        ?.textContent?.trim(),
+    ).toBe("github-mcp");
+    expect(
+      el.querySelector('[data-testid="card-capability-servers"]'),
+    ).toBeNull();
   });
 
   it("sends the chosen host kind when saving a connection over an existing stored credential", async () => {

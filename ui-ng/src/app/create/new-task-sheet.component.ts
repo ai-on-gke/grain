@@ -847,6 +847,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
             <span>{{ f.label || "Capabilities & grants" }}</span>
             <g-grants-picker
               testid="nt-grants"
+              [policyVerdicts]="true"
               [offered]="offeredCapabilities()"
               [held]="effectiveCapabilities()"
               [repo]="repoForAccess()"

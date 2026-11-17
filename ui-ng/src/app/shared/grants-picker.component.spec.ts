@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { provideRouter } from "@angular/router";
 import { TestBed } from "@angular/core/testing";
 import { GrainApi } from "../api/grain-api.service";
 import type { CapabilityMethod } from "../api/models";
@@ -79,6 +80,7 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
     methods = [];
     TestBed.configureTestingModule({
       providers: [
+        provideRouter([]),
         {
           provide: GrainApi,
           useValue: {
@@ -150,6 +152,32 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
       el.querySelector('[data-testid="held-grant-policy-0"]')?.textContent,
     ).toContain("denied by policy");
     expect(el.textContent).toContain("denies task-admin to acme/widgets");
+    // The note's "Settings → Capabilities" is a link to the policy's card.
+    const link = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="gp-policy-link"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Settings → Capabilities");
+    expect(link?.getAttribute("href")).toBe(
+      "/settings/capabilities#capability-policy",
+    );
+  });
+
+  it("links no policy for a CI-only grant, whose rule is grain's own", async () => {
+    methods = [
+      {
+        ref: "repo#read",
+        capability: "repo",
+        method: "read",
+        policy: { task: "ci_only" },
+      },
+    ];
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("held", ["repo#read"]);
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    expect(el.textContent).toContain("CI only");
+    expect(el.querySelector('[data-testid="gp-policy-link"]')).toBeNull();
   });
 
   it("never selects or attaches a method the policy refuses", async () => {

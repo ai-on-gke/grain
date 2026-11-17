@@ -1383,6 +1383,7 @@ export function duration(from?: string, to?: string): string {
               <h3 class="section-subtitle">Manage capabilities &amp; grants</h3>
               <g-grants-picker
                 testid="task-grants"
+                [policyVerdicts]="true"
                 [offered]="offeredCapabilities()"
                 [held]="t.capabilities ?? []"
                 [repo]="t.repo"

@@ -25,6 +25,7 @@ import {
   signal,
   untracked,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   APIScopeSetRow,
@@ -76,6 +77,9 @@ export function grantRef(grant: string): string {
   }
   return ref;
 }
+
+// Where a verdict's note sends the reader: the Capability policy card.
+const POLICY_PLACE = "Settings → Capabilities";
 
 /**
  * policyVerdictFor is the capability policy's word on a grant of method m
@@ -133,7 +137,7 @@ export interface GrantAttachEvent {
 
 @Component({
   selector: "g-grants-picker",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./grants-picker.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -212,9 +216,18 @@ export interface GrantAttachEvent {
           [attr.data-testid]="(testid() || 'gp') + '-policy-notes'"
         >
           @for (n of heldVerdicts(); track n.grant) {
+            @let parts = policyNoteParts(n.verdict.note);
             <li>
               <code>{{ shortGrant(n.grant) }}</code
-              >: {{ n.verdict.note }}
+              >: {{ parts[0] }}
+              @if (parts.length > 1) {
+                <a
+                  routerLink="/settings/capabilities"
+                  fragment="capability-policy"
+                  [attr.data-testid]="(testid() || 'gp') + '-policy-link'"
+                  >Settings → Capabilities</a
+                >{{ parts[1] }}
+              }
             </li>
           }
         </ul>
@@ -477,6 +490,18 @@ export class GrantsPickerComponent {
       // reports a refused grant.
       if (this.methodsFor === key) this.methodsFor = null;
     }
+  }
+
+  /**
+   * policyNoteParts splits a verdict's note around its "Settings →
+   * Capabilities", which the list renders as a link to the policy's card
+   * (#capability-policy); a note without one (CI only, whose rule is
+   * grain's own) comes back whole.
+   */
+  protected policyNoteParts(note: string): string[] {
+    const at = note.indexOf(POLICY_PLACE);
+    if (at < 0) return [note];
+    return [note.slice(0, at), note.slice(at + POLICY_PLACE.length)];
   }
 
   /** verdictOf is the policy's word on grant g, or null. */

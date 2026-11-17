@@ -108,3 +108,121 @@
     flex-basis: 100%;
   }
 }
+
+/* Settings -> Capabilities: the server list's name cell and a server's
+   own page (capability-server-detail.component.ts). */
+.cap-server-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cap-server-name {
+  font-weight: 600;
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+}
+
+.cap-server-name:hover,
+.cap-server-name:focus-visible {
+  text-decoration: underline;
+}
+
+.cap-summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cap-server-id {
+  font-size: 12px;
+}
+
+.cap-chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cap-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.cap-back {
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+.cap-detail .s-card-head,
+.cap-detail-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cap-methods,
+.cap-holders {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.cap-methods li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cap-holders li {
+  display: flex;
+  flex-direction: column;
+}
+
+.cap-facts {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0 0 8px;
+}
+
+.cap-facts dt {
+  font-weight: 600;
+}
+
+.cap-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cap-action {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 4px 0;
+}
+
+.cap-action .s-btn-sm {
+  justify-self: start;
+}
+
+@media (max-width: 599px) {
+  .cap-action {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+}
+
+.cap-danger {
+  color: var(--md-sys-color-error);
+}

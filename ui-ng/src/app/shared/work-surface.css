@@ -142,6 +142,10 @@ g-confirm-dialog .scope-list {
   font-size: 14px;
 }
 
+g-confirm-dialog .confirm-items {
+  overflow-wrap: anywhere;
+}
+
 g-confirm-dialog .scope-check {
   margin-bottom: 12px;
   font-weight: 500;
