@@ -512,6 +512,34 @@ describe("TasksPageComponent", () => {
       expect(level(q(f, "#gate-secret-h")!)).toBe(3);
     });
 
+    it("steps the Director shaper heading below the edit panel title in the pane", async () => {
+      const api = new FakeApi();
+      const f = await render(api);
+      q<HTMLButtonElement>(
+        f,
+        'g-task-detail [data-testid="act-edit"]',
+      )!.click();
+      await settle(f);
+      q<HTMLButtonElement>(
+        f,
+        'g-task-detail [data-testid="edit-shape-director"]',
+      )!.click();
+      await settle(f);
+      const level = (h: Element) =>
+        Number(h.getAttribute("aria-level") ?? h.tagName.slice(1));
+      const editH = q(f, "g-task-detail #task-edit-h")!;
+      expect(level(editH)).toBe(3);
+      const shaperH = q(
+        f,
+        'g-task-detail [data-testid="director-shaper-pane"] h3',
+      )!;
+      expect(shaperH.textContent?.trim()).toBe("Shape with Director");
+      expect(level(shaperH)).toBe(4);
+      expect(q(f, '[aria-labelledby="task-edit-h"]')!.contains(shaperH)).toBe(
+        true,
+      );
+    });
+
     it("auto-selects the first row into the persistent 30/70 pane and updates selection on click", async () => {
       localStorage.removeItem("grain.tasks.splitRatio");
       const f = await render(new FakeApi());
