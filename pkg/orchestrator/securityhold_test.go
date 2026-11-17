@@ -1377,3 +1377,66 @@ func TestNonSecurityReviewFindingsDoNotHijackSecurityHold(t *testing.T) {
 		}
 	}
 }
+
+// failingReviewPoster is a GitHub client whose review posting fails, so a
+// review's findings are relayed to its own conversation and never recorded
+// on the reviewed change's gates.
+type failingReviewPoster struct{ github.Client }
+
+func (failingReviewPoster) CreateReview(string, string, int, string, []github.NewReviewComment) (int, error) {
+	return 0, errors.New("simulated review posting failure")
+}
+
+// A code review whose findings could not be posted while the security hold
+// is still pending must leave auto-merge off for a person, so the security
+// review finishing clean afterwards cannot hand it back over findings that
+// never reached the code-review gate.
+func TestUnpostedCodeReviewFindingsKeepAutoMergeOffUnderSecurityHold(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	client, task, secReviewID := heldTask(t, ctx, store)
+	repo := *task.Target
+
+	codeReview := model.Task{
+		ID:      "code-rev-unposted",
+		Intent:  model.IntentReview,
+		Title:   "Code review",
+		Body:    "review",
+		Target:  &repo,
+		Binding: model.BindingDirective,
+		Filing:  model.Filing{Reason: model.ReasonReview},
+		Links:   []model.Link{{Kind: model.LinkProposedBy, Target: task.ID}},
+	}
+	if err := store.PutTask(ctx, codeReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkReviewTask, Target: codeReview.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := toolResult(reviewFinding("missing usage example", "README.md", 1))
+	if err := orchestrator.ProcessResult(ctx, store, failingReviewPoster{client}, codeReview, res, codeReview.ID+"-1", baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("ProcessResult(codeReview): %v", err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	if linkOf(got, model.LinkSecurityHold) == "" {
+		t.Errorf("code review dropped LinkSecurityHold while security review %s was still running", secReviewID)
+	}
+	if !model.AutoMergeAwaitsPerson(got) {
+		t.Fatalf("unposted code review findings left no await-person mark: links %+v", got.Links)
+	}
+
+	completeReview(t, ctx, store, secReviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncHumanReviewHolds(ctx, store, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded(t, ctx, store, task.ID); got.AutoMerge {
+		t.Errorf("a clean security review handed auto-merge back over unposted code review findings")
+	}
+}

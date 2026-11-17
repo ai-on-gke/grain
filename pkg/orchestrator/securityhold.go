@@ -454,10 +454,20 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 		// findings under its own id; dropPathTriggerHoldOnFindings and
 		// reviewfeedback.go handle it on its own gate.
 		if !isSecReview {
-			if secReview != "" || (!hasSecurityHold(*t) && !hasBrokenRulesHold(*t)) {
+			if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) {
 				return nil
 			}
-			if linkTarget(*t, model.LinkReviewTask) == review.ID || len(gatingTaskIDs(*t)[review.ID]) > 0 {
+			if secReview != "" || linkTarget(*t, model.LinkReviewTask) == review.ID || len(gatingTaskIDs(*t)[review.ID]) > 0 {
+				// Still turn auto-merge off for a person, so a security
+				// review finishing clean cannot hand it back over these
+				// findings should they never reach their own gate (posting
+				// them failed: relayFindingsToConversation records no
+				// findings). noteFindingsOnReviewedTask clears this mark
+				// once it has recorded them there. Its reason must not end
+				// "left findings": ClearReviewFindingsForGate drops such a
+				// mark as stale once no findings record remains, which is
+				// exactly the case this guards.
+				model.AwaitPersonForAutoMerge(t, "review "+review.ID+"'s findings are not yet on its gate")
 				return nil
 			}
 		}
