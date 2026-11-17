@@ -3693,11 +3693,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </p>
         }
         <div class="dialog-actions">
-          <button
-            type="button"
-            class="btn-text"
-            (click)="dismissSuiteDialog()"
-          >
+          <button type="button" class="btn-text" (click)="dismissSuiteDialog()">
             Cancel
           </button>
           <button
@@ -5580,7 +5576,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     ) {
       out.push("suite");
     }
-    if (this.tmplDialogOpen() && this.tmplDraftSnapshot() !== this.tmplBaseline) {
+    if (
+      this.tmplDialogOpen() &&
+      this.tmplDraftSnapshot() !== this.tmplBaseline
+    ) {
       out.push("template");
     }
     return out;
