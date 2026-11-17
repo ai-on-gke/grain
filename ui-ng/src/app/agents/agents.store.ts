@@ -104,7 +104,7 @@ export class AgentsStore implements OnDestroy {
         if (err) {
           if (this.active) {
             this.loadError.set(
-              `Running tasks could not be read: ${err}. This page tries again on its own.`,
+              `Running tasks could not be read: ${err.replace(/\.+$/, "")}. This page tries again on its own.`,
             );
           }
           return;
@@ -199,7 +199,7 @@ export class AgentsStore implements OnDestroy {
       // Only the feed's banner-worthy failures: one failed poll keeps
       // the last good list and says nothing (request-trouble.ts).
       this.loadError.set(
-        `Running tasks could not be read: ${this.feed.loadError()}. This page tries again on its own.`,
+        `Running tasks could not be read: ${(this.feed.loadError() ?? "").replace(/\.+$/, "")}. This page tries again on its own.`,
       );
     }
     this.now.set(Date.now());

@@ -1432,7 +1432,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err != nil {
 		return err
 	}
-	st.Origin = model.Origin{
+	st.Filing = model.Filing{
 		Attribution: model.Attribution{
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "director"},
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "agent-1"},
@@ -1474,7 +1474,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return fmt.Errorf("seeding imported task: %w", err)
 	}
 	if err := store.UpdateTask(ctx, imported.ID, func(t *model.Task) error {
-		t.Origin = model.Origin{
+		t.Filing = model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
 			Reason:      model.ReasonImported,
 		}
@@ -1510,7 +1510,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	dt.Admission = model.AdmissionDurable
 	dt.Tags = append(dt.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 	dt.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
-	dt.Origin = model.Origin{
+	dt.Filing = model.Filing{
 		Attribution: model.Attribution{Actor: cfg.Actor},
 		Reason:      model.ReasonConsoleSession,
 	}

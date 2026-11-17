@@ -351,7 +351,7 @@ func TestRepoSkillsEndToEndPromptIndexAndSandboxReadFile(t *testing.T) {
 		Intent:    model.IntentImplement,
 		Title:     "Use skill x",
 		Body:      "Check skill x.",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}, Reason: model.ReasonDirect},
 		Target:    &repo,
 		CreatedAt: &now,
 	}, "run-e2e-1")
@@ -393,7 +393,7 @@ func TestRepoSkillsEndToEndPromptIndexAndSandboxReadFile(t *testing.T) {
 		Intent:    model.IntentImplement,
 		Title:     "Repo claude only",
 		Body:      "Check.",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}, Reason: model.ReasonDirect},
 		Target:    &repo,
 		CreatedAt: &now,
 	}, "run-e2e-2")
@@ -423,7 +423,7 @@ func TestRepoSkillsEndToEndPromptIndexAndSandboxReadFile(t *testing.T) {
 		Intent:    model.IntentImplement,
 		Title:     "Disabled skills",
 		Body:      "Check.",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}, Reason: model.ReasonDirect},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}, Reason: model.ReasonDirect},
 		Target:    &repo,
 		Skills:    model.NewSkillsConfig(boolVal(false), nil),
 		CreatedAt: &now,

@@ -105,10 +105,17 @@ func writeStopSettingsWithPolicy(ctx context.Context, host agent.Host, grainBina
 // when host advertises FeatureHookPolicy, and returns "" without staging
 // anything for older hosts.
 func stageStopPolicy(ctx context.Context, host agent.Host, interactive bool) (string, error) {
+	return stageStopPolicyForRun(ctx, host, interactive, false)
+}
+
+func stageStopPolicyForRun(ctx context.Context, host agent.Host, interactive, requireOpenPR bool) (string, error) {
 	if !agent.SupportsHookPolicy(host) {
 		return "", nil
 	}
 	sp := stoprule.DefaultPolicy()
+	if requireOpenPR && !interactive {
+		sp = stoprule.QATreatmentPolicy()
+	}
 	sp.Interactive = &interactive
 	data, err := hookpolicy.Marshal(hookpolicy.File{Version: hookpolicy.Version, Stop: &sp})
 	if err != nil {

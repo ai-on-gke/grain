@@ -497,7 +497,7 @@ func fileTaskFromMention(ctx context.Context, deps Deps, repo model.RepoRef, num
 	task := model.Task{
 		ID:         id,
 		Intent:     model.IntentImplement,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -648,7 +648,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 
 	origin, approval, approvedAt := attributionForSender(sender, trusted, model.ReasonReview, now)
 	if r.requester != nil {
-		origin = model.Origin{Attribution: *r.requester, Reason: model.ReasonReview}
+		origin = model.Filing{Attribution: *r.requester, Reason: model.ReasonReview}
 		approval, approvedAt = nil, nil
 		if trusted {
 			a := *r.requester
@@ -713,7 +713,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	task := model.Task{
 		ID:         id,
 		Intent:     model.IntentReview,
-		Origin:     origin,
+		Filing:     origin,
 		Approval:   approval,
 		ApprovedAt: approvedAt,
 		Title:      title,
@@ -832,15 +832,15 @@ func externalPRNumberForTarget(task model.Task) int {
 	return ref.Number
 }
 
-func attributionForSender(sender string, trusted bool, trustedReason model.OriginReason,
-	now time.Time) (model.Origin, *model.Attribution, *time.Time) {
+func attributionForSender(sender string, trusted bool, trustedReason model.FilingReason,
+	now time.Time) (model.Filing, *model.Attribution, *time.Time) {
 
 	human := model.Principal{Kind: model.PrincipalHuman, ID: sender}
 	if trusted {
 		attr := model.Attribution{Actor: human}
-		return model.Origin{Attribution: attr, Reason: trustedReason}, &attr, &now
+		return model.Filing{Attribution: attr, Reason: trustedReason}, &attr, &now
 	}
-	return model.Origin{
+	return model.Filing{
 		Attribution: model.Attribution{Actor: githubWebhookAutomation, OnBehalfOf: &human},
 		Reason:      model.ReasonProposal,
 	}, nil, nil
@@ -934,7 +934,7 @@ func openGrainTaskForPR(ctx context.Context, store *model.Store, ref model.PullR
 		if err != nil || t == nil {
 			return nil, err
 		}
-		if isReviewTask(*t) || t.Origin.Reason == model.ReasonFix {
+		if isReviewTask(*t) || t.Filing.Reason == model.ReasonFix {
 			continue
 		}
 		return t, nil

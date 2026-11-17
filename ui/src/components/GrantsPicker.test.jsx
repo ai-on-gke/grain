@@ -1356,3 +1356,56 @@ describe("GrantsPicker", () => {
     expect(onRemove).not.toHaveBeenCalled();
   });
 });
+
+// Opening a select in a method section moves focus into its menu, which
+// is a portal outside the section's DOM. That is not focus leaving the
+// section: saving there re-rendered the list mid-pick on a page that
+// saves as it goes, and the option click could be lost (task 6257).
+describe("GrantsPicker ArgsSection focus", () => {
+  beforeEach(() => resetCapabilityMethodsForTest());
+
+  it("does not save when a select in the section opens its menu", async () => {
+    const keyed = {
+      ref: "https://example.com/caps/cloud#keyed",
+      method: "keyed",
+      args: {
+        type: "object",
+        required: ["account"],
+        properties: {
+          account: { type: "string", minLength: 1 },
+          mode: { type: "string", enum: ["alpha", "beta", "gamma"] },
+        },
+      },
+    };
+    serve({ current: [keyed] });
+    const held = `${keyed.ref}=${JSON.stringify({ account: "x", mode: "alpha" })}`;
+    const onSubmit = vi.fn(async () => {});
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[held]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={vi.fn()}
+      />,
+    );
+    const section = await waitFor(() => {
+      const el = document.querySelector(`[data-grant='${held}']`);
+      expect(el?.querySelector('input[data-arg="account"]')).toBeTruthy();
+      return el;
+    });
+    await user.type(within(section).getByLabelText(/^account/), "y");
+    await user.click(within(section).getByRole("combobox"));
+    expect(await screen.findByRole("option", { name: "beta" })).toBeTruthy();
+    // Let a deferred blur save run, if one was (wrongly) scheduled.
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("option", { name: "beta" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0]).toEqual({
+      capability: keyed.ref,
+      with: { account: "xy", mode: "beta" },
+    });
+  });
+});

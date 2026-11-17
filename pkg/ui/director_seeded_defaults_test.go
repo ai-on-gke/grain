@@ -50,7 +50,7 @@ func seededSessionClient(t *testing.T, id string, tasksApproved bool) (*ui.Clien
 	}
 	stored := mustGetTask(t, ctx, store, session.ID)
 	stored.Tags = append(stored.Tags, model.ConsoleSessionTag(id))
-	stored.Origin.Reason = model.ReasonConsoleSession
+	stored.Filing.Reason = model.ReasonConsoleSession
 	if err := store.PutTask(ctx, stored); err != nil {
 		t.Fatal(err)
 	}

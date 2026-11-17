@@ -473,6 +473,13 @@ function decodeFragmentKey(frag: string | null): string | null {
                       ><g-status-icon tone="info" kind="info" />Planning</span
                     >
                   }
+                  @if (s.goalMode) {
+                    <span
+                      class="ws-chip-run"
+                      [attr.data-testid]="'ws-goal-chip-' + s.key"
+                      >Autonomous goal</span
+                    >
+                  }
                   @if (s.counts.blocked) {
                     <span class="ws-chip-err"
                       ><g-status-icon tone="error" kind="error" />{{
@@ -598,6 +605,13 @@ function decodeFragmentKey(frag: string | null): string | null {
                           class="ws-chip-series"
                           [gTip]="s.by.heuristic || ''"
                           >Schedule · {{ s.seriesCount }} runs</span
+                        >
+                      }
+                      @if (s.goalMode) {
+                        <span
+                          class="ws-chip-run"
+                          [attr.data-testid]="'ws-goal-chip-' + s.key"
+                          >Autonomous goal</span
                         >
                       }
                       @if (s.repos.length) {
