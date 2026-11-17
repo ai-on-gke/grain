@@ -137,8 +137,16 @@ const RecordedChecksQuiet = time.Hour
 // RecordedChecksQuiet without another one finishing. One at a commit
 // other than head (the head grain last classified, when it knows one)
 // is unsettled as well: the head has moved on, or grain has not seen it
-// move. A failing check stands either way.
+// move. head is ignored once checks are recorded at a commit that first
+// showed up after it did: that classification is stale, and the newer
+// commit is the head. A failing check stands either way.
 func RecordedHeadChecks(jobs []GitHubCIJob, head string, now time.Time) *HeadChecks {
+	if head != "" && newerCommitThan(jobs, head) {
+		// The classification is stale: checks have since been recorded
+		// at a commit that first showed up after head's did, so that
+		// commit is the newer head.
+		head = ""
+	}
 	movedOn := head != "" && !slices.ContainsFunc(jobs, func(j GitHubCIJob) bool { return strings.EqualFold(j.Commit, head) })
 	if movedOn {
 		head = ""
@@ -183,6 +191,41 @@ func RecordedHeadChecks(jobs []GitHubCIJob, head string, now time.Time) *HeadChe
 	out.Unsettled = true
 	out.UnsettledWhy = "others may still be running"
 	return out
+}
+
+// newerCommitThan reports whether jobs hold checks at a commit other than
+// head that grain first heard of after it first heard of head's -- a push
+// after head. False when nothing is recorded at head.
+func newerCommitThan(jobs []GitHubCIJob, head string) bool {
+	first := map[string]time.Time{}
+	for _, j := range jobs {
+		if j.Commit == "" {
+			continue
+		}
+		c := strings.ToLower(j.Commit)
+		if t, ok := first[c]; !ok || gitHubJobSeen(j).Before(t) {
+			first[c] = gitHubJobSeen(j)
+		}
+	}
+	h, ok := first[strings.ToLower(head)]
+	if !ok {
+		return false
+	}
+	for c, t := range first {
+		if c != strings.ToLower(head) && t.After(h) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitHubJobSeen is when j's run first showed: its start, or failing that
+// the time gitHubJobAt gives.
+func gitHubJobSeen(j GitHubCIJob) time.Time {
+	if j.StartedAt != nil {
+		return *j.StartedAt
+	}
+	return gitHubJobAt(j)
 }
 
 // gitHubJobAt is when j was last heard of: its completion, or failing

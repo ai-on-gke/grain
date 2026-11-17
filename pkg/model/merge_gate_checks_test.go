@@ -235,3 +235,32 @@ func TestRecordedHeadChecksDoNotPassWhileChecksMayStillRun(t *testing.T) {
 		}
 	}
 }
+
+// A stale classified head does not pin the gate to its commit once checks
+// are recorded at a commit pushed after it: the newer commit's checks
+// decide the gate.
+func TestRecordedHeadChecksIgnoreAStaleHead(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	stale := "1111111111111111111111111111111111111111"
+	newer := "abcdef0123456789abcdef0123456789abcdef01"
+	older, recent := now.Add(-3*time.Hour), now.Add(-2*time.Hour)
+	jobs := []model.GitHubCIJob{
+		ghJob(1, stale, "go", "success", older),
+		ghJob(2, newer, "go", "failure", recent),
+	}
+	g := ciGateWith(t, model.RecordedHeadChecks(jobs, stale, now))
+	if g.State != model.GateStateFailing || g.Detail != "failing: Tests / go at abcdef012345" {
+		t.Fatalf("gate = %s %q, want the newer commit's failure", g.State, g.Detail)
+	}
+	// The classified head still decides while it is the newest commit.
+	g = ciGateWith(t, model.RecordedHeadChecks(jobs, newer, now))
+	if g.State != model.GateStateFailing || !strings.Contains(g.Detail, "abcdef012345") {
+		t.Fatalf("gate = %s %q, want the head's failure", g.State, g.Detail)
+	}
+	jobs[1].Conclusion = "success"
+	g = ciGateWith(t, model.RecordedHeadChecks(jobs, stale, now))
+	if g.State != model.GateStatePassed || g.Detail != "passed (1 check at abcdef012345)" {
+		t.Fatalf("gate = %s %q, want the newer commit's pass", g.State, g.Detail)
+	}
+}
