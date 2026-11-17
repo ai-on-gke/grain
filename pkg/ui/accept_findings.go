@@ -37,8 +37,9 @@ import (
 // AcceptFindingsRequest is POST /api/tasks/{id}/accept-findings's body.
 type AcceptFindingsRequest struct {
 	// Gate is the merge gate the findings hold: "security-review",
-	// "review" (which covers gating trigger reviews), or one trigger's
-	// own "trigger:<name>".
+	// "review" (configured and templated gating trigger reviews),
+	// "targeted-review" (template-less sensitive trigger reviews), or one
+	// trigger's own "trigger:<name>".
 	Gate string `json:"gate"`
 	// ReviewTask is the review whose findings are accepted. It may be
 	// left out when exactly one review has findings on Gate.
@@ -71,10 +72,10 @@ func (c *Client) AcceptReviewFindings(ctx context.Context, id string, req Accept
 			"an agent that thinks they need no fix asks the owner (ask_question)")
 	}
 	gate := strings.ToLower(strings.TrimSpace(req.Gate))
-	if gate != model.GateSecurityReview && gate != model.GateReview &&
+	if gate != model.GateSecurityReview && gate != model.GateReview && gate != model.GateTargetedReview &&
 		(!strings.HasPrefix(gate, "trigger:") || strings.TrimSpace(strings.TrimPrefix(gate, "trigger:")) == "") {
 		return AcceptFindingsResult{}, validationErrorf("gate %q: name the review gate whose findings you accept "+
-			"(%s, %s or trigger:<name>)", req.Gate, model.GateSecurityReview, model.GateReview)
+			"(%s, %s, %s or trigger:<name>)", req.Gate, model.GateSecurityReview, model.GateReview, model.GateTargetedReview)
 	}
 	reason := strings.TrimSpace(req.Reason)
 	if reason == "" {

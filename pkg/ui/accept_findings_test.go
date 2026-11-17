@@ -181,3 +181,87 @@ func TestAcceptFindingsLeavesApprovalsStanding(t *testing.T) {
 		t.Error("accepting findings cleared the approval a trigger asks for")
 	}
 }
+
+// A template-less sensitive trigger's findings sit on `targeted-review`:
+// POST /api/tasks/{id}/accept-findings accepts them on `targeted-review`,
+// refuses to clear them under `review` (and vice versa), and restores
+// auto-merge once both gates' findings are accepted.
+func TestAcceptFindingsTargetedReviewGate(t *testing.T) {
+	_, client := testServer(t)
+	ctx := context.Background()
+	seedReviewed(t, client, "710", "711", "pr-review")
+	seedAPITask(t, client, "712", "acme/widgets")
+	approve(t, client, "712")
+	if err := client.Store.UpdateTask(ctx, "712", func(tk *model.Task) error {
+		tk.Filing.Reason = model.ReasonReview
+		tk.TemplateID = model.SecurityReviewTemplateID
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkProposedBy, Target: "710"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.UpdateTask(ctx, "710", func(tk *model.Task) error {
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "every-pr=711"},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "payments=712"},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "payments"},
+		)
+		model.AwaitPersonForAutoMerge(tk, "review 712 left findings")
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{
+			Gate: "trigger:every-pr", ReviewTask: "711", Summary: "every-pr finding", HeadSHA: findingsHead, At: time.Now(),
+		})
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{
+			Gate: "trigger:payments", ReviewTask: "712", Summary: "payments finding", HeadSHA: findingsHead, At: time.Now(),
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Now()
+	if err := client.Store.Observe(ctx, model.Observation{
+		TaskID: "710", CompletedAt: &done,
+		CI: &model.CIStatus{RunID: "ci-1", Commit: findingsHead, Conclusion: "success", FinishedAt: &done},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	person := personCtx()
+	if _, err := client.AcceptReviewFindings(person, "710", ui.AcceptFindingsRequest{
+		Gate: model.GateReview, ReviewTask: "712", Reason: "wrong gate",
+	}); err == nil {
+		t.Error("targeted review 712's findings were accepted under -gate review")
+	}
+
+	res, err := client.AcceptReviewFindings(person, "710", ui.AcceptFindingsRequest{
+		Gate: model.GateTargetedReview, Reason: "payments fixture only; follow-up filed", Head: findingsHead[:12],
+	})
+	if err != nil {
+		t.Fatalf("accepting targeted-review findings: %v", err)
+	}
+	if res.Acceptance.Gate != model.GateTargetedReview || res.Acceptance.ReviewTask != "712" || res.Acceptance.Findings != "payments finding" {
+		t.Errorf("acceptance = %+v, want targeted-review review 712", res.Acceptance)
+	}
+	if g := gateOf(res.Gates, model.GateTargetedReview); g.State != model.GateStatePassed || g.Acceptable {
+		t.Errorf("targeted-review gate = %+v, want passed and no longer acceptable", g)
+	}
+	if g := gateOf(res.Gates, model.GateReview); g.State != model.GateStateFindings || !g.Acceptable {
+		t.Errorf("code-review gate = %+v, want still acceptable findings", g)
+	}
+	if mustTask(t, client, "710").AutoMerge {
+		t.Error("auto-merge came back while the code-review gate's findings still stand")
+	}
+
+	res, err = client.AcceptReviewFindings(person, "710", ui.AcceptFindingsRequest{
+		Gate: model.GateReview, Reason: "nit accepted as-is",
+	})
+	if err != nil {
+		t.Fatalf("accepting code-review findings: %v", err)
+	}
+	if g := gateOf(res.Gates, model.GateReview); g.State != model.GateStatePassed {
+		t.Errorf("code-review gate = %+v, want passed", g)
+	}
+	got := mustTask(t, client, "710")
+	if !got.AutoMerge {
+		t.Error("auto-merge was not restored once both review gates' findings were accepted")
+	}
+}

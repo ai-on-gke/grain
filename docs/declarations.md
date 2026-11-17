@@ -995,8 +995,10 @@ did change, the review of each kind is filed again for the new head:
   running is waited on.
 
 **Merging over findings: Accept findings.** A gating review's findings
-hold its gate (`security-review`, or `review`, which lists every gating
-trigger's `trigger:<name>` findings) until one of three things happens:
+hold its gate (`security-review`, `review` for configured and templated
+trigger reviews, or `targeted-review` for template-less sensitive triggers;
+`-gate trigger:<name>` accepts one trigger's own record) until one of three
+things happens:
 
 - **A clean re-review.** Push fixes, and the review filed for the new head
   passes.

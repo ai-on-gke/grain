@@ -504,7 +504,7 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	for _, rf := range ReviewFindings(t) {
 		switch {
 		case rf.Gate == GateSecurityReview || rf.Gate == GateQA:
-		case strings.HasPrefix(rf.Gate, "trigger:") && targetedTriggers[strings.TrimPrefix(rf.Gate, "trigger:")]:
+		case rf.Gate == GateTargetedReview || (strings.HasPrefix(rf.Gate, "trigger:") && targetedTriggers[strings.TrimPrefix(rf.Gate, "trigger:")]):
 			targetedFindings = append(targetedFindings, rf)
 		default:
 			codeFindings = append(codeFindings, rf)
