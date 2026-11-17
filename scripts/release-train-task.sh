@@ -189,9 +189,13 @@ if [ -z "$train_phases" ] && [ -z "$train_hold" ]; then
   fi
   api_status=0
   "$grain" api GET "/api/repos/$api_repo/release?branch=main" >"$out/release.json" 2>"$out/release.err" || api_status=$?
-  # An answer that is not a JSON object is no answer: it falls to the
-  # fail-closed branch below rather than reading as "not held".
-  if [ "$api_status" = 0 ] && ! jq -e 'type == "object"' "$out/release.json" >/dev/null 2>&1; then
+  # An answer that is not one JSON object (with baseBranchPublishing, when
+  # present, an object too) is no answer: it falls to the fail-closed branch
+  # below rather than reading as "not held". An empty body counts: jq -e
+  # passes on empty input, so it is checked with -s first.
+  if [ "$api_status" = 0 ] && { [ ! -s "$out/release.json" ] ||
+      ! jq -e -s 'length == 1 and (.[0] | type == "object" and ((.baseBranchPublishing // {}) | type == "object"))' \
+        "$out/release.json" >/dev/null 2>&1; }; then
     api_status=unparseable
   fi
   if [ "$api_status" = 0 ]; then
