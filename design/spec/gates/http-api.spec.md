@@ -20,10 +20,24 @@ success and denial exchange in [api-examples.json](api-examples.json). The
 semantic rejection. Illustrative digest values are not real authorizations.
 
 Request schemas use current generated-tool arguments: path parameters at top level,
-a query object and a body object. For HTTP, URL-encode/substitute path parameters,
+a query object, a body object and the existing optional reason/expect wrappers.
+For HTTP, URL-encode/substitute path parameters,
 encode query values (arrays are not used in query), and send only body as JSON.
 For example the submit example is POST /api/tasks/57/submit?view=gates with its
-body, or api_submit({id:"57",query:{view:"gates"},body:...}). There are no custom
+body, or api_submit({id:"57",query:{view:"gates"},body:...}). Top-level reason is the existing tool audit reason, forwarded as
+X-Grain-Acting-Reason, and is required for tasks:admin operations (issue/revoke).
+Where both it and mutation.reason are supplied they MUST match after trimming;
+a mismatch is 400 invalid. All mutating gate bodies retain their own required
+reason where specified. HTTP clients performing those dangerous calls set the
+same reason header; it carries no concurrency/permission authority.
+The existing optional expect={state?,title_prefix?,kind?} wrapper is supported for
+task mutations as a preliminary tool-side task check; it is never a substitute
+for the atomic mutation.expected contract/evidence fence. On HTTP, those optional
+preliminary checks may be omitted; they are not silently added to the JSON body.
+Use the explicit body wrapper for gate profiles; the generic bridge's legacy
+flat-body spelling must normalize to this exact closed body before validation.
+
+There are no custom
 concurrency headers to lose through the MCP bridge. All expectations are explicit
 body fields. Authentication and X-Grain-Acting-Task remain existing verified headers,
 never input fields that let a caller choose another principal.
@@ -53,6 +67,25 @@ this byte bound); if a single authorized item cannot fit, return
 413 rather than silently truncate it. Registry discovery is at most twelve v1
 entries and may total <=1 MiB; the twelve config schemas are individually bounded.
 These transport limits do not increase the evaluator's BG-3 bounds.
+
+## Tool result transport
+
+Each operation's tool_result field names the closed MCP tool_result schema.
+For the proposed gate profile a successful tool call returns exactly one text
+content item containing the complete JSON HTTP response body, with isError=false.
+A failure returns isError=true and one text item:
+TOOL_NAME + " failed: HTTP " + decimal status + ": " + JSON failure body.
+The per-operation examples include concrete tool_success and tool_error objects
+as well as the decoded HTTP bodies; validation checks that both carry identical
+payloads/status. This preserves the current generated API tool text convention
+while preventing loss of the structured failure code/recovery/operation ID.
+MCP request/response JSON-RPC IDs remain transport IDs, not action idempotency IDs.
+Controller grain_invoke dispatches the same named operation through its existing
+arguments/reason wrapper and MUST preserve that logical status/body contract.
+Pre-dispatch bridge failures (invalid tool name, missing wrapper reason or malformed
+arguments) are MCP errors without an HTTP operation: isError=true and a diagnostic
+text, no claimed accepted operation or effect. Once dispatched, the HTTP failure
+body is authoritative. SSE clients use HTTP; agent tools use JSON/long-poll.
 
 ## Authentication, authority and permission requests
 
@@ -184,6 +217,10 @@ task_id; null is permitted only for action_override with resource policy authori
 Task provenance cannot select or exclude another protecting binding.
 POST exception records have server-assigned ID, actor and timestamps. Exception records carry a monotonic revision (issue=1, first revoke=2),
 supplied as expected_exception_revision on revoke.
+task_view.exceptions and action_preview.exceptions contain only currently valid,
+applicable exceptions after server-side authority, scope, expiry and revocation
+checks. Expired/revoked records remain readable through exception lists/history;
+their existence alone is never a valid waiver marker.
 Issue/revoke advances the exception revision and invalidates cached availability,
 not the predicate dependency/evidence digest or contract semantics;
 it MUST NOT change a gate's met/unmet status. Clients reread availability after either operation; final dispatch validates the
@@ -375,6 +412,11 @@ repository-owned policy; no redundant resource configuration endpoint is added.
 Template composition view=gates returns pinned gate_defaults; an undeclared
 legacy template returns null. Template edit changes future filing defaults only.
 
+Template ID/revision must both be non-null or both null; without a template,
+fields must be empty. A supplied template lifecycle must exactly echo its pinned
+defaults; the filing profile cannot weaken it. Existing task-admission/person-only
+rules for standing intent and lifecycle budgets still apply. The gate profile
+cannot add grants or bypass approval/scheduling by choosing a lifecycle value.
 Preview resolves repository completion defaults, pinned template defaults and
 task policy (union, never replacement) with typed declared field substitution.
 No arbitrary expressions/URLs; self resolves at filing. repo=null with
@@ -530,6 +572,16 @@ for proposed routes MUST use the exact index tool names; no separate hand-mainta
 agent execution API is authorized. Each gate profile must register its typed body,
 query (including view), description and field docs in routeBodies, routeQueries,
 routeDocs and routeFieldDocs; scope-totality and body/query generation checks apply.
+The current generator has one reflect-derived body type per route and string
+query metadata; it does not yet advertise these query-dependent closed profiles.
+Implementation MUST add profile-aware schema metadata/selection to the existing
+generator: oneOf(ordinary request with query.view != gates, exact gate-profile
+request). Proposed routes use their exact request definition directly. Preserve
+the wrapper reason/expect semantics, path parameter strings and typed query-to-URL
+conversion. Old schemas/ordinary responses stay in the ordinary branch; no second
+agent execution tool or weaker permissive body branch is allowed for view=gates.
+This generator change and gate-profile transport/error serialization are explicit
+implementation blockers, not functionality claimed by this documentation.
 The normalizers/semantic checks described here run after generated schema checks.
 Both UIs, CLI and controller MCP call those same domain operations and authorization.
 

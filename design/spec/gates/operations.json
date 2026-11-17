@@ -14,7 +14,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Complete release catalogue; no pagination or filters.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "schema",
@@ -31,7 +32,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Unknown pair 404; no remote schema fetching.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "task",
@@ -48,7 +50,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "edit",
@@ -82,7 +85,8 @@
         "human_only": false,
         "ownership_rule": "explicit_resource_policy_attach_authority_within_task_scope"
       }
-    ]
+    ],
+    "tool_result": "tool_result"
   },
   {
     "id": "evidence",
@@ -99,7 +103,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Immutable exact evidence ID/version lookup; authorize owning task/resource plus source observation scope. No recollection or freshness claim.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "history",
@@ -116,7 +121,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "reevaluate",
@@ -133,7 +139,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Empty binding_ids means all effective gates; acceptance still validates full required union.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "operation",
@@ -150,7 +157,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Operation read requires tasks:read and authorization on owning task OR canonical resource for taskless operations.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "action_preview",
@@ -167,7 +175,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Read only; taskless contract revision and epoch are 0, resource policy remains mandatory.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "submit",
@@ -184,7 +193,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "PR approval/queue intent is not merge completion. CL executes only via person-only existing adapter.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "pr_submit",
@@ -201,7 +211,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Taskless canonical PR path; resolves every protecting task; aliases must agree.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "exceptions",
@@ -218,7 +229,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "issue",
@@ -245,7 +257,8 @@
         "human_only": true,
         "ownership_rule": "repository_admin_and_every_named_source_policy_owner"
       }
-    ]
+    ],
+    "tool_result": "tool_result"
   },
   {
     "id": "revoke",
@@ -272,7 +285,8 @@
         "human_only": true,
         "ownership_rule": "repository_admin_and_every_named_source_policy_owner"
       }
-    ]
+    ],
+    "tool_result": "tool_result"
   },
   {
     "id": "repo_read",
@@ -289,7 +303,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "repo_edit",
@@ -306,7 +321,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Gate profile replaces only gate_policy, not other repository settings. Person repository policy owner required.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "template_read",
@@ -323,7 +339,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Unmaterialized declared gate defaults; use preview with typed fields for effective contract.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "template_edit",
@@ -349,7 +366,8 @@
         "human_only": true,
         "ownership_rule": "template_owner_and_repository_policy_owner"
       }
-    ]
+    ],
+    "tool_result": "tool_result"
   },
   {
     "id": "preview",
@@ -366,7 +384,8 @@
     "success_status": 200,
     "error": "failure",
     "notes": "No task created. self remains a reserved preview task ID; filing replaces it atomically.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "file",
@@ -383,7 +402,8 @@
     "success_status": 201,
     "error": "failure",
     "notes": "Files unapproved as today; no auto_merge, grants or goal rewrite in this gate profile. Sources rechecked atomically.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "from_template",
@@ -401,7 +421,8 @@
     "response": "from_template_response",
     "success_status": 201,
     "error": "failure",
-    "notes": "Existing repository-declared template alias; current nested task admission/grants still apply. Body <=64 KiB; propagates preview/idempotency to the same filing transaction."
+    "notes": "Existing repository-declared template alias; current nested task admission/grants still apply. Body <=64 KiB; propagates preview/idempotency to the same filing transaction.",
+    "tool_result": "tool_result"
   },
   {
     "id": "review",
@@ -418,7 +439,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Creates/reuses exact-head review assignment through existing review service; not a positive review result.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "ci",
@@ -435,7 +457,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Task-derived repo/ref/commit must match. Empty jobs=complete suite. Selective jobs cannot satisfy required full-suite evidence.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "rerun",
@@ -452,7 +475,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Default explicit jobs=[], all=false means failed/canceled only; max three reruns per run/head including automatic retries.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "reply",
@@ -469,7 +493,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Eligible addressed person only; exact question and incoming watermark. Agent comments do not answer a pending person question.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "ack",
@@ -486,7 +511,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Acknowledgment is a versioned receipt, not processing a pending request. succeed requires closure fences; cancel records non-success.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "findings",
@@ -503,7 +529,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Existing unlimited operator role still required. One review/head/category only; not an action override.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "reconcile",
@@ -520,7 +547,8 @@
     "success_status": 202,
     "error": "failure",
     "notes": "Requests collector reconciliation of uncertain operation; never dispatches effect again.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   },
   {
     "id": "events",
@@ -537,6 +565,7 @@
     "success_status": 200,
     "error": "failure",
     "notes": "Existing JSON/long-poll/SSE protocol; new four types only. Agent default limit=20. No evaluator-created subscription.",
-    "conditional_authority": []
+    "conditional_authority": [],
+    "tool_result": "tool_result"
   }
 ]

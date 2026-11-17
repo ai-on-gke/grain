@@ -54,7 +54,8 @@
           "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
         "task_id": "57"
-      }
+      },
+      "reason": "Evaluate the current contract for this exact evidence."
     },
     "response": {
       "id": "override-1",

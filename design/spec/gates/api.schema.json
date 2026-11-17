@@ -1327,6 +1327,57 @@
         "task_policy",
         "lifecycle",
         "no_repo"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "template_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "template_revision": {
+                "type": "null"
+              },
+              "fields": {
+                "maxProperties": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "template_revision": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "repo": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "no_repo": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "no_repo": {
+                "const": false
+              }
+            }
+          }
+        }
       ]
     },
     "preview": {
@@ -1543,9 +1594,9 @@
           "maxLength": 256
         },
         "version": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 4294967295
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,9}$",
+          "maxLength": 10
         }
       },
       "required": [
@@ -1618,6 +1669,14 @@
           "required": [
             "gate_edit"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
         }
       },
       "required": [
@@ -1707,6 +1766,14 @@
             "mutation",
             "binding_ids"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
         }
       },
       "required": [
@@ -1769,6 +1836,11 @@
             "target",
             "task_id"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -1821,6 +1893,14 @@
             "intent",
             "action_request"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
         }
       },
       "required": [
@@ -1876,6 +1956,11 @@
             "intent",
             "action_request"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -1995,10 +2080,16 @@
       "properties": {
         "body": {
           "$ref": "#/$defs/exception_issue"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
-        "body"
+        "body",
+        "reason"
       ]
     },
     "issue_response": {
@@ -2030,11 +2121,17 @@
             "mutation",
             "expected_exception_revision"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
         "id",
-        "body"
+        "body",
+        "reason"
       ]
     },
     "revoke_response": {
@@ -2149,6 +2246,11 @@
             "gate_policy",
             "retire_guard_bindings"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -2233,6 +2335,11 @@
             "expected_template_revision",
             "gate_defaults"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -2250,6 +2357,11 @@
       "properties": {
         "body": {
           "$ref": "#/$defs/materialize"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -2358,6 +2470,11 @@
             "gate_admission",
             "no_repo"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -2417,6 +2534,11 @@
             "mutation",
             "requirement_id"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -2511,6 +2633,11 @@
             "commit",
             "mutation"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -2580,6 +2707,11 @@
             "commit",
             "mutation"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -2641,6 +2773,14 @@
             "question_version",
             "mutation"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
         }
       },
       "required": [
@@ -2722,6 +2862,14 @@
             "close_pull_request",
             "mutation"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
         }
       },
       "required": [
@@ -2795,6 +2943,14 @@
             "head",
             "mutation"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "expect": {
+          "$ref": "#/$defs/task_expect"
         }
       },
       "required": [
@@ -2826,6 +2982,11 @@
           "required": [
             "mutation"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
@@ -4912,6 +5073,9 @@
         "notes": {
           "type": "string",
           "maxLength": 2048
+        },
+        "tool_result": {
+          "const": "tool_result"
         }
       },
       "required": [
@@ -4927,7 +5091,8 @@
         "response",
         "success_status",
         "error",
-        "notes"
+        "notes",
+        "tool_result"
       ]
     },
     "from_template_request": {
@@ -5007,6 +5172,11 @@
               ]
             }
           }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       }
     },
@@ -5124,6 +5294,64 @@
           "pattern": "^sha256:[0-9a-f]{64}$"
         }
       }
+    },
+    "task_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "title_prefix": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": []
+    },
+    "tool_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "text"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16777216
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ]
+          }
+        },
+        "isError": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "content",
+        "isError"
+      ]
     }
   }
 }

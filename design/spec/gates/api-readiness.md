@@ -73,6 +73,8 @@ placeholders and not newly filed tasks.
    Exact CL reviewed-snapshot/renumbering and race exclusion remain separate adapter
    blockers; custom QA/publishing/config effects are outside admitted v1 actions.
 6. **API/tool/UI integration and recovery qualification:** register gate profiles,
+   profile-aware oneOf request schemas in the existing single-body generator,
+   audit reason/expect wrappers and lossless HTTP/MCP result/error transport,
    new route scopes/descriptions/query schemas, response validation, rate/size
    bounds, audit/outbox, Angular views and permission-filtered compatibility.
    Recommended: qualify every [acceptance scenario](acceptance.md), including

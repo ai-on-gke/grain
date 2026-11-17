@@ -146,7 +146,8 @@
         "operation_id": null,
         "action_request": null,
         "task_id": "57"
-      }
+      },
+      "reason": "Evaluate the current contract for this exact evidence."
     },
     "schema_valid": true,
     "semantic_valid": false,

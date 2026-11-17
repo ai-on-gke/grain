@@ -28,8 +28,13 @@ def no_remote(uri):
 
 def semantic(operation, where, value, contracts, gate_semantic):
     if where == "request":
+        if operation == "schema":
+            require(1 <= int(value['version']) <= 4294967295, 'registry version exceeds uint32')
         body = value.get("body", {})
         mutation = body.get("mutation", body.get("gate_edit", {}).get("mutation"))
+        if value.get('reason') is not None and mutation:
+            require(value['reason'].strip() == mutation['reason'].strip(),
+                    'tool and domain audit reasons must agree')
         if "action_request" in body and body["action_request"] is not None:
             action = body["action_request"]
             gate_semantic("action_request", action)
@@ -43,6 +48,17 @@ def semantic(operation, where, value, contracts, gate_semantic):
                     "action/mutation idempotency differs")
             if body.get("intent") == "approve_and_queue":
                 require(action["action"] == "change.merge", "CL submit requires execute intent")
+        if operation == 'template_edit':
+            gate_semantic('template_defaults', body['gate_defaults'])
+        if operation == 'repo_edit':
+            policy = body['gate_policy']
+            repo = value['owner'] + '/' + value['name']
+            require(policy['source'] == 'repository' and policy['source_id'] == repo,
+                    'repository policy must match the source authority')
+            for retirement in body['retire_guard_bindings']:
+                target = retirement['target']
+                require(target['kind'] == 'change' and target['repository'] == repo and
+                        target['id'] not in {'task_changes', '*'}, 'retirement needs one owned resource')
         if operation == "issue":
             if body["kind"] == "action_override":
                 action = body["action_request"]
@@ -224,6 +240,18 @@ def validate(gate_semantic):
         require(exchange["response_status"] == op["success_status"], "success code drift")
         require(exchange["error_status"] == 403, "expected auth denial example")
         require(not check("failure", exchange["error"]), "invalid denial response")
+        for field in ("tool_success", "tool_error"):
+            require(not check(op["tool_result"], exchange[field]), "invalid tool result envelope")
+        success = exchange["tool_success"]
+        require(success["isError"] is False and
+                json.loads(success["content"][0]["text"]) == exchange["response"],
+                "tool success differs from HTTP response")
+        denied = exchange["tool_error"]
+        prefix = op["tool"] + " failed: HTTP " + str(exchange["error_status"]) + ": "
+        require(denied["isError"] is True and denied["content"][0]["text"].startswith(prefix),
+                "tool error lost HTTP status")
+        require(json.loads(denied["content"][0]["text"][len(prefix):]) == exchange["error"],
+                "tool failure differs from HTTP response")
 
     evidence = json.loads((ROOT / "api-evidence-examples.json").read_text())
     require({v["reference"]["kind"] for v in evidence} ==
