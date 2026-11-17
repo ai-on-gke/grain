@@ -12,7 +12,7 @@ This design defines when grain merges a pull request into its base branch, what 
 
 **What has landed on B since the pull request was tested does not matter.** There is no overlap re-check, no re-test on top of B's tip, and no merge-queue ref. The trade-off is deliberate: two changes that are each green can be red together, for example when one changes a function's signature and the other adds a caller of the old one. That is caught after the merge by B's post-merge CI and handled by the pipeline steward ([A red base](#a-red-base-the-pipeline-steward-decides)). It is not prevented before the merge.
 
-Proposed integration: [MCP gates](mcp-gates.design.md) separates merge-readiness action prerequisites from observed integration outcomes. It preserves Submit, review, override and human-only authorization rules here; compatibility imports retain current effective policy, including the implementation gaps below, until explicitly migrated.
+Proposed integration: [Configurable built-in gates](gates.design.md) separates merge-readiness action prerequisites from observed integration outcomes. It preserves Submit, review, override and human-only authorization rules here; compatibility imports retain current effective policy, including the implementation gaps below, until explicitly migrated.
 
 ## No ordering, no queue, no batching
 
