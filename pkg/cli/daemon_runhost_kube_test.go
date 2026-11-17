@@ -356,7 +356,7 @@ ENTRYPOINT ["/usr/local/bin/grain"]
 		t.Fatalf("live run %s reads back agent start %v (started %s), so an adopter would carry its deadline from the wrong moment",
 			live.ID, live.AgentStartedAt, startedAt)
 	}
-	sandboxes := kubeAdoptPods(t, ns, k8s.SandboxLabel+"="+k8s.SandboxValue)
+	sandboxes := kubeAdoptPods(t, ns, k8s.SandboxLabel+"="+k8s.SandboxValue+",!"+k8s.PurposeLabel)
 	if len(sandboxes) != 1 {
 		t.Fatalf("sandbox pods before the roll = %+v, want the run's one", sandboxes)
 	}
@@ -396,7 +396,7 @@ ENTRYPOINT ["/usr/local/bin/grain"]
 	if infos, err := (runhost.Kubernetes{Client: client}).List(ctx, deployment); err != nil || len(infos) != 1 || infos[0].Name != runPod.Name {
 		t.Fatalf("after the roll, run pods = %+v (%v); want %s still there", infos, err, runPod.Name)
 	}
-	if after := kubeAdoptPods(t, ns, k8s.SandboxLabel+"="+k8s.SandboxValue); len(after) != 1 || after[0].UID != sandboxes[0].UID {
+	if after := kubeAdoptPods(t, ns, k8s.SandboxLabel+"="+k8s.SandboxValue+",!"+k8s.PurposeLabel); len(after) != 1 || after[0].UID != sandboxes[0].UID {
 		t.Fatalf("after the roll, sandbox pods = %+v; want %+v, the same pod, claimed back rather than reaped and recreated", after, sandboxes)
 	}
 	if n := sim.pullRequestCount(); n != 0 {

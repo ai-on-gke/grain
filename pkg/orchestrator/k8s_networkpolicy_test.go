@@ -403,22 +403,55 @@ func TestBundledEgressPolicySelectsEveryOpenSandboxOfItsBackend(t *testing.T) {
 }
 
 // TestEgressPolicyFencesTheUpgradesThrowawayPods: a self-upgrade runs
-// the candidate image in pods labelled k8s.UpgradeComponent rather than
-// k8s.SandboxValue, so the sandbox sweep leaves them alone (task 4618).
-// That label must not also take them out from under the egress fence
-// they had as sandboxes -- in networkpolicy.yaml or in either bundled
-// copy.
+// the candidate image in pods marked k8s.PurposeLabel=k8s.UpgradePurpose so
+// the sandbox sweep leaves them alone (task 4618), while keeping
+// k8s.SandboxLabel=k8s.SandboxValue so every cluster's stored
+// grain-sandbox-egress -- including clusters installed before PurposeLabel
+// existed whose manifests have not been re-applied (review 5370) -- still
+// fences them.
 func TestEgressPolicyFencesTheUpgradesThrowawayPods(t *testing.T) {
 	t.Parallel()
-	upgradePod := map[string]string{
-		k8s.ManagedByLabel: k8s.ManagedByValue,
-		k8s.SandboxLabel:   k8s.UpgradeComponent,
-		k8s.InstanceLabel:  "deployment-1",
+	raw, err := (k8s.Client{Instance: "deployment-1"}).Manifest(
+		"grain-upgrade-check",
+		k8s.PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10},
+		k8s.PodOptions{Image: "example/grain:main", Purpose: k8s.UpgradePurpose},
+	)
+	if err != nil {
+		t.Fatalf("Manifest: %v", err)
+	}
+	var pod struct {
+		Metadata struct {
+			Labels map[string]string `yaml:"labels"`
+		} `yaml:"metadata"`
+	}
+	if err := yaml.Unmarshal(raw, &pod); err != nil {
+		t.Fatalf("unmarshalling upgrade pod manifest: %v", err)
+	}
+	upgradePod := pod.Metadata.Labels
+	if upgradePod[k8s.SandboxLabel] != k8s.SandboxValue || upgradePod[k8s.PurposeLabel] != k8s.UpgradePurpose {
+		t.Fatalf("upgrade pod labels = %v, want %s=%s and %s=%s",
+			upgradePod, k8s.SandboxLabel, k8s.SandboxValue, k8s.PurposeLabel, k8s.UpgradePurpose)
 	}
 	for _, file := range append([]string{"networkpolicy.yaml"}, bundledEgressManifests...) {
 		if got := selectingPolicies(t, loadNetworkPoliciesFrom(t, file), upgradePod); !slices.Equal(got, []string{"grain-sandbox-egress"}) {
 			t.Errorf("%s: an upgrade's check pod is selected by %v, want only grain-sandbox-egress", file, got)
 		}
+	}
+	// Existing clusters do not re-apply manifests during a self-upgrade, so
+	// their stored grain-sandbox-egress selects on component=sandbox alone.
+	storedSelector := testLabelSelector{
+		MatchLabels: map[string]string{
+			k8s.ManagedByLabel: k8s.ManagedByValue,
+			k8s.SandboxLabel:   k8s.SandboxValue,
+		},
+		MatchExpressions: []struct {
+			Key      string   `yaml:"key"`
+			Operator string   `yaml:"operator"`
+			Values   []string `yaml:"values"`
+		}{{Key: NetworkLabel, Operator: "NotIn", Values: []string{string(model.NetworkNone)}}},
+	}
+	if !storedSelector.matches(t, upgradePod) {
+		t.Errorf("stored grain-sandbox-egress selector does not match upgrade pod labels %v without a manifest re-apply", upgradePod)
 	}
 }
 
