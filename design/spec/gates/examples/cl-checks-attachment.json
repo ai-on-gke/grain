@@ -7,7 +7,7 @@
   "action": "change.submit",
   "subject": {
     "kind": "change",
-    "authority": "review.example.test",
+    "authority": "forge.example",
     "repository": "ai-on-gke/grain",
     "change_kind": "cl",
     "id": "12345"
