@@ -108,6 +108,7 @@ type CapabilityPasses struct {
 }
 
 type heldPass struct {
+	renewMu  sync.Mutex
 	taskID   string
 	pass     *protocol.Pass
 	deadline time.Time
@@ -299,6 +300,8 @@ func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protoco
 	if held == nil {
 		return nil, "", nil
 	}
+	held.renewMu.Lock()
+	defer held.renewMu.Unlock()
 	if held.revokeApproval != nil {
 		held.revokeApproval()
 	}
@@ -543,11 +546,21 @@ func (h *CapabilityPasses) heldDeps(runID string, deps Deps) Deps {
 // minted for (§4.3.5): an attempt whose budget was extended past what
 // admission minted for.
 func (h *CapabilityPasses) Extend(ctx context.Context, runID string, deadline time.Time) error {
-	// held.deadline is written under h.mu below, by whichever run renews
-	// it, so it is read under h.mu too; only the Renew call goes unlocked.
 	h.mu.Lock()
 	held := h.passes[runID]
 	stale := held != nil && deadline.After(held.deadline)
+	h.mu.Unlock()
+	if !stale {
+		return nil
+	}
+	// Serialise renewals per pass so an earlier deadline cannot re-mint on
+	// the capability servers after a later one has already finished, and so
+	// a waiting caller re-checks held.deadline before minting again.
+	held.renewMu.Lock()
+	defer held.renewMu.Unlock()
+
+	h.mu.Lock()
+	stale = h.passes[runID] == held && deadline.After(held.deadline)
 	h.mu.Unlock()
 	if !stale {
 		return nil
@@ -556,7 +569,7 @@ func (h *CapabilityPasses) Extend(ctx context.Context, runID string, deadline ti
 		return err
 	}
 	h.mu.Lock()
-	if deadline.After(held.deadline) {
+	if h.passes[runID] == held {
 		held.deadline = deadline
 	}
 	h.mu.Unlock()
