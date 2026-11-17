@@ -905,3 +905,30 @@ test("Fleet says host CPU, memory and vCPU it was not told are not reported", as
   await expect(page.getByTestId("meter-cpu-none")).toHaveCount(0);
   await expect(page.getByTestId("meter-memory-none")).toHaveCount(0);
 });
+
+// Classic System -> Health links each setting saved but waiting on a
+// restart, or stored but not runnable, as /settings/<section>#<key>. On
+// /next/ such a link opened the section and stopped at its top.
+test("a Settings #<key> link scrolls to and focuses that setting's field", async ({
+  page,
+}) => {
+  await page.goto("settings/sandboxes#k8sNamespace");
+  await expect(page.getByTestId("input-k8sNamespace")).toBeFocused();
+  await expect(page.getByTestId("input-k8sNamespace")).toBeInViewport();
+
+  await page.goto("settings/sandboxes#sandboxBackend");
+  const backend = page.getByTestId("select-sandbox-backend");
+  await expect
+    .poll(() =>
+      backend.evaluate(
+        (el) =>
+          el.contains(document.activeElement) || el === document.activeElement,
+      ),
+    )
+    .toBe(true);
+
+  // A card fragment still scrolls without stealing focus into the card.
+  await page.goto("settings/capabilities#credentials");
+  await expect(page.locator("#credentials")).toBeInViewport();
+  await expect(page.locator("#credentials input:focus")).toHaveCount(0);
+});

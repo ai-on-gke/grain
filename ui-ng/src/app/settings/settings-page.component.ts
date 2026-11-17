@@ -54,6 +54,14 @@ const CARD_ANCHORS: Readonly<Record<string, string>> = {
   "external-agents": "card-external-agent-tokens",
 };
 
+// FIELD_ANCHORS are settings keys whose field is not marked
+// data-testid="input-<key>", mapped to a selector for it: the restart-only
+// settings classic System -> Health links as #<key>.
+const FIELD_ANCHORS: Readonly<Record<string, string>> = {
+  sandboxBackend: '[data-testid="select-sandbox-backend"]',
+  githubHost: '#git-host, [data-testid="input-credentials-github-host"]',
+};
+
 // LEGACY_SECTION_FRAGMENTS are the cards an old section address meant:
 // /settings/credentials was the Deployment credentials card and
 // /settings/secrets its other secrets.
@@ -63,6 +71,8 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
   "legacy-capabilities": "credentials",
   secrets: "other-secrets",
 };
+
+const FOCUSABLE = "input, select, textarea, button";
 
 @Component({
   selector: "g-settings-page",
@@ -566,12 +576,25 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   // anchorElement finds the card a #fragment names: an element with that
   // id, else the card an older fragment meant (CARD_ANCHORS), else
-  // data-testid="card-<fragment>".
+  // data-testid="card-<fragment>", else the field whose settings key it
+  // is (data-testid="input-<key>"): the classic System -> Health links a
+  // setting saved but waiting on a restart, or stored but not runnable,
+  // as /settings/<section>#<key>.
   private anchorElement(id: string): HTMLElement | null {
     const testid = CARD_ANCHORS[id] ?? `card-${id}`;
     return (
       document.getElementById(id) ??
-      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`)
+      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`) ??
+      document.querySelector<HTMLElement>(
+        FIELD_ANCHORS[id] ?? `[data-testid="input-${CSS.escape(id)}"]`,
+      )
+    );
+  }
+
+  private isFieldAnchor(id: string): boolean {
+    return (
+      id in FIELD_ANCHORS ||
+      !!document.querySelector(`[data-testid="input-${CSS.escape(id)}"]`)
     );
   }
 
@@ -597,6 +620,14 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
           el.scrollIntoView({ block: "start" });
           lastTop = Math.round(el.getBoundingClientRect().top);
         }
+      }
+      if (still >= 3 && el && this.isFieldAnchor(id)) {
+        // A field named by its key is focused too, so the person the link
+        // sent here lands in the control it is about.
+        const control = el.matches(FOCUSABLE)
+          ? el
+          : el.querySelector<HTMLElement>(FOCUSABLE);
+        control?.focus({ preventScroll: true });
       }
       if (still >= 3 || ++tries > 50) {
         if (this.anchorTimer) clearInterval(this.anchorTimer);
