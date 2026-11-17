@@ -22,7 +22,7 @@ import { provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GrainEvents } from "./grain-events.service";
-import { GrainApi, routePath } from "./grain-api.service";
+import { GrainApi, requesterTimeZone, routePath } from "./grain-api.service";
 import { TasksPageComponent } from "../tasks/tasks-page.component";
 
 describe("GrainApi.getIfChanged", () => {
@@ -897,5 +897,81 @@ describe("GrainApi verifier_unavailable retry", () => {
         req.flush([]);
       }
     }
+  });
+});
+
+describe("GrainApi X-Grain-Time-Zone header", () => {
+  let api: GrainApi;
+  let http: HttpTestingController;
+
+  beforeEach(() => {
+    localStorage.removeItem("grain.timeZone");
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    api = TestBed.inject(GrainApi);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    localStorage.removeItem("grain.timeZone");
+    http.verify();
+    TestBed.resetTestingModule();
+  });
+
+  it("attaches X-Grain-Time-Zone on mutations and omits it on reads", async () => {
+    const expectedTz = requesterTimeZone();
+    expect(expectedTz).toBeTruthy();
+
+    const g = api.get("GET /api/tasks");
+    const getReq = http.expectOne("/api/tasks");
+    expect(getReq.request.headers.has("X-Grain-Time-Zone")).toBe(false);
+    getReq.flush([]);
+    await g;
+
+    const p = api.post("POST /api/tasks", undefined, { title: "tz test" });
+    const postReq = http.expectOne("/api/tasks");
+    expect(postReq.request.headers.get("X-Grain-Time-Zone")).toBe(expectedTz);
+    postReq.flush({ id: "1" });
+    await p;
+
+    const u = api.put("PUT /api/settings", undefined, { maxWorkers: 2 });
+    const putReq = http.expectOne("/api/settings");
+    expect(putReq.request.headers.get("X-Grain-Time-Zone")).toBe(expectedTz);
+    putReq.flush({});
+    await u;
+
+    const pa = api.patch("PATCH /api/tasks/{id}", { id: "1" }, { title: "t2" });
+    const patchReq = http.expectOne("/api/tasks/1");
+    expect(patchReq.request.headers.get("X-Grain-Time-Zone")).toBe(expectedTz);
+    patchReq.flush({});
+    await pa;
+
+    const d = api.delete("DELETE /api/tasks/{id}/goal", { id: "1" });
+    const delReq = http.expectOne("/api/tasks/1/goal");
+    expect(delReq.request.headers.get("X-Grain-Time-Zone")).toBe(expectedTz);
+    delReq.flush({});
+    await d;
+  });
+
+  it("prefers the grain.timeZone preference when set and ignores 'local'", async () => {
+    localStorage.setItem("grain.timeZone", "Asia/Kolkata");
+    expect(requesterTimeZone()).toBe("Asia/Kolkata");
+
+    const p1 = api.post("POST /api/tasks", undefined, { title: "kolkata" });
+    const req1 = http.expectOne("/api/tasks");
+    expect(req1.request.headers.get("X-Grain-Time-Zone")).toBe("Asia/Kolkata");
+    req1.flush({ id: "2" });
+    await p1;
+
+    localStorage.setItem("grain.timeZone", "local");
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(requesterTimeZone()).toBe(browserTz);
+
+    const p2 = api.post("POST /api/tasks", undefined, { title: "local" });
+    const req2 = http.expectOne("/api/tasks");
+    expect(req2.request.headers.get("X-Grain-Time-Zone")).toBe(browserTz);
+    req2.flush({ id: "3" });
+    await p2;
   });
 });

@@ -2491,7 +2491,12 @@ export class FleetPageComponent implements OnInit {
             !entry ||
             (s.connection === entry.connection &&
               (!entry.model || s.model === entry.model))
-              ? { ...s, pausedUntil: undefined }
+              ? {
+                  ...s,
+                  pausedUntil: undefined,
+                  weeklyPausedUntil: undefined,
+                  pauseHorizon: undefined,
+                }
               : s,
           ),
         });

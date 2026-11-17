@@ -29,7 +29,7 @@ import {
 } from "@mui/material";
 import { useCallback, useContext, useEffect, useState } from "react";
 import api from "../../api.js";
-import { formatMoment } from "../../time.js";
+import { formatResetMoment } from "../../time.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 
@@ -206,7 +206,7 @@ export default function UsageCard({ showError }) {
                         : "—"}
                   </TableCell>
                   <TableCell>
-                    {s.resetAt ? formatMoment(s.resetAt, zone) : "—"}
+                    {s.resetAt ? formatResetMoment(s.resetAt, zone) : "—"}
                   </TableCell>
                   <TableCell
                     align="right"
@@ -223,7 +223,7 @@ export default function UsageCard({ showError }) {
                   </TableCell>
                   <TableCell>
                     {s.weeklyResetAt
-                      ? formatMoment(s.weeklyResetAt, zone)
+                      ? formatResetMoment(s.weeklyResetAt, zone)
                       : "—"}
                   </TableCell>
                   <TableCell align="right">

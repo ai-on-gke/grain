@@ -73,6 +73,28 @@ export function splitRepo(repo: string): { owner: string; name: string } {
 
 const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 
+// TIMEZONE_HEADER carries the browser's effective time zone on every write
+// (pkg/ui/timezone.go's TimeZoneHeader, matching classic ui/src/api.js): a
+// task filed, a session opened or a message sent records it so its runs and
+// fallback notices name times on the requester's clock rather than UTC.
+const TIMEZONE_HEADER = "X-Grain-Time-Zone";
+
+export function requesterTimeZone(): string {
+  try {
+    const stored = globalThis.localStorage?.getItem("grain.timeZone")?.trim();
+    if (stored && stored.toLowerCase() !== "local") {
+      return stored;
+    }
+  } catch {
+    // Ignore storage restrictions and fall back to browser timezone.
+  }
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}
+
 export const TASK_SUMMARIES_BATCH_SIZE = 50;
 
 // Splits unique non-empty task IDs into batches of at most `size`.
@@ -444,9 +466,13 @@ export class GrainApi implements OnDestroy {
     query?: string,
   ): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
+    const zone = requesterTimeZone();
+    const headers = zone
+      ? JSON_HEADERS.set(TIMEZONE_HEADER, zone)
+      : JSON_HEADERS;
     const res = await firstValueFrom(
       this.http.request<T>(method, url, {
-        headers: JSON_HEADERS,
+        headers,
         body:
           method === "delete"
             ? body === undefined
