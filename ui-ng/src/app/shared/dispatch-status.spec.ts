@@ -285,6 +285,51 @@ describe("dispatch-status", () => {
     expect(res?.resetText).toContain("in 57h");
   });
 
+  it("does not call an interval pause weekly because another connection's scope met its weekly limit", () => {
+    const res = summarizeDispatchStatus(
+      {
+        agentPause: {
+          paused: true,
+          until: "2026-11-14T03:00:00Z",
+          reason: "usage limit reached",
+          pauses: [
+            {
+              connection: "gemini-key",
+              connectionName: "Gemini key",
+              model: "gemini-pro",
+              until: "2026-11-14T03:00:00Z",
+              reason: "usage limit reached",
+              canLift: true,
+            },
+          ],
+        },
+      },
+      {
+        warnings: [],
+        scopes: [
+          {
+            connection: "claude-primary",
+            model: "",
+            pausedUntil: "2026-11-16T03:00:00Z",
+            pauseHorizon: "weekly",
+            weeklyPausedUntil: "2026-11-16T03:00:00Z",
+          },
+          {
+            connection: "gemini-key",
+            model: "gemini-pro",
+            pausedUntil: "2026-11-14T03:00:00Z",
+            pauseHorizon: "interval",
+          },
+        ],
+      },
+      nowMs,
+      "UTC",
+    );
+    expect(res?.headline).toBe(
+      "Model quota exceeded on Gemini key · gemini-pro (fallback active)",
+    );
+  });
+
   it("formats reset times accurately across spring-forward and fall-back DST transitions", () => {
     // 2026 US spring forward: Mar 8 at 02:00 PST -> 03:00 PDT (10:00Z).
     const beforeSpring = Date.parse("2026-03-08T09:00:00Z"); // 1:00 AM PST

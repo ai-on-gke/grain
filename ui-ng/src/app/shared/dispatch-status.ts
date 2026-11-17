@@ -389,12 +389,23 @@ export function summarizeDispatchStatus(
     );
     if (!primaryHeadline) {
       const weeklyRe = /\bweekly\b|\b7[- ]day\b|\bper week\b/i;
+      // Weekly only when the pause being headlined is: a weekly limit on
+      // another connection or model says nothing about this one.
+      const weeklyScopes = (usage?.scopes ?? []).filter(
+        (s) => s.pauseHorizon === "weekly" || !!s.weeklyPausedUntil,
+      );
+      const scopeCovers = (s: UsagePauseScope, p: AgentPauseEntry): boolean =>
+        (s.connection || "") === (p.connection || "") &&
+        (!s.model ||
+          (!!p.model && s.model.toLowerCase() === p.model.toLowerCase()));
       const apWeekly =
-        entries.some((p) => weeklyRe.test(p.reason || "")) ||
-        weeklyRe.test(ap.reason || "") ||
-        (usage?.scopes ?? []).some(
-          (s) => s.pauseHorizon === "weekly" || !!s.weeklyPausedUntil,
-        );
+        entries.length > 0
+          ? entries.some(
+              (p) =>
+                weeklyRe.test(p.reason || "") ||
+                weeklyScopes.some((s) => scopeCovers(s, p)),
+            )
+          : weeklyRe.test(ap.reason || "") || weeklyScopes.length > 0;
       const quotaTitle = apWeekly ? "Weekly model quota" : "Model quota";
       if (entries.length === 1) {
         const p = entries[0];

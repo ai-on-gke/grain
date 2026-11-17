@@ -207,3 +207,37 @@ func TestLearnFromWeeklyPauseAdvancesRecurringResetCycle(t *testing.T) {
 		t.Fatalf("weekly capacity = %+v, want Tokens=500000 ResetAt=%v", caps[0], until)
 	}
 }
+
+// A weekly pause holds dispatch for a day at most, but the weekly capacity
+// learns the reset its provider named (from the reason's "resets at ..."),
+// and only within one weekly cycle of now.
+func TestLearnFromWeeklyPauseUsesTheProviderNamedReset(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reset time.Time
+		want  func(until time.Time) time.Time
+	}{
+		{"three days out", now.Add(72 * time.Hour), func(time.Time) time.Time { return now.Add(72 * time.Hour) }},
+		{"beyond a cycle", now.Add(30 * 24 * time.Hour), func(until time.Time) time.Time { return until }},
+		{"in the past", now.Add(-time.Hour), func(until time.Time) time.Time { return until }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, ctx := openStore(t)
+			if err := store.RecordRunUsage(ctx, run("r", "conn", "opus", time.Hour, 500000)); err != nil {
+				t.Fatal(err)
+			}
+			until := now.Add(24 * time.Hour)
+			reason := "claude: usage limit reached: You've hit your weekly limit; resets at " + tc.reset.UTC().Format(time.RFC3339)
+			if err := LearnFromPause(ctx, store, model.UsageLimitPause{Connection: "conn", Until: until, Reason: reason}, now); err != nil {
+				t.Fatal(err)
+			}
+			caps, err := store.ListUsageCapacities(ctx)
+			if err != nil || len(caps) != 1 {
+				t.Fatalf("capacities = %+v, %v", caps, err)
+			}
+			if want := tc.want(until); !caps[0].ResetAt.Equal(want) {
+				t.Fatalf("weekly ResetAt = %v, want %v", caps[0].ResetAt, want)
+			}
+		})
+	}
+}

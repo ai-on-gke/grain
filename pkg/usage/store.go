@@ -145,8 +145,14 @@ func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLi
 	if used <= 0 {
 		return nil
 	}
+	reset := pause.Until
+	if horizon == HorizonWeekly {
+		if named, ok := ProviderResetAt(pause.Reason, now); ok {
+			reset = named
+		}
+	}
 	return store.RecordUsageCapacity(ctx, model.UsageCapacity{
-		Connection: pause.Connection, Model: key, Tokens: used, Window: window, ObservedAt: now, ResetAt: pause.Until,
+		Connection: pause.Connection, Model: key, Tokens: used, Window: window, ObservedAt: now, ResetAt: reset,
 	})
 }
 
