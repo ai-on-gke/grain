@@ -3326,6 +3326,7 @@ func sweepStrandedQAStages(ctx context.Context, deps Deps, now time.Time) error 
 	if err != nil {
 		return err
 	}
+	rootOrigins := model.NewQARootOrigins(tasks)
 	for _, task := range tasks {
 		if task.Target == nil || !model.TaskEligibleForQAStaging(task) {
 			continue
@@ -3333,7 +3334,7 @@ func sweepStrandedQAStages(ctx context.Context, deps Deps, now time.Time) error 
 		if closed, cErr := taskClosed(ctx, deps.Store, task.ID); cErr != nil || closed {
 			continue
 		}
-		root := model.ResolveQARootOrigin(task.WorkOrigin, task.ID)
+		root := rootOrigins.Of(task)
 		if !originEverEnforcedTreatment(ctx, deps.Store, root) {
 			continue
 		}

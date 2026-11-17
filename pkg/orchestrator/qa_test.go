@@ -25,6 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/qa"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 )
 
 func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *testing.T) {
@@ -87,5 +88,106 @@ func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *
 	perfBytes, err := os.ReadFile(perfPath)
 	if err != nil || !strings.Contains(string(perfBytes), `"checkId":"arm-assign"`) {
 		t.Fatalf("expected arm-assign JSONL perf sample, got (%q, %v)", string(perfBytes), err)
+	}
+}
+
+func TestResolveTaskQAAssignment_OriginlessChildInheritsRootTreeArm(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatalf("opening sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("store.Init: %v", err)
+	}
+
+	// Pick deterministic root and child IDs whose standalone "task:<id>" buckets
+	// land on opposite sides of 30% in epoch 1 so a broken fallback diverges.
+	var rootID, childID string
+	for i := 1; i < 500; i++ {
+		id := strings.TrimSpace(string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10)))
+		id = strings.TrimLeft(id, "0")
+		if rootID == "" && qa.ComputeArmBucket("task:"+id, 1) < 30 {
+			rootID = id
+		} else if childID == "" && id != rootID && qa.ComputeArmBucket("task:"+id, 1) >= 30 {
+			childID = id
+		}
+		if rootID != "" && childID != "" {
+			break
+		}
+	}
+	if rootID == "" || childID == "" {
+		t.Fatalf("failed to pick opposite-bucket task IDs")
+	}
+
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	put := func(id string, links ...model.Link) {
+		t.Helper()
+		tk := model.Task{
+			ID:      id,
+			Intent:  model.IntentImplement,
+			Title:   "task " + id,
+			Target:  &repo,
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
+			Binding: model.BindingDirective,
+			Links:   links,
+		}
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatalf("PutTask(%s): %v", id, err)
+		}
+	}
+	put(rootID)
+	// Stored before its proposed-by link was added so WorkOrigin stays ""
+	// (matching pre-origin / updated-link work trees).
+	put(childID)
+	put(childID, model.Link{Kind: model.LinkProposedBy, Target: rootID})
+
+	rootTask, err := store.GetTask(ctx, rootID)
+	if err != nil || rootTask == nil {
+		t.Fatalf("GetTask(%s): %v", rootID, err)
+	}
+	childTask, err := store.GetTask(ctx, childID)
+	if err != nil || childTask == nil || childTask.WorkOrigin != "" || childTask.Parent() != rootID {
+		t.Fatalf("childTask = %+v (%v), want empty WorkOrigin and parent %s", childTask, err, rootID)
+	}
+
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	qaCfg := model.QAConfig{
+		Enabled:    true,
+		FlowID:     model.QAFlowGoldenV1Minimal,
+		RolloutPct: 30,
+		Epoch:      1,
+		RegimeID:   1,
+	}
+	if err := store.PutConfig(ctx, model.Config{QA: qaCfg}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	cfgOn := Config{QA: qaCfg}
+
+	rootAssign, err := resolveTaskQAAssignment(ctx, store, cfgOn, *rootTask, rootID+"-1", now)
+	if err != nil {
+		t.Fatalf("resolveTaskQAAssignment root: %v", err)
+	}
+	childAssign, err := resolveTaskQAAssignment(ctx, store, cfgOn, *childTask, childID+"-1", now)
+	if err != nil {
+		t.Fatalf("resolveTaskQAAssignment child: %v", err)
+	}
+	if rootAssign.ArmID != model.QAArmTreatment || childAssign.ArmID != rootAssign.ArmID {
+		t.Fatalf("arms = (root=%q, child=%q), want both %q", rootAssign.ArmID, childAssign.ArmID, model.QAArmTreatment)
+	}
+	rootRow, err := store.QAAssignment(ctx, "task:"+rootID, 1)
+	if err != nil || rootRow == nil || rootRow.Arm != model.QAArmTreatment {
+		t.Fatalf("expected root assignment row on task:%s, got (%+v, %v)", rootID, rootRow, err)
+	}
+	childRow, err := store.QAAssignment(ctx, "task:"+childID, 1)
+	if err != nil || childRow != nil {
+		t.Fatalf("expected no separate assignment row on task:%s, got (%+v, %v)", childID, childRow, err)
+	}
+	activeChild, _, err := resolve.ActiveQAResolutionForTask(ctx, store, childID)
+	if err != nil || activeChild == nil || activeChild.ArmID != model.QAArmTreatment {
+		t.Fatalf("ActiveQAResolutionForTask(%s) = (%+v, %v), want %q", childID, activeChild, err, model.QAArmTreatment)
 	}
 }

@@ -867,8 +867,8 @@ _No flags._
 Inspects or updates the deployment-wide quality control engine and single-instance pull-request rollout configuration (`GET /api/settings` and `POST /api/settings`, matching `Settings -> Tasks`).
 
 - `qa` or `qa status` reads `GET /api/settings` and prints whether quality control is off or enabled alongside the active flow package, rollout percentage, passive control-arm shadow scoring flag, experiment epoch, and regime ID.
-- `qa enable [-flow id] [-rollout pct] [-shadow-control=bool] [-epoch n]` enables quality control via `POST /api/settings`. Only flags explicitly passed are overwritten; when enabling an unconfigured deployment (`0%` rollout) without `-rollout`, the rollout defaults to `30%`.
-- `qa disable` sets `qaEnabled` to `false` via `POST /api/settings`, leaving the stored flow, rollout percentage, shadow-control flag, and epoch intact.
+- `qa enable [-flow id] [-rollout pct] [-shadow-control=bool] [-epoch n]` enables quality control via `POST /api/settings`. Only flags explicitly passed are overwritten; when enabling an unconfigured deployment (`qaConfigured: false`, including after a no-op `qa disable` on a fresh store) without `-rollout`, the rollout defaults to `30%`. Once a QA policy has been configured (including an explicit `-rollout 0` shadow-only rollout), bare `qa enable` preserves the stored rollout percentage across `qa disable`.
+- `qa disable` sets `qaEnabled` to `false` via `POST /api/settings` (a no-op when QA has never been configured), leaving any stored flow, rollout percentage, shadow-control flag, and epoch intact.
 
 **Scope:** `settings:read` (`status`), `settings:write` (`enable`, `disable`).
 
@@ -1052,7 +1052,7 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 
-**Pinned by:** `pkg/cli/qa_test.go`: `TestQACommandStatusEnableDisableAndFlagPreservation`.
+**Pinned by:** `pkg/cli/qa_test.go`: `TestQACommandStatusEnableDisableAndFlagPreservation`, `TestQAEnablePreservesExplicitZeroPercentShadowOnlyRolloutAcrossDisable`.
 
 ### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
 

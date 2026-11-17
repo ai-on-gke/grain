@@ -1,0 +1,8 @@
+=== [Findings reproduction / store=sqlite / expect_fixed=0] ===
+  [F1] after disable rolloutPct=0; after bare 'grain qa enable' rolloutPct=30 (want 0)
+  [F1] REPRODUCED: bare 'grain qa enable' clobbered saved 0% shadow-only rollout to 30%
+  [F2] child tree API origin='task:5'; root(5) arm=treatment, child(6) arm=control (want matching 'treatment')
+  [F2] REPRODUCED: originless child task in tree 'task:5' got arm 'control' while root got 'treatment'
+  [F3] GET /api/config .access=null; UI probe={"readonlyPillVisible":false,"readonlyBannerVisible":false,"qaSwitchDisabled":false}
+  [F3] REPRODUCED: grain/viewer gma_ token received .access=null and editable QA controls
+  completed findings check (unfixed_count=3)

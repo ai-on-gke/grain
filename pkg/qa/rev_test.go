@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-const ExpectedQAEngineDigest = "1e6c034b3d9dfcdb1b9c6a2c5869146e528a406b32decabe9ee9bf3922849427"
+const ExpectedQAEngineDigest = "ba35fe785f8af018154ef23621b1d3af912c140fefa59c7ffa9422762ad080a9"
 
 func TestQAEngineRevDigest(t *testing.T) {
 	got, err := ComputeQAEngineDigest(".")

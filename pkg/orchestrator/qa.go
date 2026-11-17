@@ -17,10 +17,10 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"github.com/ai-on-gke/grain/pkg/qa"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/qa"
 	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 )
 

@@ -1,0 +1,12 @@
+=== [Item 5 / store=sqlite] ===
+  started baseline 24d0eba1 daemon at schema=139
+  upgraded in-place 139 -> 146 (grain_config.qa='')
+committed 2a32dc48e64f7274cdcf3d667ee3c8003f3d6b0f
+  grain state check (QA unset): schema:  146, which is what this build of grain knows
+already up to date, nothing to commit
+  grain state check (QA configured): schema:  146, which is what this build of grain knows
+  exported grain_config.qa: {"enabled":true,"flowId":"deterministic-s3-only","rolloutPct":35,"shadowOnControl":false,"epoch":2,"regimeId":1}
+  verified: task_qa_assignment.json, task_qa_check_run.json, task_qa_finding.json absent from state-repo/tables/
+  grain state check refused broken grain_config.qa (rc=1)
+  imported store qa status: {"enabled":true,"flowId":"deterministic-s3-only","availableFlows":["golden-v1-minimal","deterministic-s3-only","repo-custom"],"rolloutPct":35,"shadowOnControl":false,"epoch":2,"regimeId":1}
+  verified imported store has grain_config.qa intact and 0 rows in task_qa_* tables

@@ -1,0 +1,26 @@
+ pg_terminate_backend 
+----------------------
+(0 rows)
+
+=== [Item 2 / store=postgres] ===
+quality control: off
+  flow:              golden-v1-minimal
+  rollout:           0%
+  shadow on control: true
+  epoch / regime:    1 / 1
+  step2 enable 30%: {"enabled":true,"flowId":"golden-v1-minimal","availableFlows":["golden-v1-minimal","deterministic-s3-only","repo-custom"],"rolloutPct":30,"shadowOnControl":true,"epoch":1,"regimeId":1}
+  step3 enable 50%: {"enabled":true,"flowId":"golden-v1-minimal","availableFlows":["golden-v1-minimal","deterministic-s3-only","repo-custom"],"rolloutPct":50,"shadowOnControl":true,"epoch":1,"regimeId":2}
+  step4 preserve custom flags: {"enabled":true,"flowId":"repo-custom","availableFlows":["golden-v1-minimal","deterministic-s3-only","repo-custom"],"rolloutPct":65,"shadowOnControl":false,"epoch":3,"regimeId":4}
+  refused (epoch-zero): rc=2 msg=grain: qaEpoch must be at least 1 
+  refused (epoch-negative): rc=2 msg=grain: qaEpoch must be at least 1 
+  refused (epoch-downgrade): rc=2 msg=grain: qa: epoch cannot decrease from 3 to 2 
+  refused (rollout-101): rc=2 msg=grain: qa: rolloutPct must be between 0 and 100 (got 101) 
+  refused (rollout-neg): rc=2 msg=grain: qa: rolloutPct must be between 0 and 100 (got -1) 
+  refused (unknown-flow): rc=2 msg=grain: qa: flowId must be one of golden-v1-minimal, deterministic-s3-only, repo-custom (got "nonexistent-flow") 
+  dispatched while enabled: assignment_rows=1 perf_lines=1
+  step7 after disable: {"enabled":false,"flowId":"repo-custom","availableFlows":["golden-v1-minimal","deterministic-s3-only","repo-custom"],"rolloutPct":65,"shadowOnControl":false,"epoch":3,"regimeId":5}
+  dispatched after disable: assignment_rows=1 perf_lines=1 (unchanged)
+  config_audit delta: 5 (API /api/deployment/config-audit settings rows=1)
+  state-repo grain_config.json commits delta: 5
+  exported grain_config.qa: {"enabled":false,"flowId":"repo-custom","rolloutPct":65,"shadowOnControl":false,"epoch":3,"regimeId":5}
+  survived daemon restart: {"enabled":false,"flowId":"repo-custom","availableFlows":["golden-v1-minimal","deterministic-s3-only","repo-custom"],"rolloutPct":65,"shadowOnControl":false,"epoch":3,"regimeId":5}

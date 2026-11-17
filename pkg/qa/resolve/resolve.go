@@ -163,7 +163,10 @@ func ActiveQAResolutionForTask(ctx context.Context, store *model.Store, taskID s
 		return nil, qaCfg, nil
 	}
 
-	root := model.ResolveQARootOrigin(task.WorkOrigin, task.ID)
+	root, err := store.ResolveTaskQARootOrigin(ctx, *task)
+	if err != nil {
+		return nil, qaCfg, err
+	}
 
 	// Step 2: Experiment registry enrollment takes precedence over legacy epoch assignments.
 	if RegistryResolver != nil {
@@ -233,7 +236,10 @@ func EnsureQAResolutionAtDispatchWithConfig(
 		return &Resolution{Source: "none", ArmID: "baseline"}, qaCfg, nil
 	}
 
-	root := model.ResolveQARootOrigin(task.WorkOrigin, task.ID)
+	root, err := store.ResolveTaskQARootOrigin(ctx, task)
+	if err != nil {
+		return nil, qaCfg, err
+	}
 	hasPrior, err := store.OriginHasPriorRuns(ctx, root, runID)
 	if err != nil {
 		return nil, qaCfg, err

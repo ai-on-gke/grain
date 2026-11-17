@@ -106,6 +106,56 @@ func TestQACommandStatusEnableDisableAndFlagPreservation(t *testing.T) {
 	}
 }
 
+func TestQAEnablePreservesExplicitZeroPercentShadowOnlyRolloutAcrossDisable(t *testing.T) {
+	useAccessCodeFile(t)
+	srvURL, _ := syncTestServer(t)
+	seedSettings(t, srvURL, *settingsRequest("60s", 2, "github.example"))
+
+	// Fresh unconfigured store: a no-op `grain qa disable` must leave QA
+	// unconfigured so a subsequent bare `grain qa enable` still defaults
+	// rolloutPct to 30 instead of turning on silent 0% shadow-only mode.
+	if err := runCLIWithAccessCode([]string{"-server", srvURL, "qa", "disable"}); err != nil {
+		t.Fatalf("no-op grain qa disable on fresh store: %v", err)
+	}
+	var err error
+	outDefault := captureStdout(t, func() {
+		err = runCLIWithAccessCode([]string{"-server", srvURL, "--json", "qa", "enable"})
+	})
+	if err != nil {
+		t.Fatalf("initial bare grain qa enable: %v", err)
+	}
+	var parsed qaStatusView
+	if err := json.Unmarshal([]byte(outDefault), &parsed); err != nil {
+		t.Fatalf("unmarshal initial enable: %v", err)
+	}
+	if !parsed.Enabled || parsed.RolloutPct != 30 {
+		t.Fatalf("initial bare enable after fresh disable = %+v, want enabled with default 30%% rollout", parsed)
+	}
+
+	// Operator explicitly configures 0% rollout (shadow-only mode), disables QA,
+	// and runs bare `grain qa enable` again: 0% rollout must be preserved.
+	if err := runCLIWithAccessCode([]string{
+		"-server", srvURL, "qa", "enable", "-flow", model.QAFlowDeterministicS3Only, "-rollout", "0",
+	}); err != nil {
+		t.Fatalf("grain qa enable -rollout 0: %v", err)
+	}
+	if err := runCLIWithAccessCode([]string{"-server", srvURL, "qa", "disable"}); err != nil {
+		t.Fatalf("grain qa disable: %v", err)
+	}
+	outReenable := captureStdout(t, func() {
+		err = runCLIWithAccessCode([]string{"-server", srvURL, "--json", "qa", "enable"})
+	})
+	if err != nil {
+		t.Fatalf("re-enable after 0%% rollout: %v", err)
+	}
+	if err := json.Unmarshal([]byte(outReenable), &parsed); err != nil {
+		t.Fatalf("unmarshal re-enable: %v", err)
+	}
+	if !parsed.Enabled || parsed.RolloutPct != 0 || parsed.FlowID != model.QAFlowDeterministicS3Only {
+		t.Fatalf("bare re-enable clobbered explicit 0%% rollout: %+v", parsed)
+	}
+}
+
 func TestQAJudgeRunDryRunIncludesClosedExperimentTasksOnly(t *testing.T) {
 	useAccessCodeFile(t)
 	var listQuery string

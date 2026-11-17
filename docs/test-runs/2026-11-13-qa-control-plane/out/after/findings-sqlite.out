@@ -1,0 +1,5 @@
+=== [Findings reproduction / store=sqlite / expect_fixed=1] ===
+  [F1] after disable rolloutPct=0; after bare 'grain qa enable' rolloutPct=0 (want 0)
+  [F2] child tree API origin='task:5'; root(5) arm=treatment, child(6) arm=treatment (want matching 'treatment')
+  [F3] GET /api/config .access={"role":"grain/viewer","roles":["grain/viewer"],"full":false,"scopes":["tasks:read","ci:read","dispatch:read","schedules:read","templates:read","suites:read","releases:read","repos:read","boards:read","memory:read","release-notes:read","sessions:read","caches:read","settings:read","access:read","connections:read","capabilities:read","secrets:read","deployment:read","sandboxes:read"]}; UI probe={"readonlyPillVisible":true,"readonlyBannerVisible":true,"qaSwitchDisabled":true}
+  completed findings check (unfixed_count=0)

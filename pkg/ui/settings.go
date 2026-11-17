@@ -556,6 +556,7 @@ type Settings struct {
 	Skills           *model.SkillsConfig `json:"skills,omitempty"`
 	RepairTemplateID string              `json:"repairTemplateID"`
 	// Quality control engine and single-instance PR rollout settings (model.Config.QA).
+	QAConfigured      bool     `json:"qaConfigured"`
 	QAEnabled         bool     `json:"qaEnabled"`
 	QAFlowID          string   `json:"qaFlowId"`
 	QAFlowIDs         []string `json:"qaFlowIds"`
@@ -1219,6 +1220,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		PromptExtension:                    cfg.PromptExtension,
 		Skills:                             cfg.Skills.Clone(),
 		RepairTemplateID:                   cfg.RepairTemplateID,
+		QAConfigured:                       !cfg.QA.IsZero(),
 		QAEnabled:                          cfg.QA.Enabled,
 		QAFlowID:                           cfg.QA.FlowIDOrDefault(),
 		QAFlowIDs:                          model.QAFlowIDs(),
@@ -1487,6 +1489,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AgentKeyChecksEnabled:              c.Config.AgentKeyChecks != nil,
 			ApprovedByDefault:                  def.ApprovedByDefault,
 			AutoMergeByDefault:                 def.AutoMergeByDefault,
+			QAConfigured:                       !def.QA.IsZero(),
 			QAEnabled:                          def.QA.Enabled,
 			QAFlowID:                           def.QA.FlowIDOrDefault(),
 			QAFlowIDs:                          model.QAFlowIDs(),
@@ -2442,33 +2445,41 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.AutoMergeByDefault = *req.AutoMergeByDefault
 	}
 	if req.QAEnabled != nil || req.QAFlowID != nil || req.QARolloutPct != nil || req.QAShadowOnControl != nil || req.QAEpoch != nil {
-		nextQA := cfg.QA.Clone()
-		if nextQA.ShadowOnControl == nil {
-			nextQA.ShadowOnControl = model.BoolPtr(cfg.QA.ShadowOnControlEnabled())
-		}
-		if req.QAEnabled != nil {
-			nextQA.Enabled = *req.QAEnabled
-		}
-		if req.QAFlowID != nil {
-			nextQA.FlowID = strings.TrimSpace(*req.QAFlowID)
-		}
-		if req.QARolloutPct != nil {
-			nextQA.RolloutPct = *req.QARolloutPct
-		}
-		if req.QAShadowOnControl != nil {
-			nextQA.ShadowOnControl = model.BoolPtr(*req.QAShadowOnControl)
-		}
-		if req.QAEpoch != nil {
-			if *req.QAEpoch < 1 {
-				return model.Config{}, validationErrorf("qaEpoch must be at least 1")
+		// Disabling QA on a fresh unconfigured store without naming any QA policy
+		// field is a no-op so cfg.QA remains zero (qaConfigured=false) and a
+		// subsequent bare `grain qa enable` still defaults rolloutPct to 30%.
+		noOpDisable := before.QA.IsZero() &&
+			req.QAEnabled != nil && !*req.QAEnabled &&
+			req.QAFlowID == nil && req.QARolloutPct == nil && req.QAShadowOnControl == nil && req.QAEpoch == nil
+		if !noOpDisable {
+			nextQA := cfg.QA.Clone()
+			if nextQA.ShadowOnControl == nil {
+				nextQA.ShadowOnControl = model.BoolPtr(cfg.QA.ShadowOnControlEnabled())
 			}
-			nextQA.Epoch = *req.QAEpoch
+			if req.QAEnabled != nil {
+				nextQA.Enabled = *req.QAEnabled
+			}
+			if req.QAFlowID != nil {
+				nextQA.FlowID = strings.TrimSpace(*req.QAFlowID)
+			}
+			if req.QARolloutPct != nil {
+				nextQA.RolloutPct = *req.QARolloutPct
+			}
+			if req.QAShadowOnControl != nil {
+				nextQA.ShadowOnControl = model.BoolPtr(*req.QAShadowOnControl)
+			}
+			if req.QAEpoch != nil {
+				if *req.QAEpoch < 1 {
+					return model.Config{}, validationErrorf("qaEpoch must be at least 1")
+				}
+				nextQA.Epoch = *req.QAEpoch
+			}
+			advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
+			if err != nil {
+				return model.Config{}, validationErrorf("qa: %v", err)
+			}
+			cfg.QA = advanced
 		}
-		advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
-		if err != nil {
-			return model.Config{}, validationErrorf("qa: %v", err)
-		}
-		cfg.QA = advanced
 	}
 	if req.UpgradeCheckMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*req.UpgradeCheckMode))

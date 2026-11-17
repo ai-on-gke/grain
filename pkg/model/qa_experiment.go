@@ -583,7 +583,10 @@ func (s *Store) CheckMemoryFrozenForActor(ctx context.Context, actor Principal) 
 	if err != nil || task == nil {
 		return nil
 	}
-	root := ResolveQARootOrigin(task.WorkOrigin, task.ID)
+	root, err := s.ResolveTaskQARootOrigin(ctx, *task)
+	if err != nil {
+		return nil
+	}
 	enr, err := s.GetQAEnrollment(ctx, root)
 	if err != nil || enr == nil || enr.ArmID == "excluded" {
 		return nil

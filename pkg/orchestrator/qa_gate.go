@@ -1587,8 +1587,9 @@ func EvaluateRunningExperimentHarm(ctx context.Context, store *model.Store, clie
 	}
 
 	originDurations := map[string][]float64{}
+	rootOrigins := model.NewQARootOrigins(tasks)
 	for _, t := range tasks {
-		root := model.ResolveQARootOrigin(t.WorkOrigin, t.ID)
+		root := rootOrigins.Of(t)
 		if armByOrigin[root] == "" {
 			continue
 		}
@@ -1740,8 +1741,9 @@ func MaybeAutoDowngradeQARollout(ctx context.Context, store *model.Store, now ti
 		return false, nil, err
 	}
 	activeTaskIDs := map[string]bool{}
+	rootOrigins := model.NewQARootOrigins(tasks)
 	for _, t := range tasks {
-		if activeOrigins[model.ResolveQARootOrigin(t.WorkOrigin, t.ID)] {
+		if activeOrigins[rootOrigins.Of(t)] {
 			activeTaskIDs[t.ID] = true
 		}
 	}
@@ -1934,6 +1936,7 @@ func PromoteStrandedQAStagesForExperiment(ctx context.Context, store *model.Stor
 	if err != nil {
 		return
 	}
+	rootOrigins := model.NewQARootOrigins(tasks)
 	for _, t := range tasks {
 		if t.Target == nil || !model.TaskEligibleForQAStaging(t) {
 			continue
@@ -1941,7 +1944,7 @@ func PromoteStrandedQAStagesForExperiment(ctx context.Context, store *model.Stor
 		if closed, cErr := taskClosed(ctx, store, t.ID); cErr != nil || closed {
 			continue
 		}
-		if !enrolledOrigins[model.ResolveQARootOrigin(t.WorkOrigin, t.ID)] {
+		if !enrolledOrigins[rootOrigins.Of(t)] {
 			continue
 		}
 		_ = PromoteStrandedQAStage(ctx, store, client, t, reason)
@@ -2303,8 +2306,9 @@ func maybeEvaluateExperimentTriageHarmBreaker(ctx context.Context, store *model.
 	}
 	escapedOrigin := map[string]bool{}
 	originByTask := map[string]string{}
+	rootOrigins := model.NewQARootOrigins(tasks)
 	for _, t := range tasks {
-		root := model.ResolveQARootOrigin(t.WorkOrigin, t.ID)
+		root := rootOrigins.Of(t)
 		if armByOrigin[root] == "" {
 			continue
 		}
