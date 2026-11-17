@@ -2,10 +2,12 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and limits for later ports. It ships exactly two v1
-types: `delivery` with
-`{"product":"report","semantics":"current_v1"}`, and `acknowledgment` with
-`{"mode":"explicit_receipt"}`. Other catalogue profiles/types are unsupported.
+records repairs, coverage and limits for later ports. It ships four v1 types:
+`delivery` with `{"product":"report","semantics":"current_v1"}`,
+`acknowledgment` with `{"mode":"explicit_receipt"}`, and the canonical
+`review` and `approval` profiles. The [review/approval coverage guide](gate-review-observations.md)
+distinguishes implemented predicates from the scoped legacy source adapter's
+explicit provenance gaps. Other catalogue profiles/types are unsupported.
 Their closed schemas are pinned to the canonical catalogue and evaluated by pure
 local Go functions. There are no remote evaluator calls or private evaluator state.
 
@@ -33,12 +35,12 @@ mutation/reevaluation/action/waiver endpoint or MCP evaluator.
 
 Collection/display is disabled by default. A deployment-local explicit allowlist
 selects at most 32 task IDs. There is no automatic cohort expansion or lifecycle
-hook. Choose a small representative set of current finite analysis/report tasks,
+hook. Choose a small representative set of current finite analysis/report or PR tasks,
 including a report awaiting receipt and a report acknowledged by a verified person.
 Optionally include a code/standing task to inspect the explained unknown state;
 never interpret that acknowledgment observation as a code completion requirement.
 
-Only noninteractive `analyze` tasks without changes, goals, standing/keep-running
+For report/receipt, only noninteractive `analyze` tasks without changes, goals, standing/keep-running
 behavior, console hosting, or report-only child auto-closure are applicable. A
 successful recorded no-work invocation is excluded. Unsupported shapes return
 unknown with a not-applicable explanation for both monitors.
@@ -61,8 +63,10 @@ fallback or
 automation closes are unknown, not synthetic receipts. A new report/run, question,
 message, attachment, relevant task shape, or registry/config build changes the
 source fence; old receipt observations cannot silently cover a changed report.
-These local immutable body/comment and close-event records are the only supported
-evidence. No permission revisions or complete remote evidence are claimed.
+These local immutable body/comment and close-event records support the original
+two task monitors. Review/approval adds scoped local assignment, hold, finding,
+fix and base-policy evidence as described in the [source adapter guide](gate-review-observations.md).
+No complete remote evidence or rendered-context/role receipt is fabricated.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -125,7 +129,9 @@ unsampled minute refreshes after that point cannot be recovered. Aggregate retai
 comparison counts remain exact. Current/history data is local to the
 database and deliberately excluded from state-repository exports.
 
-The comparison labels are:
+For PR tasks the comparison labels are `review_approval_provenance_gap` and
+`review_approval_incomplete`; individual results explain current versus imported
+legacy outcomes. The report/receipt comparison labels are:
 
 - `equivalent_milestones`: report delivery and receipt agree with corresponding
   local legacy facts; pending receipt is not a delivery discrepancy.
@@ -214,3 +220,9 @@ diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.
+
+Review/approval validation and its material source limitations are recorded in
+[Review and approval observations](gate-review-observations.md). Current results
+remain unknown when exact provider/authorization evidence is absent; legacy
+Submit/accept-findings services remain authoritative. No production configuration
+or grant change accompanies the extension.

@@ -312,3 +312,73 @@ func TestGateObservationStorageOutageIsAnInertSidecar(t *testing.T) {
 		t.Fatal("diagnostic recovery changed task state")
 	}
 }
+
+func TestReviewApprovalObservationsPreserveAuthorizationAndSubmit(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedAPITask(t, c, "review-observer", "acme/widgets", "api:tasks:read@acme/widgets")
+	seedAPITask(t, c, "review-owner", "acme/widgets", "")
+	seedAPITask(t, c, "review-hidden", "acme/private", "")
+	must(c.Store.UpdateTask(ctx, "review-hidden", func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewerHead, Target: "DO-NOT-EXPOSE-PRIVATE-HEAD"})
+		return nil
+	}))
+	must(c.Store.UpdateTask(ctx, "review-owner", func(t *model.Task) error {
+		t.AutoMerge = false
+		t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#42"}, model.Link{Kind: model.LinkReviewTask, Target: "review-hidden"}, model.ApprovalRequiredLink("trigger:owners", []string{"alice"}), model.ReviewFindingsRecord{Gate: model.GateReview, ReviewTask: "review-hidden", HeadSHA: "head-1", Summary: "Needs a deliberate disposition", At: baseTime}.Link())
+		return nil
+	}))
+	c.Config.GateObservationTaskIDs = []string{"review-owner", "review-hidden"}
+	read := func() ui.TaskDetail {
+		t.Helper()
+		code, body := asAgent(t, srv, "review-observer", http.MethodGet, "/api/tasks/review-owner?comments_limit=1&attempts_limit=1", "", "")
+		if code != http.StatusOK || strings.Contains(body, "DO-NOT-EXPOSE-PRIVATE-HEAD") {
+			t.Fatalf("authorized scoped read: %d %s", code, body)
+		}
+		var detail ui.TaskDetail
+		must(json.Unmarshal([]byte(body), &detail))
+		if detail.GateObservations == nil || len(detail.GateObservations.Results) < 5 {
+			t.Fatal("missing scoped review/approval sidecar")
+		}
+		for i, b := range detail.GateObservations.Bindings {
+			if (b.Type == "approval" || b.Type == "review" && !b.Origin.Imported) && detail.GateObservations.Results[i].Result.Status == "met" {
+				t.Fatal("legacy record became current-head proof")
+			}
+		}
+		return detail
+	}
+	before := read()
+	if path := os.Getenv("GRAIN_TEST_REVIEW_GATE_FIXTURE"); path != "" {
+		b, _ := json.MarshalIndent(map[string]any{"gate_observations": before.GateObservations, "gate_observation_diagnostics": before.GateObservationDiagnostics}, "", "  ")
+		must(os.WriteFile(path, b, 0600))
+	}
+	code, body := asAgent(t, srv, "review-observer", http.MethodGet, "/api/tasks/review-hidden", "", "")
+	if code == http.StatusOK || strings.Contains(body, "gate_observations") {
+		t.Fatalf("hidden subject exposed observations: %d %s", code, body)
+	}
+	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: model.SourceIAP})
+	// A shadow unknown neither blocks the existing person-only Submit service nor
+	// grants it the authority to accept findings or finish a review.
+	must(c.Submit(person, "review-owner"))
+	task, err := c.Store.GetTask(ctx, "review-owner")
+	must(err)
+	if len(model.PendingApprovals(*task)) != 0 {
+		t.Fatal("legacy Submit stopped owning named approvals")
+	}
+	if len(model.ReviewFindings(*task)) != 1 {
+		t.Fatal("Submit/observation cleared findings")
+	}
+	if len(model.ReviewFindingsAcceptances(*task)) != 0 {
+		t.Fatal("Submit/observation issued acceptance")
+	}
+	after := read()
+	if after.GateObservations.SourceRevision == before.GateObservations.SourceRevision {
+		t.Fatal("Submit did not invalidate the diagnostic source")
+	}
+}

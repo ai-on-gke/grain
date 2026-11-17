@@ -187,6 +187,15 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		LastComment, Event                                                    int64
 		NoWork                                                                int
 	}{id, f.Applicable, f.Complete, f.Running, f.Settled, f.UnsupportedReason, f.IncompleteReason, gates.Digest(gates.Discover()), state, runID, outcome, started, finished, o.CompletedAt, o.ClosedAt, o.PendingQuestionCommentID, f.Report, f.Receipt, lastComment, eid, noWork})
+
+	change, version, err := captureChangeGateFacts(ctx, q, *t, o)
+	if err != nil {
+		return f, "", err
+	}
+	f.Change = change
+	if change != nil {
+		f.SourceVersion = gates.Digest([]any{f.SourceVersion, version})
+	}
 	return f, state, nil
 }
 
@@ -290,6 +299,13 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 				rejectedCache = cachedView.Dirty
 			}
 			changed := missing || source != f.SourceVersion
+			if !missing {
+				var old gates.ObservationView
+				_ = json.Unmarshal([]byte(previous), &old)
+				if gates.Digest(old.Bindings) != gates.Digest(observationBindings(id, f)) {
+					unsupportedCache = true
+				}
+			}
 			if !changed && !unsupportedCache && !rejectedCache && now.Before(evaluated.Add(time.Minute)) {
 				if err = json.Unmarshal([]byte(previous), &view); err != nil {
 					return err
@@ -297,7 +313,7 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 			} else {
 				generation++
 				evaluations++
-				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: gates.Bindings(id), Results: []gates.EvaluationState{}}
+				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: observationBindings(id, f), Results: []gates.EvaluationState{}}
 				for _, b := range view.Bindings {
 					r := gates.Evaluate(b, f, now, generation)
 					if unsupportedCache {
@@ -354,6 +370,12 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 }
 
 func compareReportMilestones(f gates.Facts, v gates.ObservationView) string {
+	if f.Change != nil {
+		if !f.Change.Complete {
+			return "review_approval_incomplete"
+		}
+		return "review_approval_provenance_gap"
+	}
 	if !f.Applicable {
 		return "not_applicable"
 	}
@@ -420,7 +442,14 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 			}
 		}
 	}
-	*view = gates.UnavailableObservation(id, now)
+	safe := gates.UnavailableObservation(id, now)
+	if raw != "" {
+		var previous gates.ObservationView
+		if json.Unmarshal([]byte(raw), &previous) == nil && currentShadowBindings(previous, id) {
+			safe = gates.UnavailableObservationForBindings(id, now, previous.Bindings)
+		}
+	}
+	*view = safe
 	generation++
 	evaluations++
 
@@ -521,10 +550,21 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 	if v.APIVersion != "grain.gates/v1" || v.Mode != "observation_only" || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover {
 		return false
 	}
-	if gates.Digest(v.Bindings) != gates.Digest(gates.Bindings(id)) || len(v.Results) != 2 {
+	base := gates.Bindings(id)
+	if len(v.Bindings) < 2 || len(v.Bindings) > 64 || len(v.Results) != len(v.Bindings) || gates.Digest(v.Bindings[:2]) != gates.Digest(base) {
 		return false
 	}
+	seen := map[string]bool{}
 	for i, b := range v.Bindings {
+		if seen[b.ID] || b.Purpose != "monitor" || b.Required || b.Action != nil || b.Origin.ID != id || b.Origin.Revision != gates.Implementation {
+			return false
+		}
+		seen[b.ID] = true
+		if i >= 2 {
+			if (b.Type != "review" && b.Type != "approval") || b.Subject.Kind != "change" || b.Subject.TaskID != "" || b.Subject.Authority == "" || b.Subject.Repository == "" || b.Subject.ChangeKind != "pr" || b.Subject.ID == "" {
+				return false
+			}
+		}
 		if _, err := gates.Validate(b.Type, b.Version, b.Config); err != nil {
 			return false
 		}
