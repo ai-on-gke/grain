@@ -306,6 +306,27 @@
   word-break: break-word;
 }
 
+/* Settings -> Access's Access code card: the mode pill with its
+   in-force note, and the host command beside its copy button. */
+.s-access-code-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.s-access-code-command {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.s-access-code-command > .s-code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .s-fingerprint {
   font-family: var(--grain-font-mono);
   font-size: 12.5px;
