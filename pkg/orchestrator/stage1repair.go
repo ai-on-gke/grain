@@ -275,22 +275,40 @@ func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind
 	jobs []model.GitHubCIJob, now time.Time) (string, error) {
 
 	failures := runFailures(kind.what, run, jobs)
+	repo := run.Repo
+	// The repair gets the CI grant every other filing path gives a task on
+	// repo (RepoCIDefaults): grain#ci where grain CI gates it, and the
+	// default api:ci-read@<repo> where GitHub Actions does and the
+	// capability policy permits it. Without it the repair cannot run the
+	// `grain ci log` its own body points it at, and parks asking a person
+	// for a grant every other task already holds.
+	ciDefaults, err := store.RepoCIDefaults(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("orchestrator: granting the %s repair of %s: checking CI mode: %w", kind.what, repo, err)
+	}
 	open, err := openTaggedRepair(ctx, store, kind.tag)
 	if err != nil {
 		return "", err
 	}
 	if open != nil {
+		var grants []model.Grant
 		if err := store.UpdateTask(ctx, open.ID, func(t *model.Task) error {
 			if t.Priority < kind.priority {
 				t.Priority = kind.priority
 			}
+			// A repair filed before repairs were granted CI (or before its
+			// repository's CI mode changed) is brought up to the grant a
+			// new one gets, so its next attempt can read the run appended
+			// below rather than stay forbidden for as long as it is open.
+			t.Grants = model.AdjustRepoCIGrants(t.Grants, repo, ciDefaults)
+			grants = t.Grants
 			return nil
 		}); err != nil {
 			return "", fmt.Errorf("orchestrator: keeping %s repair %s's priority: %w", kind.what, open.ID, err)
 		}
 		if _, err := store.AddComment(ctx, model.Comment{
 			TaskID: open.ID, Author: model.Attribution{Actor: kind.by}, CreatedAt: now,
-			Body: kind.what + " is still red. Another failing run:\n\n" + failures,
+			Body: kind.what + " is still red. Another failing run:\n\n" + failures + repairCIReadDeniedNote(repo, ciDefaults, grants),
 		}); err != nil {
 			return "", fmt.Errorf("orchestrator: appending run %d to %s repair %s: %w", run.RunID, kind.what, open.ID, err)
 		}
@@ -305,22 +323,12 @@ func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind
 	if err != nil {
 		return "", fmt.Errorf("orchestrator: ordering the %s repair: %w", kind.what, err)
 	}
-	repo := run.Repo
-	// The repair gets the CI grant every other filing path gives a task on
-	// repo (defaultRepoGrants): grain#ci where grain CI gates it, and the
-	// default api:ci-read@<repo> where GitHub Actions does and the
-	// capability policy permits it. Without it the repair cannot run the
-	// `grain ci log` its own body points it at, and parks asking a person
-	// for a grant every other task already holds.
-	grants, err := defaultRepoGrants(ctx, store, repo)
-	if err != nil {
-		return "", fmt.Errorf("orchestrator: granting the %s repair of %s: %w", kind.what, repo, err)
-	}
+	grants := model.AdjustRepoCIGrants(nil, repo, ciDefaults)
 	task := model.Task{
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  kind.title,
-		Body:   kind.intro + "\n\n" + failures,
+		Body:   kind.intro + "\n\n" + failures + repairCIReadDeniedNote(repo, ciDefaults, grants),
 		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: kind.by},
 			Reason:      model.ReasonProposal,
@@ -352,6 +360,24 @@ func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind
 	}
 	log.Printf("orchestrator: %s run %d on %s is red; filed repair %s at priority %d", kind.what, run.RunID, repo, id, kind.priority)
 	return id, nil
+}
+
+// repairCIReadDeniedNote is what a repair of repo holding grants is told
+// when the capability policy withholds the default api:ci-read@<repo>
+// from it and nothing else it holds reads repo's CI: why `grain ci log`
+// will answer forbidden, and not to ask for a grant the policy refuses
+// anyway. It is empty wherever the repair can read CI -- including an
+// open repair that still holds an api:ci-read from before a deny rule
+// was added, or one a person granted it, which AdjustRepoCIGrants never
+// strips.
+func repairCIReadDeniedNote(repo model.RepoRef, d model.RepoCIDefaults, grants []model.Grant) string {
+	if d.GrainCI || d.CIRead || model.GrantsReadCI(grants, repo) {
+		return ""
+	}
+	return fmt.Sprintf("\n\nThis repair holds no CI read: this deployment's capability policy denies "+
+		"%s on %s, so `grain ci list` and `grain ci log` answer forbidden here. Work from the failing "+
+		"jobs above and `grain ci wait` on your own branch, and do not request %s -- the policy refuses it.\n",
+		model.APIRef("ci-read"), repo, model.APIRef("ci-read"))
 }
 
 func isGitHubBaseRepairGoal(g model.TaskGoal) bool {
