@@ -148,3 +148,49 @@ func TestGateObservationsRespectTaskAuthorization(t *testing.T) {
 		t.Fatalf("hidden observation leaked %d %s", code, body)
 	}
 }
+
+// Main's batch cache can have a stable domain token while a diagnostic lease
+// expires. Never return that cached body for a selected observation task.
+func TestGateObservationSummariesBypassStableDomainCache(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Observe a task", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/tasks/summaries?ids=" + task.ID + "&comments_limit=1&attempts_limit=1"
+	code, body := serve(t, srv, http.MethodGet, path, "")
+	if code != 200 || strings.Contains(body, "gate_observations") {
+		t.Fatalf("unselected %d %s", code, body)
+	}
+	c.Config.GateObservationTaskIDs = []string{task.ID}
+	now := baseTime
+	c.Now = func() time.Time { return now }
+	code, body = serve(t, srv, http.MethodGet, path, "")
+	if code != 200 || !strings.Contains(body, "gate_observations") {
+		t.Fatalf("selected cached %d %s", code, body)
+	}
+	var envelope struct {
+		Tasks map[string]ui.TaskDetail `json:"tasks"`
+	}
+	if err = json.Unmarshal([]byte(body), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	initial := envelope.Tasks[task.ID].GateObservations.ComparedAt
+	// A coalesced read then leases the same stable domain state.
+	code, _ = serve(t, srv, http.MethodGet, path, "")
+	if code != 200 {
+		t.Fatal(code)
+	}
+	now = now.Add(2 * time.Minute)
+	code, body = serve(t, srv, http.MethodGet, path, "")
+	if code != 200 {
+		t.Fatalf("expired %d %s", code, body)
+	}
+	if err = json.Unmarshal([]byte(body), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.Tasks[task.ID].GateObservations.ComparedAt.After(initial) {
+		t.Fatal("batch cache hid expired observation lease")
+	}
+}

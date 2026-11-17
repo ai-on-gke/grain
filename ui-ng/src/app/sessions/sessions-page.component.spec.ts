@@ -341,7 +341,14 @@ describe("SessionsPageComponent", () => {
     input.dispatchEvent(new Event("change"));
     await settle(f);
 
-    expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+    // Staging reads the file asynchronously (a FileReader), which a fixed
+    // settle can outrun on a loaded machine: wait for the chip itself.
+    await expect
+      .poll(() => {
+        f.detectChanges();
+        return text(f, '[data-testid="staged-att-0"]');
+      })
+      .toContain("screen.png");
     const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
     expect(sendBtn.disabled).toBe(false);
     sendBtn.click();
