@@ -339,9 +339,12 @@ describe("SessionsPageComponent", () => {
     const file = new File(["shot-bytes"], "screen.png", { type: "image/png" });
     Object.defineProperty(input, "files", { value: [file] });
     input.dispatchEvent(new Event("change"));
-    await settle(f);
-
-    expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+    // jsdom's FileReader completes across nested setImmediate callbacks, which
+    // can fire after a fixed setTimeout under CI load.
+    await vi.waitFor(() => {
+      f.detectChanges();
+      expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+    });
     const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
     expect(sendBtn.disabled).toBe(false);
     sendBtn.click();
