@@ -232,6 +232,16 @@ type RunConfig struct {
 	// in its handover (-tool-budget-pipeline-cursor); a director's chat
 	// session reads no feed and is not asked for one.
 	ToolBudgetPipelineCursor bool
+	// RequireOpenPullRequest asks the stop rule to issue one reminder if a
+	// treatment-arm coding run executes `git push` and exits without calling
+	// `open_pull_request` (or another explicit closing tool).
+	RequireOpenPullRequest bool
+	// NoTools runs a pure single-turn model completion against an empty MCP
+	// tool registry (`grain mcpserver -no-tools`), mounting zero sandbox or
+	// host tools, omitting `-server/-task`, and skipping background stop-hook
+	// closing-tool checks. Used by fresh-context read-only diff verifiers
+	// whose prompt already inlines the candidate diff.
+	NoTools bool
 	// ProposeRepos are the repositories this deployment works in, which a
 	// propose_task call may ask its proposal to be filed against
 	// (model.Store.WorkRepos, resolved by orchestrator.RunDispatch), most

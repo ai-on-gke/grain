@@ -13,7 +13,13 @@
 // limitations under the License.
 
 import AxeBuilder from "@axe-core/playwright";
-import { test as base, expect } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type Page,
+  type Request,
+  type Route,
+} from "@playwright/test";
 import type { Result } from "axe-core";
 import { demoFixtures } from "../../ui-shared/e2e/demo.js";
 
@@ -57,11 +63,55 @@ type WorkerFixtures = {
 
 const SEVERE = ["serious", "critical"];
 
+// A request a spec's page.route handler is still working on can be
+// cancelled under it -- a reload, a navigation, or the page polling past
+// it -- and Playwright then disposes of the response the handler is
+// reading ("Response has been disposed") or refuses the reply ("Route is
+// already handled"). Thrown from a handler, that fails the test though
+// nothing it asserts went wrong (ui-ng e2e on task 5868: two specs that
+// patch a real answer in flight failed this way on consecutive runs).
+// A cancelled request has nobody to answer, so these errors -- and only
+// these -- are dropped; every other error a handler throws still fails
+// the test, and a request that really fails goes unanswered and times out
+// whatever waits on it.
+const CANCELLED_ROUTE =
+  /Response has been disposed|Route is already handled|Target page, context or browser has been closed/;
+
+type RouteHandler = (route: Route, request: Request) => unknown;
+
+function cancelSafe(handler: RouteHandler): RouteHandler {
+  return async (route, request) => {
+    try {
+      await handler(route, request);
+    } catch (err) {
+      if (!CANCELLED_ROUTE.test(String((err as Error)?.message ?? err))) {
+        throw err;
+      }
+    }
+  };
+}
+
 export const test = base.extend<Fixtures, WorkerFixtures>({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ...(demoFixtures as any),
   baseURL: async ({ demoServer }, use) => {
     await use(`${demoServer}/next/`);
+  },
+  page: async ({ page }, use) => {
+    const wrapped = new WeakMap<RouteHandler, RouteHandler>();
+    const route = page.route.bind(page);
+    const unroute = page.unroute.bind(page);
+    page.route = ((url, handler, options) => {
+      const safe = cancelSafe(handler as RouteHandler);
+      wrapped.set(handler as RouteHandler, safe);
+      return route(url, safe, options);
+    }) as Page["route"];
+    page.unroute = ((url, handler) =>
+      unroute(
+        url,
+        handler ? (wrapped.get(handler as RouteHandler) ?? handler) : undefined,
+      )) as Page["unroute"];
+    await use(page);
   },
   axe: async ({ page }, use) => {
     await use(async (options = {}) => {

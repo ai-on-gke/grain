@@ -1,0 +1,73 @@
+== HEAD on SQLite populates the store
+sqlite-1 POST /api/tasks -> 201 id=2
+sqlite-1 POST /api/tasks/2/comments -> 200 
+sqlite-1 POST /api/settings -> 200
+sqlite-1 POST /api/templates -> 201 id=template-1
+sqlite-1 POST /api/suites -> 201 "id":"suite-1"
+sqlite-2 POST /api/tasks -> 201 id=3
+sqlite-2 POST /api/tasks/3/comments -> 200 
+sqlite-2 POST /api/settings -> 200
+sqlite-2 POST /api/templates -> 201 id=template-2
+sqlite-2 POST /api/suites -> 201 "id":"suite-2"
+sqlite-3 POST /api/tasks -> 201 id=4
+sqlite-3 POST /api/tasks/4/comments -> 200 
+sqlite-3 POST /api/settings -> 200
+sqlite-3 POST /api/templates -> 201 id=template-3
+sqlite-3 POST /api/suites -> 201 "id":"suite-3"
+sqlite-4 POST /api/tasks -> 201 id=5
+sqlite-4 POST /api/tasks/5/comments -> 200 
+sqlite-4 POST /api/settings -> 200
+sqlite-4 POST /api/templates -> 201 id=template-4
+sqlite-4 POST /api/suites -> 201 "id":"suite-4"
+sqlite-5 POST /api/tasks -> 201 id=6
+sqlite-5 POST /api/tasks/6/comments -> 200 
+sqlite-5 POST /api/settings -> 200
+sqlite-5 POST /api/templates -> 201 id=template-5
+sqlite-5 POST /api/suites -> 201 "id":"suite-5"
+sqlite-6 POST /api/tasks -> 201 id=7
+sqlite-6 POST /api/tasks/7/comments -> 200 
+sqlite-6 POST /api/settings -> 200
+sqlite-6 POST /api/templates -> 201 id=template-6
+sqlite-6 POST /api/suites -> 201 "id":"suite-6"
+200 
+sqlite max task_comment.id=7
+sqlite max config_audit.id=49
+sqlite max suite_item.id=6
+-- postgres before the upgrade (empty database)
+== grain db upgrade-postgres
+Upgrading database from SQLite (/home/debian/walk/seq/data/store) to PostgreSQL...
+Saved database config to /home/debian/walk/seq/data/db-config.json
+Stored the database password in the secret store as "database-password", not in db-config.json
+Successfully upgraded database to PostgreSQL (145 tables migrated in 10.037800843s)
+-- sequences after UpgradeFromSQLite
+config_audit.id                                    49 t           49 ok
+integration_event.id                               16 t           16 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       6 t            6 ok
+suite_sequence.id                                   6 t            6 ok
+task_comment.id                                     7 t            7 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                7 t            7 ok
+template_sequence.number                            6 t            6 ok
+== HEAD on PostgreSQL, writes
+(no sequence resync logged on start)
+pg-1 POST /api/tasks -> 201 id=8
+pg-1 POST /api/tasks/8/comments -> 200 
+pg-1 POST /api/settings -> 200
+pg-1 POST /api/templates -> 201 id=template-7
+pg-1 POST /api/suites -> 201 "id":"suite-7"
+pg-2 POST /api/tasks -> 201 id=9
+pg-2 POST /api/tasks/9/comments -> 200 
+pg-2 POST /api/settings -> 200
+pg-2 POST /api/templates -> 201 id=template-8
+pg-2 POST /api/suites -> 201 "id":"suite-8"
+-- sequences after writes
+config_audit.id                                    65 t           65 ok
+integration_event.id                               20 t           20 ok
+secret_resolution_audit.id                          5 t            5 ok
+suite_item.id                                       8 t            8 ok
+suite_sequence.id                                   8 t            8 ok
+task_comment.id                                     9 t            9 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                9 t            9 ok
+template_sequence.number                            8 t            8 ok

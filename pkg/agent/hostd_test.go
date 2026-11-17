@@ -25,11 +25,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
+
+var hostdDirSeq atomic.Uint64
 
 func startHostd(t *testing.T) (hostd.Client, string) {
 	t.Helper()
@@ -41,8 +44,11 @@ func startHostd(t *testing.T) (hostd.Client, string) {
 		t.Skipf("no shell: %v", err)
 	}
 	sh, _ = filepath.EvalSymlinks(sh)
-	dir, err := os.MkdirTemp("", "hostd")
-	if err != nil {
+	dir := filepath.Join(os.TempDir(), fmt.Sprintf("h%x", hostdDirSeq.Add(1)))
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })

@@ -135,7 +135,7 @@ func TestTaskReadsAReviewTaskAsStackedAndAsAReview(t *testing.T) {
 	reviewer := model.Principal{Kind: model.PrincipalAutomation, ID: "review"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "9", Intent: model.IntentImplement, Title: "Review the change",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,
 		},

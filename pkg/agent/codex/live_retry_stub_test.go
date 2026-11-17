@@ -35,7 +35,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -186,10 +185,7 @@ func TestLiveCodexReportsA429GrainCanClassify(t *testing.T) {
 // among the things these probes are here to watch.
 func execAgainstRefusingProvider(t *testing.T, provider *refusingResponsesAPI) (stdout string, runErr error, elapsed time.Duration) {
 	t.Helper()
-	codexPath, err := exec.LookPath("codex")
-	if err != nil {
-		skipUnlessLiveRequired(t, "no codex binary on $PATH")
-	}
+	codexPath := lookReviewedCodex(t)
 	grainBinaryPath := buildGrainBinary(t)
 
 	f := New(codexPath, grainBinaryPath, withExtraConfig(stubProviderConfig(provider.URL)))

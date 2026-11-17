@@ -16,7 +16,7 @@ import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import type { Subscription } from "rxjs";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { TaskDetail } from "../api/models";
+import type { QAFlowSpec, QAFlowsResponse, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { errorText } from "../sessions/session-helpers";
@@ -27,6 +27,7 @@ import {
   type CreateSuiteRequest,
   type CreateTemplateRequest,
   type DeclarationAcceptanceView,
+  type DeclaredTrigger,
   type RepoDefaultsView,
   type RepoWorkflow,
   type RepoWorkflowsResponse,
@@ -70,6 +71,14 @@ export class ProcessesStore {
   readonly suites = signal<Suite[]>([]);
   readonly suiteRuns = signal<SuiteRun[]>([]);
   readonly acceptances = signal<DeclarationAcceptanceView[]>([]);
+  readonly qaFlows = signal<QAFlowSpec[]>([]);
+  readonly qaFlowsLoaded = signal(false);
+  readonly qaRollout = signal<{
+    enabled: boolean;
+    flowId: string;
+    rolloutPct: number;
+    shadowOnControl: boolean;
+  } | null>(null);
   readonly configuredRepos = signal<string[]>([]);
   readonly hasTargetAllowlist = signal(false);
   readonly approvedByDefault = signal(false);
@@ -109,19 +118,50 @@ export class ProcessesStore {
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
   });
 
+  // declaringRepos is every repository whose declarations are read for
+  // triggers, as the classic page reads them (ui/src/processes.js
+  // declaringRepos): the deployment's configured repositories and each one
+  // a loaded schedule, template or suite was declared in. A repository can
+  // declare nothing but a trigger, which is why the configured ones count.
+  readonly declaringRepos = computed(() => {
+    const found = new Set(this.configuredRepos().filter(Boolean));
+    for (const list of [this.schedules(), this.templates(), this.suites()]) {
+      for (const it of list) {
+        if (it.declaredIn?.repo) found.add(it.declaredIn.repo);
+      }
+    }
+    return [...found].sort((a, b) => a.localeCompare(b));
+  });
+
+  // triggers is each .grain/triggers file a declaring repository's synced
+  // declarations name (RepoDeclarationsStatus.triggers).
+  readonly triggers = computed(() => {
+    const out: DeclaredTrigger[] = [];
+    const defaults = this.repoDefaults();
+    for (const repo of this.declaringRepos()) {
+      for (const path of defaults[repo]?.declarationsStatus?.triggers ?? []) {
+        out.push({ repo, path });
+      }
+    }
+    return out;
+  });
+
   readonly awaitingAcceptancesCount = computed(
     () => this.acceptances().filter((a) => a.awaiting).length,
   );
 
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private configTask: Promise<void> | null = null;
   private activeCount = 0;
 
   start(): void {
     this.actionError.set(null);
     this.activeCount++;
     if (this.activeCount > 1) return;
-    void this.loadConfigAndRepos();
+    this.configTask = this.loadConfigAndRepos().finally(() => {
+      this.configTask = null;
+    });
     void this.refresh();
     this.eventSub = this.events.events().subscribe((ev) => {
       if (ev.type === "task.state") {
@@ -138,10 +178,55 @@ export class ProcessesStore {
   stop(): void {
     this.activeCount = Math.max(0, this.activeCount - 1);
     if (this.activeCount > 0) return;
+    this.declStatusAsked.clear();
     this.eventSub?.unsubscribe();
     this.eventSub = null;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+  }
+
+  canReadGlobalSettings(): boolean {
+    return (
+      this.access.can("GET /api/qa/flows") &&
+      !this.access.repoLimits()["settings:read"]?.length
+    );
+  }
+
+  private async refreshQaRollout(): Promise<void> {
+    if (
+      !this.canReadGlobalSettings() ||
+      !this.access.can("GET /api/settings")
+    ) {
+      return;
+    }
+    try {
+      const s =
+        await this.api.get<Record<string, unknown>>("GET /api/settings");
+      if (this.activeCount > 0 && s) {
+        this.qaRollout.set({
+          enabled: !!s["qaEnabled"],
+          flowId:
+            typeof s["qaFlowId"] === "string" && s["qaFlowId"]
+              ? s["qaFlowId"]
+              : "golden-v1-minimal",
+          rolloutPct:
+            typeof s["qaRolloutPct"] === "number" ? s["qaRolloutPct"] : 0,
+          shadowOnControl: s["qaShadowOnControl"] !== false,
+        });
+      }
+    } catch {
+      // Non-fatal.
+    }
+  }
+
+  private ensureConfig(): Promise<void> {
+    if (this.configTask) return this.configTask;
+    if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      return Promise.resolve();
+    }
+    return (this.configTask = this.loadConfigAndRepos().finally(() => {
+      this.configTask = null;
+    }));
   }
 
   private async loadConfigAndRepos(): Promise<void> {
@@ -154,14 +239,36 @@ export class ProcessesStore {
         const summary = configuredInstanceRepos(cfg);
         this.hasTargetAllowlist.set(summary.hasTargetAllowlist);
         this.configuredRepos.set(summary.repos);
+        if (this.loaded()) void this.loadDeclarationStatuses();
       }
+      if (this.canReadGlobalSettings()) {
+        try {
+          const flowsRes =
+            await this.api.get<QAFlowsResponse>("GET /api/qa/flows");
+          if (this.activeCount > 0 && Array.isArray(flowsRes?.flows)) {
+            this.qaFlows.set(flowsRes.flows);
+          }
+        } catch {
+          // Non-fatal on older servers.
+        }
+      }
+      if (this.activeCount > 0) {
+        this.qaFlowsLoaded.set(true);
+      }
+      await this.refreshQaRollout();
     } catch {
-      // Non-fatal.
+      if (this.activeCount > 0) {
+        this.qaFlowsLoaded.set(true);
+      }
     }
   }
 
   async refresh(): Promise<void> {
     if (this.activeCount === 0) return;
+    if (!this.access.configLoaded()) {
+      await this.ensureConfig();
+      if (this.activeCount === 0) return;
+    }
     try {
       const [schedRes, tmplRes, suiteRes, runsRes, accRes] = await Promise.all([
         this.access.can("GET /api/schedules")
@@ -201,9 +308,11 @@ export class ProcessesStore {
           unwrapList<DeclarationAcceptanceView>(accRes.body, "declarations"),
         );
       }
+      void this.refreshQaRollout();
 
       this.loadError.set(null);
       this.loaded.set(true);
+      void this.loadDeclarationStatuses();
     } catch (err) {
       if (this.activeCount === 0) return;
       this.loaded.set(true);
@@ -499,6 +608,35 @@ export class ProcessesStore {
 
   // --- Repo Workflows & .grain/ Declarations ---
 
+  private readonly declStatusAsked = new Set<string>();
+
+  // loadDeclarationStatuses reads, once per visit, the declarations of
+  // each declaring repository not read yet, for its triggers. Selecting a
+  // repository on the declarations tab reads it again (loadRepoInspect).
+  private async loadDeclarationStatuses(): Promise<void> {
+    const repos = this.declaringRepos().filter(
+      (r) =>
+        !this.declStatusAsked.has(r) &&
+        this.access.can("GET /api/repos/{owner}/{name}/declarations", r),
+    );
+    await Promise.all(
+      repos.map(async (repo) => {
+        const { owner, name } = splitRepo(repo);
+        if (!owner || !name) return;
+        this.declStatusAsked.add(repo);
+        const decl = await this.api
+          .get<RepoDefaultsView>("GET /api/repos/{owner}/{name}/declarations", {
+            owner,
+            name,
+          })
+          .catch(() => null);
+        if (decl && this.activeCount > 0) {
+          this.repoDefaults.update((m) => ({ ...m, [repo]: decl }));
+        }
+      }),
+    );
+  }
+
   async loadRepoInspect(repo: string): Promise<void> {
     const clean = repo.trim();
     if (!clean) return;
@@ -506,6 +644,9 @@ export class ProcessesStore {
     if (!owner || !name) return;
     this.repoLoading.set(clean);
     try {
+      if (!this.access.configLoaded()) {
+        await this.ensureConfig();
+      }
       const [decl, wf] = await Promise.all([
         this.access.can("GET /api/repos/{owner}/{name}/declarations", clean)
           ? this.api

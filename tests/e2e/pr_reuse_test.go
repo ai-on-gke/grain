@@ -139,11 +139,11 @@ func TestSecondAttemptPushReusesTheFirstAttemptsOpenPullRequest(t *testing.T) {
 	actor := human("dana")
 	task := model.Task{
 		ID: "iss-325", Intent: model.IntentImplement, Title: "issue iss-325",
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 		Binding: model.BindingDirective,
 		Target:  &repo,
 	}
-	if model.LandsQueued(task.Origin) {
+	if model.LandsQueued(task.Filing) {
 		task.Approval = &model.Attribution{Actor: actor}
 	}
 	if err := store.PutTask(ctx, task); err != nil {

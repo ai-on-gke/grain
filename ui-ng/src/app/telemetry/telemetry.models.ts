@@ -215,6 +215,155 @@ export interface MetricsReport {
   failed?: MetricsSectionFailure[];
 }
 
+export interface QAArmMetrics {
+  arm: string;
+  assignedOrigins: number;
+  tasksTotal: number;
+  prsOpened: number;
+  prsMerged: number;
+  heldByQaGate: number;
+  blindEscapes: number;
+  blindEscapeRate: number;
+  blindEscapeCiLow: number;
+  blindEscapeCiHigh: number;
+  blindReviewEscapes: number;
+  blindReviewEscapeRate: number;
+  firstPushCiEvaluated: number;
+  firstPushCiGreen: number;
+  firstPushCiGreenRate: number;
+  stackedFixes: number;
+  stackedFixRate: number;
+  postMergeChurn7d: number;
+  postMergeChurn7dRate: number;
+  promptsMeasured: number;
+  threadCuts: number;
+  threadCutShare: number;
+  qaSkillPromptByteShare: number;
+}
+
+export interface QACheckRuleSummary {
+  ruleId: string;
+  stage: string;
+  enforcedRuns: number;
+  shadowRuns: number;
+  passCount: number;
+  failCount: number;
+  errorCount: number;
+  catchRate: number;
+  findingsCount: number;
+  filteredTheaterCount: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  meanAllocBytes: number;
+  helpfulVotes: number;
+  notHelpfulVotes: number;
+  notHelpfulRate: number;
+  notHelpfulWilsonLb: number;
+}
+
+export interface QAShadowRecall {
+  controlTasksChecked: number;
+  shadowWouldBlock: number;
+  shadowCatchRate: number;
+  controlBlindEscapes: number;
+  matchedBlindEscapes: number;
+  pairedRecall: number;
+  matchedEscapes: number;
+  matchedRecall: number;
+}
+
+export interface QATwoByTwoStratum {
+  regimeId: number;
+  rolloutPct: number;
+  treatEvents: number;
+  treatN: number;
+  ctrlEvents: number;
+  ctrlN: number;
+}
+
+export interface QACMHResult {
+  strata: number;
+  riskDiff: number;
+  riskDiffCiLow: number;
+  riskDiffCiHigh: number;
+  oddsRatio: number;
+  pValue: number;
+}
+
+export interface QAOnlineCUPEDResult {
+  treatN: number;
+  ctrlN: number;
+  rawTreatMean: number;
+  rawCtrlMean: number;
+  adjTreatMean: number;
+  adjCtrlMean: number;
+  adjDelta: number;
+  adjRelativeDelta: number;
+  ciLow: number;
+  ciHigh: number;
+  varianceReduction: number;
+}
+
+export interface QAHLResult {
+  treatN: number;
+  ctrlN: number;
+  treatMedian: number;
+  ctrlMedian: number;
+  shift: number;
+  shiftCiLow: number;
+  shiftCiHigh: number;
+  relativeShift: number;
+  mannWhitneyP: number;
+}
+
+export interface QAMSPRTResult {
+  n: number;
+  meanDiff: number;
+  likelihoodRatio: number;
+  pSeq: number;
+  halfWidth95: number;
+  significant: boolean;
+}
+
+export interface QACircuitBreaker {
+  minSampleMet: boolean;
+  treatmentSample: number;
+  minRequiredSample: number;
+  shouldAutoDowngrade: boolean;
+  reasons?: string[];
+  fastLaneLatencyMsprt: QAMSPRTResult;
+  blindEscapeMsprt: QAMSPRTResult;
+}
+
+export interface QASummary {
+  costMeasured: boolean;
+  since: string;
+  until: string;
+  windowSeconds: number;
+  repos?: string[];
+  enabled: boolean;
+  flowId: string;
+  rolloutPct: number;
+  shadowOnControl: boolean;
+  epoch: number;
+  regimeId: number;
+  treatment: QAArmMetrics;
+  control: QAArmMetrics;
+  regimeStrata: QATwoByTwoStratum[];
+  blindEscapeCmh: QACMHResult;
+  relativeEscapeLift: number;
+  fisherExactP: number;
+  barnardExactP: number;
+  costCuped: QAOnlineCUPEDResult;
+  tokensCuped: QAOnlineCUPEDResult;
+  fastLaneTimeToPrSeconds: QAHLResult;
+  overallTimeToPrSeconds: QAHLResult;
+  originTimeToLandSeconds: QAHLResult;
+  shadowRecall: QAShadowRecall;
+  checks: QACheckRuleSummary[];
+  circuitBreaker: QACircuitBreaker;
+}
+
 export interface TokenBudget {
   connection: string;
   model?: string;
@@ -250,6 +399,18 @@ export interface UsageScope {
   burnPerHour: number;
   runsOutAt?: string;
   sustainableWorkers?: number;
+  // Which limit the pause in force met (pkg/usage PauseHorizon).
+  pauseHorizon?: "weekly" | "interval" | string;
+  // The 7-day horizon beside the interval window (pkg/usage weekly.go).
+  weeklyRuns?: number;
+  weeklyUsed?: number;
+  weeklyWindowStart?: string;
+  weeklyLimit?: number;
+  weeklyLimitSource?: "learned" | string;
+  weeklyRemaining?: number;
+  weeklyResetAt?: string;
+  weeklyPausedUntil?: string;
+  weeklyRunsOutAt?: string;
 }
 
 export interface UsageTotals {
@@ -442,6 +603,38 @@ export function formatCompactNum(n: number | undefined | null): string {
 export function formatPct(rate: number | undefined | null): string {
   if (rate === undefined || rate === null || !Number.isFinite(rate)) return "—";
   return `${(rate * 100).toFixed(1)}%`;
+}
+
+export function formatSignedPctPoints(diff: number | undefined | null): string {
+  if (diff === undefined || diff === null || !Number.isFinite(diff)) return "—";
+  const pts = diff * 100;
+  if (Math.abs(pts) < 0.05) return "0.0 pp";
+  return `${pts > 0 ? "+" : "−"}${Math.abs(pts).toFixed(1)} pp`;
+}
+
+export function formatSignedRelPct(rel: number | undefined | null): string {
+  if (rel === undefined || rel === null || !Number.isFinite(rel)) return "—";
+  const pct = rel * 100;
+  if (Math.abs(pct) < 0.05) return "0.0%";
+  return `${pct > 0 ? "+" : "−"}${Math.abs(pct).toFixed(1)}%`;
+}
+
+export function formatSignedDurationSec(
+  sec: number | undefined | null,
+): string {
+  if (sec === undefined || sec === null || !Number.isFinite(sec)) return "—";
+  if (Math.abs(sec) < 0.5) return "0s";
+  const sign = sec > 0 ? "+" : "−";
+  return `${sign}${formatDurationSec(Math.abs(sec))}`;
+}
+
+export function formatCheckDurationMs(ms: number | undefined | null): string {
+  if (ms === undefined || ms === null || !Number.isFinite(ms) || ms < 0) {
+    return "—";
+  }
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const sec = ms / 1000;
+  return sec >= 10 ? `${Math.round(sec)}s` : `${sec.toFixed(1)}s`;
 }
 
 export function buildThroughputGeometry(

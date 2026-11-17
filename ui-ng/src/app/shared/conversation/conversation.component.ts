@@ -47,12 +47,24 @@ import { isTypingTarget } from "../../services/keyboard.service";
 
 export type ConversationMode = "inline" | "expanded" | "fullscreen";
 
+// CommentTarget names a comment a `#comment=<id>` link asks to show; seq
+// changes on every request so following the same link twice reveals the
+// comment again.
+export interface CommentTarget {
+  id: number;
+  seq: number;
+}
+
+// How long a deep-linked comment keeps its highlight.
+const HIGHLIGHT_MS = 4000;
+
 // Pixels from the bottom within which the thread counts as "following" new
 // messages; further up, new messages raise the jump pill instead.
 const FOLLOW_SLACK_PX = 48;
 
 export interface ComposerConfig {
   placeholder?: string;
+  sendOnEnter?: boolean;
   submitLabel?: string;
   secondaryLabel?: string;
   disabled?: boolean;
@@ -163,7 +175,10 @@ export interface ComposerConfig {
             [class.is-human]="human(c)"
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
+            [class.comment-highlight]="c.id === highlightedCommentId()"
+            [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
+            [attr.tabindex]="c.id === highlightedCommentId() ? -1 : null"
           >
             <span class="msg-meta">
               <span class="msg-author">
@@ -241,8 +256,7 @@ export interface ComposerConfig {
             [disabled]="config()?.disabled"
             (input)="draft.set($any($event.target).value)"
             (paste)="onPaste($event)"
-            (keydown.control.enter)="onEnter($event)"
-            (keydown.meta.enter)="onEnter($event)"
+            (keydown)="onEnter($event)"
           ></textarea>
           <g-attachment-picker
             testid="task-attach"
@@ -252,7 +266,12 @@ export interface ComposerConfig {
           />
           <div class="action-bar convo-actions">
             <span class="muted composer-hint"
-              >Ctrl+Enter sends &middot; paste or drop files</span
+              >{{
+                config()?.sendOnEnter
+                  ? "Enter sends · Shift+Enter adds a line"
+                  : "Ctrl+Enter sends"
+              }}
+              &middot; paste or drop files</span
             >
             @if (config()?.secondaryLabel) {
               <button
@@ -321,6 +340,10 @@ export class ConversationComponent implements OnDestroy {
 
   readonly olderCount = input<number>(0);
   readonly loadingOlder = input<boolean>(false);
+  // targetComment is the comment a #comment=<id> link names: once it is in
+  // comments() the thread scrolls it into view (instantly, so long threads
+  // do not visibly travel), focuses it, and highlights it for a moment.
+  readonly targetComment = input<CommentTarget | null>(null);
 
   readonly mode = model<ConversationMode>("inline");
 
@@ -336,6 +359,7 @@ export class ConversationComponent implements OnDestroy {
 
   /** Messages that arrived while the reader was scrolled up. */
   protected readonly unseen = signal(0);
+  protected readonly highlightedCommentId = signal<number | null>(null);
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
@@ -346,8 +370,10 @@ export class ConversationComponent implements OnDestroy {
   protected readonly human = isHuman;
 
   private following = true;
-  private lastCount = 0;
+  private lastTailId: number | null = null;
   private lastTask = "";
+  private appliedTargetSeq = 0;
+  private highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     effect(() => {
@@ -355,6 +381,7 @@ export class ConversationComponent implements OnDestroy {
       untracked(() => {
         this.stagedAttachments.set([]);
         this.unseen.set(0);
+        this.clearHighlight();
       });
     });
 
@@ -368,17 +395,21 @@ export class ConversationComponent implements OnDestroy {
         if (typeof el.showModal === "function") el.showModal();
         else el.setAttribute("open", "");
         this.composer()?.nativeElement.focus();
-        this.scrollToEnd();
+        if (this.following) this.scrollToEnd();
       } else if (m !== "fullscreen" && el.open) {
         el.close();
       }
     });
 
     // Follow new messages when the reader is at the bottom; otherwise count
-    // them for the "New messages" pill. A task switch always jumps to the end.
+    // the ones that arrived at the end for the "New messages" pill (older
+    // history paged in above is not news). A task switch jumps to the end;
+    // a deep-linked comment wins over both.
     afterRenderEffect(() => {
-      const n = this.comments().length;
+      const list = this.comments();
+      const tailId = list.length ? list[list.length - 1].id : null;
       const task = this.taskId();
+      const target = this.targetComment();
       this.transcript();
       this.mode();
       this.watchThread();
@@ -387,17 +418,62 @@ export class ConversationComponent implements OnDestroy {
         for (const child of Array.from(el.children)) this.resize.observe(child);
       }
       const switched = task !== this.lastTask;
-      const grew = n > this.lastCount;
-      if (switched || this.following) {
+      if (target !== null && target.seq !== this.appliedTargetSeq) {
+        this.following = false;
+        if (this.revealTargetComment(target.id)) {
+          this.appliedTargetSeq = target.seq;
+        }
+        if (this.unseen()) this.unseen.set(0);
+      } else if (switched || this.following) {
         this.scrollToEnd();
         this.following = true;
         if (this.unseen()) this.unseen.set(0);
-      } else if (grew) {
-        this.unseen.update((u) => u + (n - this.lastCount));
+      } else if (
+        tailId !== null &&
+        this.lastTailId !== null &&
+        tailId > this.lastTailId
+      ) {
+        const prevTail = this.lastTailId;
+        const added = list.filter((c) => c.id > prevTail).length;
+        if (added) this.unseen.update((u) => u + added);
       }
       this.lastTask = task;
-      this.lastCount = n;
+      this.lastTailId = tailId;
     });
+  }
+
+  // revealTargetComment scrolls comment id into the middle of the thread,
+  // focuses it without a second scroll, and highlights it. It reports
+  // false while the comment is not rendered yet.
+  private revealTargetComment(id: number): boolean {
+    const root =
+      this.mode() === "fullscreen"
+        ? this.modal()?.nativeElement
+        : this.thread()?.nativeElement;
+    const el = root?.querySelector<HTMLElement>(
+      `article.msg[data-comment-id="${id}"]`,
+    );
+    if (!el) return false;
+    this.highlightedCommentId.set(id);
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    this.highlightTimer = setTimeout(() => {
+      this.highlightTimer = null;
+      if (this.highlightedCommentId() === id) {
+        this.highlightedCommentId.set(null);
+      }
+    }, HIGHLIGHT_MS);
+    if (typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+    el.tabIndex = -1;
+    el.focus({ preventScroll: true });
+    return true;
+  }
+
+  private clearHighlight(): void {
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    this.highlightTimer = null;
+    this.highlightedCommentId.set(null);
   }
 
   private resize?: ResizeObserver;
@@ -424,6 +500,7 @@ export class ConversationComponent implements OnDestroy {
   // inert, so it stays where Angular rendered it (no manual DOM moves).
   ngOnDestroy() {
     this.resize?.disconnect();
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
     const el = this.modal()?.nativeElement;
     if (el?.open) el.close();
   }
@@ -506,7 +583,9 @@ export class ConversationComponent implements OnDestroy {
   }
 
   protected onEnter(ev: Event): void {
-    if ((ev as KeyboardEvent).isComposing) return;
+    const k = ev as KeyboardEvent;
+    if (k.key !== "Enter" || k.isComposing || k.shiftKey) return;
+    if (!this.config()?.sendOnEnter && !k.ctrlKey && !k.metaKey) return;
     ev.preventDefault();
     this.submit();
   }

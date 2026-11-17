@@ -114,7 +114,7 @@ type TaskTiming struct {
 	// repo by.
 	Repo string
 	// Author is who the task is attributed to
-	// (Origin.Attribution.Actor.ID) -- the UI's `author` filter, again in
+	// (Filing.Attribution.Actor.ID) -- the UI's `author` filter, again in
 	// its own spelling, so that a query narrowed on screen scopes a
 	// report without translation.
 	Author string
