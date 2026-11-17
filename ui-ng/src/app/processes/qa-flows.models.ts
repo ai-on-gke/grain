@@ -1149,12 +1149,17 @@ export function buildClientWorkflowStagesView(
       index: 1,
       label: CANONICAL_STAGE_LABELS["s0-decompose"],
       boundary: "controller_fresh_context",
-      enabled: s0Intent || decompEnabled,
+      enabled:
+        s0Intent ||
+        decompEnabled ||
+        s0Steps.some((s) => s.kind === "skill_step" && s.enabled),
       mode: decompEnabled
         ? decomp.mode || "slice_plan"
         : s0Intent
           ? "warn"
-          : "off",
+          : s0Steps.some((s) => s.kind === "skill_step" && s.enabled)
+            ? "active"
+            : "off",
       summary:
         "Extracts testable acceptance criteria and decomposes medium/high-complexity work into reviewable slices.",
       steps: s0Steps,
@@ -1175,8 +1180,14 @@ export function buildClientWorkflowStagesView(
       index: 3,
       label: CANONICAL_STAGE_LABELS["s2-plan"],
       boundary: "isolated_critic",
-      enabled: s2PlanCritic,
-      mode: s2PlanCritic ? "active" : "off",
+      enabled:
+        s2PlanCritic ||
+        s2PlanSteps.some((s) => s.id !== "s2:plan-critic" && s.enabled),
+      mode:
+        s2PlanCritic ||
+        s2PlanSteps.some((s) => s.id !== "s2:plan-critic" && s.enabled)
+          ? "active"
+          : "off",
       summary:
         "Audits the proposed file plan and sibling importers in a fresh context before heavy code edits.",
       steps: s2PlanSteps,
@@ -1208,8 +1219,15 @@ export function buildClientWorkflowStagesView(
       index: 6,
       label: CANONICAL_STAGE_LABELS["s3-pr"],
       boundary: "pre_pr_contract",
-      enabled: prActive || Boolean(stopNudge),
-      mode: prActive ? prContract.mode || "warn" : stopNudge ? "active" : "off",
+      enabled:
+        prActive ||
+        Boolean(stopNudge) ||
+        prSteps.some((s) => s.kind === "skill_step" && s.enabled),
+      mode: prActive
+        ? prContract.mode || "warn"
+        : stopNudge || prSteps.some((s) => s.kind === "skill_step" && s.enabled)
+          ? "active"
+          : "off",
       summary:
         "Enforces commit/PR subject length, required sections, lint-suppression audits, and self-review nudges.",
       steps: prSteps,
@@ -1219,8 +1237,18 @@ export function buildClientWorkflowStagesView(
       index: 7,
       label: CANONICAL_STAGE_LABELS["s4-verify"],
       boundary: "fresh_context_readonly_verifier",
-      enabled: Boolean(verifierEnabled),
-      mode: verifierEnabled ? "blocking" : "off",
+      enabled:
+        Boolean(verifierEnabled) ||
+        s4Steps.some(
+          (s) => s.id !== "golden:s4-orthogonal-verifier" && s.enabled,
+        ),
+      mode: verifierEnabled
+        ? "blocking"
+        : s4Steps.some(
+              (s) => s.id !== "golden:s4-orthogonal-verifier" && s.enabled,
+            )
+          ? "active"
+          : "off",
       summary:
         "Executes a fresh-context read-only verification pass with zero author chain-of-thought and grounded evidence checks.",
       steps: s4Steps,

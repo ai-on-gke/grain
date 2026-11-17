@@ -387,7 +387,7 @@ function defaultFixturesForEngine(engine: CustomCheckEngine): {
                       </li>
                     }
 
-                    @if (canEdit()) {
+                    @if (canEdit() && stageSupportsAddSubstep(stage.id)) {
                       <li>
                         <button
                           type="button"
@@ -501,8 +501,9 @@ function defaultFixturesForEngine(engine: CustomCheckEngine): {
           (draftLabelChange)="draftLabelChange.emit($event)"
           (draftSummaryChange)="draftSummaryChange.emit($event)"
           (addSkillStepReq)="addSkillStepForStage($event)"
-          (addCheckReq)="addCheck($event)"
-          (addCustomStageReq)="addCustomStage()"
+          (addCheckReq)="addCheck($event.engine, $event.stageId)"
+          (addCustomStageReq)="addCustomStage($event)"
+          (jumpToStageAddReq)="jumpToStageAdd($event)"
           (s0IntentChange)="s0Intent.set($event)"
           (decomposeEnabledChange)="decomposeEnabled.set($event)"
           (decomposeModeChange)="updateDecomposeMode($event)"
@@ -996,7 +997,7 @@ export class QaV3StudioComponent {
 
   readonly isPartialReadonlyFilterActive = computed(
     () =>
-      !this.editing() &&
+      (this.embedded() || !this.editing()) &&
       this.stepSearch().trim() === "" &&
       this.kindFilter() === "all",
   );
@@ -1100,14 +1101,9 @@ export class QaV3StudioComponent {
       const d4 = this.declV4();
       const det = this.detail();
       const isEd = this.editing();
-      const identity = [
-        det?.hash ?? "",
-        det?.key ?? "",
-        d4?.key ?? "",
-        d3?.key ?? "",
-        d4 ? "v4" : "",
-        d3 ? "v3" : "",
-      ].join("|");
+      const identity = det
+        ? `detail:${det.hash ?? ""}|${det.key ?? ""}`
+        : `standalone:${d4?.key ?? ""}|${d3?.key ?? ""}|${d4 ? "v4" : ""}|${d3 ? "v3" : ""}`;
       const discardedEdit = this.wasEditing && !isEd;
       this.wasEditing = isEd;
 
@@ -1148,6 +1144,7 @@ export class QaV3StudioComponent {
       readonly mode: "inherit" | "append" | "replace";
       readonly text: string;
     },
+    preserveSelection = false,
   ): void {
     const d3 = det?.declarationV3 ?? det?.declaration?.declarationV3;
     const d4 = det?.declarationV4 ?? det?.declaration?.declarationV4;
@@ -1156,7 +1153,9 @@ export class QaV3StudioComponent {
       this.codingSkillMode.set(skillOverride.mode);
       this.codingSkillText.set(skillOverride.text);
     }
-    this.addingForStageId.set(null);
+    if (!preserveSelection) {
+      this.addingForStageId.set(null);
+    }
     this.fixtureReport.set(null);
     this.dryRunResult.set(null);
   }
@@ -1653,6 +1652,15 @@ export class QaV3StudioComponent {
     this.selectStep(target.stageId, target.stepId);
   }
 
+  stageSupportsAddSubstep(stageId: string): boolean {
+    return stageId !== "s1-context" && stageId !== "s5-triage";
+  }
+
+  jumpToStageAdd(targetStageId: string): void {
+    this.showSkippedStages.set(true);
+    this.requestAddSubstep(targetStageId);
+  }
+
   requestAddSubstep(stageId: string): void {
     this.collapsedStages.update((prev) => ({ ...prev, [stageId]: false }));
     this.selectedStageId.set(stageId);
@@ -1761,12 +1769,7 @@ export class QaV3StudioComponent {
       "s4-verify": "s4",
     };
     const stg = stageMap[stageId] ?? "coding";
-    const targetStageViewId =
-      stageId === "s1-context" ||
-      stageId === "s3-checks" ||
-      stageId === "s5-triage"
-        ? "s2-coding"
-        : stageId;
+    const targetStageViewId = stageMap[stageId] ? stageId : "s2-coding";
     const seq = this.nextUid++;
     const id = `step:custom-${stg}-${seq}`;
     const newStep: SkillStepDecl = {
@@ -1832,9 +1835,17 @@ export class QaV3StudioComponent {
   protected updateStageInsertAfter(uid: number, val: string): void {
     const insertAfter: InsertAfterStage =
       val === "s2" || val === "s4" ? val : "s3";
+    const destStageId =
+      insertAfter === "s2"
+        ? "s2-plan"
+        : insertAfter === "s4"
+          ? "s4-verify"
+          : "s3-checks";
     this.customStages.update((list) =>
       list.map((s) => (s.uid === uid ? { ...s, insertAfter } : s)),
     );
+    this.collapsedStages.update((prev) => ({ ...prev, [destStageId]: false }));
+    this.selectedStageId.set(destStageId);
   }
 
   protected updateStageTimeout(uid: number, timeoutSeconds: number): void {
@@ -1847,7 +1858,15 @@ export class QaV3StudioComponent {
     );
   }
 
-  addCustomStage(): void {
+  addCustomStage(stageId = "s3-checks"): void {
+    const insertAfter: InsertAfterStage =
+      stageId === "s2-plan" ? "s2" : stageId === "s4-verify" ? "s4" : "s3";
+    const targetStageId =
+      insertAfter === "s2"
+        ? "s2-plan"
+        : insertAfter === "s4"
+          ? "s4-verify"
+          : "s3-checks";
     const uid = this.nextUid++;
     const id = `custom:stage-${uid}`;
     this.customStages.update((s) => [
@@ -1855,14 +1874,17 @@ export class QaV3StudioComponent {
       {
         uid,
         id,
-        label: `Custom critic stage ${uid}`,
-        insertAfter: "s3",
+        label: `Custom critic pass ${uid}`,
+        insertAfter,
         timeoutSeconds: 30,
       },
     ]);
     this.addingForStageId.set(null);
-    this.collapsedStages.update((prev) => ({ ...prev, "s3-checks": false }));
-    this.selectedStageId.set("s3-checks");
+    this.collapsedStages.update((prev) => ({
+      ...prev,
+      [targetStageId]: false,
+    }));
+    this.selectedStageId.set(targetStageId);
     this.selectedStepId.set(id);
   }
 
@@ -1874,7 +1896,8 @@ export class QaV3StudioComponent {
     }
   }
 
-  addCheck(engine: CustomCheckEngine): void {
+  addCheck(engine: CustomCheckEngine, stageId = "s3-checks"): void {
+    const targetStageId = stageId === "s3-checks" ? stageId : "s3-checks";
     const uid = this.nextUid++;
     const id = `custom:check-${uid}`;
     const def = defaultFixturesForEngine(engine);
@@ -1905,8 +1928,11 @@ export class QaV3StudioComponent {
       },
     ]);
     this.addingForStageId.set(null);
-    this.collapsedStages.update((prev) => ({ ...prev, "s3-checks": false }));
-    this.selectedStageId.set("s3-checks");
+    this.collapsedStages.update((prev) => ({
+      ...prev,
+      [targetStageId]: false,
+    }));
+    this.selectedStageId.set(targetStageId);
     this.selectedStepId.set(id);
   }
 

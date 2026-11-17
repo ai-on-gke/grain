@@ -301,7 +301,7 @@ describe("QaV3StudioComponent", () => {
     expect(postSpy.mock.calls[0][0]).toBe("POST /api/qa/flow-versions");
     expect(postSpy.mock.calls[0][3]).toBe("dryRun=1");
     const yamlBody = (postSpy.mock.calls[0][2] as { yaml: string }).yaml;
-    expect(yamlBody).toContain('insert-after: "s3"');
+    expect(yamlBody).toContain('insert-after: "s4"');
     expect(yamlBody).toContain("timeout-seconds: 30");
     expect(root.textContent).toContain("sha256:v3preview");
 

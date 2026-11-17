@@ -1244,7 +1244,7 @@ export class QaFlowsPanelComponent {
 
   protected enterDraftFromStudio(): void {
     if (!this.isEditing() && this.canAdmin()) {
-      this.newVersion();
+      this.newVersion(true);
     }
   }
 
@@ -1877,12 +1877,12 @@ export class QaFlowsPanelComponent {
     }
   }
 
-  newVersion(): void {
+  newVersion(preserveSelection = false): void {
     ++this.dryRunSeq;
     this.dryRunBusy.set(false);
     this.isEditing.set(true);
     this.isFork.set(false);
-    this.initDraft();
+    this.initDraft(preserveSelection);
   }
 
   onForkFlowMenuClick(): void {
@@ -1912,7 +1912,7 @@ export class QaFlowsPanelComponent {
     this.openMobileDrawerIfPhone();
   }
 
-  initDraft(): void {
+  initDraft(preserveSelection = false): void {
     const detail = this.selectedDetail();
     if (!detail) return;
     const explicitSkill = extractExplicitSkillDecl(
@@ -2015,7 +2015,7 @@ export class QaFlowsPanelComponent {
     this.draftChecks.set(checks);
     this.draftCheckParams.set(params);
     this.draftDeclaration.set(draft);
-    this.studio()?.resetToDetail(detail, draft.skill);
+    this.studio()?.resetToDetail(detail, draft.skill, preserveSelection);
   }
 
   cancelEdit(): void {

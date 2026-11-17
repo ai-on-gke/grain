@@ -276,85 +276,131 @@ function readInputChecked(ev: Event): boolean {
                 </div>
 
                 <div class="qa-type-catalog">
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-skill"
-                    (click)="addSkillStepReq.emit(targetStage.id)"
-                  >
-                    <span class="qa-type-title">Markdown skill</span>
-                    <span class="qa-type-desc"
-                      >Inject concise stage instructions scoped to matching file
-                      globs.</span
+                  @if (canAddSkillToStage(targetStage.id)) {
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-skill"
+                      (click)="addSkillStepReq.emit(targetStage.id)"
                     >
-                  </button>
+                      <span class="qa-type-title">Markdown skill</span>
+                      <span class="qa-type-desc"
+                        >Inject concise stage instructions scoped to matching
+                        file globs in {{ targetStage.label }}.</span
+                      >
+                    </button>
+                  }
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-pattern"
-                    (click)="addCheckReq.emit('pattern')"
-                  >
-                    <span class="qa-type-title">Pattern check</span>
-                    <span class="qa-type-desc"
-                      >Flag forbidden regex patterns on added diff lines,
-                      verified with two example lines.</span
+                  @if (canAddChecksToStage(targetStage.id)) {
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-pattern"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'pattern',
+                        })
+                      "
                     >
-                  </button>
+                      <span class="qa-type-title">Pattern check</span>
+                      <span class="qa-type-desc"
+                        >Flag forbidden regex patterns on added diff lines,
+                        verified with two example lines.</span
+                      >
+                    </button>
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-companion"
-                    (click)="addCheckReq.emit('companion')"
-                  >
-                    <span class="qa-type-title">Companion file check</span>
-                    <span class="qa-type-desc"
-                      >Require matching migration, test, or doc updates when
-                      watched files change.</span
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-companion"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'companion',
+                        })
+                      "
                     >
-                  </button>
+                      <span class="qa-type-title">Companion file check</span>
+                      <span class="qa-type-desc"
+                        >Require matching migration, test, or doc updates when
+                        watched files change.</span
+                      >
+                    </button>
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-diff-budget"
-                    (click)="addCheckReq.emit('diff-budget')"
-                  >
-                    <span class="qa-type-title">Diff-budget check</span>
-                    <span class="qa-type-desc"
-                      >Cap added lines per file scope so pull requests remain
-                      focused and reviewable.</span
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-diff-budget"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'diff-budget',
+                        })
+                      "
                     >
-                  </button>
+                      <span class="qa-type-title">Diff-budget check</span>
+                      <span class="qa-type-desc"
+                        >Cap added lines per file scope so pull requests remain
+                        focused and reviewable.</span
+                      >
+                    </button>
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-jsonschema"
-                    (click)="addCheckReq.emit('jsonschema')"
-                  >
-                    <span class="qa-type-title"
-                      >Configuration schema check</span
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-jsonschema"
+                      (click)="
+                        addCheckReq.emit({
+                          stageId: targetStage.id,
+                          engine: 'jsonschema',
+                        })
+                      "
                     >
-                    <span class="qa-type-desc"
-                      >Validate structured configuration files before pull
-                      request review.</span
-                    >
-                  </button>
+                      <span class="qa-type-title"
+                        >Configuration schema check</span
+                      >
+                      <span class="qa-type-desc"
+                        >Validate structured configuration files before pull
+                        request review.</span
+                      >
+                    </button>
+                  }
 
-                  <button
-                    type="button"
-                    class="qa-type-card"
-                    data-testid="qa-v3-add-stage"
-                    (click)="addCustomStageReq.emit()"
-                  >
-                    <span class="qa-type-title">AI critic stage</span>
-                    <span class="qa-type-desc"
-                      >Run an isolated custom verification stage after plan,
-                      pre-PR checks, or diff review.</span
+                  @if (canAddCriticToStage(targetStage.id)) {
+                    <button
+                      type="button"
+                      class="qa-type-card"
+                      data-testid="qa-v3-add-stage"
+                      (click)="addCustomStageReq.emit(targetStage.id)"
                     >
-                  </button>
+                      <span class="qa-type-title">Custom critic substep</span>
+                      <span class="qa-type-desc"
+                        >Run an isolated verification pass inside
+                        {{ targetStage.label }}.</span
+                      >
+                    </button>
+                  }
+
+                  @if (targetStage.id !== "s3-checks") {
+                    <button
+                      type="button"
+                      class="btn-text"
+                      data-testid="qa-jump-stage5-checks"
+                      (click)="jumpToStageAddReq.emit('s3-checks')"
+                    >
+                      Need a deterministic file or regex check? Add in Stage 5 →
+                    </button>
+                  } @else {
+                    <button
+                      type="button"
+                      class="btn-text"
+                      data-testid="qa-jump-stage4-skills"
+                      (click)="jumpToStageAddReq.emit('s2-coding')"
+                    >
+                      Need coding or readability instructions? Add in Stage 4 →
+                    </button>
+                  }
                 </div>
               </div>
             } @else if (step) {
@@ -2044,6 +2090,28 @@ export class QaStepDrawerComponent {
     this.openHelpKey.update((cur) => (cur === key ? null : key));
   }
 
+  protected canAddSkillToStage(stageId: string): boolean {
+    return (
+      stageId === "s0-decompose" ||
+      stageId === "s2-plan" ||
+      stageId === "s2-coding" ||
+      stageId === "s3-pr" ||
+      stageId === "s4-verify"
+    );
+  }
+
+  protected canAddChecksToStage(stageId: string): boolean {
+    return stageId === "s3-checks";
+  }
+
+  protected canAddCriticToStage(stageId: string): boolean {
+    return (
+      stageId === "s2-plan" ||
+      stageId === "s3-checks" ||
+      stageId === "s4-verify"
+    );
+  }
+
   readonly detail = input<QAFlowVersionDetail | null>(null);
   readonly stages = input<readonly WorkflowStageView[]>([]);
   readonly selectedStage = input<WorkflowStageView | null>(null);
@@ -2118,8 +2186,12 @@ export class QaStepDrawerComponent {
   readonly draftSummaryChange = output<string>();
 
   readonly addSkillStepReq = output<string>();
-  readonly addCheckReq = output<CustomCheckEngine>();
-  readonly addCustomStageReq = output<void>();
+  readonly addCheckReq = output<{
+    stageId: string;
+    engine: CustomCheckEngine;
+  }>();
+  readonly addCustomStageReq = output<string>();
+  readonly jumpToStageAddReq = output<string>();
 
   readonly s0IntentChange = output<boolean>();
   readonly decomposeEnabledChange = output<boolean>();
