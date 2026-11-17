@@ -336,6 +336,10 @@ func TestAccessCodeSessionConfirmsRemovingItsOwnEntry(t *testing.T) {
 	if rec.Code/100 != 2 {
 		t.Fatalf("DELETE user:alice@example.com?confirmSelf=1: %d %s, want it removed once confirmed", rec.Code, rec.Body)
 	}
+	rec = serveFrom(srv, networkAddr, http.MethodDelete, "/api/access/principals/user:alice@example.com", "", headers)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("DELETE missing user:alice@example.com from alice's code session: %d %s, want 404 without asking to confirm", rec.Code, rec.Body)
+	}
 }
 
 // Removing the session's own entry when it is the last person on the

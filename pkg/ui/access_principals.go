@@ -720,7 +720,7 @@ func checkSelfAccessConfirm(ctx context.Context, caller *accessRole, ch accessCh
 // here: an allowlist naming nobody lets the code sign in as any email, and
 // Settings -> Access already warns about removing the last entry.
 func (c *Client) checkAccessCodeSelfRemoval(ctx context.Context, ch accessChange) error {
-	if ch.role != "" || ch.confirmSelf {
+	if ch.current == "" || ch.role != "" || ch.confirmSelf {
 		return nil
 	}
 	name := accessCodeNameFromContext(ctx)
