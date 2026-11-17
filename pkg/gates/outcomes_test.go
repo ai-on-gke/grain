@@ -82,6 +82,13 @@ func TestDeliveryVariantsAndCompatibilityAreInert(t *testing.T) {
 			if len(r.Actions) != 0 || len(r.Work) != 0 || len(r.Waits) != 0 {
 				t.Fatal("delivery produced an effect")
 			}
+			if product == "change" && selected != "report" {
+				f.Complete = false
+				if got := Evaluate(outcomeBinding("delivery", DeliveryConfig{Product: selected, Semantics: "current_v1"}), f, now, 1).Status; got != want {
+					t.Fatalf("unrelated report gap changed delivered artifact: %s", got)
+				}
+				f.Complete = true
+			}
 			f.Blocked = true
 			if got := Evaluate(outcomeBinding("delivery", DeliveryConfig{Product: selected, Semantics: "legacy_finish_v1"}), f, now, 1).Status; got != "pending" {
 				t.Fatalf("blocked precedence=%s", got)

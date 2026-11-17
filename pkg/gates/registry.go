@@ -236,6 +236,14 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 			return evaluateChildren(b, f, r)
 		}
 	}
+	if now.Before(f.ValidUntil) && b.Type == "delivery" && (f.Product == "change" || f.Product == "nothing_needed") && f.ProductEvidence != nil && f.ProductUnknown == "" {
+		var config DeliveryConfig
+		_ = json.Unmarshal(b.Config, &config)
+		if config.Product != "report" {
+			r.Dependencies[0].Complete = true
+			return evaluateDelivery(config, f, r)
+		}
+	}
 	if !f.Complete {
 		if f.IncompleteReason != "" {
 			r.Summary = f.IncompleteReason

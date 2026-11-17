@@ -170,6 +170,13 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		if replay.Results[0].Revision != v.Results[0].Revision {
 			t.Fatal("restart duplicated accepted collection")
 		}
+		now = now.Add(time.Second)
+		source(task, "acme/outcomes#7", "head-1", "closed", "")
+		if status(observe(task), "delivery-change") != "met" || status(observe(task), "pr_merged") != "unmet" {
+			t.Fatal("delivered change was confused with integration")
+		}
+		now = now.Add(time.Second)
+		source(task, "acme/outcomes#7", "head-1", "merged", "")
 		// A slow old failed collector cannot rewind the positive source.
 		s.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{Resource: "acme/outcomes#7", State: "unknown", At: now.Add(-time.Second)})
 		if status(observe(task), "pr_merged") != "met" {

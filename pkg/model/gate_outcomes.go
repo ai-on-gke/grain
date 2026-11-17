@@ -166,7 +166,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			}
 			known := true
 			for _, resource := range resources {
-				if !resource.Complete || !now.Before(resource.ValidUntil) || !oneOfOutcome(resource.State, "open", "merged", "submitted", "equivalent") {
+				if !resource.Complete || !now.Before(resource.ValidUntil) || !oneOfOutcome(resource.State, "open", "closed", "abandoned", "merged", "submitted", "equivalent") {
 					known = false
 				}
 			}
@@ -183,6 +183,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			f.ProductUnknown = "The finish selected a change, but its complete exact-head provenance is unavailable."
 		}
 	}
+	legacyChildBinding := ""
 	g, err := scanTaskGoal(q.QueryRowContext(ctx, "SELECT "+taskGoalColumns+" FROM `task_goal` WHERE `task_id` = ?", f.TaskID).Scan)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -194,7 +195,9 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			if predicate == "" {
 				predicate = "closed"
 			}
-			selected = append(append([]gates.ChildrenConfig(nil), selected...), gates.ChildrenConfig{Tasks: g.Spec.Tasks, Predicate: predicate})
+			config := gates.ChildrenConfig{Tasks: g.Spec.Tasks, Predicate: predicate}
+			legacyChildBinding = "children-" + predicate + "-" + gates.Digest(config)[7:19]
+			selected = append(append([]gates.ChildrenConfig(nil), selected...), config)
 		case GoalPRMerged, GoalCLSubmitted:
 			resources, changeSubject, legacyMet, err := captureGoalIntegration(ctx, q, *t, g)
 			if err != nil {
@@ -225,7 +228,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			continue
 		}
 		seen[id] = true
-		add(id, "children", c, subject, false)
+		add(id, "children", c, subject, id == legacyChildBinding)
 		for _, childID := range c.Tasks {
 			if len(f.Children) >= 64 {
 				if _, ok := f.Children[childID]; !ok {
@@ -445,8 +448,9 @@ func captureChildOutcome(ctx context.Context, q querier, parent Task, id string,
 		o = &Observation{}
 	}
 	var outcome, runID string
+	var runStarted time.Time
 	var finished sql.NullTime
-	err = q.QueryRowContext(ctx, "SELECT `id`,COALESCE(`outcome`,''),`finished_at` FROM `task_run` WHERE `task_id` = ? ORDER BY `attempt` DESC LIMIT 1", id).Scan(&runID, &outcome, &finished)
+	err = q.QueryRowContext(ctx, "SELECT `id`,COALESCE(`outcome`,''),`started_at`,`finished_at` FROM `task_run` WHERE `task_id` = ? ORDER BY `attempt` DESC LIMIT 1", id).Scan(&runID, &outcome, &runStarted, &finished)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return child, err
 	}
@@ -461,6 +465,11 @@ func captureChildOutcome(ctx context.Context, q querier, parent Task, id string,
 	if err != nil {
 		return child, err
 	}
+	var reopened time.Time
+	reopenErr := q.QueryRowContext(ctx, "SELECT `at` FROM `task_event` WHERE `task_id` = ? AND `kind` = 'reopened' ORDER BY `id` DESC LIMIT 1", id).Scan(&reopened)
+	if reopenErr != nil && !errors.Is(reopenErr, sql.ErrNoRows) {
+		return child, reopenErr
+	}
 	child.Known = true
 	child.Closed = o.ClosedAt != nil
 	child.LegacyMerged = o.PrMergedAt != nil
@@ -474,9 +483,12 @@ func captureChildOutcome(ctx context.Context, q querier, parent Task, id string,
 		}
 		integrated := true
 		for _, r := range resources {
-			if !r.Complete || !now.Before(r.ValidUntil) || (r.State != "merged" && r.State != "submitted" && r.State != "equivalent") {
+			if r.ObservedAt.Before(runStarted) || (!reopened.IsZero() && !r.ObservedAt.After(reopened)) || !r.Complete || !now.Before(r.ValidUntil) || (r.State != "merged" && r.State != "submitted" && r.State != "equivalent") {
 				integrated = false
 			}
+		}
+		if !integrated && !reopened.IsZero() {
+			child.MergedKnown = false
 		}
 		if integrated {
 			child.Merged = child.Closed

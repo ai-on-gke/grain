@@ -340,14 +340,21 @@ func TestGateChildHistoryUsesCurrentReadPermissions(t *testing.T) {
 	read := func() struct {
 		View        gates.ObservationView            `json:"gate_observations"`
 		Diagnostics model.GateObservationDiagnostics `json:"gate_observation_diagnostics"`
-	} { t.Helper(); code, body := asAgent(t, srv, "child-observe-caller", http.MethodGet, "/api/tasks/child-observe-parent", "", ""); if code != 200 {
-		t.Fatalf("read=%d %s", code, body)
-	}; var result struct {
-		View        gates.ObservationView            `json:"gate_observations"`
-		Diagnostics model.GateObservationDiagnostics `json:"gate_observation_diagnostics"`
-	}; if err := json.Unmarshal([]byte(body), &result); err != nil {
-		t.Fatal(err)
-	}; return result }
+	} {
+		t.Helper()
+		code, body := asAgent(t, srv, "child-observe-caller", http.MethodGet, "/api/tasks/child-observe-parent", "", "")
+		if code != 200 {
+			t.Fatalf("read=%d %s", code, body)
+		}
+		var result struct {
+			View        gates.ObservationView            `json:"gate_observations"`
+			Diagnostics model.GateObservationDiagnostics `json:"gate_observation_diagnostics"`
+		}
+		if err := json.Unmarshal([]byte(body), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
 	before := read()
 	found := false
 	for _, r := range before.View.Results {

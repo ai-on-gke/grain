@@ -69,13 +69,16 @@ func (s *Store) RecordGateOutcomeSource(ctx context.Context, id string, source G
 			return
 		}
 		if previous.At.Equal(source.At) {
+			if previous.Proof == "ambiguous-head-order" {
+				return
+			}
 			if source.State == "unknown" && previous.State != "unknown" {
 				return
 			}
 			if previous.Head != "" && source.Head != "" && previous.Head != source.Head {
 				source.State = "unknown"
 				source.Head = ""
-				source.Proof = ""
+				source.Proof = "ambiguous-head-order"
 			}
 			if previous.Head == source.Head && (previous.State == "merged" || previous.State == "submitted" || previous.State == "equivalent") && source.State == "open" {
 				return
