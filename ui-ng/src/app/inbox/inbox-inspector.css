@@ -5,7 +5,9 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  /* Clip, not hide: a hidden pane is still a scroll container that focus
+     and scrollIntoView can slide, carrying the header out of view. */
+  overflow: clip;
   background: var(--md-sys-color-surface-container-low);
 }
 
