@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -136,15 +137,6 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 			f.IncompleteReason = "Attachment-bearing reports are incomplete in this body-only observer."
 		}
 	}
-	if cid > 0 && strings.TrimSpace(body) == "" {
-		var attachments int
-		if err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_attachment` WHERE `task_id` = ? AND `comment_id` = ?", id, cid).Scan(&attachments); err != nil {
-			return f, "", err
-		}
-		if attachments > 0 {
-			f.Complete = false
-		}
-	}
 	if cid > 0 && strings.TrimSpace(body) != "" && f.Settled && !at.Before(started) && !at.After(*o.CompletedAt) {
 		version := gates.Digest(struct {
 			ID   int64
@@ -163,7 +155,10 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 			return f, "", err
 		}
 		p := Principal{Kind: PrincipalKind(kind), ID: actor, Source: AuthSource(source)}
-		if f.Report != nil && kind == string(PrincipalHuman) && p.Verified() && !closed.Before(at) && !closed.Before(*o.CompletedAt) {
+		// These legacy close events do not name a report version. Strictly
+		// later timestamps are the only supported ordering proof: equal
+		// timestamps can also mean a revised report arrived after the close.
+		if f.Report != nil && strings.TrimSpace(actor) != "" && kind == string(PrincipalHuman) && p.Verified() && closed.After(at) && closed.After(*o.CompletedAt) {
 			version := gates.Digest(struct {
 				Event  int64
 				Report string
@@ -195,6 +190,49 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 	return f, state, nil
 }
 
+// beginGateObservation preserves normal writer serialization while bounding
+// SQLite's lock acquisition to this diagnostic's deadline. Its busy handler can
+// otherwise outlast context cancellation by the legacy five-second timeout.
+// The change belongs only to a leased connection and is restored before reuse;
+// Postgres already honors context while acquiring its advisory writer lock.
+func (s *Store) beginGateObservation(ctx context.Context) (*sql.Tx, func(), error) {
+	deadline, bounded := ctx.Deadline()
+	if !bounded || IsPostgresDB(s.db) {
+		tx, err := s.db.BeginTx(ctx, nil)
+		return tx, func() {}, err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var busy int
+	if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	release := func() {
+		// Cleanup must survive the request's cancellation. If restoration
+		// fails, discard the connection rather than changing legacy writers.
+		restore, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		if _, err := conn.ExecContext(restore, fmt.Sprintf("PRAGMA busy_timeout = %d", busy)); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		_ = conn.Close()
+	}
+	timeout := min(busy, max(1, int(time.Until(deadline).Milliseconds())))
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", timeout)); err != nil {
+		release()
+		return nil, nil, err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return tx, release, nil
+}
+
 // ObserveTaskGates is display-driven shadow maintenance. It intentionally does
 // NOT use Store.write: diagnostic commits must not signal Changed(), wake a
 // dispatcher, append integration events or contribute task-failure accounting.
@@ -204,7 +242,7 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 	var diag GateObservationDiagnostics
 	var last error
 	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, release, err := s.beginGateObservation(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -242,16 +280,17 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 				}
 				evaluations = generation
 			}
-			unsupportedCache := false
+			unsupportedCache, rejectedCache := false, false
 			if !missing {
 				var cachedView gates.ObservationView
 				if err = json.Unmarshal([]byte(previous), &cachedView); err != nil {
 					return err
 				}
 				unsupportedCache = !currentShadowBindings(cachedView, id)
+				rejectedCache = cachedView.Dirty
 			}
 			changed := missing || source != f.SourceVersion
-			if !changed && !unsupportedCache && now.Before(evaluated.Add(time.Minute)) {
+			if !changed && !unsupportedCache && !rejectedCache && now.Before(evaluated.Add(time.Minute)) {
 				if err = json.Unmarshal([]byte(previous), &view); err != nil {
 					return err
 				}
@@ -301,10 +340,11 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 		} else {
 			_ = tx.Rollback()
 		}
+		_ = tx.Rollback()
+		release()
 		if err == nil {
 			return &view, &diag, nil
 		}
-		_ = tx.Rollback()
 		last = err
 		if !isSerializationFailure(err) {
 			break
@@ -339,25 +379,15 @@ func compareReportMilestones(f gates.Facts, v gates.ObservationView) string {
 // exponential retry. No raw infrastructure errors or evidence bodies are stored.
 // This is controller state, never evaluator-private durable state.
 func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now time.Time, view *gates.ObservationView) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, release, err := s.beginGateObservation(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	view.Mode = "observation_only"
-	view.Authority = "legacy"
-	view.LifecycleEffects = false
-	view.ActionEffects = false
-	view.DispatchEffects = false
-	view.AutomaticCutover = false
-	for i := range view.Results {
-		view.Results[i].Result.Work = []struct{}{}
-		view.Results[i].Result.Actions = []struct{}{}
-	}
+	defer func() { _ = tx.Rollback(); release() }()
 	var raw string
 	var generation, evaluations uint64
-	var started time.Time
-	err = tx.QueryRowContext(ctx, "SELECT `view_json`,`generation`,`started_at`,`evaluations` FROM `gate_observation_shadow` WHERE `task_id` = ?", id).Scan(&raw, &generation, &started, &evaluations)
+	var started, evaluated time.Time
+	err = tx.QueryRowContext(ctx, "SELECT `view_json`,`generation`,`started_at`,`evaluations`,`evaluated_at` FROM `gate_observation_shadow` WHERE `task_id` = ?", id).Scan(&raw, &generation, &started, &evaluations, &evaluated)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -371,16 +401,26 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 	delay := time.Second
 	if raw != "" {
 		var old gates.ObservationView
-		if json.Unmarshal([]byte(raw), &old) == nil && old.Dirty && len(old.Results) > 0 && old.Results[0].Result.Error != nil {
-			if old.Results[0].RetryAt != nil {
+		if json.Unmarshal([]byte(raw), &old) == nil && currentShadowBindings(old, id) {
+			// now is the collection's start, not its failure completion.
+			// A slower failed request cannot replace a newer accepted read;
+			// bursts of failures share one generation until its retry is due.
+			first := old.Results[0] // currentShadowBindings validated the fixed pair
+			backingOff := old.Dirty && first.RetryAt != nil && now.Before(*first.RetryAt)
+			if !now.After(evaluated) || backingOff {
+				*view = old
+				return tx.Commit()
+			}
+			if old.Dirty && first.Result.Error != nil && first.RetryAt != nil {
 				// Recover the previous nominal delay before doubling it;
 				// retry jitter must not compound across generations.
-				prior := old.Results[0].RetryAt.Sub(old.ComparedAt)
-				nominal := prior * 100 / time.Duration(100+old.Results[0].DirtyGeneration%21)
+				prior := first.RetryAt.Sub(old.ComparedAt)
+				nominal := prior * 100 / time.Duration(100+first.DirtyGeneration%21)
 				delay = min(2*nominal, time.Minute)
 			}
 		}
 	}
+	*view = gates.UnavailableObservation(id, now)
 	generation++
 	evaluations++
 
@@ -457,18 +497,22 @@ func readGateDiagnostics(ctx context.Context, q querier, id string) (GateObserva
 	return diag, rows.Err()
 }
 
+// Prune with ordered cutoffs rather than tuple NOT IN against the retained
+// 32768-row set. SQLite can otherwise do a quadratic anti-join while holding
+// the same writer lock used by legacy work. Existing time/primary-key indexes
+// bound the scans and target only expired or overflow rows.
 func pruneGateObservations(ctx context.Context, tx *sql.Tx, id string, now time.Time) error {
-	_, err := tx.ExecContext(ctx, "DELETE FROM `gate_observation_shadow_history` WHERE `at` < ? OR (`task_id` = ? AND `generation` NOT IN (SELECT `generation` FROM `gate_observation_shadow_history` WHERE `task_id` = ? ORDER BY `generation` DESC LIMIT 1024))", now.Add(-72*time.Hour), id, id)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `gate_observation_shadow_history` WHERE `at` < ?", now.Add(-72*time.Hour)); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM `gate_observation_shadow` WHERE `evaluated_at` < ? OR `task_id` NOT IN (SELECT `task_id` FROM `gate_observation_shadow` ORDER BY `evaluated_at` DESC,`task_id` DESC LIMIT 32)", now.Add(-72*time.Hour)); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `gate_observation_shadow_history` WHERE `task_id` = ? AND `generation` <= (SELECT `generation` FROM `gate_observation_shadow_history` WHERE `task_id` = ? ORDER BY `generation` DESC LIMIT 1 OFFSET 1024)", id, id); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM `gate_observation_shadow_history` WHERE (`task_id`,`generation`) NOT IN (SELECT `task_id`,`generation` FROM `gate_observation_shadow_history` ORDER BY `at` DESC,`task_id` DESC,`generation` DESC LIMIT 32768)"); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `gate_observation_shadow` WHERE `evaluated_at` < ? OR `task_id` NOT IN (SELECT `task_id` FROM `gate_observation_shadow` ORDER BY `evaluated_at` DESC,`task_id` DESC LIMIT 32)", now.Add(-72*time.Hour)); err != nil {
 		return err
 	}
-	return nil
+	_, err := tx.ExecContext(ctx, "DELETE FROM `gate_observation_shadow_history` WHERE (`at`,`task_id`,`generation`) <= (SELECT `at`,`task_id`,`generation` FROM `gate_observation_shadow_history` ORDER BY `at` DESC,`task_id` DESC,`generation` DESC LIMIT 1 OFFSET 32768)")
+	return err
 }
 
 // Cached diagnostics cannot smuggle an unregistered profile or old build into
