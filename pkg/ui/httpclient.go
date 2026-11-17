@@ -1324,6 +1324,13 @@ func (c *HTTPClient) RecordDelivered(ctx context.Context, id string, through int
 		deliveredRequest{Through: through}, nil)
 }
 
+// RecordPRFeedbackDelivered acknowledges a fully rendered addenda batch, including
+// external PR feedback that a human-only chat reply may have skipped.
+func (c *HTTPClient) RecordPRFeedbackDelivered(ctx context.Context, id string, through int64) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/delivered",
+		deliveredRequest{Through: through, PRFeedback: true}, nil)
+}
+
 // Attachment returns one attachment's full content (GET /api/tasks/{id}/attachments/{attachmentId}).
 func (c *HTTPClient) Attachment(ctx context.Context, taskID string, id int64) (model.Attachment, error) {
 	resp, err := c.send(ctx, http.MethodGet, func() (*http.Request, error) {

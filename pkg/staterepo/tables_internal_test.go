@@ -216,6 +216,7 @@ var notSettings = []string{
 	// attachment is not something a pull request against the state
 	// repository proposes, and clearing the tables to reinstate them
 	// would race the daemon writing new ones.
+	"task_pr_feedback",
 	"task_comment",
 	"task_attachment",
 	// A durable task's compaction cursor, handover version and current

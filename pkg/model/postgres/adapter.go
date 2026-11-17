@@ -105,6 +105,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_usage":                 {"run_id"},
 	"usage_capacity":                 {"connection_id", "model"},
 	"usage_setting":                  {"id"},
+	"task_pr_feedback":               {"task_id", "event_key"},
 	"task_context":                   {"task_id"},
 	"task_brief_edit":                {"id"},
 	"tuning_recommendation":          {"id"},

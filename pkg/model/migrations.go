@@ -1156,6 +1156,7 @@ var Migrations = []Migration{
 			"ALTER TABLE `task` ADD COLUMN `qa_flow_ref` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{Version: 152, Description: "record pending PR feedback with source identity", Statements: []string{prFeedbackTable}},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
