@@ -339,9 +339,12 @@ describe("SessionsPageComponent", () => {
     const file = new File(["shot-bytes"], "screen.png", { type: "image/png" });
     Object.defineProperty(input, "files", { value: [file] });
     input.dispatchEvent(new Event("change"));
-    await settle(f);
-
-    expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+    // jsdom reads the file on its own timers, which a loaded runner can
+    // leave behind settle()'s single tick, so wait for the staged chip.
+    await vi.waitFor(async () => {
+      await settle(f);
+      expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+    });
     const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
     expect(sendBtn.disabled).toBe(false);
     sendBtn.click();
