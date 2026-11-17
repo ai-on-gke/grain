@@ -134,11 +134,11 @@ func TestListCommitStatusesReadsHistoryCreatorsAndPages(t *testing.T) {
 	}
 }
 
-func TestListCommitStatusesOfUnknownRefIsNone(t *testing.T) {
+func TestListCommitStatusesFailsClosedOnNotFound(t *testing.T) {
 	client := NewClient(NewFakeTransport(ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}), nil)
 	got, err := client.ListCommitStatuses("o", "r", "missing")
-	if err != nil || len(got) != 0 {
-		t.Fatalf("ListCommitStatuses = %+v, %v; want none and no error", got, err)
+	if !IsNotFound(err) || len(got) != 0 {
+		t.Fatalf("ListCommitStatuses on 404 = %+v, %v; want 404 *Error so rc-hold and ci checks fail closed", got, err)
 	}
 }
 

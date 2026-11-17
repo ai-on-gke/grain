@@ -435,6 +435,29 @@ func TestCLICIChecksCommitStatusesAnd403Fallback(t *testing.T) {
 	if rec := failGet("/cli/ci/checks?repo=acme/widgets&sha=" + rcSHA + "&format=github"); rec.Code != http.StatusNotFound {
 		t.Errorf("ci/checks with status error and no app = %d %s, want 404", rec.Code, rec.Body)
 	}
+
+	// Rate-limit 403s on /check-runs and any 403 on a GitHub App credential
+	// must fail closed rather than silently zero check_runs.
+	rateLimitForge := forge
+	rateLimitForge.checkErr = &github.Error{
+		Status: http.StatusForbidden,
+		Body:   []byte(`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`),
+	}
+	rateLimitGet := forgeProxy(t, rateLimitForge)
+	if rec := rateLimitGet("/cli/ci/checks?repo=acme/widgets&sha=" + rcSHA + "&name=grain/release-qualification&format=github"); rec.Code != http.StatusNotFound {
+		t.Errorf("ci/checks with secondary rate-limit 403 = %d %s, want 404 fail-closed", rec.Code, rec.Body)
+	}
+
+	app403Forge := forge
+	app403Forge.app = "grain-test"
+	app403Forge.checkErr = &github.Error{
+		Status: http.StatusForbidden,
+		Body:   []byte(`{"message":"Resource not accessible by integration"}`),
+	}
+	app403Get := forgeProxy(t, app403Forge)
+	if rec := app403Get("/cli/ci/checks?repo=acme/widgets&sha=" + rcSHA + "&name=grain/release-qualification&format=github"); rec.Code != http.StatusNotFound {
+		t.Errorf("ci/checks with GitHub App 403 = %d %s, want 404 fail-closed", rec.Code, rec.Body)
+	}
 }
 
 func TestCLIGitHubShapesCommitStatusQualificationInCandidateGate(t *testing.T) {
@@ -448,7 +471,7 @@ func TestCLIGitHubShapesCommitStatusQualificationInCandidateGate(t *testing.T) {
 	base := qualifiedRC()
 	base.app = ""
 	base.checks = nil
-	base.checkErr = &github.Error{Status: http.StatusForbidden, Body: []byte("PAT cannot read Checks API")}
+	base.checkErr = &github.Error{Status: http.StatusForbidden, Body: []byte(`{"message":"Resource not accessible by personal access token"}`)}
 	base.statusLogin = "grain-pat-bot"
 
 	runGate := func(t *testing.T, forge fakeForgeCI, appOverride, loginOverride string) (string, int) {

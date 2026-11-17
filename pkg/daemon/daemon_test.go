@@ -33,7 +33,11 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log"
 	"net/http"
@@ -47,10 +51,17 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
+
+type routeTransportFunc func(method, path string) github.ApiResponse
+
+func (f routeTransportFunc) Request(method, path string, _ map[string]string, _ []byte) (github.ApiResponse, error) {
+	return f(method, path), nil
+}
 
 func TestReadTrimmedFile(t *testing.T) {
 	t.Parallel()
@@ -136,6 +147,54 @@ func TestCredentialTokenSourceTokenFor(t *testing.T) {
 		}
 		if login, err := src.StatusLoginFor("other", "repo"); login != "" || err != nil {
 			t.Fatalf("StatusLoginFor for unmatched repo = (%q, %v), want empty", login, err)
+		}
+	})
+
+	t.Run("StatusLoginFor names PAT login and stays empty for GitHub Apps", func(t *testing.T) {
+		set, err := gitproxy.LoadCredentialSet(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+		set.AppTransport = routeTransportFunc(func(method, path string) github.ApiResponse {
+			switch method + " " + path {
+			case "GET /user":
+				return github.ApiResponse{Status: 200, Body: []byte(`{"login":"grain-pat-bot","id":77,"name":"Grain Bot"}`)}
+			case "POST /app/installations/67890/access_tokens":
+				return github.ApiResponse{Status: 201, Body: []byte(`{"token":"ghs_inst","expires_at":"` + exp + `"}`)}
+			case "GET /app":
+				return github.ApiResponse{Status: 200, Body: []byte(`{"id":12345,"slug":"grain-app","name":"Grain App"}`)}
+			default:
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}
+			}
+		})
+		if err := set.SetPAT("pat", "ghp_secret"); err != nil {
+			t.Fatal(err)
+		}
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+		if err := set.SetApp("app", "12345", "67890", string(keyPEM)); err != nil {
+			t.Fatal(err)
+		}
+		patSrc := credentialTokenSource{
+			credentials:    set,
+			teamCredential: func(_, owner, _ string) (string, bool) { return "pat", owner == "acme" },
+		}
+		if login, err := patSrc.StatusLoginFor("acme", "widgets"); err != nil || login != "grain-pat-bot" {
+			t.Fatalf("StatusLoginFor(PAT) = (%q, %v), want grain-pat-bot", login, err)
+		}
+		appSrc := credentialTokenSource{
+			credentials:    set,
+			teamCredential: func(_, owner, _ string) (string, bool) { return "app", owner == "acme" },
+		}
+		if slug, err := appSrc.AppSlugFor("acme", "widgets"); err != nil || slug != "grain-app" {
+			t.Fatalf("AppSlugFor(App) = (%q, %v), want grain-app", slug, err)
+		}
+		if login, err := appSrc.StatusLoginFor("acme", "widgets"); err != nil || login != "" {
+			t.Fatalf("StatusLoginFor(App) = (%q, %v), want empty so App credentials use check runs only", login, err)
 		}
 	})
 

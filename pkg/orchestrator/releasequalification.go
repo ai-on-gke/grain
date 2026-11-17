@@ -419,40 +419,50 @@ func isCandidateLabelByte(b byte) bool {
 		(b >= '0' && b <= '9') || b == '.' || b == '-' || b == '_'
 }
 
-// statusMentionsCandidate reports whether desc names label as a whole
-// candidate token (so v1.4.0-rc.1 does not match v1.4.0-rc.10 or v1.4.0).
-func statusMentionsCandidate(desc, label string) bool {
+// candidateLabelEnd returns the byte offset right after label as a whole
+// candidate token in s (so v1.4.0-rc.1 does not match v1.4.0-rc.10 or
+// v1.4.0), or -1 when s does not name label.
+func candidateLabelEnd(s, label string) int {
 	if label == "" {
-		return false
+		return -1
 	}
-	for from := 0; from < len(desc); {
-		i := strings.Index(desc[from:], label)
+	for from := 0; from < len(s); {
+		i := strings.Index(s[from:], label)
 		if i < 0 {
-			return false
+			return -1
 		}
 		start := from + i
 		end := start + len(label)
-		leftOK := start == 0 || !isCandidateLabelByte(desc[start-1])
-		rightOK := end == len(desc) || !isCandidateLabelByte(desc[end])
+		leftOK := start == 0 || !isCandidateLabelByte(s[start-1])
+		rightOK := end == len(s) || !isCandidateLabelByte(s[end])
 		if leftOK && rightOK {
-			return true
+			return end
 		}
 		from = start + 1
 	}
-	return false
+	return -1
 }
 
-// parseStatusAttempt extracts the Stage 2 attempt number from a commit
-// status description for rcTag ("Qualifying <rcTag> (attempt N)" or
+// statusMentionsCandidate reports whether desc names label as a whole
+// candidate token (so v1.4.0-rc.1 does not match v1.4.0-rc.10 or v1.4.0).
+func statusMentionsCandidate(desc, label string) bool {
+	return candidateLabelEnd(desc, label) >= 0
+}
+
+// parseStatusAttempt extracts the Stage 2 attempt number from the
+// orchestrator-controlled header of a commit status description for rcTag
+// ("Qualifying <rcTag> (attempt N)" or
 // "Release qualification of <rcTag> (attempt N): ..."), returning (1, true)
-// when rcTag is named with no attempt suffix.
+// when rcTag is named in the header with no attempt suffix. Anything after
+// ":" (which may carry an item's closing-note reason) is ignored so agent
+// output cannot match another candidate or spoof an attempt number.
 func parseStatusAttempt(desc, rcTag string) (int, bool) {
-	if !statusMentionsCandidate(desc, rcTag) {
+	head, _, _ := strings.Cut(desc, ":")
+	labelEnd := candidateLabelEnd(head, rcTag)
+	if labelEnd < 0 {
 		return 0, false
 	}
-	const marker = " (attempt "
-	if i := strings.Index(desc, marker); i >= 0 {
-		rest := desc[i+len(marker):]
+	if rest, ok := strings.CutPrefix(head[labelEnd:], " (attempt "); ok {
 		if end := strings.IndexByte(rest, ')'); end > 0 {
 			if n, err := strconv.Atoi(rest[:end]); err == nil && n >= 2 && strconv.Itoa(n) == rest[:end] {
 				return n, true

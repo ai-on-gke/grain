@@ -645,10 +645,12 @@ func (p *GitProxy) serveCIChecks(w http.ResponseWriter, r *http.Request, scope n
 		statuses, statusLogin, statusErr = statusReader.ExternalCommitStatuses(r.Context(), repo, sha, name)
 	}
 	if checkErr != nil {
-		var ghErr *github.Error
-		if hasStatusReader && statusErr == nil && errors.As(checkErr, &ghErr) && ghErr.Status == http.StatusForbidden {
-			// A fine-grained PAT cannot read the Checks API (HTTP 403),
-			// while commit statuses remain readable.
+		if hasStatusReader && statusErr == nil && app == "" && github.IsPermissionDenied(checkErr) {
+			// A fine-grained PAT cannot read the Checks API (HTTP 403
+			// "Resource not accessible by..."), while commit statuses remain
+			// readable. Rate-limit, SAML and IP allow-list 403s, and any 403
+			// on a GitHub App credential, are not PAT permission denials and
+			// must fail closed rather than silently zero check_runs.
 			runs = nil
 			note = "check runs unreadable (HTTP 403); reading commit statuses"
 		} else {

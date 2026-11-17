@@ -128,7 +128,10 @@ func (c *RESTClient) CommitStatuses(owner, repo, ref string) ([]CommitStatus, er
 
 // ListCommitStatuses is GET /repos/{owner}/{repo}/commits/{ref}/statuses:
 // every commit status posted against ref, newest first, with each entry's
-// creator login. A ref GitHub does not know answers no statuses.
+// creator login. Like ListCheckRuns, non-200 responses (including 404 when
+// the ref is unknown or the credential has lost access to the repository)
+// return *Error so callers such as grain/rc-hold fail closed rather than
+// reading a missing permission as an empty status list.
 func (c *RESTClient) ListCommitStatuses(owner, repo, ref string) ([]CommitStatus, error) {
 	var out []CommitStatus
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/statuses?per_page=100", owner, repo, url.PathEscape(ref))
@@ -136,9 +139,6 @@ func (c *RESTClient) ListCommitStatuses(owner, repo, ref string) ([]CommitStatus
 		resp, err := c.get(owner, repo, path)
 		if err != nil {
 			return nil, err
-		}
-		if resp.Status == 404 || resp.Status == 422 {
-			return out, nil
 		}
 		if resp.Status != 200 {
 			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}

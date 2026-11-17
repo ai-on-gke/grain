@@ -1013,13 +1013,13 @@ func (a actionsExternalRuns) ExternalCheckRuns(ctx context.Context, repoText, sh
 	if !ok {
 		return nil, "", errors.New("this deployment's forge connection cannot list a commit's check runs")
 	}
-	runs, err := reader.ListCheckRunAttempts(repo.StoredOwner(), repo.Name, sha, name)
-	if err != nil {
-		return nil, "", fmt.Errorf("reading the check runs on %s of %s from the forge: %w", sha, repo, err)
-	}
 	app, err := reader.CheckRunApp(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		app = ""
+	}
+	runs, err := reader.ListCheckRunAttempts(repo.StoredOwner(), repo.Name, sha, name)
+	if err != nil {
+		return nil, app, fmt.Errorf("reading the check runs on %s of %s from the forge: %w", sha, repo, err)
 	}
 	out := make([]ci.GitHubCheckRun, 0, len(runs))
 	for _, r := range runs {

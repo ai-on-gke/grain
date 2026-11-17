@@ -653,9 +653,12 @@ func TestReleaseQualificationCommitStatusIgnoresUntrustedAndEarlierCandidate(t *
 			// Untrusted login spoofing a passing verdict for rqTag.
 			{ID: 1, Context: model.ReleaseQualificationCheckName, State: "success",
 				Description: "Release qualification of " + rqTag + ": success", Creator: "untrusted-user"},
-			// Earlier discarded rc.1 on the same commit from grain's own login.
+			// Earlier discarded rc.1 on the same commit from grain's own login,
+			// even when the item's closing-note reason after ":" mentions rqTag
+			// or an attempt marker.
 			{ID: 2, Context: model.ReleaseQualificationCheckName, State: "failure",
-				Description: "Release qualification of v1.4.0-rc.1: failure", Creator: "grain-pat-bot"},
+				Description: "Release qualification of v1.4.0-rc.1: failure - item: fail -- saw " + rqTag + " (attempt 5)",
+				Creator:     "grain-pat-bot"},
 		},
 	}
 
@@ -665,8 +668,41 @@ func TestReleaseQualificationCommitStatusIgnoresUntrustedAndEarlierCandidate(t *
 		t.Fatalf("tasks = %v, want Stage 2 started despite untrusted and earlier-rc statuses", tasks)
 	}
 	sts := forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
-	if len(sts) != 3 || sts[2].State != "pending" || sts[2].Creator != "grain-pat-bot" || !strings.Contains(sts[2].Description, rqTag) {
-		t.Fatalf("statuses = %+v, want a new pending status for %s from grain-pat-bot", sts, rqTag)
+	if len(sts) != 3 || sts[2].State != "pending" || sts[2].Creator != "grain-pat-bot" || sts[2].Description != "Qualifying "+rqTag {
+		t.Fatalf("statuses = %+v, want a new attempt-1 pending status for %s from grain-pat-bot", sts, rqTag)
+	}
+}
+
+func TestReleaseQualificationCommitStatusSummaryCannotSpoofAttempt(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.app = ""
+	forge.statusLogin = "grain-pat-bot"
+	forge.nightly = "success"
+	baseTag := model.ReleaseQualificationTag(repo, rqTag)
+
+	// An attempt-1 infra-stall status whose item summary mentions "(attempt 5)"
+	// after ":" must still advance to attempt 2, not attempt 6.
+	forge.statuses = map[string][]github.CommitStatus{
+		rqSHA: {
+			{
+				ID:          1,
+				Context:     model.ReleaseQualificationCheckName,
+				State:       "error",
+				Description: "Release qualification of " + rqTag + ": neutral - item: infra (task 1, attempt 3) -- failed (attempt 5)",
+				Creator:     "grain-pat-bot",
+			},
+		},
+	}
+	syncQualification(t, ctx, store, forge, baseTime)
+	tag2 := model.QualificationAttemptTag(baseTag, 2)
+	tasks2 := qualificationTasksForTag(t, ctx, store, tag2)
+	if len(tasks2["qualification-mergequeue"]) != 1 {
+		t.Fatalf("attempt 2 tasks = %v, want attempt 2 started rather than spoofed attempt 6", tasks2)
+	}
+	sts := forge.statusesForContext(rqSHA, model.ReleaseQualificationCheckName)
+	if len(sts) != 2 || sts[1].State != "pending" || sts[1].Description != "Qualifying "+rqTag+" (attempt 2)" {
+		t.Fatalf("statuses = %+v, want Qualifying %s (attempt 2)", sts, rqTag)
 	}
 }
 
