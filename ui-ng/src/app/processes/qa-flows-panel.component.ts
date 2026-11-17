@@ -39,6 +39,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { DialogTrapDirective } from "../shared/dialog-trap.directive";
 import {
   type PillOption,
   PillSelectComponent,
@@ -75,6 +76,7 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
     QaV3StudioComponent,
     PillSelectComponent,
     ConfirmDialogComponent,
+    DialogTrapDirective,
     StatusIconComponent,
     TipDirective,
     RouterLink,
@@ -541,6 +543,116 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
       </div>
     </div>
 
+    @if (guideDialogOpen()) {
+      <div
+        class="qa-guide-backdrop"
+        role="presentation"
+        (click)="guideDialogOpen.set(false)"
+      >
+        <div
+          class="qa-guide-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qa-guide-dialog-title"
+          data-testid="qa-guide-dialog"
+          gDialogTrap
+          (gDialogClose)="guideDialogOpen.set(false)"
+          (click)="$event.stopPropagation()"
+          (keydown)="$event.stopPropagation()"
+        >
+          <div class="qa-guide-head">
+            <div>
+              <span class="qa-drawer-eyebrow">Workflow reference</span>
+              <h3 id="qa-guide-dialog-title">
+                How Software Workflows &amp; QA stages work
+              </h3>
+            </div>
+            <button
+              type="button"
+              class="qa-icon-close-btn"
+              data-testid="qa-close-guide-dialog"
+              aria-label="Close workflow guide"
+              (click)="guideDialogOpen.set(false)"
+            >
+              ×
+            </button>
+          </div>
+          <ol class="qa-guide-steps">
+            <li>
+              <strong>Inspect safely:</strong> Expand any stage in the center
+              spine and click a substep to read its prompt or rule logic without
+              modifying live tasks.
+            </li>
+            <li>
+              <strong>Customize in an isolated draft:</strong> Click
+              <strong>Customize</strong> (or <strong>+ Add substep</strong>
+              inside a stage) to add stage-scoped skills, zero-JSON checks, or
+              critic passes.
+            </li>
+            <li>
+              <strong>Validate &amp; roll out:</strong> Run
+              <strong>Test on recent PRs</strong>, click
+              <strong>Publish</strong> to mint an immutable
+              <code>&#64;vN</code> version, then click
+              <strong>Set as default…</strong> or compare in an A/B experiment.
+            </li>
+          </ol>
+          <div class="qa-guide-grid">
+            <div class="qa-guide-stage-card">
+              <strong>1 · Goal &amp; subtask breakdown</strong>
+              Extracts testable acceptance criteria and slices complex tasks.
+              Add: <em>Markdown skill</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>2 · Context &amp; blast radius</strong>
+              Built-in 0..100 blast scorer (T0..T3) plus caller &amp; memory
+              discovery.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>3 · Plan &amp; fresh critique</strong>
+              Fresh-context file-plan &amp; caller audit. Add:
+              <em>Markdown skill</em>, <em>Custom critic substep</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>4 · Coding &amp; readability rules</strong>
+              Core coding contract &amp; language packs (Go, TS/Angular, Python,
+              C++). Add: <em>Markdown skill</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>5 · Pre-PR deterministic gates</strong>
+              Sub-second AST/diff floors &amp; zero-JSON rules. Add:
+              <em>Pattern</em>, <em>Companion</em>, <em>Diff-budget</em>,
+              <em>Schema</em>, or <em>Custom critic</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>6 · PR authoring &amp; self-review</strong>
+              Subject length, required PR sections, and turn-end self-audit.
+              Add: <em>Markdown skill</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>7 · Adversarial verification</strong>
+              Read-only fresh-context diff verifier on T2/T3 changes. Add:
+              <em>Markdown skill</em>, <em>Custom critic substep</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>8 · Scorecard &amp; merge triage</strong>
+              Tighten-only T0/T1 auto-merge vs. T2/T3 human-review hold.
+            </div>
+          </div>
+          <div class="dialog-actions">
+            <button
+              type="button"
+              class="btn-primary"
+              data-testid="qa-guide-got-it-btn"
+              (click)="guideDialogOpen.set(false)"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+
     @if (confirmRequest(); as req) {
       <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
     }
@@ -580,6 +692,7 @@ export class QaFlowsPanelComponent {
   readonly showParentDiff = signal(false);
   readonly testMenuOpen = signal(false);
   readonly moreMenuOpen = signal(false);
+  readonly guideDialogOpen = signal(false);
 
   readonly dryRunBusy = signal(false);
   readonly dryRunResult = signal<QADryRunResponse | null>(null);
@@ -1115,8 +1228,9 @@ export class QaFlowsPanelComponent {
   }
 
   protected openGuide(): void {
+    this.closeMenus();
     this.studio()?.openGuide();
-    this.openMobileDrawerIfPhone();
+    this.guideDialogOpen.set(true);
   }
 
   protected openYamlTab(): void {

@@ -19,6 +19,7 @@ import {
   computed,
   input,
   output,
+  signal,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import type { DiffPreviewFile } from "../api/models";
@@ -374,7 +375,9 @@ function readInputChecked(ev: Event): boolean {
                       type="button"
                       class="qa-help-btn"
                       aria-label="About this substep"
+                      [attr.aria-expanded]="openHelpKey() === 'substep'"
                       [gTip]="helpTipFor(step)"
+                      (click)="toggleHelp('substep', $event)"
                     >
                       ?
                     </button>
@@ -390,6 +393,12 @@ function readInputChecked(ev: Event): boolean {
                     </button>
                   </div>
                 </div>
+
+                @if (openHelpKey() === "substep") {
+                  <div class="qa-example-box" data-testid="qa-inline-help">
+                    <span class="qa-kv-val">{{ helpTipFor(step) }}</span>
+                  </div>
+                }
 
                 <p class="qa-drawer-sub">{{ step.summary }}</p>
 
@@ -770,7 +779,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Activation</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-pack-activation"
                             ariaLabel="Readability pack activation"
                             [options]="packActivationOptions"
@@ -934,7 +942,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Enforcement</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-check-severity-select"
                             ariaLabel="Check enforcement"
                             [options]="severityOptions"
@@ -1511,7 +1518,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Enforcement</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-builtin-check-severity"
                             ariaLabel="Built-in check enforcement"
                             [disabled]="!step.enabled"
@@ -1550,7 +1556,6 @@ function readInputChecked(ev: Event): boolean {
                         <div class="qa-field">
                           <span class="qa-field-label">Enforcement</span>
                           <g-pill-select
-                            align="left"
                             testid="qa-pr-mode-select"
                             ariaLabel="PR contract enforcement"
                             [options]="prModeOptions"
@@ -1760,11 +1765,24 @@ function readInputChecked(ev: Event): boolean {
                       type="button"
                       class="qa-help-btn"
                       aria-label="About workflow studio"
+                      [attr.aria-expanded]="openHelpKey() === 'guide'"
                       gTip="Select any stage substep to inspect it, or click Customize to draft and verify changes safely before publishing."
+                      (click)="toggleHelp('guide', $event)"
                     >
                       ?
                     </button>
                   </div>
+                  @if (openHelpKey() === "guide") {
+                    <div class="qa-example-box" data-testid="qa-inline-help">
+                      <span class="qa-kv-val"
+                        >Workflows run up to 8 ordered stages around every agent
+                        task. Published versions are immutable; click Customize
+                        in the toolbar to draft a new version safely without
+                        affecting running tasks until you publish and activate
+                        it.</span
+                      >
+                    </div>
+                  }
                   <ol class="qa-guide-steps">
                     <li>
                       Expand any stage in the center spine and click a substep
@@ -1878,11 +1896,22 @@ function readInputChecked(ev: Event): boolean {
                   type="button"
                   class="qa-help-btn"
                   aria-label="About empirical validation"
+                  [attr.aria-expanded]="openHelpKey() === 'empirical'"
                   gTip="Dry-runs evaluate deterministic checks against recent pull requests without altering live task execution."
+                  (click)="toggleHelp('empirical', $event)"
                 >
                   ?
                 </button>
               </div>
+              @if (openHelpKey() === "empirical") {
+                <div class="qa-example-box" data-testid="qa-inline-help">
+                  <span class="qa-kv-val"
+                    >Dry-runs replay your deterministic checks against the last
+                    20 pull requests and report how many PRs would block or warn
+                    before you publish.</span
+                  >
+                </div>
+              }
               @if (canDryRun() || canProbe()) {
                 <div class="qa-field-row">
                   @if (canDryRun()) {
@@ -2008,6 +2037,12 @@ function readInputChecked(ev: Event): boolean {
 })
 export class QaStepDrawerComponent {
   readonly maxPromptBudgetBytes = MAX_PROMPT_BUDGET_BYTES;
+  protected readonly openHelpKey = signal<string | null>(null);
+
+  protected toggleHelp(key: string, ev: Event): void {
+    ev.stopPropagation();
+    this.openHelpKey.update((cur) => (cur === key ? null : key));
+  }
 
   readonly detail = input<QAFlowVersionDetail | null>(null);
   readonly stages = input<readonly WorkflowStageView[]>([]);
