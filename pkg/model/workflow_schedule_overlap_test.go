@@ -105,7 +105,7 @@ func fileReview(t *testing.T, store *model.Store, ctx context.Context, sched mod
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  sched.Title,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.SchedulePrincipal},
 			Reason:      model.ReasonSchedule,
 		},

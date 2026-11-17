@@ -86,7 +86,8 @@ type Category struct {
 //
 // v30 adds the authorization-bearing, secret-handling, route-registering and
 // release-signing surfaces found unclassified by the structural classification
-// hygiene test (task 5325): pkg/ghwebhook/, pkg/ui/verifier_session.go (the
+// hygiene test (task 5325): pkg/ghwebhook/, pkg/ui/qa_flow_api.go (qa:admin
+// gated flow edits), pkg/ui/verifier_session.go (the
 // verifier's HMAC-signed session binding), Unix-socket SO_PEERCRED / host
 // account and local access-code auth (pkg/ui/hostaccount.go, peercred_linux.go,
 // peercred_other.go, localtoken.go), role-gated handlers and scope-set storage
@@ -353,6 +354,8 @@ var Categories = []Category{
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
 			"pkg/ui/team_scope.go",
+			// The QA flow API gates flow edits on the qa:admin scope.
+			"pkg/ui/qa_flow_api.go",
 			// The agent API: which scope each route needs, which scopes
 			// are Dangerous, and the escalation and self-protection rails.
 			"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",

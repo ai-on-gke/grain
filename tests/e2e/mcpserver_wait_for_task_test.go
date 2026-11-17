@@ -57,7 +57,7 @@ func TestWaitForTaskParksThenResumesWhenTheTargetMerges(t *testing.T) {
 	for _, id := range []string{"a1", "b1"} {
 		if err := store.PutTask(ctx, model.Task{
 			ID: id, Intent: model.IntentAnalyze, Title: "task " + id, Body: "please",
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: actor},
 			Binding:  model.BindingDirective,
 		}); err != nil {

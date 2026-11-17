@@ -159,7 +159,7 @@ func TestEventsLifecycleOrderingPayloadAndNoSecretOrTranscriptLeak(t *testing.T)
 		CreatedAt:  &createdAt,
 		FiledVia:   "plc-studio",
 		WorkOrigin: "acme/widgets#500",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}},
 		},
 		Links: []model.Link{
@@ -754,7 +754,7 @@ func TestEventsAuthorizationFilteringAcrossPrincipalsAndRoles(t *testing.T) {
 		ID:        "704",
 		Title:     "Deployment-wide no-repo chore",
 		CreatedAt: &noRepoCreated,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "boss@example.com"}},
 		},
 	}); err != nil {

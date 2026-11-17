@@ -43,7 +43,7 @@ func TestDemoPendingAccessHookParksTheTask(t *testing.T) {
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "parked", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 	}); err != nil {
 		t.Fatal(err)

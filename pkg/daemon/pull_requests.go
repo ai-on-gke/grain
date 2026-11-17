@@ -43,6 +43,10 @@ type PullRequestOpener struct {
 }
 
 func (o *PullRequestOpener) OpenForTask(ctx context.Context, taskID string) (ui.PullRequestStatus, error) {
+	return o.OpenForTaskWithOptions(ctx, taskID, ui.OpenPullRequestOptions{})
+}
+
+func (o *PullRequestOpener) OpenForTaskWithOptions(ctx context.Context, taskID string, opts ui.OpenPullRequestOptions) (ui.PullRequestStatus, error) {
 	task, err := o.Store.GetTask(ctx, taskID)
 	if err != nil {
 		return ui.PullRequestStatus{}, err
@@ -50,7 +54,10 @@ func (o *PullRequestOpener) OpenForTask(ctx context.Context, taskID string) (ui.
 	if task == nil {
 		return ui.PullRequestStatus{}, fmt.Errorf("no task %s", taskID)
 	}
-	status, err := orchestrator.OpenPullRequestForTask(ctx, o.Store, o.Client, *task)
+	status, err := orchestrator.OpenPullRequestForTaskWithQA(ctx, o.Store, o.Client, *task, orchestrator.QAOpenPROptions{
+		CallerNotes:         opts.CallerNotes,
+		AllowHoldAfterS3Cap: opts.AllowHoldAfterS3Cap,
+	})
 	if err != nil {
 		return ui.PullRequestStatus{}, err
 	}
@@ -207,13 +214,17 @@ func (o *PullRequestOpener) Close(ctx context.Context, ref string) error {
 type PullRequestGate struct{}
 
 func (PullRequestGate) OpenForTask(ctx context.Context, taskID string) (ui.PullRequestStatus, error) {
+	return PullRequestGate{}.OpenForTaskWithOptions(ctx, taskID, ui.OpenPullRequestOptions{})
+}
+
+func (PullRequestGate) OpenForTaskWithOptions(ctx context.Context, taskID string, opts ui.OpenPullRequestOptions) (ui.PullRequestStatus, error) {
 	opener := LivePullRequests.Load()
 	if opener == nil {
 		return ui.PullRequestStatus{}, errors.New(
 			"this daemon has no GitHub client yet, so it cannot open a pull request: " +
 				"its reconcile loop has not started (or has failed -- check the daemon log)")
 	}
-	return opener.OpenForTask(ctx, taskID)
+	return opener.OpenForTaskWithOptions(ctx, taskID, opts)
 }
 
 // ReattachForTask is the same gate for ui.PullRequestReattacher.

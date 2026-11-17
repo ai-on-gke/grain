@@ -469,7 +469,7 @@ func TestSharedSandboxBudgetContentionHoldsCIJobsAndAdmitsStuckWaitForChecksJob(
 			ID:       id,
 			Intent:   model.IntentImplement,
 			Title:    "Agent task " + id,
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: who}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: who}, Reason: model.ReasonDirect},
 			Binding:  model.BindingDirective,
 			Approval: &model.Attribution{Actor: who},
 		}

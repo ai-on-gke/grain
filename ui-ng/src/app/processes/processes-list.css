@@ -106,6 +106,12 @@ a.proc-row {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .proc-row {
+    transition: none;
+  }
+}
+
 /* One control height across a subbar: chips, the suites/runs switch and
    the sort sit on one baseline (36px in toolbars, the design book's rule). */
 .proc-subbar .filter-chip,

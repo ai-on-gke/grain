@@ -123,8 +123,8 @@ func TestACLReviewIsFiledWithTheProvidersReadOnlyGrant(t *testing.T) {
 		t.Fatalf("%d reviews filed, want one per snapshot", len(reviews))
 	}
 	review := reviews[0]
-	if review.Origin.Reason != model.ReasonReview || review.Origin.Attribution.Actor.Kind != model.PrincipalAutomation {
-		t.Errorf("review origin = %+v, want a review grain filed", review.Origin)
+	if review.Filing.Reason != model.ReasonReview || review.Filing.Attribution.Actor.Kind != model.PrincipalAutomation {
+		t.Errorf("review origin = %+v, want a review grain filed", review.Filing)
 	}
 	var grant string
 	for _, g := range review.Grants {
@@ -262,7 +262,7 @@ func TestOnlyAReviewGrainFiledClearsACLSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	impostor := model.Task{ID: "55", Title: "review", Intent: model.IntentImplement,
-		Origin: model.Origin{Reason: model.ReasonReview},
+		Filing: model.Filing{Reason: model.ReasonReview},
 		Grants: []model.Grant{{Capability: grant}},
 		Links:  []model.Link{{Kind: model.LinkProposedBy, Target: "54"}}}
 	if err := store.PutTask(ctx, impostor); err != nil {

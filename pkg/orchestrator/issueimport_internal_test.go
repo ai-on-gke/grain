@@ -79,7 +79,7 @@ func putImportConfig(t *testing.T, ctx context.Context, store *model.Store, imp 
 	}
 }
 
-func tasksByReason(t *testing.T, ctx context.Context, store *model.Store, reason model.OriginReason) []model.Task {
+func tasksByReason(t *testing.T, ctx context.Context, store *model.Store, reason model.FilingReason) []model.Task {
 	t.Helper()
 	all, err := store.ListTasks(ctx)
 	if err != nil {
@@ -87,7 +87,7 @@ func tasksByReason(t *testing.T, ctx context.Context, store *model.Store, reason
 	}
 	var out []model.Task
 	for _, task := range all {
-		if task.Origin.Reason == reason {
+		if task.Filing.Reason == reason {
 			out = append(out, task)
 		}
 	}
@@ -245,7 +245,7 @@ func TestIssueImportFromAnotherRepository(t *testing.T) {
 	// the upstream issue, and does not stop the import.
 	local := model.Task{ID: "1", Intent: model.IntentImplement, Title: "local seven", Issue: 7, Target: &widgets,
 		Binding: model.BindingDirective,
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect}}
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect}}
 	if err := store.PutTask(ctx, local); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestIssueImportSkipsAnIssueATaskAlreadyNames(t *testing.T) {
 	putImportConfig(t, ctx, store, model.IssueImport{Enabled: true})
 	existing := model.Task{ID: "1", Intent: model.IntentImplement, Title: "by hand", Issue: 3, Target: &widgets,
 		Binding: model.BindingDirective,
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect}}
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect}}
 	if err := store.PutTask(ctx, existing); err != nil {
 		t.Fatal(err)
 	}
