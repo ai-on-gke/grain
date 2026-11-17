@@ -24,10 +24,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// A task schedule held by a peer's suite run whose pass has never
-// started (walkthrough finding F6) is raised as one held by a task is:
-// the run's never-started tasks, together, under one notification that
-// waits on the run rather than on one of its tasks.
 // A suite run started outside any schedule but carrying the group's tag
 // holds the group too; its starved firing must not be described as the
 // schedule's own previous firing.
@@ -111,6 +107,10 @@ func TestAStarvedGroupFiringHeldByAScheduleLessSuiteRunNamesTheGroup(t *testing.
 	wording(byRun, comments[1].Body)
 }
 
+// A task schedule held by a peer's suite run whose pass has never
+// started (walkthrough finding F6) is raised as one held by a task is:
+// the run's never-started tasks, together, under one notification that
+// waits on the run rather than on one of its tasks.
 func TestAStarvedGroupFiringHeldByASuiteRunRaisesTheRunsTasks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
