@@ -20,6 +20,7 @@ import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
 import { SettingsPageComponent } from "./settings-page.component";
 import { safeManagementUrl } from "./settings-instance.component";
+import { capServerState } from "./settings-work.component";
 
 interface RecordedCall {
   method: "GET" | "TEXT" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -43,6 +44,14 @@ class FakeSettingsApi {
       scopes: [],
     },
   };
+
+  hostdsBody: unknown[] = [
+    { name: "workstation-1", owner: "alice", status: "connected" },
+  ];
+
+  enrollmentCodesBody: unknown[] = [
+    { name: "eng-laptops", uses: 2, max_uses: 10 },
+  ];
 
   upgradeBody: Record<string, unknown> = {
     currentVersion: "v3.6.0",
@@ -75,15 +84,6 @@ class FakeSettingsApi {
     }
     if (key === "GET /api/deployment") {
       return Promise.resolve(structuredClone(this.deploymentBody));
-    }
-    if (key === "GET /api/agent-keys") {
-      return Promise.resolve({
-        enabled: true,
-        geminiApiKeySet: true,
-        claudeOAuthTokenSet: false,
-        openaiApiKeySet: false,
-        codexAuthJSONSet: false,
-      });
     }
     if (key === "GET /api/access/principals") {
       return Promise.resolve([
@@ -133,12 +133,10 @@ class FakeSettingsApi {
       return Promise.resolve("## v3.7.0\n- Faster microVM boot");
     }
     if (key === "GET /api/hostds") {
-      return Promise.resolve([
-        { name: "workstation-1", owner: "alice", status: "connected" },
-      ]);
+      return Promise.resolve(this.hostdsBody);
     }
     if (key === "GET /api/hostds/enrollment-codes") {
-      return Promise.resolve([{ name: "eng-laptops", uses: 2, max_uses: 10 }]);
+      return Promise.resolve(structuredClone(this.enrollmentCodesBody));
     }
     if (key === "GET /api/hostds/pending") {
       return Promise.resolve([
@@ -188,9 +186,6 @@ class FakeSettingsApi {
         ...((body ?? {}) as Record<string, unknown>),
       };
       return Promise.resolve(structuredClone(this.settingsBody));
-    }
-    if (key === "POST /api/agent-keys/{framework}/check") {
-      return Promise.resolve({ ok: true, detail: "200 OK (models reachable)" });
     }
     if (key === "POST /api/external-agents/tokens") {
       return Promise.resolve({ token: "gma_live_secret_token_999" });
@@ -357,7 +352,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeNull();
   });
 
-  it("enforces configRepoOnly read-only chip and banner on config-managed sections while keeping API keys editable", async () => {
+  it("enforces configRepoOnly read-only chip and banner on config-managed sections", async () => {
     const api = new FakeSettingsApi();
     api.configBody.configRepoOnly = true;
     api.settingsBody["configRepoOnly"] = true;
@@ -378,69 +373,23 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         ?.hasAttribute("disabled"),
     ).toBe(true);
 
-    // Navigate to Models: zero password inputs mount on initial load, and the
-    // secret key toggle/input stays enabled even when configRepoOnly is true.
+    // Navigate to Models: zero password inputs mount on initial load.
     await harness.navigateByUrl("/settings/models");
     await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
     expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
-    const toggleBtn = el.querySelector<HTMLButtonElement>(
-      '[data-testid="toggle-agent-key-antigravity"]',
-    )!;
-    expect(toggleBtn.disabled).toBe(false);
-    toggleBtn.click();
-    harness.detectChanges();
-    const keyInput = el.querySelector<HTMLInputElement>(
-      '[data-testid="input-agent-key-antigravity"]',
-    )!;
-    expect(keyInput.disabled).toBe(false);
   });
 
-  it("manages Model Connections and verifies framework API keys", async () => {
+  it("manages Model Connections without a standalone framework keys card", async () => {
     const { el, api, harness } = await mountSettings("/settings/models");
 
     expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="toggle-agent-key-claude"]',
-    )!.click();
-    harness.detectChanges();
-
-    setInput(
-      el.querySelector<HTMLInputElement>(
-        '[data-testid="input-agent-key-claude"]',
-      )!,
-      "sk-ant-test-123",
+    // Credentials live on each connection; the deployment-wide framework
+    // keys card (and its /api/agent-keys reads) is retired from the UI.
+    expect(el.querySelector('[data-testid="card-agent-keys"]')).toBeNull();
+    expect(api.calls.some((c) => c.key.includes("/api/agent-keys"))).toBe(
+      false,
     );
-    harness.detectChanges();
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="save-agent-key-claude"]',
-    )!.click();
-    await new Promise((r) => setTimeout(r, 200));
-    harness.detectChanges();
-
-    expect(
-      api.calls.some(
-        (c) =>
-          c.key === "PUT /api/agent-keys/{framework}" &&
-          c.params?.["framework"] === "claude",
-      ),
-    ).toBe(true);
-    expect(
-      el.querySelector('[data-testid="input-agent-key-claude"]'),
-    ).toBeNull();
-
-    harness.detectChanges();
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="check-agent-key-antigravity"]',
-    )!.click();
-    harness.detectChanges();
-    await harness.fixture.whenStable();
-    await new Promise((r) => setTimeout(r, 200));
-    harness.detectChanges();
-    expect(
-      el.querySelector('[data-testid="key-check-result-antigravity"]')
-        ?.textContent,
-    ).toContain("200 OK");
 
     // Add a new Vertex backend connection
     setInput(
@@ -660,6 +609,121 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(safeManagementUrl("https://console.example.com/x")).toBe(
       "https://console.example.com/x",
     );
+  });
+
+  it("shows a host's available grain-agentd update and the command to take it", async () => {
+    const api = new FakeSettingsApi();
+    api.hostdsBody = [
+      {
+        name: "laptop",
+        owner: "alice",
+        state: "connected",
+        update: {
+          build: "v3.8.0",
+          available: "v3.9.0",
+          command: "grain-agentd update -version v3.9.0",
+        },
+      },
+      { name: "workstation-1", owner: "bob", state: "connected" },
+    ];
+    const { el } = await mountSettings("/settings/hosts", api);
+    const line = el.querySelector('[data-testid="hostd-update-laptop"]');
+    expect(line?.textContent).toContain("v3.8.0");
+    expect(line?.textContent).toContain("v3.9.0");
+    expect(line?.textContent).toContain("grain-agentd update -version v3.9.0");
+    expect(
+      el.querySelector('[data-testid="hostd-update-workstation-1"]'),
+    ).toBeNull();
+  });
+
+  it("shows the default enrollment code's invite command with copy buttons and switches codes", async () => {
+    const api = new FakeSettingsApi();
+    api.enrollmentCodesBody = [
+      {
+        name: "eng-laptops",
+        code: "gjc_eng_secret",
+        uses: 1,
+        max_uses: 5,
+      },
+      {
+        name: "default",
+        code: "gjc_default_secret",
+        uses: 3,
+        allowed_principals: ["alice@example.com"],
+        install: {
+          lines: ["grain host join --code gjc_default_secret"],
+          note: "Needs grain v3.6 or newer.",
+        },
+      },
+      { name: "old", revoked_at: "2026-11-01T00:00:00Z" },
+    ];
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (t: string) => {
+          writes.push(t);
+          return Promise.resolve();
+        },
+      },
+    });
+    try {
+      const { el, harness } = await mountSettings("/settings/hosts", api);
+      const snippet = () =>
+        el.querySelector('[data-testid="invite-hosts-snippet"]')?.textContent;
+      // "default" wins over the first code in the list.
+      expect(snippet()).toBe("grain host join --code gjc_default_secret");
+      expect(
+        el.querySelector('[data-testid="invite-hosts-note"]')?.textContent,
+      ).toContain("Needs grain v3.6 or newer.");
+      expect(
+        el.querySelector('[data-testid="invite-hosts-meta"]')?.textContent,
+      ).toContain("Allow: alice@example.com");
+
+      const copy = el.querySelector<HTMLButtonElement>(
+        '[data-testid="copy-invite-command"]',
+      );
+      expect(copy?.textContent).toContain("Copy invite command");
+      copy?.click();
+      await harness.fixture.whenStable();
+      expect(writes).toEqual(["grain host join --code gjc_default_secret"]);
+
+      // The raw secret stays hidden until asked for, and copies alone.
+      expect(el.querySelector('[data-testid="enrollment-secret"]')).toBeNull();
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="toggle-enrollment-secret"]',
+      )?.click();
+      await harness.fixture.whenStable();
+      expect(
+        el.querySelector('[data-testid="enrollment-secret"]')?.textContent,
+      ).toBe("gjc_default_secret");
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="copy-enrollment-secret"]',
+      )?.click();
+      await harness.fixture.whenStable();
+      expect(writes.at(-1)).toBe("gjc_default_secret");
+
+      // Switching to a code with no rendered install lines falls back to
+      // the standard --join command on this origin.
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-invite-code"]',
+      )?.click();
+      await harness.fixture.whenStable();
+      const option = [
+        ...el.querySelectorAll<HTMLElement>('[role="option"]'),
+      ].find((o) => o.textContent?.includes("eng-laptops"));
+      option?.click();
+      await harness.fixture.whenStable();
+      expect(snippet()).toBe(
+        `curl -fsSL ${window.location.origin}/hostd/install | sh -s -- --join gjc_eng_secret`,
+      );
+      expect(el.querySelector('[data-testid="enrollment-secret"]')).toBeNull();
+      expect(
+        el.querySelector('[data-testid="invite-hosts-meta"]')?.textContent,
+      ).toContain("Uses: 1 / 5");
+    } finally {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
   });
 
   it("gates operator-only (scope: null) hostds enrollment-codes, pending joins, and state-repo/remote for non-operators without 403 calls", async () => {
@@ -911,6 +975,220 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBe(true);
   });
 
+  it("offers the Codex subscription mode only for codex and manages a connection's own auth.json", async () => {
+    const api = new FakeSettingsApi();
+    (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
+      { id: "codex-sub", framework: "codex", authMode: "subscription" },
+      { id: "codex-key", framework: "codex", authMode: "api_key" },
+    ];
+    let status: Record<string, unknown> = {
+      enabled: true,
+      set: true,
+      sharedSet: true,
+      refreshError: "refresh token was revoked; upload a new auth.json",
+    };
+    const baseGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/agent-backends/{id}/codex-auth") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve(structuredClone(status));
+      }
+      return baseGet(key, params, query);
+    };
+    const basePut = api.put;
+    api.put = (key: string, params?: RouteParams, body?: unknown) => {
+      if (key === "PUT /api/agent-backends/{id}/codex-auth") {
+        api.calls.push({ method: "PUT", key, params, body });
+        status = { enabled: true, set: true };
+        return Promise.resolve(structuredClone(status));
+      }
+      return basePut(key, params, body);
+    };
+    api.delete = (key: string, params?: RouteParams) => {
+      api.calls.push({ method: "DELETE", key, params });
+      status = { enabled: true, set: false, sharedSet: true };
+      return Promise.resolve(structuredClone(status));
+    };
+    const { el, harness } = await mountSettings("/settings/models", api);
+
+    // The auth mode picker lists the subscription mode only for codex.
+    const optionLabels = () => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-auth"]',
+      )!.click();
+      harness.fixture.detectChanges();
+      const labels = Array.from(
+        document.querySelectorAll(
+          '[data-testid="select-new-backend-auth-menu"] [role="option"]',
+        ),
+      ).map((o) => o.textContent?.trim());
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-auth"]',
+      )!.click();
+      harness.fixture.detectChanges();
+      return labels;
+    };
+    expect(optionLabels()).not.toContain("ChatGPT subscription (auth.json)");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-new-backend-fw"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-fw-opt-codex"]',
+      )!
+      .click();
+    harness.fixture.detectChanges();
+    expect(optionLabels()).toContain("ChatGPT subscription (auth.json)");
+
+    // An api_key Codex connection keeps the ordinary secret field.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-codex-key"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('input[aria-label="Credential for codex-key"]'),
+    ).toBeTruthy();
+    expect(el.querySelector('[data-testid="codex-auth-codex-key"]')).toBeNull();
+
+    // A subscription connection shows its own login status, read from GET.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-codex-sub"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "GET /api/agent-backends/{id}/codex-auth" &&
+          c.params?.["id"] === "codex-sub",
+      ),
+    ).toBe(true);
+    expect(
+      el.querySelector('input[aria-label="Credential for codex-sub"]'),
+    ).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="codex-auth-status-codex-sub"]')
+        ?.textContent?.trim(),
+    ).toBe("Configured");
+    expect(
+      el.querySelector('[data-testid="codex-auth-refresh-error-codex-sub"]')
+        ?.textContent,
+    ).toContain("refresh token was revoked");
+
+    const save = el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-codex-auth-codex-sub"]',
+    )!;
+    expect(save.disabled).toBe(true);
+    setInput(
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-codex-auth-codex-sub"]',
+      )!,
+      '{"tokens":{"refresh_token":"fake"}}',
+    );
+    harness.fixture.detectChanges();
+    expect(save.disabled).toBe(false);
+    save.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    const put = api.calls.find(
+      (c) => c.key === "PUT /api/agent-backends/{id}/codex-auth",
+    );
+    expect(put?.params?.["id"]).toBe("codex-sub");
+    expect(put?.body).toEqual({ value: '{"tokens":{"refresh_token":"fake"}}' });
+    expect(
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-codex-auth-codex-sub"]',
+      )!.value,
+    ).toBe("");
+    expect(
+      el.querySelector('[data-testid="codex-auth-refresh-error-codex-sub"]'),
+    ).toBeNull();
+
+    // Clearing deletes this connection's file; the shared login (sharedSet)
+    // is never shown as covering it.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="clear-codex-auth-codex-sub"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("codex-sub");
+    expect(
+      api.calls.some(
+        (c) => c.key === "DELETE /api/agent-backends/{id}/codex-auth",
+      ),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/agent-backends/{id}/codex-auth" &&
+          c.params?.["id"] === "codex-sub",
+      ),
+    ).toBe(true);
+    expect(
+      el
+        .querySelector('[data-testid="codex-auth-status-codex-sub"]')
+        ?.textContent?.trim(),
+    ).toBe("Not set");
+    expect(
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="clear-codex-auth-codex-sub"]',
+      )!.disabled,
+    ).toBe(true);
+  });
+
+  it("shows each repository's declarations and Git connection with classic's wording, linked to their views", async () => {
+    const api = new FakeSettingsApi();
+    const get = api.get;
+    api.get = ((key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/repos/{owner}/{name}/declarations") {
+        return Promise.resolve({ declarations: true, ciMode: "github" });
+      }
+      if (key === "GET /api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [{ repo: "acme/platform", push: false }],
+          connections: [
+            { credential: "acme-bot", host: "github.com", ok: true },
+            { credential: "broken", host: "github.com", ok: false },
+            { credential: "ghe-bot", host: "ghe.example.com", ok: true },
+          ],
+        });
+      }
+      return get(key, params, query);
+    }) as typeof api.get;
+    const { el } = await mountSettings("/settings/repositories", api);
+
+    const headers = Array.from(el.querySelectorAll("th")).map((th) =>
+      th.textContent?.trim(),
+    );
+    expect(headers).toContain("Declarations");
+    expect(headers).toContain("Git connection");
+
+    const decl = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-declarations-acme/platform"] a',
+    )!;
+    expect(decl.textContent?.trim()).toBe("Read");
+    expect(decl.getAttribute("href")).toBe(
+      "/next/processes/declarations?repo=acme%2Fplatform",
+    );
+
+    const git = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-git-acme/platform"] a',
+    )!;
+    expect(git.textContent?.trim()).toBe("acme-bot (read only)");
+    expect(git.getAttribute("href")).toBe("/next/settings/git");
+  });
+
   it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
     const api = new FakeSettingsApi();
     (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
@@ -961,15 +1239,33 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       '[data-testid="clear-cred-claude-team"]',
     )!;
     expect(clearBtn).toBeTruthy();
-    clearBtn.click();
-    await harness.fixture.whenStable();
-    expect(
+    const cleared = () =>
       api.calls.some(
         (c) =>
           c.key === "DELETE /api/agent-backends/{id}/credential" &&
           c.params?.["id"] === "claude-team",
-      ),
-    ).toBe(true);
+      );
+    // Clearing a stored secret asks first; dismissing deletes nothing.
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Clear the credential for claude-team?");
+    expect(cleared()).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(cleared()).toBe(false);
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cleared()).toBe(true);
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="remove-backend-claude-team"]',
@@ -1095,5 +1391,364 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
         .length,
     ).toBe(1);
+  });
+
+  it("pluralizes Broadcast delivery and counts stranded open tasks across repositories on Check stranded tasks", async () => {
+    const api = new FakeSettingsApi();
+    let broadcastDelivered = 1;
+    let strandedEntries: Array<{ repo: string; tasks: string[] }> = [
+      { repo: "acme/legacy", tasks: ["101"] },
+    ];
+    const basePost = api.post;
+    api.post = (key, params, body, query) => {
+      if (key === "POST /api/deployment/broadcast") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ delivered_count: broadcastDelivered });
+      }
+      if (key === "POST /api/repos/plan") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ targetReposStranded: strandedEntries });
+      }
+      return basePost(key, params, body, query);
+    };
+
+    const { el, harness } = await mountSettings("/settings/general", api);
+    const { SnackbarService } = await import("../services/snackbar.service");
+    const snackbar = TestBed.inject(SnackbarService);
+
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Pause merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 1 task");
+
+    broadcastDelivered = 3;
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Resume merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 3 tasks");
+
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("1 open task would be stranded by current repository list.");
+
+    strandedEntries = [{ repo: "acme/legacy", tasks: ["101", "102"] }];
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("2 open tasks would be stranded by current repository list.");
+
+    // A schedules-only entry strands no task, so it is never counted as one.
+    const notice = async () => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="check-repos-plan-btn"]',
+      )!.click();
+      await harness.fixture.whenStable();
+      harness.fixture.detectChanges();
+      return el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim();
+    };
+    strandedEntries = [
+      { repo: "acme/cron", schedules: ["nightly"] } as unknown as {
+        repo: string;
+        tasks: string[];
+      },
+    ];
+    expect(await notice()).toBe(
+      "1 schedule would be stranded by current repository list.",
+    );
+    strandedEntries = [
+      { repo: "acme/legacy", tasks: ["101"] },
+      {
+        repo: "acme/cron",
+        schedules: ["nightly", "weekly"],
+        qualificationPlan: true,
+      } as unknown as { repo: string; tasks: string[] },
+    ];
+    expect(await notice()).toBe(
+      "1 open task, 2 schedules and 1 qualification plan would be stranded by current repository list.",
+    );
+  });
+
+  it("labels capability server states in host wording, gives failed the error tone, and titles needs-config with its reason", async () => {
+    expect(
+      capServerState({ id: "p", status: { state: "needs-hostd:mac-mini" } }),
+    ).toEqual({ label: "needs host mac-mini", tone: "blast" });
+    expect(
+      capServerState({ id: "b", status: { state: "needs-hostd" } }),
+    ).toEqual({ label: "needs host", tone: "blast" });
+    expect(capServerState({ id: "f", status: { state: "failed" } })).toEqual({
+      label: "failed",
+      tone: "error",
+    });
+
+    const api = new FakeSettingsApi();
+    const baseGet = api.get;
+    api.get = (key, params, query) => {
+      if (key === "GET /api/capability-servers") {
+        return Promise.resolve([
+          {
+            id: "figma",
+            status: { state: "needs-config", reason: "Set a Figma token" },
+          },
+          { id: "host-script", status: { state: "needs-hostd:builder-1" } },
+          {
+            id: "broken-mcp",
+            status: { state: "failed", error: "connection refused" },
+          },
+        ]);
+      }
+      return baseGet(key, params, query);
+    };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    const chip = (id: string) =>
+      el.querySelector<HTMLElement>(`[data-testid="cap-server-state-${id}"]`)!;
+    expect(chip("figma").textContent?.trim()).toBe("needs-configuring");
+    expect(chip("figma").getAttribute("title")).toBe("Set a Figma token");
+    expect(chip("host-script").textContent?.trim()).toBe(
+      "needs host builder-1",
+    );
+    expect(chip("host-script").classList.contains("blast")).toBe(true);
+    expect(chip("broken-mcp").textContent?.trim()).toBe("failed");
+    expect(chip("broken-mcp").classList.contains("error")).toBe(true);
+    expect(chip("broken-mcp").getAttribute("title")).toBe("connection refused");
+  });
+
+  it("sends the chosen host kind when saving a connection over an existing stored credential", async () => {
+    const { el, harness, api } = await mountSettings("/settings/git");
+    const click = (id: string) => {
+      el.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!.click();
+      harness.fixture.detectChanges();
+    };
+    click("select-git-conn-mode");
+    click("select-git-conn-mode-opt-existing");
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-name"]',
+      )!,
+      "git-cred-1",
+    );
+    click("select-git-conn-kind");
+    click("select-git-conn-kind-opt-git");
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-host"]',
+      )!,
+      "git.internal.example",
+    );
+    harness.fixture.detectChanges();
+    click("save-git-conn-btn");
+    await harness.fixture.whenStable();
+    const saved = api.calls.find(
+      (c) => c.key === "POST /api/deployment/git-connections",
+    );
+    expect(saved?.body).toMatchObject({
+      credential: "git-cred-1",
+      host: "git.internal.example",
+      kind: "git",
+    });
+  });
+
+  it("opens Models, not the phone section list, for an old /settings/connections link", async () => {
+    const { el } = await mountSettings("/settings/connections");
+    const shell = el.querySelector(".settings-shell")!;
+    expect(shell.classList).toContain("is-mobile-detail");
+    expect(shell.classList).not.toContain("is-mobile-list");
+    expect(
+      el.querySelector('[data-testid="card-model-backends"]'),
+    ).not.toBeNull();
+  });
+
+  it("scrolls to an old section name's card on in-app navigation and stops when another section is chosen", async () => {
+    const { el, harness } = await mountSettings("/settings/engine");
+    const scrolled: string[] = [];
+    const orig = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.id);
+    };
+    try {
+      // Same component instance; the fragment stays null -> null.
+      await harness.navigateByUrl("/settings/secrets");
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 140));
+      expect(scrolled).toContain("other-secrets");
+
+      // An anchor that never appears keeps the timer running until the
+      // reader picks another section.
+      await harness.navigateByUrl("/settings/capabilities#no-such-card");
+      await harness.fixture.whenStable();
+      const comp = harness.routeDebugElement?.componentInstance as {
+        anchorTimer: ReturnType<typeof setInterval> | null;
+      };
+      expect(comp.anchorTimer).not.toBeNull();
+      el.querySelector<HTMLAnchorElement>(
+        '[data-testid="settings-nav-engine"]',
+      )!.click();
+      expect(comp.anchorTimer).toBeNull();
+    } finally {
+      HTMLElement.prototype.scrollIntoView = orig;
+    }
+  });
+
+  it("explains unreadable secret lists and editable secrets when a role holds secrets:write without settings:write or secrets:read", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.access = {
+      role: "grain/secret-writer",
+      roles: ["grain/secret-writer"],
+      full: false,
+      scopes: ["settings:read", "secrets:write"],
+    };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    expect(
+      el.querySelector('[data-testid="settings-role-readonly"]')?.textContent,
+    ).toContain("Secrets and API keys remain editable.");
+    expect(
+      el
+        .querySelector('[data-testid="stored-secrets"] .s-subhead-title')
+        ?.textContent?.trim(),
+    ).toBe("Stored secrets");
+    expect(
+      el.querySelector('[data-testid="secrets-read-restricted"]')?.textContent,
+    ).toContain("Stored secret names cannot be read with your role");
+    expect(el.querySelector('[data-testid="secrets-empty"]')).toBeNull();
+  });
+
+  it("disables capability policy and scope-set inputs under configRepoOnly", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody = { ...api.settingsBody, configRepoOnly: true };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    for (const id of [
+      "input-cap-server-id",
+      "input-cap-server-url",
+      "input-policy-capability",
+      "input-policy-repos",
+      "select-policy-effect",
+      "switch-policy-allow-untrusted",
+      "add-policy-rule-btn",
+      "input-scope-set-name",
+      "input-scope-set-scopes",
+    ]) {
+      const ctrl = el.querySelector<HTMLInputElement | HTMLButtonElement>(
+        `[data-testid="${id}"]`,
+      );
+      expect(ctrl, id).not.toBeNull();
+      expect(ctrl?.disabled, id).toBe(true);
+    }
+    expect(
+      el.querySelector<HTMLInputElement>('[data-testid="input-secret-value"]')
+        ?.disabled,
+    ).toBe(false);
+  });
+
+  it("keeps a replacement typed during an in-flight secret PUT and blocks double submits", async () => {
+    const api = new FakeSettingsApi();
+    const baseGet = api.get;
+    api.get = (key, params, query) => {
+      if (key === "GET /api/secrets") {
+        return Promise.resolve({
+          enabled: true,
+          secrets: [
+            { name: "rv-a", keys: ["token"] },
+            { name: "rv-b", keys: ["token"] },
+          ],
+        });
+      }
+      return baseGet(key, params, query);
+    };
+    let releasePut!: () => void;
+    let putCount = 0;
+    const basePut = api.put;
+    api.put = (key, params, body) => {
+      if (key === "PUT /api/secrets/{secret}/{key}") {
+        putCount += 1;
+        return new Promise((resolve) => {
+          releasePut = () => resolve({});
+        });
+      }
+      return basePut(key, params, body);
+    };
+
+    const { el, harness } = await mountSettings("/settings/capabilities", api);
+    const nameIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-name"]',
+    )!;
+    const keyIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-key"]',
+    )!;
+    const valIn = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-value"]',
+    )!;
+    const storeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="store-secret-btn"]',
+    )!;
+
+    setInput(nameIn, "rv-a");
+    setInput(keyIn, "token");
+    setInput(valIn, "A-NEW");
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(false);
+    storeBtn.click();
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(true);
+    storeBtn.click();
+    expect(putCount).toBe(1);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="replace-secret-rv-b-token"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    setInput(valIn, "B-NEW");
+    harness.fixture.detectChanges();
+    expect(storeBtn.disabled).toBe(true);
+
+    releasePut();
+    await new Promise((r) => setTimeout(r, 0));
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+
+    expect(nameIn.value).toBe("rv-b");
+    expect(keyIn.value).toBe("token");
+    expect(valIn.value).toBe("B-NEW");
+    expect(storeBtn.disabled).toBe(false);
   });
 });

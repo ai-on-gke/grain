@@ -308,7 +308,13 @@ func UnmetRequirements(job Job, req Request) []string {
 			continue
 		}
 		if !containsCapability(req.Capabilities, id) {
-			out = append(out, fmt.Sprintf("this job requires the capability %q and this deployment does not provide it for %s", id, req.Repo))
+			msg := fmt.Sprintf("this job requires the capability %q and this deployment does not provide it for %s", id, req.Repo)
+			if Capabilities.Retired != nil {
+				if why := Capabilities.Retired(id); why != "" {
+					msg += ": " + why + "; declare that instead"
+				}
+			}
+			out = append(out, msg)
 		}
 	}
 	for _, name := range job.Secrets {

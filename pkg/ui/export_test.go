@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"io/fs"
 	"net"
 	"net/http"
 	"testing"
@@ -98,4 +99,59 @@ func AccessCodeRecoveryRouteForTest(r *http.Request) bool { return accessCodeRec
 // caller's grants from.
 func WithExternalTokenForTest(ctx context.Context, tok *model.ExternalAgentToken) context.Context {
 	return withExternalToken(ctx, tok)
+}
+
+// SetVerifierSessionClockForTest sets the clock verifier sessions are
+// issued and checked on, until the test ends.
+func SetVerifierSessionClockForTest(t interface{ Cleanup(func()) }, now func() time.Time) {
+	prev := verifierSessionNow
+	verifierSessionNow = now
+	t.Cleanup(func() { verifierSessionNow = prev })
+}
+
+// SignVerifierSessionForTest signs a verifier session cookie value with
+// key, or with the daemon's own key when key is nil.
+func SignVerifierSessionForTest(key []byte, verifier, email, kind, host string, expires time.Time) string {
+	if key == nil {
+		key = verifierSessionKey()
+	}
+	return signVerifierSession(key, verifierSessionPayload{
+		Verifier: verifier, Email: email, Kind: kind, Host: host, Expires: expires.Unix(),
+	})
+}
+
+// SetFrontendFSForTest replaces s's embedded legacy (static) and Angular
+// (staticNext) filesystems so external tests in package ui_test can exercise
+// Server.ServeHTTP against controlled content-hashed bundles whether or not
+// `make frontend` has populated pkg/ui/static and pkg/ui/static-next.
+func SetFrontendFSForTest(s *Server, static, staticNext fs.FS) {
+	s.setFrontendFS(static, staticNext)
+}
+
+// FrontendGzipComputationsForTest reports how many times s's exempt bundle
+// cache has compressed a bundle to gzip.
+func FrontendGzipComputationsForTest(s *Server) int64 {
+	fa := s.frontend.Load()
+	if fa == nil {
+		return 0
+	}
+	return fa.gzipComputations.Load()
+}
+
+// FrontendCachedGzipBytesForTest returns the cached gzip bytes stored for
+// rawPath in s's exempt bundle cache, or (nil, false) if rawPath is not cached.
+func FrontendCachedGzipBytesForTest(s *Server, rawPath string) ([]byte, bool) {
+	fa := s.frontend.Load()
+	if fa == nil {
+		return nil, false
+	}
+	v, ok := fa.gzipBundles.Load(rawPath)
+	if !ok {
+		return nil, false
+	}
+	entry := v.(*cachedGzipBundle)
+	if entry.err != nil {
+		return nil, false
+	}
+	return entry.gz, true
 }

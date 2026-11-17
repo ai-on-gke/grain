@@ -1,0 +1,18 @@
+-- tasks
+7	queued	Run the release train (check, release, cut)
+1	awaiting_reply	Director
+-- skips
+id  schedule_id                                          occurrence                               reason          task_id  outcome  fired_task_id  held_by_schedule_id                   
+--  ---------------------------------------------------  ---------------------------------------  --------------  -------  -------  -------------  --------------------------------------
+1   repo:schedule:acme:grain:release-train               2026-11-15 06:17:25 +0000 UTC            publishingHeld  2        fired    5                                                    
+2   repo:schedule:acme:grain:walk-release-v351-template  2026-11-15 06:17:25 +0000 UTC            publishingHeld  2        fired    6                                                    
+3   repo:schedule:acme:grain:release-train-on-stage1     2026-11-15 07:22:36.046268834 +0000 UTC  publishingHeld  2        dropped                                                       
+4   repo:schedule:acme:grain:release-train-on-stage1     2026-11-15 07:22:46.045915298 +0000 UTC  publishingHeld  2        dropped                                                       
+5   repo:schedule:acme:grain:release-train-on-stage1     2026-11-15 07:23:11.045882777 +0000 UTC  task            5        dropped                 repo:schedule:acme:grain:release-train
+-- schedules
+id                                                   next_run_at                             last_run_at                            
+---------------------------------------------------  --------------------------------------  ---------------------------------------
+repo:schedule:acme:grain:release-train               2026-11-15 07:37:25 +0000 UTC           2026-11-15 07:23:11.045882777 +0000 UTC
+repo:schedule:acme:grain:release-train-on-stage1     2027-11-16 07:22:25.04624865 +0000 UTC  2026-11-15 07:23:51.04573982 +0000 UTC 
+repo:schedule:acme:grain:walk-release-v351           2026-11-15 07:37:25 +0000 UTC           2026-11-15 07:22:26.04579094 +0000 UTC 
+repo:schedule:acme:grain:walk-release-v351-template  2026-11-15 07:37:25 +0000 UTC           2026-11-15 07:23:11.045882777 +0000 UTC

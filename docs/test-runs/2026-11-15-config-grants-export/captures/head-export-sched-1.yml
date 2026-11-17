@@ -1,0 +1,33 @@
+  - id: sched-1
+    title: Walk schedule
+    body: Nightly walk.
+    template: null
+    suite: null
+    daily:
+      at: "03:00"
+    overlap: skip
+    overlap-group: ""
+    skip-when: ""
+    timezone: ""
+    enabled: true
+    base: main
+    review: ""
+    grain-ci: false
+    auto-approve-proposals: false
+    model: ""
+    admission: ""
+    hosting: ""
+    auto-merge: false
+    network: ""
+    nothing-needed: ""
+    keep-running: false
+    target: acme/widgets
+    reads:
+      - ghe.example.com/acme/legacy
+    grants:
+      - https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}
+      - https://grain.dev/capabilities/repo#write={"base":"","repo":"acme/docs"}
+      - https://grain.dev/capabilities/repo#write={"base":"main","repo":"acme/gadgets"}
+    next-run-at: "2026-11-16T03:00:00Z"
+    last-run-at: null
+    created-at: "2026-11-15T07:41:38.756865402Z"

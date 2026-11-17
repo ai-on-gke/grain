@@ -196,6 +196,56 @@ supports `env_open`, and the controller's closed `env:` list otherwise -- and
 writes `~/.config/grain/agentd.yaml` once you confirm on the host (pass `-yes`
 for non-interactive automation).
 
+## Updating it (`grain-agentd update`)
+
+When Settings -> Hosts shows **Update available** for a host, its owner runs,
+on the host:
+
+```sh
+grain-agentd update            # or: grain-agentd update -version v3.9.0
+```
+
+`update` fetches the signed manifest and binary for this machine's platform
+from the controller recorded in `grain-agentd.service` (or `-server URL`;
+`-from DIR` reads release assets from a directory instead), and:
+
+1. verifies the manifest's signature against the release key pinned at install
+   (`~/.config/grain/agentd-release.pub`, else the key built into the binary)
+   -- never a key the controller sends -- and the binary's size and SHA-256;
+2. refuses an older release than the installed one, unless the allowlist's
+   `update.pin` names exactly that version, and refuses anything outside the
+   pin;
+3. stages it as `~/.local/lib/grain-agentd/versions/<v>/grain-agentd`, runs it
+   with `-build` and `-check` against the current allowlist, and only then
+   points `~/.local/lib/grain-agentd/current` at it.
+   `~/.local/bin/grain-agentd` becomes a link through `current`, and the
+   previous version stays beside it;
+4. asks the running host agent to cut over: it keeps taking runs and exits the
+   first moment none runs (within the allowlist's `drain_cap`), and systemd
+   `--user` starts the new build. That build adopts the detached runs the old
+   one left in its spool.
+
+If the new build has not answered the controller's hello within five minutes
+of its first start, it is rolled back: the unit's `ExecStartPre` guard
+(`~/.local/lib/grain-agentd/guard.sh`, which `update` adds to a unit an older
+install wrote) and the new build itself both move `current` back to the
+previous version. The rolled-back update is recorded in
+`~/.local/lib/grain-agentd/update-failed`. `-no-cutover` stages and switches
+without touching the running host agent.
+
+The owner controls this in the allowlist, which the controller cannot write:
+
+```yaml
+update:
+  mode: offer   # off: refuse every update | offer (default) | auto (not implemented yet; behaves as offer)
+  pin: v3.*     # optional: never leave this range; an exact version also allows moving back to it
+```
+
+Add `update:` only once the host runs a build that has `grain-agentd update`:
+an older one refuses the unknown key. The controller never starts an update
+by itself, and a root-installed `grain host` is never offered one. It updates
+with its machine's installer.
+
 ## Hooks
 
 A run's agent CLI forks hooks -- agy's pre-tool hook (`agy-tool-hook`) and

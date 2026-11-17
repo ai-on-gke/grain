@@ -30,7 +30,8 @@ import (
 // alone: the PR descriptions, the `Origin:` commit trailers and the
 // progress comment on the origin all name it (docs/work-trees.md).
 //
-// It is not Task.Origin, which says who filed this one task and why.
+// It is not Task.Filing, which says who filed this one task and why --
+// the API calls this WorkOrigin `origin` (docs/work-trees.md#glossary).
 //
 // The stored form is one string: `owner/repo#12` for a GitHub pull request
 // or issue (GitHub numbers both in one sequence, and the comments API

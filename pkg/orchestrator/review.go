@@ -294,7 +294,7 @@ func reviewTaskLink(task model.Task) (string, bool) {
 // change of its own. syncEntry treats it exactly the way it treats a fix
 // task: never a queue entry in its own right, and merged into the branch
 // it was filed against the moment it reads clean.
-func isReviewTask(task model.Task) bool { return task.Origin.Reason == model.ReasonReview }
+func isReviewTask(task model.Task) bool { return task.Filing.Reason == model.ReasonReview }
 
 // reviewsInPlace reports whether task is a review working on the reviewed
 // change's own branch (model.LinkPushesReviewedBranch), and which task
@@ -345,7 +345,7 @@ func reviewsInPlace(task model.Task) (reviewedID string, ok bool) {
 // work nobody will ever see, so it is set here regardless of what the
 // template says about the tasks it files anywhere else.
 //
-// Origin.Reason is ReasonReview, which is what isReviewTask reads and
+// Filing.Reason is ReasonReview, which is what isReviewTask reads and
 // therefore what keeps the review out of its repo's merge queue as an
 // entry in its own right. It is deliberately not ReasonFix: that reason
 // draws on the capacity model.Limits.Mergers keeps back for the merge
@@ -521,7 +521,7 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		SourceTemplateID: tmpl.ID,
 		Admission:        admission,
 		Hosting:          model.NormalizeHosting(tmpl.Hosting),
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,
 		},
@@ -580,14 +580,46 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 // in the title of the task or the body an agent is handed is worse than
 // the empty string a field with no default means.
 func reviewTaskTitle(tmpl model.Template, task model.Task) string {
-	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, tmpl.FieldValues(nil))); title != "" {
+	values := tmpl.FieldValues(nil)
+	if _, ok := values["task_title"]; !ok {
+		// {{task_title}}, as a gating trigger's review fills it
+		// (buildPullRequestReview), unless the template declares a field
+		// of that name itself.
+		if values == nil {
+			values = map[string]string{}
+		}
+		values["task_title"] = reviewSubjectTitle(task)
+	}
+	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, values)); title != "" {
 		return title
 	}
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
+	return "Review: " + reviewSubjectTitle(task)
+}
+
+// reviewSubjectTitle is how a review's title names the task under review:
+// its title, or its ID when it has none. Review templates read it as
+// {{task_title}}.
+func reviewSubjectTitle(task model.Task) string {
+	if title := strings.TrimSpace(task.Title); title != "" {
+		return title
 	}
-	return "Review: " + title
+	return task.ID
+}
+
+// targetedReviewTitle names the review sensitive path triggers file
+// without a template of their own (grain's security review brief, filed
+// for the trigger rather than the trust-boundary hold): "Targeted review
+// (<trigger>, ...): <task title>", every trigger it serves listed in
+// name order so one review for several reads the same whichever matched
+// first. The trust-boundary hold's own review keeps securityReviewTitle.
+func targetedReviewTitle(task model.Task, triggers []string) string {
+	names := slices.Clone(triggers)
+	slices.Sort(names)
+	names = slices.Compact(names)
+	if len(names) == 0 {
+		return "Targeted review: " + reviewSubjectTitle(task)
+	}
+	return "Targeted review (" + strings.Join(names, ", ") + "): " + reviewSubjectTitle(task)
 }
 
 // reviewTaskBody is the template's instructions with the subject of the

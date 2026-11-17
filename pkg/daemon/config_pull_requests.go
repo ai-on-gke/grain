@@ -108,7 +108,7 @@ func (m *StateManager) OpenConfigPullRequest(ctx context.Context, req ui.ConfigP
 	task := model.Task{
 		ID:        id,
 		Intent:    model.IntentImplement,
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: actor}},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: actor}},
 		Title:     title,
 		Body:      req.Body,
 		Approval:  &model.Attribution{Actor: actor},

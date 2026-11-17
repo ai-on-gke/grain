@@ -1,0 +1,7 @@
+{
+  "grant_id": "grant-A",
+  "grant_revision": 4,
+  "authorization_epoch": 4,
+  "expires_at": "2026-11-16T22:00:00Z",
+  "idempotency_key": "mutation-1"
+}

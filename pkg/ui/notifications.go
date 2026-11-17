@@ -122,6 +122,19 @@ func AgentNamespace(taskID string) string { return "agent." + taskID + ":" }
 // RaiseNotification raises req as whoever ctx's actor is. A run's agent
 // principal is held to notify_operator's rules (AgentNotify).
 func (c *Client) RaiseNotification(ctx context.Context, req RaiseNotificationRequest) (NotificationRaiseResponse, error) {
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI {
+		req.Repo = ciCall.Repo.String()
+		if c.Store != nil {
+			open, err := c.Store.OpenNotification(ctx, strings.TrimSpace(req.Subject))
+			if err != nil {
+				return NotificationRaiseResponse{}, err
+			}
+			if open != nil && !model.SameRepoText(open.Repo, ciCall.Repo.String()) {
+				return NotificationRaiseResponse{}, forbiddenErrorf("notification %s belongs to %s, not %s",
+					strings.TrimSpace(req.Subject), open.Repo, ciCall.Repo)
+			}
+		}
+	}
 	actor := c.requestActor(ctx).Actor
 	if actor.Kind == model.PrincipalAgent {
 		return c.AgentNotify(ctx, actor.ID, req)
@@ -492,12 +505,47 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 	notifications = filterList(notifications, func(n model.Notification) bool {
 		return list.matches(n.Subject, n.Title)
 	})
+	notifications = s.readableNotifications(r, notifications)
 	if strings.EqualFold(strings.TrimSpace(q.Get("fields")), "list") {
 		for i := range notifications {
 			notifications[i].Body = listNotificationBody(notifications[i])
 		}
 	}
 	writeListBy(w, notifications, list, func(n model.Notification) string { return strconv.FormatInt(n.ID, 10) })
+}
+
+// readableNotifications narrows notifications to what r's caller may
+// read under tasks:read: an unrestricted caller sees every one, while a
+// caller holding tasks:read on some repositories only (a repo-scoped RBAC
+// role, an agent, an external-agent token) sees those whose repository --
+// the notification's own, or else its task's, as GET /api/events resolves
+// notification.* events -- it may read. A deployment-wide notification
+// (no repository and no task) is shown only to a caller whose tasks:read
+// reaches every repository.
+func (s *Server) readableNotifications(r *http.Request, in []model.Notification) []model.Notification {
+	if !taskReadScoped(r) {
+		return in
+	}
+	ctx := r.Context()
+	readable := s.taskReadable(r)
+	taskRepo := map[string]string{}
+	return filterList(in, func(n model.Notification) bool {
+		repo := strings.TrimSpace(n.Repo)
+		if repo == "" && strings.TrimSpace(n.TaskID) != "" {
+			cached, ok := taskRepo[n.TaskID]
+			if !ok {
+				if t, err := s.tasks.Task(ctx, n.TaskID); err == nil {
+					cached = t.Repo
+				}
+				taskRepo[n.TaskID] = cached
+			}
+			repo = cached
+		}
+		// readable("") holds only for a caller whose tasks:read reaches
+		// every repository (grain/viewer, an unrestricted agent grant), the
+		// way GET /api/events still streams it such notifications.
+		return readable(repo)
+	})
 }
 
 // pendingReleaseFamily is the release train's "approve this release"

@@ -144,7 +144,8 @@ func (p *printer) usage(rep ui.UsageResponse) {
 		tokens(int64(r.BurnPerHour)), since)
 	if len(rep.Scopes) > 0 {
 		fmt.Println()
-		fmt.Printf("%-24s %-22s %9s %9s %9s %-16s %9s %s\n", "CONNECTION", "MODEL", "USED", "LIMIT", "LEFT", "RESET", "BURN/H", "SUSTAINS")
+		fmt.Printf("%-24s %-22s %9s %9s %9s %-16s %9s %9s %-16s %9s %s\n", "CONNECTION", "MODEL", "USED", "LIMIT", "LEFT", "RESET",
+			"WEEK", "WEEK LIM", "WEEK RESET", "BURN/H", "SUSTAINS")
 		for _, s := range rep.Scopes {
 			conn := s.Connection
 			if s.ConnectionName != "" {
@@ -169,13 +170,27 @@ func (p *printer) usage(rep ui.UsageResponse) {
 			if s.ResetAt != nil {
 				reset = s.ResetAt.UTC().Format("01-02 15:04 UTC")
 			}
+			// The weekly horizon: a weekly pause says the week is spent,
+			// however little the interval shows.
+			weekLimit := "?"
+			if s.WeeklyLimit > 0 {
+				weekLimit = tokens(s.WeeklyLimit) + "~"
+			}
+			if s.WeeklyPausedUntil != nil {
+				weekLimit = "spent"
+			}
+			weekReset := "-"
+			if s.WeeklyResetAt != nil {
+				weekReset = s.WeeklyResetAt.UTC().Format("01-02 15:04 UTC")
+			}
 			sustains := "-"
 			if s.SustainableWorkers != nil {
 				sustains = strconv.FormatFloat(*s.SustainableWorkers, 'f', -1, 64)
 			}
-			fmt.Printf("%-24s %-22s %9s %9s %9s %-16s %9s %s\n", conn, m, tokens(s.Used), limit, left, reset, tokens(int64(s.BurnPerHour)), sustains)
+			fmt.Printf("%-24s %-22s %9s %9s %9s %-16s %9s %9s %-16s %9s %s\n", conn, m, tokens(s.Used), limit, left, reset,
+				tokens(s.WeeklyUsed), weekLimit, weekReset, tokens(int64(s.BurnPerHour)), sustains)
 		}
-		fmt.Println("\n(~ marks a limit learned from the usage a window had consumed when its provider refused it)")
+		fmt.Println("\n(USED is the interval window's; WEEK the last 7 days'. ~ marks a limit learned from the usage a window had consumed when its provider refused it)")
 	}
 	for _, a := range rep.Advisories {
 		fmt.Println("advisory: " + a)

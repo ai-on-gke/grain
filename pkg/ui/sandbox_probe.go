@@ -54,6 +54,27 @@ type SandboxProber interface {
 	ProbeSandbox(ctx context.Context, req SandboxProbeRequest) (SandboxProbeResult, error)
 }
 
+// SandboxProbeAvailability is what a SandboxProber may also implement to
+// say it cannot build a sandbox at all here (pkg/daemon's adapter over a
+// backend that is not the Kubernetes granule one), so the UI need not
+// offer a probe that can only be refused.
+type SandboxProbeAvailability interface {
+	SandboxProbeAvailable() bool
+}
+
+// sandboxProbeAvailable is Settings.SandboxProbe: a prober is wired and
+// does not say it cannot probe.
+func (s *Server) sandboxProbeAvailable() bool {
+	prober := s.tasks.Config.SandboxProbe
+	if prober == nil {
+		return false
+	}
+	if a, ok := prober.(SandboxProbeAvailability); ok {
+		return a.SandboxProbeAvailable()
+	}
+	return true
+}
+
 var errSandboxProbeUnavailable = errors.New(
 	"sandbox probes are not available: this deployment's UI is not wired to the daemon that owns its sandboxes")
 

@@ -74,6 +74,16 @@ export interface ReachableReposState {
   errors: string[];
   hostMismatches: string[];
   reason: string;
+  // available is false when no Git connection could list anything;
+  // connections are the ones that were asked, by credential and host.
+  available: boolean;
+  connections: ReachConnection[];
+}
+
+export interface ReachConnection {
+  credential: string;
+  host: string;
+  ok: boolean;
 }
 
 const REACHABLE_REPOS_TTL_MS = 60_000;
@@ -167,6 +177,37 @@ export class SettingsStateService {
     return fallback;
   }
 
+  // Many numeric settings store 0 for "grain's default" and report that
+  // default beside them as `<key>Default` (sandboxCpus/sandboxCpusDefault,
+  // ciCacheMb/ciCacheMbDefault, ...). Showing the stored 0 reads as "zero
+  // vCPUs"; the box shows blank with the default as its placeholder
+  // instead, and a cleared box saves 0 again (back to the default).
+  defaultedNumber(key: string): string {
+    const v = Number(this.val<unknown>(key, 0));
+    return Number.isFinite(v) && v !== 0 ? String(v) : "";
+  }
+
+  // defaultHint is `<key>Default` as text for a placeholder, or `fallback`
+  // when the server does not report one.
+  defaultHint(key: string, fallback = ""): string {
+    const d = this.settings()[`${key}Default`];
+    return d === undefined || d === null || d === "" ? fallback : String(d);
+  }
+
+  // setNumber records a number box's text: blank is `blank` (0, the
+  // server's "default", unless the setting refuses 0 and wants grain's
+  // default spelled out), anything else its numeric value.
+  //
+  // A setting whose blank is a non-zero default (Max worker agents,
+  // Max merges per repo branch) binds `(input)` with deferBlank, so the
+  // box is not refilled under the cursor while somebody retypes it, and
+  // `(change)` without it, which fills the default in once they leave.
+  setNumber(key: string, raw: string, blank = 0, deferBlank = false): void {
+    const t = String(raw ?? "").trim();
+    if (t === "" && deferBlank) return;
+    this.setField(key, t === "" ? blank : Number(t));
+  }
+
   deployVal<T>(key: string, fallback: T): T {
     const d = this.deployDraft();
     if (key in d) return (d[key] as T) ?? fallback;
@@ -253,6 +294,8 @@ export class SettingsStateService {
             errors?: string[];
             hostMismatches?: string[];
             reason?: string;
+            available?: boolean;
+            connections?: Partial<ReachConnection>[];
           }
       >("GET /api/deployment/reachable-repos")
       .then((res) => {
@@ -282,6 +325,15 @@ export class SettingsStateService {
             ? (res?.hostMismatches ?? [])
             : [],
           reason: !Array.isArray(res) ? (res?.reason ?? "") : "",
+          // A bare list is an older server's: it listed, so it was available.
+          available: Array.isArray(res) ? true : res?.available !== false,
+          connections: (!Array.isArray(res) ? (res?.connections ?? []) : [])
+            .filter((c) => c && typeof c === "object")
+            .map((c) => ({
+              credential: String(c.credential ?? ""),
+              host: String(c.host ?? ""),
+              ok: Boolean(c.ok),
+            })),
         };
         if (this.reachableEpoch() === epoch) {
           this.reachableCache = { at: Date.now(), data };
@@ -388,6 +440,27 @@ export class SettingsStateService {
     } finally {
       this.planning.set(false);
     }
+  }
+
+  // saveFields saves just these drafted settings, for a card with a Save
+  // button of its own (Memory's Save memory), leaving every other draft
+  // for the section Save bar. It throws what the server refused.
+  async saveFields(keys: readonly string[]): Promise<void> {
+    const draft = this.draft();
+    const payload: Record<string, unknown> = {};
+    for (const k of keys) if (k in draft) payload[k] = draft[k];
+    if (Object.keys(payload).length === 0) return;
+    const saved = await this.api.post<Record<string, unknown>>(
+      "POST /api/settings",
+      undefined,
+      payload,
+    );
+    if (saved && typeof saved === "object") this.settings.set(saved);
+    this.draft.update((prev) => {
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
   }
 
   async saveChanges(): Promise<void> {

@@ -37,6 +37,7 @@ func TestPublishedToolNamesNamesEveryToolTheServerCanRegister(t *testing.T) {
 		// The sandbox roster and the escape hatches.
 		"run_command", "read_file", "edit_file", "write_file",
 		"ask_question", "request_secret", "comment_on_issue", "nothing_needed", "propose_task", "add_review_comment",
+		"record_assumption", "complete_goal",
 		// The CI loop, GitHub's half and grain's own.
 		"pull_request_status", "base_branch_status", "wait_for_checks",
 		"list_ci_runs", "get_ci_log", "get_ci_artifact", "run_ci_job",

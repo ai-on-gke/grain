@@ -1117,6 +1117,33 @@ func TestExternalTemplateWithinMatchesBothAPIGrantSpellings(t *testing.T) {
 	}
 }
 
+// TestExternalTemplateWithinFoldsEmptyMethodArgs is
+// TestTemplateWithinTaskFoldsEmptyMethodArgs for an external agent
+// credential: server#method={} and bare server#method are one grant in
+// either direction, and arguments are never dropped.
+func TestExternalTemplateWithinFoldsEmptyMethodArgs(t *testing.T) {
+	tok := &model.ExternalAgentToken{Name: "bot"}
+	allow := func(string) bool { return true }
+	bare := model.GitHubReadIssuesRef
+	empty := model.GitHubReadIssuesRef + "={}"
+	withArgs := model.GitHubReadIssuesRef + `={"repo":"acme/widgets"}`
+	for _, tc := range []struct {
+		held, granted string
+		want          bool
+	}{
+		{empty, bare, true},
+		{bare, empty, true},
+		{bare, withArgs, false},
+		{empty, withArgs, false},
+	} {
+		err := externalTemplateWithin(tok, []string{tc.held},
+			model.Template{ID: "t", Grants: []model.Grant{{Capability: tc.granted}}}, allow)
+		if got := err == nil; got != tc.want {
+			t.Errorf("held %s, template grants %s: within = %v (%v), want %v", tc.held, tc.granted, got, err, tc.want)
+		}
+	}
+}
+
 func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
 	c := &Client{}
 	for _, bad := range []string{
@@ -1153,6 +1180,9 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/config":                                                true,
 	"GET /api/database":                                              true,
 	"GET /api/deployment":                                            true,
+	"GET /api/qa/flow-versions/{hash}":                               true,
+	"GET /api/qa/experiments/{id}":                                   true,
+	"GET /api/qa/experiments/{id}/results":                           true,
 	"GET /api/deployment/repos/{owner}/{name}/config":                true,
 	"GET /api/fs/ci/{path...}":                                       true,
 	"GET /api/fs/config/{path...}":                                   true,
@@ -1173,6 +1203,8 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/refs/{ref}/summary":                                    true,
 	"GET /api/registry":                                              true,
 	"GET /api/registry/status":                                       true,
+	"GET /api/qa/flows":                                              true,
+	"GET /api/qa/summary":                                            true,
 	"GET /api/release-approval-key":                                  true,
 	"GET /api/release-notes/stats":                                   true,
 	"GET /api/release-notes/versions/{version}":                      true,
@@ -1206,12 +1238,14 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/state-repo":                                            true,
 	"GET /api/suite-runs/{id}":                                       true,
 	"GET /api/suites/{id}/composition":                               true,
+	"GET /api/tasks/summaries":                                       true,
 	"GET /api/tasks/wait":                                            true,
 	"GET /api/tasks/{id}":                                            true,
 	"GET /api/tasks/{id}/attachments/{attachmentId}":                 true,
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":         true,
 	"GET /api/tasks/{id}/attempts/{number}/transcript":               true,
 	"GET /api/tasks/{id}/prompt":                                     true,
+	"GET /api/tasks/{id}/qa":                                         true,
 	"GET /api/tasks/{id}/diff-preview":                               true,
 	"GET /api/tasks/{id}/tree":                                       true,
 	"GET /api/templates/{id}/composition":                            true,

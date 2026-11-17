@@ -179,14 +179,18 @@ Both belong on the surface that *states the problem* -- the sentence
    predicate, and it is built (grain/task-479). `POST
    /api/tasks/{id}/force-merge` -- the "Force merge" button on the task
    pane, `ui.Client.ForceMerge`, `grain force-merge [-override-gates <gates>] <id> <reason>` (and `grain pr submit <pr> -override-gates <gates> -reason <why>`) --
-   records the override on the task; when any review gate (`security-review`
-   or `review`) is unsatisfied, `overrideGates` / `-override-gates` must
+   records the override on the task; when any review gate (`security-review`,
+   `review` or `targeted-review`, which `review` also covers) is unsatisfied, `overrideGates` / `-override-gates` must
    name each skipped gate explicitly; the next `SyncPullRequests` cycle
    reads it, `mayMerge` takes the forced arm, and **grain performs the
    merge itself**, so the task moves to merged, the queue row closes, and
    post-merge dispatch and the base-branch run fire as they do for any
    other merge. That is the whole argument for it: the hand merge it
-   replaces left every one of those undone.
+   replaces left every one of those undone. It overrides *everything* it
+   names. An owner who has decided to merge over one review's findings
+   uses **Accept findings** (`grain accept-findings`) instead, which clears
+   only that review's findings on that gate
+   ([declarations.md](declarations.md#gating-reviews)).
 
    A reason is required. It is recorded on the task when it is asked for,
    and on the task and the pull request again when the merge happens,
