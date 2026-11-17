@@ -174,8 +174,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:b4f6b10e586221e2f6ea01cabb66c3ee4978873de7058d6972d352950c959af7",
-            "continuation_version": "1"
+            "input_declaration": "sha256:c4e53f76a2a2739f6a9336d3916f1695dccaf579f040dc4c45e3a9b2871ed443",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -197,8 +198,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:4d51ac5eac4a109f2936c39271cf3aa89c7642ed002079b23527af608c8ac5d1",
-            "continuation_version": "1"
+            "input_declaration": "sha256:d1fb33589bdf72f13e66eb079f62b91669c0f585a17a4ad52269acd7e7ed364e",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -220,8 +222,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:3c95802e19d29906d03f832a4464b8c8ecdd93f008edbaa158ac8c593fa44fa4",
-            "continuation_version": "1"
+            "input_declaration": "sha256:d1fb33589bdf72f13e66eb079f62b91669c0f585a17a4ad52269acd7e7ed364e",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -243,8 +246,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:502bfa161eabb4d30daff1a31864cdc18db9a1044445abca62ff83b44a978fb1",
-            "continuation_version": "1"
+            "input_declaration": "sha256:d1fb33589bdf72f13e66eb079f62b91669c0f585a17a4ad52269acd7e7ed364e",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -266,8 +270,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:a09c53607ecb5e3081470bd9c8188ed4f08c4050436ff180f7382ef7e4a817e6",
-            "continuation_version": "1"
+            "input_declaration": "sha256:abd8de2f52266515e1c111da3dd12e5a29583db6d467a1432d9ef49bfac0674b",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -382,8 +387,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:0e2e3ae26a222d24149cb7b846640b94124a1f4e977369c5d57c3fdec74d088d",
-            "continuation_version": "1"
+            "input_declaration": "sha256:d1fb33589bdf72f13e66eb079f62b91669c0f585a17a4ad52269acd7e7ed364e",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -486,8 +492,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:2bfc233b221be4bbdb7e089a32de41c7199415cfee9c9a9d9f2611d9dc750ffd",
-            "continuation_version": "1"
+            "input_declaration": "sha256:d24f6f0f1622a99040c33024eb7d3f23acb2c50b01ca03534e77c0c2f05e438f",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -590,8 +597,9 @@
             "gate_version": "1",
             "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
             "state_version": "1",
-            "input_declaration": "sha256:cb2a6d52b8736b73420a6425b30d700a7616820d015913d05f39fb0e6111a150",
-            "continuation_version": "1"
+            "input_declaration": "sha256:d24f6f0f1622a99040c33024eb7d3f23acb2c50b01ca03534e77c0c2f05e438f",
+            "continuation_version": "1",
+            "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
           },
           "args": {
             "resource_source": "action_context",
@@ -821,7 +829,7 @@
       "expected_policy_digest": "sha256:changelist-policy",
       "inputs": {
         "change_id": "cl:246",
-        "snapshot": 17
+        "evidence_context": 17
       },
       "reason": null,
       "confirmed": true
@@ -901,7 +909,7 @@
       "authorization": "allowed",
       "outcome": "blocked",
       "context": {
-        "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+        "context_digest": "sha256:23465b93b6f2f085fc23edcff8eb12818c580f50a6adee3be1a85620c1906528",
         "operation_id": "op-merge-H1",
         "registry": {
           "registry_id": "grain-actions",
@@ -937,7 +945,7 @@
             "authority_epoch": 1
           }
         ],
-        "snapshot_id": "snapshot:20",
+        "evidence_context_id": "snapshot:20",
         "evidence_revision": 20
       },
       "guards": [
@@ -1072,7 +1080,7 @@
       "authorization": "allowed",
       "outcome": "succeeded",
       "context": {
-        "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+        "context_digest": "sha256:9d8fed5802d01643239edb771c5b979a6b3e93549bc2a689408dd04cb2a0b8b7",
         "operation_id": "op-merge-H1",
         "registry": {
           "registry_id": "grain-actions",
@@ -1108,7 +1116,7 @@
             "authority_epoch": 1
           }
         ],
-        "snapshot_id": "snapshot:21",
+        "evidence_context_id": "snapshot:21",
         "evidence_revision": 21
       },
       "guards": [
@@ -1300,7 +1308,7 @@
     "before_version": "pr:123/H1/open/7",
     "after_version": "pr:123/merged/M1",
     "policy_digest": "sha256:policy12",
-    "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+    "context_digest": "sha256:34165053034724a959ee3cb6f8dd9f61bae71137d389c3e1ce4d5d649b1d1e46",
     "outcome": "succeeded",
     "source": "reconciled_executor",
     "authoritative_evidence": [
@@ -1313,7 +1321,7 @@
     "occurred_at": "2026-11-16T21:01:00Z"
   },
   "guard_request": {
-    "protocol_version": "3.0",
+    "protocol_version": "5.0",
     "bundle_id": "bundle-action-21",
     "evaluation_id": "ev-ordinary-review-21",
     "mode": "evaluate",
@@ -1331,8 +1339,9 @@
       "gate_version": "1",
       "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
       "state_version": "1",
-      "input_declaration": "sha256:4d51ac5eac4a109f2936c39271cf3aa89c7642ed002079b23527af608c8ac5d1",
-      "continuation_version": "1"
+      "input_declaration": "sha256:d1fb33589bdf72f13e66eb079f62b91669c0f585a17a4ad52269acd7e7ed364e",
+      "continuation_version": "1",
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
     },
     "args": {
       "resource_source": "action_context",
@@ -1345,13 +1354,10 @@
     "now": "2026-11-16T21:00:00Z",
     "limits": {
       "elapsed_ms": 30000,
-      "rounds": 8,
+      "rounds": 16,
       "inline_bytes": 262144,
       "page_bytes": 131072,
       "page_records": 100,
-      "pages": 64,
-      "page_requests_per_round": 8,
-      "page_requests_total": 64,
       "total_page_bytes": 8388608,
       "records": 6500,
       "state_bytes": 16384,
@@ -1362,10 +1368,14 @@
       "transport_bytes": 25165824,
       "retries_per_round": 1,
       "retries_total": 2,
-      "retention_ms": 60000
+      "retention_ms": 60000,
+      "read_calls": 64,
+      "reads_per_round": 8,
+      "reads_total": 64,
+      "dependencies_total": 8192
     },
-    "snapshot": {
-      "version": "2",
+    "evidence_context": {
+      "version": "3",
       "id": "snapshot:21",
       "evidence_revision": 21,
       "cursor": "journal:721",
@@ -1379,10 +1389,10 @@
       "records": [
         {
           "id": "guard-context:21",
-          "version": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+          "version": "sha256:f79742d84a84206d24db71bed3960a8ca4bb158433abcd5cebe4f5f3aa60e9b6",
           "kind": "action_guard_context",
           "data": {
-            "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+            "context_digest": "sha256:9d8fed5802d01643239edb771c5b979a6b3e93549bc2a689408dd04cb2a0b8b7",
             "operation_id": "op-merge-H1",
             "registry": {
               "registry_id": "grain-actions",
@@ -1418,33 +1428,116 @@
                 "authority_epoch": 1
               }
             ],
-            "snapshot_id": "snapshot:21",
+            "evidence_context_id": "snapshot:21",
             "evidence_revision": 21
-          }
-        },
-        {
-          "id": "ordinary-review:H1",
-          "version": "H1/21",
-          "kind": "review",
-          "data": {
-            "head": "H1",
-            "disposition": "accepted",
-            "observed_at": "2026-11-16T20:59:59Z"
           }
         }
       ],
-      "references": [],
       "created_at": "2026-11-16T21:00:00Z",
-      "expires_at": "2026-11-16T21:01:00Z"
+      "expires_at": "2026-11-16T21:01:00Z",
+      "subjects": [
+        {
+          "authority": "github.com",
+          "repository_id": "repo:grain-immutable-id",
+          "kind": "pull_request",
+          "id": "pr:123",
+          "head": "H1"
+        }
+      ],
+      "requirements": [
+        {
+          "domain": "reviews",
+          "operation": "change.reviews.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:d5b799574c2e5bf46e0fbf7b4d539c03cd8f6eba8a267f73de4f23b5ca37d47c"
+        }
+      ]
     },
     "round": 0,
     "phase": "initial",
     "previous_response_digest": null,
     "continuation_state": null,
-    "deliveries": [],
-    "request_digest": "sha256:01e584de7cab83d46590d02ce1be796aa890ff148bdb0fc1db71125f3a6bccf7",
+    "read_results": [
+      {
+        "request": {
+          "read_id": "review-prefetch",
+          "operation": "change.reviews.list",
+          "operation_version": "1.0",
+          "args": {
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "repo:grain-immutable-id",
+              "kind": "pull_request",
+              "id": "pr:123",
+              "head": "H1"
+            },
+            "policy_revision": 12,
+            "cursor": null,
+            "limit": 100
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "snapshot:21",
+          "read_id": "review-prefetch",
+          "operation": "change.reviews.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:130a96a9e2b4b2b9828981a7c593ae3abfa6fa9075389391fac36c0d44a95624",
+          "subject": {
+            "authority": "github.com",
+            "repository_id": "repo:grain-immutable-id",
+            "kind": "pull_request",
+            "id": "pr:123",
+            "head": "H1"
+          },
+          "collection_revision": "reviews:H1:21",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "ordinary-review:H1",
+              "version": "H1/21",
+              "kind": "review",
+              "data": {
+                "head": "H1",
+                "disposition": "accepted",
+                "observed_at": "2026-11-16T20:59:59Z",
+                "policy_revision": 12,
+                "path_digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                "reviewer_role": "ordinary",
+                "valid_until": "2026-11-16T21:01:00Z"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "review-set:pr123:H1",
+              "version": "review-set:21",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "repo:grain-immutable-id",
+                "kind": "pull_request",
+                "id": "pr:123",
+                "head": "H1"
+              },
+              "collection_revision": "reviews:H1:21",
+              "authorization_revision": 5,
+              "observed_at": "2026-11-16T20:59:59Z",
+              "valid_until": "2026-11-16T21:01:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:59:59Z",
+          "valid_until": "2026-11-16T21:01:00Z"
+        }
+      }
+    ],
+    "request_digest": "sha256:20fb89507d82dfb2f635c36d3ba8ec95b9f7cde17b42ded64c2a5117b37a6c82",
     "action_context": {
-      "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+      "context_digest": "sha256:9d8fed5802d01643239edb771c5b979a6b3e93549bc2a689408dd04cb2a0b8b7",
       "operation_id": "op-merge-H1",
       "registry": {
         "registry_id": "grain-actions",
@@ -1480,12 +1573,12 @@
           "authority_epoch": 1
         }
       ],
-      "snapshot_id": "snapshot:21",
+      "evidence_context_id": "snapshot:21",
       "evidence_revision": 21
     }
   },
   "guard_response": {
-    "protocol_version": "3.0",
+    "protocol_version": "5.0",
     "bundle_id": "bundle-action-21",
     "evaluation_id": "ev-ordinary-review-21",
     "gate_id": "repo-integration@4/ordinary-review",
@@ -1496,8 +1589,8 @@
     "read_scope_digest": "sha256:ffc8f595133e42d564bf775cca4ee4867f9411cf33629f0b0da242df9f2750c6",
     "expected_state_revision": 0,
     "round": 0,
-    "request_digest": "sha256:01e584de7cab83d46590d02ce1be796aa890ff148bdb0fc1db71125f3a6bccf7",
-    "snapshot_id": "snapshot:21",
+    "request_digest": "sha256:20fb89507d82dfb2f635c36d3ba8ec95b9f7cde17b42ded64c2a5117b37a6c82",
+    "evidence_context_id": "snapshot:21",
     "evidence_revision": 21,
     "kind": "final",
     "status": "met",
@@ -1515,7 +1608,7 @@
     "action_requests": [],
     "waits": [],
     "buttons": [],
-    "action_context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65"
+    "action_context_digest": "sha256:9d8fed5802d01643239edb771c5b979a6b3e93549bc2a689408dd04cb2a0b8b7"
   },
   "operation_events": [
     {
@@ -1544,7 +1637,7 @@
         "base_version": "main:B1"
       },
       "attempt_digest": "sha256:merge-attempt",
-      "context_digest": null,
+      "context_digest": "sha256:3ae58ba5ac8b57f860cc95085aa7ce4f4f2c80fdcfdbf9df6e793aa156ab1be3",
       "decision_reference": null,
       "lease_epoch": null,
       "receipt_reference": null,
@@ -1576,7 +1669,7 @@
         "base_version": "main:B1"
       },
       "attempt_digest": "sha256:merge-attempt",
-      "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+      "context_digest": "sha256:4239d5f8dad5e8ac3b83505bf16df33046fa4f2c3b2521558431c904998eda41",
       "decision_reference": {
         "id": "decision:blocked",
         "kind": "action_decision",
@@ -1612,7 +1705,7 @@
         "base_version": "main:B1"
       },
       "attempt_digest": "sha256:merge-attempt",
-      "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+      "context_digest": "sha256:e1133f39b90b22c39dc768519806053684e4239a885b2849cda4e4f2c8aeecb5",
       "decision_reference": {
         "id": "decision:ready",
         "kind": "action_decision",
@@ -1648,7 +1741,7 @@
         "base_version": "main:B1"
       },
       "attempt_digest": "sha256:merge-attempt",
-      "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+      "context_digest": "sha256:efddf08849231b502bd26f28bb04692f8c27eb5c67628fa5f43fd34f14b5fd3c",
       "decision_reference": {
         "id": "decision:success",
         "kind": "action_decision",
@@ -1664,9 +1757,9 @@
     }
   ],
   "evaluator_declaration": {
-    "protocol_version": "3.0",
-    "snapshot_version": "2",
-    "transport": "grain_rounds",
+    "protocol_version": "5.0",
+    "evidence_context_version": "3",
+    "transport": "grain_brokered_reads",
     "continuation_version": "1",
     "evidence_replay_safe": true,
     "inputs": [
@@ -1676,7 +1769,10 @@
           "action_guard_context"
         ],
         "required": true,
-        "prefetch": false
+        "prefetch": false,
+        "operations": [
+          "change.reviews.list"
+        ]
       },
       {
         "domain": "reviews",
@@ -1684,22 +1780,43 @@
           "review"
         ],
         "required": true,
-        "prefetch": false
+        "prefetch": false,
+        "operations": [
+          "change.reviews.list"
+        ]
       }
     ],
     "record_schemas": [
       {
         "kind": "action_guard_context",
-        "schema_digest": "sha256:f10e7c3179f0fa8b88937ba160a03cbd55b35e95b48bd808faea72d5e79f67f5"
+        "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
       },
       {
         "kind": "review",
-        "schema_digest": "sha256:b3c2a66fa1e977bbb3e1cdc44408cb00b8d38ea5f1e3569662cc73cce6402d33"
+        "schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+      }
+    ],
+    "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+    "read_operations": [
+      {
+        "operation": "change.reviews.list",
+        "version": "1.0",
+        "args_schema_digest": "sha256:88add0ef42047596b3ea5a9c984228e8e1a78c57668c39ad7ff2b8545bd1f839",
+        "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+        "adapter_pin": {
+          "id": "proposed:grain:change.reviews.list",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "config_revision": "fixture-1"
+        },
+        "authorization_rule": "registered-evidence-read",
+        "read_only": true,
+        "record_kind": "review",
+        "record_schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
       }
     ]
   },
   "guard_paged_request": {
-    "protocol_version": "3.0",
+    "protocol_version": "5.0",
     "bundle_id": "bundle-action-paged",
     "evaluation_id": "ev-ordinary-review-paged",
     "mode": "evaluate",
@@ -1717,8 +1834,9 @@
       "gate_version": "1",
       "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
       "state_version": "1",
-      "input_declaration": "sha256:4d51ac5eac4a109f2936c39271cf3aa89c7642ed002079b23527af608c8ac5d1",
-      "continuation_version": "1"
+      "input_declaration": "sha256:d1fb33589bdf72f13e66eb079f62b91669c0f585a17a4ad52269acd7e7ed364e",
+      "continuation_version": "1",
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
     },
     "args": {
       "resource_source": "action_context",
@@ -1731,13 +1849,10 @@
     "now": "2026-11-16T21:00:00Z",
     "limits": {
       "elapsed_ms": 30000,
-      "rounds": 8,
+      "rounds": 16,
       "inline_bytes": 262144,
       "page_bytes": 131072,
       "page_records": 100,
-      "pages": 64,
-      "page_requests_per_round": 8,
-      "page_requests_total": 64,
       "total_page_bytes": 8388608,
       "records": 6500,
       "state_bytes": 16384,
@@ -1748,10 +1863,14 @@
       "transport_bytes": 25165824,
       "retries_per_round": 1,
       "retries_total": 2,
-      "retention_ms": 60000
+      "retention_ms": 60000,
+      "read_calls": 64,
+      "reads_per_round": 8,
+      "reads_total": 64,
+      "dependencies_total": 8192
     },
-    "snapshot": {
-      "version": "2",
+    "evidence_context": {
+      "version": "3",
       "id": "snapshot:22",
       "evidence_revision": 22,
       "cursor": "journal:722",
@@ -1765,10 +1884,10 @@
       "records": [
         {
           "id": "guard-context:22",
-          "version": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730",
+          "version": "sha256:f1d9c1759f4011b1fdd2fa17d5da476c7f4fa9c6c3d6cf0cf4da1630d367dbb4",
           "kind": "action_guard_context",
           "data": {
-            "context_digest": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730",
+            "context_digest": "sha256:0fbaa74c4c95c4d98d25844bec1bb7aa0c2f53dfb9239b25ef3d3623aa7a8e4d",
             "operation_id": "op-merge-H1",
             "registry": {
               "registry_id": "grain-actions",
@@ -1804,35 +1923,39 @@
                 "authority_epoch": 1
               }
             ],
-            "snapshot_id": "snapshot:22",
+            "evidence_context_id": "snapshot:22",
             "evidence_revision": 22
           }
         }
       ],
-      "references": [
+      "created_at": "2026-11-16T21:00:00Z",
+      "expires_at": "2026-11-16T21:01:00Z",
+      "subjects": [
         {
-          "id": "reviews:H1",
-          "domain": "reviews",
-          "kind": "snapshot_page",
-          "record_kind": "review",
-          "schema_digest": "sha256:b3c2a66fa1e977bbb3e1cdc44408cb00b8d38ea5f1e3569662cc73cce6402d33",
-          "version": "H1/21",
-          "page_count": 1,
-          "record_count": 1,
-          "expires_at": "2026-11-16T21:01:00Z"
+          "authority": "github.com",
+          "repository_id": "repo:grain-immutable-id",
+          "kind": "pull_request",
+          "id": "pr:123",
+          "head": "H1"
         }
       ],
-      "created_at": "2026-11-16T21:00:00Z",
-      "expires_at": "2026-11-16T21:01:00Z"
+      "requirements": [
+        {
+          "domain": "reviews",
+          "operation": "change.reviews.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:d5b799574c2e5bf46e0fbf7b4d539c03cd8f6eba8a267f73de4f23b5ca37d47c"
+        }
+      ]
     },
     "round": 0,
     "phase": "initial",
     "previous_response_digest": null,
     "continuation_state": null,
-    "deliveries": [],
-    "request_digest": "sha256:300492f51857b98c2059e05b908924697858dad258921dafc1d296d0dbb8aad8",
+    "read_results": [],
+    "request_digest": "sha256:15951ecd89704d33708bc48fa867e376716be4f21ee58f5d7af0f5bb7bfb66bd",
     "action_context": {
-      "context_digest": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730",
+      "context_digest": "sha256:0fbaa74c4c95c4d98d25844bec1bb7aa0c2f53dfb9239b25ef3d3623aa7a8e4d",
       "operation_id": "op-merge-H1",
       "registry": {
         "registry_id": "grain-actions",
@@ -1868,40 +1991,523 @@
           "authority_epoch": 1
         }
       ],
-      "snapshot_id": "snapshot:22",
+      "evidence_context_id": "snapshot:22",
       "evidence_revision": 22
     }
   },
   "guard_paged_response": {
-    "protocol_version": "3.0",
+    "protocol_version": "5.0",
     "evaluation_id": "ev-ordinary-review-paged",
     "gate_id": "repo-integration@4/ordinary-review",
-    "snapshot_id": "snapshot:22",
+    "evidence_context_id": "snapshot:22",
     "contract_revision": 9,
     "authority_epoch": 2,
     "policy_revision": 12,
     "evidence_revision": 22,
     "expected_state_revision": 0,
     "round": 0,
-    "request_digest": "sha256:300492f51857b98c2059e05b908924697858dad258921dafc1d296d0dbb8aad8",
+    "request_digest": "sha256:15951ecd89704d33708bc48fa867e376716be4f21ee58f5d7af0f5bb7bfb66bd",
     "bundle_id": "bundle-action-paged",
     "permission_revision": 5,
     "read_scope_digest": "sha256:ffc8f595133e42d564bf775cca4ee4867f9411cf33629f0b0da242df9f2750c6",
     "summary": "Read a retained review page.",
-    "kind": "needs_data",
+    "kind": "read_requests",
     "requests": [
       {
-        "protocol_version": "2.0",
-        "evaluation_id": "ev-ordinary-review-paged",
-        "snapshot_id": "snapshot:22",
         "read_id": "read-review-1",
-        "reference_id": "reviews:H1",
-        "cursor": null
+        "operation": "change.reviews.list",
+        "operation_version": "1.0",
+        "args": {
+          "resource": {
+            "authority": "github.com",
+            "repository_id": "repo:grain-immutable-id",
+            "kind": "pull_request",
+            "id": "pr:123",
+            "head": "H1"
+          },
+          "policy_revision": 12,
+          "cursor": null,
+          "limit": 100
+        }
       }
     ],
     "continuation_state": {
       "awaiting": "reviews:H1"
     },
-    "action_context_digest": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730"
+    "action_context_digest": "sha256:0fbaa74c4c95c4d98d25844bec1bb7aa0c2f53dfb9239b25ef3d3623aa7a8e4d"
+  },
+  "evaluator_declarations": {
+    "gate_checks": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.checks.list"
+          ]
+        },
+        {
+          "domain": "checks",
+          "kinds": [
+            "check"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.checks.list"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "check",
+          "schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "change.checks.list",
+          "version": "1.0",
+          "args_schema_digest": "sha256:46a91f11b9666f80a05afd623814b92a076e89810e024363ab3a0fb9b3ba0c8f",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:change.checks.list",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "check",
+          "record_schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
+        }
+      ]
+    },
+    "gate_review": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        },
+        {
+          "domain": "reviews",
+          "kinds": [
+            "review"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "review",
+          "schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "change.reviews.list",
+          "version": "1.0",
+          "args_schema_digest": "sha256:88add0ef42047596b3ea5a9c984228e8e1a78c57668c39ad7ff2b8545bd1f839",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:change.reviews.list",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "review",
+          "record_schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ]
+    },
+    "gate_security_review": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        },
+        {
+          "domain": "reviews",
+          "kinds": [
+            "review"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "review",
+          "schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "change.reviews.list",
+          "version": "1.0",
+          "args_schema_digest": "sha256:88add0ef42047596b3ea5a9c984228e8e1a78c57668c39ad7ff2b8545bd1f839",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:change.reviews.list",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "review",
+          "record_schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ]
+    },
+    "gate_path_review": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        },
+        {
+          "domain": "reviews",
+          "kinds": [
+            "review"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "review",
+          "schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "change.reviews.list",
+          "version": "1.0",
+          "args_schema_digest": "sha256:88add0ef42047596b3ea5a9c984228e8e1a78c57668c39ad7ff2b8545bd1f839",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:change.reviews.list",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "review",
+          "record_schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ]
+    },
+    "gate_approval": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "evidence.events.list"
+          ]
+        },
+        {
+          "domain": "events",
+          "kinds": [
+            "evidence_event"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "evidence.events.list"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "evidence_event",
+          "schema_digest": "sha256:eee73dcfaa5eda5e57530c300769eeb939ec0eb4a4be0ff536967e622255c1a2"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "evidence.events.list",
+          "version": "1.0",
+          "args_schema_digest": "sha256:9903140c49df333bca6cc4390c2d38fb00690c3948e1587c1e45624118376192",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:evidence.events.list",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "evidence_event",
+          "record_schema_digest": "sha256:eee73dcfaa5eda5e57530c300769eeb939ec0eb4a4be0ff536967e622255c1a2"
+        }
+      ]
+    },
+    "gate_submit_review": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        },
+        {
+          "domain": "reviews",
+          "kinds": [
+            "review"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.reviews.list"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "review",
+          "schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "change.reviews.list",
+          "version": "1.0",
+          "args_schema_digest": "sha256:88add0ef42047596b3ea5a9c984228e8e1a78c57668c39ad7ff2b8545bd1f839",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:change.reviews.list",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "review",
+          "record_schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+        }
+      ]
+    },
+    "gate_promotion_ready": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.read"
+          ]
+        },
+        {
+          "domain": "change",
+          "kinds": [
+            "change"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.read"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "change",
+          "schema_digest": "sha256:79b8282b2e8691329779c37873bd06b215e02da2dad2caed427c7707e1230217"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "change.read",
+          "version": "1.0",
+          "args_schema_digest": "sha256:dcfb4032df46b284aa1b341cb7730578e261e3d6c6735fb58484064f81dcba1a",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:change.read",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "change",
+          "record_schema_digest": "sha256:79b8282b2e8691329779c37873bd06b215e02da2dad2caed427c7707e1230217"
+        }
+      ]
+    },
+    "gate_publication_ready": {
+      "protocol_version": "5.0",
+      "evidence_context_version": "3",
+      "transport": "grain_brokered_reads",
+      "continuation_version": "1",
+      "evidence_replay_safe": true,
+      "inputs": [
+        {
+          "domain": "action_guard_context",
+          "kinds": [
+            "action_guard_context"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.read"
+          ]
+        },
+        {
+          "domain": "change",
+          "kinds": [
+            "change"
+          ],
+          "required": true,
+          "prefetch": false,
+          "operations": [
+            "change.read"
+          ]
+        }
+      ],
+      "record_schemas": [
+        {
+          "kind": "action_guard_context",
+          "schema_digest": "sha256:98d462f781c65ea1eb3586ae8e6757888c790cad2bf7e5863ba4fead78aa9ad1"
+        },
+        {
+          "kind": "change",
+          "schema_digest": "sha256:79b8282b2e8691329779c37873bd06b215e02da2dad2caed427c7707e1230217"
+        }
+      ],
+      "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+      "read_operations": [
+        {
+          "operation": "change.read",
+          "version": "1.0",
+          "args_schema_digest": "sha256:dcfb4032df46b284aa1b341cb7730578e261e3d6c6735fb58484064f81dcba1a",
+          "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+          "adapter_pin": {
+            "id": "proposed:grain:change.read",
+            "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_revision": "fixture-1"
+          },
+          "authorization_rule": "registered-evidence-read",
+          "read_only": true,
+          "record_kind": "change",
+          "record_schema_digest": "sha256:79b8282b2e8691329779c37873bd06b215e02da2dad2caed427c7707e1230217"
+        }
+      ]
+    }
   }
 }

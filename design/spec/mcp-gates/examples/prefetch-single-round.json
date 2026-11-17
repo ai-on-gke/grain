@@ -2,9 +2,9 @@
   "name": "prefetch-single-round",
   "description": "Required declared inputs fit inline plus one prefetched page, charged to the same read/page budgets; initial response is final.",
   "declaration": {
-    "protocol_version": "2.0",
-    "snapshot_version": "2",
-    "transport": "grain_rounds",
+    "protocol_version": "4.0",
+    "evidence_context_version": "3",
+    "transport": "grain_brokered_reads",
     "continuation_version": "1",
     "evidence_replay_safe": true,
     "inputs": [
@@ -14,7 +14,10 @@
           "evaluation_context"
         ],
         "required": true,
-        "prefetch": false
+        "prefetch": false,
+        "operations": [
+          "change.checks.list"
+        ]
       },
       {
         "domain": "checks",
@@ -22,17 +25,38 @@
           "check"
         ],
         "required": true,
-        "prefetch": true
+        "prefetch": true,
+        "operations": [
+          "change.checks.list"
+        ]
       }
     ],
     "record_schemas": [
       {
         "kind": "check",
-        "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd"
+        "schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
       },
       {
         "kind": "evaluation_context",
         "schema_digest": "sha256:befef31a856926b2cf764dda8f3187bd1e419682fa54c2f35d01040306709de8"
+      }
+    ],
+    "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+    "read_operations": [
+      {
+        "operation": "change.checks.list",
+        "version": "1.0",
+        "args_schema_digest": "sha256:46a91f11b9666f80a05afd623814b92a076e89810e024363ab3a0fb9b3ba0c8f",
+        "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+        "adapter_pin": {
+          "id": "proposed:grain:change.checks.list",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "config_revision": "fixture-1"
+        },
+        "authorization_rule": "registered-evidence-read",
+        "read_only": true,
+        "record_kind": "check",
+        "record_schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
       }
     ]
   },
@@ -40,7 +64,7 @@
     {
       "type": "call",
       "message": {
-        "protocol_version": "2.0",
+        "protocol_version": "4.0",
         "bundle_id": "bundle-19",
         "evaluation_id": "ev-47",
         "mode": "evaluate",
@@ -58,8 +82,9 @@
           "gate_version": "1",
           "args_schema": "sha256:793da71767aae3cdbf090628ee2d6dea491c0d4d6225b1f767d776ad179dfa69",
           "state_version": "1",
-          "input_declaration": "sha256:eed5f6f2e242d54ab7d060eea0a4b7f6a9c9f77b2d0d545f90b391d6f159d98b",
-          "continuation_version": "1"
+          "input_declaration": "sha256:c99e5cec0b55ba1f04e9e8ea8313afaafdaa17ed1f53a22c3aed1953a57f759f",
+          "continuation_version": "1",
+          "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
         },
         "args": {
           "repo": "ai-on-gke/grain",
@@ -74,13 +99,10 @@
         "now": "2026-11-16T20:13:00Z",
         "limits": {
           "elapsed_ms": 30000,
-          "rounds": 8,
+          "rounds": 16,
           "inline_bytes": 262144,
           "page_bytes": 131072,
           "page_records": 100,
-          "pages": 64,
-          "page_requests_per_round": 8,
-          "page_requests_total": 64,
           "total_page_bytes": 8388608,
           "records": 6500,
           "state_bytes": 16384,
@@ -91,10 +113,14 @@
           "transport_bytes": 25165824,
           "retries_per_round": 1,
           "retries_total": 2,
-          "retention_ms": 60000
+          "retention_ms": 60000,
+          "read_calls": 64,
+          "reads_per_round": 8,
+          "reads_total": 64,
+          "dependencies_total": 8192
         },
-        "snapshot": {
-          "version": "2",
+        "evidence_context": {
+          "version": "3",
           "id": "snap-19",
           "evidence_revision": 19,
           "cursor": "journal:718",
@@ -128,45 +154,69 @@
               }
             }
           ],
-          "references": [
+          "created_at": "2026-11-16T20:13:00Z",
+          "expires_at": "2026-11-16T20:14:00Z",
+          "subjects": [
             {
-              "id": "checks:a1",
-              "domain": "checks",
-              "kind": "snapshot_page",
-              "record_kind": "check",
-              "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd",
-              "version": "observed:19",
-              "page_count": 1,
-              "record_count": 2,
-              "expires_at": "2026-11-16T20:14:00Z"
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
             }
           ],
-          "created_at": "2026-11-16T20:13:00Z",
-          "expires_at": "2026-11-16T20:14:00Z"
+          "requirements": [
+            {
+              "domain": "checks",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args_digest": "sha256:ccc180d7ba656a7d7db79344e8695d77f8428ea03cd0d88f8cf4ad30565bd714"
+            }
+          ]
         },
         "round": 0,
         "phase": "initial",
         "previous_response_digest": null,
         "continuation_state": null,
-        "deliveries": [
+        "read_results": [
           {
             "request": {
-              "protocol_version": "2.0",
-              "evaluation_id": "ev-47",
-              "snapshot_id": "snap-19",
               "read_id": "read-prefetch",
-              "reference_id": "checks:a1",
-              "cursor": null
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args": {
+                "resource": {
+                  "authority": "github.com",
+                  "repository_id": "12345",
+                  "kind": "pull_request",
+                  "id": "123",
+                  "head": "a1"
+                },
+                "required_set_revision": 2,
+                "cursor": null,
+                "limit": 100
+              }
             },
             "status": "ok",
             "page": {
-              "protocol_version": "2.0",
-              "evaluation_id": "ev-47",
-              "snapshot_id": "snap-19",
-              "evidence_revision": 19,
+              "protocol_version": "1.0",
+              "evidence_context_id": "snap-19",
               "read_id": "read-prefetch",
-              "reference_id": "checks:a1",
-              "cursor": null,
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args_digest": "sha256:878d34bc15de2617c30b9589df47e8d8e98ca3c37402019c5761c97313f25dc0",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "checks:19",
+              "coverage": {
+                "complete": true,
+                "empty": false
+              },
               "records": [
                 {
                   "id": "check:unit",
@@ -192,17 +242,35 @@
                 }
               ],
               "next_cursor": null,
-              "expires_at": "2026-11-16T20:14:00Z"
+              "dependencies": [
+                {
+                  "key": "check-set:123:a1",
+                  "version": "evidence:19",
+                  "subject": {
+                    "authority": "github.com",
+                    "repository_id": "12345",
+                    "kind": "pull_request",
+                    "id": "123",
+                    "head": "a1"
+                  },
+                  "collection_revision": "checks:19",
+                  "authorization_revision": 7,
+                  "observed_at": "2026-11-16T20:13:00Z",
+                  "valid_until": "2026-11-16T20:14:00Z"
+                }
+              ],
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
             }
           }
         ],
-        "request_digest": "sha256:0b5d36c411dce5425af582bf80a35792220c3106feaad2fc4ebc87405ae19207"
+        "request_digest": "sha256:32aa6831849a7d87b6bc788062a552705c32c6a035c0f261f0e030e535bb419e"
       }
     },
     {
       "type": "reply",
       "message": {
-        "protocol_version": "2.0",
+        "protocol_version": "4.0",
         "bundle_id": "bundle-19",
         "evaluation_id": "ev-47",
         "gate_id": "checks",
@@ -213,8 +281,8 @@
         "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
         "expected_state_revision": 2,
         "round": 0,
-        "request_digest": "sha256:0b5d36c411dce5425af582bf80a35792220c3106feaad2fc4ebc87405ae19207",
-        "snapshot_id": "snap-19",
+        "request_digest": "sha256:32aa6831849a7d87b6bc788062a552705c32c6a035c0f261f0e030e535bb419e",
+        "evidence_context_id": "snap-19",
         "evidence_revision": 19,
         "kind": "final",
         "status": "met",

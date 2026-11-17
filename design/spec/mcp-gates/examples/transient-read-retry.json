@@ -1,0 +1,736 @@
+{
+  "name": "transient-read-retry",
+  "description": "One transient adapter failure before delivery is retried under the same logical read ID/args and original budgets, then ordinary gate continuation/final.",
+  "declaration": {
+    "protocol_version": "4.0",
+    "evidence_context_version": "3",
+    "transport": "grain_brokered_reads",
+    "continuation_version": "1",
+    "evidence_replay_safe": true,
+    "inputs": [
+      {
+        "domain": "context",
+        "kinds": [
+          "evaluation_context"
+        ],
+        "required": true,
+        "prefetch": false,
+        "operations": [
+          "change.checks.list"
+        ]
+      },
+      {
+        "domain": "checks",
+        "kinds": [
+          "check"
+        ],
+        "required": true,
+        "prefetch": false,
+        "operations": [
+          "change.checks.list"
+        ]
+      }
+    ],
+    "record_schemas": [
+      {
+        "kind": "check",
+        "schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
+      },
+      {
+        "kind": "evaluation_context",
+        "schema_digest": "sha256:befef31a856926b2cf764dda8f3187bd1e419682fa54c2f35d01040306709de8"
+      }
+    ],
+    "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+    "read_operations": [
+      {
+        "operation": "change.checks.list",
+        "version": "1.0",
+        "args_schema_digest": "sha256:46a91f11b9666f80a05afd623814b92a076e89810e024363ab3a0fb9b3ba0c8f",
+        "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+        "adapter_pin": {
+          "id": "proposed:grain:change.checks.list",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "config_revision": "fixture-1"
+        },
+        "authorization_rule": "registered-evidence-read",
+        "read_only": true,
+        "record_kind": "check",
+        "record_schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "type": "call",
+      "message": {
+        "protocol_version": "4.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "mode": "evaluate",
+        "task_id": "47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "pin": {
+          "provider": "capability:forge",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "tool": "gate_checks",
+          "gate_version": "1",
+          "args_schema": "sha256:793da71767aae3cdbf090628ee2d6dea491c0d4d6225b1f767d776ad179dfa69",
+          "state_version": "1",
+          "input_declaration": "sha256:8b4a42e908a42bec99b770a01cbb620f783246cff777edbb804e068495ef19a1",
+          "continuation_version": "1",
+          "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
+        },
+        "args": {
+          "repo": "ai-on-gke/grain",
+          "head": "a1"
+        },
+        "args_digest": "sha256:521c2981b9718e79c4b1cc9a89fe5944d5f2bd1dedc90ae9123c3449c60c5363",
+        "expected_state_revision": 2,
+        "gate_state": {
+          "checks_seen": 0
+        },
+        "deadline": "2026-11-16T20:13:30Z",
+        "now": "2026-11-16T20:13:00Z",
+        "limits": {
+          "elapsed_ms": 30000,
+          "rounds": 16,
+          "inline_bytes": 262144,
+          "page_bytes": 131072,
+          "page_records": 100,
+          "total_page_bytes": 8388608,
+          "records": 6500,
+          "state_bytes": 16384,
+          "continuation_bytes": 16384,
+          "json_depth": 16,
+          "response_bytes": 262144,
+          "request_bytes": 2097152,
+          "transport_bytes": 25165824,
+          "retries_per_round": 1,
+          "retries_total": 2,
+          "retention_ms": 60000,
+          "read_calls": 64,
+          "reads_per_round": 8,
+          "reads_total": 64,
+          "dependencies_total": 8192
+        },
+        "evidence_context": {
+          "version": "3",
+          "id": "snap-19",
+          "evidence_revision": 19,
+          "cursor": "journal:718",
+          "incoming_message_watermark": 6,
+          "processed_message_watermark": 6,
+          "domains": [
+            "context",
+            "checks"
+          ],
+          "unavailable": [],
+          "records": [
+            {
+              "id": "context:47",
+              "kind": "evaluation_context",
+              "version": "evidence:19",
+              "data": {
+                "task_id": "47",
+                "contract_revision": 4,
+                "authority_epoch": 1,
+                "policy_revision": 2,
+                "permission_revision": 7,
+                "head": "a1",
+                "check_count": 2,
+                "children": [],
+                "operations": [],
+                "waivers": [],
+                "required_suites": [
+                  "unit",
+                  "security"
+                ]
+              }
+            }
+          ],
+          "created_at": "2026-11-16T20:13:00Z",
+          "expires_at": "2026-11-16T20:14:00Z",
+          "subjects": [
+            {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            }
+          ],
+          "requirements": [
+            {
+              "domain": "checks",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args_digest": "sha256:ccc180d7ba656a7d7db79344e8695d77f8428ea03cd0d88f8cf4ad30565bd714"
+            }
+          ]
+        },
+        "round": 0,
+        "phase": "initial",
+        "previous_response_digest": null,
+        "continuation_state": null,
+        "read_results": [],
+        "request_digest": "sha256:9b33228a2369ae25d3e4a3aed3e5ebfdeafc27ef631151c5226734bb71089cfe"
+      }
+    },
+    {
+      "type": "reply",
+      "message": {
+        "protocol_version": "4.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "expected_state_revision": 2,
+        "round": 0,
+        "request_digest": "sha256:9b33228a2369ae25d3e4a3aed3e5ebfdeafc27ef631151c5226734bb71089cfe",
+        "evidence_context_id": "snap-19",
+        "evidence_revision": 19,
+        "kind": "read_requests",
+        "summary": "More declared read evidence is needed.",
+        "requests": [
+          {
+            "read_id": "read-1",
+            "operation": "change.checks.list",
+            "operation_version": "1.0",
+            "args": {
+              "resource": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "required_set_revision": 2,
+              "cursor": null,
+              "limit": 100
+            }
+          }
+        ],
+        "continuation_state": {
+          "seen": 0,
+          "all_success": true,
+          "evidence": []
+        }
+      }
+    },
+    {
+      "type": "event",
+      "description": "Broker persists operation attempt for read-1. Authorized adapter transport fails unavailable before data; no delivery/checkpoint advance. Reserve second call slot, retry identical operation/version/args/read_id once. Returned page/dependencies below are persisted before round 1; no gate replay executes the read again."
+    },
+    {
+      "type": "call",
+      "message": {
+        "protocol_version": "4.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "mode": "evaluate",
+        "task_id": "47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "pin": {
+          "provider": "capability:forge",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "tool": "gate_checks",
+          "gate_version": "1",
+          "args_schema": "sha256:793da71767aae3cdbf090628ee2d6dea491c0d4d6225b1f767d776ad179dfa69",
+          "state_version": "1",
+          "input_declaration": "sha256:8b4a42e908a42bec99b770a01cbb620f783246cff777edbb804e068495ef19a1",
+          "continuation_version": "1",
+          "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
+        },
+        "args": {
+          "repo": "ai-on-gke/grain",
+          "head": "a1"
+        },
+        "args_digest": "sha256:521c2981b9718e79c4b1cc9a89fe5944d5f2bd1dedc90ae9123c3449c60c5363",
+        "expected_state_revision": 2,
+        "gate_state": {
+          "checks_seen": 0
+        },
+        "deadline": "2026-11-16T20:13:30Z",
+        "now": "2026-11-16T20:13:00Z",
+        "limits": {
+          "elapsed_ms": 30000,
+          "rounds": 16,
+          "inline_bytes": 262144,
+          "page_bytes": 131072,
+          "page_records": 100,
+          "total_page_bytes": 8388608,
+          "records": 6500,
+          "state_bytes": 16384,
+          "continuation_bytes": 16384,
+          "json_depth": 16,
+          "response_bytes": 262144,
+          "request_bytes": 2097152,
+          "transport_bytes": 25165824,
+          "retries_per_round": 1,
+          "retries_total": 2,
+          "retention_ms": 60000,
+          "read_calls": 64,
+          "reads_per_round": 8,
+          "reads_total": 64,
+          "dependencies_total": 8192
+        },
+        "evidence_context": {
+          "version": "3",
+          "id": "snap-19",
+          "evidence_revision": 19,
+          "cursor": "journal:718",
+          "incoming_message_watermark": 6,
+          "processed_message_watermark": 6,
+          "domains": [
+            "context",
+            "checks"
+          ],
+          "unavailable": [],
+          "records": [
+            {
+              "id": "context:47",
+              "kind": "evaluation_context",
+              "version": "evidence:19",
+              "data": {
+                "task_id": "47",
+                "contract_revision": 4,
+                "authority_epoch": 1,
+                "policy_revision": 2,
+                "permission_revision": 7,
+                "head": "a1",
+                "check_count": 2,
+                "children": [],
+                "operations": [],
+                "waivers": [],
+                "required_suites": [
+                  "unit",
+                  "security"
+                ]
+              }
+            }
+          ],
+          "created_at": "2026-11-16T20:13:00Z",
+          "expires_at": "2026-11-16T20:14:00Z",
+          "subjects": [
+            {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            }
+          ],
+          "requirements": [
+            {
+              "domain": "checks",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args_digest": "sha256:ccc180d7ba656a7d7db79344e8695d77f8428ea03cd0d88f8cf4ad30565bd714"
+            }
+          ]
+        },
+        "round": 1,
+        "phase": "continue",
+        "previous_response_digest": "sha256:904b19089f9432ce012366db443956e2de7517789628c5c687e1974ee09a1916",
+        "continuation_state": {
+          "seen": 0,
+          "all_success": true,
+          "evidence": []
+        },
+        "read_results": [
+          {
+            "request": {
+              "read_id": "read-1",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args": {
+                "resource": {
+                  "authority": "github.com",
+                  "repository_id": "12345",
+                  "kind": "pull_request",
+                  "id": "123",
+                  "head": "a1"
+                },
+                "required_set_revision": 2,
+                "cursor": null,
+                "limit": 100
+              }
+            },
+            "status": "ok",
+            "page": {
+              "protocol_version": "1.0",
+              "evidence_context_id": "snap-19",
+              "read_id": "read-1",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args_digest": "sha256:878d34bc15de2617c30b9589df47e8d8e98ca3c37402019c5761c97313f25dc0",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "checks:19",
+              "coverage": {
+                "complete": false,
+                "empty": false
+              },
+              "records": [
+                {
+                  "id": "check:unit",
+                  "kind": "check",
+                  "version": "head:a1/run:1",
+                  "data": {
+                    "head": "a1",
+                    "suite": "unit",
+                    "conclusion": "success",
+                    "observed_at": "2026-11-16T20:12:59Z"
+                  }
+                }
+              ],
+              "next_cursor": "cursor-page-2",
+              "dependencies": [
+                {
+                  "key": "check-set:123:a1",
+                  "version": "evidence:19",
+                  "subject": {
+                    "authority": "github.com",
+                    "repository_id": "12345",
+                    "kind": "pull_request",
+                    "id": "123",
+                    "head": "a1"
+                  },
+                  "collection_revision": "checks:19",
+                  "authorization_revision": 7,
+                  "observed_at": "2026-11-16T20:13:00Z",
+                  "valid_until": "2026-11-16T20:14:00Z"
+                }
+              ],
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          }
+        ],
+        "request_digest": "sha256:9bd0edbf0e5231cd9fe98b52cf3872ef3ec425085c6c2dfb0f80dc69f68c1a35"
+      }
+    },
+    {
+      "type": "reply",
+      "message": {
+        "protocol_version": "4.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "expected_state_revision": 2,
+        "round": 1,
+        "request_digest": "sha256:9bd0edbf0e5231cd9fe98b52cf3872ef3ec425085c6c2dfb0f80dc69f68c1a35",
+        "evidence_context_id": "snap-19",
+        "evidence_revision": 19,
+        "kind": "read_requests",
+        "summary": "More declared read evidence is needed.",
+        "requests": [
+          {
+            "read_id": "read-2",
+            "operation": "change.checks.list",
+            "operation_version": "1.0",
+            "args": {
+              "resource": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "required_set_revision": 2,
+              "cursor": "cursor-page-2",
+              "limit": 100
+            }
+          }
+        ],
+        "continuation_state": {
+          "seen": 1,
+          "all_success": true,
+          "evidence": [
+            {
+              "id": "check:unit",
+              "kind": "check",
+              "version": "head:a1/run:1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "call",
+      "message": {
+        "protocol_version": "4.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "mode": "evaluate",
+        "task_id": "47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "pin": {
+          "provider": "capability:forge",
+          "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "tool": "gate_checks",
+          "gate_version": "1",
+          "args_schema": "sha256:793da71767aae3cdbf090628ee2d6dea491c0d4d6225b1f767d776ad179dfa69",
+          "state_version": "1",
+          "input_declaration": "sha256:8b4a42e908a42bec99b770a01cbb620f783246cff777edbb804e068495ef19a1",
+          "continuation_version": "1",
+          "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b"
+        },
+        "args": {
+          "repo": "ai-on-gke/grain",
+          "head": "a1"
+        },
+        "args_digest": "sha256:521c2981b9718e79c4b1cc9a89fe5944d5f2bd1dedc90ae9123c3449c60c5363",
+        "expected_state_revision": 2,
+        "gate_state": {
+          "checks_seen": 0
+        },
+        "deadline": "2026-11-16T20:13:30Z",
+        "now": "2026-11-16T20:13:00Z",
+        "limits": {
+          "elapsed_ms": 30000,
+          "rounds": 16,
+          "inline_bytes": 262144,
+          "page_bytes": 131072,
+          "page_records": 100,
+          "total_page_bytes": 8388608,
+          "records": 6500,
+          "state_bytes": 16384,
+          "continuation_bytes": 16384,
+          "json_depth": 16,
+          "response_bytes": 262144,
+          "request_bytes": 2097152,
+          "transport_bytes": 25165824,
+          "retries_per_round": 1,
+          "retries_total": 2,
+          "retention_ms": 60000,
+          "read_calls": 64,
+          "reads_per_round": 8,
+          "reads_total": 64,
+          "dependencies_total": 8192
+        },
+        "evidence_context": {
+          "version": "3",
+          "id": "snap-19",
+          "evidence_revision": 19,
+          "cursor": "journal:718",
+          "incoming_message_watermark": 6,
+          "processed_message_watermark": 6,
+          "domains": [
+            "context",
+            "checks"
+          ],
+          "unavailable": [],
+          "records": [
+            {
+              "id": "context:47",
+              "kind": "evaluation_context",
+              "version": "evidence:19",
+              "data": {
+                "task_id": "47",
+                "contract_revision": 4,
+                "authority_epoch": 1,
+                "policy_revision": 2,
+                "permission_revision": 7,
+                "head": "a1",
+                "check_count": 2,
+                "children": [],
+                "operations": [],
+                "waivers": [],
+                "required_suites": [
+                  "unit",
+                  "security"
+                ]
+              }
+            }
+          ],
+          "created_at": "2026-11-16T20:13:00Z",
+          "expires_at": "2026-11-16T20:14:00Z",
+          "subjects": [
+            {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            }
+          ],
+          "requirements": [
+            {
+              "domain": "checks",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args_digest": "sha256:ccc180d7ba656a7d7db79344e8695d77f8428ea03cd0d88f8cf4ad30565bd714"
+            }
+          ]
+        },
+        "round": 2,
+        "phase": "continue",
+        "previous_response_digest": "sha256:4346779b500edc04b843bd8869f7f6dfed3a79c1d7845824dd5b8e30a61d1f73",
+        "continuation_state": {
+          "seen": 1,
+          "all_success": true,
+          "evidence": [
+            {
+              "id": "check:unit",
+              "kind": "check",
+              "version": "head:a1/run:1"
+            }
+          ]
+        },
+        "read_results": [
+          {
+            "request": {
+              "read_id": "read-2",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args": {
+                "resource": {
+                  "authority": "github.com",
+                  "repository_id": "12345",
+                  "kind": "pull_request",
+                  "id": "123",
+                  "head": "a1"
+                },
+                "required_set_revision": 2,
+                "cursor": "cursor-page-2",
+                "limit": 100
+              }
+            },
+            "status": "ok",
+            "page": {
+              "protocol_version": "1.0",
+              "evidence_context_id": "snap-19",
+              "read_id": "read-2",
+              "operation": "change.checks.list",
+              "operation_version": "1.0",
+              "args_digest": "sha256:2537ca1c1ab1f1f41cf50240c3ef19cfced5de63c7211a989f59a45e849dd88e",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "checks:19",
+              "coverage": {
+                "complete": true,
+                "empty": false
+              },
+              "records": [
+                {
+                  "id": "check:security",
+                  "kind": "check",
+                  "version": "head:a1/run:2",
+                  "data": {
+                    "head": "a1",
+                    "suite": "security",
+                    "conclusion": "success",
+                    "observed_at": "2026-11-16T20:12:59Z"
+                  }
+                }
+              ],
+              "next_cursor": null,
+              "dependencies": [
+                {
+                  "key": "check-set:123:a1",
+                  "version": "evidence:19",
+                  "subject": {
+                    "authority": "github.com",
+                    "repository_id": "12345",
+                    "kind": "pull_request",
+                    "id": "123",
+                    "head": "a1"
+                  },
+                  "collection_revision": "checks:19",
+                  "authorization_revision": 7,
+                  "observed_at": "2026-11-16T20:13:00Z",
+                  "valid_until": "2026-11-16T20:14:00Z"
+                }
+              ],
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          }
+        ],
+        "request_digest": "sha256:66c395c2e21227a0489785c4baa6f8d28fb734db7e2ea5b0b2fe08a176bef849"
+      }
+    },
+    {
+      "type": "reply",
+      "message": {
+        "protocol_version": "4.0",
+        "bundle_id": "bundle-19",
+        "evaluation_id": "ev-47",
+        "gate_id": "checks",
+        "contract_revision": 4,
+        "authority_epoch": 1,
+        "policy_revision": 2,
+        "permission_revision": 7,
+        "read_scope_digest": "sha256:30a1e05af8f20efdbc9625a91419115d2d4025e7802aeaf3e79fdf2dbf00f072",
+        "expected_state_revision": 2,
+        "round": 2,
+        "request_digest": "sha256:66c395c2e21227a0489785c4baa6f8d28fb734db7e2ea5b0b2fe08a176bef849",
+        "evidence_context_id": "snap-19",
+        "evidence_revision": 19,
+        "kind": "final",
+        "status": "met",
+        "summary": "Both required checks passed on head a1.",
+        "evidence": [
+          {
+            "id": "check:unit",
+            "kind": "check",
+            "version": "head:a1/run:1"
+          },
+          {
+            "id": "check:security",
+            "kind": "check",
+            "version": "head:a1/run:2"
+          }
+        ],
+        "gate_state": {
+          "checks_seen": 2
+        },
+        "blockers": [],
+        "work": [],
+        "action_requests": [],
+        "waits": [],
+        "buttons": []
+      }
+    },
+    {
+      "type": "event",
+      "description": "Grain validates all delivered evidence, current vector, permission epoch and deadline; one transaction inserts final receipt, increments state revision 2 to 3 and installs subscriptions. Closure/action checks remain separate."
+    }
+  ]
+}

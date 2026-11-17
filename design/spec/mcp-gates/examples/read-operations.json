@@ -1,0 +1,843 @@
+{
+  "description": "Illustrative exact request/result for each proposed initial operation. IDs and adapter releases do not attest production sources.",
+  "examples": [
+    {
+      "request": {
+        "read_id": "example-read-1",
+        "operation": "task.read",
+        "operation_version": "1.0",
+        "args": {
+          "task_id": "47"
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-1",
+          "operation": "task.read",
+          "operation_version": "1.0",
+          "args": {
+            "task_id": "47"
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-1",
+          "operation": "task.read",
+          "operation_version": "1.0",
+          "args_digest": "sha256:22f7a12fed21fa7a04b46ebd4811c842b0a1853f0c15b9459f514e2529862aba",
+          "subject": {
+            "authority": "grain:installation-1",
+            "repository_id": "12345",
+            "kind": "task",
+            "id": "47",
+            "head": null
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "task:1",
+              "kind": "task",
+              "version": "record:1",
+              "data": {
+                "task_id": "47",
+                "contract_revision": 0,
+                "authority_epoch": 0,
+                "policy_revision": 0,
+                "state": "resting",
+                "outcome": "none",
+                "incoming_message_watermark": 6,
+                "processed_message_watermark": 6,
+                "live_operation_ids": []
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "task.read:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "grain:installation-1",
+                "repository_id": "12345",
+                "kind": "task",
+                "id": "47",
+                "head": null
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-2",
+        "operation": "task.relations.list",
+        "operation_version": "1.0",
+        "args": {
+          "task_id": "47",
+          "relation": "required_outcome",
+          "cursor": null,
+          "limit": 1
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-2",
+          "operation": "task.relations.list",
+          "operation_version": "1.0",
+          "args": {
+            "task_id": "47",
+            "relation": "required_outcome",
+            "cursor": null,
+            "limit": 1
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-2",
+          "operation": "task.relations.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:ea351318597689249571bfd8ee25aea2bf9c537da833c0e5752cbcf328fd26fb",
+          "subject": {
+            "authority": "grain:installation-1",
+            "repository_id": "12345",
+            "kind": "task",
+            "id": "47",
+            "head": null
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "child_outcome:1",
+              "kind": "child_outcome",
+              "version": "record:1",
+              "data": {
+                "parent_id": "example",
+                "child_id": "example",
+                "relation": "required_outcome",
+                "predicate": "success",
+                "outcome": "succeeded",
+                "relationship_revision": 0,
+                "outcome_revision": 0
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "task.relations.list:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "grain:installation-1",
+                "repository_id": "12345",
+                "kind": "task",
+                "id": "47",
+                "head": null
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-3",
+        "operation": "task.messages.list",
+        "operation_version": "1.0",
+        "args": {
+          "task_id": "47",
+          "after_watermark": 0,
+          "through_watermark": 6,
+          "cursor": null,
+          "limit": 1
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-3",
+          "operation": "task.messages.list",
+          "operation_version": "1.0",
+          "args": {
+            "task_id": "47",
+            "after_watermark": 0,
+            "through_watermark": 6,
+            "cursor": null,
+            "limit": 1
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-3",
+          "operation": "task.messages.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:d9b9eb15ba48d6cae926c7a49189f59181676d4cc4ddd2110f664f0be01045b4",
+          "subject": {
+            "authority": "grain:installation-1",
+            "repository_id": "12345",
+            "kind": "task",
+            "id": "47",
+            "head": null
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "message:1",
+              "kind": "message",
+              "version": "record:1",
+              "data": {
+                "task_id": "47",
+                "watermark": 0,
+                "author_kind": "person",
+                "body_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "body_excerpt": "example",
+                "processed": true
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "task.messages.list:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "grain:installation-1",
+                "repository_id": "12345",
+                "kind": "task",
+                "id": "47",
+                "head": null
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-4",
+        "operation": "change.read",
+        "operation_version": "1.0",
+        "args": {
+          "resource": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          }
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-4",
+          "operation": "change.read",
+          "operation_version": "1.0",
+          "args": {
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            }
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-4",
+          "operation": "change.read",
+          "operation_version": "1.0",
+          "args_digest": "sha256:fe8e6e5545181f8e87d41c0d255f14be3e8788ee95f8255c81319d1e06bbb8b9",
+          "subject": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "change:1",
+              "kind": "change",
+              "version": "record:1",
+              "data": {
+                "resource": {
+                  "authority": "github.com",
+                  "repository_id": "12345",
+                  "kind": "pull_request",
+                  "id": "123",
+                  "head": "a1"
+                },
+                "disposition": "open",
+                "subject_revision": "example",
+                "observed_at": "2026-11-16T20:13:00Z",
+                "valid_until": "2026-11-16T20:13:00Z",
+                "receipt_id": "example"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "change.read:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-5",
+        "operation": "change.checks.list",
+        "operation_version": "1.0",
+        "args": {
+          "resource": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "required_set_revision": 0,
+          "cursor": null,
+          "limit": 1
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-5",
+          "operation": "change.checks.list",
+          "operation_version": "1.0",
+          "args": {
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            },
+            "required_set_revision": 0,
+            "cursor": null,
+            "limit": 1
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-5",
+          "operation": "change.checks.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:9965b12348245c6ff8b5989bf7fe0e796c909c8865cbfe32754d1c8d11ebb900",
+          "subject": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "check:1",
+              "kind": "check",
+              "version": "record:1",
+              "data": {
+                "head": "a1",
+                "suite": "example",
+                "conclusion": "success",
+                "observed_at": "2026-11-16T20:13:00Z"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "change.checks.list:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-6",
+        "operation": "change.reviews.list",
+        "operation_version": "1.0",
+        "args": {
+          "resource": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "policy_revision": 0,
+          "cursor": null,
+          "limit": 1
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-6",
+          "operation": "change.reviews.list",
+          "operation_version": "1.0",
+          "args": {
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            },
+            "policy_revision": 0,
+            "cursor": null,
+            "limit": 1
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-6",
+          "operation": "change.reviews.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:946c315a500775c1e766545febcd882f67e41a2dc6abe16ac43b26db0acce9ee",
+          "subject": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "review:1",
+              "kind": "review",
+              "version": "record:1",
+              "data": {
+                "head": "a1",
+                "policy_revision": 0,
+                "path_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "reviewer_role": "example",
+                "disposition": "accepted",
+                "observed_at": "2026-11-16T20:13:00Z",
+                "valid_until": "2026-11-16T20:13:00Z"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "change.reviews.list:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-7",
+        "operation": "policy.read",
+        "operation_version": "1.0",
+        "args": {
+          "resource": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "purpose": "completion",
+          "task_id": "47"
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-7",
+          "operation": "policy.read",
+          "operation_version": "1.0",
+          "args": {
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            },
+            "purpose": "completion",
+            "task_id": "47"
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-7",
+          "operation": "policy.read",
+          "operation_version": "1.0",
+          "args_digest": "sha256:71aa1198c62c317f7d856b404254945c9b939bcc02c6e9581d41c1a5a7d078b2",
+          "subject": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "effective_policy:1",
+              "kind": "effective_policy",
+              "version": "record:1",
+              "data": {
+                "resource": {
+                  "authority": "github.com",
+                  "repository_id": "12345",
+                  "kind": "pull_request",
+                  "id": "123",
+                  "head": "a1"
+                },
+                "revision": 0,
+                "purpose": "completion",
+                "required_gate_ids": [
+                  "checks"
+                ],
+                "required_suites": [
+                  "unit"
+                ],
+                "review_policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "coverage_revision": "example"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "policy.read:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-8",
+        "operation": "resource.observations.list",
+        "operation_version": "1.0",
+        "args": {
+          "task_id": "47",
+          "reference_ids": [
+            "ref:1"
+          ],
+          "cursor": null,
+          "limit": 1
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-8",
+          "operation": "resource.observations.list",
+          "operation_version": "1.0",
+          "args": {
+            "task_id": "47",
+            "reference_ids": [
+              "ref:1"
+            ],
+            "cursor": null,
+            "limit": 1
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-8",
+          "operation": "resource.observations.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:31d481f910bb259ab1705ef2499ece8f66df9dece30518b6f4e1231cbc41a51a",
+          "subject": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "tracked_observation:1",
+              "kind": "tracked_observation",
+              "version": "record:1",
+              "data": {
+                "task_id": "47",
+                "reference_id": "example",
+                "reference_revision": 0,
+                "provider": "example",
+                "provider_pin": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "accepted_sequence": 0,
+                "subject_revision": "example",
+                "availability": "available",
+                "disposition": "active",
+                "observed_at": "2026-11-16T20:13:00Z",
+                "valid_until": "2026-11-16T20:13:00Z",
+                "dirty_generation": 0,
+                "covered_generation": 0,
+                "evidence_ids": []
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "resource.observations.list:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "read_id": "example-read-9",
+        "operation": "evidence.events.list",
+        "operation_version": "1.0",
+        "args": {
+          "task_id": "47",
+          "resource": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "kinds": [
+            "action"
+          ],
+          "cursor": null,
+          "limit": 1
+        }
+      },
+      "result": {
+        "request": {
+          "read_id": "example-read-9",
+          "operation": "evidence.events.list",
+          "operation_version": "1.0",
+          "args": {
+            "task_id": "47",
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "12345",
+              "kind": "pull_request",
+              "id": "123",
+              "head": "a1"
+            },
+            "kinds": [
+              "action"
+            ],
+            "cursor": null,
+            "limit": 1
+          }
+        },
+        "status": "ok",
+        "page": {
+          "protocol_version": "1.0",
+          "evidence_context_id": "context:operation-examples",
+          "read_id": "example-read-9",
+          "operation": "evidence.events.list",
+          "operation_version": "1.0",
+          "args_digest": "sha256:e50d49cda5a6ea366601ff1cdfcd39075c121bc1e476a5e4273e032466c77e04",
+          "subject": {
+            "authority": "github.com",
+            "repository_id": "12345",
+            "kind": "pull_request",
+            "id": "123",
+            "head": "a1"
+          },
+          "collection_revision": "collection:1",
+          "coverage": {
+            "complete": true,
+            "empty": false
+          },
+          "records": [
+            {
+              "id": "evidence_event:1",
+              "kind": "evidence_event",
+              "version": "record:1",
+              "data": {
+                "task_id": "47",
+                "resource": {
+                  "authority": "github.com",
+                  "repository_id": "12345",
+                  "kind": "pull_request",
+                  "id": "123",
+                  "head": "a1"
+                },
+                "kind": "report",
+                "actor_id": "example",
+                "subject_revision": "example",
+                "policy_revision": 0,
+                "event_revision": "example",
+                "disposition": "delivered",
+                "artifact_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "covered_message_watermark": 6,
+                "occurred_at": "2026-11-16T20:13:00Z",
+                "action_context_digest": null,
+                "binding_id": null,
+                "scope_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "dependencies": [
+            {
+              "key": "evidence.events.list:scope1",
+              "version": "generation:1",
+              "subject": {
+                "authority": "github.com",
+                "repository_id": "12345",
+                "kind": "pull_request",
+                "id": "123",
+                "head": "a1"
+              },
+              "collection_revision": "collection:1",
+              "authorization_revision": 7,
+              "observed_at": "2026-11-16T20:13:00Z",
+              "valid_until": "2026-11-16T20:14:00Z"
+            }
+          ],
+          "observed_at": "2026-11-16T20:13:00Z",
+          "valid_until": "2026-11-16T20:14:00Z"
+        }
+      }
+    }
+  ]
+}

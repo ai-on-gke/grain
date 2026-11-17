@@ -4,476 +4,73 @@
       "name": "gate_checks",
       "description": "Evaluate the declared current-head check predicate from retained Grain evidence.",
       "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$ref": "#/$defs/request",
-        "$defs": {
-          "request": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "protocol_version",
-              "evaluation_id",
-              "mode",
-              "task_id",
-              "gate_id",
-              "contract_revision",
-              "authority_epoch",
-              "policy_revision",
-              "pin",
-              "args",
-              "args_digest",
-              "expected_state_revision",
-              "gate_state",
-              "deadline",
-              "now",
-              "limits",
-              "snapshot",
-              "bundle_id",
-              "permission_revision",
-              "read_scope_digest",
-              "round",
-              "phase",
-              "request_digest",
-              "previous_response_digest",
-              "continuation_state",
-              "deliveries"
-            ],
-            "properties": {
-              "protocol_version": {
-                "const": "2.0"
-              },
-              "evaluation_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "mode": {
-                "enum": [
-                  "evaluate",
-                  "migrate",
-                  "recover"
-                ]
-              },
-              "task_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "gate_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "contract_revision": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "authority_epoch": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "policy_revision": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "pin": {
-                "$ref": "#/$defs/pin"
-              },
-              "args": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "repo",
-                  "head"
-                ],
-                "properties": {
-                  "repo": {
-                    "type": "string",
-                    "enum": [
-                      "ai-on-gke/grain"
-                    ]
-                  },
-                  "head": {
-                    "type": "string",
-                    "enum": [
-                      "a1"
-                    ]
-                  }
-                }
-              },
-              "args_digest": {
-                "type": "string",
-                "pattern": "^sha256:[0-9a-f]{64}$"
-              },
-              "expected_state_revision": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "gate_state": {
-                "description": "Bounded opaque JSON; byte/depth limits and secret exclusion are normative in MGS-2."
-              },
-              "deadline": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "now": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "limits": {
-                "$ref": "#/$defs/limits"
-              },
-              "snapshot": {
-                "$ref": "#/$defs/snapshot"
-              },
-              "previous_pin": {
-                "$ref": "#/$defs/pin"
-              },
-              "recovery_reason": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 2048
-              },
-              "bundle_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "permission_revision": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "read_scope_digest": {
-                "type": "string",
-                "pattern": "^sha256:[0-9a-f]{64}$"
-              },
-              "round": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 7
-              },
-              "phase": {
-                "enum": [
-                  "initial",
-                  "continue"
-                ]
-              },
-              "request_digest": {
-                "type": "string",
-                "pattern": "^sha256:[0-9a-f]{64}$"
-              },
-              "previous_response_digest": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "pattern": "^sha256:[0-9a-f]{64}$"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "continuation_state": {
-                "description": "Request-carried transient provider JSON, <=16 KiB/depth 16; initial null. Never durable gate_state."
-              },
-              "deliveries": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/delivery"
-                },
-                "minItems": 0,
-                "maxItems": 8
-              }
-            },
-            "allOf": [
-              {
-                "if": {
-                  "properties": {
-                    "mode": {
-                      "const": "migrate"
-                    }
-                  }
-                },
-                "then": {
-                  "required": [
-                    "previous_pin"
-                  ]
-                }
-              },
-              {
-                "if": {
-                  "properties": {
-                    "mode": {
-                      "const": "recover"
-                    }
-                  }
-                },
-                "then": {
-                  "required": [
-                    "recovery_reason"
-                  ],
-                  "properties": {
-                    "gate_state": {
-                      "type": "null"
-                    }
-                  }
-                }
-              },
-              {
-                "if": {
-                  "properties": {
-                    "round": {
-                      "const": 0
-                    }
-                  }
-                },
-                "then": {
-                  "properties": {
-                    "phase": {
-                      "const": "initial"
-                    },
-                    "previous_response_digest": {
-                      "type": "null"
-                    },
-                    "continuation_state": {
-                      "type": "null"
-                    }
-                  }
-                },
-                "else": {
-                  "properties": {
-                    "phase": {
-                      "const": "continue"
-                    },
-                    "previous_response_digest": {
-                      "type": "string",
-                      "pattern": "^sha256:[0-9a-f]{64}$"
-                    }
-                  }
-                }
-              }
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol_version",
+          "evaluation_id",
+          "mode",
+          "task_id",
+          "gate_id",
+          "contract_revision",
+          "authority_epoch",
+          "policy_revision",
+          "pin",
+          "args",
+          "args_digest",
+          "expected_state_revision",
+          "gate_state",
+          "deadline",
+          "now",
+          "limits",
+          "evidence_context",
+          "bundle_id",
+          "permission_revision",
+          "read_scope_digest",
+          "round",
+          "phase",
+          "request_digest",
+          "previous_response_digest",
+          "continuation_state",
+          "read_results"
+        ],
+        "properties": {
+          "protocol_version": {
+            "const": "4.0"
+          },
+          "evaluation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "mode": {
+            "enum": [
+              "evaluate",
+              "migrate",
+              "recover"
             ]
           },
-          "delivery": {
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "request",
-                  "status",
-                  "page"
-                ],
-                "properties": {
-                  "request": {
-                    "$ref": "#/$defs/page_request"
-                  },
-                  "status": {
-                    "const": "ok"
-                  },
-                  "page": {
-                    "$ref": "#/$defs/page"
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "request",
-                  "status",
-                  "error"
-                ],
-                "properties": {
-                  "request": {
-                    "$ref": "#/$defs/page_request"
-                  },
-                  "status": {
-                    "const": "unavailable"
-                  },
-                  "error": {
-                    "$ref": "#/$defs/read_error"
-                  }
-                }
-              }
-            ]
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
           },
-          "read_error": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "code",
-              "retryable",
-              "message"
-            ],
-            "properties": {
-              "code": {
-                "enum": [
-                  "unauthorized",
-                  "unsupported_version",
-                  "resource_limit",
-                  "request_loop",
-                  "unavailable"
-                ]
-              },
-              "retryable": {
-                "const": false
-              },
-              "message": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 2048
-              }
-            }
+          "gate_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
           },
-          "page_request": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "protocol_version",
-              "evaluation_id",
-              "snapshot_id",
-              "read_id",
-              "reference_id",
-              "cursor"
-            ],
-            "properties": {
-              "protocol_version": {
-                "const": "2.0"
-              },
-              "evaluation_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "snapshot_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "read_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "reference_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "cursor": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 256
-              }
-            }
+          "contract_revision": {
+            "type": "integer",
+            "minimum": 0
           },
-          "page": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "protocol_version",
-              "evaluation_id",
-              "snapshot_id",
-              "evidence_revision",
-              "read_id",
-              "reference_id",
-              "cursor",
-              "records",
-              "next_cursor",
-              "expires_at"
-            ],
-            "properties": {
-              "protocol_version": {
-                "const": "2.0"
-              },
-              "evaluation_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "snapshot_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "evidence_revision": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "read_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "reference_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "cursor": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "records": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/record"
-                },
-                "minItems": 1,
-                "maxItems": 100
-              },
-              "next_cursor": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "expires_at": {
-                "type": "string",
-                "format": "date-time"
-              }
-            }
+          "authority_epoch": {
+            "type": "integer",
+            "minimum": 0
           },
-          "record": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "id",
-              "kind",
-              "version",
-              "data"
-            ],
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "kind": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64
-              },
-              "version": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "data": {
-                "type": "object",
-                "description": "Validated against the Grain-registered schema for kind before delivery."
-              }
-            }
+          "policy_revision": {
+            "type": "integer",
+            "minimum": 0
           },
           "pin": {
             "type": "object",
@@ -486,7 +83,8 @@
               "args_schema",
               "state_version",
               "input_declaration",
-              "continuation_version"
+              "continuation_version",
+              "read_registry"
             ],
             "properties": {
               "provider": {
@@ -523,192 +121,53 @@
               },
               "continuation_version": {
                 "const": "1"
-              }
-            }
-          },
-          "snapshot": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "version",
-              "id",
-              "evidence_revision",
-              "cursor",
-              "incoming_message_watermark",
-              "processed_message_watermark",
-              "domains",
-              "unavailable",
-              "records",
-              "references",
-              "created_at",
-              "expires_at"
-            ],
-            "properties": {
-              "version": {
-                "const": "2"
               },
-              "id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "evidence_revision": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "cursor": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "incoming_message_watermark": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "processed_message_watermark": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "domains": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 64
-                },
-                "minItems": 1,
-                "maxItems": 32
-              },
-              "unavailable": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/unavailable"
-                },
-                "minItems": 0,
-                "maxItems": 64
-              },
-              "records": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/record"
-                },
-                "minItems": 0,
-                "maxItems": 100
-              },
-              "references": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/snapshot_reference"
-                },
-                "minItems": 0,
-                "maxItems": 64
-              },
-              "created_at": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "expires_at": {
-                "type": "string",
-                "format": "date-time"
-              }
-            }
-          },
-          "snapshot_reference": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "id",
-              "domain",
-              "kind",
-              "record_kind",
-              "schema_digest",
-              "version",
-              "page_count",
-              "record_count",
-              "expires_at"
-            ],
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "domain": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64
-              },
-              "kind": {
-                "const": "snapshot_page"
-              },
-              "record_kind": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64
-              },
-              "schema_digest": {
+              "read_registry": {
                 "type": "string",
                 "pattern": "^sha256:[0-9a-f]{64}$"
-              },
-              "version": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "page_count": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 64
-              },
-              "record_count": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 6400
-              },
-              "expires_at": {
-                "type": "string",
-                "format": "date-time"
               }
             }
           },
-          "unavailable": {
+          "args": {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "domain",
-              "reference_id",
-              "code",
-              "reason"
+              "repo",
+              "head"
             ],
             "properties": {
-              "domain": {
+              "repo": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 64
-              },
-              "reference_id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "code": {
                 "enum": [
-                  "unavailable",
-                  "unauthorized",
-                  "unsupported_version",
-                  "resource_limit",
-                  "reference_expired"
+                  "ai-on-gke/grain"
                 ]
               },
-              "reason": {
+              "head": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 1024
+                "enum": [
+                  "a1"
+                ]
               }
             }
+          },
+          "args_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "expected_state_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gate_state": {
+            "description": "Bounded opaque JSON; byte/depth limits and secret exclusion are normative in MGS-2."
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time"
           },
           "limits": {
             "type": "object",
@@ -719,9 +178,6 @@
               "inline_bytes",
               "page_bytes",
               "page_records",
-              "pages",
-              "page_requests_per_round",
-              "page_requests_total",
               "total_page_bytes",
               "records",
               "state_bytes",
@@ -732,7 +188,11 @@
               "transport_bytes",
               "retries_per_round",
               "retries_total",
-              "retention_ms"
+              "retention_ms",
+              "read_calls",
+              "reads_per_round",
+              "reads_total",
+              "dependencies_total"
             ],
             "properties": {
               "elapsed_ms": {
@@ -743,7 +203,7 @@
               "rounds": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 8
+                "maximum": 16
               },
               "inline_bytes": {
                 "type": "integer",
@@ -759,21 +219,6 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 100
-              },
-              "pages": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 64
-              },
-              "page_requests_per_round": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 8
-              },
-              "page_requests_total": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 64
               },
               "total_page_bytes": {
                 "type": "integer",
@@ -827,14 +272,2322 @@
               },
               "retention_ms": {
                 "const": 60000
+              },
+              "read_calls": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "reads_per_round": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8
+              },
+              "reads_total": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "dependencies_total": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8192
+              }
+            }
+          },
+          "evidence_context": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "id",
+              "evidence_revision",
+              "cursor",
+              "incoming_message_watermark",
+              "processed_message_watermark",
+              "domains",
+              "unavailable",
+              "records",
+              "created_at",
+              "expires_at",
+              "requirements",
+              "subjects"
+            ],
+            "properties": {
+              "version": {
+                "const": "3"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "evidence_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "incoming_message_watermark": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "processed_message_watermark": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "minItems": 1,
+                "maxItems": 32
+              },
+              "unavailable": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "domain",
+                    "code",
+                    "reason"
+                  ],
+                  "properties": {
+                    "domain": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "code": {
+                      "enum": [
+                        "unavailable",
+                        "unauthorized",
+                        "unsupported_version",
+                        "resource_limit",
+                        "cursor_expired",
+                        "stale_context"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    }
+                  }
+                },
+                "minItems": 0,
+                "maxItems": 64
+              },
+              "records": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "kind",
+                    "version",
+                    "data"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "kind": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "version": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Validated against the Grain-registered schema for kind before delivery."
+                    }
+                  }
+                },
+                "minItems": 0,
+                "maxItems": 100
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "requirements": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "domain",
+                    "operation",
+                    "operation_version",
+                    "args_digest"
+                  ],
+                  "properties": {
+                    "domain": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "operation": {
+                      "enum": [
+                        "task.read",
+                        "task.relations.list",
+                        "task.messages.list",
+                        "change.read",
+                        "change.checks.list",
+                        "change.reviews.list",
+                        "policy.read",
+                        "resource.observations.list",
+                        "evidence.events.list"
+                      ]
+                    },
+                    "operation_version": {
+                      "const": "1.0"
+                    },
+                    "args_digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                "minItems": 0,
+                "maxItems": 64
+              },
+              "subjects": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority",
+                    "repository_id",
+                    "kind",
+                    "id",
+                    "head"
+                  ],
+                  "properties": {
+                    "authority": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "repository_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "kind": {
+                      "enum": [
+                        "pull_request",
+                        "changelist",
+                        "artifact",
+                        "deployment",
+                        "task"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "head": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "minItems": 0,
+                "maxItems": 100
+              }
+            }
+          },
+          "previous_pin": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "provider",
+              "release",
+              "tool",
+              "gate_version",
+              "args_schema",
+              "state_version",
+              "input_declaration",
+              "continuation_version",
+              "read_registry"
+            ],
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "release": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "tool": {
+                "type": "string",
+                "pattern": "^gate_[a-z0-9][a-z0-9_-]{0,62}$"
+              },
+              "gate_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "args_schema": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "state_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "input_declaration": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "continuation_version": {
+                "const": "1"
+              },
+              "read_registry": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          },
+          "recovery_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "bundle_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "permission_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "read_scope_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 15
+          },
+          "phase": {
+            "enum": [
+              "initial",
+              "continue"
+            ]
+          },
+          "request_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "previous_response_digest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "continuation_state": {
+            "description": "Request-carried transient provider JSON, <=16 KiB/depth 16; initial null. Never durable gate_state."
+          },
+          "read_results": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "request",
+                    "status",
+                    "page"
+                  ],
+                  "properties": {
+                    "request": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "task.read"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "task.relations.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "relation",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "relation": {
+                                  "enum": [
+                                    "required_outcome",
+                                    "advisory",
+                                    "independent",
+                                    "all"
+                                  ]
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "task.messages.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "after_watermark",
+                                "through_watermark",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "after_watermark": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "through_watermark": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "change.read"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "change.checks.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource",
+                                "required_set_revision",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "required_set_revision": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "change.reviews.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource",
+                                "policy_revision",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "policy_revision": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "policy.read"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource",
+                                "purpose",
+                                "task_id"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "purpose": {
+                                  "enum": [
+                                    "completion",
+                                    "action_guard"
+                                  ]
+                                },
+                                "task_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "resource.observations.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "reference_ids",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "reference_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 100,
+                                  "uniqueItems": true
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "evidence.events.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "resource",
+                                "kinds",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "resource": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "authority",
+                                        "repository_id",
+                                        "kind",
+                                        "id",
+                                        "head"
+                                      ],
+                                      "properties": {
+                                        "authority": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        "repository_id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        "kind": {
+                                          "enum": [
+                                            "pull_request",
+                                            "changelist",
+                                            "artifact",
+                                            "deployment",
+                                            "task"
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        "head": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 256
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "kinds": {
+                                  "type": "array",
+                                  "items": {
+                                    "enum": [
+                                      "action",
+                                      "approval",
+                                      "waiver",
+                                      "report",
+                                      "operation"
+                                    ]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 5,
+                                  "uniqueItems": true
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "status": {
+                      "const": "ok"
+                    },
+                    "page": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "protocol_version",
+                        "evidence_context_id",
+                        "read_id",
+                        "operation",
+                        "operation_version",
+                        "args_digest",
+                        "subject",
+                        "collection_revision",
+                        "coverage",
+                        "records",
+                        "next_cursor",
+                        "dependencies",
+                        "observed_at",
+                        "valid_until"
+                      ],
+                      "properties": {
+                        "protocol_version": {
+                          "const": "1.0"
+                        },
+                        "evidence_context_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "read_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "operation": {
+                          "enum": [
+                            "task.read",
+                            "task.relations.list",
+                            "task.messages.list",
+                            "change.read",
+                            "change.checks.list",
+                            "change.reviews.list",
+                            "policy.read",
+                            "resource.observations.list",
+                            "evidence.events.list"
+                          ]
+                        },
+                        "operation_version": {
+                          "const": "1.0"
+                        },
+                        "args_digest": {
+                          "type": "string",
+                          "pattern": "^sha256:[0-9a-f]{64}$"
+                        },
+                        "subject": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "authority",
+                            "repository_id",
+                            "kind",
+                            "id",
+                            "head"
+                          ],
+                          "properties": {
+                            "authority": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "repository_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "kind": {
+                              "enum": [
+                                "pull_request",
+                                "changelist",
+                                "artifact",
+                                "deployment",
+                                "task"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "head": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "collection_revision": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "coverage": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "complete",
+                            "empty"
+                          ],
+                          "properties": {
+                            "complete": {
+                              "type": "boolean"
+                            },
+                            "empty": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "records": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "id",
+                              "kind",
+                              "version",
+                              "data"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "kind": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "version": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "data": {
+                                "type": "object",
+                                "description": "Validated against the Grain-registered schema for kind before delivery."
+                              }
+                            }
+                          },
+                          "minItems": 0,
+                          "maxItems": 100
+                        },
+                        "next_cursor": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "dependencies": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "key",
+                              "version",
+                              "subject",
+                              "collection_revision",
+                              "authorization_revision",
+                              "observed_at",
+                              "valid_until"
+                            ],
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "version": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "subject": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "authority",
+                                  "repository_id",
+                                  "kind",
+                                  "id",
+                                  "head"
+                                ],
+                                "properties": {
+                                  "authority": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256
+                                  },
+                                  "repository_id": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256
+                                  },
+                                  "kind": {
+                                    "enum": [
+                                      "pull_request",
+                                      "changelist",
+                                      "artifact",
+                                      "deployment",
+                                      "task"
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256
+                                  },
+                                  "head": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "collection_revision": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "authorization_revision": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "observed_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "maxLength": 35
+                              },
+                              "valid_until": {
+                                "type": "string",
+                                "format": "date-time",
+                                "maxLength": 35
+                              }
+                            }
+                          },
+                          "minItems": 1,
+                          "maxItems": 128
+                        },
+                        "observed_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "maxLength": 35
+                        },
+                        "valid_until": {
+                          "type": "string",
+                          "format": "date-time",
+                          "maxLength": 35
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "request",
+                    "status",
+                    "error"
+                  ],
+                  "properties": {
+                    "request": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "task.read"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "task.relations.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "relation",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "relation": {
+                                  "enum": [
+                                    "required_outcome",
+                                    "advisory",
+                                    "independent",
+                                    "all"
+                                  ]
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "task.messages.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "after_watermark",
+                                "through_watermark",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "after_watermark": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "through_watermark": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "change.read"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "change.checks.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource",
+                                "required_set_revision",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "required_set_revision": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "change.reviews.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource",
+                                "policy_revision",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "policy_revision": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "policy.read"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "resource",
+                                "purpose",
+                                "task_id"
+                              ],
+                              "properties": {
+                                "resource": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "authority",
+                                    "repository_id",
+                                    "kind",
+                                    "id",
+                                    "head"
+                                  ],
+                                  "properties": {
+                                    "authority": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "repository_id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "pull_request",
+                                        "changelist",
+                                        "artifact",
+                                        "deployment",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    "head": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "purpose": {
+                                  "enum": [
+                                    "completion",
+                                    "action_guard"
+                                  ]
+                                },
+                                "task_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "resource.observations.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "reference_ids",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "reference_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 100,
+                                  "uniqueItems": true
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "read_id",
+                            "operation",
+                            "operation_version",
+                            "args"
+                          ],
+                          "properties": {
+                            "read_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256
+                            },
+                            "operation": {
+                              "const": "evidence.events.list"
+                            },
+                            "operation_version": {
+                              "const": "1.0"
+                            },
+                            "args": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "task_id",
+                                "resource",
+                                "kinds",
+                                "cursor",
+                                "limit"
+                              ],
+                              "properties": {
+                                "task_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 256
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "resource": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "authority",
+                                        "repository_id",
+                                        "kind",
+                                        "id",
+                                        "head"
+                                      ],
+                                      "properties": {
+                                        "authority": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        "repository_id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        "kind": {
+                                          "enum": [
+                                            "pull_request",
+                                            "changelist",
+                                            "artifact",
+                                            "deployment",
+                                            "task"
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        "head": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 256
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "kinds": {
+                                  "type": "array",
+                                  "items": {
+                                    "enum": [
+                                      "action",
+                                      "approval",
+                                      "waiver",
+                                      "report",
+                                      "operation"
+                                    ]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 5,
+                                  "uniqueItems": true
+                                },
+                                "cursor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 4096
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "status": {
+                      "const": "unavailable"
+                    },
+                    "error": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "code",
+                        "retryable",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "unauthorized",
+                            "unsupported_version",
+                            "resource_limit",
+                            "request_loop",
+                            "unavailable",
+                            "cursor_expired",
+                            "stale_context",
+                            "invalid_request"
+                          ]
+                        },
+                        "retryable": {
+                          "type": "boolean"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 8
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "migrate"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "previous_pin"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "recover"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "recovery_reason"
+              ],
+              "properties": {
+                "gate_state": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "round": {
+                  "const": 0
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "phase": {
+                  "const": "initial"
+                },
+                "previous_response_digest": {
+                  "type": "null"
+                },
+                "continuation_state": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "phase": {
+                  "const": "continue"
+                },
+                "previous_response_digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
               }
             }
           }
-        },
+        ],
         "x-grain-gate": {
-          "protocol_version": "2.0",
-          "snapshot_version": "2",
-          "transport": "grain_rounds",
+          "protocol_version": "4.0",
+          "evidence_context_version": "3",
+          "transport": "grain_brokered_reads",
           "continuation_version": "1",
           "evidence_replay_safe": true,
           "inputs": [
@@ -844,7 +2597,10 @@
                 "evaluation_context"
               ],
               "required": true,
-              "prefetch": false
+              "prefetch": false,
+              "operations": [
+                "change.checks.list"
+              ]
             },
             {
               "domain": "checks",
@@ -852,17 +2608,38 @@
                 "check"
               ],
               "required": true,
-              "prefetch": false
+              "prefetch": false,
+              "operations": [
+                "change.checks.list"
+              ]
             }
           ],
           "record_schemas": [
             {
               "kind": "check",
-              "schema_digest": "sha256:843042bbee4a111a88e703fbf0329002619d36e9c3938a8c83792cd3ef6cd9cd"
+              "schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
             },
             {
               "kind": "evaluation_context",
               "schema_digest": "sha256:befef31a856926b2cf764dda8f3187bd1e419682fa54c2f35d01040306709de8"
+            }
+          ],
+          "read_registry": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+          "read_operations": [
+            {
+              "operation": "change.checks.list",
+              "version": "1.0",
+              "args_schema_digest": "sha256:46a91f11b9666f80a05afd623814b92a076e89810e024363ab3a0fb9b3ba0c8f",
+              "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+              "adapter_pin": {
+                "id": "proposed:grain:change.checks.list",
+                "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "config_revision": "fixture-1"
+              },
+              "authorization_rule": "registered-evidence-read",
+              "read_only": true,
+              "record_kind": "check",
+              "record_schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
             }
           ]
         }

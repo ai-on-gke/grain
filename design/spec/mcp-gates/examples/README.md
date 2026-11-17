@@ -1,82 +1,45 @@
-# Gate v2 wire transcripts
+# Brokered gate read transcripts
 
-These are documentation fixtures, not a runtime implementation. Each transcript is an independent scenario; repeated example IDs across files do not share storage. All call/reply/controller-error messages are complete envelopes. Hashes are real canonical SHA-256 values; the small readable record, snapshot and cursor IDs are illustrative.
+Documentation fixtures for completion **4.0**, action **5.0**, evidence context **3**, read operations **1.0**; not runtime endpoints or deployed policy. These supersede the former v2/3 snapshot-page-only transcripts. Historical filenames such as stale-snapshot/expired-pages identify the same failure scenario under the new dependency context; they do not imply full materialization.
 
-| File | Expected behavior |
+| File | Complete sequence / expected handling |
 |---|---|
-| [success-paged.json](success-paged.json) | Two needs_data replies, two retained pages, then one final met and state CAS. |
-| [prefetch-single-round.json](prefetch-single-round.json) | Declared required data is prefetched in round 0; final met without continuation. This variant has its own release/declaration pin. |
-| [repeated-request.json](repeated-request.json) | A later round requests the same selection with a new read ID; one unavailable request_loop delivery, then final unknown. |
-| [denied-read.json](denied-read.json) | An undeclared/inaccessible reference returns safe unauthorized without records, then final unknown. |
-| [partial-batch.json](partial-batch.json) | One ordered batch contains a successful page and a safe unauthorized delivery; final unknown. |
-| [permission-revoked.json](permission-revoked.json) | Permission epoch changes mid-call; no further delivery or accepted result/state, even if access is later restored. |
-| [partial-required-input.json](partial-required-input.json) | A complete captured prefix with explicit required-domain unavailability cannot yield met. |
-| [expired-pages.json](expired-pages.json) | Recovery after retention expires aborts the old evaluation without another outbound call or live-page reconstruction. |
-| [stale-snapshot.json](stale-snapshot.json) | New evidence fences the whole bundle; a late reply cannot update state or authorize an action/close. |
-| [provider-timeout.json](provider-timeout.json) | The original deadline expires during round 1; only a synthetic diagnostic, then bounded backoff. |
-| [provider-crash-retry.json](provider-crash-retry.json) | Exact stored round retransmission after provider restart; request-carried continuation makes it replayable without a session. |
-| [controller-crash-retry.json](controller-crash-retry.json) | New owner lease resumes a persisted checkpoint; crash after final commit reuses the unique receipt. |
-| [cancellation.json](cancellation.json) | Pause cancels the driver context; no provider cancel callback or accepted gate result. |
+| [success-paged.json](success-paged.json) | Two typed change.checks.list requests with stable collection generation/cursors, delivered pages, then final met/state candidate; final acceptance revalidates dependencies. |
+| [action-review-brokered.json](action-review-brokered.json) | Taskless action-profile exact-head ordinary review: read request, authorized review result and final met, preserving action context/digest. No merge is performed. |
+| [prefetch-single-round.json](prefetch-single-round.json) | Grain preexecutes declared check read in round 0; final without continuation, under the same read/dependency budgets. |
+| [transient-read-retry.json](transient-read-retry.json) | Transient adapter failure before delivery; one exact logical-read retry charges another operation attempt; ordinary gate continuation/final then succeeds. |
+| [repeated-request.json](repeated-request.json) | Later repeated operation/scope/cursor gets request_loop without data, then unknown. New read IDs cannot reset limits. |
+| [denied-read.json](denied-read.json) | Well-formed registered operation targeting an out-of-scope private subject gets safe unauthorized with no records; final unknown. |
+| [partial-batch.json](partial-batch.json) | Ordered successful page plus denied read; final unknown, required insufficiency latched. |
+| [partial-required-input.json](partial-required-input.json) | Captured prefix plus explicit required-domain insufficiency cannot support met. |
+| [permission-revoked.json](permission-revoked.json) | Permission epoch changes mid-call; no further delivery or accepted result/state, even if permission later restored. |
+| [expired-pages.json](expired-pages.json) | Context/retained request expiry aborts recovery; no reconstruction from live facts. |
+| [stale-snapshot.json](stale-snapshot.json) | Changed head/evidence invalidates context/dependency receipt; late final cannot commit or authorize an action/close. |
+| [provider-timeout.json](provider-timeout.json) | Original deadline expires; diagnostic/backoff only. |
+| [provider-crash-retry.json](provider-crash-retry.json) | Exact same gate round after provider crash/lost reply; no reexecution of already delivered reads or provider session. |
+| [controller-crash-retry.json](controller-crash-retry.json) | Fenced lease/checkpoint takeover; final receipt uniqueness prevents second state application. |
+| [cancellation.json](cancellation.json) | Local cancel/pause fences late replies, no provider cancel callback. |
 
-A `call` step is the `arguments` of MCP `tools/call` for the pinned tool; a `reply` step is its JSON `structuredContent`. An `event` step describes a controller/storage/clock event, not a new MCP message or trigger. A `controller_error` is a local error projection that never commits candidate state or becomes met. Only validated non-error final candidates enter the bundle transaction.
+Each scenario is independent. Repeated illustrative IDs do not share storage. Hashes are actual canonical fixture SHA-256 values; release/adapter pins and short subject/version IDs are illustrative, never deployed attestations. Production must use RFC 8785; fixture values use ASCII keys and integers so sorted compact JSON yields the same bytes.
 
-[tools-list.json](tools-list.json) is a complete MCP `tools/list` result for the paged provider. Its tool's `inputSchema` embeds all resolved request-schema dependencies from [wire.schema.json](../wire.schema.json) and constrains args with [args.schema.json](args.schema.json). `inputSchema["x-grain-gate"]` contains the declaration, including supported record-schema digests. It is a schema annotation, not a call argument. The annotations are hints and supply no authority. [evidence.schema.json](evidence.schema.json) is the local example registry for the delivered `check` and `evaluation_context` record data; real adapters register their own bounded schemas/validators under immutable pins. The example predicate requires every suite in the context record’s required_suites to have a matching check on head a1 and a success conclusion, with observed_at no older than 60 seconds at acceptance. Coverage/count and delivered-page completeness must agree. A missing or unavailable required suite is unknown; an observed failure is unmet. This is a fixture contract, not an implicitly attached built-in gate.
+Complete native MCP envelopes are in [checks.mcp.json](checks.mcp.json) and [reviews.mcp.json](reviews.mcp.json); [read-operations.json](read-operations.json) supplies exact request/result examples for all nine initial operations. A `call.message` is the application **arguments** of an ordinary MCP request:
 
-From the repository root, this checks Draft 2020-12 schemas, every complete message, resolved tool input, registry data and the request/response digest chain. It requires Python 3 and `jsonschema` (Debian package `python3-jsonschema`). The fixtures contain no floating-point or unusual Unicode object keys, so sorted compact JSON produces their RFC 8785 canonical bytes. Production MUST use RFC 8785 for all supported JSON values.
-
-```sh
-python3 - <<'PY'
-import hashlib, json
-from pathlib import Path
-from jsonschema import Draft202012Validator, FormatChecker
-root = Path("design/spec/mcp-gates")
-schema = json.loads((root / "wire.schema.json").read_text())
-Draft202012Validator.check_schema(schema)
-def validator(name):
-    return Draft202012Validator(
-        {**schema, "$ref": "#/$defs/" + name},
-        format_checker=FormatChecker())
-def digest(value):
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
-                     ensure_ascii=False).encode()
-    return "sha256:" + hashlib.sha256(raw).hexdigest()
-registry = json.loads((root / "examples/evidence.schema.json").read_text())
-tool = json.loads((root / "examples/tools-list.json").read_text())["tools"][0]
-Draft202012Validator.check_schema(registry)
-Draft202012Validator.check_schema(tool["inputSchema"])
-validator("discovery").validate(tool["inputSchema"]["x-grain-gate"])
-for path in sorted((root / "examples").glob("*.json")):
-    if path.name.endswith(".schema.json") or path.name == "tools-list.json":
-        continue
-    transcript = json.loads(path.read_text())
-    validator("transcript").validate(transcript)
-    previous, calls = None, {}
-    for step in transcript["steps"]:
-        if step["type"] == "event":
-            continue
-        message = step["message"]
-        if step["type"] == "call":
-            body = {k: v for k, v in message.items() if k != "request_digest"}
-            assert message["request_digest"] == digest(body)
-            assert message["pin"]["input_declaration"] == digest(transcript["declaration"])
-            if message["round"]:
-                assert message["previous_response_digest"] == digest(previous)
-            Draft202012Validator(tool["inputSchema"]).validate(message)
-            calls[message["round"]] = message
-            records = list(message["snapshot"]["records"])
-            for delivery in message["deliveries"]:
-                if delivery["status"] == "ok":
-                    records += delivery["page"]["records"]
-            for record in records:
-                Draft202012Validator(
-                    {**registry, "$ref": "#/$defs/" + record["kind"]},
-                    format_checker=FormatChecker()).validate(record["data"])
-        else:
-            assert message["request_digest"] == calls[message["round"]]["request_digest"]
-            if message["kind"] == "needs_data":
-                previous = message
-    print(path.name + ": valid")
-PY
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gate_checks","arguments":"REPLACE_WITH_THE_COMPLETE_call.message_OBJECT"}}
 ```
 
-Schema validation does not replace the normative cross-field rules. Implementation conformance must additionally exercise live authorization/vector/lease/clock fences, page selection and aggregate accounting, registry predicate checks, TTL storage guarantees, mode restrictions and transaction crash boundaries in [MGS-10/11](../mcp-gates.spec.md#MGS-10).
+The string is a substitution marker, not a valid gate invocation. For action-review use gate_review and its complete action-profile object. The corresponding reply is an MCP result with `structuredContent` set to the complete `reply.message` object and `isError:false`; the existing client also permits a single text block carrying identical JSON. A non-final application's kind=read_requests is still an ordinary tools/call **result**, not a native server-to-client JSON-RPC request. Grain executes the named registered reads through an authorized adapter, never by giving the provider a callback connection or arbitrary tool caller.
+
+A `read_result` acknowledges exact operation/version/args/read identity, carries typed records, source times, collection generation/completeness/cursor and trusted automatically tracked dependencies. Only a final response can propose durable gate_state. `event` steps describe controller/adapter/store/clock events, not wire messages, source events or triggers. `controller_error` is a diagnostic projection with unchanged state/no accepted result. Full context/dependency/permission/freshness/coverage checks and state CAS remain necessary beyond shape validation.
+
+[tools-list.json](tools-list.json) provides complete resolved completion discovery/input schema and declaration. [args.schema.json](args.schema.json) is the fixture's fixed gate configuration. [evidence.schema.json](evidence.schema.json) defines the bounded inline evaluation_context/check fixture kinds; read operations additionally use the [shared exact record/args/result schemas](../read-operations.schema.json) and [registry](../read-operations.registry.json). The check predicate requires every suite named in the context on exact head a1, with actual check observation age ≤60 seconds at acceptance and complete required-set coverage. Unknown suites/missing/denied/stale facts mean unknown; observed failure means unmet. A final citation cannot prove an undelivered page or omitted prerequisite.
+
+The nine initial operation schemas are proposed logical read contracts, not claims that those MCP names or safe endpoint equivalents exist. Registry adapter releases in fixtures are illustrative. [BR-1](../brokered-reads.spec.md#BR-1) maps current source and explicit adapter gaps; BR-3 specifies the versioned projection/dependency transactions needed for a consistent recorded cut.
+
+From repository root, run:
+
+```sh
+/usr/bin/python3 design/spec/mcp-gates/validate.py
+```
+
+Requires Python 3 and jsonschema (`sudo apt-get update && sudo apt-get install -y python3-jsonschema` on Debian). The documentation validator checks schemas with remote resolution forbidden; initial registry/declaration/record/argument/request/context hash chains; all completion/action transcript messages; typed read records/citations and page invariants; and action binding fixtures. It implements no driver or runtime endpoint. [MGS-11](../mcp-gates.spec.md#MGS-11)/[BR-4](../brokered-reads.spec.md#BR-4) separately require live race, revocation, byte/allocation, retry/crash and action/closure conformance testing before implementation admission.

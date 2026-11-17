@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://grain.dev/spec/mcp-gates/wire-v2.schema.json",
-  "title": "Proposed MCP gates wire protocol v2.0 (Grain-driven rounds)",
-  "description": "Select a named $defs schema for validation. Cross-field authorization, byte/depth, snapshot and registry constraints are normative in mcp-gates.spec.md. No runtime implementation is introduced.",
+  "$id": "https://grain.dev/spec/mcp-gates/wire-v4.schema.json",
+  "title": "MCP gate brokered-read protocol 4.0",
+  "description": "Documentation only. Brokered typed reads, lazy dependency validation, pure pinned evaluator rounds. No reverse network RPC.",
   "$defs": {
     "reference": {
       "type": "object",
@@ -72,7 +72,8 @@
         "args_schema",
         "state_version",
         "input_declaration",
-        "continuation_version"
+        "continuation_version",
+        "read_registry"
       ],
       "properties": {
         "provider": {
@@ -109,6 +110,10 @@
         },
         "continuation_version": {
           "const": "1"
+        },
+        "read_registry": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       }
     },
@@ -192,7 +197,7 @@
         }
       }
     },
-    "snapshot": {
+    "evidence_context": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -205,13 +210,14 @@
         "domains",
         "unavailable",
         "records",
-        "references",
         "created_at",
-        "expires_at"
+        "expires_at",
+        "requirements",
+        "subjects"
       ],
       "properties": {
         "version": {
-          "const": "2"
+          "const": "3"
         },
         "id": {
           "type": "string",
@@ -261,14 +267,6 @@
           "minItems": 0,
           "maxItems": 100
         },
-        "references": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/snapshot_reference"
-          },
-          "minItems": 0,
-          "maxItems": 64
-        },
         "created_at": {
           "type": "string",
           "format": "date-time"
@@ -276,6 +274,56 @@
         "expires_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "domain",
+              "operation",
+              "operation_version",
+              "args_digest"
+            ],
+            "properties": {
+              "domain": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "operation": {
+                "enum": [
+                  "task.read",
+                  "task.relations.list",
+                  "task.messages.list",
+                  "change.read",
+                  "change.checks.list",
+                  "change.reviews.list",
+                  "policy.read",
+                  "resource.observations.list",
+                  "evidence.events.list"
+                ]
+              },
+              "operation_version": {
+                "const": "1.0"
+              },
+              "args_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "read-operations.schema.json#/$defs/resource"
+          },
+          "minItems": 0,
+          "maxItems": 100
         }
       }
     },
@@ -288,9 +336,6 @@
         "inline_bytes",
         "page_bytes",
         "page_records",
-        "pages",
-        "page_requests_per_round",
-        "page_requests_total",
         "total_page_bytes",
         "records",
         "state_bytes",
@@ -301,7 +346,11 @@
         "transport_bytes",
         "retries_per_round",
         "retries_total",
-        "retention_ms"
+        "retention_ms",
+        "read_calls",
+        "reads_per_round",
+        "reads_total",
+        "dependencies_total"
       ],
       "properties": {
         "elapsed_ms": {
@@ -312,7 +361,7 @@
         "rounds": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 8
+          "maximum": 16
         },
         "inline_bytes": {
           "type": "integer",
@@ -328,21 +377,6 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 100
-        },
-        "pages": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 64
-        },
-        "page_requests_per_round": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 8
-        },
-        "page_requests_total": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 64
         },
         "total_page_bytes": {
           "type": "integer",
@@ -396,6 +430,26 @@
         },
         "retention_ms": {
           "const": 60000
+        },
+        "read_calls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "reads_per_round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "reads_total": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "dependencies_total": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
         }
       }
     },
@@ -419,7 +473,7 @@
         "deadline",
         "now",
         "limits",
-        "snapshot",
+        "evidence_context",
         "bundle_id",
         "permission_revision",
         "read_scope_digest",
@@ -428,11 +482,11 @@
         "request_digest",
         "previous_response_digest",
         "continuation_state",
-        "deliveries"
+        "read_results"
       ],
       "properties": {
         "protocol_version": {
-          "const": "2.0"
+          "const": "4.0"
         },
         "evaluation_id": {
           "type": "string",
@@ -496,8 +550,8 @@
         "limits": {
           "$ref": "#/$defs/limits"
         },
-        "snapshot": {
-          "$ref": "#/$defs/snapshot"
+        "evidence_context": {
+          "$ref": "#/$defs/evidence_context"
         },
         "previous_pin": {
           "$ref": "#/$defs/pin"
@@ -523,7 +577,7 @@
         "round": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 7
+          "maximum": 15
         },
         "phase": {
           "enum": [
@@ -549,10 +603,10 @@
         "continuation_state": {
           "description": "Request-carried transient provider JSON, <=16 KiB/depth 16; initial null. Never durable gate_state."
         },
-        "deliveries": {
+        "read_results": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/delivery"
+            "$ref": "#/$defs/read_result"
           },
           "minItems": 0,
           "maxItems": 8
@@ -924,8 +978,8 @@
             "invalid_request",
             "invalid_result",
             "state_conflict",
-            "stale_snapshot",
-            "reference_expired",
+            "stale_context",
+            "cursor_expired",
             "resource_limit",
             "provider_error",
             "request_loop",
@@ -942,123 +996,11 @@
         }
       }
     },
-    "page_request": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "protocol_version",
-        "evaluation_id",
-        "snapshot_id",
-        "read_id",
-        "reference_id",
-        "cursor"
-      ],
-      "properties": {
-        "protocol_version": {
-          "const": "2.0"
-        },
-        "evaluation_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "snapshot_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "read_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "reference_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "cursor": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1,
-          "maxLength": 256
-        }
-      }
+    "read_request": {
+      "$ref": "read-operations.schema.json#/$defs/operation_request"
     },
-    "page": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "protocol_version",
-        "evaluation_id",
-        "snapshot_id",
-        "evidence_revision",
-        "read_id",
-        "reference_id",
-        "cursor",
-        "records",
-        "next_cursor",
-        "expires_at"
-      ],
-      "properties": {
-        "protocol_version": {
-          "const": "2.0"
-        },
-        "evaluation_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "snapshot_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "evidence_revision": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "read_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "reference_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "cursor": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "records": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record"
-          },
-          "minItems": 1,
-          "maxItems": 100
-        },
-        "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "expires_at": {
-          "type": "string",
-          "format": "date-time"
-        }
-      }
+    "read_page": {
+      "$ref": "read-operations.schema.json#/$defs/read_page"
     },
     "action_event": {
       "type": "object",
@@ -1074,7 +1016,7 @@
         "task_id",
         "gate_scopes",
         "contract_revision",
-        "snapshot_id",
+        "evidence_context_id",
         "evidence_revision",
         "preconditions",
         "request_id",
@@ -1156,7 +1098,7 @@
           "type": "integer",
           "minimum": 0
         },
-        "snapshot_id": {
+        "evidence_context_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
@@ -1210,7 +1152,7 @@
         "pin",
         "args_digest",
         "contract_revision",
-        "snapshot_id",
+        "evidence_context_id",
         "evidence_revision",
         "scope",
         "issued_at",
@@ -1253,7 +1195,7 @@
           "type": "integer",
           "minimum": 0
         },
-        "snapshot_id": {
+        "evidence_context_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
@@ -1314,7 +1256,8 @@
         "domain",
         "kinds",
         "required",
-        "prefetch"
+        "prefetch",
+        "operations"
       ],
       "properties": {
         "domain": {
@@ -1337,6 +1280,25 @@
         },
         "prefetch": {
           "type": "boolean"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "task.read",
+              "task.relations.list",
+              "task.messages.list",
+              "change.read",
+              "change.checks.list",
+              "change.reviews.list",
+              "policy.read",
+              "resource.observations.list",
+              "evidence.events.list"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 9,
+          "uniqueItems": true
         }
       }
     },
@@ -1345,22 +1307,24 @@
       "additionalProperties": false,
       "required": [
         "protocol_version",
-        "snapshot_version",
+        "evidence_context_version",
         "transport",
         "continuation_version",
         "evidence_replay_safe",
         "inputs",
-        "record_schemas"
+        "record_schemas",
+        "read_operations",
+        "read_registry"
       ],
       "properties": {
         "protocol_version": {
-          "const": "2.0"
+          "const": "4.0"
         },
-        "snapshot_version": {
-          "const": "2"
+        "evidence_context_version": {
+          "const": "3"
         },
         "transport": {
-          "const": "grain_rounds"
+          "const": "grain_brokered_reads"
         },
         "continuation_version": {
           "const": "1"
@@ -1399,6 +1363,18 @@
               }
             }
           }
+        },
+        "read_operations": {
+          "type": "array",
+          "items": {
+            "$ref": "read-operations.schema.json#/$defs/registry_entry"
+          },
+          "minItems": 1,
+          "maxItems": 32
+        },
+        "read_registry": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       }
     },
@@ -1407,7 +1383,6 @@
       "additionalProperties": false,
       "required": [
         "domain",
-        "reference_id",
         "code",
         "reason"
       ],
@@ -1417,21 +1392,14 @@
           "minLength": 1,
           "maxLength": 64
         },
-        "reference_id": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1,
-          "maxLength": 256
-        },
         "code": {
           "enum": [
             "unavailable",
             "unauthorized",
             "unsupported_version",
             "resource_limit",
-            "reference_expired"
+            "cursor_expired",
+            "stale_context"
           ]
         },
         "reason": {
@@ -1441,107 +1409,8 @@
         }
       }
     },
-    "snapshot_reference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "domain",
-        "kind",
-        "record_kind",
-        "schema_digest",
-        "version",
-        "page_count",
-        "record_count",
-        "expires_at"
-      ],
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "domain": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "kind": {
-          "const": "snapshot_page"
-        },
-        "record_kind": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "schema_digest": {
-          "type": "string",
-          "pattern": "^sha256:[0-9a-f]{64}$"
-        },
-        "version": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256
-        },
-        "page_count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 64
-        },
-        "record_count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 6400
-        },
-        "expires_at": {
-          "type": "string",
-          "format": "date-time"
-        }
-      }
-    },
-    "delivery": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "request",
-            "status",
-            "page"
-          ],
-          "properties": {
-            "request": {
-              "$ref": "#/$defs/page_request"
-            },
-            "status": {
-              "const": "ok"
-            },
-            "page": {
-              "$ref": "#/$defs/page"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "request",
-            "status",
-            "error"
-          ],
-          "properties": {
-            "request": {
-              "$ref": "#/$defs/page_request"
-            },
-            "status": {
-              "const": "unavailable"
-            },
-            "error": {
-              "$ref": "#/$defs/read_error"
-            }
-          }
-        }
-      ]
+    "read_result": {
+      "$ref": "read-operations.schema.json#/$defs/operation_result"
     },
     "final_response": {
       "type": "object",
@@ -1550,7 +1419,7 @@
         "protocol_version",
         "evaluation_id",
         "gate_id",
-        "snapshot_id",
+        "evidence_context_id",
         "contract_revision",
         "authority_epoch",
         "policy_revision",
@@ -1574,7 +1443,7 @@
       ],
       "properties": {
         "protocol_version": {
-          "const": "2.0"
+          "const": "4.0"
         },
         "evaluation_id": {
           "type": "string",
@@ -1586,7 +1455,7 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "snapshot_id": {
+        "evidence_context_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
@@ -1697,7 +1566,7 @@
         "round": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 7
+          "maximum": 15
         },
         "request_digest": {
           "type": "string",
@@ -1807,14 +1676,14 @@
         }
       ]
     },
-    "needs_data": {
+    "read_requests": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "protocol_version",
         "evaluation_id",
         "gate_id",
-        "snapshot_id",
+        "evidence_context_id",
         "contract_revision",
         "authority_epoch",
         "policy_revision",
@@ -1832,7 +1701,7 @@
       ],
       "properties": {
         "protocol_version": {
-          "const": "2.0"
+          "const": "4.0"
         },
         "evaluation_id": {
           "type": "string",
@@ -1844,7 +1713,7 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "snapshot_id": {
+        "evidence_context_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
@@ -1872,7 +1741,7 @@
         "round": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 7
+          "maximum": 15
         },
         "request_digest": {
           "type": "string",
@@ -1898,12 +1767,12 @@
           "pattern": "^[^\\r\\n]*$"
         },
         "kind": {
-          "const": "needs_data"
+          "const": "read_requests"
         },
         "requests": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/page_request"
+            "$ref": "#/$defs/read_request"
           },
           "minItems": 1,
           "maxItems": 8
@@ -1919,7 +1788,7 @@
           "$ref": "#/$defs/final_response"
         },
         {
-          "$ref": "#/$defs/needs_data"
+          "$ref": "#/$defs/read_requests"
         }
       ]
     },
@@ -2024,32 +1893,7 @@
       }
     },
     "read_error": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "code",
-        "retryable",
-        "message"
-      ],
-      "properties": {
-        "code": {
-          "enum": [
-            "unauthorized",
-            "unsupported_version",
-            "resource_limit",
-            "request_loop",
-            "unavailable"
-          ]
-        },
-        "retryable": {
-          "const": false
-        },
-        "message": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2048
-        }
-      }
+      "$ref": "read-operations.schema.json#/$defs/error"
     }
   }
 }

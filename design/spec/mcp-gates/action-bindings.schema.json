@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://grain.dev/spec/mcp-gates/action-bindings.schema.json",
-  "title": "Proposed action gate bindings v1 and evaluator action profile 3.0",
-  "description": "Documentation only. Named definition plus AGB semantic invariants required. Action envelope 3.0 composes unchanged Task 47 wire-v2 Grain-driven rounds/snapshots/pages; no callbacks or alternate transport.",
+  "title": "Proposed action gate bindings v1 and brokered evaluator action profile 5.0",
+  "description": "Documentation only. Action profile 5.0 composes wire-v4 brokered reads and dependency-validated evidence contexts; no callbacks.",
   "$defs": {
     "version_ref": {
       "type": "object",
@@ -755,7 +755,7 @@
         "authorization_revision",
         "binding_revisions",
         "contracts",
-        "snapshot_id",
+        "evidence_context_id",
         "evidence_revision"
       ],
       "properties": {
@@ -817,7 +817,7 @@
           "minItems": 0,
           "maxItems": 128
         },
-        "snapshot_id": {
+        "evidence_context_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
@@ -1529,7 +1529,7 @@
         "deadline",
         "now",
         "limits",
-        "snapshot",
+        "evidence_context",
         "bundle_id",
         "permission_revision",
         "read_scope_digest",
@@ -1538,12 +1538,12 @@
         "request_digest",
         "previous_response_digest",
         "continuation_state",
-        "deliveries",
+        "read_results",
         "action_context"
       ],
       "properties": {
         "protocol_version": {
-          "const": "3.0"
+          "const": "5.0"
         },
         "evaluation_id": {
           "$ref": "wire.schema.json#/$defs/request/properties/evaluation_id"
@@ -1599,8 +1599,8 @@
         "limits": {
           "$ref": "wire.schema.json#/$defs/request/properties/limits"
         },
-        "snapshot": {
-          "$ref": "wire.schema.json#/$defs/request/properties/snapshot"
+        "evidence_context": {
+          "$ref": "wire.schema.json#/$defs/request/properties/evidence_context"
         },
         "previous_pin": {
           "$ref": "wire.schema.json#/$defs/request/properties/previous_pin"
@@ -1632,8 +1632,8 @@
         "continuation_state": {
           "$ref": "wire.schema.json#/$defs/request/properties/continuation_state"
         },
-        "deliveries": {
-          "$ref": "wire.schema.json#/$defs/request/properties/deliveries"
+        "read_results": {
+          "$ref": "wire.schema.json#/$defs/request/properties/read_results"
         },
         "action_context": {
           "$ref": "#/$defs/context"
@@ -1714,7 +1714,7 @@
           "$ref": "#/$defs/guard_final_response"
         },
         {
-          "$ref": "#/$defs/guard_needs_data"
+          "$ref": "#/$defs/guard_read_requests"
         }
       ]
     },
@@ -1734,7 +1734,8 @@
         "operation_events",
         "evaluator_declaration",
         "guard_paged_request",
-        "guard_paged_response"
+        "guard_paged_response",
+        "evaluator_declarations"
       ],
       "properties": {
         "registry_entries": {
@@ -1799,7 +1800,18 @@
           "$ref": "#/$defs/guard_request"
         },
         "guard_paged_response": {
-          "$ref": "#/$defs/guard_needs_data"
+          "$ref": "#/$defs/guard_read_requests"
+        },
+        "evaluator_declarations": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 32,
+          "patternProperties": {
+            "^gate_[a-z0-9][a-z0-9_-]{0,62}$": {
+              "$ref": "#/$defs/guard_discovery"
+            }
+          }
         }
       }
     },
@@ -1972,7 +1984,7 @@
         "protocol_version",
         "evaluation_id",
         "gate_id",
-        "snapshot_id",
+        "evidence_context_id",
         "contract_revision",
         "authority_epoch",
         "policy_revision",
@@ -1997,7 +2009,7 @@
       ],
       "properties": {
         "protocol_version": {
-          "const": "3.0"
+          "const": "5.0"
         },
         "evaluation_id": {
           "$ref": "wire.schema.json#/$defs/final_response/properties/evaluation_id"
@@ -2005,8 +2017,8 @@
         "gate_id": {
           "$ref": "wire.schema.json#/$defs/final_response/properties/gate_id"
         },
-        "snapshot_id": {
-          "$ref": "wire.schema.json#/$defs/final_response/properties/snapshot_id"
+        "evidence_context_id": {
+          "$ref": "wire.schema.json#/$defs/final_response/properties/evidence_context_id"
         },
         "contract_revision": {
           "$ref": "wire.schema.json#/$defs/final_response/properties/contract_revision"
@@ -2176,14 +2188,14 @@
         }
       ]
     },
-    "guard_needs_data": {
+    "guard_read_requests": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "protocol_version",
         "evaluation_id",
         "gate_id",
-        "snapshot_id",
+        "evidence_context_id",
         "contract_revision",
         "authority_epoch",
         "policy_revision",
@@ -2202,58 +2214,58 @@
       ],
       "properties": {
         "protocol_version": {
-          "const": "3.0"
+          "const": "5.0"
         },
         "evaluation_id": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/evaluation_id"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/evaluation_id"
         },
         "gate_id": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/gate_id"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/gate_id"
         },
-        "snapshot_id": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/snapshot_id"
+        "evidence_context_id": {
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/evidence_context_id"
         },
         "contract_revision": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/contract_revision"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/contract_revision"
         },
         "authority_epoch": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/authority_epoch"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/authority_epoch"
         },
         "policy_revision": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/policy_revision"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/policy_revision"
         },
         "evidence_revision": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/evidence_revision"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/evidence_revision"
         },
         "expected_state_revision": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/expected_state_revision"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/expected_state_revision"
         },
         "round": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/round"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/round"
         },
         "request_digest": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/request_digest"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/request_digest"
         },
         "bundle_id": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/bundle_id"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/bundle_id"
         },
         "permission_revision": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/permission_revision"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/permission_revision"
         },
         "read_scope_digest": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/read_scope_digest"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/read_scope_digest"
         },
         "summary": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/summary"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/summary"
         },
         "kind": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/kind"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/kind"
         },
         "requests": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/requests"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/requests"
         },
         "continuation_state": {
-          "$ref": "wire.schema.json#/$defs/needs_data/properties/continuation_state"
+          "$ref": "wire.schema.json#/$defs/read_requests/properties/continuation_state"
         },
         "action_context_digest": {
           "type": "string",
@@ -2267,19 +2279,21 @@
       "additionalProperties": false,
       "required": [
         "protocol_version",
-        "snapshot_version",
+        "evidence_context_version",
         "transport",
         "continuation_version",
         "evidence_replay_safe",
         "inputs",
-        "record_schemas"
+        "record_schemas",
+        "read_operations",
+        "read_registry"
       ],
       "properties": {
         "protocol_version": {
-          "const": "3.0"
+          "const": "5.0"
         },
-        "snapshot_version": {
-          "$ref": "wire.schema.json#/$defs/discovery/properties/snapshot_version"
+        "evidence_context_version": {
+          "$ref": "wire.schema.json#/$defs/discovery/properties/evidence_context_version"
         },
         "transport": {
           "$ref": "wire.schema.json#/$defs/discovery/properties/transport"
@@ -2295,6 +2309,12 @@
         },
         "record_schemas": {
           "$ref": "wire.schema.json#/$defs/discovery/properties/record_schemas"
+        },
+        "read_operations": {
+          "$ref": "wire.schema.json#/$defs/discovery/properties/read_operations"
+        },
+        "read_registry": {
+          "$ref": "wire.schema.json#/$defs/discovery/properties/read_registry"
         }
       }
     },
@@ -2338,6 +2358,106 @@
         "observed_at": {
           "type": "string",
           "format": "date-time"
+        }
+      }
+    },
+    "guard_transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "declaration",
+        "steps"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "declaration": {
+          "$ref": "#/$defs/guard_discovery"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "message"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "call"
+                  },
+                  "message": {
+                    "$ref": "#/$defs/guard_request"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "message"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "reply"
+                  },
+                  "message": {
+                    "$ref": "#/$defs/guard_response"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "message"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "controller_error"
+                  },
+                  "message": {
+                    "$ref": "#/$defs/guard_final_response"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "description"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "event"
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 40
         }
       }
     }

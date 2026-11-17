@@ -1,0 +1,2033 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grain.dev/spec/mcp-gates/read-operations.schema.json",
+  "title": "Brokered read operations v1: proposed documentation, not deployed tools",
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority",
+        "repository_id",
+        "kind",
+        "id",
+        "head"
+      ],
+      "properties": {
+        "authority": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "repository_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "enum": [
+            "pull_request",
+            "changelist",
+            "artifact",
+            "deployment",
+            "task"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "head": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "task_read_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "task_relations_list_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "relation",
+        "cursor",
+        "limit"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "relation": {
+          "enum": [
+            "required_outcome",
+            "advisory",
+            "independent",
+            "all"
+          ]
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "task_messages_list_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "after_watermark",
+        "through_watermark",
+        "cursor",
+        "limit"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "after_watermark": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "through_watermark": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "change_read_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource"
+      ],
+      "properties": {
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "change_checks_list_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource",
+        "required_set_revision",
+        "cursor",
+        "limit"
+      ],
+      "properties": {
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "required_set_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "change_reviews_list_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource",
+        "policy_revision",
+        "cursor",
+        "limit"
+      ],
+      "properties": {
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "policy_read_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource",
+        "purpose",
+        "task_id"
+      ],
+      "properties": {
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "purpose": {
+          "enum": [
+            "completion",
+            "action_guard"
+          ]
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "resource_observations_list_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "reference_ids",
+        "cursor",
+        "limit"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "reference_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "evidence_events_list_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "resource",
+        "kinds",
+        "cursor",
+        "limit"
+      ],
+      "properties": {
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "authority",
+                "repository_id",
+                "kind",
+                "id",
+                "head"
+              ],
+              "properties": {
+                "authority": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "repository_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "kind": {
+                  "enum": [
+                    "pull_request",
+                    "changelist",
+                    "artifact",
+                    "deployment",
+                    "task"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "head": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "action",
+              "approval",
+              "waiver",
+              "report",
+              "operation"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "task_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "contract_revision",
+        "authority_epoch",
+        "policy_revision",
+        "state",
+        "outcome",
+        "incoming_message_watermark",
+        "processed_message_watermark",
+        "live_operation_ids"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "contract_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "canceled",
+            "none",
+            "unknown"
+          ]
+        },
+        "incoming_message_watermark": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "processed_message_watermark": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "live_operation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 100
+        }
+      }
+    },
+    "child_outcome_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parent_id",
+        "child_id",
+        "relation",
+        "predicate",
+        "outcome",
+        "relationship_revision",
+        "outcome_revision"
+      ],
+      "properties": {
+        "parent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "child_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "relation": {
+          "enum": [
+            "required_outcome",
+            "advisory",
+            "independent"
+          ]
+        },
+        "predicate": {
+          "enum": [
+            "success",
+            "integration",
+            "terminal_closure",
+            "none"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "canceled",
+            "pending",
+            "unknown"
+          ]
+        },
+        "relationship_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome_revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "message_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "watermark",
+        "author_kind",
+        "body_digest",
+        "body_excerpt",
+        "processed"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "watermark": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "author_kind": {
+          "enum": [
+            "person",
+            "agent",
+            "automation"
+          ]
+        },
+        "body_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "body_excerpt": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "processed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "change_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource",
+        "disposition",
+        "subject_revision",
+        "observed_at",
+        "valid_until",
+        "receipt_id"
+      ],
+      "properties": {
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "disposition": {
+          "enum": [
+            "open",
+            "merged",
+            "submitted",
+            "closed_unmerged",
+            "unknown"
+          ]
+        },
+        "subject_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "valid_until": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "receipt_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "check_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "suite",
+        "conclusion",
+        "observed_at"
+      ],
+      "properties": {
+        "head": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "suite": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "conclusion": {
+          "enum": [
+            "success",
+            "failure",
+            "pending",
+            "skipped",
+            "neutral",
+            "unknown"
+          ]
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      }
+    },
+    "review_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "policy_revision",
+        "path_digest",
+        "reviewer_role",
+        "disposition",
+        "observed_at",
+        "valid_until"
+      ],
+      "properties": {
+        "head": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "path_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "reviewer_role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "disposition": {
+          "enum": [
+            "accepted",
+            "findings",
+            "dismissed",
+            "pending",
+            "unknown"
+          ]
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "valid_until": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      }
+    },
+    "effective_policy_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource",
+        "revision",
+        "purpose",
+        "required_gate_ids",
+        "required_suites",
+        "review_policy_digest",
+        "coverage_revision"
+      ],
+      "properties": {
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "purpose": {
+          "enum": [
+            "completion",
+            "action_guard"
+          ]
+        },
+        "required_gate_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 128
+        },
+        "required_suites": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "review_policy_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "coverage_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "tracked_observation_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "reference_id",
+        "reference_revision",
+        "provider",
+        "provider_pin",
+        "accepted_sequence",
+        "subject_revision",
+        "availability",
+        "disposition",
+        "observed_at",
+        "valid_until",
+        "dirty_generation",
+        "covered_generation",
+        "evidence_ids"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "reference_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "reference_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "provider_pin": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "accepted_sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subject_revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "unavailable",
+            "unauthorized",
+            "deleted",
+            "error"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "active",
+            "merged",
+            "submitted",
+            "resolved",
+            "closed",
+            "succeeded",
+            "failed",
+            "canceled",
+            "unknown"
+          ]
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "valid_until": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "dirty_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "covered_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 0,
+          "maxItems": 100
+        }
+      }
+    },
+    "evidence_event_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "resource",
+        "kind",
+        "actor_id",
+        "subject_revision",
+        "policy_revision",
+        "event_revision",
+        "disposition",
+        "artifact_digest",
+        "covered_message_watermark",
+        "occurred_at",
+        "action_context_digest",
+        "binding_id",
+        "scope_digest"
+      ],
+      "properties": {
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "authority",
+                "repository_id",
+                "kind",
+                "id",
+                "head"
+              ],
+              "properties": {
+                "authority": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "repository_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "kind": {
+                  "enum": [
+                    "pull_request",
+                    "changelist",
+                    "artifact",
+                    "deployment",
+                    "task"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "head": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "action",
+            "approval",
+            "waiver",
+            "report",
+            "operation"
+          ]
+        },
+        "actor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "subject_revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "disposition": {
+          "enum": [
+            "delivered",
+            "acknowledged",
+            "approved",
+            "waived",
+            "revoked",
+            "settled",
+            "pending",
+            "failed",
+            "succeeded",
+            "canceled",
+            "unknown"
+          ]
+        },
+        "artifact_digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "covered_message_watermark": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "action_context_digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "binding_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "operation_request": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "task.read"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/task_read_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "task.relations.list"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/task_relations_list_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "task.messages.list"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/task_messages_list_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "change.read"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/change_read_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "change.checks.list"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/change_checks_list_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "change.reviews.list"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/change_reviews_list_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "policy.read"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/policy_read_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "resource.observations.list"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/resource_observations_list_args"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_id",
+            "operation",
+            "operation_version",
+            "args"
+          ],
+          "properties": {
+            "read_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "operation": {
+              "const": "evidence.events.list"
+            },
+            "operation_version": {
+              "const": "1.0"
+            },
+            "args": {
+              "$ref": "#/$defs/evidence_events_list_args"
+            }
+          }
+        }
+      ]
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "version",
+        "subject",
+        "collection_revision",
+        "authorization_revision",
+        "observed_at",
+        "valid_until"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "collection_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "authorization_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "valid_until": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      }
+    },
+    "read_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "evidence_context_id",
+        "read_id",
+        "operation",
+        "operation_version",
+        "args_digest",
+        "subject",
+        "collection_revision",
+        "coverage",
+        "records",
+        "next_cursor",
+        "dependencies",
+        "observed_at",
+        "valid_until"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "1.0"
+        },
+        "evidence_context_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "read_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "operation": {
+          "enum": [
+            "task.read",
+            "task.relations.list",
+            "task.messages.list",
+            "change.read",
+            "change.checks.list",
+            "change.reviews.list",
+            "policy.read",
+            "resource.observations.list",
+            "evidence.events.list"
+          ]
+        },
+        "operation_version": {
+          "const": "1.0"
+        },
+        "args_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "repository_id",
+            "kind",
+            "id",
+            "head"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "repository_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "pull_request",
+                "changelist",
+                "artifact",
+                "deployment",
+                "task"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "head": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "collection_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "complete",
+            "empty"
+          ],
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "empty": {
+              "type": "boolean"
+            }
+          }
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "wire.schema.json#/$defs/record"
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dependency"
+          },
+          "minItems": 1,
+          "maxItems": 128
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        },
+        "valid_until": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 35
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "retryable",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "unauthorized",
+            "unsupported_version",
+            "resource_limit",
+            "request_loop",
+            "unavailable",
+            "cursor_expired",
+            "stale_context",
+            "invalid_request"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "operation_result": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request",
+            "status",
+            "page"
+          ],
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/operation_request"
+            },
+            "status": {
+              "const": "ok"
+            },
+            "page": {
+              "$ref": "#/$defs/read_page"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request",
+            "status",
+            "error"
+          ],
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/operation_request"
+            },
+            "status": {
+              "const": "unavailable"
+            },
+            "error": {
+              "$ref": "#/$defs/error"
+            }
+          }
+        }
+      ]
+    },
+    "registry_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "version",
+        "args_schema_digest",
+        "result_schema_digest",
+        "record_kind",
+        "record_schema_digest",
+        "adapter_pin",
+        "authorization_rule",
+        "read_only"
+      ],
+      "properties": {
+        "operation": {
+          "enum": [
+            "task.read",
+            "task.relations.list",
+            "task.messages.list",
+            "change.read",
+            "change.checks.list",
+            "change.reviews.list",
+            "policy.read",
+            "resource.observations.list",
+            "evidence.events.list"
+          ]
+        },
+        "version": {
+          "const": "1.0"
+        },
+        "args_schema_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "result_schema_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "record_kind": {
+          "enum": [
+            "task",
+            "child_outcome",
+            "message",
+            "change",
+            "check",
+            "review",
+            "effective_policy",
+            "tracked_observation",
+            "evidence_event"
+          ]
+        },
+        "record_schema_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "adapter_pin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "release",
+            "config_revision"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "release": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "config_revision": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        },
+        "authorization_rule": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "read_only": {
+          "const": true
+        }
+      }
+    }
+  }
+}

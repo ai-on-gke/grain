@@ -1,0 +1,142 @@
+{
+  "protocol_version": "1.0",
+  "status": "proposed_registry_not_deployed_tools",
+  "registry_digest": "sha256:ba72db2fb72eb9676e1d25e542f8f80888af89d1b64ed48418ef0240bcd3616b",
+  "operations": [
+    {
+      "operation": "task.read",
+      "version": "1.0",
+      "args_schema_digest": "sha256:27fec4792136c7a80b2ba7a9a8b3b2043958cb55ba146f8728409093a3b7d554",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:task.read",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "task",
+      "record_schema_digest": "sha256:2f5c80d6423bdef9f5db245e75d7ad4918b11b51a97748fc88345794626b89d2"
+    },
+    {
+      "operation": "task.relations.list",
+      "version": "1.0",
+      "args_schema_digest": "sha256:fb1f8f86ffee85c8bdc59bfc1dcdd2fe9a99bf8a6bd2ea5859912e2bbd835d71",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:task.relations.list",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "child_outcome",
+      "record_schema_digest": "sha256:a0e1720f791fc81039b755b8f579162efacb0f3787f517a960d2a6c42d8ca396"
+    },
+    {
+      "operation": "task.messages.list",
+      "version": "1.0",
+      "args_schema_digest": "sha256:667938edb43d80c15c1a8458d088dd38b6fffb3e3437f3e810660a605a97b17b",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:task.messages.list",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "message",
+      "record_schema_digest": "sha256:d97758870d4d49a9584a2806a5538a858454ddec65d459f96dadb2aa9ec82653"
+    },
+    {
+      "operation": "change.read",
+      "version": "1.0",
+      "args_schema_digest": "sha256:dcfb4032df46b284aa1b341cb7730578e261e3d6c6735fb58484064f81dcba1a",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:change.read",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "change",
+      "record_schema_digest": "sha256:79b8282b2e8691329779c37873bd06b215e02da2dad2caed427c7707e1230217"
+    },
+    {
+      "operation": "change.checks.list",
+      "version": "1.0",
+      "args_schema_digest": "sha256:46a91f11b9666f80a05afd623814b92a076e89810e024363ab3a0fb9b3ba0c8f",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:change.checks.list",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "check",
+      "record_schema_digest": "sha256:460fa8ab52e8b2ed15b64037eb5880cdde0abaa378b0bcee280e345fbc84d516"
+    },
+    {
+      "operation": "change.reviews.list",
+      "version": "1.0",
+      "args_schema_digest": "sha256:88add0ef42047596b3ea5a9c984228e8e1a78c57668c39ad7ff2b8545bd1f839",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:change.reviews.list",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "review",
+      "record_schema_digest": "sha256:7455f4c6ea29bcae2ae3e81cf728e7d74928b31d9a072c08967492838bbedcd3"
+    },
+    {
+      "operation": "policy.read",
+      "version": "1.0",
+      "args_schema_digest": "sha256:7bb48d9e466101ac3e8d51b72fe311c06e7e9fb0855cec298e5f0e0dec5d79a6",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:policy.read",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "effective_policy",
+      "record_schema_digest": "sha256:91ac43a396adf4d7948d32e21637407b173690c1e0b4e56a60aff5df6066ce8d"
+    },
+    {
+      "operation": "resource.observations.list",
+      "version": "1.0",
+      "args_schema_digest": "sha256:8858a6072451c64a41b270d531fc13a06a0c2002124ea052904b8a0857768583",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:resource.observations.list",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "tracked_observation",
+      "record_schema_digest": "sha256:14ccac8732e411a6aa105aab6c8d32891f1bd1732bd9ee4de460671130477b60"
+    },
+    {
+      "operation": "evidence.events.list",
+      "version": "1.0",
+      "args_schema_digest": "sha256:9903140c49df333bca6cc4390c2d38fb00690c3948e1587c1e45624118376192",
+      "result_schema_digest": "sha256:3699c2099fa000183582d251faf16a3411729070efb40cff016d8dbf388148b4",
+      "adapter_pin": {
+        "id": "proposed:grain:evidence.events.list",
+        "release": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_revision": "fixture-1"
+      },
+      "authorization_rule": "registered-evidence-read",
+      "read_only": true,
+      "record_kind": "evidence_event",
+      "record_schema_digest": "sha256:eee73dcfaa5eda5e57530c300769eeb939ec0eb4a4be0ff536967e622255c1a2"
+    }
+  ]
+}
