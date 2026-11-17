@@ -217,6 +217,7 @@ func carryPathTriggerGate(ctx context.Context, store *model.Store, task model.Ta
 			model.Link{Kind: model.LinkPathTriggersRead, Target: headSHA})
 		t.Links = model.WithoutApprovalRules(t.Links, model.ApprovalRuleTrigger)
 		t.Links = append(t.Links, approvalLinks(gates)...)
+		carryLastReviewed(t, gates, from, headSHA)
 		if hasPathTriggerHold(*t) && len(gates) > 0 {
 			t.Links = append(withoutLinks(t.Links, model.LinkPathTriggerHold),
 				model.Link{Kind: model.LinkPathTriggerHold, Target: string(human)})
@@ -235,6 +236,32 @@ func carryPathTriggerGate(ctx context.Context, store *model.Store, task model.Ta
 	log.Printf("orchestrator: %s moved from %s to %s without changing its change; its gating reviews (%s) carry",
 		ref, shortSHA(from), shortSHA(headSHA), gateSummary(gates))
 	return noteReviewsCarried(ctx, store, task.ID, from, headSHA, now)
+}
+
+// carryLastReviewed moves each carried kind's last-reviewed head
+// (model.LinkPathTriggerReviewed) from from to headSHA: the review read a
+// change headSHA proposes unchanged, so the next push's re-review reads
+// from headSHA. Left at from, the merge of the base that the carry let
+// through sits inside from..next, and a trigger watching the files that
+// merge brought in (every-pr's "**" watches all of them) turns every
+// later re-review into a full one (reviewDelta).
+func carryLastReviewed(t *model.Task, gates []gateFiring, from, headSHA string) {
+	carried := map[string]bool{}
+	for _, g := range gates {
+		if g.template != "" && g.taskID != "" {
+			carried[g.template] = true
+		}
+	}
+	for i, l := range t.Links {
+		if l.Kind != model.LinkPathTriggerReviewed {
+			continue
+		}
+		kind, id, head, ok := parseLastReviewedTarget(l.Target)
+		if !ok || !carried[kind] || !strings.EqualFold(head, from) {
+			continue
+		}
+		t.Links[i].Target = kind + "=" + id + "@" + headSHA
+	}
 }
 
 // securityReviewUnchanged reports whether task's security review read the

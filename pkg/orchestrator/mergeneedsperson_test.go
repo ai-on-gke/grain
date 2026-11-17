@@ -106,6 +106,68 @@ func TestAGivenUpPullRequestRaisesAnInboxNotification(t *testing.T) {
 	}
 }
 
+// A change whose auto-merge a gating review has withdrawn (every-pr.yml
+// holds every pull request until its review passes) is still repaired when
+// it goes red, so its red has to be split as well: a check the repository
+// declared unfixable is escalated at once, not handed to a repair agent
+// that no commit can help (2026-11-13 merge-and-reviews walkthrough, F3).
+func TestAnUnfixableRedIsEscalatedWhileAGatingReviewHoldsAutoMerge(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.AutoMerge = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	declareUnfixableChecks(t, ctx, store, repo, "cla/google")
+	setMergeable(sim, true)
+	sim.CheckRuns[branch] = []github.CheckRun{
+		{Name: "cla/google", Status: "completed", Conclusion: strPtr("failure")},
+	}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs != nil && obs.MergeQueueRepairAt != nil {
+		t.Fatalf("the queue sent a change red only on an unfixable check to a repair (at %v)", obs.MergeQueueRepairAt)
+	}
+
+	// The review passes and gives auto-merge back: the change reaches the
+	// head of its queue and is escalated as unfixable, its repair unspent.
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.AutoMerge = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if obs, err := store.GetObservation(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	} else if obs != nil && obs.MergeQueueRepairAt != nil {
+		t.Fatalf("the queue repaired an unfixable red once auto-merge was back (at %v)", obs.MergeQueueRepairAt)
+	}
+	if !blockedOnAPerson(t, ctx, store, task.ID) {
+		t.Fatal("the queue did not give up on a check no branch reaches")
+	}
+	n, err := store.OpenNotification(ctx, model.NotificationSubject(model.FamilyMergeNeedsPerson, task.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == nil || !strings.Contains(n.Body, "cla/google") {
+		t.Fatalf("the Inbox item does not name the unfixable check: %+v", n)
+	}
+}
+
 // uiE2ETail is a Playwright failure the same on every branch: one fault,
 // not the branch's.
 const uiE2ETail = "##[group]Run npx playwright test\n" +
