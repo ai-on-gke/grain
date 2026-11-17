@@ -1071,10 +1071,10 @@ func TestUpgradeStatusOffersOnlyARollbackThatWouldBeTaken(t *testing.T) {
 		status upgrade.Status
 		want   string
 	}{
-		{"completed", upgrade.Status{Branch: "v2", Phase: upgrade.PhaseOK, PreviousImage: v1}, v1},
-		{"cancelled since", upgrade.Status{Branch: "v1", Phase: upgrade.PhaseCancelled, PreviousImage: running, RollbackImage: v1}, v1},
-		{"cancelled, nothing carried", upgrade.Status{Branch: "v1", Phase: upgrade.PhaseCancelled, PreviousImage: running}, ""},
-		{"previous by tag", upgrade.Status{Branch: "v2", Phase: upgrade.PhaseOK, PreviousImage: "docker.io/grainai/grain:v1"}, ""},
+		{"completed", upgrade.Status{Branch: "v3.2.0", Phase: upgrade.PhaseOK, PreviousImage: v1}, v1},
+		{"cancelled since", upgrade.Status{Branch: "v3.1.0", Phase: upgrade.PhaseCancelled, PreviousImage: running, RollbackImage: v1}, v1},
+		{"cancelled, nothing carried", upgrade.Status{Branch: "v3.1.0", Phase: upgrade.PhaseCancelled, PreviousImage: running}, ""},
+		{"previous by tag", upgrade.Status{Branch: "v3.2.0", Phase: upgrade.PhaseOK, PreviousImage: "docker.io/grainai/grain:v1"}, ""},
 	} {
 		raw, err := json.Marshal(tc.status)
 		if err != nil {
