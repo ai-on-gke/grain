@@ -4,7 +4,7 @@
   "action": "change.submit",
   "target": {
     "kind": "change",
-    "authority": "citc",
+    "authority": "example-cl-host",
     "repository": "ai-on-gke/grain",
     "change_kind": "cl",
     "id": "12345"
