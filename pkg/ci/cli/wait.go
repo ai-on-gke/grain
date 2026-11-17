@@ -572,6 +572,9 @@ func ProviderFlakeReport(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, 
 	}
 	report := ci.NewFlakeReport(attempts, ci.Stage1RollupJob)
 	report.Repo, report.Workflow, report.Ref = f.Repo, f.Workflow, refGlob
+	if report.Ref == "" {
+		report.Ref = f.Ref
+	}
 	if !f.Since.IsZero() {
 		at := f.Since
 		report.Since = &at

@@ -269,13 +269,24 @@ func JobAttemptSummaries(runs []JobAttemptRun, rollup ...string) []JobAttemptSum
 	return out
 }
 
-// commitVerdict is what a job's attempts on one commit add up to: its
-// newest attempt decides, and a pass after a failure is a pass on retry.
-// "" for a job that was only ever skipped.
+// commitVerdict is what a job's attempts on one commit add up to: two
+// failures confirm it red regardless of any later attempt, as
+// check-qualification judges Stage 1; otherwise its newest attempt
+// decides, and a pass after one failure is a pass on retry. "" for a
+// job that was only ever skipped.
 func commitVerdict(attempts []string) string {
+	fails := 0
+	for _, a := range attempts {
+		if a == "failure" {
+			fails++
+		}
+	}
+	if fails >= 2 {
+		return JobVerdictFail
+	}
 	switch attempts[len(attempts)-1] {
 	case "success":
-		if slices.Contains(attempts, "failure") {
+		if fails > 0 {
 			return JobVerdictPassOnRetry
 		}
 		return JobVerdictPass

@@ -353,13 +353,14 @@ func TestCIReadOfActionsRunsKeepsToTheTasksReadScope(t *testing.T) {
 		"/api/ci/runs?repo=acme/widgets",
 		"/api/ci/runs/gha:acme:widgets:42",
 		"/api/ci/runs/gha:acme:widgets:42/log",
+		"/api/ci/runs/gha:acme:widgets:42/attempts",
 		"/api/ci/runs/gha:acme:widgets:42/artifacts",
 	} {
 		if code, body := asAgent(t, srv, "outsider", http.MethodGet, path, "", ""); code != http.StatusForbidden {
 			t.Errorf("a task scoped to acme/other read %s: %d %s", path, code, body)
 		}
 	}
-	if n := forge.count("runs") + forge.count("run") + forge.count("log"); n != 0 {
+	if n := forge.count("runs") + forge.count("run") + forge.count("log") + forge.count("attempts"); n != 0 {
 		t.Errorf("a refused read still asked the forge %d times", n)
 	}
 }
@@ -372,8 +373,8 @@ func TestCIReadOfActionsRunsKeepsToTheTasksReadScope(t *testing.T) {
 func TestCIReadOfActionsRunsKeepsToTheDeploymentsRepos(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	forge := newFakeActions(now)
-	srv, client, store := actionsServer(t, forge, now)
+	forge := attemptsActions{fakeActions: newFakeActions(now)}
+	srv, client, store := actionsServerOver(t, forge, now)
 	if err := store.SetTargetRepos(context.Background(), []string{"acme/widgets"}); err != nil {
 		t.Fatal(err)
 	}
@@ -381,6 +382,7 @@ func TestCIReadOfActionsRunsKeepsToTheDeploymentsRepos(t *testing.T) {
 	paths := []string{
 		"/api/ci/runs/gha:elsewhere:secrets:42",
 		"/api/ci/runs/gha:elsewhere:secrets:42/log",
+		"/api/ci/runs/gha:elsewhere:secrets:42/attempts",
 		"/api/ci/runs/gha:elsewhere:secrets:42/artifacts",
 	}
 	for _, path := range paths {
@@ -395,7 +397,7 @@ func TestCIReadOfActionsRunsKeepsToTheDeploymentsRepos(t *testing.T) {
 	if runs := decodeString[ui.CIRunsResponse](t, body).Runs; code != http.StatusOK || len(runs) != 0 {
 		t.Errorf("listing a repository off the deployment's list = %d %s, want no runs", code, body)
 	}
-	if n := forge.count("runs") + forge.count("run") + forge.count("jobs") + forge.count("log") + forge.count("artifacts"); n != 0 {
+	if n := forge.count("runs") + forge.count("run") + forge.count("jobs") + forge.count("log") + forge.count("attempts") + forge.count("artifacts"); n != 0 {
 		t.Errorf("the forge was asked %d times about a repository this deployment does not work in", n)
 	}
 	// The deployment's own repository still reads.

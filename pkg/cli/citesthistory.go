@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// cicmd_print.go is how `grain ci` (cicmd.go) prints what the daemon
-// answered: a run's jobs and steps, a listing of runs, the job cache and a
-// run's artifacts, as text or, under -json, as the route's own body.
 package cli
 
 // `grain ci test-history` and `grain ci flake-report`: the flags of each;

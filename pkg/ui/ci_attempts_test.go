@@ -52,10 +52,27 @@ func TestCIRunAttemptsListsEveryAttemptOfAnActionsRunsJobs(t *testing.T) {
 		got.Jobs[1].Conclusion == nil || *got.Jobs[1].Conclusion != "success" || got.Jobs[0].HeadSHA != "abc" {
 		t.Errorf("attempts = %+v", got)
 	}
+	// A completed run's job attempts are served from the cache on repeat reads.
+	for i := 0; i < 2; i++ {
+		if code, body := asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/attempts", "", ""); code != http.StatusOK {
+			t.Fatalf("cached attempts read %d: %d %s", i, code, body)
+		}
+	}
+	if n := forge.count("attempts"); n != 1 {
+		t.Errorf("forge attempts calls = %d, want 1 (cached across repeat reads)", n)
+	}
 	if code, body := asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/run-g1/attempts", "", ""); code != http.StatusBadRequest {
 		t.Errorf("a grain CI run's attempts answered %d %s, want 400", code, body)
 	}
+	for _, bad := range []string{"run-g1", "gha:", "gha:widgets:42", "gha:acme:widgets:abc", "gha:acme:widgets:0"} {
+		if rec := do(t, srv, http.MethodGet, "/api/ci/runs/"+bad+"/attempts", ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("malformed run id %q answered %d %s, want 400", bad, rec.Code, rec.Body.String())
+		}
+	}
 	if code, body := asAgent(t, srv, "outsider", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/attempts", "", ""); code != http.StatusForbidden && code != http.StatusNotFound {
 		t.Errorf("a task without ci:read on acme/widgets read its attempts: %d %s", code, body)
+	}
+	if n := forge.count("attempts"); n != 1 {
+		t.Errorf("refused or malformed attempts reads asked the forge (%d calls, want 1)", n)
 	}
 }

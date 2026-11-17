@@ -109,3 +109,26 @@ func TestMatchRefGlob(t *testing.T) {
 		t.Error("IsRefGlob")
 	}
 }
+
+func TestConfirmedRedStaysFailPastLaterAttempts(t *testing.T) {
+	at := time.Date(2026, 11, 16, 2, 0, 0, 0, time.UTC)
+	runs := []JobAttemptRun{
+		{Run: Run{ID: "gha:a:b:1", Ref: "v1.0.0-rc.1", Commit: "aaa", StartedAt: &at}, Jobs: []GitHubJob{
+			attempt(1, 1, "aaa", "ui e2e", "failure"),
+			attempt(1, 2, "aaa", "ui e2e", "failure"),
+			attempt(1, 3, "aaa", "ui e2e", "success"),
+			attempt(1, 1, "aaa", "go", "failure"),
+			attempt(1, 2, "aaa", "go", "failure"),
+			attempt(1, 3, "aaa", "go", "cancelled"),
+		}},
+	}
+	got := JobAttemptSummaries(runs, Stage1RollupJob)
+	if len(got) != 2 {
+		t.Fatalf("summaries = %+v, want go and ui e2e", got)
+	}
+	for _, s := range got {
+		if s.Failed != 1 || s.ConfirmedRed != 1 || s.PassedOnRetry != 0 || s.Infra != 0 || s.Decisive() != 1 {
+			t.Errorf("%s = %+v, want Failed=1 ConfirmedRed=1 (a job gets only one flake retry)", s.Job, s)
+		}
+	}
+}
