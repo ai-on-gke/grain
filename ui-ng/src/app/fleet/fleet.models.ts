@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { DispatchCondition } from "../api/models";
+export type { DispatchCondition };
+
 export type FleetTab = "sandboxes" | "hostds" | "controls" | "logs";
 
 export interface SandboxSnapshot {
@@ -100,15 +103,6 @@ export interface DaemonHealth {
   logCommand?: string;
 }
 
-export interface DispatchCondition {
-  name?: string;
-  error?: string;
-  since?: string;
-  remedy?: string;
-  held?: boolean | string;
-  check?: boolean | string;
-}
-
 export interface PersistentSandboxEvent {
   at: string;
   kind: string;
@@ -153,6 +147,41 @@ export interface PackageCacheStats {
   bytes: number;
 }
 
+// BaseBranchPublishing is one base branch this deployment has stopped
+// publishing from (pkg/model/base_branch_publishing.go): releases failing
+// while merges keep landing. Gated with TriageTaskID is a release triage
+// task holding the branch's next releases -- and every `skip-when:
+// publishing-held` schedule, the release train among them -- until it
+// closes. Detail is the server's own sentence for all of it.
+export interface BaseBranchPublishing {
+  repo: string;
+  branch: string;
+  failures: number;
+  failingSince?: string;
+  failingForMS?: number;
+  conclusion?: string;
+  commit?: string;
+  runID?: string;
+  runInFlight: boolean;
+  triageTaskID?: string;
+  gated: boolean;
+  detail: string;
+}
+
+// CIWaitHealth is one task resume_later deferred on a CI verdict that has
+// waited longer than CIWaitHealthAge, an hour (pkg/ui/sandbox_health.go):
+// CI is "my-branch" or the run id it waits on, Since when it was deferred,
+// Recovered a wait read back from resume_later's own comment.
+export interface CIWaitHealth {
+  taskId: string;
+  repo?: string;
+  branch?: string;
+  ciMode?: string;
+  ci: string;
+  since: string;
+  recovered?: boolean;
+}
+
 export interface SandboxHealthResponse {
   enabled: boolean;
   checkedAt?: string;
@@ -161,6 +190,8 @@ export interface SandboxHealthResponse {
   budget?: SandboxBudgetReport;
   daemon?: DaemonHealth;
   dispatchBlocked?: DispatchCondition[];
+  baseBranchPublishing?: BaseBranchPublishing[];
+  ciWaits?: CIWaitHealth[];
   standingSandboxes?: StandingSandboxStatus[];
   persistentSandboxes?: PersistentSandboxStatus[];
   packageCache?: PackageCacheStats[];

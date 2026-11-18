@@ -23,9 +23,14 @@ import {
   signal,
   untracked,
 } from "@angular/core";
-import { GrainApi } from "../api/grain-api.service";
+import { GrainApi, loadTaskSummaryBatches } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { Task, TaskDetail, TaskListPage } from "../api/models";
+import type {
+  Task,
+  TaskDetail,
+  TaskListPage,
+  TaskSummariesResponse,
+} from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
@@ -100,6 +105,7 @@ export class WorkstreamsStore implements OnDestroy {
   readonly closedTasks = signal<Task[]>([]);
   readonly extraTasks = signal<Record<string, TaskDetail>>({});
   readonly loaded = signal(false);
+  readonly closedLoading = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
   readonly busy = signal<string | null>(null);
@@ -172,6 +178,7 @@ export class WorkstreamsStore implements OnDestroy {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshing: Promise<void> | null = null;
   private queuedRefresh: Promise<void> | null = null;
+  private configInFlight: Promise<void> | null = null;
   private forceClosedPending = false;
   private pollCount = 0;
   private closedFetchedOnce = false;
@@ -331,10 +338,13 @@ export class WorkstreamsStore implements OnDestroy {
         ? !this.closedFetchedOnce && this.hasMissingAncestor(currentOpen)
         : openChanged || !this.closedFetchedOnce || this.pollCount % 5 === 0);
     if (needClosed) {
+      this.closedLoading.set(true);
       this.lastSeenRevision = rev;
-      await this.loadClosedPages();
     }
     this.loaded.set(true);
+    if (needClosed) {
+      await this.loadClosedPages();
+    }
   }
 
   private async loadClosedPages(): Promise<void> {
@@ -344,6 +354,7 @@ export class WorkstreamsStore implements OnDestroy {
 
     const closedSince = encodeURIComponent(new Date(cutoffMs).toISOString());
 
+    this.closedLoading.set(true);
     try {
       for (let page = 0; page < MAX_CLOSED_PAGES; page++) {
         const q = `state=closed&closedSince=${closedSince}&limit=${CLOSED_PAGE_LIMIT}&cursor=${encodeURIComponent(cursor)}`;
@@ -379,26 +390,100 @@ export class WorkstreamsStore implements OnDestroy {
       }
     } catch {
       // Closed history failure is non-fatal when open tasks succeeded.
+    } finally {
+      this.closedLoading.set(false);
     }
   }
 
-  async ensureRootDetail(rootId: string): Promise<void> {
-    if (!rootId || rootId.includes("/") || rootId.includes("#")) return;
-    if (this.extraTasks()[rootId] || this.detailInFlight.has(rootId)) return;
-    this.detailInFlight.add(rootId);
+  private pendingRootDetails = new Set<string>();
+  private rootFlushPromise: Promise<void> | null = null;
+
+  private ensureConfig(): Promise<void> {
+    if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      return Promise.resolve();
+    }
+    return (this.configInFlight ??= Promise.resolve()
+      .then(() => this.api.config())
+      .then((cfg) => {
+        if (cfg && !this.access.configLoaded()) {
+          this.access.setConfig(cfg);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.configInFlight = null;
+      }));
+  }
+
+  ensureRootDetail(rootId: string): Promise<void> {
+    if (!rootId || rootId.includes("/") || rootId.includes("#")) {
+      return Promise.resolve();
+    }
+    this.pendingRootDetails.add(rootId);
+    if (!this.rootFlushPromise) {
+      this.rootFlushPromise = Promise.resolve().then(() => {
+        const batch = [...this.pendingRootDetails];
+        this.pendingRootDetails.clear();
+        this.rootFlushPromise = null;
+        return this.ensureRootDetails(batch);
+      });
+    }
+    return this.rootFlushPromise;
+  }
+
+  async ensureRootDetails(rootIds: readonly string[]): Promise<void> {
+    const candidates = rootIds.filter(
+      (id) =>
+        Boolean(id) &&
+        !id.includes("/") &&
+        !id.includes("#") &&
+        !this.extraTasks()[id] &&
+        !this.detailInFlight.has(id),
+    );
+    if (candidates.length === 0) return;
+    await this.ensureConfig();
+    const cached = this.extraTasks();
+    const open = this.openTasks();
+    const closed = this.closedTasks();
+    const seen = new Set<string>();
+    const todo: string[] = [];
+    for (const rootId of candidates) {
+      if (
+        seen.has(rootId) ||
+        cached[rootId] ||
+        this.detailInFlight.has(rootId)
+      ) {
+        continue;
+      }
+      seen.add(rootId);
+      const known =
+        open.find((t) => t.id === rootId) ??
+        closed.find((t) => t.id === rootId);
+      const allowed = known
+        ? this.access.canAccessTask("GET /api/tasks/{id}", known.repo ?? null)
+        : this.access.can("GET /api/tasks/{id}");
+      if (!allowed) continue;
+      todo.push(rootId);
+    }
+    if (todo.length === 0) return;
+    for (const id of todo) this.detailInFlight.add(id);
     try {
-      const detail = await this.api.get<TaskDetail>(
-        "GET /api/tasks/{id}",
-        { id: rootId },
-        "comments_limit=1&attempts_limit=1",
+      const { tasks } = await loadTaskSummaryBatches(todo, 1, 1, (query) =>
+        this.api
+          .get<TaskSummariesResponse>(
+            "GET /api/tasks/summaries",
+            undefined,
+            query,
+          )
+          .then((r) => r?.tasks),
       );
-      if (detail?.id) {
-        this.extraTasks.update((m) => ({ ...m, [detail.id]: detail }));
+      if (Object.keys(tasks).length > 0) {
+        this.extraTasks.update((m) => ({ ...m, ...tasks }));
       }
     } catch {
-      // Fall back to list metadata cleanly if single task detail fails.
+      // Fall back to list metadata cleanly if batch task summary fails.
     } finally {
-      this.detailInFlight.delete(rootId);
+      for (const id of todo) this.detailInFlight.delete(id);
     }
   }
 
@@ -416,7 +501,10 @@ export class WorkstreamsStore implements OnDestroy {
   approvePreview(stream: Workstream): StreamBatchPreview {
     const nodes = [...stream.proposedNodes]
       .filter((n) =>
-        this.access.can("POST /api/tasks/{id}/approve", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/approve",
+          n.task.repo ?? null,
+        ),
       )
       .sort((a, b) => Number(a.id) - Number(b.id) || a.id.localeCompare(b.id));
     return {
@@ -436,7 +524,10 @@ export class WorkstreamsStore implements OnDestroy {
     const nodes = pool.filter(
       (n) =>
         (n.task.state === "proposed" || n.task.state === "queued") &&
-        this.access.can("POST /api/tasks/{id}/defer", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/defer",
+          n.task.repo ?? null,
+        ),
     );
     return {
       nodes,
@@ -454,7 +545,10 @@ export class WorkstreamsStore implements OnDestroy {
     const nodes = pool.filter(
       (n) =>
         n.glyph === "deferred" &&
-        this.access.can("POST /api/tasks/{id}/undefer", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/undefer",
+          n.task.repo ?? null,
+        ),
     );
     return {
       nodes,

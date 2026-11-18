@@ -1,0 +1,2 @@
+{"kind": "mcp_sequence", "calls": [
+ {"tool": "request_access", "args": {"summary": "Open network access to fetch the widgets schema", "reason": "The schema lives on the vendor site.", "requests": [{"kind": "network", "access": "open"}]}}]}

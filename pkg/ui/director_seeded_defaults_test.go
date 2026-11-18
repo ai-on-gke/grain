@@ -43,14 +43,14 @@ func seededSessionClient(t *testing.T, id string, tasksApproved bool) (*ui.Clien
 		t.Fatal(err)
 	}
 	session, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "Session", Interactive: true, Capabilities: &[]string{"self-debug"},
+		Title: "Session", Interactive: true, Capabilities: &[]string{"api:self-debug", model.GrainSourceGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	stored := mustGetTask(t, ctx, store, session.ID)
 	stored.Tags = append(stored.Tags, model.ConsoleSessionTag(id))
-	stored.Origin.Reason = model.ReasonConsoleSession
+	stored.Filing.Reason = model.ReasonConsoleSession
 	if err := store.PutTask(ctx, stored); err != nil {
 		t.Fatal(err)
 	}

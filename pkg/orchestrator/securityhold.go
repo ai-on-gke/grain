@@ -469,8 +469,9 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	raiseFindingsReview(ctx, store, review, reviewedID, summary, now)
 	body := fmt.Sprintf(
 		"Review task %s left findings on this change, so its security-review gate did not pass. "+
-			"Address the findings so a re-review passes, or override the gate under merge:force with "+
-			"a reason; pressing Submit records your approval only and will not merge over open findings.",
+			"Address the findings so a re-review passes, or, if the change should merge as it is, "+
+			"accept them as they are with **Accept findings** on the merge-gates panel (`grain accept-findings`, a reason required), which clears this review's findings on this gate and nothing else. Pressing Submit records your approval only and will not merge over open findings; "+
+			"Force merge is for overriding every gate, not for this.",
 		review.ID)
 	_, ref, ok, err := reviewedPullRequest(ctx, store, review)
 	if err != nil || !ok {
@@ -1080,7 +1081,7 @@ func holdIsAbout(task model.Task, ref model.PullRequestRef) bool {
 // (holdForTrustBoundary classifies nothing of it): a stacked fix, which
 // lands on a branch that is judged when it merges, or a review.
 func unjudged(task model.Task) bool {
-	return task.Origin.Reason == model.ReasonFix || isReviewTask(task)
+	return task.Filing.Reason == model.ReasonFix || isReviewTask(task)
 }
 
 // clearedTarget is LinkTrustBoundaryCleared's target for headSHA under this
@@ -1177,11 +1178,7 @@ func withoutLinks(links []model.Link, kinds ...model.LinkKind) []model.Link {
 }
 
 func securityReviewTitle(task model.Task) string {
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
-	}
-	return "Security review: " + title
+	return "Security review: " + reviewSubjectTitle(task)
 }
 
 // securityReviewBody is the template's instructions with the subject
@@ -1200,6 +1197,7 @@ func securityReviewBody(tmpl model.Template, task model.Task, ref model.PullRequ
 		"any fix to it.\n\n",
 		task.ID, task.Title, task.BranchName(), ref, ref)
 	b.WriteString(matchList(matches, known))
+	b.WriteString("\n" + changeUnderReviewSection(task, true) + "\n")
 	return b.String()
 }
 

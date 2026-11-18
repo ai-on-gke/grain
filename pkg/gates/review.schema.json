@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "category",
+    "requirement_id",
+    "semantics"
+  ],
+  "properties": {
+    "category": {
+      "enum": [
+        "ordinary",
+        "security",
+        "path",
+        "takeover"
+      ]
+    },
+    "requirement_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "semantics": {
+      "enum": [
+        "current_head_v1",
+        "legacy_completion_v1"
+      ]
+    }
+  }
+}

@@ -1,0 +1,100 @@
+== HEAD populates a deployment
+orig-1 POST /api/tasks -> 201 id=1
+orig-1 POST /api/tasks/1/comments -> 200 
+orig-1 POST /api/settings -> 200
+orig-1 POST /api/templates -> 201 id=template-1
+orig-1 POST /api/suites -> 201 "id":"suite-1"
+orig-2 POST /api/tasks -> 201 id=3
+orig-2 POST /api/tasks/3/comments -> 200 
+orig-2 POST /api/settings -> 200
+orig-2 POST /api/templates -> 201 id=template-2
+orig-2 POST /api/suites -> 201 "id":"suite-2"
+orig-3 POST /api/tasks -> 201 id=4
+orig-3 POST /api/tasks/4/comments -> 200 
+orig-3 POST /api/settings -> 200
+orig-3 POST /api/templates -> 201 id=template-3
+orig-3 POST /api/suites -> 201 "id":"suite-3"
+orig-4 POST /api/tasks -> 201 id=5
+orig-4 POST /api/tasks/5/comments -> 200 
+orig-4 POST /api/settings -> 200
+orig-4 POST /api/templates -> 201 id=template-4
+orig-4 POST /api/suites -> 201 "id":"suite-4"
+201 
+already up to date, nothing to commit
+adfed2d Update grain state after a write by the access code
+-- sequences before the restore
+board_sequence.id                                   1 t            1 ok
+config_audit.id                                    34 t           34 ok
+integration_event.id                               11 t           11 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       4 t            4 ok
+suite_sequence.id                                   4 t            4 ok
+task_comment.id                                     5 t            5 ok
+task_sequence.number                                5 t            5 ok
+template_sequence.number                            4 t            4 ok
+== restore: a rebuilt host -- a fresh data directory and an empty database, holding only
+   a clone of grain/config -- loads the repository into the store (staterepo.Load -> ImportTables)
+staterepo: loading /home/debian/walk/seq-restored/data/state-repo as the deployment's state repository; importing its settings
+-- sequences after the restore (before writes)
+board_sequence.id                                   1 t            1 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       4 t            4 ok
+suite_sequence.id                                   4 t            4 ok
+task_sequence.number                                1 t            1 ok
+template_sequence.number                            4 t            4 ok
+restored-1 POST /api/tasks -> 201 id=2
+restored-1 POST /api/tasks/2/comments -> 200 
+restored-1 POST /api/settings -> 200
+restored-1 POST /api/templates -> 201 id=template-5
+restored-1 POST /api/suites -> 201 "id":"suite-5"
+201 
+-- sequences after writes
+board_sequence.id                                   2 t            2 ok
+config_audit.id                                    10 t           10 ok
+integration_event.id                                5 t            5 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       5 t            5 ok
+suite_sequence.id                                   5 t            5 ok
+task_comment.id                                     2 t            2 ok
+task_sequence.number                                2 t            2 ok
+template_sequence.number                            5 t            5 ok
+nextval probe: 37 serial tables, 0 would collide
+== settings merge: a commit to grain/config adds template-50 and suite-50 with explicit ids
+-- waiting for the running daemon to merge the commit
+template-50 present: 1
+grain ui: settings saved by the access code: changed PollInterval
+grain api: operator (access code) (access-code) changed settings: POST /api/settings
+grain daemon: applying changed settings without a restart: poll-interval 12s -> 21s
+staterepo: wrote settings snapshot to /home/debian/walk/seq-restored/data/settings-snapshots/20261115T123202Z-02a41361f2c5 before applying 02a41361f2c5587f7b5dc5fe6e39c2c0b37c0656
+staterepo: the settings that just arrived did not match this database on 5 rows of its settings tables, across 4 files (settings/templates.yml, tables/template_sequence.json, settings/suites.yml, tabl
+-- sequences after the merge (before writes)
+board_sequence.id                                   3 t            2 ok
+config_audit.id                                    11 t           10 ok
+integration_event.id                                6 t            5 ok
+secret_resolution_audit.id                          3 t            2 ok
+suite_item.id                                       6 t            6 ok
+suite_sequence.id                                  50 t           50 ok
+task_comment.id                                     3 t            2 ok
+task_sequence.number                                3 t            2 ok
+template_sequence.number                           50 t           50 ok
+merged-1 POST /api/tasks -> 201 id=4
+merged-1 POST /api/tasks/4/comments -> 200 
+merged-1 POST /api/settings -> 200
+merged-1 POST /api/templates -> 201 id=template-51
+merged-1 POST /api/suites -> 201 "id":"suite-51"
+merged-2 POST /api/tasks -> 201 id=5
+merged-2 POST /api/tasks/5/comments -> 200 
+merged-2 POST /api/settings -> 200
+merged-2 POST /api/templates -> 201 id=template-52
+merged-2 POST /api/suites -> 201 "id":"suite-52"
+-- sequences after writes
+board_sequence.id                                   3 t            2 ok
+config_audit.id                                    27 t           27 ok
+integration_event.id                               10 t           10 ok
+secret_resolution_audit.id                          3 t            2 ok
+suite_item.id                                       8 t            8 ok
+suite_sequence.id                                  52 t           52 ok
+task_comment.id                                     5 t            5 ok
+task_sequence.number                                5 t            5 ok
+template_sequence.number                           52 t           52 ok
+nextval probe: 37 serial tables, 0 would collide

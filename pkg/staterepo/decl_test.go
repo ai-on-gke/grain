@@ -135,9 +135,8 @@ func TestASettingsDocumentIsWrittenInTheAuthoringFormat(t *testing.T) {
 		"- id: tpl-1",
 		"auto-merge: true",
 		"target: bwsalmon/grain",
-		"reads:\n      - bwsalmon/notes",
-		"writes:\n      - bwsalmon/docs",
-		"grants:\n      - memory",
+		"grants:\n      - memory\n      - " + model.TaskRepoReadGrant(model.RepoRef{Owner: "bwsalmon", Name: "notes"}).Key() +
+			"\n      - " + model.TaskRepoWriteGrant(model.WriteTarget{Repo: model.RepoRef{Owner: "bwsalmon", Name: "docs"}}).Key(),
 		"custom-fields:\n      team: platform",
 		"options: [ui, api]",
 		"required: true",
@@ -145,6 +144,13 @@ func TestASettingsDocumentIsWrittenInTheAuthoringFormat(t *testing.T) {
 	} {
 		if !strings.Contains(templates, want) {
 			t.Errorf("the templates document does not hold %q:\n%s", want, templates)
+		}
+	}
+	// Plain repository access is written under grants: alone
+	// (unified-grants §3), not under reads:/writes: as well.
+	for _, unwanted := range []string{"reads:", "writes:"} {
+		if strings.Contains(templates, unwanted) {
+			t.Errorf("the templates document still holds %q:\n%s", unwanted, templates)
 		}
 	}
 	// And the five recurrence columns, four of them NULL, are one block.
@@ -296,8 +302,8 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 // one key on import. A task-level repository grant under grants: lands
 // in template_read / template_write, an entry both lists name is held
 // once, {capability, with} folds into the stored reference, a legacy api:
-// spelling is stored as its reference, and the next export writes
-// grants: beside reads: and writes:, which an older binary still reads.
+// spelling is stored as its reference, and the next export writes the
+// plain repository access under grants: alone, with no reads: or writes:.
 func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 	ctx := context.Background()
 	store, db := openDB(t)
@@ -369,9 +375,12 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 		if entry["id"] != "tpl-1" {
 			continue
 		}
-		for _, key := range []string{"reads", "writes", "grants"} {
-			if _, ok := entry[key]; !ok {
-				t.Errorf("the export carries no %s: for the template: %v", key, entry)
+		if _, ok := entry["grants"]; !ok {
+			t.Errorf("the export carries no grants: for the template: %v", entry)
+		}
+		for _, key := range []string{"reads", "writes"} {
+			if got, ok := entry[key]; ok {
+				t.Errorf("the export still writes %s: %v for the template, whose access grants: already carries", key, got)
 			}
 		}
 		want := []any{
@@ -409,9 +418,10 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 	}
 }
 
-// unified-grants §3: the export writes reads:/writes: under grants: as well,
-// as …/repo#read {repo} and …/repo#write {repo, base}, and an import of
-// that export holds each repository once. Export → import → export is
+// unified-grants §3: the export writes plain reads:/writes: rows under
+// grants: alone, as …/repo#read {repo} and …/repo#write {repo, base};
+// only a row a grant cannot carry (an off-host repository) stays under
+// reads:/writes:, and an import of that export holds each repository once. Export → import → export is
 // byte-for-byte stable, and the read and write tables are what they were.
 func TestRepoAccessExportedAsGrantsRoundTrips(t *testing.T) {
 	t.Parallel()
@@ -467,9 +477,16 @@ func TestRepoAccessExportedAsGrantsRoundTrips(t *testing.T) {
 		if got := entries[0]["grants"]; !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: exported grants: = %#v, want %#v (an off-host repository stays under reads: alone)", table, got, want)
 		}
+	}
+	for table, want := range map[string]map[string]any{
+		"template": {"reads": []any{offHost.String()}},
+		"schedule": {},
+	} {
+		_, _, entries := settingsDocument(t, first, table)
 		for _, key := range []string{"reads", "writes"} {
-			if _, ok := entries[0][key]; !ok {
-				t.Errorf("%s: the export no longer writes %s:: %v", table, key, entries[0])
+			got, ok := entries[0][key]
+			if w, wantKey := want[key]; wantKey != ok || (ok && !reflect.DeepEqual(got, w)) {
+				t.Errorf("%s: exported %s: = %#v (present %v), want %#v (plain repositories go under grants: alone)", table, key, got, ok, w)
 			}
 		}
 	}
@@ -649,4 +666,104 @@ func TestASettingsDocumentCarriesRowsWhoseOwnerIsGone(t *testing.T) {
 		t.Fatalf("importing: %v", err)
 	}
 	sameDatabase(t, ctx, db, restored, "a database restored from a dump with orphaned settings rows")
+}
+
+// A hand-written template in grain/config's settings/templates.yml that leaves
+// out target: (along with auto-merge: and created-at:, as a repository's own
+// .grain/templates/<name>.yml may) imports with empty/zero values rather than
+// failing on NOT NULL columns that declare no DDL default in pkg/model/schema.go.
+func TestMinimalHandWrittenTemplateWithoutTargetImports(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openDB(t)
+	remote := bareRemote(t)
+	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: filepath.Join(t.TempDir(), "state"), Remote: remote})
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	bound := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "tpl-bound", Name: "bound", Title: "Bound template", Body: "initial body",
+		Target: &bound, AutoMerge: true, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("putting bound template: %v", err)
+	}
+	if err := staterepo.Load(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+
+	work := filepath.Join(t.TempDir(), "clone")
+	git(t, "", "clone", "--quiet", remote, work)
+	tplPath := filepath.Join(work, filepath.FromSlash(staterepo.DumpPath("template")))
+	if err := os.WriteFile(tplPath, []byte(`templates:
+  - id: tpl-bound
+    name: bound
+    title: Unbound by omitting target
+    body: updated body
+  - id: template-1
+    name: minimal
+    title: A minimal hand-written template
+    body: written in grain/config by hand
+  - id: template-null-target
+    name: explicit-null
+    target: null
+    title: Explicit null target
+    body: written with null target
+`), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", tplPath, err)
+	}
+
+	_, checkDB := openDB(t)
+	report, err := staterepo.Check(ctx, checkDB, work, model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("Check failed on minimal templates.yml: %v", err)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "cannot be imported") {
+			t.Errorf("Check reported false unimportable column warning: %s", w)
+		}
+	}
+
+	git(t, work, "-c", "user.email=alice@example.com", "-c", "user.name=Alice", "commit", "-am", "Add minimal templates without target")
+	git(t, work, "push", "--quiet", "origin", "main")
+
+	if applied, err := staterepo.Apply(ctx, repo, db, model.SchemaVersion); err != nil || !applied {
+		t.Fatalf("Apply: applied=%v err=%v", applied, err)
+	}
+
+	minimal, err := store.GetTemplate(ctx, "template-1")
+	if err != nil || minimal == nil {
+		t.Fatalf("GetTemplate(template-1): %v, %v", minimal, err)
+	}
+	if minimal.Name != "minimal" || minimal.Title != "A minimal hand-written template" || minimal.Body != "written in grain/config by hand" {
+		t.Errorf("minimal text = %+v", minimal)
+	}
+	if minimal.Target != nil || minimal.AutoMerge || !minimal.CreatedAt.IsZero() {
+		t.Errorf("minimal defaults = (Target=%v, AutoMerge=%v, CreatedAt=%v), want nil/false/zero",
+			minimal.Target, minimal.AutoMerge, minimal.CreatedAt)
+	}
+
+	nullTarget, err := store.GetTemplate(ctx, "template-null-target")
+	if err != nil || nullTarget == nil || nullTarget.Target != nil {
+		t.Errorf("GetTemplate(template-null-target) = (%+v, %v), want unbound", nullTarget, err)
+	}
+
+	unbound, err := store.GetTemplate(ctx, "tpl-bound")
+	if err != nil || unbound == nil {
+		t.Fatalf("GetTemplate(tpl-bound): %v, %v", unbound, err)
+	}
+	if unbound.Target != nil || unbound.AutoMerge || unbound.Title != "Unbound by omitting target" {
+		t.Errorf("tpl-bound after omitting target/auto-merge = %+v, want unbound with AutoMerge=false", unbound)
+	}
+
+	// Re-exporting and importing into a fresh store round-trips cleanly.
+	exported := t.TempDir()
+	if err := staterepo.Export(ctx, db, exported); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	_, restored := openDB(t)
+	if err := staterepo.Import(ctx, restored, exported); err != nil {
+		t.Fatalf("Import after re-export: %v", err)
+	}
+	sameDatabase(t, ctx, db, restored, "a database with an imported minimal template")
 }

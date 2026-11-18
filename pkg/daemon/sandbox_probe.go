@@ -39,6 +39,12 @@ type sandboxProbeAdapter struct {
 	config    func() Config
 }
 
+// SandboxProbeAvailable is ui.SandboxProbeAvailability: only a backend
+// ProbeSandbox can build on is offered a probe in the UI.
+func (a sandboxProbeAdapter) SandboxProbeAvailable() bool {
+	return orchestrator.CanProbeSandboxes(a.sandboxes)
+}
+
 func (a sandboxProbeAdapter) ProbeSandbox(ctx context.Context, req ui.SandboxProbeRequest) (ui.SandboxProbeResult, error) {
 	deps := orchestrator.SandboxProbeDeps{Sandboxes: a.sandboxes, Meter: a.meter, PackageCache: a.cache}
 	if a.config != nil {

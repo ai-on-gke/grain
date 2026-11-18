@@ -21,3 +21,9 @@ trigger:
 overlap:
   skip: true
   group: release-train
+# Not held by `skip-when: publishing-held`: this trigger only fires when
+# Stage 1 (nightly.yml) concludes on a `v*-rc.*` tag, and promoting or
+# dropping an already-cut rc does not depend on main's newest commit
+# publishing. Under a publishing hold, scripts/release-train-task.sh runs
+# only Phase 1 (judge / release / drop) and skips cut with
+# `held=publishing (cut skipped)`.

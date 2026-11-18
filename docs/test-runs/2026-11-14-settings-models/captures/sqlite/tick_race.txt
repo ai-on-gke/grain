@@ -1,0 +1,12 @@
+14:11:30.520 daemon started 14:11:25; tick due 14:21:25
+14:21:15.546 provider now serves [a, stale], answering 15s late
+14:21:27.335 the tick asked the provider: 2026-11-15T14:21:27.21989271Z slow auth=true
+14:21:29.365 provider now serves [a, fresh]; clicking Refresh models (POST discover)
+14:21:29.367 refresh answered: {"asked":true,"error":null,"discovered":{"models":["claude-walk-a","claude-walk-fresh"],"refreshedAt":"2026-11-15T14:21:42.440227717Z"}}
+14:21:43.448 stored after both: {"models":["claude-walk-a","claude-walk-fresh"],"refreshedAt":"2026-11-15T14:21:42.440227717Z"}
+14:21:43.672 provider hits:
+2026-11-15T14:19:59.695514713Z ok auth=true
+2026-11-15T14:21:27.21989271Z slow auth=true
+2026-11-15T14:21:42.439764187Z ok auth=true
+102:2026/11/15 14:11:27 grain ui: refreshed the models 3 connection(s) discovered
+105:2026/11/15 14:21:42 grain ui: refreshed the models 1 connection(s) discovered

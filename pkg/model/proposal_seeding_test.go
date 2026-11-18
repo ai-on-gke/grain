@@ -51,7 +51,7 @@ func seedingDirector() model.Task {
 		ID:          "9",
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
-		Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Reason: model.ReasonConsoleSession},
 		Grants:      model.ConsoleSessionGrants(session),
 	}
 }

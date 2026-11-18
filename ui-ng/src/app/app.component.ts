@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, Location, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -38,8 +38,9 @@ import {
   RouterLinkActive,
   RouterOutlet,
 } from "@angular/router";
-import type { RouteKey } from "./api/generated-routes";
-import { GrainApi } from "./api/grain-api.service";
+import { type RouteKey } from "./api/generated-routes";
+import { GrainApi, routeScope } from "./api/grain-api.service";
+import { GrainEvents } from "./api/grain-events.service";
 import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
@@ -53,19 +54,31 @@ import { KeyboardService } from "./services/keyboard.service";
 import { NavConfigService } from "./services/nav-config.service";
 import { SnackbarService } from "./services/snackbar.service";
 import { TaskFeedStore } from "./services/task-feed.service";
+import { ConnectionStatus } from "./services/connection.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
 import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
-import { TipDirective } from "./shared/tip.directive";
+import {
+  effectiveDisplayTimeZone,
+  summarizeDispatchStatus,
+  type UsagePauseInput,
+} from "./shared/dispatch-status";
+import { TipDirective, dismissActiveTooltip } from "./shared/tip.directive";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.component";
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
+import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
+import { NavProgressComponent } from "./shell/nav-progress.component";
+import { resolveReloadHref, saveDataEnabled } from "./shell/route-preload";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
 // Material-style 24px outline paths, drawn for this app.
 const ICONS: Record<string, string> = {
+  // cloud_off: the daemon is not answering (the disconnected banner).
+  cloudOff:
+    "M19.35 10.04A7.49 7.49 0 0 0 12 4c-1.48 0-2.85.43-4.01 1.17l1.46 1.46A5.497 5.497 0 0 1 17.5 11.5v.5H19a3 3 0 0 1 3 3c0 1.13-.64 2.11-1.56 2.62l1.45 1.45A4.97 4.97 0 0 0 24 15c0-2.64-2.05-4.78-4.65-4.96zM3 5.27l2.75 2.74C2.56 8.15 0 10.77 0 14c0 3.31 2.69 6 6 6h11.73l2 2L21 20.73 4.27 4 3 5.27zM7.73 10l8 8H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h1.73z",
   inbox:
     "M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 12h-4a3 3 0 0 1-6 0H5V5h14v10z",
   workstreams:
@@ -80,6 +93,9 @@ const ICONS: Record<string, string> = {
   ci: "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
   processes:
     "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
+  // A repository: a bound book with a ribbon (the repo glyph).
+  repos:
+    "M6 2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4v2l-2-1.5L10 22v-2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 2v10.17A3 3 0 0 1 7 14h11V4H6zm1 12a1 1 0 0 0 0 2h3v-2H7zm7 0v2h4v-2h-4zM8 6h2v2H8zm0 4h2v2H8z",
   telemetry: "M4 19h16v2H4zM6 10h3v7H6zm5-5h3v12h-3zm5 8h3v4h-3z",
   context:
     "M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z",
@@ -122,6 +138,7 @@ type CreateItem =
       gate?: RouteKey;
       route: string;
       query?: Record<string, unknown>;
+      mergeQueryOnSameRoute?: boolean;
     }
   | {
       kind: "href";
@@ -153,7 +170,9 @@ export class DeferErrorDirective implements OnInit {
     DeferErrorDirective,
     SnackbarComponent,
     NewTaskSheetComponent,
+    NavProgressComponent,
     NextUpComponent,
+    DispatchBannerComponent,
     HelpDialogComponent,
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
@@ -166,6 +185,35 @@ export class DeferErrorDirective implements OnInit {
     "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
+    <g-nav-progress />
+    @if (installNotice(); as notice) {
+      <div
+        class="install-banner"
+        role="status"
+        data-testid="install-notice-banner"
+      >
+        <span
+          >{{ notice.text }}
+          @if (notice.docsUrl) {
+            <a
+              [href]="notice.docsUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="install-notice-docs"
+              >Migration docs</a
+            >
+          }
+        </span>
+      </div>
+    }
+    @if (disconnectedText(); as text) {
+      <div class="conn-banner" role="status" data-testid="disconnected-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+          <path [attr.d]="icons['cloudOff']" fill="currentColor" />
+        </svg>
+        <span>{{ text }}</span>
+      </div>
+    }
     <div class="app-shell">
       <nav
         class="nav-rail"
@@ -303,12 +351,20 @@ export class DeferErrorDirective implements OnInit {
                 <path [attr.d]="icons['more']" fill="currentColor" />
               </svg>
               @if (navConfig.hiddenDestinations().length > 0) {
-                <span class="rail-badge" data-testid="rail-hidden-count">{{
-                  navConfig.hiddenDestinations().length
-                }}</span>
+                <span
+                  class="rail-badge"
+                  data-testid="rail-hidden-count"
+                  aria-hidden="true"
+                  >{{ navConfig.hiddenDestinations().length }}</span
+                >
               }
             </span>
             <span class="rail-label">More</span>
+            @if (navConfig.hiddenDestinations().length > 0) {
+              <span class="sr-only"
+                >({{ navConfig.hiddenDestinations().length }} hidden)</span
+              >
+            }
           </button>
 
           @if (railMoreOpen()) {
@@ -425,12 +481,20 @@ export class DeferErrorDirective implements OnInit {
                 <path [attr.d]="icons[d.icon]" fill="currentColor" />
               </svg>
               @if (d.id === "inbox" && inboxCount() > 0) {
-                <span class="rail-badge" data-testid="rail-inbox-count">{{
-                  inboxCount()
-                }}</span>
+                <span
+                  class="rail-badge"
+                  data-testid="rail-inbox-count"
+                  aria-hidden="true"
+                  >{{ inboxCount() }}</span
+                >
               }
             </span>
             <span class="rail-label">{{ d.label }}</span>
+            <!-- The badge is drawn, not read: its number would run into
+                 the label ("13Inbox"), so the link's name says it here. -->
+            @if (d.id === "inbox" && inboxCount() > 0) {
+              <span class="sr-only">({{ inboxCount() }} waiting)</span>
+            }
           </a>
         } @else {
           <a
@@ -486,20 +550,31 @@ export class DeferErrorDirective implements OnInit {
           <g-next-up />
           <a
             class="live-pill tabular"
-            [class.is-idle]="feed.runningCount() === 0"
+            [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
+            [class.is-paused-warn]="dispatchBanner()?.tone === 'warn'"
+            [class.is-paused-error]="dispatchBanner()?.tone === 'error'"
             routerLink="/agents"
             data-testid="live-pill"
             [gTip]="livePillTip()"
           >
             <span
               class="live-dot"
-              [class.is-idle]="feed.runningCount() === 0"
+              [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
               aria-hidden="true"
             ></span>
-            <span class="live-pill-text"
-              >{{ feed.runningCount() }}
-              {{ feed.runningCount() === 1 ? "agent" : "agents" }} running</span
-            >
+            @if (dispatchBanner(); as db) {
+              <span class="live-pill-text">{{
+                feed.runningCount() > 0
+                  ? feed.runningCount() + " running · " + db.shortLabel
+                  : db.shortLabel
+              }}</span>
+            } @else {
+              <span class="live-pill-text"
+                >{{ feed.runningCount() }}
+                {{ feed.runningCount() === 1 ? "agent" : "agents" }}
+                running</span
+              >
+            }
           </a>
           <button
             #directorBtn
@@ -528,7 +603,12 @@ export class DeferErrorDirective implements OnInit {
               <span class="live-dot" aria-hidden="true"></span>
             }
           </button>
-          <label class="search-box">
+          <form
+            class="search-box"
+            role="search"
+            autocomplete="off"
+            (submit)="$event.preventDefault()"
+          >
             <span class="search-icon" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 24 24">
                 <path [attr.d]="icons['search']" fill="currentColor" />
@@ -538,6 +618,12 @@ export class DeferErrorDirective implements OnInit {
               #searchInput
               class="search-input"
               type="search"
+              name="grain-view-filter"
+              autocomplete="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
               placeholder="Filter this view"
               aria-label="Filter this view"
               data-testid="view-filter"
@@ -552,7 +638,7 @@ export class DeferErrorDirective implements OnInit {
                 >/</span
               >
             }
-          </label>
+          </form>
           <button
             type="button"
             class="icon-btn"
@@ -610,6 +696,11 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
+          @defer (when dispatchBanner()) {
+            @if (dispatchBanner(); as db) {
+              <g-dispatch-banner [banner]="db" />
+            }
+          }
           <router-outlet />
         </main>
         @defer (when directorCtx.isOpen()) {
@@ -846,6 +937,7 @@ export class DeferErrorDirective implements OnInit {
             [class]="cls"
             [routerLink]="item.route"
             [queryParams]="item.query"
+            [queryParamsHandling]="queryHandlingFor(item)"
             [gTip]="item.tip"
             gTipPlacement="right"
             (click)="closeMenus()"
@@ -875,7 +967,7 @@ export class DeferErrorDirective implements OnInit {
       </ng-template>
 
       <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-      @defer (when createTask.isOpen(); prefetch on idle) {
+      @defer (when createTask.isOpen(); prefetch when idlePrefetch()) {
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
@@ -925,6 +1017,42 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly access = inject(AccessService);
   protected readonly filter = inject(ViewFilter);
   protected readonly feed = inject(TaskFeedStore);
+  private readonly connection = inject(ConnectionStatus);
+
+  // The standing banner for an install only its operator can fix (GET
+  // /api/config's installNotice, classic InstallNoticeBanner): what is
+  // wrong, the CLIs that cannot run until then, and where the migration
+  // is written up. It has no close button, since nothing changes until
+  // the install is migrated and the daemon restarted.
+  protected readonly installNotice = computed(() => {
+    const n = this.access.rawConfig()?.installNotice;
+    if (!n?.message) return null;
+    const clis = (n.affectedClis ?? []).map((c) => c.split(":")[0]);
+    const text =
+      `${n.message[0].toUpperCase()}${n.message.slice(1)}.` +
+      (clis.length ? ` Cannot run until then: ${clis.join(", ")}.` : "");
+    return { text, docsUrl: n.docsUrl ?? "" };
+  });
+
+  // The standing banner for a daemon that is not answering at all
+  // (ConnectionStatus): when it stopped, in the deployment's time zone,
+  // and that the page keeps retrying and recovers on its own.
+  protected readonly disconnectedText = computed(() => {
+    const d = this.connection.disconnection();
+    if (!d) return "";
+    let at = "";
+    try {
+      at = new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZone: effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+      }).format(new Date(d.since));
+    } catch {
+      at = "";
+    }
+    return `${d.reason} Unreachable${at ? ` since ${at}` : ""} — retrying automatically; this page will pick back up on its own once it answers again.`;
+  });
   protected readonly navConfig = inject(NavConfigService);
   protected readonly help = inject(HelpService);
   protected readonly keyboard = inject(KeyboardService);
@@ -934,10 +1062,14 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly sessionsRef = signal<SessionsStore | null>(null);
   private destroyed = false;
   private readonly api = inject(GrainApi);
+  private readonly events = inject(GrainEvents);
   private readonly router = inject(Router);
+  private readonly location = inject(Location);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  protected readonly idlePrefetch = signal(false);
+  private cancelIdlePrefetch: (() => void) | null = null;
 
   protected readonly icons = ICONS;
   protected readonly rosettePath = CHLADNI_ROSETTE_PATH;
@@ -963,6 +1095,24 @@ export class AppComponent implements OnInit, OnDestroy {
       testid: "create-start-workstream",
       tip: "State a goal; an agent plans it and proposes tasks into one stream.",
       prefill: { workstream: true, origin: "" },
+    },
+    {
+      kind: "task",
+      icon: "agents",
+      label: "Prototype a goal",
+      sub: "Hammer through autonomously — logs assumptions, verifies deliverables, opens a PR",
+      gate: "POST /api/tasks",
+      testid: "create-prototype-goal",
+      tip: "Run autonomously across bounded passes without stopping for questions.",
+      prefill: {
+        goalMode: {
+          enabled: true,
+          maxPasses: 8,
+          wallClockMinutes: 120,
+          mockMissingSecrets: true,
+        },
+        autoApproveProposals: true,
+      },
     },
     {
       kind: "route",
@@ -1012,6 +1162,7 @@ export class AppComponent implements OnInit, OnDestroy {
       gate: "POST /api/boards",
       route: "/tasks",
       query: { newBoard: 1 },
+      mergeQueryOnSameRoute: true,
       tip: "Save a filtered view of tasks as a reusable board.",
     },
   ];
@@ -1023,6 +1174,7 @@ export class AppComponent implements OnInit, OnDestroy {
       this.access.can("POST /api/tasks/from-template"),
   );
   protected readonly onSessions = signal(false);
+  protected readonly currentPath = signal("");
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
     () => this.inboxRef()?.decisions().length ?? 0,
@@ -1054,11 +1206,24 @@ export class AppComponent implements OnInit, OnDestroy {
       !this.spriteFailed(),
   );
 
+  protected readonly dispatchBanner = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
+
   protected readonly livePillTip = computed(() => {
     const n = this.feed.runningCount();
-    return n > 0
-      ? `${n} active agent ${n === 1 ? "run" : "runs"}. Open Live Agents.`
-      : "No agents running right now. Open Live Agents.";
+    const base =
+      n > 0
+        ? `${n} active agent ${n === 1 ? "run" : "runs"}. Open Live Agents.`
+        : "No agents running right now. Open Live Agents.";
+    const db = this.dispatchBanner();
+    return db
+      ? `${base} · ${db.headline}${db.resetText ? ` (${db.resetText})` : ""}`
+      : base;
   });
 
   protected readonly avatarTip = computed(() => {
@@ -1091,6 +1256,19 @@ export class AppComponent implements OnInit, OnDestroy {
 
   private unregister: (() => void)[] = [];
   private navSub: { unsubscribe(): void } | null = null;
+  private dispatchEventSub: { unsubscribe(): void } | null = null;
+  private dispatchPollTimer: ReturnType<typeof setInterval> | null = null;
+  private dispatchTickTimer: ReturnType<typeof setInterval> | null = null;
+  private lastConfigAt = 0;
+  private lastUsageAt = 0;
+  private dispatchReading = false;
+  private spriteProbed = false;
+  private readonly onVisibilityChange = (): void => {
+    if (this.doc.visibilityState === "visible") {
+      this.access.tickClock();
+      void this.refreshDispatchStatus(Date.now() - this.lastUsageAt >= 10_000);
+    }
+  };
   private motionMql: MediaQueryList | null = null;
   private readonly onMotionChange = (e: MediaQueryListEvent): void => {
     this.zone.run(() => this.prefersReducedMotion.set(e.matches));
@@ -1113,7 +1291,19 @@ export class AppComponent implements OnInit, OnDestroy {
       this.prefersReducedMotion.set(this.motionMql.matches);
       this.motionMql.addEventListener?.("change", this.onMotionChange);
     }
-    this.probeBrandSprite();
+    effect(
+      () => {
+        if (
+          this.feed.runningCount() > 0 &&
+          !this.prefersReducedMotion() &&
+          !this.spriteProbed
+        ) {
+          this.spriteProbed = true;
+          this.probeBrandSprite();
+        }
+      },
+      { injector: this.injector },
+    );
 
     if (!this.access.configLoaded() && typeof this.api.config === "function") {
       void this.api
@@ -1188,7 +1378,7 @@ export class AppComponent implements OnInit, OnDestroy {
       runInInjectionContext(this.injector, () => {
         const s = inject(InboxStore);
         this.inboxRef.set(s);
-        s.start();
+        s.start(true);
       });
     });
 
@@ -1200,27 +1390,98 @@ export class AppComponent implements OnInit, OnDestroy {
       });
     });
 
+    this.currentPath.set(this.router.url.split(/[?#]/, 1)[0]);
     this.directorCtx.setRoute(this.router.url);
+    void this.refreshDispatchStatus(true);
+    this.dispatchEventSub = this.events.events().subscribe(() => {
+      if (Date.now() - this.lastConfigAt >= 10_000) {
+        void this.refreshDispatchStatus(true);
+      }
+    });
     this.navSub = this.router.events.subscribe((e) => {
       if (e instanceof NavigationStart) {
+        dismissActiveTooltip();
         this.closeMenus();
         this.accountOpen.set(false);
       }
       if (e instanceof NavigationEnd) {
         const url = e.urlAfterRedirects;
+        this.currentPath.set(url.split(/[?#]/, 1)[0]);
         this.directorCtx.setRoute(url);
         this.onSessions.set(
           url.startsWith("/sessions") || url.startsWith("/task/"),
         );
+        if (Date.now() - this.lastConfigAt >= 5_000) {
+          void this.refreshDispatchStatus(false);
+        }
       }
     });
 
     this.zone.runOutsideAngular(() => {
+      if (!saveDataEnabled()) {
+        const w = this.doc.defaultView as
+          | (Window & {
+              requestIdleCallback?: (cb: () => void) => number;
+              cancelIdleCallback?: (id: number) => void;
+            })
+          | null;
+        const fire = () => {
+          this.cancelIdlePrefetch = null;
+          if (!this.destroyed) {
+            this.zone.run(() => this.idlePrefetch.set(true));
+          }
+        };
+        if (w && typeof w.requestIdleCallback === "function") {
+          const id = w.requestIdleCallback(fire);
+          this.cancelIdlePrefetch = () => w.cancelIdleCallback?.(id);
+        } else {
+          const t = setTimeout(fire, 1);
+          this.cancelIdlePrefetch = () => clearTimeout(t);
+        }
+      }
+      this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
+      this.dispatchPollTimer = setInterval(() => {
+        if (this.doc.visibilityState !== "hidden") {
+          this.zone.run(() => void this.refreshDispatchStatus(false));
+        }
+      }, 60_000);
+      this.dispatchTickTimer = setInterval(() => {
+        if (this.doc.visibilityState !== "hidden" && this.dispatchBanner()) {
+          this.zone.run(() => this.access.tickClock());
+        }
+      }, 30_000);
       this.doc.defaultView?.addEventListener("resize", this.onViewportChange);
       this.doc
         .querySelector(".nav-rail")
         ?.addEventListener("scroll", this.onViewportChange);
     });
+  }
+
+  private async refreshDispatchStatus(forceUsage: boolean): Promise<void> {
+    if (this.destroyed || this.dispatchReading) return;
+    this.dispatchReading = true;
+    const now = Date.now();
+    this.lastConfigAt = now;
+    try {
+      const cfg = await this.api.config().catch(() => null);
+      if (cfg) this.access.setConfig(cfg);
+      if (
+        (forceUsage || now - this.lastUsageAt >= 60_000) &&
+        typeof this.api.get === "function" &&
+        this.access.canGlobalScope(routeScope("GET /api/usage"))
+      ) {
+        this.lastUsageAt = now;
+        const usage = await this.api
+          .get<UsagePauseInput>("GET /api/usage")
+          .catch(() => null);
+        if (usage && ("warnings" in usage || "scopes" in usage)) {
+          this.access.setUsage(usage);
+        }
+      }
+      this.access.tickClock();
+    } finally {
+      this.dispatchReading = false;
+    }
   }
 
   ngOnDestroy(): void {
@@ -1230,6 +1491,12 @@ export class AppComponent implements OnInit, OnDestroy {
     this.inboxRef()?.stop();
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
+    this.dispatchEventSub?.unsubscribe();
+    this.cancelIdlePrefetch?.();
+    this.cancelIdlePrefetch = null;
+    if (this.dispatchPollTimer) clearInterval(this.dispatchPollTimer);
+    if (this.dispatchTickTimer) clearInterval(this.dispatchTickTimer);
+    this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.motionMql?.removeEventListener?.("change", this.onMotionChange);
     this.doc.defaultView?.removeEventListener("resize", this.onViewportChange);
     this.doc
@@ -1313,13 +1580,29 @@ export class AppComponent implements OnInit, OnDestroy {
     this.directorCtx.toggle(this.activeOpener());
   }
 
+  // Exposed as a method so specs can spy on full-page navigation in jsdom.
+  navigateTo(url?: string): void {
+    const loc = this.doc.defaultView?.location;
+    if (!loc) return;
+    if (url) loc.assign(url);
+    else loc.reload();
+  }
+
+  reloadApp(dest?: string): void {
+    const href = resolveReloadHref(this.location, dest);
+    if (href) this.navigateTo(href);
+    else this.navigateTo();
+  }
+
   protected onDeferError(
     which: "create" | "help" | "account" | "customize" | "director",
   ): void {
+    const action = { label: "Reload", run: () => this.reloadApp() };
     if (which === "director") {
       this.directorCtx.close(false);
       this.snackbar.show(
         "The Director drawer could not load. Reload the page and try again.",
+        action,
       );
       return;
     }
@@ -1327,19 +1610,25 @@ export class AppComponent implements OnInit, OnDestroy {
       this.createTask.close();
       this.snackbar.show(
         "The New task form could not load. Reload the page and try again.",
+        action,
       );
     } else if (which === "help") {
       this.help.close();
-      this.snackbar.show("Help could not load. Reload the page and try again.");
+      this.snackbar.show(
+        "Help could not load. Reload the page and try again.",
+        action,
+      );
     } else if (which === "account") {
       this.onAccountClosed(true);
       this.snackbar.show(
         "Account menu could not load. Reload the page and try again.",
+        action,
       );
     } else {
       this.onCustomizeNavClosed();
       this.snackbar.show(
         "Navigation settings could not load. Reload the page and try again.",
+        action,
       );
     }
   }
@@ -1371,7 +1660,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   open(d: Destination): void {
-    if (d.route) void this.router.navigateByUrl(d.route);
+    if (d.route) void this.router.navigateByUrl(d.route).catch(() => undefined);
     else if (d.classic) this.doc.defaultView?.location.assign(d.classic);
   }
 
@@ -1422,6 +1711,14 @@ export class AppComponent implements OnInit, OnDestroy {
         applyTop(Math.max(12, Math.round(winH - rect.height - 12)));
       }
     });
+  }
+
+  protected queryHandlingFor(
+    item: Extract<CreateItem, { kind: "route" }>,
+  ): "merge" | "" {
+    return item.mergeQueryOnSameRoute && this.currentPath() === item.route
+      ? "merge"
+      : "";
   }
 
   protected toggleMore(ev: Event): void {

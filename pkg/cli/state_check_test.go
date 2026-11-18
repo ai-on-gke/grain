@@ -45,7 +45,7 @@ func exportedState(t *testing.T) string {
 	defer db.Close()
 	if err := store.PutTask(ctx, model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "Rename the endpoint",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}},
 			Reason:      model.ReasonDirect,
 		},

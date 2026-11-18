@@ -15,8 +15,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -26,6 +27,7 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { formatStamp } from "../shared/dispatch-status";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -109,7 +111,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                 operators out.
               </p>
             </div>
-            <span class="status-pill neutral tabular"
+            <span class="status-pill neutral s-mono"
               >Your role: {{ access.roleLabel() || "operator" }}</span
             >
           </div>
@@ -126,14 +128,21 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                     <tr>
                       <th>Principal</th>
                       <th>Role</th>
-                      <th>Actions</th>
+                      <th class="s-actions-cell">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     @for (p of principals(); track p.entry) {
                       <tr [attr.data-testid]="'principal-row-' + p.entry">
-                        <td class="tabular">
-                          {{ p.entry }}{{ p.label ? " (" + p.label + ")" : "" }}
+                        <td>
+                          <div class="s-cell-stack">
+                            <span class="s-cell-title">{{
+                              p.label || p.entry
+                            }}</span>
+                            @if (p.label) {
+                              <span class="s-meta-mono">{{ p.entry }}</span>
+                            }
+                          </div>
                         </td>
                         <td>
                           <g-pill-select
@@ -150,20 +159,22 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                             (valueChange)="updatePrincipalRole(p.entry, $event)"
                           />
                         </td>
-                        <td>
-                          <button
-                            type="button"
-                            class="btn-text s-btn-sm"
-                            [attr.data-testid]="'remove-principal-' + p.entry"
-                            [disabled]="
-                              !access.can(
-                                'DELETE /api/access/principals/{entry}'
-                              )
-                            "
-                            (click)="removePrincipal(p.entry)"
-                          >
-                            Remove
-                          </button>
+                        <td class="s-actions-cell">
+                          <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [attr.data-testid]="'remove-principal-' + p.entry"
+                              [disabled]="
+                                !access.can(
+                                  'DELETE /api/access/principals/{entry}'
+                                )
+                              "
+                              (click)="removePrincipal(p.entry)"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     }
@@ -172,67 +183,72 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               </div>
             }
 
-            <div class="s-grid">
-              <div class="s-field">
-                <label class="s-label" for="pr-entry"
-                  >Email, group, or subject</label
-                >
-                <input
-                  id="pr-entry"
-                  class="s-input tabular"
-                  type="text"
-                  data-testid="input-principal-entry"
-                  placeholder="alice@example.com"
-                  [value]="newPrincipalEntry()"
-                  [disabled]="!access.can('POST /api/access/principals')"
-                  (input)="newPrincipalEntry.set($any($event.target).value)"
-                />
+            <div class="s-subsection">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">Grant access</h4>
               </div>
-              <div class="s-field">
-                <span class="s-label">Role</span>
-                <g-pill-select
-                  testid="select-new-principal-role"
-                  ariaLabel="New principal role"
-                  align="left"
-                  [options]="roleOptions()"
-                  [value]="newPrincipalRole()"
-                  [disabled]="!access.can('POST /api/access/principals')"
-                  (valueChange)="newPrincipalRole.set($event)"
-                />
+              <div class="s-grid">
+                <div class="s-field">
+                  <label class="s-label" for="pr-entry"
+                    >Email, group, or subject</label
+                  >
+                  <input
+                    id="pr-entry"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-principal-entry"
+                    placeholder="alice@example.com"
+                    [value]="newPrincipalEntry()"
+                    [disabled]="!access.can('POST /api/access/principals')"
+                    (input)="newPrincipalEntry.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <span class="s-label">Role</span>
+                  <g-pill-select
+                    testid="select-new-principal-role"
+                    ariaLabel="New principal role"
+                    align="left"
+                    [options]="roleOptions()"
+                    [value]="newPrincipalRole()"
+                    [disabled]="!access.can('POST /api/access/principals')"
+                    (valueChange)="newPrincipalRole.set($event)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="pr-reason"
+                    >Reason (audit — required for operator/veto changes)</label
+                  >
+                  <input
+                    id="pr-reason"
+                    class="s-input"
+                    type="text"
+                    data-testid="input-principal-reason"
+                    placeholder="Onboard or update team member"
+                    [value]="newPrincipalReason()"
+                    [disabled]="
+                      !access.can('POST /api/access/principals') &&
+                      !access.can('PATCH /api/access/principals/{entry}') &&
+                      !access.can('DELETE /api/access/principals/{entry}')
+                    "
+                    (input)="newPrincipalReason.set($any($event.target).value)"
+                  />
+                </div>
               </div>
-              <div class="s-field">
-                <label class="s-label" for="pr-reason"
-                  >Reason (audit — required for operator/veto changes)</label
-                >
-                <input
-                  id="pr-reason"
-                  class="s-input"
-                  type="text"
-                  data-testid="input-principal-reason"
-                  placeholder="Onboard or update team member"
-                  [value]="newPrincipalReason()"
+              <div class="s-inline">
+                <button
+                  type="button"
+                  class="btn-primary"
+                  data-testid="add-principal-btn"
                   [disabled]="
-                    !access.can('POST /api/access/principals') &&
-                    !access.can('PATCH /api/access/principals/{entry}') &&
-                    !access.can('DELETE /api/access/principals/{entry}')
+                    !newPrincipalEntry().trim() ||
+                    !access.can('POST /api/access/principals')
                   "
-                  (input)="newPrincipalReason.set($any($event.target).value)"
-                />
+                  (click)="addPrincipal()"
+                >
+                  Grant access
+                </button>
               </div>
-            </div>
-            <div class="s-inline">
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="add-principal-btn"
-                [disabled]="
-                  !newPrincipalEntry().trim() ||
-                  !access.can('POST /api/access/principals')
-                "
-                (click)="addPrincipal()"
-              >
-                Grant access
-              </button>
             </div>
           }
         </div>
@@ -288,7 +304,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
 
           @if (mintedTokenSecret(); as secret) {
             <div class="s-banner ok" data-testid="minted-gma-token">
-              <span class="tabular"
+              <span
                 >Copy token now (shown once):
                 <strong>{{ secret }}</strong></span
               >
@@ -310,15 +326,15 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                     <th>Name</th>
                     <th>Scope set</th>
                     <th>State</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (tok of tokens(); track tok.id) {
                     @let tokState = tokenStatus(tok);
                     <tr [attr.data-testid]="'gma-token-row-' + tok.id">
-                      <td class="tabular">{{ tok.name }}</td>
-                      <td class="tabular">{{ tok.scopeSet || "custom" }}</td>
+                      <td class="s-mono">{{ tok.name }}</td>
+                      <td>{{ tok.scopeSet || "custom" }}</td>
                       <td>
                         <span
                           [class]="
@@ -334,8 +350,8 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                           {{ tokState }}
                         </span>
                       </td>
-                      <td>
-                        <div class="s-inline">
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           <button
                             type="button"
                             class="btn-tonal s-btn-sm"
@@ -383,49 +399,54 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
             </div>
           }
 
-          <div class="s-grid">
-            <div class="s-field">
-              <label class="s-label" for="tk-name">Token name</label>
-              <input
-                id="tk-name"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-gma-token-name"
-                placeholder="ci-bot"
-                [value]="newTokenName()"
-                [disabled]="!access.can('POST /api/external-agents/tokens')"
-                (input)="newTokenName.set($any($event.target).value)"
-              />
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Mint external agent token</h4>
             </div>
-            <div class="s-field">
-              <label class="s-label" for="tk-scopes"
-                >Scopes (comma-separated)</label
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="tk-name">Token name</label>
+                <input
+                  id="tk-name"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-gma-token-name"
+                  placeholder="ci-bot"
+                  [value]="newTokenName()"
+                  [disabled]="!access.can('POST /api/external-agents/tokens')"
+                  (input)="newTokenName.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="tk-scopes"
+                  >Scopes (comma-separated)</label
+                >
+                <input
+                  id="tk-scopes"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-gma-token-scopes"
+                  placeholder="tasks:read,tasks:write"
+                  [value]="newTokenScopes()"
+                  [disabled]="!access.can('POST /api/external-agents/tokens')"
+                  (input)="newTokenScopes.set($any($event.target).value)"
+                />
+              </div>
+            </div>
+            <div class="s-inline">
+              <button
+                type="button"
+                class="btn-tonal"
+                data-testid="mint-gma-token-btn"
+                [disabled]="
+                  !newTokenName().trim() ||
+                  !access.can('POST /api/external-agents/tokens')
+                "
+                (click)="mintToken()"
               >
-              <input
-                id="tk-scopes"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-gma-token-scopes"
-                placeholder="tasks:read,tasks:write"
-                [value]="newTokenScopes()"
-                [disabled]="!access.can('POST /api/external-agents/tokens')"
-                (input)="newTokenScopes.set($any($event.target).value)"
-              />
+                Mint gma_ token
+              </button>
             </div>
-          </div>
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="mint-gma-token-btn"
-              [disabled]="
-                !newTokenName().trim() ||
-                !access.can('POST /api/external-agents/tokens')
-              "
-              (click)="mintToken()"
-            >
-              Mint gma_ token
-            </button>
           </div>
         </div>
 
@@ -438,7 +459,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               >
               <input
                 id="gcp-proj"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-default-gcp-project"
                 [value]="state.val('gcpProject', '')"
@@ -454,7 +475,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               >
               <input
                 id="gcp-sa"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-default-gcp-sa"
                 [value]="state.val('gcpServiceAccountEmail', '')"
@@ -472,7 +493,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
             <div class="s-inline">
               @for (gk of gcpKeys(); track gk.name) {
                 <span
-                  class="status-pill neutral tabular"
+                  class="status-pill neutral s-mono"
                   [attr.data-testid]="'gcp-key-pill-' + gk.name"
                 >
                   {{ gk.name }}{{ gk.projectId ? " · " + gk.projectId : "" }}
@@ -496,7 +517,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               <label class="s-label" for="gcp-kname">Key alias</label>
               <input
                 id="gcp-kname"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-gcp-key-name"
                 placeholder="vertex-runner"
@@ -509,7 +530,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               <label class="s-label" for="gcp-kproj">Project ID</label>
               <input
                 id="gcp-kproj"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-gcp-key-project"
                 placeholder="my-gcp-project"
@@ -522,7 +543,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               <label class="s-label" for="gcp-ksa">Service account email</label>
               <input
                 id="gcp-ksa"
-                class="s-input tabular"
+                class="s-input"
                 type="email"
                 data-testid="input-gcp-key-sa"
                 placeholder="runner@my-gcp-project.iam.gserviceaccount.com"
@@ -537,7 +558,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               >
               <input
                 id="gcp-kcnt"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 data-testid="input-gcp-key-count"
@@ -552,7 +573,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               >
               <input
                 id="gcp-kage"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="text"
                 data-testid="input-gcp-key-max-age"
                 placeholder="24h"
@@ -567,7 +588,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               >
               <input
                 id="gcp-kminter"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-gcp-key-minter"
                 placeholder="gcp-minter"
@@ -616,10 +637,21 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
             </button>
           </div>
 
-          <div class="s-inline">
+          <form
+            class="s-inline"
+            role="search"
+            autocomplete="off"
+            (submit)="$event.preventDefault()"
+          >
             <input
               class="s-input s-input-inline"
               type="search"
+              name="grain-audit-filter"
+              autocomplete="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
               aria-label="Filter by actor or action"
               data-testid="audit-actor-filter"
               placeholder="Filter actor or action…"
@@ -642,7 +674,7 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
               [value]="auditTimeFilter()"
               (valueChange)="auditTimeFilter.set($event)"
             />
-          </div>
+          </form>
 
           @if (filteredAuditEvents().length === 0) {
             <p class="s-card-desc" data-testid="audit-empty">
@@ -663,12 +695,14 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                 <tbody>
                   @for (ev of filteredAuditEvents(); track ev.id) {
                     <tr data-testid="audit-row">
-                      <td class="tabular">{{ ev.at }}</td>
+                      <td class="s-num">
+                        <time [attr.datetime]="ev.at">{{ stamp(ev.at) }}</time>
+                      </td>
                       <td>
                         <span class="status-pill neutral">{{ ev.kind }}</span>
                       </td>
-                      <td class="tabular">{{ ev.actor }}</td>
-                      <td class="tabular">{{ ev.action }}</td>
+                      <td class="s-mono">{{ ev.actor }}</td>
+                      <td class="s-mono">{{ ev.action }}</td>
                       <td>{{ ev.detail }}</td>
                     </tr>
                   }
@@ -730,6 +764,13 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly newGcpKeyMinter = signal("");
 
   protected readonly auditEvents = signal<AuditEventRow[]>([]);
+
+  // stamp is an audit entry's time in the display time zone, read again
+  // on every clock tick so a Preferences change shows at once.
+  protected stamp(at: string): string {
+    this.access.clockNow();
+    return formatStamp(at, this.state.config()?.timeZone);
+  }
   protected readonly auditFilterText = signal("");
   protected readonly auditKindFilter = signal("all");
   protected readonly auditTimeFilter = signal("all");
@@ -762,8 +803,10 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -821,6 +864,15 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
                 label: r.description ? `${r.name} — ${r.description}` : r.name,
               })),
             );
+            // The Grant access picker starts on a role this deployment
+            // has -- the read-only one when it can -- rather than a
+            // built-in name the server would refuse.
+            const names = p.roles.map((r) => r.name);
+            if (!names.includes(this.newPrincipalRole())) {
+              this.newPrincipalRole.set(
+                names.includes("grain/viewer") ? "grain/viewer" : names[0],
+              );
+            }
           }
         }
       } catch {
@@ -869,9 +921,22 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     }
   }
 
+  // isSelfPrincipal is whether entry names the signed-in person: the
+  // allowlist writes people as "user:<email>", so the prefixes are
+  // dropped before comparing.
   private isSelfPrincipal(entry: string): boolean {
-    const viewer = this.access.viewer().trim().toLowerCase();
-    return Boolean(viewer && entry.trim().toLowerCase() === viewer);
+    // The viewer can also carry how they signed in
+    // ("access-code:alice@example.com", GET /api/whoami).
+    const viewer = this.access
+      .viewer()
+      .trim()
+      .toLowerCase()
+      .replace(/^(access-code|user):/, "");
+    const who = entry
+      .trim()
+      .toLowerCase()
+      .replace(/^user:/, "");
+    return Boolean(viewer && who === viewer);
   }
 
   private isSelfConfirmRefusal(err: unknown): boolean {
@@ -942,12 +1007,28 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     });
   }
 
+  // removePrincipal always asks first: removing an entry takes access
+  // away from whoever it names, at once. Removing your own entry, or the
+  // last one, says so in the question.
   protected async removePrincipal(entry: string): Promise<void> {
     const reason = this.newPrincipalReason().trim();
     if (this.isSelfPrincipal(entry)) {
       this.promptSelfRemoveConfirm(entry, reason);
       return;
     }
+    const last = this.principals().length <= 1;
+    this.confirmRequest.set({
+      title: `Remove ${entry}?`,
+      message: last
+        ? `"${entry}" is the last allowed entry. Removing it leaves only the access code able to sign in.`
+        : `Removing "${entry}" revokes its access to this deployment immediately.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.deletePrincipal(entry, reason),
+    });
+  }
+
+  private async deletePrincipal(entry: string, reason: string): Promise<void> {
     const q = reason ? `reason=${encodeURIComponent(reason)}` : undefined;
     try {
       await this.api.delete(
