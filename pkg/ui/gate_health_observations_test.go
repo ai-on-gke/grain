@@ -49,6 +49,15 @@ func TestHealthGateAPIPermissionsAndProjection(t *testing.T) {
 	must(c.Store.PutBaseBranchCI(ctx, row))
 	must(c.Store.RecordGateBaseSource(ctx, repo, "main", model.GateBaseSource{PlanRevision: "test-plan", ConfirmationRevision: "test-recheck", RowRevision: model.GateBaseRowRevision(row), PolicyRevision: model.GateHealthPolicyRevision(&cfg), Tip: row.Commit, Complete: true, ManagedRefs: []string{"main"}, At: now}))
 	c.Config.GateObservationTaskIDs = []string{"health-api"}
+	// A repair task can also own a PR. Its health projection must not invoke
+	// the merged change-CI collector or acquire unrelated change obligations.
+	must(c.Store.UpdateTask(ctx, "health-api", func(task *model.Task) error {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkFixes, Target: repo.String() + "#7"})
+		return nil
+	}))
+	forge := newShadowForge()
+	forge.onChecks = func() { t.Error("health goal triggered an unrelated change-CI read") }
+	c.Config.GitHubPullRequests = forge
 	decode := func(code int, body string) ui.TaskDetail {
 		t.Helper()
 		if code != 200 {
@@ -60,6 +69,9 @@ func TestHealthGateAPIPermissionsAndProjection(t *testing.T) {
 		}
 		if d.GateObservations == nil || len(d.GateObservations.Results) != 4 {
 			t.Fatalf("missing health projection: %s", body)
+		}
+		if forge.readHead != "" {
+			t.Fatal("health projection collected change-CI evidence")
 		}
 		return d
 	}

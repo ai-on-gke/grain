@@ -44,13 +44,16 @@ var publishingHealthSchema []byte
 //go:embed pipeline_health.schema.json
 var pipelineHealthSchema []byte
 
+//go:embed checks.schema.json
+var checksSchema []byte
+
 //go:embed review.schema.json
 var reviewSchema []byte
 
 //go:embed approval.schema.json
 var approvalSchema []byte
 
-const Implementation = "builtin-task-observer-v4"
+const Implementation = "builtin-task-observer-v6"
 
 type Descriptor struct {
 	Type           string
@@ -62,7 +65,7 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return append(healthDescriptors(), []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}}...)
+	return append(healthDescriptors(), []Descriptor{{"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}}...)
 }
 
 // Validate admits closed canonical profiles supported by these pure observers.
@@ -75,6 +78,8 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	}
 	var allowedKeys map[string]bool
 	switch typ {
+	case "checks":
+		allowedKeys = map[string]bool{"mode": true, "extra_jobs": true, "empty": true, "semantics": true}
 	case "delivery":
 		allowedKeys = map[string]bool{"product": true, "semantics": true}
 	case "review":
@@ -140,6 +145,11 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	}
 	validID := func(s string) bool { return strings.TrimSpace(s) != "" && utf8.RuneCountInString(s) <= 256 }
 	switch typ {
+	case "checks":
+		if len(keys) != 4 {
+			return nil, fmt.Errorf("checks config requires all canonical fields")
+		}
+		return validateChecks(raw)
 	case "review":
 		c := ReviewConfig{}
 		if err := decode(&c); err != nil {
@@ -197,6 +207,7 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 type Facts struct {
 	Bindings           []Binding
 	Health             map[string]HealthFacts
+	Checks             []ChecksFacts
 	Change             *ChangeFacts
 	IncompleteReason   string
 	TaskID             string
@@ -222,11 +233,27 @@ func Bindings(taskID string) []Binding {
 	}
 }
 
+func BindingsFor(taskID string, checks []ChecksFacts) []Binding {
+	out := Bindings(taskID)
+	for _, f := range checks {
+		out = append(out, ChecksBinding(f, false), ChecksBinding(f, true))
+	}
+	return out
+}
+
 // Evaluate is pure. Predictions are text and inert wait descriptors; work and
 // actions are always empty. The controller alone accepts diagnostic versions.
 func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 	if isHealthType(b.Type) {
 		return evaluateHealth(b, f, now, generation)
+	}
+	if b.Type == "checks" {
+		for _, c := range f.Checks {
+			if c.Subject == b.Subject {
+				return EvaluateChecks(b, c, now, generation)
+			}
+		}
+		return EvaluateChecks(b, ChecksFacts{TaskID: f.TaskID, Subject: b.Subject, ObservedAt: now, ValidUntil: now}, now, generation)
 	}
 	if b.Type == "review" || b.Type == "approval" {
 		return evaluateChange(b, f, now, generation)
@@ -297,12 +324,8 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 // UnavailableObservation constructs a safe rejected diagnostic, without reusing
 // evidence, waits or accepted metadata from a prior successful collection.
 // SourceRevision is an unavailable build sentinel, not a captured fact version.
-func UnavailableObservation(taskID string, now time.Time, selected ...[]Binding) ObservationView {
-	bindings := Bindings(taskID)
-	if len(selected) > 0 {
-		bindings = selected[0]
-	}
-	return UnavailableObservationForBindings(taskID, now, bindings)
+func UnavailableObservation(taskID string, now time.Time, checks ...ChecksFacts) ObservationView {
+	return UnavailableObservationForBindings(taskID, now, BindingsFor(taskID, checks))
 }
 
 // UnavailableObservationForBindings retains only a validated diagnostic scope,

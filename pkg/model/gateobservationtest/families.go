@@ -118,4 +118,122 @@ func RunObservationFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 	if len(current.Bindings) != len(review.Bindings) {
 		t.Fatal("current-only projection changed")
 	}
+	t.Run("CI and health replay", func(t *testing.T) { runHealthChecksFamilies(t, s, db) })
+}
+
+// Exercise the merged external-CI preflight as well as the transactional health
+// path. A current goal wins over a previously collected change context.
+func runHealthChecksFamilies(t *testing.T, s *model.Store, db *sql.DB) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 18, 4, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "mixed-ci"}
+	id := "mixed-ci-health"
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	yes := func(string) bool { return true }
+	access := model.GateHealthAccess{Repository: yes, PublicationRepository: yes, PipelineRepository: yes, DeploymentWide: true}
+	must(s.PutTask(ctx, model.Task{ID: id + "-review", Intent: model.IntentAnalyze, Title: "review", Target: &repo}))
+	task := model.Task{ID: id, Intent: model.IntentImplement, Title: "CI repair", Target: &repo, Base: "main", Links: []model.Link{{Kind: model.LinkFixes, Target: repo.String() + "#7"}, {Kind: model.LinkReviewTask, Target: id + "-review"}}}
+	must(s.PutTask(ctx, task))
+	facts := gates.ChecksFacts{TaskID: id, Subject: model.CheckSubjects(task)[0], Head: "H1", Mode: "github", PolicyVersion: gates.Digest("policy"), PolicyComplete: true, ObservedAt: now, ValidUntil: now.Add(time.Minute), Sources: []gates.CheckSource{{Kind: "github", Head: "H1", Version: gates.Digest("set"), Complete: true, All: true, Attempts: []gates.CheckAttempt{{Identity: "app/go", Names: []string{"go"}, Head: "H1", Version: gates.Digest("run"), Order: 1, State: "completed", Conclusion: "success"}}}}}
+	known, err := s.RecordedGateChecks(ctx, repo, facts.Head)
+	must(err)
+	facts.RecordedChecksVersion = known.Version
+	fence := func() string { t.Helper(); _, _, f, err := s.GateChecksInput(ctx, id); must(err); return f }
+	read := func(at time.Time, input string) *gates.ObservationView {
+		t.Helper()
+		before := legacyChecksSnapshot(t, ctx, db)
+		wake, commits := s.Changed(), s.CommitCount()
+		v, _, err := s.ObserveTaskGatesWithChecks(ctx, id, at, input, []gates.ChecksFacts{facts}, access)
+		must(err)
+		if before != legacyChecksSnapshot(t, ctx, db) || commits != s.CommitCount() {
+			t.Fatal("family read changed legacy state")
+		}
+		select {
+		case <-wake:
+			t.Fatal("family read signalled legacy wake")
+		default:
+		}
+		for _, result := range v.Results {
+			if len(result.Result.Work) > 0 || len(result.Result.Actions) > 0 {
+				t.Fatal("effectful family prediction")
+			}
+		}
+		return v
+	}
+	ci := read(now, fence())
+	if len(ci.Bindings) < 5 || ci.Bindings[2].Type != "checks" || ci.Results[2].Result.Status != "met" || ci.Bindings[4].Type != "review" {
+		t.Fatal("combined CI/review projection lost")
+	}
+	errorAt := now.Add(time.Second)
+	failure := gates.UnavailableObservation(id, errorAt, facts)
+	must(s.RecordGateObservationFailure(ctx, id, errorAt, &failure, access))
+	retry, _, err := s.GateObservationRetry(ctx, id, errorAt, false, access)
+	must(err)
+	if retry == nil || len(retry.Bindings) != len(ci.Bindings) {
+		t.Fatal("CI preflight did not retain the validated scope")
+	}
+	oldFence := fence()
+	must(s.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: repo, Branch: "main", RunID: "base", Commit: "base-head", Conclusion: "success", StartedAt: now, FinishedAt: &now}))
+	must(s.SetTaskGoal(ctx, id, model.GoalDecl{Kind: model.GoalBaseGreen, Spec: model.GoalSpec{Repo: repo.String(), Branch: "main"}}, "automation:test", now.Add(2*time.Second)))
+	retry, _, err = s.GateObservationRetry(ctx, id, now.Add(2*time.Second), true, access)
+	must(err)
+	if retry != nil {
+		t.Fatal("CI preflight hid a new health goal")
+	}
+	health := read(now.Add(2*time.Second), oldFence)
+	if len(health.Bindings) != 2 || health.Bindings[0].Type != "base_health" || health.Results[0].Result.Status != "met" {
+		t.Fatal("old external CI input replaced current health scope")
+	}
+	failure = gates.UnavailableObservation(id, now.Add(3*time.Second), facts)
+	must(s.RecordGateObservationFailure(ctx, id, now.Add(3*time.Second), &failure, access))
+	if len(failure.Bindings) != 2 || failure.Bindings[0].Type != "base_health" {
+		t.Fatal("health failure inherited CI requirements")
+	}
+	s = model.New(db)
+	retry, _, err = s.GateObservationRetry(ctx, id, now.Add(3*time.Second), true)
+	must(err)
+	if retry != nil {
+		t.Fatal("unscoped CI preflight replayed health evidence")
+	}
+	denied := model.WithExternalRefReadable(ctx, func(string) bool { return false })
+	if _, _, err = s.GateObservationRetry(denied, id, now.Add(3*time.Second), false, access); !errors.Is(err, model.ErrGateObservationScopeDenied) {
+		t.Fatalf("preflight task denial: %v", err)
+	}
+	must(s.ClearTaskGoal(ctx, id))
+	retry, _, err = s.GateObservationRetry(ctx, id, now.Add(4*time.Second), true, access)
+	must(err)
+	if retry != nil {
+		t.Fatal("health backoff hid a restored CI projection")
+	}
+	facts.ObservedAt, facts.ValidUntil = now.Add(4*time.Second), now.Add(time.Minute)
+	restored := read(now.Add(4*time.Second), fence())
+	if len(restored.Bindings) != len(ci.Bindings) || restored.Results[2].Result.Status != "met" || restored.Bindings[4].Type != "review" {
+		t.Fatal("CI/review projection did not recover after health")
+	}
+	failure = gates.UnavailableObservation(id, now.Add(5*time.Second), facts)
+	must(s.RecordGateObservationFailure(ctx, id, now.Add(5*time.Second), &failure, access))
+	retry, history, err := s.GateObservationRetry(ctx, id, now.Add(5*time.Second), true, model.GateHealthAccess{ScopeLimited: true})
+	must(err)
+	if retry == nil || history == nil || !history.StartedAt.IsZero() || history.Evaluations != 0 {
+		t.Fatal("restricted preflight exposed aggregate health history")
+	}
+	for _, sample := range history.History {
+		for _, binding := range sample.View.Bindings {
+			if binding.Subject.Kind == "repository" {
+				t.Fatal("restricted CI retry exposed retained health scope")
+			}
+		}
+	}
+	_, err = db.ExecContext(ctx, "UPDATE `gate_observation_shadow_history` SET `view_json` = ? WHERE `task_id` = ?", "not-json", id)
+	must(err)
+	retry, _, err = s.GateObservationRetry(ctx, id, now.Add(5*time.Second), false, access)
+	must(err)
+	if retry == nil {
+		t.Fatal("current-only preflight consulted retained history")
+	}
 }

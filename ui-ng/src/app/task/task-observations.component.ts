@@ -125,7 +125,15 @@ import type {
               ·
               {{ entry.result.status }}
             </h4>
-            <p class="muted">{{ profileLabel($index) }}</p>
+            @if (entry.result.type === "checks") {
+              <p class="muted">
+                Shadow CI prediction ·
+                {{ checksLabel(entry.result.binding_id) }}
+              </p>
+            }
+            @if (entry.result.type !== "checks") {
+              <p class="muted">{{ profileLabel($index) }}</p>
+            }
             <p>{{ entry.result.summary }}</p>
             @if (entry.result.error; as error) {
               <p>Observation error: {{ error.code }} · {{ error.message }}</p>
@@ -144,7 +152,10 @@ import type {
             @if (entry.result.human_text) {
               <p>{{ entry.result.human_text }}</p>
             }
-            @for (wait of entry.result.waits; track wait.event) {
+            @if (entry.result.agent_text) {
+              <p>{{ entry.result.agent_text }}</p>
+            }
+            @for (wait of entry.result.waits; track wait.key ?? $index) {
               <p>
                 Predicted wait only: {{ wait.event }} · owned by
                 {{ wait.owner }} · evidence expires
@@ -266,6 +277,24 @@ export class TaskObservationsComponent {
   }
   readonly observations = input<GateObservations>();
   readonly diagnostics = input<GateObservationDiagnostics>();
+  checksLabel(id?: string): string {
+    const binding = this.observations()?.bindings.find((b) =>
+      id?.endsWith("/" + b.id),
+    );
+    const profile = binding?.origin?.imported
+      ? "Legacy CI import"
+      : "Current CI policy";
+    const subject = binding?.subject;
+    return subject
+      ? profile +
+          " · " +
+          subject.repository +
+          " · " +
+          subject.change_kind +
+          " " +
+          subject.id
+      : profile;
+  }
   profileLabel(index: number): string {
     const binding = this.observations()?.bindings[index];
     const config = binding?.config;

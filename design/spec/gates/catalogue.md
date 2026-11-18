@@ -24,22 +24,22 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 ## Runtime coverage after the initial framework review
 
 The catalogue above remains the full v1 contract, not an implementation claim.
-Task #61's delivered slice, Task #64's independent repairs, Task #67's review/approval
-extension and Task #68's health port implement these nonrequired observation monitors:
+Tasks #61, #64, #66, #67 and #68 implement nine nonrequired observation gate
+types (the full canonical surface contains twelve types):
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
 | `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
 | `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
+| `checks` v1, `current_v1` and explicitly imported `legacy_ci_v1` | Nonrequired change monitors; typed effective/github/grain/both/provider/none modes, inherited/extra required identities, complete bounded exact-head CI collections and base-owned definitions. Legacy empty-clock, recorded Grain status/narrowing and budget-exception comparisons are explicitly labeled. Merge context remains separate and inert. See [CI checks coverage](../../../docs/gate-check-observations.md). |
 | `base_health` v1, `legacy_recorded_v1` / `current_tip_v1` | Existing base-green goals only. Legacy recorded-row predicate; current additionally pins collector tip, source row, CI policy and complete Grain plan, including authentic exact-commit noncached confirmation coverage. Unsupported/missing source proof stays unknown. |
 | `nightly_health` v1, `legacy_500_v1`, `legacy_verified_push_v1` / `window_v1` | Existing nightly-green goals only. Preserve newest-500 case-insensitive default-like/RC selection and saved verified-push goal disposition. Current requires same-repository branch event, exact workflow/ref/head/run attempt, counted complete raw jobs and declaration/24-hour window. Idle-skipped/cancelled newest runs cannot establish health. |
 | `publishing_health` v1, `legacy_no_finding_v1` / `positive_current_v1` | Optional publishing portion of existing base-green goals. Legacy calls the actual configured BaseBranchPublishingOf thresholds and preserves absent-row/no-finding behavior. Current receipt predicate is implemented; existing release collectors lack complete target/commit/artifact publication receipts, so runtime positive publication remains explained unknown. |
 | `pipeline_health` v1, `legacy_quiet_v1` / `scoped_v1` | Existing pipeline-healthy goals only. Explicit deployment read ceiling for legacy broad scan; current SQL-scoped notifications/tasks/queue plus configured managed refs and complete current base proofs. Missing expected repository/ref sets, visibility gaps and truncated scans stay unknown. Paused/self exclusions are preserved. |
-
 | `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
 | `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
 
-Other delivery/acknowledgment profiles and the other four types remain unsupported.
+Other delivery/acknowledgment profiles and the other three types remain unsupported.
 See [health evidence, source gaps and validation](../../../docs/gate-health-observations.md).
 The legacy publishing reader uses the running code's configured threshold (currently
 three failures or a default three hours, with its existing environment override);

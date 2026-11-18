@@ -715,6 +715,7 @@ export interface GateObservationResult {
   retry_at: string | null;
   result: {
     type: string;
+    binding_id?: string;
     version: number;
     status: string;
     summary: string;
@@ -730,7 +731,7 @@ export interface GateObservationResult {
       head?: string | null;
     }[];
     dependencies: { key: string; version: string; complete: boolean }[];
-    waits: { event: string; owner: string; deadline: string }[];
+    waits: { event: string; key?: string; owner: string; deadline: string }[];
     error: { code: string; message: string } | null;
   };
 }
@@ -746,12 +747,20 @@ export interface GateObservations {
     type: string;
     version: number;
     config: unknown;
-    origin: unknown;
+    origin: {
+      kind?: string;
+      id?: string;
+      revision?: string;
+      imported?: boolean;
+    };
     subject?: {
       kind: string;
+      authority?: string;
       repository?: string;
       ref?: string;
       task_id?: string;
+      change_kind?: string;
+      id?: string;
     };
   }[];
   results: GateObservationResult[];

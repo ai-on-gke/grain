@@ -133,3 +133,13 @@ independent correctness oracle.
 
 These are explicit extension constraints, not additional tasks or authorization
 to activate enforcement. No production deployment/configuration/grants change.
+
+## Task #66 extension
+
+The historical fixed-pair limitation above is repaired for the checks port.
+Bindings, failure reconstruction, cache validation and comparisons now include a
+bounded current/legacy pair for each task-owned change. The report/receipt
+predicates remain unchanged. See [CI checks in shadow](gate-check-observations.md)
+for the ordinary readers, source/definition bounds, local acceptance fence,
+permission-aware history, inert merge context, tests and remaining admission gaps.
+No unrelated gate or enforcement surface was added.

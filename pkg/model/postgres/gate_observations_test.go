@@ -44,6 +44,11 @@ func TestHealthGateSourceBounds(t *testing.T) {
 	gateobservationtest.RunHealthSourceBounds(t, s, db)
 }
 
+func TestGateChecksPersistWithoutLifecycleEffects(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunChecks(t, s, db)
+}
+
 func TestReviewApprovalGateObservations(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.RunChangeGates(t, s, db)

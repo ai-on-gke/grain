@@ -17,23 +17,10 @@ package model
 import (
 	"encoding/json"
 	"strings"
-	"time"
 
 	"github.com/ai-on-gke/grain/pkg/gates"
 )
 
-func shadowLeaseCurrent(raw string, now time.Time) bool {
-	var v gates.ObservationView
-	if json.Unmarshal([]byte(raw), &v) != nil {
-		return false
-	}
-	for _, r := range v.Results {
-		if !now.Before(r.Result.ValidUntil) {
-			return false
-		}
-	}
-	return true
-}
 func compareHealthPredictions(v gates.ObservationView) string {
 	legacy, current := []string{}, []string{}
 	for i, b := range v.Bindings {

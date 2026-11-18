@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { TestBed } from "@angular/core/testing";
+import { provideRouter } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type { CapabilityMethod } from "../api/models";
 import { AccessService } from "../services/access.service";
@@ -79,6 +80,7 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
     methods = [];
     TestBed.configureTestingModule({
       providers: [
+        provideRouter([]),
         {
           provide: GrainApi,
           useValue: {
@@ -150,6 +152,39 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
       el.querySelector('[data-testid="held-grant-policy-0"]')?.textContent,
     ).toContain("denied by policy");
     expect(el.textContent).toContain("denies task-admin to acme/widgets");
+    // The note links back to the policy, as the classic picker's does
+    // (docs/test-runs/2026-11-17-connections-infrastructure-settings.md).
+    const link = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="gp-policy-link"]',
+    );
+    expect(link?.getAttribute("href")).toBe(
+      "/settings/capabilities#capability-policy",
+    );
+    expect(link?.textContent).toBe("Settings → Capabilities");
+    expect(
+      el.querySelector('[data-testid="gp-policy-notes"]')?.textContent,
+    ).toContain("or change the capability policy (Settings → Capabilities).");
+  });
+
+  it("links no policy from a CI-only note", async () => {
+    methods = [
+      {
+        ref: "repo#read",
+        capability: "repo",
+        method: "read",
+        policy: { task: "ci_only" },
+      },
+    ];
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    f.componentRef.setInput("repo", "acme/widgets");
+    f.componentRef.setInput("held", ["repo#read"]);
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="gp-policy-notes"]')?.textContent,
+    ).toContain("CI only: not a grant for agent tasks");
+    expect(el.querySelector('[data-testid="gp-policy-link"]')).toBeNull();
   });
 
   it("never selects or attaches a method the policy refuses", async () => {

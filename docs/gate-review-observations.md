@@ -3,7 +3,7 @@
 Task #67 extends the observation framework reviewed in Task #64. The Task #59
 specification merge `2e45dca71`, Task #61 implementation merge `6bd221161`
 and Task #64 review commit `de688e249` were verified as merged ancestors before
-extension. The implementation pin is `builtin-task-observer-v4`. Public gate,
+extension. The implementation pin is `builtin-task-observer-v6`. Public gate,
 configuration and observation contracts remain v1.
 
 Everything is **OBSERVATION-ONLY**. Existing review/security/path/takeover

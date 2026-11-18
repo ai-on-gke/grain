@@ -134,6 +134,63 @@ describe("observation-only task display", () => {
   });
 });
 
+it("labels current and legacy CI predictions with their resource and keeps remediation inert", async () => {
+  const fixture = TestBed.createComponent(TaskObservationsComponent);
+  const v = view();
+  v.bindings = [
+    {
+      id: "checks",
+      type: "checks",
+      version: 1,
+      config: {},
+      origin: { imported: false },
+      subject: {
+        kind: "change",
+        repository: "acme/widgets",
+        change_kind: "pr",
+        id: "7",
+      },
+    },
+    {
+      id: "checks-legacy",
+      type: "checks",
+      version: 1,
+      config: {},
+      origin: { imported: true },
+      subject: {
+        kind: "change",
+        repository: "acme/widgets",
+        change_kind: "pr",
+        id: "7",
+      },
+    },
+  ];
+  const current = v.results[0];
+  current.result.type = "checks";
+  current.result.binding_id = "task/66/checks";
+  current.result.agent_text =
+    "Prediction only: retry checks under existing authorization.";
+  current.result.human_text =
+    "Merge conflicts remain an executor precondition.";
+  const legacy = structuredClone(current);
+  legacy.evaluation_id = "shadow-legacy";
+  legacy.result.binding_id = "task/66/checks-legacy";
+  legacy.result.status = "pending";
+  v.results = [current, legacy];
+  fixture.componentRef.setInput("observations", v);
+  fixture.detectChanges();
+  const el: HTMLElement = fixture.nativeElement;
+  expect(el.textContent).toContain(
+    "Shadow CI prediction · Current CI policy · acme/widgets · pr 7",
+  );
+  expect(el.textContent).toContain("Shadow CI prediction · Legacy CI import");
+  expect(el.textContent).toContain("Prediction only: retry checks");
+  expect(el.textContent).toContain(
+    "Merge conflicts remain an executor precondition.",
+  );
+  expect(el.querySelectorAll("button,a,input").length).toBe(0);
+});
+
 describe("review and approval shadow scopes", () => {
   it("separates legacy comparison from current predictions and leaves proposals inert", async () => {
     await TestBed.configureTestingModule({

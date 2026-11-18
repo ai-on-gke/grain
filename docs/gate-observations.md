@@ -2,15 +2,16 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and extension rules. Eight v1 types are registered:
-report/receipt, review/approval, and base/nightly/publishing/pipeline health.
-See the [review/approval guide](gate-review-observations.md) and
+records repairs, coverage and extension rules. Nine v1 types are registered:
+report/receipt, checks, review/approval, and base/nightly/publishing/pipeline health.
+See the [CI checks guide](gate-check-observations.md),
+[review/approval guide](gate-review-observations.md) and
 [health guide](gate-health-observations.md) for source coverage and explicit gaps.
 Selected existing health goals use labeled legacy/current health profiles; other
-selected tasks retain the report/receipt and applicable PR review/approval projection.
-These monitors do not materialize a task contract or add completion obligations.
-Closed schemas are pinned to the canonical catalogue and evaluated by pure local
-Go functions. There are no remote evaluator calls or private evaluator state.
+selected tasks retain the report/receipt and applicable change checks/review/approval
+projection. These monitors do not materialize a task contract or add completion
+obligations. Closed schemas are pinned to the canonical catalogue and evaluated by
+pure local Go functions. There are no remote evaluator calls or private evaluator state.
 
 Legacy services still own every task lifecycle, queue/run/wait, approval, report,
 acknowledgment, merge and submit operation. There is no authority migration or
@@ -76,6 +77,8 @@ report/receipt evidence. Review/approval and health use their own scoped source
 records and permissions as described in their guides; no enforcement authorization
 is claimed. Missing provider, rendered-policy, role or positive publication proof
 remains explained unknown.
+CI uses its separate scoped, versioned collector described in the
+[checks guide](gate-check-observations.md).
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -230,6 +233,9 @@ diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.
+
+CI-specific runtime profiles, source bounds, version fences, comparison differences
+and validation are documented in [CI checks in shadow](gate-check-observations.md).
 
 Review/approval validation and its material source limitations are recorded in
 [Review and approval observations](gate-review-observations.md). Current results

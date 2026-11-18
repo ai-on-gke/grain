@@ -3,7 +3,7 @@
 Task #68 builds on merged canonical-spec PR #1719 (Task #59), initial-framework
 PR #1739 (Task #61) and framework-review PR #1803 (Task #64). All three merge
 commits were verified ancestors of the implementation checkout. The implementation
-pin is `builtin-task-observer-v4`; public contracts remain `grain.gates/v1`.
+pin is `builtin-task-observer-v6`; public contracts remain `grain.gates/v1`.
 
 **OBSERVATION-ONLY.** Every binding is a nonrequired monitor with action=null,
 authority=legacy and lifecycle/action/dispatch/automatic-cutover flags false.
@@ -88,7 +88,7 @@ still leaves the stronger profile unknown.
 ## Persistence and bounds
 
 The existing serialized diagnostic writer, replay/backoff handling and history
-retention are shared by all eight types. Error reconstruction regenerates the
+retention are shared by all nine types. Error reconstruction regenerates the
 current binding shape and discards accepted evidence/work/actions/waits. Safe
 binding/permission selection precedes persisted backoff; expensive fact collection
 runs only after retry is due. Window, threshold and source expiry shorten the
@@ -108,8 +108,10 @@ newer failure, and losing time provenance installs a newest unknown marker.
 Pipeline collection caps base rows at 256, refs at 64 per repository,
 notifications/tasks at 1000 and configured repositories at 64. Exceeding a
 collection bound yields unknown/incomplete rather than an empty healthy set.
-Collection keeps the existing 250 ms request and 50 ms failure-persistence budgets;
-collector database writes have 50 ms budgets and never signal Changed.
+Local health collection/acceptance keeps its 250 ms budget and failure persistence
+keeps its 50 ms budget. A bounded 50 ms goal selection prevents per-request change-CI
+reads for health goals. Collector database writes have 50 ms budgets and never
+signal Changed.
 
 Comparison labels distinguish profile agreement, stronger-profile differences and
 unknown/incomplete evidence. These are retained diagnostic samples, not an
@@ -157,8 +159,10 @@ edits; actual accepted/denied/pending/stale/error views validate against canonic
 schemas. Angular tests cover visible legacy/current differences, exact provenance,
 expiry and absence of operational controls. Existing framework retention,
 contention, concurrent failure and API regression suites remain required.
-The merged review/approval extension is covered on both database engines: PR to
-health-goal and back transitions during error backoff select the current family,
+The merged CI/check and review/approval extensions are covered on both database
+engines: PR to health-goal and back transitions during error backoff select the current family,
+including the external-CI preflight, stale CI input and restart. Resource-restricted
+preflight reads filter old health samples and withhold aggregate metadata;
 scoped collection and failure writes reauthorize the task, and current-only reads
 remain independent of retained history. The shared registry implementation pin is
-v4; all eight registered types retain their v1 profiles and wire contracts.
+v6; all nine registered types retain their v1 profiles and wire contracts.
