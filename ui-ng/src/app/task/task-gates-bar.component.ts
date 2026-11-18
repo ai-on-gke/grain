@@ -34,6 +34,11 @@ import type {
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { parseUnifiedDiff } from "../shared/diff-parse";
+import {
+  accessItemGrantable,
+  chosenAccessItems,
+  grantAccessLabel,
+} from "../shared/access-items";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { unsatisfiedGates } from "../shared/gates";
@@ -231,11 +236,7 @@ export function mergeRuleSource(from?: string[]): string {
                   "
                   (click)="grantAccess()"
                 >
-                  {{
-                    chosenIndexes().length === grantableCount()
-                      ? "Grant all"
-                      : "Grant selected (" + chosenIndexes().length + ")"
-                  }}
+                  {{ grantLabel() }}
                 </button>
                 <button
                   type="button"
@@ -720,25 +721,17 @@ export class TaskGatesBarComponent {
     () => this.checkedOverride() ?? this.task().pendingAccess?.items ?? [],
   );
 
-  // An item is grantable when it is not already held and either checked
-  // clean or carries the substitute grant the server will apply instead
-  // (pkg/ui/task_access_request.go GrantAccessRequest grants *Substitute).
   protected isGrantable(it: AccessRequestItem): boolean {
-    return !it.held && (!it.error || !!it.substitute || !!it.substituteGrant);
+    return accessItemGrantable(it);
   }
 
-  protected readonly grantableCount = computed(
-    () => this.displayItems().filter((it) => this.isGrantable(it)).length,
+  protected readonly chosenIndexes = computed(() =>
+    chosenAccessItems(this.displayItems(), this.unticked()),
   );
 
-  protected readonly chosenIndexes = computed(() => {
-    const off = this.unticked();
-    const out: number[] = [];
-    this.displayItems().forEach((it, idx) => {
-      if (this.isGrantable(it) && !off.has(idx)) out.push(idx);
-    });
-    return out;
-  });
+  protected readonly grantLabel = computed(() =>
+    grantAccessLabel(this.chosenIndexes().length, this.displayItems().length),
+  );
 
   protected readonly configDiffFiles = computed(() => {
     const diff = this.task().pendingConfigChange?.diff ?? "";

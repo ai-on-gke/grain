@@ -84,7 +84,14 @@ import {
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
+import {
+  ago,
+  levelOf,
+  mergeStuck,
+  priorityOf,
+  stateLabel,
+  taskStateLabel,
+} from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
 import { TaskDocsTabComponent } from "./task-docs-tab.component";
@@ -226,7 +233,7 @@ export function duration(from?: string, to?: string): string {
               >
             }
             <span [class]="'status-pill ' + tone()" data-testid="task-state">{{
-              label(t.state)
+              stateOval(t)
             }}</span>
             @if (t.paused) {
               <span class="status-pill proposal" data-testid="task-paused-pill"
@@ -951,7 +958,7 @@ export function duration(from?: string, to?: string): string {
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
                       disabled: !can('POST /api/tasks/{id}/comments'),
-                      deniedReason: commentDenied(),
+                      deniedReason: composerHidden() ? '' : commentDenied(),
                       hidden: composerHidden(),
                     }"
                     (send)="onConversationSend($event)"
@@ -1429,6 +1436,7 @@ export function duration(from?: string, to?: string): string {
                 [offered]="offeredCapabilities()"
                 [held]="t.capabilities ?? []"
                 [repo]="t.repo"
+                [policyVerdicts]="true"
                 [disabled]="store.isBusy('capability', t.id)"
                 (attachGrant)="onAttachCapability($event)"
                 (detachGrant)="onDetachCapability($event)"
@@ -1754,6 +1762,7 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+  protected readonly stateOval = taskStateLabel;
 
   // depTitle is a dependency chip's hover text: the task it waits for,
   // its title where the open-task feed knows it, its state, and whether
@@ -1895,6 +1904,19 @@ export class TaskDetailComponent implements OnDestroy {
       (!!t.turnStopped || t.reason?.reason === "awaiting_reply/stopped")
     );
   });
+  // composerHidden is whether the conversation offers no composer: a closed
+  // or stopped task, or one parked on a grant until "reply in words" opens
+  // it. commentDenied's note goes only with a composer to explain, since the
+  // conversation renders it outside the form.
+  protected readonly composerHidden = computed(() => {
+    const t = this.t();
+    return (
+      !t ||
+      t.state === "closed" ||
+      (!!this.parked() && !this.allowWordsOnParked()) ||
+      this.isStopped()
+    );
+  });
   protected readonly canRollover = computed(() => {
     const t = this.t();
     if (!t) return false;
@@ -1925,17 +1947,6 @@ export class TaskDetailComponent implements OnDestroy {
       (t.state === "running" &&
         !t.paused &&
         this.can("POST /api/tasks/{id}/pause"))
-    );
-  });
-  // composerHidden is true while this task takes no words from the
-  // composer: closed, stopped, or parked on something words do not answer.
-  protected readonly composerHidden = computed(() => {
-    const t = this.t();
-    return (
-      !!t &&
-      (t.state === "closed" ||
-        (this.parked() && !this.allowWordsOnParked()) ||
-        this.isStopped())
     );
   });
   protected readonly replyBlocked = computed(() => {
@@ -1990,7 +2001,9 @@ export class TaskDetailComponent implements OnDestroy {
     return n ? `${n} granted` : "None beyond the defaults";
   });
   protected readonly tone = computed(() => {
-    switch (this.t()?.state) {
+    const t = this.t();
+    if (t && mergeStuck(t)) return "error";
+    switch (t?.state) {
       case "running":
         return "setup";
       case "awaiting_reply":
