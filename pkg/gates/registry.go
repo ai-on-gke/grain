@@ -22,12 +22,19 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
 
 //go:embed delivery.schema.json
 var deliverySchema []byte
+
+//go:embed integration.schema.json
+var integrationSchema []byte
+
+//go:embed children.schema.json
+var childrenSchema []byte
 
 //go:embed acknowledgment.schema.json
 var acknowledgmentSchema []byte
@@ -53,7 +60,7 @@ var reviewSchema []byte
 //go:embed approval.schema.json
 var approvalSchema []byte
 
-const Implementation = "builtin-task-observer-v6"
+const Implementation = "builtin-task-observer-v7"
 
 type Descriptor struct {
 	Type           string
@@ -65,10 +72,16 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return append(healthDescriptors(), []Descriptor{{"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}}...)
+	return append(healthDescriptors(), []Descriptor{{"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"integration", 1, Digest(json.RawMessage(integrationSchema)), append([]byte(nil), integrationSchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}, {"children", 1, Digest(json.RawMessage(childrenSchema)), append([]byte(nil), childrenSchema...), Implementation}}...)
 }
 
-// Validate admits closed canonical profiles supported by these pure observers.
+var registryDigest = sync.OnceValue(func() string { return Digest(Discover()) })
+
+// RegistryDigest pins immutable built-in schemas and implementation metadata.
+// Avoid decoding and canonicalizing the same registry on each scoped read.
+func RegistryDigest() string { return registryDigest() }
+
+// Validate admits the implemented closed v1 outcome profiles.
 func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	if len(raw) > 64*1024 {
 		return nil, fmt.Errorf("config exceeds 64 KiB")
@@ -82,6 +95,10 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		allowedKeys = map[string]bool{"mode": true, "extra_jobs": true, "empty": true, "semantics": true}
 	case "delivery":
 		allowedKeys = map[string]bool{"product": true, "semantics": true}
+	case "integration":
+		allowedKeys = map[string]bool{"kind": true, "semantics": true}
+	case "children":
+		allowedKeys = map[string]bool{"tasks": true, "predicate": true}
 	case "review":
 		allowedKeys = map[string]bool{"category": true, "requirement_id": true, "semantics": true}
 	case "approval":
@@ -182,7 +199,7 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		if err := decode(&c); err != nil {
 			return nil, err
 		}
-		if c.Product != "report" || c.Semantics != "current_v1" {
+		if !oneOf(c.Product, "report", "change", "review", "nothing_needed", "any") || !oneOf(c.Semantics, "current_v1", "legacy_finish_v1") {
 			return nil, fmt.Errorf("unsupported delivery profile")
 		}
 		b, _ := json.Marshal(c)
@@ -192,8 +209,35 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		if err := decode(&c); err != nil {
 			return nil, err
 		}
-		if c.Mode != "explicit_receipt" {
+		if !oneOf(c.Mode, "explicit_receipt", "legacy_report", "legacy_child_answer", "legacy_nothing_needed_ack") {
 			return nil, fmt.Errorf("unsupported acknowledgment profile")
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
+	case "integration":
+		c := IntegrationConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if !oneOf(c.Kind, "pr_merged", "cl_submitted") || c.Semantics != "positive_v1" {
+			return nil, fmt.Errorf("unsupported integration profile")
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
+	case "children":
+		c := ChildrenConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if !oneOf(c.Predicate, "success", "closed", "merged") || len(c.Tasks) == 0 || len(c.Tasks) > 64 {
+			return nil, fmt.Errorf("invalid children selection")
+		}
+		seen := map[string]bool{}
+		for _, id := range c.Tasks {
+			if strings.TrimSpace(id) == "" || utf8.RuneCountInString(id) > 256 || seen[id] {
+				return nil, fmt.Errorf("invalid child identity")
+			}
+			seen[id] = true
 		}
 		b, _ := json.Marshal(c)
 		return b, nil
@@ -202,11 +246,31 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	}
 }
 
+func oneOf(s string, values ...string) bool {
+	for _, v := range values {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Facts contains only the scoped reader's immutable evidence, never private
 // evaluator state. CompleteEmpty is meaningful: no report is not success.
 type Facts struct {
-	Bindings           []Binding
-	Health             map[string]HealthFacts
+	Health          map[string]HealthFacts
+	LegacyMet       map[string]bool
+	Bindings        []Binding
+	Product         string
+	ProductEvidence *Evidence
+	ProductUnknown  string
+	Blocked         bool
+	ChildAnswer     bool
+	NothingAck      bool
+	Resources       map[string][]ResourceFact
+	Children        map[string]ChildFact
+	Cycle           bool
+
 	Checks             []ChecksFacts
 	Change             *ChangeFacts
 	IncompleteReason   string
@@ -271,6 +335,22 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		r.Summary = "Not applicable: " + f.UnsupportedReason
 		return r
 	}
+	if now.Before(f.ValidUntil) {
+		if b.Type == "integration" {
+			return evaluateIntegration(b, f, r)
+		}
+		if b.Type == "children" {
+			return evaluateChildren(b, f, r)
+		}
+	}
+	if now.Before(f.ValidUntil) && b.Type == "delivery" && (f.Product == "change" || f.Product == "nothing_needed") && f.ProductEvidence != nil && f.ProductUnknown == "" {
+		var config DeliveryConfig
+		_ = json.Unmarshal(b.Config, &config)
+		if config.Product != "report" {
+			r.Dependencies[0].Complete = true
+			return evaluateDelivery(config, f, r)
+		}
+	}
 	if !f.Complete {
 		if f.IncompleteReason != "" {
 			r.Summary = f.IncompleteReason
@@ -286,6 +366,11 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 	}
 	switch b.Type {
 	case "delivery":
+		var c DeliveryConfig
+		_ = json.Unmarshal(b.Config, &c)
+		if c.Product != "report" || f.Product != "" || f.ProductUnknown != "" || f.Blocked {
+			return evaluateDelivery(c, f, r)
+		}
 		switch {
 		case f.Running:
 			r.Status = "pending"
@@ -301,6 +386,11 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 			r.Summary = "No current settled report is recorded."
 		}
 	case "acknowledgment":
+		var c AcknowledgmentConfig
+		_ = json.Unmarshal(b.Config, &c)
+		if c.Mode != "explicit_receipt" {
+			return evaluateLegacyAck(c, f, r)
+		}
 		switch {
 		case f.Report == nil || !f.Settled || f.Running:
 			r.Summary = "No current settled report to acknowledge."

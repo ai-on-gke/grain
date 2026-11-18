@@ -953,6 +953,9 @@ type Commit struct {
 // merged pull request compares to nothing at all, and why reconstructing
 // the fork point needs the merge commit rather than this.
 type Comparison struct {
+	// Exact response pins for diagnostic provenance; absent on older readers.
+	BaseSHA   string
+	HeadSHA   string
 	Status    string
 	MergeBase string
 	Commits   []Commit
@@ -2182,8 +2185,12 @@ func (c *RESTClient) CompareRefs(owner, repo, base, head string) (Comparison, er
 		return Comparison{}, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
 	var data struct {
-		Status    string `json:"status"`
-		MergeBase struct {
+		Status     string `json:"status"`
+		BaseCommit struct {
+			SHA string `json:"sha"`
+		} `json:"base_commit"`
+		TotalCommits *int `json:"total_commits"`
+		MergeBase    struct {
 			SHA string `json:"sha"`
 		} `json:"merge_base_commit"`
 		Commits []struct {
@@ -2223,7 +2230,14 @@ func (c *RESTClient) CompareRefs(owner, repo, base, head string) (Comparison, er
 			Parents: parents,
 		})
 	}
-	return Comparison{Status: data.Status, MergeBase: data.MergeBase.SHA, Commits: commits,
+	headSHA := ""
+	if data.TotalCommits != nil && *data.TotalCommits == len(commits) && len(commits) > 0 {
+		headSHA = commits[len(commits)-1].SHA
+	}
+	if data.Status == "identical" || data.Status == "behind" {
+		headSHA = data.MergeBase.SHA
+	}
+	return Comparison{BaseSHA: data.BaseCommit.SHA, HeadSHA: headSHA, Status: data.Status, MergeBase: data.MergeBase.SHA, Commits: commits,
 		Files: files, FilesTruncated: len(files) >= compareFileCap}, nil
 }
 

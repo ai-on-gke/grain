@@ -225,6 +225,7 @@ var LocalTables = map[string]bool{
 	// portable task declarations or completion authority.
 	"gate_health_base_source":         true,
 	"gate_health_workflow_source":     true,
+	"gate_outcome_source":             true,
 	"gate_observation_shadow":         true,
 	"gate_observation_shadow_history": true,
 	"task_run_api_call":               true,

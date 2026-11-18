@@ -53,7 +53,7 @@ func RunHealthSourceOrdering(t *testing.T, s *model.Store) {
 	access := model.GateHealthAccess{Repository: func(string) bool { return true }}
 	read := func(at time.Time, want string) {
 		t.Helper()
-		view, _, err := s.ObserveTaskGates(ctx, "health-source-order", at, access)
+		view, _, err := s.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "health-source-order", at)
 		must(err)
 		if got := view.Results[1].Result.Status; got != want {
 			t.Fatalf("current nightly status = %s, want %s: %s", got, want, view.Results[1].Result.Summary)

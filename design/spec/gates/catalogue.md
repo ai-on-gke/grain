@@ -21,16 +21,19 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 
 `legacy_*` profiles preserve predicate interpretation, not permission to bypass the new message/child/authority closure fences or credential admission. Complete-set limitations must be displayed. A result used by enforced action admission must meet current-head/current-policy/complete-collection rules even if an older cohort's monitoring uses a legacy reading. No passing check gate can waive a different failing review/approval or outcome.
 
-## Runtime coverage after the initial framework review
+## Runtime observation coverage
 
-The catalogue above remains the full v1 contract, not an implementation claim.
-Tasks #61, #64, #66, #67 and #68 implement nine nonrequired observation gate
-types (the full canonical surface contains twelve types):
+Task #61 (PR #1739), Task #64 (PR #1803), Task #65, Task #66, Task #67 and Task #68 extend the existing
+registry, preserving the canonical v1 schemas. All attachments remain nonrequired
+monitors with legacy authority and every effect/cutover flag false.
+Eleven of the twelve canonical types are registered.
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
-| `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
-| `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
+| `delivery`, all products, `current_v1` / `legacy_finish_v1` | Settled durable report or typed finish provenance; exact-head authenticated changes, owning-change acceptance for in-place fixes, delivered review, validated no-work and actual finish precedence. Body reports retain the 8192-character/attachment limits. |
+| `acknowledgment`, all four modes | Conservative verified human close after the current report/settlement; imported report-only child filing provenance and configured no-work acknowledgment are distinct. No review output becomes a second acknowledgment. |
+| `integration`, `positive_v1` | Current PR from complete links and exact-head merge receipt, or every scoped CL/snapshot with canonical renumbering. Positive landed/empty equivalence requires pinned proof. Missing snapshots, denied/stale/incomplete data are unknown. |
+| `children`, explicit success/closed/merged | Only selected IDs or a labeled existing tasks-closed goal. Missing/private children and unknown legacy success stay unknown; failure/cancel does not satisfy success. Reopen/message/relation revisions invalidate, and bounded cycle diagnostics never modify waits. |
 | `checks` v1, `current_v1` and explicitly imported `legacy_ci_v1` | Nonrequired change monitors; typed effective/github/grain/both/provider/none modes, inherited/extra required identities, complete bounded exact-head CI collections and base-owned definitions. Legacy empty-clock, recorded Grain status/narrowing and budget-exception comparisons are explicitly labeled. Merge context remains separate and inert. See [CI checks coverage](../../../docs/gate-check-observations.md). |
 | `base_health` v1, `legacy_recorded_v1` / `current_tip_v1` | Existing base-green goals only. Legacy recorded-row predicate; current additionally pins collector tip, source row, CI policy and complete Grain plan, including authentic exact-commit noncached confirmation coverage. Unsupported/missing source proof stays unknown. |
 | `nightly_health` v1, `legacy_500_v1`, `legacy_verified_push_v1` / `window_v1` | Existing nightly-green goals only. Preserve newest-500 case-insensitive default-like/RC selection and saved verified-push goal disposition. Current requires same-repository branch event, exact workflow/ref/head/run attempt, counted complete raw jobs and declaration/24-hour window. Idle-skipped/cancelled newest runs cannot establish health. |
@@ -39,7 +42,11 @@ types (the full canonical surface contains twelve types):
 | `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
 | `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
 
-Other delivery/acknowledgment profiles and the other three types remain unsupported.
+The remaining `qa_stage` type is unsupported by this registry.
+Representative read-only selection and monitor-only mappings for existing
+`pr-merged`, `cl-submitted`, and `tasks-closed` goals do not migrate stored goals
+or tasks; success contracts make no legacy closure parity claim.
+
 See [health evidence, source gaps and validation](../../../docs/gate-health-observations.md).
 The legacy publishing reader uses the running code's configured threshold (currently
 three failures or a default three hours, with its existing environment override);

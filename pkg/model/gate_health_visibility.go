@@ -137,3 +137,16 @@ func healthRepoScopeOversized(repos []string) bool {
 	}
 	return len(set) > 64
 }
+
+type gateHealthAccessKey struct{}
+
+// WithGateHealthAccess supplies the ordinary caller's health read ceiling.
+// It grants no authority and leaves child comparison selection independent.
+
+func WithGateHealthAccess(ctx context.Context, access GateHealthAccess) context.Context {
+	return context.WithValue(ctx, gateHealthAccessKey{}, access)
+}
+func gateHealthAccessFrom(ctx context.Context) GateHealthAccess {
+	access, _ := ctx.Value(gateHealthAccessKey{}).(GateHealthAccess)
+	return access
+}

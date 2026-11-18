@@ -233,6 +233,7 @@ var notSettings = []string{
 	"integration_event",
 	"gate_health_base_source",
 	"gate_health_workflow_source",
+	"gate_outcome_source",
 	"gate_observation_shadow",
 	"gate_observation_shadow_history",
 	// config_audit is the record of who changed the configuration

@@ -87,7 +87,7 @@ func TestHealthSourceCollectorsKeepLegacyInputsAndEffects(t *testing.T) {
 	if len(jobs) != 1 || jobs[0].Conclusion != "success" || forge.latestCalls != 1 || forge.exactCalls != 1 {
 		t.Fatal("shadow changed legacy collector inputs")
 	}
-	v, _, err := store.ObserveTaskGates(ctx, "source-health", now, access)
+	v, _, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "source-health", now)
 	must(err)
 	if v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != "unmet" {
 		t.Fatalf("source predicates: %+v", v.Results)
@@ -96,7 +96,7 @@ func TestHealthSourceCollectorsKeepLegacyInputsAndEffects(t *testing.T) {
 	// denial/missing exact read must replace proof with unknown, not old green.
 	forge.exactErr = errors.New("denied")
 	observeWorkflowHealthSource(ctx, deps, run, now.Add(time.Second))
-	v, _, err = store.ObserveTaskGates(ctx, "source-health", now.Add(time.Second), access)
+	v, _, err = store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "source-health", now.Add(time.Second))
 	must(err)
 	if v.Results[1].Result.Status != "unknown" {
 		t.Fatal("denied exact jobs reused prior proof")
@@ -116,7 +116,7 @@ func TestHealthSourceCollectorsKeepLegacyInputsAndEffects(t *testing.T) {
 	run.Event = "pull_request"
 	run.HeadRepo = "fork/widgets"
 	observeWorkflowHealthSource(ctx, deps, run, now.Add(2*time.Second))
-	v, _, err = store.ObserveTaskGates(ctx, "source-health", now.Add(2*time.Second), access)
+	v, _, err = store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "source-health", now.Add(2*time.Second))
 	must(err)
 	if v.Results[1].Result.Status == "met" {
 		t.Fatal("fork main became base health")
@@ -155,7 +155,7 @@ func TestWorkflowHealthCollectorPreservesAggregateRunVerdict(t *testing.T) {
 			if len(jobs) != 1 || jobs[0].Conclusion != "success" {
 				t.Fatal("shadow changed legacy jobs")
 			}
-			v, _, err := store.ObserveTaskGates(ctx, "workflow-verdict-health", at, access)
+			v, _, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "workflow-verdict-health", at)
 			must(err)
 			if v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != tc.want {
 				t.Fatalf("legacy=%s current=%s; want current=%s", v.Results[0].Result.Status, v.Results[1].Result.Status, tc.want)
@@ -200,7 +200,7 @@ func TestBaseHealthCollectorRequiresExactPlanAndAuthenticNonreproduction(t *test
 			t.Fatal("source observation woke legacy dispatcher")
 		default:
 		}
-		v, _, err := store.ObserveTaskGates(ctx, "base-source-health", at, access)
+		v, _, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "base-source-health", at)
 		must(err)
 		if v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != want {
 			t.Fatalf("%+v", v.Results)
@@ -223,7 +223,7 @@ func TestBaseHealthCollectorRequiresExactPlanAndAuthenticNonreproduction(t *test
 	runner.runs["original"] = original
 	// A newer tip invalidates a passing recorded-row legacy reading.
 	observeBaseHealthSource(ctx, deps, row, "new", true, now.Add(4*time.Second))
-	v, _, err := store.ObserveTaskGates(ctx, "base-source-health", now.Add(4*time.Second), access)
+	v, _, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "base-source-health", now.Add(4*time.Second))
 	must(err)
 	if v.Results[1].Result.Status == "met" {
 		t.Fatal("stale base tip passed")
@@ -254,7 +254,7 @@ func TestBaseHealthCollectorCannotUpgradeNarrowRunToWholePlan(t *testing.T) {
 	check := func(want string, at time.Time) {
 		t.Helper()
 		observeBaseHealthSource(ctx, deps, row, row.Commit, true, at)
-		v, _, err := store.ObserveTaskGates(ctx, "base-plan-health", at, access)
+		v, _, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), "base-plan-health", at)
 		must(err)
 		if v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != want {
 			t.Fatalf("legacy/current predictions: %+v", v.Results)

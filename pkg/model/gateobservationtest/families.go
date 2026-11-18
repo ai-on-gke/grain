@@ -49,7 +49,7 @@ func RunObservationFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 		changed := s.Changed()
 		before, err := s.TaskGoal(ctx, id)
 		must(err)
-		v, _, err := s.ObserveTaskGates(ctx, id, at, access)
+		v, _, err := s.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), id, at)
 		must(err)
 		after, err := s.TaskGoal(ctx, id)
 		must(err)
@@ -69,7 +69,7 @@ func RunObservationFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 		return v
 	}
 	review := read(now)
-	if len(review.Bindings) <= 2 || review.Bindings[2].Type != "review" {
+	if len(review.Bindings) <= 2 || !hasObservationType(review, "review") {
 		t.Fatal("upstream PR projection was lost")
 	}
 	failure := gates.UnavailableObservation(id, now.Add(time.Second))
@@ -90,7 +90,7 @@ func RunObservationFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 	}
 	must(s.ClearTaskGoal(ctx, id))
 	restored := read(now.Add(4 * time.Second))
-	if len(restored.Bindings) != len(review.Bindings) || restored.Bindings[2].Type != "review" {
+	if len(restored.Bindings) != len(review.Bindings) || !hasObservationType(restored, "review") {
 		t.Fatal("health backoff hid the restored upstream PR projection")
 	}
 	for _, r := range restored.Results {
@@ -101,7 +101,7 @@ func RunObservationFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 	// Scoped task reads retain the upstream security boundary, including the
 	// failure path; a denied task cannot consult or replace a shared cache.
 	denied := model.WithExternalRefReadable(ctx, func(string) bool { return false })
-	_, _, err := s.ObserveTaskGates(denied, id, now.Add(5*time.Second), access)
+	_, _, err := s.ObserveTaskGates(model.WithGateHealthAccess(denied, access), id, now.Add(5*time.Second))
 	if !errors.Is(err, model.ErrGateObservationScopeDenied) {
 		t.Fatalf("collection scope denial: %v", err)
 	}
@@ -113,7 +113,7 @@ func RunObservationFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 	// metadata, make one stored history row undecodable, and replay current state.
 	_, err = db.ExecContext(ctx, "UPDATE `gate_observation_shadow_history` SET `view_json` = ? WHERE `task_id` = ?", "not-json", id)
 	must(err)
-	current, err := s.ObserveTaskGatePredictions(ctx, id, now.Add(4*time.Second), access)
+	current, err := s.ObserveTaskGatePredictions(model.WithGateHealthAccess(ctx, access), id, now.Add(4*time.Second))
 	must(err)
 	if len(current.Bindings) != len(review.Bindings) {
 		t.Fatal("current-only projection changed")
@@ -148,7 +148,7 @@ func runHealthChecksFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 		t.Helper()
 		before := legacyChecksSnapshot(t, ctx, db)
 		wake, commits := s.Changed(), s.CommitCount()
-		v, _, err := s.ObserveTaskGatesWithChecks(ctx, id, at, input, []gates.ChecksFacts{facts}, access)
+		v, _, err := s.ObserveTaskGatesWithChecks(model.WithGateHealthAccess(ctx, access), id, at, input, []gates.ChecksFacts{facts}, gates.ChildrenConfig{Tasks: []string{id + "-review"}, Predicate: "closed"})
 		must(err)
 		if before != legacyChecksSnapshot(t, ctx, db) || commits != s.CommitCount() {
 			t.Fatal("family read changed legacy state")
@@ -166,7 +166,7 @@ func runHealthChecksFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 		return v
 	}
 	ci := read(now, fence())
-	if len(ci.Bindings) < 5 || ci.Bindings[2].Type != "checks" || ci.Results[2].Result.Status != "met" || ci.Bindings[4].Type != "review" {
+	if len(ci.Bindings) < 5 || ci.Bindings[2].Type != "checks" || ci.Results[2].Result.Status != "met" || !hasObservationType(ci, "review") || !hasObservationType(ci, "children") {
 		t.Fatal("combined CI/review projection lost")
 	}
 	errorAt := now.Add(time.Second)
@@ -224,7 +224,7 @@ func runHealthChecksFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 	}
 	facts.ObservedAt, facts.ValidUntil = now.Add(4*time.Second), now.Add(time.Minute)
 	restored := read(now.Add(4*time.Second), fence())
-	if len(restored.Bindings) != len(ci.Bindings) || restored.Results[2].Result.Status != "met" || restored.Bindings[4].Type != "review" {
+	if len(restored.Bindings) != len(ci.Bindings) || restored.Results[2].Result.Status != "met" || !hasObservationType(restored, "review") || !hasObservationType(restored, "children") {
 		t.Fatal("CI/review projection did not recover after health")
 	}
 	failure = gates.UnavailableObservation(id, now.Add(5*time.Second), facts)
@@ -248,4 +248,13 @@ func runHealthChecksFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 	if retry == nil {
 		t.Fatal("current-only preflight consulted retained history")
 	}
+}
+
+func hasObservationType(view *gates.ObservationView, typ string) bool {
+	for _, binding := range view.Bindings {
+		if binding.Type == typ {
+			return true
+		}
+	}
+	return false
 }

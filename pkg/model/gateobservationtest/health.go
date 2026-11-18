@@ -80,7 +80,7 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 		t.Helper()
 		before := snapshot()
 		changed := store.Changed()
-		v, d, err := store.ObserveTaskGates(ctx, id, at, a)
+		v, d, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, a), id, at)
 		must(err)
 		if before != snapshot() {
 			t.Fatal("shadow changed legacy health/lifecycle state")
@@ -225,12 +225,17 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 	if v.Results[0].EvaluationID != failure.Results[0].EvaluationID {
 		t.Fatal("failure replay changed generation")
 	}
-	// New unrelated tasks keep the report/receipt projection and do not acquire
+	// Unrelated tasks retain the ordinary outcome projection and do not acquire
 	// health requirements just because another task is a repair.
 	must(s.PutTask(ctx, model.Task{ID: "unrelated", Intent: model.IntentImplement, Target: &repo, Title: "ordinary work"}))
 	unrelated, _ := read(s, "unrelated", now, access)
-	if len(unrelated.Bindings) != 2 || unrelated.Bindings[0].Type != "delivery" {
-		t.Fatal("health attached to unrelated task")
+	if len(unrelated.Bindings) < 2 || unrelated.Bindings[0].Type != "delivery" || unrelated.Bindings[1].Type != "acknowledgment" {
+		t.Fatal("ordinary outcome projection was lost")
+	}
+	for _, binding := range unrelated.Bindings {
+		if strings.HasSuffix(binding.Type, "_health") || binding.Required || binding.Purpose != "monitor" {
+			t.Fatal("health or required obligations attached to unrelated task")
+		}
 	}
 
 	t.Run("nightly-real-rows-and-window", func(t *testing.T) {

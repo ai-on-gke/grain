@@ -3,7 +3,7 @@
 Task #68 builds on merged canonical-spec PR #1719 (Task #59), initial-framework
 PR #1739 (Task #61) and framework-review PR #1803 (Task #64). All three merge
 commits were verified ancestors of the implementation checkout. The implementation
-pin is `builtin-task-observer-v6`; public contracts remain `grain.gates/v1`.
+pin is `builtin-task-observer-v7`; public contracts remain `grain.gates/v1`.
 
 **OBSERVATION-ONLY.** Every binding is a nonrequired monitor with action=null,
 authority=legacy and lifecycle/action/dispatch/automatic-cutover flags false.
@@ -88,7 +88,7 @@ still leaves the stronger profile unknown.
 ## Persistence and bounds
 
 The existing serialized diagnostic writer, replay/backoff handling and history
-retention are shared by all nine types. Error reconstruction regenerates the
+retention are shared by all eleven types. Error reconstruction regenerates the
 current binding shape and discards accepted evidence/work/actions/waits. Safe
 binding/permission selection precedes persisted backoff; expensive fact collection
 runs only after retry is due. Window, threshold and source expiry shorten the
@@ -167,4 +167,11 @@ local health-source change. Resource-restricted
 preflight reads filter old health samples and withhold aggregate metadata;
 scoped collection and failure writes reauthorize the task, and current-only reads
 remain independent of retained history. The shared registry implementation pin is
-v6; all nine registered types retain their v1 profiles and wire contracts.
+v7; all eleven registered types retain their v1 profiles and wire contracts.
+
+The delivery/integration/children port shares this registry and persistence path.
+Health read ceilings travel in ordinary scoped Go context, independently of
+explicit child comparison configurations. Non-health tasks retain the upstream
+outcome, CI and review projections; health goals retain only their selected
+health profiles. Child history reauthorization and health-resource history
+filtering both apply, and source tables remain deployment-local diagnostics.

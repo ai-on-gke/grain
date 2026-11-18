@@ -122,13 +122,28 @@ func healthBindings(t Task, g TaskGoal, repos []string) []gates.Binding {
 	}
 	return out
 }
-func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, access GateHealthAccess) (gates.Facts, string, error) {
+func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, access GateHealthAccess, selected ...gates.ChildrenConfig) (gates.Facts, string, error) {
 	g, err := gateTaskGoal(ctx, q, id)
 	if err != nil {
 		return gates.Facts{}, "", err
 	}
 	if !healthGoal(g) {
-		return captureReportFacts(ctx, q, id, now)
+		t, err := getTask(ctx, q, id)
+		if err != nil {
+			return gates.Facts{}, "", err
+		}
+		if t == nil {
+			return gates.Facts{}, "", sql.ErrNoRows
+		}
+		o, err := getObservation(ctx, q, id)
+		if err != nil {
+			return gates.Facts{}, "", err
+		}
+		f, state, err := captureReportFacts(ctx, q, id, now, t, o)
+		if err == nil {
+			err = captureOutcomeFacts(ctx, q, &f, now, selected, t, o)
+		}
+		return f, state, err
 	}
 	t, err := getTask(ctx, q, id)
 	if err != nil {
