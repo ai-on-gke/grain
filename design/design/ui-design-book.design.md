@@ -688,7 +688,12 @@ Rules:
   Example: Release hold cannot clear review findings, so a hold of findings
   alone shows no Release hold. The gate card says what does clear it and
   offers that action (*Override review gate…*) to people who may take it
-  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`).
+  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`). On Task detail, when
+  a task waits on a person's `Retry merge` (`reason.control === "Retry merge"`
+  or a completed task in `merge_failed`), the header offers **Retry merge** as
+  its primary action, and a `completed` task tucks **Run now** into **More ▾**
+  rather than placing it in the header
+  (`ui-ng/e2e/next-retry-merge-header.spec.ts`).
 - **Refusals say why.** A failed action shows the server's own `error`
   text (`errorText`). A refusal the request caused is a 4xx with a message,
   never a 500 with only a reference id.
