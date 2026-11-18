@@ -288,6 +288,9 @@ func (c *HostGitClient) forge(t *CommandForgeTransport, req *http.Request) (*htt
 	}
 	var res hostGitForgeResult
 	if err := c.call(ctx, hostGitToolForge, args, &res); err != nil {
+		if strings.Contains(err.Error(), bodyCutMarker) {
+			return nil, &forgeBodyCutError{msg: err.Error()}
+		}
 		return nil, err
 	}
 	if res.LoginLocation != "" {
@@ -496,6 +499,10 @@ func hostGitServeForge(ctx context.Context, args map[string]any) ([]byte, error)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, hostGitMaxBody+1))
+	if errors.Is(err, ErrForgeBodyCut) {
+		// Already names the command, the status and what it said.
+		return json.Marshal(hostGitForgeResult{Error: err.Error()})
+	}
 	if err != nil {
 		return json.Marshal(hostGitForgeResult{Error: fmt.Sprintf("reading %s's answer: %v", src.Command, err)})
 	}
