@@ -96,24 +96,35 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 		return view
 	}
+	qaIndex := func(v *gates.ObservationView) int {
+		t.Helper()
+		for i, b := range v.Bindings {
+			if b.ID == "qa-s3" {
+				return i
+			}
+		}
+		t.Fatal("missing S3 monitor")
+		return 0
+	}
+	qa := func(v *gates.ObservationView) gates.EvaluationState { return v.Results[qaIndex(v)] }
 	first := read(s, now, c)
 	if path := os.Getenv("GRAIN_QUALIFICATION_OBSERVATION_FIXTURE"); path != "" {
 		data, err := json.MarshalIndent(first, "", "  ")
 		must(err)
 		must(os.WriteFile(path, data, 0600))
 	}
-	if len(first.Results) != 5 || first.Results[2].Result.Status != "unmet" {
+	if len(first.Results) < 5 || qa(first).Result.Status != "unmet" {
 		t.Fatalf("missing stage prediction %+v", first)
 	}
 	replayed := read(model.New(db), now.Add(time.Second), c)
-	if replayed.Results[2].Revision != first.Results[2].Revision {
+	if qa(replayed).Revision != qa(first).Revision {
 		t.Fatal("restart or heartbeat generated a source event")
 	}
 	next := *c.QA
 	next.Head = strings.Repeat("b", 40)
 	c.QA = &next
 	second := read(s, now.Add(2*time.Second), c)
-	if second.Results[2].Result.Status != "unknown" || second.Results[2].Revision <= first.Results[2].Revision {
+	if qa(second).Result.Status != "unknown" || qa(second).Revision <= qa(first).Revision {
 		t.Fatal("old-head stage survived source event")
 	}
 	old := gates.QualificationCollection{StoreFence: c.StoreFence, QA: &f}
@@ -123,7 +134,7 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 	}
 	must(s.UpdateTask(ctx, id, func(task *model.Task) error { task.QAFlowRef = "another-flow"; return nil }))
 	stale := read(s, now.Add(3*time.Second), c)
-	if stale.Results[2].Result.Status != "unknown" || stale.Results[2].Result.Dependencies[0].Complete {
+	if qa(stale).Result.Status != "unknown" || qa(stale).Result.Dependencies[0].Complete {
 		t.Fatal("changed task/policy accepted old source")
 	}
 	c.StoreFence, _ = s.QualificationObservationFence(ctx, id)
@@ -142,7 +153,7 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 		t.Fatal("failure woke legacy")
 	default:
 	}
-	if len(unavailable.Results) != 5 {
+	if len(unavailable.Results) != len(accepted.Results) {
 		t.Fatal("failure dropped QA shape")
 	}
 	for _, r := range unavailable.Results {
@@ -151,11 +162,11 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 	}
 	rejected := read(model.New(db), errorAt.Add(time.Millisecond), c)
-	if !rejected.Dirty || rejected.Results[2].Result.Status != "error" {
+	if !rejected.Dirty || qa(rejected).Result.Status != "error" {
 		t.Fatal("restart lost rejected backoff")
 	}
 	recovered := read(model.New(db), now.Add(8*time.Second), c)
-	if recovered.Dirty || recovered.Results[2].Result.Status != "unmet" {
+	if recovered.Dirty || qa(recovered).Result.Status != "unmet" {
 		t.Fatal("did not recover")
 	}
 	late := gates.UnavailableQualifications(id, errorAt, c)
@@ -163,7 +174,7 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 	if late.SourceRevision != recovered.SourceRevision {
 		t.Fatal("late failure replaced recovery")
 	}
-	if accepted.Results[2].Revision >= recovered.Results[2].Revision {
+	if qa(accepted).Revision >= qa(recovered).Revision {
 		t.Fatal("recovery revision rewound")
 	}
 
@@ -190,13 +201,13 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 	// silently reusing the prediction for a different stage/profile.
 	corrupt := *expired
 	corrupt.Bindings = append([]gates.Binding{}, expired.Bindings...)
-	corrupt.Bindings[2].Config = json.RawMessage("{\"stage\":\"s4\",\"flow_revision\":\"flow\",\"assignment\":\"treatment\"}")
+	corrupt.Bindings[qaIndex(&corrupt)].Config = json.RawMessage("{\"stage\":\"s4\",\"flow_revision\":\"flow\",\"assignment\":\"treatment\"}")
 	raw, err := json.Marshal(corrupt)
 	must(err)
 	_, err = db.ExecContext(ctx, "UPDATE `gate_observation_shadow` SET `view_json` = ? WHERE `task_id` = ?", string(raw), id)
 	must(err)
 	rebuilt := read(s, now.Add(22*time.Second), c)
-	if rebuilt.Results[2].Result.Status != "unknown" || !strings.Contains(rebuilt.Results[2].Result.Summary, "regenerated") {
+	if qa(rebuilt).Result.Status != "unknown" || !strings.Contains(qa(rebuilt).Result.Summary, "regenerated") {
 		t.Fatal("mismatched cache profile was reused")
 	}
 	must(s.UpdateTask(ctx, id, func(task *model.Task) error {
@@ -238,15 +249,16 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 	for _, subject := range model.CheckSubjects(*currentTask) {
 		checks = append(checks, gates.ChecksFacts{TaskID: id, Subject: subject, ObservedAt: now, ValidUntil: now.Add(time.Minute)})
 	}
+	children := gates.ChildrenConfig{Tasks: []string{"missing-selected-child"}, Predicate: "success"}
 	beforeCombined, wakeCombined := legacy(), s.Changed()
-	all, _, err := s.ObserveTaskGatesWithEvidence(ctx, id, now.Add(24*time.Second), checkFence, checks, c)
+	all, _, err := s.ObserveTaskGatesWithEvidence(ctx, id, now.Add(24*time.Second), checkFence, checks, c, children)
 	must(err)
 	counts := map[string]int{}
 	for _, b := range all.Bindings {
 		counts[b.Type]++
 	}
-	if len(all.Bindings) > 64 || counts["checks"] != 16 || counts["qa_stage"] != 3 || counts["release_qualification"] != 8 || counts["review"] == 0 {
-		t.Fatalf("combined CI/QA/release/review families lost or unbounded: %v (%d bindings)", counts, len(all.Bindings))
+	if len(all.Bindings) > 64 || counts["checks"] != 16 || counts["qa_stage"] != 3 || counts["release_qualification"] != 8 || counts["review"] == 0 || counts["children"] != 1 || counts["delivery"] < 5 || counts["integration"] == 0 {
+		t.Fatalf("combined CI/outcome/QA/release/review families lost or unbounded: %v (%d bindings)", counts, len(all.Bindings))
 	}
 	if legacy() != beforeCombined {
 		t.Fatal("combined observations changed legacy rows")
@@ -256,7 +268,7 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 		t.Fatal("combined observations woke legacy scheduling")
 	default:
 	}
-	restart, _, err := model.New(db).ObserveTaskGatesWithEvidence(ctx, id, now.Add(25*time.Second), checkFence, checks, c)
+	restart, _, err := model.New(db).ObserveTaskGatesWithEvidence(ctx, id, now.Add(25*time.Second), checkFence, checks, c, children)
 	must(err)
 	if restart.Results[0].Revision != all.Results[0].Revision {
 		t.Fatal("combined restart generated an event")

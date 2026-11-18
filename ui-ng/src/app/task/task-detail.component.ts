@@ -84,7 +84,14 @@ import {
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
+import {
+  ago,
+  levelOf,
+  mergeStuck,
+  priorityOf,
+  stateLabel,
+  taskStateLabel,
+} from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
 import { TaskDocsTabComponent } from "./task-docs-tab.component";
@@ -226,7 +233,7 @@ export function duration(from?: string, to?: string): string {
               >
             }
             <span [class]="'status-pill ' + tone()" data-testid="task-state">{{
-              label(t.state)
+              stateOval(t)
             }}</span>
             @if (t.paused) {
               <span class="status-pill proposal" data-testid="task-paused-pill"
@@ -1431,6 +1438,7 @@ export function duration(from?: string, to?: string): string {
                 [offered]="offeredCapabilities()"
                 [held]="t.capabilities ?? []"
                 [repo]="t.repo"
+                [policyVerdicts]="true"
                 [disabled]="store.isBusy('capability', t.id)"
                 (attachGrant)="onAttachCapability($event)"
                 (detachGrant)="onDetachCapability($event)"
@@ -1754,6 +1762,7 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+  protected readonly stateOval = taskStateLabel;
 
   // depTitle is a dependency chip's hover text: the task it waits for,
   // its title where the open-task feed knows it, its state, and whether
@@ -1979,7 +1988,9 @@ export class TaskDetailComponent implements OnDestroy {
     return n ? `${n} granted` : "None beyond the defaults";
   });
   protected readonly tone = computed(() => {
-    switch (this.t()?.state) {
+    const t = this.t();
+    if (t && mergeStuck(t)) return "error";
+    switch (t?.state) {
       case "running":
         return "setup";
       case "awaiting_reply":

@@ -23,22 +23,26 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 
 `legacy_*` profiles preserve predicate interpretation, not permission to bypass the new message/child/authority closure fences or credential admission. Complete-set limitations must be displayed. A result used by enforced action admission must meet current-head/current-policy/complete-collection rules even if an older cohort's monitoring uses a legacy reading. No passing check gate can waive a different failing review/approval or outcome.
 
-## Runtime coverage after the initial framework review
+## Runtime observation coverage
 
-The catalogue above remains the full v1 contract, not an implementation claim.
-Task #61, Task #64, Task #66, Task #67 and Task #69 implement:
+The catalogue remains the full v1 contract. Tasks #61, #64, #65, #66, #67 and #69 implement nonrequired monitors with legacy authority and every effect/cutover flag false.
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
-| `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
-| `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
+| `delivery`, all products, `current_v1` / `legacy_finish_v1` | Settled durable report or typed finish provenance; exact-head authenticated changes, owning-change acceptance for in-place fixes, delivered review, validated no-work and actual finish precedence. Body reports retain the 8192-character/attachment limits. |
+| `acknowledgment`, all four modes | Conservative verified human close after the current report/settlement; imported report-only child filing provenance and configured no-work acknowledgment are distinct. No review output becomes a second acknowledgment. |
+| `integration`, `positive_v1` | Current PR from complete links and exact-head merge receipt, or every scoped CL/snapshot with canonical renumbering. Positive landed/empty equivalence requires pinned proof. Missing snapshots, denied/stale/incomplete data are unknown. |
+| `children`, explicit success/closed/merged | Only selected IDs or a labeled existing tasks-closed goal. Missing/private children and unknown legacy success stay unknown; failure/cancel does not satisfy success. Reopen/message/relation revisions invalidate, and bounded cycle diagnostics never modify waits. |
 | `checks` v1, `current_v1` and explicitly imported `legacy_ci_v1` | Nonrequired change monitors; typed effective/github/grain/both/provider/none modes, inherited/extra required identities, complete bounded exact-head CI collections and base-owned definitions. Legacy empty-clock, recorded Grain status/narrowing and budget-exception comparisons are explicitly labeled. Merge context remains separate and inert. See [CI checks coverage](../../../docs/gate-check-observations.md). |
 | `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
 | `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
 | `qa_stage` v1, s3/s4/s5 | Authentic exact-head/flow/engine/arm task monitors, complete conditional/grouped checks, repair descriptions and human floors. Missing pins/unsupported overlays stay unknown. |
 | `release_qualification` v1 | Actual qualification-suite task's repository monitors, authenticated recorded suite verdict, RC/readiness facts and committed veto/version policy. Missing signed/effective-policy/asset receipts stay unknown. |
 
-Other profiles of delivery/acknowledgment and the other six types remain unsupported by this registry.
+The other four catalogue types remain unsupported by this registry.
+Representative read-only selection and monitor-only mappings for existing
+`pr-merged`, `cl-submitted`, and `tasks-closed` goals do not migrate stored goals
+or tasks; success contracts make no legacy closure parity claim.
 The [review/approval guide](../../../docs/gate-review-observations.md) records
 runtime scope, bounded readers, tests and the explicit positive-proof/CL/multiple-change
 limitations; registration does not claim provider-backed positive qualification.

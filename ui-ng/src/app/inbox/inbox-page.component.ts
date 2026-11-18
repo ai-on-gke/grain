@@ -44,6 +44,7 @@ import {
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
+  AccessRequestItem,
   ClearNotificationsRequest,
   DiffPreview,
   Task,
@@ -61,6 +62,11 @@ import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import {
+  accessItemGrantable,
+  chosenAccessItems,
+  grantAccessLabel,
+} from "../shared/access-items";
 import { TaskGoalCardComponent } from "../task/task-goal-card.component";
 
 import {
@@ -806,8 +812,10 @@ const ONE_KEY = new Set(["approve"]);
                           <label>
                             <input
                               type="checkbox"
-                              [checked]="!unticked().has($index) && !it.error"
-                              [disabled]="!!it.error"
+                              [checked]="
+                                !unticked().has($index) && grantable(it)
+                              "
+                              [disabled]="!grantable(it)"
                               (change)="toggleItem($index)"
                             />
                             <span class="tabular">{{ itemText(it) }}</span>
@@ -850,12 +858,10 @@ const ONE_KEY = new Set(["approve"]);
                             (click)="grant(sel, pa.items)"
                           >
                             {{
-                              chosenItems(pa.items).length === pa.items.length
-                                ? "Grant all"
-                                : "Grant " +
-                                  chosenItems(pa.items).length +
-                                  " of " +
-                                  pa.items.length
+                              grantLabel(
+                                chosenItems(pa.items).length,
+                                pa.items.length
+                              )
                             }}
                           </button>
                           <button
@@ -1725,9 +1731,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected chosenItems(items: { error?: string }[]): number[] {
-    const un = this.unticked();
-    return items.map((_, i) => i).filter((i) => !un.has(i) && !items[i].error);
+  protected readonly grantable = accessItemGrantable;
+  protected readonly grantLabel = grantAccessLabel;
+
+  protected chosenItems(items: readonly AccessRequestItem[]): number[] {
+    return chosenAccessItems(items, this.unticked());
   }
 
   protected toggleItem(i: number): void {
@@ -2077,7 +2085,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected grant(sel: InboxEntry, items: { error?: string }[]): void {
+  protected grant(sel: InboxEntry, items: readonly AccessRequestItem[]): void {
     const chosen = this.chosenItems(items);
     const all = chosen.length === items.length;
     void this.actAndFocus(

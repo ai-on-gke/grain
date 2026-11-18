@@ -526,14 +526,21 @@ func shadowRequirementID(id string) string {
 	return "scope:" + gates.Digest(id)[7:]
 }
 
-func observationBindings(id string, f gates.Facts) []gates.Binding {
+func observationBindings(id string, f gates.Facts, reserve ...int) []gates.Binding {
+	limit := 64
+	if len(reserve) > 0 {
+		limit -= reserve[0]
+	}
 	b := gates.BindingsFor(id, f.Checks)
+	if len(f.Bindings) > 2 {
+		b = append(b, f.Bindings[2:]...)
+	}
 	if f.Change != nil {
 		extra := gates.ChangeBindings(id, *f.Change)
-		if len(b)+len(extra) > 64 {
+		if len(b)+len(extra) > limit {
 			f.Change.Complete = false
-			f.Change.IncompleteReason = "Combined CI/review observation exceeds the canonical 64-binding bound; displayed review/approval scopes are incomplete."
-			extra = extra[:64-len(b)]
+			f.Change.IncompleteReason = "Combined CI/outcome/review observation exceeds the canonical 64-binding bound; displayed review/approval scopes are incomplete."
+			extra = extra[:limit-len(b)]
 		}
 		b = append(b, extra...)
 	}

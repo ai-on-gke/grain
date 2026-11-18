@@ -3,7 +3,7 @@
 Task #69 extends the observation-only slice reviewed in Task #64. Verified merged
 ancestors before implementation: canonical spec PR #1719 (2e45dca71), framework
 PR #1739 (6bd221161), and review PR #1803 (07e43408c, including de688e249).
-The implementation pin is builtin-ci-qualification-observer-v6.
+The implementation pin is builtin-outcome-ci-qualification-observer-v7.
 
 The existing disabled-by-default allowlist still selects at most 32 tasks.
 Authorized ordinary task reads add QA observations for eligible QA tasks, and
@@ -140,3 +140,5 @@ do not version the configured qualification predicate.
 The merged Task #66 CI observers are retained alongside QA/release and review/approval. Shared admission reserves both CI and qualification bindings before collecting review scopes, preserving the canonical 64-binding limit.
 
 The release qualification family also requires the ordinary CI read scope. Denied callers do not trigger release source reads; cached/historical suite views are rechecked before display. Authorized task-local QA observations remain independent of that CI permission.
+
+The merged delivery/integration/children port is retained, including related-task redaction, explicit child selections and byte-bounded history reads. Binding admission reserves actual outcome, CI and qualification contributions before collecting review scopes. The security review fix keeps breaking-change observations unknown without a complete release tag history.
