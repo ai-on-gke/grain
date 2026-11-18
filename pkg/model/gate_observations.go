@@ -152,26 +152,12 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		}{cid, body, at})
 		f.Report = &gates.Evidence{Kind: "report", ID: strconv.FormatInt(cid, 10), Version: version, Subject: subject, Digest: version}
 	}
+	f.ReceiptUnversioned = o.ClosedAt != nil
 	var eid int64
-	var kind, actor, source string
-	var closed time.Time
-	if o.ClosedAt != nil {
-		f.ReceiptUnversioned = true
-		err = q.QueryRowContext(ctx, "SELECT `id`,`actor_kind`,`actor_id`,`actor_source`,`at` FROM `task_event` WHERE `task_id` = ? AND `kind` = 'closed' AND `at` = ? ORDER BY `id` DESC LIMIT 1", id, *o.ClosedAt).Scan(&eid, &kind, &actor, &source, &closed)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if f.Settled && f.Report != nil {
+		f.Receipt, eid, err = captureProductReceipt(ctx, q, id, o.ClosedAt, *settledAt, at, *f.Report)
+		if err != nil {
 			return f, "", err
-		}
-		p := Principal{Kind: PrincipalKind(kind), ID: actor, Source: AuthSource(source)}
-		// These legacy close events do not name a report version. Strictly
-		// later timestamps are the only supported ordering proof: equal
-		// timestamps can also mean a revised report arrived after the close.
-		if f.Report != nil && strings.TrimSpace(actor) != "" && kind == string(PrincipalHuman) && p.Verified() && closed.After(at) && closed.After(*settledAt) {
-			version := gates.Digest(struct {
-				Event  int64
-				Report string
-				At     time.Time
-			}{eid, f.Report.Version, closed})
-			f.Receipt = &gates.Evidence{Kind: "acknowledgment", ID: strconv.FormatInt(eid, 10), Version: version, Subject: subject, Digest: version}
 		}
 	}
 	// Any message, including one posted while evaluation runs, changes the fence.
@@ -196,6 +182,36 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 	}{id, f.Applicable, f.Complete, f.Running, f.Settled, f.UnsupportedReason, f.IncompleteReason, gates.RegistryDigest(), state, runID, outcome, started, finished, o.CompletedAt, o.ClosedAt, o.PendingQuestionCommentID, f.Report, f.Receipt, lastComment, eid, noWork})
 
 	return f, state, nil
+}
+
+// captureProductReceipt reads the existing close event without conferring any
+// approval or closure authority. Legacy events do not name a product version;
+// strict ordering is the conservative shadow proof for both reports and typed
+// no-work finishes. Equal timestamps and unverifiable people remain unknown.
+func captureProductReceipt(ctx context.Context, q querier, id string, closedAt *time.Time, settledAt, producedAt time.Time, product gates.Evidence) (*gates.Evidence, int64, error) {
+	if closedAt == nil {
+		return nil, 0, nil
+	}
+	var event int64
+	var kind, actor, source string
+	var closed time.Time
+	err := q.QueryRowContext(ctx, "SELECT `id`,`actor_kind`,`actor_id`,`actor_source`,`at` FROM `task_event` WHERE `task_id` = ? AND `kind` = 'closed' AND `at` = ? ORDER BY `id` DESC LIMIT 1", id, *closedAt).Scan(&event, &kind, &actor, &source, &closed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	p := Principal{Kind: PrincipalKind(kind), ID: actor, Source: AuthSource(source)}
+	if strings.TrimSpace(actor) == "" || p.Kind != PrincipalHuman || !p.Verified() || !closed.After(producedAt) || !closed.After(settledAt) {
+		return nil, event, nil
+	}
+	version := gates.Digest(struct {
+		Event   int64
+		Product string
+		At      time.Time
+	}{event, product.Version, closed})
+	return &gates.Evidence{Kind: "acknowledgment", ID: strconv.FormatInt(event, 10), Version: version, Subject: product.Subject, Digest: version}, event, nil
 }
 
 // beginGateObservation preserves normal writer serialization while bounding
@@ -330,6 +346,9 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			if err != nil {
 				return err
 			}
+			// Keep the transactional local fence independently of external reads.
+			// The report dependency persists it without changing the wire schema.
+			f.LocalSourceVersion = f.SourceVersion
 			if f.Health != nil && !f.Complete {
 				transient = true
 				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: observationBindings(id, f), Results: []gates.EvaluationState{}}
@@ -447,7 +466,12 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				// across a restart. A changed local fence still invalidates the
 				// result rather than returning a possibly stale cached success.
 				if now.Before(evaluated) {
-					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && (f.Health == nil || source == f.SourceVersion) {
+					sameLocalSource := source == f.SourceVersion
+					if f.Health == nil {
+						sameLocalSource = len(cachedView.Results) > 0 && len(cachedView.Results[0].Result.Dependencies) > 0 &&
+							cachedView.Results[0].Result.Dependencies[0].Version == f.LocalSourceVersion
+					}
+					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && sameLocalSource {
 						view = cachedView
 						if history {
 							diag, err = readGateDiagnostics(ctx, tx, id)
@@ -465,7 +489,22 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 						if err != nil {
 							return err
 						}
+						f.LocalSourceVersion = f.SourceVersion
 						bindings = observationBindings(id, f)
+					} else if len(f.Checks) > 0 || qualifications.QA != nil || qualifications.Release != nil {
+						// Local facts must refresh, but an older collection cannot
+						// replace newer external evidence with an old positive head.
+						const reason = "Local observation context changed after this older collection started; recollect external evidence."
+						for i := range f.Checks {
+							f.Checks[i].PolicyComplete = false
+							f.Checks[i].Gap = reason
+						}
+						qualifications = qualifications.Invalidate(reason)
+						versions := []string{f.SourceVersion, qualifications.SourceVersionAt(now)}
+						for _, c := range f.Checks {
+							versions = append(versions, gates.ChecksVersion(c))
+						}
+						f.SourceVersion = gates.Digest(versions)
 					}
 				}
 			}
@@ -583,9 +622,6 @@ func compareReportMilestones(f gates.Facts, v gates.ObservationView) string {
 }
 
 func compareOutcomeMilestones(f gates.Facts, v gates.ObservationView) string {
-	if !f.Applicable {
-		return "not_applicable"
-	}
 	hasOutcomes, successContract := false, false
 	for i, binding := range v.Bindings {
 		if binding.Type != "integration" && binding.Type != "children" {
@@ -609,6 +645,9 @@ func compareOutcomeMilestones(f gates.Facts, v gates.ObservationView) string {
 			return "explicit_success_contract_only"
 		}
 		return "equivalent_outcome_milestones"
+	}
+	if !f.Applicable {
+		return "not_applicable"
 	}
 	if f.Product != "" && f.Product != "report" {
 		return "observed_" + f.Product + "_milestone"

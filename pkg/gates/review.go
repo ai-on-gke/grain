@@ -126,21 +126,7 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 		Evidence: []Evidence{}, Dependencies: []Dependency{}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{},
 		ObservedAt: now, ValidUntil: f.ValidUntil}
 	r.Dependencies = []Dependency{{Key: "change/" + b.ID, Subject: b.Subject, Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Config), ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}
-	defer func() {
-		// The canonical summary is <=240 characters. Longer scope/legacy diagnosis
-		// belongs in bounded inert guidance, not an expanded public wire contract.
-		if len([]rune(r.Summary)) > 240 {
-			detail := r.Summary
-			r.Summary = string([]rune(detail)[:239]) + "…"
-			if r.HumanText != nil {
-				detail = *r.HumanText + "\n\n" + detail
-			}
-			if len([]rune(detail)) > 8192 {
-				detail = string([]rune(detail)[:8191]) + "…"
-			}
-			r.HumanText = &detail
-		}
-	}()
+	defer func() { boundResultSummary(&r) }()
 	if _, err := Validate(b.Type, b.Version, b.Config); err != nil {
 		r.Summary = "Unsupported or malformed gate configuration."
 		return r
@@ -184,7 +170,7 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 			r.Dependencies = append(r.Dependencies, dep)
 		}
 	}
-	if !now.Before(f.ValidUntil) {
+	if f.ObservedAt.After(now) || !now.Before(f.ValidUntil) {
 		r.Summary = "Evidence is stale; refresh required."
 		return r
 	}

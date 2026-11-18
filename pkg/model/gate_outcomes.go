@@ -178,6 +178,16 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			f.ProductUnknown = "The finish selected a change, but its complete exact-head provenance is unavailable."
 		}
 	}
+	// No-work may have no report body at all. Pin its compatibility receipt to
+	// the authenticated current finish product, never to an incidental report.
+	if f.Product == "nothing_needed" {
+		if f.Settled && !f.Blocked && f.ProductEvidence != nil && f.ProductUnknown == "" && o.CompletedAt != nil {
+			f.NoWorkReceipt, _, err = captureProductReceipt(ctx, q, f.TaskID, o.ClosedAt, *o.CompletedAt, finish.At, *f.ProductEvidence)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	legacyChildBinding := ""
 	g, err := scanTaskGoal(q.QueryRowContext(ctx, "SELECT "+taskGoalColumns+" FROM `task_goal` WHERE `task_id` = ?", f.TaskID).Scan)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -280,6 +290,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		Blocked         bool
 		Product         string
 		ProductEvidence *gates.Evidence
+		NoWorkReceipt   *gates.Evidence
 		ProductUnknown  string
 		LegacyMet       map[string]bool
 		Settled         bool
@@ -287,7 +298,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		Declaration GoalDecl
 		At          time.Time
 		By          string
-	}{g.Decl(), g.DeclaredAt, g.DeclaredBy}, relations, acceptanceRevision, o.DeliveredCommentID, f.Blocked, f.Product, f.ProductEvidence, f.ProductUnknown, f.LegacyMet, f.Settled})
+	}{g.Decl(), g.DeclaredAt, g.DeclaredBy}, relations, acceptanceRevision, o.DeliveredCommentID, f.Blocked, f.Product, f.ProductEvidence, f.NoWorkReceipt, f.ProductUnknown, f.LegacyMet, f.Settled})
 	return nil
 }
 

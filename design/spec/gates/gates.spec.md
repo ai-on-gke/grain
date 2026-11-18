@@ -1,6 +1,6 @@
 # Configurable built-in gate specification
 
-**Status:** proposed normative design; documentation/schema only, not implemented. No runtime, deployment, configuration, live permission, automatic follow-up filing or task migration is authorized.
+**Status:** proposed normative enforcement design. The separate [observation-only subset](../../../docs/gate-coverage-audit.md) implements scoped predictions and diagnostic history; it does not activate the enforcement/authority contracts below. No deployment, configuration, live permission, automatic follow-up filing or task migration is authorized.
 
 **Specifies:** [Configurable built-in gates](../../design/gates.design.md). BCP 14 keywords apply. `BG-*` are stable requirement IDs. [contracts.schema.json](contracts.schema.json) defines closed configuration, result, action, exception and decision shapes; [catalogue.md](catalogue.md) defines predicates and configuration meanings; [compatibility.md](compatibility.md) identifies current source and deliberate changes. Shape validation MUST be followed by the semantic checks here. Examples are proposed records, not currently accepted APIs.
 The exact [internal evaluator API](internal-api.spec.md) and [HTTP/tool API](http-api.spec.md),

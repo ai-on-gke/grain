@@ -1,7 +1,8 @@
 # Built-in registry and evaluator API
 
-**Status:** normative proposed interface, documentation only. Implements the boundary
-described by [BG-1–4](gates.spec.md), not a deployed Go package. BCP 14 applies.
+**Status:** normative proposed enforcement interface. Describes the boundary
+in [BG-1–4](gates.spec.md); the separate [observation-only implementation](../../../docs/gate-coverage-audit.md)
+qualifies only its documented diagnostic subset. BCP 14 applies.
 [contracts.schema.json](contracts.schema.json) defines the wire representation and
 all scalar bounds/enums; [api.schema.json](api.schema.json) defines controller
 acceptance, discovery and operation projections. These are complementary contracts.
@@ -60,6 +61,7 @@ type Config struct {
     PublishingHealth *PublishingHealthConfig
     PipelineHealth *PipelineHealthConfig
     QAStage *QAStageConfig
+    ReleaseQualification *ReleaseQualificationConfig
 } // exactly one member; MUST match Binding.Gate
 type DeliveryConfig struct { Product, Semantics string }
 type AcknowledgmentConfig struct { Mode string }
@@ -98,6 +100,12 @@ type QAStageConfig struct {
     Stage string
     FlowRevision string
     Assignment string
+}
+type ReleaseQualificationConfig struct {
+    Predicate string
+    ExpectedCommit string
+    ReleaseVersion string
+    PolicyRevision string
 }
 ```
 
