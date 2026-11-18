@@ -617,7 +617,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     api.upgradeBody = {
       enabled: true,
       mode: "image",
-      branch: "v2",
+      branch: "stable",
       phase: "ok",
       cancellable: false,
     };
@@ -638,7 +638,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       mode: "image",
       phase: "",
       scheduled: {
-        branch: "v2",
+        branch: "stable",
         busyRuns: 0,
         busyCiRuns: 0,
         countError:
@@ -649,7 +649,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(
       el.querySelector('[data-testid="scheduled-upgrade-banner"]')?.textContent,
-    ).toContain("v2");
+    ).toContain("stable");
     expect(
       el.querySelector('[data-testid="scheduled-upgrade-count-error"]')
         ?.textContent,

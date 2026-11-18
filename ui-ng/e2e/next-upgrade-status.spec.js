@@ -33,11 +33,11 @@ async function stubUpgrade(page) {
         ...body,
         enabled: true,
         mode: "image",
-        branch: "v2",
+        branch: "stable",
         phase: "ok",
         cancellable: false,
         scheduled: {
-          branch: "v2",
+          branch: "stable",
           requestedAt: "2026-11-18T06:00:00Z",
           byKind: "human",
           byId: "alice@example.com",
