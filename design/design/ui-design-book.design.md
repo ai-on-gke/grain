@@ -162,7 +162,9 @@ do not pull in an icon font.
   Sessions and More, plus a floating New task button.
 - **Build stamp:** the "grain v…" stamp at the left of the bottom bar is a
   link to Settings → Upgrade, as it is in the classic UI. It ellipsizes
-  before the live count beside it gives way, and is hidden on phones.
+  before the live count beside it gives way. On phones (where the bottom bar's
+  stamp is hidden) the same link sits at the foot of the More sheet, wrapping
+  cleanly on narrow (`320px`) screens rather than clipping.
 - **Old addresses:** a classic address that has a page here (`/system/<tab>`,
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the

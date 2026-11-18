@@ -108,6 +108,7 @@ async function render(
         { path: "context", children: [] },
         { path: "fleet", children: [] },
         { path: "settings", children: [] },
+        { path: "settings/:section", children: [] },
       ]),
       { provide: APP_BASE_HREF, useValue: "/next/" },
       { provide: GrainApi, useValue: api },
@@ -983,5 +984,38 @@ describe("AppComponent shell", () => {
     newBoardOnInbox.click();
     await f.whenStable();
     expect(router.url).toBe("/tasks?newBoard=1");
+  });
+
+  it("shows a single build stamp in the phone More sheet that opens Settings -> Upgrade", async () => {
+    const { fixture: f } = await render();
+    const router = TestBed.inject(Router);
+    expect(el(f).querySelectorAll('[data-testid="build-stamp"]').length).toBe(
+      1,
+    );
+    expect(
+      el(f).querySelector('[data-testid="build-stamp"]')?.textContent?.trim(),
+    ).toBe("grain v3.5.0-test");
+
+    const more = el(f).querySelector<HTMLButtonElement>(
+      '[data-testid="compact-more"]',
+    )!;
+    more.click();
+    await f.whenStable();
+
+    const stamps = el(f).querySelectorAll<HTMLAnchorElement>(
+      '[data-testid="build-stamp"]',
+    );
+    expect(stamps.length).toBe(1);
+    const sheetStamp = el(f).querySelector<HTMLAnchorElement>(
+      '[data-testid="more-sheet"] [data-testid="build-stamp"]',
+    )!;
+    expect(sheetStamp).toBeTruthy();
+    expect(sheetStamp.textContent?.trim()).toBe("grain v3.5.0-test");
+    expect(sheetStamp.getAttribute("href")).toBe("/next/settings/upgrade");
+
+    sheetStamp.click();
+    await f.whenStable();
+    expect(router.url).toBe("/settings/upgrade");
+    expect(el(f).querySelector('[data-testid="more-sheet"]')).toBeNull();
   });
 });

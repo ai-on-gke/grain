@@ -41,6 +41,7 @@ import {
 import { type RouteKey } from "./api/generated-routes";
 import { GrainApi, routeScope } from "./api/grain-api.service";
 import { GrainEvents } from "./api/grain-events.service";
+import { versionLabel } from "./api/version";
 import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
@@ -716,16 +717,18 @@ export class DeferErrorDirective implements OnInit {
 
       <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
         <span class="bottom-left">
-          <a
-            class="muted bottom-version"
-            routerLink="/settings/upgrade"
-            data-testid="build-stamp"
-            [attr.title]="
-              'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
-            "
-            >grain{{ version() ? " " + version() : "" }}</a
-          >
-          <span class="bottom-sep" aria-hidden="true">·</span>
+          @if (!moreOpen()) {
+            <a
+              class="muted bottom-version"
+              routerLink="/settings/upgrade"
+              data-testid="build-stamp"
+              [attr.title]="
+                'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+              "
+              >grain{{ version() ? " " + version() : "" }}</a
+            >
+            <span class="bottom-sep" aria-hidden="true">·</span>
+          }
           <a
             class="factory-telemetry tabular"
             routerLink="/agents"
@@ -888,6 +891,18 @@ export class DeferErrorDirective implements OnInit {
               </button>
             </li>
           </ul>
+          <div class="more-sheet-foot">
+            <a
+              class="more-sheet-stamp tabular"
+              routerLink="/settings/upgrade"
+              data-testid="build-stamp"
+              [attr.title]="
+                'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+              "
+              (click)="closeMenus()"
+              >grain{{ version() ? " " + version() : "" }}</a
+            >
+          </div>
         </nav>
       }
 
@@ -1175,7 +1190,12 @@ export class AppComponent implements OnInit, OnDestroy {
   );
   protected readonly onSessions = signal(false);
   protected readonly currentPath = signal("");
-  protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
+  protected readonly version = computed(
+    () =>
+      versionLabel(this.access.rawConfig()?.version) ||
+      this.inboxRef()?.version() ||
+      "",
+  );
   protected readonly inboxCount = computed(
     () => this.inboxRef()?.decisions().length ?? 0,
   );
