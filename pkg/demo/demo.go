@@ -1986,23 +1986,37 @@ func (l *demoCLLease) release() {
 	}
 }
 
-// seed remembers obs and leaves n drafts on cl for taskID -- exactly n,
-// whatever an earlier seed left -- unless another live demo already
-// seeded what this one would share. A seedDemo outside any Start (the
-// package's own tests) always seeds.
+// seed remembers obs and sets taskID's waiting drafts to n on cl --
+// overwriting in place without forgetting first, so parallel seedDemo
+// readers never see a gap -- unless another live demo already seeded what
+// this one would share. A seedDemo outside any Start (the package's own
+// tests) always seeds.
 func (l *demoCLLease) seed(obs []change.Observation, taskID, cl string, n int, reason string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.seeded && l.live > 1 {
 		return
 	}
-	l.resetLocked()
 	for _, o := range obs {
-		change.Remember(o)
-		l.cls = append(l.cls, o.Target)
+		l.rememberLocked(o)
 	}
-	demoDrafts.leave(taskID, cl, n, reason)
-	l.seeded = true
+	demoDrafts.set(taskID, cl, n, reason)
+	if l.live > 0 {
+		l.seeded = true
+	}
+}
+
+func (l *demoCLLease) remember(obs change.Observation) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rememberLocked(obs)
+}
+
+func (l *demoCLLease) rememberLocked(obs change.Observation) {
+	change.Remember(obs)
+	if obs.Target != "" && !slices.Contains(l.cls, obs.Target) {
+		l.cls = append(l.cls, obs.Target)
+	}
 }
 
 // reset forgets everything the demo's CLs left in pkg/change.
@@ -2034,6 +2048,21 @@ func (d *demoDraftStore) reset() {
 type demoDraftStore struct {
 	mu     sync.Mutex
 	byTask map[string]map[string]int
+}
+
+// set sets taskID's waiting drafts to n on cl alone, replacing anything an
+// earlier seed or Reply left on taskID, and offers them on its Publish
+// replies button with reason.
+func (d *demoDraftStore) set(taskID, cl string, n int, reason string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if n <= 0 {
+		delete(d.byTask, taskID)
+		change.RememberPublish(taskID, change.PublishResult{})
+		return
+	}
+	d.byTask[taskID] = map[string]int{cl: n}
+	change.RememberPublish(taskID, d.resultLocked(taskID, 0, reason))
 }
 
 // leave records n more drafts on cl for taskID, and offers them on its
@@ -2111,7 +2140,7 @@ func (demoChangelists) Threads(context.Context, model.Task, string) ([]change.Th
 func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
 	obs, _ := change.LastObserved(target)
 	obs.Target, obs.Status = target, change.StatusSubmitted
-	change.Remember(obs)
+	demoCLState.remember(obs)
 	return change.Result{Target: target, Message: fmt.Sprintf("%s submitted %s (demo: nothing left this process).", by.Name, target)}, nil
 }
 func (demoChangelists) Sync(_ context.Context, task model.Task, _ string) (change.SyncResult, error) {
@@ -2120,7 +2149,7 @@ func (demoChangelists) Sync(_ context.Context, task model.Task, _ string) (chang
 		obs.Target, obs.Health, obs.Presubmit, obs.Checks = live[0], change.HealthOK, change.PresubmitNotRun, nil
 		obs.Snapshot++
 		obs.SnapshotAt = time.Now().UTC()
-		change.Remember(obs)
+		demoCLState.remember(obs)
 	}
 	return change.SyncResult{Message: "synced to head (demo)"}, nil
 }
@@ -2197,7 +2226,7 @@ func (demoChangelists) Mail(_ context.Context, _ model.Task, target string, revi
 	if obs.ReviewState == "" || obs.ReviewState == change.ReviewStateDraft {
 		obs.ReviewState = change.ReviewStateInReview
 	}
-	change.Remember(obs)
+	demoCLState.remember(obs)
 	to := "the deployment's default reviewers"
 	if len(reviewers) > 0 {
 		to = strings.Join(reviewers, ", ")
