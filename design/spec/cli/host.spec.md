@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`/`show`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `accept-findings`, `force-merge`, `run-now`, `compact`, `brief`, `rollover`, `pause`, `resume`, `inbox`, `wait`, `logs` |
-| Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `host …`, `hub …`, `access list\|allow\|role\|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject\|rollback`, `upgrade …`, `metrics`, `failures`, `usage`, `health`, `ci …`, `merge-queue`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status\|submit`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `host …`, `hub …`, `access list\|allow\|role\|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `notifications clear`, `release approve\|reject\|rollback`, `upgrade …`, `metrics`, `failures`, `usage`, `health`, `ci …`, `merge-queue`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status\|submit`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete`, `skill install\|status`, `mcp` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `host`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
@@ -303,17 +303,17 @@ _No flags._
 
 ### 3.7a `grain accept-findings -gate <gate> <id> <reason…>` {#CLI-112}
 
-Calls `POST /api/tasks/{id}/accept-findings`. A person accepts one review's findings on one merge gate (`security-review`, `review`, or `trigger:<name>`) as they are, so the change merges without fixing them. It clears that review's findings and questions on that gate and nothing else: CI, the other gates, approvers a trigger names and security holds still apply. It is recorded with the reason on the task, its timeline and the pull request. `-review <task>` names the review when several have findings on the gate. `-head <sha>` pins the head the findings were read at, and the request is refused if the pull request has moved since. **Scope:** person (`tasks:write`, unlimited role); an agent is refused.
+Calls `POST /api/tasks/{id}/accept-findings`. A person accepts one review's findings on one merge gate (`security-review`, `review`, `targeted-review`, or `trigger:<name>`) as they are, so the change merges without fixing them. It clears that review's findings and questions on that gate and nothing else: CI, the other gates, approvers a trigger names and security holds still apply. It is recorded with the reason on the task, its timeline and the pull request. `-review <task>` names the review when several have findings on the gate. `-head <sha>` pins the head the findings were read at, and the request is refused if the pull request has moved since. **Scope:** person (`tasks:write`, unlimited role); an agent is refused.
 
 <!-- BEGIN GENERATED FLAGS: grain accept-findings -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-gate` | string |  |  | the gate whose findings you accept: security-review, review, or trigger:<name> |
+| `-gate` | string |  |  | the gate whose findings you accept: security-review, review, targeted-review, or trigger:<name> |
 | `-head` | string |  |  | the head commit you read the findings at; refused if the pull request has moved since |
 | `-review` | string |  |  | the review task whose findings you accept; needed only when several have findings on the gate |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/ui/accept_findings_test.go`: `TestAcceptFindingsRefusesAnAgent`.
+**Pinned by:** `pkg/ui/accept_findings_test.go`: `TestAcceptFindingsRefusesAnAgent`, `TestAcceptFindingsTargetedReviewGate`.
 
 ### 3.7 `grain force-merge <id> <reason…>` {#CLI-28}
 
@@ -861,6 +861,29 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** *untested*.
+
+### 4.9.1 `grain notifications clear` {#CLI-113}
+
+`notifications clear [-subject prefix] [-severity info|warning|critical] [-older-than d] [-ids 1,2] [-dry-run] -reason <why>` calls `POST /api/notifications/clear`, the Inbox's **Clear all** and **Clear these**. Every flag given narrows the open notifications; none clears every open alert (a pending release is left alone unless `-subject` or `-ids` names it). `-older-than` takes a Go duration or a number of days (`7d`) and compares it with when each was last raised. `-reason` is required unless `-dry-run`, and the CLI refuses before calling the server without it. It prints `Cleared N notification(s).` (`Would clear N` with `-dry-run`) and, when some are level-triggered, how many will be raised again while their condition holds and their families. Each is cleared as `POST /api/notifications/{id}/clear` clears it; the server records one audit entry per call. A run's own credential clears only its task's `agent.<task>:` notifications.
+
+**Scope:** `notifications:write`.
+
+<!-- BEGIN GENERATED FLAGS: grain notifications -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain notifications clear -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-dry-run` | bool |  |  | count what would be cleared, and how many would come back, without clearing anything |
+| `-ids` | string |  |  | clear only these notification ids, comma-separated |
+| `-older-than` | string |  |  | clear only those last raised longer ago than this: a duration (90m, 12h) or days (7d) |
+| `-reason` | string |  |  | why they no longer need anyone, recorded in the audit log (required unless -dry-run) |
+| `-severity` | string |  |  | clear only this severity: info, warning or critical |
+| `-subject` | string |  |  | clear only the notifications whose subject starts with this |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/notifications_test.go`: `TestNotificationsClearSendsItsFilter`; the route is pinned in `pkg/ui/notifications_clear_test.go`.
 
 ### 4.9a `grain qa` {#CLI-112}
 
@@ -2283,7 +2306,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks (SQLite by 
 | `-merge-rules` | bool |  |  | seed acme/widgets' merge rules (the docs/declarations.md example) and two deploy/** changes the merge queue classified under them |
 | `-model-catalog` | string |  |  | host:port of an Anthropic model listing stub (GET /v1/models) on loopback: Claude connections that advertise no models are given what it lists, as a deployment's are given what Anthropic lists |
 | `-model-discovery-interval` | duration | `the deployment's 10m` |  | how often -model-catalog's discovery asks the provider again |
-| `-notifications` | bool |  |  | run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle |
+| `-notifications` | bool |  |  | run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green, ttl or suite-run) has come true is cleared on its own, as on a daemon's cycle |
 | `-observability` | bool |  |  | serve the live CI and sandbox observability demo |
 | `-open` | bool | `true` |  | open the UI in the system's default browser once it's listening |
 | `-qualification` | bool |  |  | seed a release candidate of -default-target-repo whose qualification run is waiting for approval |

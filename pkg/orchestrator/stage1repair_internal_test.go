@@ -332,3 +332,46 @@ func TestASkippedScheduledStage1NeitherFilesARepairNorClosesOne(t *testing.T) {
 		t.Fatalf("an idle-gated scheduled run cleared %s while repair %s is open", subject, ids[0])
 	}
 }
+
+// pipeline.nightly-red-unattended is level-triggered: a clear -- one at a
+// time or POST /api/notifications/clear, which makes the same store call --
+// takes the instance away, and the next cycle raises a new one while the
+// repair still waits. That is what the bulk clear's expectedBack counts.
+func TestAClearedUnattendedStage1NoticeIsRaisedAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	optInStage1(t, ctx, store, repo)
+	deps := Deps{Store: store}
+	now := time.Date(2026, 11, 10, 18, 0, 0, 0, time.UTC)
+	run, jobs := stage1Run(t, ctx, store, repo, 81, "v3.5.0-rc.1", "push", "failure", now,
+		map[string]string{"go-long": "failure"})
+	if err := handleStage1Verdict(ctx, deps, run, jobs, now); err != nil {
+		t.Fatal(err)
+	}
+	subject := stage1Subject(repo)
+	if err := reconcileStage1Repairs(ctx, deps, now.Add(61*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.OpenNotification(ctx, subject)
+	if err != nil || first == nil {
+		t.Fatalf("no %s after an hour queued (%v)", subject, err)
+	}
+	if !model.LevelTriggeredFamily(first.Family) {
+		t.Fatalf("%s is not counted as level-triggered", first.Family)
+	}
+	if cleared, err := store.ClearNotificationByID(ctx, first.ID, "human:alice"); err != nil || !cleared {
+		t.Fatalf("clearing %d = %v, %v", first.ID, cleared, err)
+	}
+	if err := reconcileStage1Repairs(ctx, deps, now.Add(62*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.OpenNotification(ctx, subject)
+	if err != nil || again == nil {
+		t.Fatalf("%s did not come back while the repair still waits (%v)", subject, err)
+	}
+	if again.ID == first.ID {
+		t.Fatalf("the cleared instance %d was reopened, want a new one", first.ID)
+	}
+}

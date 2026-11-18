@@ -172,7 +172,16 @@ do not pull in an icon font.
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
   `Details (N)` breakdown, paired with status on the topbar live pill and
   contextual queue/settings notices formatted in the configured or local
-  timezone with relative countdowns.
+  timezone with relative countdowns. A page that changes the pause itself
+  (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
+  so the banner follows the click rather than the next poll.
+- **Disconnected banner:** the one standing banner above the whole shell
+  (`services/connection.service.ts`). It is raised when requests fail to
+  connect, when a gateway answers 502/503/504, or when a polled read goes
+  10 s unanswered. It says when the outage began, in the deployment's time
+  zone, and clears itself on the first answer. It sits in flow above the
+  rail and top bar, never over them (`g-root:has(> .conn-banner)` becomes a
+  column), is `role="status"`, and has no close button.
 
 ### Destinations fill the stage
 
@@ -224,6 +233,10 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
+- A page with a split calls `sp.attach()` once drawn (and `sp.detach()`
+  on destroy): only a measured split clamps a remembered share, so the
+  detail pane keeps its 320px floor whatever share a wider window stored
+  (`ui-ng/e2e/next-prompt-panes.spec.js`).
 - The detail pane is always there on desktop; it is not a modal. The
   exception is Agents, whose cards are a dashboard in their own right:
   its inspector opens only on the agent `?task=` names. With none (on
@@ -385,6 +398,22 @@ working. A table cell holding a list (scopes, repositories) stays on one line,
 truncates with the full list in its `title`, and drops secondary columns
 (`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
 
+A capability server opens on a page of its own,
+`/settings/capabilities/<encoded id>` (the classic `serverPath`), reached from
+its id in the servers table and from Stored secrets' "Used by" links: the
+server's state, what it gives a task, its connection (edited, renamed after a
+confirm, tested unsaved, placed on a host), its secrets, its server settings
+and what holds a grant on it, each holder linked to its page (a task to the
+classic `/tasks/<id>` until `/next/` is the default). Server settings are drawn
+from the schema its configure tool declares, never hand-written per server:
+deprecated and grain-injected fields are left out, an enum reads through its
+`x-grain-enum-labels`, a write-only field is a password box with a set /
+missing / not set chip whose typed value goes as `configSecrets`, a refusal
+keyed by field shows under that field, and a field that does not apply given
+its siblings (gcp's `pool_max` in keyless token mode) is hidden unless it holds
+a value. Removing a server asks first and lists what holds it, linked, in the
+confirm (`ConfirmRequest.items`).
+
 A setting kept in the secret store rather than in grain/config (the Hub's
 `grc_…` registration token) stays editable while a config-repo lock
 disables the fields around it, says when the daemon has no secret store
@@ -477,12 +506,14 @@ it rather than copy it.
 | Conversation | `shared/conversation/` | thread + composer (section 3) |
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
-| Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
+| Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope, and a required reason (`reason`) where the action is audited, such as the Inbox's Clear all |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
 | Prompt and attributes panes | `shared/detail-panes.css` (`.g-panes`, `.g-pane`, `.g-attrs`) | what an agent is told beside the facts about it: task detail, Processes schedule and template inspectors |
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
+| Info popover | `shared/info-popover.component.ts` | an `(i)` beside a field or name whose explanation is too long for a tooltip: opens on click, Enter or Space, closes on Escape (focus back on the button), an outside click or a second press, and shifts to stay inside the viewport |
+| Schema form | `settings/capability-schema-form.component.ts` | a form drawn from a JSON schema (a capability server's configure schema): never hand-written per server |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
 | Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
 | Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |
@@ -493,6 +524,12 @@ Rules:
   reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
   above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
   code blocks into one paragraph. A one-line `summary` stays the row title.
+  An alert's body is read whole from its family (`?open=1&family=`: the
+  polled list carries its first line only) and kept per raise -- id and
+  `lastRaisedAt` -- since raising it again rewrites the body under the same
+  id; until that raise is read, or when the read fails, the dock shows the
+  list's first line, never an earlier raise's body
+  (`ui-ng/e2e/next-inbox-alert-body.spec.js`).
 - **A decision's actions never leave the screen.** In the Inbox inspector
   only the message in the resolution dock gives way (it shrinks and
   scrolls); the dock's actions keep their height and the inspector body
@@ -546,17 +583,25 @@ Rules:
   Something an operator should fix while the deployment keeps working (a
   base branch publishing nothing, `baseBranchPublishing`) is a
   `warning-container` banner with a warning status icon on its first line
-  and `role="status"`. It sits beside the page's error banners (Dispatch
-  blocked, `role="alert"`), above the content. Use the server's `detail`
-  sentence rather than rewording it, and link the task that holds the
-  finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+  and `role="status"` on its short title (rather than on the whole banner,
+  whose `detail` age ticks over on polls). It sits beside the page's error
+  banners (Dispatch blocked, `role="alert"`), above the content. Use the
+  server's `detail` sentence rather than rewording it, and link the task
+  that holds the finding where there is one
+  (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
 - **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
   ```` ```mermaid ```` fences in the active theme with a Diagram / Source
   toggle, and pairs Before / After fences (named in the info string or by
   matching headings) into one block with Side by side / Before / After /
   Stacked / Source (Before alone on a phone). `mermaid` is imported only
   when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
-  before it reaches the DOM. A diagram never shrinks below 75% of its
+  before it reaches the DOM. Mermaid runs in strict mode, and a
+  diagram's own `%%{init}%%` may change neither security settings nor its
+  theme, palette, fonts or CSS (`secure` in `mermaidConfigForMode`; Mermaid
+  strips those keys at every depth, front-matter `config:` and `__proto__`
+  included), so its palette follows the theme switch. A diagram's own
+  `style`/`classDef` statements are its syntax, not configuration, and
+  keep the colours they name. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
   the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
@@ -733,12 +778,15 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
-  Save-Data), so navigation does not stall behind a slow origin. A
+  Save-Data alongside idle `@defer` prefetches), so navigation does not stall behind a slow origin. A
   navigation still pending after 120 ms shows the shell's top progress bar
-  (`shell/nav-progress.component.ts`), which takes no pointer events. Routes
+  (`shell/nav-progress.component.ts`), which takes no pointer events. If a lazy
+  route or `@defer` chunk cannot load (such as a 404 on an open tab after a
+  daemon upgrade), the shell surfaces a snackbar with a **Reload** action onto
+  the requested destination rather than leaving the click silent. Routes
   have no resolvers or guards that wait on polled reads; a page loads its own
-  data and shows its loading state. `e2e/next-task-page-stall.spec.js`
-  covers this.
+  data and shows its loading state. `e2e/next-task-page-stall.spec.js` and
+  `e2e/next-stale-chunk-upgrade.spec.ts` cover this.
 
 ## 10. How to test a UI change
 
@@ -900,3 +948,20 @@ Autonomous Goal Mode lets an operator hand Grain a multi-pass outcome ("Prototyp
 
 - **Tasks (`/next/tasks`)** and **Agents (`/next/agents`)**: render compact status pills (`data-testid="goal-badge-<id>"`) showing `Goal ✓` (`healthy`), `Goal capped` (`warn`), or `Goal · N/M` (`setup`).
 - **Workstreams (`/next/workstreams`)**: streams whose root or member tasks run in Autonomous Goal Mode display an `Autonomous goal` chip (`data-testid="ws-goal-chip-<key>"`).
+
+
+## Task gate observations
+
+Task detail may show a neutral **Built-in gates · Observation only** card when
+its ordinary task read supplies the observation sidecar. This is a diagnostic
+surface: keep the legacy-authority sentence visible, use explicit textual status,
+show stale/error/incomplete reasons, and never style a met observation as task
+readiness or successful completion. Remediation and wait predictions are inert
+text; no shadow action/override buttons or links are permitted. Existing task
+controls stay owned by legacy services. Collapse version/config/provenance and
+bounded comparison history into keyboard-accessible disclosures with at least 24px
+hit targets and the primary focus ring. Body/title use 14/20 (title 600), metadata
+uses 12/16 and identifiers/digests use monospace. Expiry must update locally even
+when later API requests are unchanged or unavailable. Supported/deferred runtime
+surfaces and the separate rollout/review process are in
+[the observation guide](../../docs/gate-observations.md).

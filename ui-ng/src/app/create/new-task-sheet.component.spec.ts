@@ -321,10 +321,18 @@ describe("NewTaskSheetComponent", () => {
     const file = new File(["repro log"], "repro.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
-    expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
-      "repro.txt",
+    // Staging reads the file (File.arrayBuffer), real I/O that can outlast
+    // settle()'s fixed pause on a busy runner, so wait for the chip itself.
+    await vi.waitFor(
+      () => {
+        f.detectChanges();
+        expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
+          "repro.txt",
+        );
+      },
+      { timeout: 5_000, interval: 20 },
     );
+    await settle(f);
 
     // Expand Capabilities & repo context section and toggle capability + read repo.
     q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();

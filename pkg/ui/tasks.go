@@ -31,6 +31,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -827,6 +828,8 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // agents#403 -- "a way for grain get/the UI to show N consecutive failed
 // attempts, last failure: reason").
 type TaskDetail struct {
+	GateObservations           *gates.ObservationView            `json:"gate_observations,omitempty"`
+	GateObservationDiagnostics *model.GateObservationDiagnostics `json:"gate_observation_diagnostics,omitempty"`
 	Task
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
@@ -2757,7 +2760,7 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 		token := s.taskDetails.tokenFor(ctx, s.tasks)
 		readable := s.taskReadable(r)
 		for _, id := range q.ids {
-			if token != "" {
+			if token != "" && !s.tasks.observesGates(id) {
 				cacheKey := taskDetailCacheKey(id, q.page, q.paged)
 				if entry, ok := s.taskDetails.hit(cacheKey, token, q.paged); ok {
 					if readable(entry.repo) {
