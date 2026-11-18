@@ -32,6 +32,7 @@ import (
 )
 
 type readOnlySource struct {
+	missingTag              bool
 	tagReads, moveTagOnRead int
 	head                    string
 	err                     error
@@ -74,9 +75,12 @@ func (s *readOnlySource) ListMatchingTags(_, _, prefix string) ([]github.TagRef,
 	if s.pending == "" {
 		return nil, s.err
 	}
-	return []github.TagRef{{Name: strings.TrimSuffix(prefix, "-pending") + "-pending", ObjectSHA: "tag-object", ObjectType: "tag"}}, s.err
+	return []github.TagRef{{Name: strings.TrimSuffix(prefix, "-pending") + "-pending", ObjectSHA: strings.Repeat("c", 40), ObjectType: "tag"}}, s.err
 }
 func (s *readOnlySource) GetAnnotatedTag(_, _, _ string) (*github.AnnotatedTag, error) {
+	if s.missingTag {
+		return nil, nil
+	}
 	return &github.AnnotatedTag{Commit: s.head, Message: s.pending}, s.err
 }
 func (s *readOnlySource) ReadFile(_, _, _, path string) ([]byte, bool, error) {
@@ -257,7 +261,7 @@ func TestQualificationObservationReleaseUsesExistingAuthenticatedVerdict(t *test
 	}
 	id := run.Tasks[0].TaskID
 	success := "success"
-	src := &readOnlySource{head: head, tags: []github.Tag{{Name: candidate, SHA: head}}, checks: []github.CheckRun{
+	src := &readOnlySource{head: head, tags: []github.Tag{{Name: candidate, SHA: head}, {Name: "v3.1.0-pending", SHA: head}}, checks: []github.CheckRun{
 		{ID: 99, Name: model.ReleaseQualificationCheckName, HeadSHA: head, App: "foreign", ExternalID: tag + "#9", Status: "completed", Conclusion: &success},
 		{ID: 2, Name: model.ReleaseQualificationCheckName, HeadSHA: head, App: "grain", ExternalID: tag + "#2", Status: "completed", Conclusion: &success},
 	}, pending: "Qualification: PASS", conf: []byte("RELEASE_MAJOR=3\n"), comparison: github.Comparison{Status: "identical", MergeBase: head}}
@@ -340,8 +344,30 @@ func TestQualificationObservationReleaseUsesExistingAuthenticatedVerdict(t *test
 			t.Fatal("occupied release version was ignored")
 		}
 	}
-	src.tags = src.tags[:1]
+	src.tags = src.tags[:2]
 	src.conf = []byte("RELEASE_MAJOR=3\n")
+	src.checks[1].Conclusion = &success
+	beforeHealth := read().SourceVersion()
+	src.checks = append(src.checks, github.CheckRun{ID: 300, Name: "nightly", HeadSHA: head, App: "github-actions", Status: "completed", Conclusion: &success, Output: "unrelated health data"})
+	if read().SourceVersion() != beforeHealth {
+		t.Fatal("unrelated nightly data dirtied qualification")
+	}
+	src.missingTag = true
+	c = read()
+	for _, b := range c.Bindings(id)[2:] {
+		if b.ID == "release-soak" && c.Evaluate(b, now, 1).Status != "unknown" {
+			t.Fatal("missing annotation became a qualification exemption")
+		}
+	}
+	src.missingTag = false
+	src.head = "short"
+	c = read()
+	for _, b := range c.Bindings(id)[2:] {
+		if b.ID == "release-provenance" && c.Evaluate(b, now, 1).Status != "unknown" {
+			t.Fatal("malformed provider head became ancestry proof")
+		}
+	}
+	src.head = head
 	neutral := "neutral"
 	src.checks[1].Conclusion = &neutral
 	c = read()

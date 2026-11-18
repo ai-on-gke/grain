@@ -58,3 +58,5 @@ func maxS4RepairRounds(f qa.FlowSpec) int                { return max(0, min(f.M
 
 var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 var retractedTagPattern = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+)-retracted$`)
+
+var observationCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)

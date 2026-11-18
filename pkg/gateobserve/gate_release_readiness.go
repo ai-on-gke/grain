@@ -39,6 +39,16 @@ func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, t
 		versions = append(versions, f.PromotionPolicy)
 	}
 	defer func() { f.SourceVersion = gates.Digest(versions) }()
+	knownPending := false
+	for _, tag := range tags {
+		if tag.Name == f.Version+"-pending" {
+			knownPending = true
+			if observationCommitPattern.MatchString(tag.SHA) && tag.SHA != f.Head {
+				no := false
+				f.Provenance = &no
+			}
+		}
+	}
 	if reader, ok := source.(github.ReleaseTagReader); ok && ctx.Err() == nil {
 		refs, err := reader.ListMatchingTags(repo.StoredOwner(), repo.Name, f.Version+"-pending")
 		if err == nil && len(refs) <= 16 {
@@ -46,8 +56,27 @@ func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, t
 				if ref.Name != f.Version+"-pending" {
 					continue
 				}
-				head, message, err := peelPendingTag(reader, repo, ref)
-				if err != nil || len(message) > 8192 {
+				if len(tags) > 0 && !knownPending {
+					f.Complete = false
+					f.Reason = "Complete RC and pending-tag collections disagree; recollection required."
+					return
+				}
+				var head, message string
+				if ref.ObjectType == "tag" {
+					if !observationCommitPattern.MatchString(ref.ObjectSHA) {
+						continue
+					}
+					annotation, readErr := reader.GetAnnotatedTag(repo.StoredOwner(), repo.Name, ref.ObjectSHA)
+					if readErr != nil || annotation == nil {
+						continue
+					}
+					head, message = annotation.Commit, annotation.Message
+				} else if ref.ObjectType == "commit" {
+					head = ref.ObjectSHA
+				} else {
+					continue
+				}
+				if !observationCommitPattern.MatchString(head) || len(message) > 8192 {
 					continue
 				}
 				versions = append(versions, ref, head, message)
@@ -75,7 +104,7 @@ func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, t
 	heads, canHead := source.(qaObservationHeads)
 	if canCompare && canHead && f.Provenance == nil && ctx.Err() == nil {
 		main, err := heads.GetBranchHead(repo.StoredOwner(), repo.Name, "main")
-		if err == nil && main != nil && main.SHA != "" {
+		if err == nil && main != nil && observationCommitPattern.MatchString(main.SHA) {
 			cmp, err := comparer.CompareRefs(repo.StoredOwner(), repo.Name, main.SHA, f.Head)
 			if err == nil {
 				versions = append(versions, main.SHA, cmp.Status, cmp.MergeBase)
@@ -88,7 +117,7 @@ func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, t
 		// The legacy convergence branch is an alternative ancestry source.
 		if f.Provenance == nil && ctx.Err() == nil {
 			convergence, err := heads.GetBranchHead(repo.StoredOwner(), repo.Name, "release/"+f.Version)
-			if err == nil && convergence != nil && convergence.SHA != "" {
+			if err == nil && convergence != nil && observationCommitPattern.MatchString(convergence.SHA) {
 				cmp, err := comparer.CompareRefs(repo.StoredOwner(), repo.Name, convergence.SHA, f.Head)
 				if err == nil {
 					versions = append(versions, convergence.SHA, cmp.Status, cmp.MergeBase)
@@ -185,7 +214,7 @@ func readReleasePromotionPolicy(ctx context.Context, source any, repo model.Repo
 		return
 	}
 	head, err := heads.GetBranchHead(repo.StoredOwner(), repo.Name, "main")
-	if err != nil || head == nil || head.SHA == "" {
+	if err != nil || head == nil || !observationCommitPattern.MatchString(head.SHA) {
 		return
 	}
 	raw, found, err := files.ReadFile(repo.StoredOwner(), repo.Name, head.SHA, "scripts/release.conf")

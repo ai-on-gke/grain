@@ -77,7 +77,10 @@ the deployment suite catalogue or notifications. Provider errors are redacted.
 QA reads at most 512 exact-task/head check rows and 512 findings, with 8192-byte
 details and 768-character finding summaries. Overflow is incomplete. Complete tags
 are capped at 2048 and release checks at 512. The ordinary forge APIs perform their
-existing pagination; a failed collection is never interpreted as empty success.
+existing pagination; record admission limits apply after they return, rather than
+providing a new bounded paging transport. Acquisition can exceed the admitted
+record limits on those legacy interfaces. A failed collection is never interpreted
+as empty success.
 Network reads have a separate three-second collection context outside the diagnostic transaction, using the configured
 ordinary forge read adapter and its transport timeout. Context expiry prevents
 acceptance, but these legacy forge interfaces themselves do not accept a context;
@@ -128,3 +131,8 @@ shared projection keeps its 64-binding limit: QA/release monitors reserve a boun
 portion of that budget, and an overflowing review collection stays explicitly
 incomplete. Existing review payload bounds remain separate from the 64 KiB
 QA/release contribution limit.
+
+Missing/unreadable annotated-tag bodies do not establish either a qualification
+exemption or a commit mismatch. Complete tag scopes must agree, all provider heads
+used as immutable proof are full SHAs, and unrelated nightly/publication checks
+do not version the configured qualification predicate.

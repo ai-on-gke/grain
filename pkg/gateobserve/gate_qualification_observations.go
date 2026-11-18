@@ -150,7 +150,7 @@ func observationQAHead(source any, task model.Task) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if head == nil {
+	if head == nil || !observationCommitPattern.MatchString(head.SHA) {
 		return "", nil
 	}
 	return head.SHA, nil
@@ -360,7 +360,7 @@ func collectReleaseObservation(ctx context.Context, store *model.Store, source a
 		return nil, err
 	}
 	repo, stem, declared := repoDeclaredSuite(run.SuiteID)
-	if !declared || repo.String() != task.Target.String() {
+	if !declared || !repo.Same(*task.Target) {
 		return nil, nil
 	}
 	cfg, err := store.SuiteQualification(ctx, run.SuiteID)
@@ -435,8 +435,8 @@ func collectReleaseObservation(ctx context.Context, store *model.Store, source a
 		}
 		f.SourceVersion = gates.Digest(list)
 	}
-	if f.Head == "" {
-		f.Reason = "Exact RC head is missing."
+	if !observationCommitPattern.MatchString(f.Head) {
+		f.Reason = "Exact RC head is missing or malformed."
 		return f, nil
 	}
 	if ctx.Err() != nil {
@@ -459,9 +459,16 @@ func collectReleaseObservation(ctx context.Context, store *model.Store, source a
 	if checks, ok := source.(releaseObservationChecks); ok && ctx.Err() == nil {
 		app, err := checks.CheckRunApp(repo.StoredOwner(), repo.Name)
 		if err == nil && app != "" {
+			f.PolicyVersion = gates.Digest([]string{f.PolicyVersion, "issuer:" + app})
 			checksList, readErr := checks.ListCheckRuns(repo.StoredOwner(), repo.Name, f.Head)
 			if readErr == nil && len(checksList) <= 512 {
-				list = checksList
+				// Only the configured qualification scope versions this observer;
+				// unrelated nightly/publication changes belong to health.
+				for _, check := range checksList {
+					if check.Name == policy.Check {
+						list = append(list, check)
+					}
+				}
 				base := model.QualificationTag(stem, repo, candidate)
 				attempt, check := latestAttemptCheckRun(list, policy.Check, app, base)
 				if check != nil {
