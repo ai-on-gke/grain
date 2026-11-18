@@ -26,7 +26,7 @@ import (
 
 // QAEngineRev identifies the behavior revision of the QA engine (checks, flows, and S4 verifier prompt).
 // Any change to non-test files under pkg/qa/** requires bumping QAEngineRev and updating ExpectedQAEngineDigest.
-const QAEngineRev = 5
+const QAEngineRev = 6
 
 // ComputeQAEngineDigest computes a deterministic SHA-256 hex digest over all non-test source/asset files under qaDir.
 func ComputeQAEngineDigest(qaDir string) (string, error) {

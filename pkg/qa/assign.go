@@ -46,8 +46,15 @@ func ComputeArmBucket(rootOrigin string, epoch int) int {
 // strictly from pre-filtrated task specification fields (title and body), never from
 // post-treatment diff size or turn count so CUPED stratification stays unbiased.
 func ClassifyTaskComplexity(title, body string) string {
-	words := len(strings.Fields(title)) + len(strings.Fields(body))
-	lower := strings.ToLower(title + "\n" + body)
+	return ClassifyTaskComplexityWithAttachments(title, body, "", 0)
+}
+
+// ClassifyTaskComplexityWithAttachments computes a pre-dispatch complexity tier ("low", "medium", "high")
+// from pre-filtrated task title, inline body, and specification attachments symmetrically across arms.
+func ClassifyTaskComplexityWithAttachments(title, body, attachmentText string, markdownAttachmentCount int) string {
+	cleanInline := stripDispatchEnvelope(stripYAMLFrontmatter(body))
+	words := len(strings.Fields(title)) + len(strings.Fields(cleanInline))
+	lower := strings.ToLower(title + "\n" + cleanInline)
 	archSignals := 0
 	for _, kw := range []string{
 		"migration", "schema", "concurrency", "scheduler", "syscall",
@@ -58,13 +65,33 @@ func ClassifyTaskComplexity(title, body string) string {
 			archSignals++
 		}
 	}
+	wordTier := model.QAComplexityLow
 	switch {
 	case words >= 180 || archSignals >= 2:
-		return model.QAComplexityHigh
+		wordTier = model.QAComplexityHigh
 	case words >= 45 || archSignals >= 1:
-		return model.QAComplexityMedium
+		wordTier = model.QAComplexityMedium
+	}
+	assessed := string(AssessTaskComplexity(ComplexityInput{
+		Title:                   title,
+		Body:                    body,
+		AttachmentText:          attachmentText,
+		MarkdownAttachmentCount: markdownAttachmentCount,
+	}, nil).Tier)
+	if complexityTierOrder(assessed) > complexityTierOrder(wordTier) {
+		return assessed
+	}
+	return wordTier
+}
+
+func complexityTierOrder(tier string) int {
+	switch tier {
+	case model.QAComplexityHigh:
+		return 3
+	case model.QAComplexityMedium:
+		return 2
 	default:
-		return model.QAComplexityLow
+		return 1
 	}
 }
 
