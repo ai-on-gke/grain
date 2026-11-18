@@ -4051,19 +4051,20 @@ type JobLogTailer interface {
 // WorkflowRun is one GitHub Actions workflow run returned by
 // GET /repos/{owner}/{repo}/actions/runs.
 type WorkflowRun struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	Path       string     `json:"path"`
-	HeadBranch string     `json:"head_branch"`
-	HeadSHA    string     `json:"head_sha"`
-	HeadRepo   string     `json:"head_repo,omitempty"`
-	Event      string     `json:"event"`
-	Status     string     `json:"status"`
-	Conclusion string     `json:"conclusion"`
-	HTMLURL    string     `json:"html_url"`
-	RunAttempt int        `json:"run_attempt"`
-	StartedAt  *time.Time `json:"run_started_at"`
-	UpdatedAt  *time.Time `json:"updated_at"`
+	CheckSuiteID int64      `json:"check_suite_id,omitempty"`
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	Path         string     `json:"path"`
+	HeadBranch   string     `json:"head_branch"`
+	HeadSHA      string     `json:"head_sha"`
+	HeadRepo     string     `json:"head_repo,omitempty"`
+	Event        string     `json:"event"`
+	Status       string     `json:"status"`
+	Conclusion   string     `json:"conclusion"`
+	HTMLURL      string     `json:"html_url"`
+	RunAttempt   int        `json:"run_attempt"`
+	StartedAt    *time.Time `json:"run_started_at"`
+	UpdatedAt    *time.Time `json:"updated_at"`
 	// DisplayTitle is the run's own name (a workflow's `run-name`), which
 	// is how an on-demand release build of one commit names itself.
 	DisplayTitle string `json:"display_title,omitempty"`

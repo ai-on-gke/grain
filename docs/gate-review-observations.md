@@ -93,9 +93,10 @@ do not invent PR-head semantics for CL snapshots. Enforcement, rendered-head
 mutation admission, role/receipt issuance, automatic reevaluation and authority
 handoff remain deferred.
 
-Collection is bounded to 24 review/approval scopes (at most 48 additional canonical
-bindings/results, sharing a 64-monitor budget with the outcome projection), 64 related tasks, 64 base trigger
-rows and 65536 characters per declaration. Each inspected task has at most 512 links and 65536 bytes of linked metadata admitted to diagnostic hashing. Overflow/malformed data is explicitly
+Collection is bounded to 31 review/approval scopes, 64 related tasks, 64 base
+trigger rows and 65536 characters per declaration. The displayed projection
+shares a 64-monitor budget with outcome and CI observations; overflow is explicitly
+incomplete. Each inspected task has at most 512 links and 65536 bytes of linked metadata admitted to diagnostic hashing. Overflow/malformed data is explicitly
 incomplete and cannot yield a current pass. Retention and load bounds remain
 60-second leases, the 250ms collection/50ms error budgets, 32 selected tasks,
 72 hours/1024 samples per task/32768 globally, newest 20 samples per read, and

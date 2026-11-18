@@ -971,3 +971,9 @@ uses 12/16 and identifiers/digests use monospace. Expiry must update locally eve
 when later API requests are unchanged or unavailable. Supported/deferred runtime
 surfaces and the separate rollout/review process are in
 [the observation guide](../../docs/gate-observations.md).
+
+CI rows in the observation card additionally identify the change and distinguish
+**Current CI policy** from **Legacy CI import** at the point of display. Show
+run/retry/fix/merge/Submit proposals as inert text, with executor and base/overlap
+preconditions separately explained. Multiple CI sources must have distinct wait
+and evidence tracking keys. A legacy CI verdict is not a readiness badge.

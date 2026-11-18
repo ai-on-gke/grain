@@ -2,22 +2,24 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs and extension conventions. The registry now implements six
+records repairs and extension conventions. The registry now implements seven
 existing v1 types: all `delivery` products (`report`, `change`, `review`,
 `nothing_needed`, `any`) with current/legacy finish semantics; all four
 `acknowledgment` profiles; `integration` for PR merge and all scoped CL submission;
-and explicitly selected `children` success/closed/merged predicates. The existing canonical `review` and `approval` observers are also retained; the
-other six catalogue types remain unsupported. See the [review/approval coverage
+and explicitly selected `children` success/closed/merged predicates. The shipped `checks` observer and existing canonical `review` and `approval` observers are also retained; the
+other five catalogue types remain unsupported. See the [review/approval coverage
 guide](gate-review-observations.md) for its source adapter and provenance gaps. Closed schemas are pinned to the
 canonical catalogue and pure local Go evaluators. There are no remote evaluator
 calls or private evaluator state.
+
+See [CI checks in shadow](gate-check-observations.md) for its source and permission boundaries.
 
 Legacy services still own every task lifecycle, queue/run/wait, approval, report,
 acknowledgment, merge and submit operation. There is no authority migration or
 cutover code. Every binding is a nonrequired monitor; all effect flags are false.
 Diagnostic acceptance means the observation was recorded, not task readiness,
 successful completion, or permission to act. Work/actions arrays are always empty.
-Proposed receipt remediation and waits are inert descriptions with no buttons.
+Proposed remediation and waits are inert descriptions with no buttons.
 
 ## Shipped read surfaces
 
@@ -86,6 +88,8 @@ profiles keep person receipt, provenance-backed report-only child answer, and
 configured no-work acknowledgment distinct; report delivery alone is not receipt.
 Review/approval also reads scoped assignment, hold, finding, fix and base-policy
 evidence; it never fabricates complete remote or rendered-context/role receipts.
+
+See [CI checks in shadow](gate-check-observations.md) for its source and permission boundaries.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -188,9 +192,12 @@ Disabling collection also hides its projection; no timer can enable enforcement.
 Tasks with both outcome and review/approval monitors retain both independent
 comparison labels, separated by `;` in a history sample. Diagnostic counts count
 each family separately, so their sum can exceed the number of retained samples.
-A review provenance gap never hides a positive or discrepant child/integration
-milestone. Up to 16 outcome monitors compose with at most 24 review/approval
-scopes (at most 48 additional bindings); the combined limit is 64.
+CI, outcome and review/approval comparisons remain independent; a provenance gap
+in one family never hides a positive or discrepant milestone in another. Up to
+16 outcome monitors compose with at most eight current/legacy CI pairs. The review
+reader admits up to 31 scopes, but the displayed projection shares a 64-binding
+limit. An overflowing review/approval subset is explicitly incomplete and cannot
+pass current semantics. No scope is converted into an operational requirement.
 
 
 History records complete bounded observation views (task/source/config/context,
@@ -311,6 +318,9 @@ diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.
+
+CI-specific runtime profiles, source bounds, version fences, comparison differences
+and validation are documented in [CI checks in shadow](gate-check-observations.md).
 
 Review/approval validation and its material source limitations are recorded in
 [Review and approval observations](gate-review-observations.md). Current results

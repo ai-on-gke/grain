@@ -145,3 +145,13 @@ body/receipt ordering, retry, contention, retention and legacy-isolation repairs
 remain regression requirements. Compact bounded typed domain provenance stays within ordinary scoped internal
 reads and introduces no provider back-call. Shadow success is not an
 authority/closure decision, and all enforcement and rollout activation stays deferred.
+
+## Task #66 extension
+
+The historical fixed-pair limitation above is repaired for the checks port.
+Bindings, failure reconstruction, cache validation and comparisons now include a
+bounded current/legacy pair for each task-owned change. The report/receipt
+predicates remain unchanged. See [CI checks in shadow](gate-check-observations.md)
+for the ordinary readers, source/definition bounds, local acceptance fence,
+permission-aware history, inert merge context, tests and remaining admission gaps.
+No unrelated gate or enforcement surface was added.

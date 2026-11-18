@@ -950,7 +950,10 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled: store.isBusy('send', t.id),
+                      disabled:
+                        store.isBusy('send', t.id) ||
+                        !can('POST /api/tasks/{id}/comments'),
+                      deniedReason: commentDenied(),
                       hidden:
                         t.state === 'closed' ||
                         (this.parked() && !this.allowWordsOnParked()) ||
@@ -1876,6 +1879,15 @@ export class TaskDetailComponent implements OnDestroy {
     if (t.pendingConfigChange) return "a configuration change";
     return "";
   });
+  // commentDenied explains a composer this role may not post from, as
+  // the Inbox's reply box does: a viewer reads the conversation but has
+  // nothing to type into.
+  protected readonly commentDenied = computed(() =>
+    this.access.deniedReasonForTask(
+      "POST /api/tasks/{id}/comments",
+      this.t()?.repo ?? null,
+    ),
+  );
   protected readonly isStopped = computed(() => {
     const t = this.t();
     return (
@@ -2954,7 +2966,13 @@ export class TaskDetailComponent implements OnDestroy {
 
   private async submitComment(): Promise<void> {
     const t = this.t();
-    if (!t || t.id !== this.id() || this.isStopped() || this.replyBlocked())
+    if (
+      !t ||
+      t.id !== this.id() ||
+      this.isStopped() ||
+      this.replyBlocked() ||
+      !this.can("POST /api/tasks/{id}/comments")
+    )
       return;
     const tgt = this.replyTarget() ?? {
       taskId: t.id,

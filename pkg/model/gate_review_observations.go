@@ -31,7 +31,7 @@ import (
 
 // Bound fanout independently of history retention and the 250ms read budget.
 // An overflow is explicit incomplete evidence, never a smaller passing set.
-const maxShadowChangeScopes = 24
+const maxShadowChangeScopes = 31
 
 // captureChangeGateFacts reuses domain task/link/observation and base-declaration
 // records in the same transaction. It never calls a reconciler, provider, action
@@ -86,7 +86,7 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		}
 		if len(c.Reviews)+len(c.Approvals) >= maxShadowChangeScopes {
 			c.Complete = false
-			c.IncompleteReason = "Review/approval scope exceeds the 24-scope reader bound; the displayed subset is incomplete."
+			c.IncompleteReason = "Review/approval scope exceeds the 31-scope reader bound; the displayed subset is incomplete."
 			return
 		}
 		c.Reviews[scope] = gates.ReviewFacts{AssignedReviewID: task, Category: category, AssignmentReadable: true, AssignmentPresent: task != "",
@@ -101,7 +101,7 @@ func captureChangeGateFacts(ctx context.Context, q querier, t Task, o *Observati
 		}
 		if len(c.Reviews)+len(c.Approvals) >= maxShadowChangeScopes {
 			c.Complete = false
-			c.IncompleteReason = "Review/approval scope exceeds the 24-scope reader bound; the displayed subset is incomplete."
+			c.IncompleteReason = "Review/approval scope exceeds the 31-scope reader bound; the displayed subset is incomplete."
 			return
 		}
 		c.Approvals[id] = gates.ApprovalFacts{LegacyDetail: detail, Evidence: []gates.Evidence{}}
@@ -523,12 +523,18 @@ func shadowRequirementID(id string) string {
 }
 
 func observationBindings(id string, f gates.Facts) []gates.Binding {
-	b := f.Bindings
-	if len(b) == 0 {
-		b = gates.Bindings(id)
+	b := gates.BindingsFor(id, f.Checks)
+	if len(f.Bindings) > 2 {
+		b = append(b, f.Bindings[2:]...)
 	}
 	if f.Change != nil {
-		b = append(b, gates.ChangeBindings(id, *f.Change)...)
+		extra := gates.ChangeBindings(id, *f.Change)
+		if len(b)+len(extra) > 64 {
+			f.Change.Complete = false
+			f.Change.IncompleteReason = "Combined CI/outcome/review observation exceeds the canonical 64-binding bound; displayed review/approval scopes are incomplete."
+			extra = extra[:64-len(b)]
+		}
+		b = append(b, extra...)
 	}
 	return b
 }
