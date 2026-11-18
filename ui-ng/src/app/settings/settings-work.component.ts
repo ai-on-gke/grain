@@ -82,9 +82,12 @@ interface CapabilityServerRow {
 }
 
 const DEFAULT_QA_FLOW_OPTIONS: readonly PillOption[] = [
-  { value: "standard-workflow", label: "Standard workflow (DAG default)" },
-  { value: "fast-baseline", label: "Fast baseline" },
-  { value: "gates-only", label: "Deterministic gates only" },
+  {
+    value: "standard-workflow",
+    label: "Standard workflow · standard-workflow",
+  },
+  { value: "fast-baseline", label: "Fast baseline · fast-baseline" },
+  { value: "gates-only", label: "Gates only · gates-only" },
 ];
 
 const DEFAULT_QA_FLOW_LABELS: ReadonlyMap<string, string> = new Map(
