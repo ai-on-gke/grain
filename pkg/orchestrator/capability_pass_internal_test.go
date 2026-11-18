@@ -34,11 +34,13 @@ const passTestCap = "https://github.com/bwsalmon/grain/capabilities/gcp"
 // answering every mint with reply (an ok by default) and recording each
 // call.
 type mintCaller struct {
-	mu    sync.Mutex
-	reply func() ([]byte, error)
+	mu     sync.Mutex
+	reply  func() ([]byte, error)
+	onMint func(time.Time)
 	// releaseReply answers every release_; empty is a bare ok.
 	releaseReply string
 	calls        []string // tool name and attempt_id
+	deadlines    []time.Time
 	args         []map[string]any
 }
 
@@ -64,18 +66,32 @@ func (c *mintCaller) ListTools(context.Context) ([]protocol.Tool, error) {
 
 func (c *mintCaller) CallTool(_ context.Context, name string, args map[string]any) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.calls = append(c.calls, name+" "+args["attempt_id"].(string))
 	if strings.HasPrefix(name, "release_") {
-		if c.releaseReply != "" {
-			return []byte(c.releaseReply), nil
+		reply := c.releaseReply
+		c.mu.Unlock()
+		if reply != "" {
+			return []byte(reply), nil
 		}
 		return []byte(`{"status":"ok"}`), nil
 	}
+	var dl time.Time
+	if raw, ok := args["deadline"].(string); ok {
+		dl, _ = time.Parse(time.RFC3339, raw)
+		c.deadlines = append(c.deadlines, dl)
+	}
 	a, _ := args["args"].(map[string]any)
 	c.args = append(c.args, a)
-	if c.reply != nil {
-		return c.reply()
+	onMint := c.onMint
+	replyFn := c.reply
+	c.mu.Unlock()
+	if onMint != nil {
+		onMint(dl)
+	}
+	if replyFn != nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return replyFn()
 	}
 	return []byte(`{"status":"ok"}`), nil
 }
@@ -86,6 +102,18 @@ func (c *mintCaller) called() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.calls...)
+}
+
+func (c *mintCaller) mintedDeadlines() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Time(nil), c.deadlines...)
+}
+
+func (c *mintCaller) setOnMint(fn func(time.Time)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onMint = fn
 }
 
 type oneServer struct{ srv *protocol.Server }
@@ -284,31 +312,103 @@ func TestAdmissionRefusesWhatTheCapabilityPolicyDoesNotAdmit(t *testing.T) {
 	}
 }
 
-// Extend is called from each run's own goroutine, so two renewing the
-// same pass at once must not race on its deadline (go test -race), and
-// the later deadline wins whichever finishes last.
+// Extend is called from each run's own goroutine and lease watchdog, so two
+// renewing the same pass at once must not race on its deadline (go test -race)
+// or mint an earlier deadline after a later one has finished.
 func TestExtendIsSafeFromConcurrentRuns(t *testing.T) {
-	caller := &mintCaller{}
-	deps, _, ctx, now := passHarness(t, caller)
-	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
-		t.Fatalf("admit = %+v, %v", adm, err)
-	}
-	passes := deps.CapabilityPasses
-	base := capabilityDeadline(*now, deps.Config.maxRunRuntime())
-	var wg sync.WaitGroup
-	for i := 1; i <= 8; i++ {
-		wg.Add(1)
-		go func(d time.Time) {
-			defer wg.Done()
-			if err := passes.Extend(ctx, "7-1", d); err != nil {
-				t.Errorf("extend: %v", err)
+	t.Run("concurrent burst", func(t *testing.T) {
+		caller := &mintCaller{}
+		deps, _, ctx, now := passHarness(t, caller)
+		if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+			t.Fatalf("admit = %+v, %v", adm, err)
+		}
+		passes := deps.CapabilityPasses
+		base := capabilityDeadline(*now, deps.Config.maxRunRuntime())
+		var wg sync.WaitGroup
+		for i := 1; i <= 8; i++ {
+			wg.Add(1)
+			go func(d time.Time) {
+				defer wg.Done()
+				if err := passes.Extend(ctx, "7-1", d); err != nil {
+					t.Errorf("extend: %v", err)
+				}
+			}(base.Add(time.Duration(i) * time.Hour))
+		}
+		wg.Wait()
+		want := base.Add(8 * time.Hour)
+		if _, got := passes.held("7-1"); !got.Equal(want) {
+			t.Errorf("deadline = %v, want the latest asked for, %v", got, want)
+		}
+		minted := caller.mintedDeadlines()
+		if len(minted) < 2 {
+			t.Fatalf("minted = %v, want admission mint plus renewal", minted)
+		}
+		if last := minted[len(minted)-1]; !last.Equal(want) {
+			t.Errorf("last minted deadline = %v, want %v (all: %v)", last, want, minted)
+		}
+		for i := 1; i < len(minted); i++ {
+			if !minted[i].After(minted[i-1]) {
+				t.Errorf("minted deadlines moved backwards or repeated: %v", minted)
 			}
-		}(base.Add(time.Duration(i) * time.Hour))
-	}
-	wg.Wait()
-	if _, got := passes.held("7-1"); !got.Equal(base.Add(8 * time.Hour)) {
-		t.Errorf("deadline = %v, want the latest asked for, %v", got, base.Add(8*time.Hour))
-	}
+		}
+	})
+
+	t.Run("slow renewal cannot move minted deadline back", func(t *testing.T) {
+		caller := &mintCaller{}
+		deps, _, ctx, now := passHarness(t, caller)
+		if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+			t.Fatalf("admit = %+v, %v", adm, err)
+		}
+		passes := deps.CapabilityPasses
+		base := capabilityDeadline(*now, deps.Config.maxRunRuntime())
+		later := base.Add(4 * time.Hour)
+		earlier := base.Add(time.Hour)
+
+		inFlight := make(chan struct{})
+		unblock := make(chan struct{})
+		var once sync.Once
+		caller.setOnMint(func(d time.Time) {
+			if d.Equal(later) {
+				once.Do(func() { close(inFlight) })
+				<-unblock
+			}
+		})
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := passes.Extend(ctx, "7-1", later); err != nil {
+				t.Errorf("extend later: %v", err)
+			}
+		}()
+		<-inFlight
+		go func() {
+			defer wg.Done()
+			if err := passes.Extend(ctx, "7-1", earlier); err != nil {
+				t.Errorf("extend earlier: %v", err)
+			}
+		}()
+		// Give the second Extend a moment to enter Extend while the first
+		// renewal is still blocked inside Renew.
+		time.Sleep(20 * time.Millisecond)
+		close(unblock)
+		wg.Wait()
+		caller.setOnMint(nil)
+
+		if _, got := passes.held("7-1"); !got.Equal(later) {
+			t.Errorf("held deadline = %v, want %v", got, later)
+		}
+		minted := caller.mintedDeadlines()
+		if last := minted[len(minted)-1]; !last.Equal(later) {
+			t.Fatalf("last minted deadline = %v, want %v (all: %v)", last, later, minted)
+		}
+		for i := 1; i < len(minted); i++ {
+			if !minted[i].After(minted[i-1]) {
+				t.Errorf("minted deadlines moved backwards or repeated: %v", minted)
+			}
+		}
+	})
 }
 
 func TestExtendRenewsAPassOnlyPastItsDeadline(t *testing.T) {
