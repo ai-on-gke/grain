@@ -253,8 +253,13 @@ func TestQASettingsAcceptV4VersionedAndStoredCustomFlowsAndRejectRetired(t *test
 	if err != nil {
 		t.Fatalf("GetSettings: %v", err)
 	}
-	if cur.QAFlowIDs[0] != model.QAFlowGoldenV1Minimal {
-		t.Fatalf("QAFlowIDs[0] = %q, want %q", cur.QAFlowIDs[0], model.QAFlowGoldenV1Minimal)
+	if cur.QAFlowIDs[0] != model.QAFlowStandard {
+		t.Fatalf("QAFlowIDs[0] = %q, want %q", cur.QAFlowIDs[0], model.QAFlowStandard)
+	}
+	for _, canonical := range []string{model.QAFlowStandard, model.QAFlowFast, model.QAFlowGatesOnly} {
+		if !slices.Contains(cur.QAFlowIDs, canonical) {
+			t.Fatalf("expected canonical workflow %q in QAFlowIDs, got %v", canonical, cur.QAFlowIDs)
+		}
 	}
 	if !slices.Contains(cur.QAFlowIDs, model.QAFlowGoldenV3Enforced) {
 		t.Fatalf("expected seeded %q in QAFlowIDs, got %v", model.QAFlowGoldenV3Enforced, cur.QAFlowIDs)
@@ -271,11 +276,14 @@ func TestQASettingsAcceptV4VersionedAndStoredCustomFlowsAndRejectRetired(t *test
 	if customCount != 1 {
 		t.Fatalf("expected custom-team-flow once in QAFlowIDs, got %d (%v)", customCount, cur.QAFlowIDs)
 	}
-	if !slices.Contains(cur.QAFlowIDs, model.QAFlowEngineeringWorkflowV4) {
-		t.Fatalf("expected %q in QAFlowIDs, got %v", model.QAFlowEngineeringWorkflowV4, cur.QAFlowIDs)
+	if slices.Contains(cur.QAFlowIDs, model.QAFlowEngineeringWorkflowV4) {
+		t.Fatalf("legacy unseeded %q must not be advertised in QAFlowIDs: %v", model.QAFlowEngineeringWorkflowV4, cur.QAFlowIDs)
 	}
 
 	for _, validFlow := range []string{
+		model.QAFlowStandard,
+		model.QAFlowFast,
+		model.QAFlowGatesOnly,
 		model.QAFlowEngineeringWorkflowV4,
 		model.QAFlowGoldenV3Enforced,
 		model.QAFlowGoldenV3 + "@1",

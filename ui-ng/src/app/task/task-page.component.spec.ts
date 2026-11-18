@@ -228,6 +228,9 @@ class FakeApi {
     if (route === "GET /api/ci/runs/{id}") {
       return Promise.resolve(this.ciRuns[0]);
     }
+    if (route === "GET /api/capability-methods") {
+      return Promise.resolve({ items: [] });
+    }
     if (route === "GET /api/tasks/{id}/context") {
       return Promise.resolve({ brief: "Original brief", summarised: 0 });
     }
@@ -329,6 +332,54 @@ async function openMore(f: ComponentFixture<unknown>): Promise<void> {
 }
 
 describe("TaskPageComponent", () => {
+  it("pages the actual Details viewport immediately without stealing native Home or editor keys", async () => {
+    const f = await render(new FakeApi(), "details");
+    const page = q(f, ".task-page")!;
+    const body = q(f, ".task-tab-body")!;
+    Object.defineProperties(page, {
+      clientHeight: { value: 500 },
+      scrollHeight: { value: 2000 },
+    });
+    Object.defineProperties(body, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 200, configurable: true },
+    });
+    const pageScroll = vi.fn();
+    const bodyScroll = vi.fn();
+    page.scrollTo = pageScroll;
+    body.scrollTo = bodyScroll;
+    const key = (target: HTMLElement, key: string, ctrlKey = false) => {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        ctrlKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(event);
+      return event;
+    };
+    expect(key(page, "PageDown").defaultPrevented).toBe(true);
+    expect(pageScroll).toHaveBeenLastCalledWith({
+      top: 450,
+      behavior: "instant",
+    });
+    expect(key(body, "Home", true).defaultPrevented).toBe(false);
+    Object.defineProperty(body, "scrollHeight", {
+      value: 1000,
+      configurable: true,
+    });
+    key(body, "PageDown");
+    expect(bodyScroll).toHaveBeenLastCalledWith({
+      top: 180,
+      behavior: "instant",
+    });
+    const input = document.createElement("textarea");
+    body.append(input);
+    expect(key(input, "Home", true).defaultPrevented).toBe(false);
+    expect(key(input, "PageDown").defaultPrevented).toBe(false);
+    expect(bodyScroll).toHaveBeenCalledTimes(1);
+  });
+
   afterEach(() => {
     TestBed.inject(TaskStore).close();
     TestBed.inject(SnackbarService).dismiss();
@@ -339,6 +390,8 @@ describe("TaskPageComponent", () => {
     const f = await render(new FakeApi());
     const root = f.nativeElement as HTMLElement;
     expect(q(f, "#task-title")!.textContent).toContain("#7");
+    // On its own page the title is the page's h1.
+    expect(q(f, "#task-title")!.tagName).toBe("H1");
     expect(q(f, '[data-testid="task-state"]')!.textContent).toContain("Asked");
     expect(q(f, '[data-testid="act-reply"]')).toBeTruthy();
     expect(q(f, '[data-testid="act-approve"]')).toBeNull();
@@ -1311,6 +1364,17 @@ describe("TaskPageComponent", () => {
     });
   });
 
+  it("keeps the plain Defer a deferral with no date", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "queued" };
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-defer"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/defer"),
+    ).toMatchObject({ body: { deferredUntil: "" } });
+  });
+
   it("undoes on the task that was acted on, even after moving to another", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, state: "queued" };
@@ -1337,6 +1401,112 @@ describe("TaskPageComponent", () => {
     expect(store.transcriptFor()).toBeNull();
     expect(store.transcript()).toBeNull();
     await settle(f);
+  });
+
+  it("offers Retry merge in the header on a merge-failed task, demotes Run now to More on completed tasks, and follows the retry without reload", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "completed",
+      mergeQueueState: "merge_failed",
+      reason: {
+        reason: "completed/merge_failed",
+        class: "awaiting a person",
+        control: "Retry merge",
+      },
+    };
+    const origPost = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r === "POST /api/tasks/{id}/retry-merge") {
+        api.detail = {
+          ...api.detail,
+          mergeQueueState: undefined,
+          reason: {
+            reason: "completed/on_merge_queue",
+            class: "driven",
+          },
+        };
+      }
+      return origPost(r, p, b);
+    };
+
+    const f = await render(api);
+    expect(q(f, '[data-testid="task-state"]')!.textContent!.trim()).toBe(
+      "Merge failed",
+    );
+    const retryBtn = q<HTMLButtonElement>(
+      f,
+      '[data-testid="act-retry-merge"]',
+    )!;
+    expect(retryBtn).toBeTruthy();
+    expect(retryBtn.classList.contains("btn-primary")).toBe(true);
+    // Run now is not in the visible header bar on a completed task.
+    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
+
+    // Viewer without merge:write sees no Retry merge button.
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "viewer",
+        roles: ["viewer"],
+        full: false,
+        scopes: ["tasks:read"],
+      },
+    });
+    await settle(f);
+    expect(q(f, '[data-testid="act-retry-merge"]')).toBeNull();
+    expect(q(f, '[data-testid="act-more"]')).toBeNull();
+
+    // Restore full access and press Retry merge.
+    TestBed.inject(AccessService).setConfig({ access: null });
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="act-retry-merge"]')!.click();
+    await settle(f);
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/retry-merge"),
+    ).toMatchObject({ params: { id: "7" } });
+    expect(q(f, '[data-testid="act-retry-merge"]')).toBeNull();
+    expect(q(f, '[data-testid="task-state"]')!.textContent!.trim()).toBe(
+      "Merging",
+    );
+    expect(q(f, '[data-testid="act-run-now"]')).toBeNull();
+
+    // Opening More on a completed task offers Run now and closes the menu on click.
+    await openMore(f);
+    const moreRunNow = q<HTMLButtonElement>(
+      f,
+      '[data-testid="act-more-menu"] [data-testid="act-run-now"]',
+    )!;
+    expect(moreRunNow).toBeTruthy();
+    expect(moreRunNow.getAttribute("role")).toBe("menuitem");
+    moreRunNow.click();
+    await settle(f);
+    expect(q(f, '[data-testid="act-more-menu"]')).toBeNull();
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/run-now"),
+    ).toMatchObject({ params: { id: "7" } });
+  });
+
+  it("hides Retry merge while a merge-failed task is paused so Resume lifts the pause first", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "completed",
+      mergeQueueState: "merge_failed",
+      paused: {
+        at: "2026-11-18T00:00:00Z",
+        by: "ana",
+        fromState: "completed",
+      },
+      reason: {
+        reason: "completed/operator_paused",
+        class: "awaiting a person",
+        control: "Resume",
+      },
+    };
+    const f = await render(api);
+    expect(q(f, '[data-testid="act-resume-pause"]')).toBeTruthy();
+    expect(q(f, '[data-testid="act-retry-merge"]')).toBeNull();
   });
 });
 
@@ -2129,14 +2299,14 @@ describe("#comment=<id> deep links", () => {
     store.open("7");
     await store.refresh();
     expect(store.detail()?.comments?.length).toBe(100);
-    expect(await store.loadOlderCommentsThrough(50)).toBe(true);
+    expect(await store.loadOlderCommentsThrough(50)).toBe("found");
     expect(pages).toEqual([
       "comments_limit=500&comments_before=1101&attempts_limit=1",
       "comments_limit=500&comments_before=601&attempts_limit=1",
       "comments_limit=500&comments_before=101&attempts_limit=1",
     ]);
     expect(store.detail()?.comments?.[0].id).toBe(1);
-    expect(await store.loadOlderCommentsThrough(99999)).toBe(false);
+    expect(await store.loadOlderCommentsThrough(99999)).toBe("missing");
   });
 
   it("switches the task page to Conversation for a #comment= link and names a bad one", async () => {

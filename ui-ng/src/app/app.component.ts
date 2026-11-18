@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, Location, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -45,6 +45,7 @@ import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
 import type { InboxStore } from "./inbox/inbox.store";
+import type { ProcessesStore } from "./processes/processes.store";
 import type { SessionsStore } from "./sessions/sessions.store";
 import { DirectorContextService } from "./director/director-context.service";
 import { DirectorDrawerComponent } from "./director/director-drawer.component";
@@ -70,6 +71,7 @@ import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
 import { NavProgressComponent } from "./shell/nav-progress.component";
+import { resolveReloadHref, saveDataEnabled } from "./shell/route-preload";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -185,6 +187,26 @@ export class DeferErrorDirective implements OnInit {
   },
   template: `
     <g-nav-progress />
+    @if (installNotice(); as notice) {
+      <div
+        class="install-banner"
+        role="status"
+        data-testid="install-notice-banner"
+      >
+        <span
+          >{{ notice.text }}
+          @if (notice.docsUrl) {
+            <a
+              [href]="notice.docsUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="install-notice-docs"
+              >Migration docs</a
+            >
+          }
+        </span>
+      </div>
+    }
     @if (disconnectedText(); as text) {
       <div class="conn-banner" role="status" data-testid="disconnected-banner">
         <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
@@ -466,6 +488,13 @@ export class DeferErrorDirective implements OnInit {
                   aria-hidden="true"
                   >{{ inboxCount() }}</span
                 >
+              } @else if (d.id === "processes" && processesCount() > 0) {
+                <span
+                  class="rail-badge is-neutral"
+                  data-testid="rail-processes-count"
+                  aria-hidden="true"
+                  >{{ processesCount() }}</span
+                >
               }
             </span>
             <span class="rail-label">{{ d.label }}</span>
@@ -473,6 +502,8 @@ export class DeferErrorDirective implements OnInit {
                  the label ("13Inbox"), so the link's name says it here. -->
             @if (d.id === "inbox" && inboxCount() > 0) {
               <span class="sr-only">({{ inboxCount() }} waiting)</span>
+            } @else if (d.id === "processes" && processesCount() > 0) {
+              <span class="sr-only">({{ processesCount() }})</span>
             }
           </a>
         } @else {
@@ -946,7 +977,7 @@ export class DeferErrorDirective implements OnInit {
       </ng-template>
 
       <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-      @defer (when createTask.isOpen(); prefetch on idle) {
+      @defer (when createTask.isOpen(); prefetch when idlePrefetch()) {
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
@@ -998,6 +1029,21 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly feed = inject(TaskFeedStore);
   private readonly connection = inject(ConnectionStatus);
 
+  // The standing banner for an install only its operator can fix (GET
+  // /api/config's installNotice, classic InstallNoticeBanner): what is
+  // wrong, the CLIs that cannot run until then, and where the migration
+  // is written up. It has no close button, since nothing changes until
+  // the install is migrated and the daemon restarted.
+  protected readonly installNotice = computed(() => {
+    const n = this.access.rawConfig()?.installNotice;
+    if (!n?.message) return null;
+    const clis = (n.affectedClis ?? []).map((c) => c.split(":")[0]);
+    const text =
+      `${n.message[0].toUpperCase()}${n.message.slice(1)}.` +
+      (clis.length ? ` Cannot run until then: ${clis.join(", ")}.` : "");
+    return { text, docsUrl: n.docsUrl ?? "" };
+  });
+
   // The standing banner for a daemon that is not answering at all
   // (ConnectionStatus): when it stopped, in the deployment's time zone,
   // and that the page keeps retrying and recovers on its own.
@@ -1023,14 +1069,18 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly directorCtx = inject(DirectorContextService);
   private readonly snackbar = inject(SnackbarService);
   private readonly inboxRef = signal<InboxStore | null>(null);
+  private readonly processesRef = signal<ProcessesStore | null>(null);
   private readonly sessionsRef = signal<SessionsStore | null>(null);
   private destroyed = false;
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly router = inject(Router);
+  private readonly location = inject(Location);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  protected readonly idlePrefetch = signal(false);
+  private cancelIdlePrefetch: (() => void) | null = null;
 
   protected readonly icons = ICONS;
   protected readonly rosettePath = CHLADNI_ROSETTE_PATH;
@@ -1139,6 +1189,9 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
     () => this.inboxRef()?.decisions().length ?? 0,
+  );
+  protected readonly processesCount = computed(
+    () => this.processesRef()?.processCount() ?? 0,
   );
   protected readonly createOpen = signal(false);
   protected readonly createPos = signal({ top: 0, left: 0 });
@@ -1343,6 +1396,15 @@ export class AppComponent implements OnInit, OnDestroy {
       });
     });
 
+    void import("./processes/processes.store").then(({ ProcessesStore }) => {
+      if (this.destroyed) return;
+      runInInjectionContext(this.injector, () => {
+        const s = inject(ProcessesStore);
+        this.processesRef.set(s);
+        s.start(true);
+      });
+    });
+
     void import("./sessions/sessions.store").then(({ SessionsStore }) => {
       if (this.destroyed) return;
       runInInjectionContext(this.injector, () => {
@@ -1379,6 +1441,27 @@ export class AppComponent implements OnInit, OnDestroy {
     });
 
     this.zone.runOutsideAngular(() => {
+      if (!saveDataEnabled()) {
+        const w = this.doc.defaultView as
+          | (Window & {
+              requestIdleCallback?: (cb: () => void) => number;
+              cancelIdleCallback?: (id: number) => void;
+            })
+          | null;
+        const fire = () => {
+          this.cancelIdlePrefetch = null;
+          if (!this.destroyed) {
+            this.zone.run(() => this.idlePrefetch.set(true));
+          }
+        };
+        if (w && typeof w.requestIdleCallback === "function") {
+          const id = w.requestIdleCallback(fire);
+          this.cancelIdlePrefetch = () => w.cancelIdleCallback?.(id);
+        } else {
+          const t = setTimeout(fire, 1);
+          this.cancelIdlePrefetch = () => clearTimeout(t);
+        }
+      }
       this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
       this.dispatchPollTimer = setInterval(() => {
         if (this.doc.visibilityState !== "hidden") {
@@ -1429,9 +1512,12 @@ export class AppComponent implements OnInit, OnDestroy {
     this.help.attached.set(false);
     this.feed.stop(false);
     this.inboxRef()?.stop();
+    this.processesRef()?.stop(true);
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
     this.dispatchEventSub?.unsubscribe();
+    this.cancelIdlePrefetch?.();
+    this.cancelIdlePrefetch = null;
     if (this.dispatchPollTimer) clearInterval(this.dispatchPollTimer);
     if (this.dispatchTickTimer) clearInterval(this.dispatchTickTimer);
     this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
@@ -1518,13 +1604,29 @@ export class AppComponent implements OnInit, OnDestroy {
     this.directorCtx.toggle(this.activeOpener());
   }
 
+  // Exposed as a method so specs can spy on full-page navigation in jsdom.
+  navigateTo(url?: string): void {
+    const loc = this.doc.defaultView?.location;
+    if (!loc) return;
+    if (url) loc.assign(url);
+    else loc.reload();
+  }
+
+  reloadApp(dest?: string): void {
+    const href = resolveReloadHref(this.location, dest);
+    if (href) this.navigateTo(href);
+    else this.navigateTo();
+  }
+
   protected onDeferError(
     which: "create" | "help" | "account" | "customize" | "director",
   ): void {
+    const action = { label: "Reload", run: () => this.reloadApp() };
     if (which === "director") {
       this.directorCtx.close(false);
       this.snackbar.show(
         "The Director drawer could not load. Reload the page and try again.",
+        action,
       );
       return;
     }
@@ -1532,19 +1634,25 @@ export class AppComponent implements OnInit, OnDestroy {
       this.createTask.close();
       this.snackbar.show(
         "The New task form could not load. Reload the page and try again.",
+        action,
       );
     } else if (which === "help") {
       this.help.close();
-      this.snackbar.show("Help could not load. Reload the page and try again.");
+      this.snackbar.show(
+        "Help could not load. Reload the page and try again.",
+        action,
+      );
     } else if (which === "account") {
       this.onAccountClosed(true);
       this.snackbar.show(
         "Account menu could not load. Reload the page and try again.",
+        action,
       );
     } else {
       this.onCustomizeNavClosed();
       this.snackbar.show(
         "Navigation settings could not load. Reload the page and try again.",
+        action,
       );
     }
   }
@@ -1576,7 +1684,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   open(d: Destination): void {
-    if (d.route) void this.router.navigateByUrl(d.route);
+    if (d.route) void this.router.navigateByUrl(d.route).catch(() => undefined);
     else if (d.classic) this.doc.defaultView?.location.assign(d.classic);
   }
 

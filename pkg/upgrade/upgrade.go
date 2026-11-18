@@ -1273,11 +1273,17 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 
 	var (
 		tag            string
-		tagWasOnHost   bool
 		ref            string
 		sandbox        string
 		mirroredTarget string
 		schemaPrepared bool
+		// prevTagID: the image ID tag resolved to on this host before
+		// pullImage ran, if any. Cancel cleanup leaves tag when it still
+		// resolves to prevTagID -- an earlier rollback's target, say, or an
+		// image the operator pulled -- and removes it if pullImage moved a
+		// mutable tag onto a newly fetched image.
+		prevTagID   string
+		pullStarted bool
 	)
 	cleanupOnCancel := func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1289,16 +1295,26 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 			u.discardSchemaUpgrade()
 			schemaPrepared = false
 		}
+		// Before any image: a container still holding the target is
+		// what docker would refuse to remove it over.
+		u.removeCheckContainers(cleanupCtx, p)
 		if mirroredTarget != "" && !imageKeptBy(mirroredTarget, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
 			u.removeImageForCancel(cleanupCtx, p, mirroredTarget)
 		}
 		if sandbox != "" && !imageKeptBy(sandbox, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
 			u.removeImageForCancel(cleanupCtx, p, sandbox)
 		}
-		if tag != "" && !tagWasOnHost && !imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
+		if pullStarted && tag != "" &&
+			!(prevTagID != "" && u.imageID(cleanupCtx, tag) == prevTagID) &&
+			!imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
 			(ref == "" || !imageKeptBy(ref, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin)) {
 			u.removeImageForCancel(cleanupCtx, p, tag)
 		}
+		// And once more after: a `docker run` killed while docker was
+		// still creating its container can leave one that appears only
+		// after the first sweep (seen on a real daemon; the run is
+		// harmless once the image is gone, but the container is not).
+		u.removeCheckContainers(cleanupCtx, p)
 	}
 	failImage := func(err error) (stagedUpgrade, error) {
 		if u.isCancelled() {
@@ -1317,9 +1333,11 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		}
 	}
 
-	// Asked before the pull, which would make it so: a cancelled upgrade
-	// removes only the tag it pulled itself, never one already here.
-	tagWasOnHost = u.imageOnHost(ctx, p, stepPull, tag)
+	prevTagID = u.imageID(ctx, tag)
+	if err := ctx.Err(); err != nil {
+		return failImage(err)
+	}
+	pullStarted = true
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
 	if pullErr == nil {
 		ref, pullErr = u.pinImage(ctx, p, stepPull, tag)

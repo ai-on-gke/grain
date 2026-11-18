@@ -23,3 +23,53 @@ func TestGateObservationsPersistWithoutLifecycleEffects(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.Run(t, s, db)
 }
+
+func TestGateObservationReviewRegressions(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunReviewRegressions(t, s, db)
+}
+
+func TestHealthGateObservations(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunHealth(t, s, db)
+}
+
+func TestHealthGateSourceOrdering(t *testing.T) {
+	s, _, _ := openStore(t)
+	gateobservationtest.RunHealthSourceOrdering(t, s)
+}
+
+func TestHealthGateSourceBounds(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunHealthSourceBounds(t, s, db)
+}
+
+func TestGateOutcomeObservations(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunOutcomes(t, s, db)
+}
+
+func TestGateChecksPersistWithoutLifecycleEffects(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunChecks(t, s, db)
+}
+
+func TestReviewApprovalGateObservations(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunChangeGates(t, s, db)
+}
+
+func TestReviewApprovalScopeOverflow(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunChangeScopeOverflow(t, s, db)
+}
+
+func TestQualificationObservationsPersistWithoutLifecycleEffects(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunQualifications(t, s, db)
+}
+
+func TestObservationFamilyTransitions(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunObservationFamilies(t, s, db)
+}

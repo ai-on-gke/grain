@@ -2541,6 +2541,7 @@ var Tables = []string{
 	// makes; never a verdict grain reuses.
 	gitHubCIJobTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_ref`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`ref`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_commit`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`commit_sha`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`grain_schema`" + ` (
   ` + "`id`" + `      INTEGER NOT NULL,
@@ -4666,12 +4667,21 @@ var Tables = []string{
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
 
-	// Every close and reopen of a task somebody asked for, with who, when
-	// and why (model.TaskEvent).
+	// Local shadow diagnostics, separate from lifecycle and event outboxes.
+	gateHealthBaseTable,
+	gateHealthWorkflowTable,
+	"CREATE INDEX IF NOT EXISTS `gate_health_workflow_order` ON `gate_health_workflow_source` (`completed_at`,`repo`,`run_id`,`attempt`)",
+	gateOutcomeSourceTable,
+	"CREATE INDEX IF NOT EXISTS `gate_outcome_source_at` ON `gate_outcome_source` (`at`,`task_id`,`resource`)",
 	gateObservationTable,
 	gateObservationHistoryTable,
-	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_at` ON `gate_observation_shadow_history` (`at`)",
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_order` ON `gate_observation_shadow_history` (`at`,`task_id`,`generation`)",
+	// The composite index also covers expiry; retire the original prefix.
+	"DROP INDEX IF EXISTS `gate_shadow_history_at`",
 	"CREATE INDEX IF NOT EXISTS `gate_shadow_current_at` ON `gate_observation_shadow` (`evaluated_at`)",
+
+	// Every close and reopen of a task somebody asked for, with who, when
+	// and why (model.TaskEvent).
 	taskEventTable,
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
@@ -4696,8 +4706,11 @@ var Tables = []string{
 	// individual QA findings (model.QAAssignment, model.QACheckRun, model.QAFinding).
 	taskQAAssignmentTable,
 	taskQACheckRunTable,
+	// Exact-head observation reads must not scan unrelated QA heads.
+	"CREATE INDEX IF NOT EXISTS `task_qa_check_run_head` ON `task_qa_check_run` (`task_id`,`commit_sha`,`id`)",
 	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_check_run_task`" + ` ON ` + "`task_qa_check_run`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
 	taskQAFindingTable,
+	"CREATE INDEX IF NOT EXISTS `task_qa_finding_run` ON `task_qa_finding` (`check_run_id`,`id`)",
 	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_finding_task`" + ` ON ` + "`task_qa_finding`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
 	qaFlowVersionTable,
 	qaExperimentTable,

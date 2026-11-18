@@ -267,7 +267,7 @@ func LiveChanges(task model.Task) []string {
 // live CL remains -- closes the task as merged: ClosedAt and PrMergedAt,
 // which is what merge metrics, pr-merged goals and tasks-closed until
 // merged all read. outside is a submit grain did not make.
-func RecordSubmitted(ctx context.Context, st Store, task model.Task, from, to, message string, outside bool, now time.Time) error {
+func RecordSubmitted(ctx context.Context, st Store, task model.Task, from, to, message string, outside bool, now time.Time, observations ...Observation) error {
 	target := SubmittedTarget(from, to)
 	last := false
 	if err := st.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -299,6 +299,11 @@ func RecordSubmitted(ctx context.Context, st Store, task model.Task, from, to, m
 		}); err != nil {
 			return fmt.Errorf("closing %s as submitted: %w", task.ID, err)
 		}
+	}
+	if len(observations) == 1 && observations[0].Target == from {
+		obs := observations[0]
+		obs.Status = StatusSubmitted
+		recordOutcomeObservation(ctx, st, task, obs, to, outside, now)
 	}
 	body := strings.TrimSpace(message)
 	if outside {

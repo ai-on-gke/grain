@@ -27,6 +27,7 @@ import {
   viewChild,
   ViewEncapsulation,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { type Scope, scopeLines } from "./scope";
 
 export interface ConfirmRequest {
@@ -39,10 +40,23 @@ export interface ConfirmRequest {
   scope?: Scope;
   // Gerund phrase for multi-repo/owner confirm tick (defaults to "approving work").
   actionVerb?: string;
+  // What the action affects, each linked to where it is changed: the
+  // tasks, templates and schedules holding a grant on a server about to
+  // be removed. A classic page is an href, a /next/ page a route.
+  items?: ConfirmItem[];
+  itemsLabel?: string;
   // reason asks for a reason before the accept button turns on; the
   // dialog writes what was typed into value, which run reads.
   reason?: ConfirmReason;
   run: () => Promise<unknown>;
+}
+
+export interface ConfirmItem {
+  key: string;
+  label: string;
+  href?: string;
+  route?: string[];
+  detail?: string;
 }
 
 export interface ConfirmReason {
@@ -80,6 +94,7 @@ export function bypassConfirm(
 
 @Component({
   selector: "g-confirm-dialog",
+  imports: [RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
   styleUrls: ["./work-surface.css", "./surface-controls.css"],
@@ -99,6 +114,30 @@ export function bypassConfirm(
       >
         <h2 id="confirm-title" class="modal-title">{{ c.title }}</h2>
         <p id="confirm-body" class="modal-body">{{ c.message }}</p>
+        @if (c.items?.length) {
+          <ul
+            class="scope-list confirm-items"
+            data-testid="confirm-items"
+            [attr.aria-label]="c.itemsLabel || null"
+          >
+            @for (it of c.items; track it.key) {
+              <li>
+                @if (it.href) {
+                  <a [href]="it.href">{{ it.label }}</a>
+                } @else if (it.route) {
+                  <a [routerLink]="it.route" (click)="close(false)">{{
+                    it.label
+                  }}</a>
+                } @else {
+                  {{ it.label }}
+                }
+                @if (it.detail) {
+                  <span class="confirm-item-detail">{{ it.detail }}</span>
+                }
+              </li>
+            }
+          </ul>
+        }
         @if (c.scope; as s) {
           <ul class="scope-list" data-testid="confirm-scope">
             @for (line of lines(); track line) {

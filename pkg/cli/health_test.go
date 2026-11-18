@@ -17,12 +17,17 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/dispatchcondition"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/mergelogins"
@@ -139,6 +144,8 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 	out := captureStdout(t, func() {
 		(&printer{}).health(ui.SandboxHealthResponse{CapabilityServers: []ui.CapabilityServerDown{
 			{ID: "https://walk.example/caps/cm", State: "failed", Reason: "initialize: mcp: capability server closed its output: EOF"},
+			{ID: "https://grain.dev/capabilities/git", State: "failed", StartError: "could not start: port 4254 in use", Reason: "capability server https://grain.dev/capabilities/git: configure: server reported an error: git: listen tcp 127.0.0.1:4254: bind: address already in use"},
+			{ID: "https://grain.dev/capabilities/host-script", State: "failed", StartError: "could not start", Reason: "capability server https://grain.dev/capabilities/host-script: configure: server reported an error: host-script: mkdir /readonly/hs: read-only file system"},
 			{ID: "https://grain.dev/capabilities/gcp", State: "needs-config", ConfigRefused: true, Reason: "gcp: permission set org: roles/owner is not grantable"},
 			{ID: "https://walk.example/caps/corp", State: "needs-config", Waiting: "a renewed host credential", Reason: "configure: the host credential expired"},
 		}})
@@ -146,6 +153,8 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 	for _, want := range []string{
 		"FAILING: capability servers out of use",
 		"https://walk.example/caps/cm (failed): initialize: mcp: capability server closed its output: EOF",
+		"https://grain.dev/capabilities/git (could not start: port 4254 in use): capability server https://grain.dev/capabilities/git: configure: server reported an error: git: listen tcp 127.0.0.1:4254: bind: address already in use",
+		"https://grain.dev/capabilities/host-script (could not start): capability server https://grain.dev/capabilities/host-script: configure: server reported an error: host-script: mkdir /readonly/hs: read-only file system",
 		"https://grain.dev/capabilities/gcp (refused its saved config): gcp: permission set org: roles/owner is not grantable",
 		"https://walk.example/caps/corp (waiting for a renewed host credential, retried every minute): configure: the host credential expired",
 	} {
@@ -155,6 +164,109 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 	}
 	if strings.Contains(out, "no counters") {
 		t.Errorf("grain health says there is nothing to report with a server down:\n%s", out)
+	}
+}
+
+// End-to-end regression for F3 (2026-11-13-hosts-env-drain): a configured
+// git built-in whose data-plane port is occupied makes `grain health` exit 1
+// with "(could not start: port <N> in use)" rather than "(refused its saved
+// config)", and clears once the port is freed and the registry retries.
+func TestGrainHealthReportsPortInUseRatherThanRefusedConfig(t *testing.T) {
+	const code = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
+	const gitID = "https://grain.dev/capabilities/git"
+
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := held.Addr().(*net.TCPAddr).Port
+	listenAddr := held.Addr().String()
+	t.Cleanup(func() { _ = held.Close() })
+
+	gitBuilder, ok := intree.Lookup("git")
+	if !ok {
+		t.Fatal("missing built-in git capability")
+	}
+	var built []*intree.Server
+	t.Cleanup(func() {
+		for _, s := range built {
+			_ = s.Close(context.Background())
+		}
+	})
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	reg := servers.New(servers.Options{
+		Secrets:       func(name string) (string, bool) { return "fake-upstream-token", name == "walk-git/token" },
+		Now:           func() time.Time { return now },
+		RetryInterval: time.Minute,
+		Attach: func(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
+			srv, err := gitBuilder.Build(ctx, []string{"-listen", listenAddr}, func(string) string { return "" }, nil)
+			if err != nil {
+				return nil, err
+			}
+			built = append(built, srv)
+			srv.CapabilityServer.Token = strings.Repeat("t", protocol.MinHTTPTokenBytes)
+			ts := httptest.NewServer(srv.CapabilityServer)
+			ps, err := protocol.Attach(ctx, id, protocol.ServerConfig{
+				ServerURL: ts.URL,
+				Headers:   map[string]string{"Authorization": "Bearer " + srv.CapabilityServer.Token},
+				Config:    cfg.Config,
+			}, secrets, opts)
+			if err != nil {
+				ts.Close()
+				_ = srv.Close(ctx)
+				return nil, err
+			}
+			t.Cleanup(ts.Close)
+			return ps, nil
+		},
+	})
+	t.Cleanup(reg.Close)
+
+	cfg := map[string]protocol.ServerConfig{
+		gitID: {
+			Command: "grain",
+			Args:    []string{"capability", "git"},
+			Builtin: "git",
+			Config: map[string]any{
+				"upstream": "http://127.0.0.1:9",
+				"repos":    []any{"acme/widgets"},
+				"token":    "$secret:walk-git/token",
+			},
+		},
+	}
+	reg.Sync(context.Background(), cfg)
+
+	store, _ := sqlitetest.Open(t)
+	srv := ui.NewServer(ui.Config{
+		Actor:             ui.DefaultActor("operator@example.com"),
+		LocalAPIToken:     code,
+		CapabilityServers: reg,
+	}, store)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	out, err := runAccessCLI(t, ts.URL, code, "health")
+	if exit, _, _ := classifyError(err); exit != exitFailed {
+		t.Fatalf("grain health with port held: exit=%d err=%v, want exit %d\n%s", exit, err, exitFailed, out)
+	}
+	wantLabel := fmt.Sprintf("%s (could not start: port %d in use):", gitID, port)
+	if !strings.Contains(out, wantLabel) {
+		t.Errorf("grain health missing %q:\n%s", wantLabel, out)
+	}
+	if strings.Contains(out, "refused its saved config") {
+		t.Errorf("grain health still blamed the saved config:\n%s", out)
+	}
+
+	_ = held.Close()
+	now = now.Add(time.Minute)
+	reg.Sync(context.Background(), cfg)
+
+	out, err = runAccessCLI(t, ts.URL, code, "health")
+	if err != nil {
+		t.Fatalf("grain health once port is free: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "FAILING") {
+		t.Errorf("grain health still failing after port freed:\n%s", out)
 	}
 }
 

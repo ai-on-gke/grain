@@ -42,7 +42,7 @@ func finishInPlaceReview(t *testing.T, ctx context.Context, store *model.Store, 
 		t.Fatal(err)
 	}
 	if fix != "" {
-		pushFile(t, sim.BareRepo, model.BranchName(task.ID), fix, "hardened by the reviewer\n")
+		pushAsReview(t, ctx, store, sim, "s-review", model.BranchName(task.ID), fix)
 	}
 	if err := store.FinishRun(ctx, reviewID+"-1", baseTime.Add(2*time.Minute), "succeeded", ""); err != nil {
 		t.Fatal(err)
@@ -52,6 +52,20 @@ func finishInPlaceReview(t *testing.T, ctx context.Context, store *model.Store, 
 	if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, reviewID),
 		toolResult(calls...), reviewID+"-1", baseTime.Add(2*time.Minute)); err != nil {
 		t.Fatalf("ProcessResult (review): %v", err)
+	}
+}
+
+// pushAsReview pushes path to branch the way the review live on sandbox
+// does: through the git proxy, which records the fast-forward against the
+// review (model.Store.RecordReviewedBranchPush) as it lets it through.
+func pushAsReview(t *testing.T, ctx context.Context, store *model.Store, sim *githubsim.Sim,
+	sandbox, branch, path string) {
+
+	t.Helper()
+	old := branchSHA(t, sim.BareRepo, branch)
+	pushFile(t, sim.BareRepo, branch, path, "hardened by the reviewer\n")
+	if err := store.RecordReviewedBranchPush(ctx, sandbox, old, branchSHA(t, sim.BareRepo, branch)); err != nil {
+		t.Fatalf("RecordReviewedBranchPush: %v", err)
 	}
 }
 
@@ -93,7 +107,7 @@ func TestSecurityReviewPushesToTheReviewedBranchAndOpensNoPullRequest(t *testing
 		t.Error("open_pull_request opened a second pull request for a review working on the reviewed branch")
 	}
 
-	pushFile(t, sim.BareRepo, branch, "pkg/ui/server.go", "hardened by the reviewer\n")
+	pushAsReview(t, ctx, store, sim, "s-review", branch, "pkg/ui/server.go")
 	head := branchSHA(t, sim.BareRepo, branch)
 	if err := store.FinishRun(ctx, reviewID+"-1", baseTime.Add(2*time.Minute), "succeeded", ""); err != nil {
 		t.Fatal(err)

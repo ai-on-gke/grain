@@ -95,6 +95,10 @@ Rules that came from real defects:
   contrast to about 2:1. To de-emphasise, switch to the `outline` or
   `on-surface-variant` token, which keep at least 4.5:1. Never dim anything
   that needs a person.
+- **Native inputs on `inverse-surface` take `--inverse-color-scheme`.**
+  `inverse-surface` flips with the theme (`#282c35` in light, `#e4e6eb` in
+  dark); hard-coding `color-scheme: dark` leaves a date input's picker glyph
+  light on dark mode's light grey bar.
 
 ### Type
 
@@ -167,6 +171,13 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Into the classic UI:** a control here that can only be answered by a
+  classic page opens that page rather than doing something smaller in
+  place. It marks the jump with a muted `↗` hint after its label, which
+  stays on screen when the label ellipsizes, and its accessible name says
+  where it goes ("…, opens on the classic Boards page"). The Boards menu on
+  Tasks does this for every board that is not a list saved from here
+  (`tasks/board-labels.ts`'s `nextBoardParams`).
 - **Dispatch & quota alerts:** when dispatch is paused or model quotas are
   exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
@@ -175,8 +186,15 @@ do not pull in an icon font.
   timezone with relative countdowns. A page that changes the pause itself
   (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
   so the banner follows the click rather than the next poll.
-- **Disconnected banner:** the one standing banner above the whole shell
-  (`services/connection.service.ts`). It is raised when requests fail to
+- **Install notice:** `/api/config`'s `installNotice` (an unmigrated
+  host-mode install) is the other standing banner above the shell
+  (`.install-banner`, error colours, `role="status"`, no close button). It
+  says what is wrong, the CLIs that cannot run until then and links the
+  migration docs. It sits in flow above the rail like the disconnected banner,
+  and Settings → Upgrade shows the same notice in full with the command to
+  run.
+- **Disconnected banner:** the standing banner for a daemon that is not
+  answering (`services/connection.service.ts`). It is raised when requests fail to
   connect, when a gateway answers 502/503/504, or when a polled read goes
   10 s unanswered. It says when the outage began, in the deployment's time
   zone, and clears itself on the first answer. It sits in flow above the
@@ -233,6 +251,10 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
+- A page with a split calls `sp.attach()` once drawn (and `sp.detach()`
+  on destroy): only a measured split clamps a remembered share, so the
+  detail pane keeps its 320px floor whatever share a wider window stored
+  (`ui-ng/e2e/next-prompt-panes.spec.js`).
 - The detail pane is always there on desktop; it is not a modal. The
   exception is Agents, whose cards are a dashboard in their own right:
   its inspector opens only on the agent `?task=` names. With none (on
@@ -273,8 +295,12 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   schedules and declared triggers are rows of Schedules & Triggers and
   count there. Its own chips (Active, Paused, Event triggers, Suppressed)
   narrow within the tab. Finding one item across kinds is the
-  "Filter this view" box on each tab, and the header New menu creates any
-  kind from any tab (task 6180).
+  "Filter this view" box on each tab; Templates and Suites open their
+  narrowed kind directly (`+ New template`, `+ New suite`), while
+  Schedules & Triggers, Repo Workflows & Declarations and Software
+  Workflow & QA offer the header `New ▾` menu to create any kind (tasks
+  6180, 6916). The rail's `Processes` destination carries a neutral total
+  count badge (`schedules + templates + suites + triggers`).
 
 ### Workstream detail
 
@@ -328,7 +354,16 @@ inspector and Task Detail. Sessions shares its message styles.
   is scrolled to the middle instantly (no long smooth travel), takes focus,
   and wears `primary-container` with a `primary` border for four seconds:
   on at once, fading out over 600 ms (no fade under reduced motion). A malformed or missing comment says
-  so in a snackbar rather than silently landing at the end.
+  so in a snackbar rather than silently landing at the end; a page read that
+  failed shows its error instead and never claims the comment is missing. A
+  fragment belongs to the task it arrived with: a Tasks or Workstreams pane
+  that moves to another task keeps the address's `#comment=` but does not
+  follow it there, while a link that names both (`?task=21#comment=14`
+  followed from task 20, or Back/Forward between two such links) is
+  followed on the task it names. Phones have no pane, so the pane form
+  (`/next/tasks?task=<id>#comment=<n>`) opens the task's own page. A bare
+  `[x](#comment=<n>)` in a note stays on the page rather than resolving
+  against `<base href="/next/">`.
 
 ### Settings
 
@@ -393,6 +428,22 @@ set or server asks first through `<g-confirm-dialog>`, saying what stops
 working. A table cell holding a list (scopes, repositories) stays on one line,
 truncates with the full list in its `title`, and drops secondary columns
 (`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
+
+A capability server opens on a page of its own,
+`/settings/capabilities/<encoded id>` (the classic `serverPath`), reached from
+its id in the servers table and from Stored secrets' "Used by" links: the
+server's state, what it gives a task, its connection (edited, renamed after a
+confirm, tested unsaved, placed on a host), its secrets, its server settings
+and what holds a grant on it, each holder linked to its page (a task to the
+classic `/tasks/<id>` until `/next/` is the default). Server settings are drawn
+from the schema its configure tool declares, never hand-written per server:
+deprecated and grain-injected fields are left out, an enum reads through its
+`x-grain-enum-labels`, a write-only field is a password box with a set /
+missing / not set chip whose typed value goes as `configSecrets`, a refusal
+keyed by field shows under that field, and a field that does not apply given
+its siblings (gcp's `pool_max` in keyless token mode) is hidden unless it holds
+a value. Removing a server asks first and lists what holds it, linked, in the
+confirm (`ConfirmRequest.items`).
 
 A setting kept in the secret store rather than in grain/config (the Hub's
 `grc_…` registration token) stays editable while a config-repo lock
@@ -492,6 +543,8 @@ it rather than copy it.
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
+| Info popover | `shared/info-popover.component.ts` | an `(i)` beside a field or name whose explanation is too long for a tooltip: opens on click, Enter or Space, closes on Escape (focus back on the button), an outside click or a second press, and shifts to stay inside the viewport |
+| Schema form | `settings/capability-schema-form.component.ts` | a form drawn from a JSON schema (a capability server's configure schema): never hand-written per server |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
 | Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
 | Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |
@@ -502,6 +555,12 @@ Rules:
   reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
   above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
   code blocks into one paragraph. A one-line `summary` stays the row title.
+  An alert's body is read whole from its family (`?open=1&family=`: the
+  polled list carries its first line only) and kept per raise -- id and
+  `lastRaisedAt` -- since raising it again rewrites the body under the same
+  id; until that raise is read, or when the read fails, the dock shows the
+  list's first line, never an earlier raise's body
+  (`ui-ng/e2e/next-inbox-alert-body.spec.js`).
 - **A decision's actions never leave the screen.** In the Inbox inspector
   only the message in the resolution dock gives way (it shrinks and
   scrolls); the dock's actions keep their height and the inspector body
@@ -555,17 +614,30 @@ Rules:
   Something an operator should fix while the deployment keeps working (a
   base branch publishing nothing, `baseBranchPublishing`) is a
   `warning-container` banner with a warning status icon on its first line
-  and `role="status"`. It sits beside the page's error banners (Dispatch
-  blocked, `role="alert"`), above the content. Use the server's `detail`
-  sentence rather than rewording it, and link the task that holds the
-  finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+  and `role="status"` on its short title (rather than on the whole banner,
+  whose `detail` age ticks over on polls). It sits beside the page's error
+  banners (Dispatch blocked, `role="alert"`), above the content. Use the
+  server's `detail` sentence rather than rewording it, and link the task
+  that holds the finding where there is one
+  (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **A Settings banner's action keeps the right-hand slot.** `.s-banner`
+  wraps, so a message that can run long (the scheduled upgrade's count
+  error) goes in `.s-banner-text`, which takes the row's spare width:
+  the button stays on the right of a wide pane and wraps under the
+  message on a phone (`ui-ng/e2e/next-upgrade-status.spec.js`).
 - **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
   ```` ```mermaid ```` fences in the active theme with a Diagram / Source
   toggle, and pairs Before / After fences (named in the info string or by
   matching headings) into one block with Side by side / Before / After /
   Stacked / Source (Before alone on a phone). `mermaid` is imported only
   when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
-  before it reaches the DOM. A diagram never shrinks below 75% of its
+  before it reaches the DOM. Mermaid runs in strict mode, and a
+  diagram's own `%%{init}%%` may change neither security settings nor its
+  theme, palette, fonts or CSS (`secure` in `mermaidConfigForMode`; Mermaid
+  strips those keys at every depth, front-matter `config:` and `__proto__`
+  included), so its palette follows the theme switch. A diagram's own
+  `style`/`classDef` statements are its syntax, not configuration, and
+  keep the colours they name. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
   the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
@@ -583,7 +655,16 @@ Rules:
   (`g-grants-picker` with `[policyVerdicts]="true"`, so a grant the
   capability policy denies, may refuse or reserves for CI is badged and
   explained, and a refused method is listed disabled with the policy's
-  reason) and Model (`g-model-picker` plus *Use default*). Where
+  reason) and Model (`g-model-picker` plus *Use default*). Templates also
+  carry Task priority (whole number ≥ 1, `1e3` → `1000`), Interactive
+  (live-chat switch, explained in `Launch task from template` when set) and
+  `New task from this template` (carrying priority into the New task sheet,
+  or opening `Launch task from template` when input fields are declared).
+  Inline-prompt schedules also carry Network access, Reads, Writes and
+  declared Custom fields, and the schedule Configuration pane lists
+  Admission, Hosting and Keep running beside Model. Suite forms use a
+  searchable multi-select `Templates` combobox with an inline `+ New template`
+  (gated on `templates:write` and kept in place when refused). Where
   something else decides a setting (a template behind a schedule, a suite),
   the form says so instead of offering a box the server would ignore.
 - **An edit sends only what changed.** A PATCH from a form leaves out each
@@ -625,7 +706,12 @@ Rules:
   Example: Release hold cannot clear review findings, so a hold of findings
   alone shows no Release hold. The gate card says what does clear it and
   offers that action (*Override review gate…*) to people who may take it
-  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`).
+  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`). On Task detail, when
+  a task waits on a person's `Retry merge` (`reason.control === "Retry merge"`
+  or a completed task in `merge_failed`), the header offers **Retry merge** as
+  its primary action, and a `completed` task tucks **Run now** into **More ▾**
+  rather than placing it in the header
+  (`ui-ng/e2e/next-retry-merge-header.spec.ts`).
 - **Refusals say why.** A failed action shows the server's own `error`
   text (`errorText`). A refusal the request caused is a 4xx with a message,
   never a 500 with only a reference id.
@@ -720,7 +806,13 @@ WCAG 2.1 AA is the floor.
 - Text contrast is at least 4.5:1 (3:1 for large text and UI shapes).
 - Focus is always visible (2px primary outline).
 - Hit targets are at least 24×24.
-- Landmarks and headings are in order (one `h1` per page).
+- Landmarks and headings are in order (one `h1` per page). A detail view
+  embedded in another page's split (task detail in the Tasks, Workstreams
+  and Agents panes) steps its title down to `h2` and its sections to
+  level 3, and everything below steps down with them: subsections to
+  level 4, and the headings of child components it renders (gate cards,
+  the edit panel, the Changes tab) take a `pane` input and do the same.
+  Only its standalone page gives it the `h1`.
 - Live regions announce counts that change.
 - Dialogs trap focus and restore it on close.
 
@@ -742,12 +834,15 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
-  Save-Data), so navigation does not stall behind a slow origin. A
+  Save-Data alongside idle `@defer` prefetches), so navigation does not stall behind a slow origin. A
   navigation still pending after 120 ms shows the shell's top progress bar
-  (`shell/nav-progress.component.ts`), which takes no pointer events. Routes
+  (`shell/nav-progress.component.ts`), which takes no pointer events. If a lazy
+  route or `@defer` chunk cannot load (such as a 404 on an open tab after a
+  daemon upgrade), the shell surfaces a snackbar with a **Reload** action onto
+  the requested destination rather than leaving the click silent. Routes
   have no resolvers or guards that wait on polled reads; a page loads its own
-  data and shows its loading state. `e2e/next-task-page-stall.spec.js`
-  covers this.
+  data and shows its loading state. `e2e/next-task-page-stall.spec.js` and
+  `e2e/next-stale-chunk-upgrade.spec.ts` cover this.
 
 ## 10. How to test a UI change
 
@@ -849,7 +944,7 @@ The **Telemetry Cards** (`/next/telemetry?tab=quality`) adds three new compact e
 - A **Stage Funnel & Cost Attribution** ops-card, measuring `p95 latency`, `runs`, and `tokensMedian` per stage and arm.
 - A **Human-Review Triage (S5)** ops-card highlighting escape rates, human-routed precision, and reviews saved.
 
-The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage chip natively in queue rows (via `qaTriageChip()`), reducing UI noise while ensuring safety-critical `qa-triage` tasks are immediately identifiable in `<span class="row-line3">`. The Task Changes tab also explicitly flags `Complexity` and `Blast` tiers.
+The **Inbox, Tasks, Workstreams, and Task Detail views** surface a compact workflow and classifier chip via `qaWorkflowChip()` (`shared/chips.ts`), displaying the active workflow family (`Standard`, `Fast`, `Gates only`, or `Control`) alongside complexity (`Low`, `Med`, `High`), blast tier (`T0`–`T3`), or triage review state (`T2 Review`, `Held`). In Task Detail (`[data-testid="task-qa-chip"]`), the chip links directly to `/next/processes/quality?flow=<flowId>`. The Task Changes tab displays `Complexity`, `Blast`, and `Triage` summary pills (`[data-testid="qa-summary-stats"]`) together with recorded stage runs across `S0`–`S5`.
 
 ## 13. V4 Software Workflow & QA Studio, Tab-Strip Underline, & Full-Width Composition Body Well
 
@@ -866,7 +961,7 @@ The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage c
    - At `@container wf-studio (max-width: 1179.95px)` (covering `1024×860` and `1280px` when the Director drawer is open), the left catalog collapses into the center header's `<g-pill-select align="left" testid="qa-flow-switcher">`, leaving 2 columns (`Stage Spine | Focused Drawer`) with compact `padding-inline: 8px; font-size: 13px` inspector tabs that never clip on `340px` panes. At `@media (max-width: 599.95px)` (`390×844`), navigation uses a 3-step progressive view: Step 1 single-column catalog (`Workflows (N)`), Step 2 stage spine with `← Back` (`[data-testid="qa-mobile-back"]`), and Step 3 full-screen substep/guide drawer with `← Back to stages` (`[data-testid="qa-mobile-back-stages"]`).
    - Published workflow versions open in **Read-Only Inspect Mode** with zero disabled form controls, `[gMarkdown]` rendering on read-only prompt guidance, an explicit **`Customize as v1 override`** (when only a built-in `@v1` exists) or **`Customize as vN`** CTA (`[data-testid="qa-new-version-btn"]`), and version/hash-aware **`Set as default…`** (`[data-testid="qa-set-default-btn"]`). Entering Draft Mode enables unsaved-draft navigation guards (`[data-qa-unsaved-draft="true"]`, `beforeunload`, and `<g-confirm-dialog>`) and swaps header actions to `Test on recent PRs ▾` (`qa-dry-run-btn`, `qa-v3-open-probe`), `Discard draft` (`qa-cancel-edit-btn`), `Publish vN` (`qa-publish-version-btn`), and `⋯` (`qa-more-actions-btn`).
    - All 8 lifecycle stages start collapsed by default (`[data-testid="qa-expand-all-stages"]`), partial read-only workflows summarize skipped stages in `[data-testid="qa-toggle-skipped-stages"]`, and custom checks validate via zero-JSON single-line examples (`pattern`) or auto-synthesized fixtures (`companion`, `diff-budget`) with live `Caught` / `Allowed` status pills.
-   - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus active/built-in flows such as `engineering-workflow-v4@1`, `golden-v3-enforced@1`, `golden-v3@1`, `golden-v2@1`), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
+   - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus the 3 canonical built-in workflows `standard-workflow@1`, `fast-baseline@1`, and `gates-only@1` alongside any active custom versions), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
 
 ## 14. Autonomous Goal Mode
 
@@ -926,3 +1021,9 @@ uses 12/16 and identifiers/digests use monospace. Expiry must update locally eve
 when later API requests are unchanged or unavailable. Supported/deferred runtime
 surfaces and the separate rollout/review process are in
 [the observation guide](../../docs/gate-observations.md).
+
+CI rows in the observation card additionally identify the change and distinguish
+**Current CI policy** from **Legacy CI import** at the point of display. Show
+run/retry/fix/merge/Submit proposals as inert text, with executor and base/overlap
+preconditions separately explained. Multiple CI sources must have distinct wait
+and evidence tracking keys. A legacy CI verdict is not a readiness badge.

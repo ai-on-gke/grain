@@ -24,11 +24,15 @@ import {
 import {
   provideRouter,
   withComponentInputBinding,
+  withNavigationErrorHandler,
   withPreloading,
 } from "@angular/router";
 import { routes } from "./app.routes";
 import { connectionInterceptor } from "./services/connection.service";
-import { IdleRoutePreload } from "./shell/route-preload";
+import {
+  IdleRoutePreload,
+  staleChunkErrorHandler,
+} from "./shell/route-preload";
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -37,6 +41,7 @@ export const appConfig: ApplicationConfig = {
       routes,
       withComponentInputBinding(),
       withPreloading(IdleRoutePreload),
+      withNavigationErrorHandler(staleChunkErrorHandler),
     ),
     provideHttpClient(withFetch(), withInterceptors([connectionInterceptor])),
   ],

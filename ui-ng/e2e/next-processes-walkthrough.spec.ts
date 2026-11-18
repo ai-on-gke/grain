@@ -301,8 +301,7 @@ test("templates with required parameters preview without 400, workflow Run now c
 
   // Create template with required parameter and no default -> zero 400s on composition preview.
   await page.goto("processes/templates");
-  await page.getByRole("button", { name: "New ▾" }).click();
-  await page.getByRole("menuitem", { name: "Template" }).click();
+  await page.getByRole("button", { name: "+ New template" }).click();
   const tmplDlg = page.getByRole("dialog", { name: "New task template" });
   await tmplDlg.getByLabel("Template name").fill("e2e-req-param");
   await tmplDlg.getByLabel(/Filed task title/).fill("chore: update {{module}}");
@@ -393,6 +392,11 @@ test(
     expect(box.y + box.height).toBeLessThanOrEqual(saveBox.y + 0.5);
 
     await dialog.getByRole("button", { name: "Cancel" }).click();
+    // The draft was filled in, so Cancel asks before dropping it.
+    await page
+      .getByRole("dialog", { name: "Discard unsaved changes?" })
+      .getByRole("button", { name: "Discard" })
+      .click();
     await page.getByTestId("proc-new-menu-btn").click();
     await page.getByTestId("proc-new-schedule").click();
     await expect(page.getByTestId("proc-dialog-error")).toHaveCount(0);

@@ -77,6 +77,16 @@ func (s *Server) handleGetQAFlows(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, QAFlowsResponse{Flows: qa.BuiltInFlows()})
 }
 
+func assessTaskComplexityTier(t model.Task) string {
+	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
+		Title:       t.Title,
+		Body:        t.Body,
+		ReadsCount:  len(t.Reads),
+		WritesCount: len(t.Writes),
+	}, nil)
+	return string(comp.Tier)
+}
+
 // QASummaryRequest specifies the span and repository scope for GET /api/qa/summary.
 type QASummaryRequest struct {
 	Window time.Duration

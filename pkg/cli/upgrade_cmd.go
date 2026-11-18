@@ -116,8 +116,7 @@ func cmdUpgradeStart(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 		return nil
 	}
 	if *after && st.Scheduled != nil {
-		fmt.Printf("scheduled upgrade to %s (waiting on %d active run(s), %d CI run(s))\n",
-			st.Scheduled.Branch, st.Scheduled.BusyRuns, st.Scheduled.BusyCIRuns)
+		fmt.Printf("scheduled upgrade to %s (%s)\n", st.Scheduled.Branch, scheduledWaitingOn(st.Scheduled))
 		return nil
 	}
 	fmt.Printf("started upgrade to %s (phase=%s)\n", st.Branch, st.Phase)
@@ -264,8 +263,7 @@ func printUpgradeStatus(st ui.UpgradeStatus) {
 		fmt.Printf("mode: %s\n", st.Mode)
 	}
 	if st.Scheduled != nil {
-		fmt.Printf("scheduled: %s (waiting on %d active run(s), %d CI run(s))\n",
-			st.Scheduled.Branch, st.Scheduled.BusyRuns, st.Scheduled.BusyCIRuns)
+		fmt.Printf("scheduled: %s (%s)\n", st.Scheduled.Branch, scheduledWaitingOn(st.Scheduled))
 	}
 	if st.Phase != "" {
 		fmt.Printf("last/current upgrade: branch=%s phase=%s\n", st.Branch, st.Phase)
@@ -287,7 +285,10 @@ func printUpgradeStatus(st ui.UpgradeStatus) {
 		}
 		cutOver := st.Phase == "ok" && !st.Unchanged
 		switch {
-		case cutOver && st.RollbackLabel != "":
+		case st.Phase == "running":
+			// A rollback is refused until this upgrade has finished, and
+			// what it replaces is not decided until it cuts over.
+		case st.RollbackLabel != "" && st.RollbackReplacedByThisUpgrade:
 			fmt.Printf("replaced: %s (run \"grain upgrade rollback\" to go back)\n", st.RollbackLabel)
 		case st.RollbackLabel != "":
 			// This upgrade changed nothing, so the rollback still goes
@@ -309,4 +310,14 @@ func printUpgradeStatus(st ui.UpgradeStatus) {
 			fmt.Printf("replaced: %s\n", prev)
 		}
 	}
+}
+
+// scheduledWaitingOn is what a scheduled upgrade is waiting on, in the
+// words `grain upgrade start -after-tasks-finish` and `grain upgrade
+// status` print: the two counts, or why there are none to print.
+func scheduledWaitingOn(s *ui.ScheduledUpgradeStatus) string {
+	if s.CountError != "" {
+		return s.CountError
+	}
+	return fmt.Sprintf("waiting on %d active run(s), %d CI run(s)", s.BusyRuns, s.BusyCIRuns)
 }

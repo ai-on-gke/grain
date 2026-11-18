@@ -40,6 +40,8 @@ package upgrade
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"regexp"
@@ -74,11 +76,21 @@ type ImageConfig struct {
 	// in something that needs no docker daemon.
 	PullCmd []string
 	// RunCmd runs an image, with the ref and then HealthCheckArgs
-	// appended; {"docker", "run", "--rm", "--pull=never"} when left nil. The image's
+	// appended; {"docker", "run", "--rm", "--pull=never",
+	// "--label=grain.upgrade-check=<hash>"} when left nil, where <hash>
+	// names this deployment's RefFile (checkContainerLabel). The image's
 	// own ENTRYPOINT is `grain` (Dockerfile), so appending
 	// HealthCheckArgs -- {"schema-version"} on a real deployment -- runs
 	// exactly the same subcommand the binary path's health check runs,
 	// against the image about to be cut over to.
+	//
+	// Setting RunCmd also turns off a cancel's check-container cleanup:
+	// removeCheckContainers finds containers only by that label, which a
+	// custom command does not add, so it does nothing. Killing the command
+	// on a cancel stops the client, not necessarily what it started, so a
+	// custom runner that starts a container must remove it itself, or a
+	// cancelled health check's container -- and the pulled image it holds
+	// -- is left behind.
 	RunCmd []string
 	// ListCmd lists images for a repository, appended as its last argument,
 	// one per line: the `repo:tag` cleanup would remove, optionally followed
@@ -659,6 +671,28 @@ func (u *Upgrader) pinImage(ctx context.Context, p *progress, step, ref string) 
 	return "", fmt.Errorf("%s has no digest from %s on this host, so there is nothing to pin the upgrade to (it printed %q)", ref, repo, strings.TrimSpace(out))
 }
 
+// imageID returns the image ID ref resolves to in this host's docker image
+// store, or "" when ref is absent (or cannot be inspected). stageImage
+// records this before pulling tag and compares it again on cancel so that
+// cleanup keeps a pre-existing tag only when it still names the same image
+// (docs/test-runs/2026-11-13-upgrade-cancel.md F7) -- not when `docker pull`
+// moved a mutable branch or channel tag (:main, :latest, :stable) onto a
+// newly fetched, unverified image. It asks only when docker both pulls and
+// removes images: a custom PullCmd or RemoveCmd keeps an image store docker
+// may not see, and there it answers "".
+func (u *Upgrader) imageID(ctx context.Context, ref string) string {
+	if len(u.cfg.Image.PullCmd) > 0 || len(u.cfg.Image.RemoveCmd) > 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, imageInspectTimeout)
+	defer cancel()
+	out, err := newCommand(ctx, "", "docker", "image", "inspect", "--format", "{{.Id}}", ref).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // imageInspectTimeout bounds pinImage's question. It reads the image
 // store's metadata and starts no container, so it is nowhere near
 // imageRunTimeout's tail.
@@ -671,12 +705,56 @@ const imageInspectTimeout = time.Minute
 // present), so Docker must never implicitly pull a missing ref -- in
 // particular a hostless `grain/*` ref left in RefFile by an earlier
 // release-asset install, which Docker would resolve on Docker Hub.
+//
+// The default argv also labels the container checkContainerLabel. Killing
+// `docker run` -- which is what cancelling an upgrade's context does to it
+// -- stops the client and not the container, so a cancelled health check
+// left its container behind (created or still running), and that
+// container then kept docker from removing the image the cancel was meant
+// to remove. The label is how removeCheckContainers finds them again.
 func (u *Upgrader) dockerRunArgs(extra ...string) []string {
 	argv := u.cfg.Image.RunCmd
 	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm", "--pull=never"}
+		argv = []string{"docker", "run", "--rm", "--pull=never", "--label=" + u.checkContainerLabel()}
 	}
 	return append(append([]string{}, argv...), extra...)
+}
+
+// checkContainerLabelKey is the label every container ModeImage starts
+// with the default run command carries.
+const checkContainerLabelKey = "grain.upgrade-check"
+
+// checkContainerLabel is checkContainerLabelKey=<this deployment>: the ref
+// file's path, hashed, so two deployments sharing one docker daemon never
+// clean up each other's checks.
+func (u *Upgrader) checkContainerLabel() string {
+	sum := sha256.Sum256([]byte(u.cfg.Image.RefFile))
+	return checkContainerLabelKey + "=" + hex.EncodeToString(sum[:6])
+}
+
+// removeCheckContainers force-removes every container this deployment's
+// default run command started that is still there: on a cancel, the one
+// whose `docker run` client the cancel killed. Best-effort, and a no-op
+// when ImageConfig.RunCmd replaces docker run, since nothing then carries
+// the label.
+func (u *Upgrader) removeCheckContainers(ctx context.Context, p *progress) {
+	if len(u.cfg.Image.RunCmd) > 0 {
+		return
+	}
+	out, err := newCommand(ctx, "", "docker", "ps", "-aq", "--filter", "label="+u.checkContainerLabel()).Output()
+	if err != nil {
+		p.logf("cancel cleanup: could not list check containers: %v", err)
+		return
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return
+	}
+	if out, err := newCommand(ctx, "", "docker", append([]string{"rm", "-f"}, ids...)...).CombinedOutput(); err != nil {
+		p.logf("cancel cleanup: could not remove check container(s) %s: %v (%s)", strings.Join(ids, " "), err, strings.TrimSpace(string(out)))
+		return
+	}
+	p.logf("cancel cleanup: removed check container(s) %s", strings.Join(ids, " "))
 }
 
 // healthCheckImage runs the just-pulled image with HealthCheckArgs, the
@@ -950,15 +1028,14 @@ func containsImageID(ids []string, id string) bool {
 	return false
 }
 
-// listImages lists the images on this host for repository, asked as part
-// of step.
-func (u *Upgrader) listImages(ctx context.Context, p *progress, step, repository string) ([]listedImage, error) {
+// listImages lists the images on this host for repository.
+func (u *Upgrader) listImages(ctx context.Context, p *progress, repository string) ([]listedImage, error) {
 	argv := u.cfg.Image.ListCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}} {{.Repository}}@{{.Digest}} {{.ID}}"}
 	}
 	argv = append(append([]string{}, argv...), repository)
-	out, err := runAsked(ctx, p, step, imageRunTimeout, argv)
+	out, err := runAsked(ctx, p, stepRecord, imageRunTimeout, argv)
 	if err != nil {
 		return nil, err
 	}
@@ -975,30 +1052,6 @@ func (u *Upgrader) listImages(ctx context.Context, p *progress, step, repository
 		images = append(images, img)
 	}
 	return images, nil
-}
-
-// imageOnHost reports whether this host already holds ref -- its tag, or
-// its digest when it is pinned -- before an upgrade pulls it, so that
-// cancelling the upgrade removes only what the upgrade itself brought
-// (cleanupOnCancel): a tag an earlier upgrade or rollback left here is not
-// this one's to take away. A list that cannot be read answers false, which
-// is what cancel cleanup assumed of every tag before it asked.
-func (u *Upgrader) imageOnHost(ctx context.Context, p *progress, step, ref string) bool {
-	images, err := u.listImages(ctx, p, step, repositoryOf(ref))
-	if err != nil {
-		return false
-	}
-	for _, img := range images {
-		for _, name := range img.names {
-			if strings.HasSuffix(name, ":<none>") || strings.HasSuffix(name, "@<none>") {
-				continue
-			}
-			if imageKeptBy(ref, name) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // containerImageIDs lists the IDs of the images running containers use.
@@ -1175,7 +1228,7 @@ func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef
 	listed := make(map[string][]listedImage)
 	var keptIDs []string
 	for repo := range repos {
-		images, err := u.listImages(ctx, p, stepRecord, repo)
+		images, err := u.listImages(ctx, p, repo)
 		if err != nil {
 			p.logf("%s: listing older images for %s to remove: %v", stepRecord, repo, err)
 			continue

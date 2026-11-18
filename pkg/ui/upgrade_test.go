@@ -80,8 +80,9 @@ type upgradeResponse struct {
 	PreviousRelease     string          `json:"previousRelease"`
 	PreviousCommit      string          `json:"previousCommit"`
 	Rollback            *struct {
-		Image string `json:"image"`
-		Label string `json:"label"`
+		Image                 string `json:"image"`
+		Label                 string `json:"label"`
+		ReplacedByThisUpgrade bool   `json:"replacedByThisUpgrade"`
 	} `json:"rollback"`
 	Cancelled bool `json:"cancelled"`
 
@@ -1070,11 +1071,14 @@ func TestUpgradeStatusOffersOnlyARollbackThatWouldBeTaken(t *testing.T) {
 		name   string
 		status upgrade.Status
 		want   string
+		// thisOne is whether the reported upgrade replaced the target
+		// itself rather than carrying it forward.
+		thisOne bool
 	}{
-		{"completed", upgrade.Status{Branch: "v3.2.0", Phase: upgrade.PhaseOK, PreviousImage: v1}, v1},
-		{"cancelled since", upgrade.Status{Branch: "v3.1.0", Phase: upgrade.PhaseCancelled, PreviousImage: running, RollbackImage: v1}, v1},
-		{"cancelled, nothing carried", upgrade.Status{Branch: "v3.1.0", Phase: upgrade.PhaseCancelled, PreviousImage: running}, ""},
-		{"previous by tag", upgrade.Status{Branch: "v3.2.0", Phase: upgrade.PhaseOK, PreviousImage: "docker.io/grainai/grain:v1"}, ""},
+		{"completed", upgrade.Status{Branch: "v3.2.0", Phase: upgrade.PhaseOK, PreviousImage: v1}, v1, true},
+		{"cancelled since", upgrade.Status{Branch: "v3.1.0", Phase: upgrade.PhaseCancelled, PreviousImage: running, RollbackImage: v1}, v1, false},
+		{"cancelled, nothing carried", upgrade.Status{Branch: "v3.1.0", Phase: upgrade.PhaseCancelled, PreviousImage: running}, "", false},
+		{"previous by tag", upgrade.Status{Branch: "v3.2.0", Phase: upgrade.PhaseOK, PreviousImage: "docker.io/grainai/grain:v1"}, "", false},
 	} {
 		raw, err := json.Marshal(tc.status)
 		if err != nil {
@@ -1091,8 +1095,9 @@ func TestUpgradeStatusOffersOnlyARollbackThatWouldBeTaken(t *testing.T) {
 		switch {
 		case tc.want == "" && got.Rollback != nil:
 			t.Errorf("%s: rollback = %+v, want none offered", tc.name, *got.Rollback)
-		case tc.want != "" && (got.Rollback == nil || got.Rollback.Image != tc.want || got.Rollback.Label == ""):
-			t.Errorf("%s: rollback = %+v, want %s with a label", tc.name, got.Rollback, tc.want)
+		case tc.want != "" && (got.Rollback == nil || got.Rollback.Image != tc.want || got.Rollback.Label == "" ||
+			got.Rollback.ReplacedByThisUpgrade != tc.thisOne):
+			t.Errorf("%s: rollback = %+v, want %s with a label, replacedByThisUpgrade %v", tc.name, got.Rollback, tc.want, tc.thisOne)
 		}
 	}
 }

@@ -21,7 +21,12 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { scopeOf } from "../shared/scope";
-import { ciChip, repoShort } from "../shared/chips";
+import {
+  type QaWorkflowChip,
+  ciChip,
+  qaWorkflowChip,
+  repoShort,
+} from "../shared/chips";
 import { withDetailGates } from "../shared/gates";
 import { TipDirective } from "../shared/tip.directive";
 import {
@@ -44,6 +49,7 @@ import {
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
+  AccessRequestItem,
   ClearNotificationsRequest,
   DiffPreview,
   Task,
@@ -61,6 +67,11 @@ import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import {
+  accessItemGrantable,
+  chosenAccessItems,
+  grantAccessLabel,
+} from "../shared/access-items";
 import { TaskGoalCardComponent } from "../task/task-goal-card.component";
 
 import {
@@ -73,13 +84,6 @@ import {
 import { InboxStore } from "./inbox.store";
 import { replyRefusal, whyGone } from "./departure";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
-
-function qaTriageChip(t: Task): string | null {
-  const hr = t.humanReviewHold?.find((h) => h.source === "qa-triage");
-  if (!hr) return null;
-  const m = hr.reason?.match(/\[(T[0-3])\b/);
-  return m ? `[${m[1]} · Review]` : "[T2 · Review]";
-}
 
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: "all", label: "All" },
@@ -126,6 +130,22 @@ const PAST: Record<string, string> = {
   retry: "Retried",
   resume: "Resumed",
   "retry-merge": "Retried the merge of",
+};
+
+// The ownership tick a bulk confirm asks for names what the batch does
+// ("I am deferring work owned by someone else"); the dialog's own default
+// says "approving work", which is wrong for every other answer.
+const BULK_VERB: Record<string, string> = {
+  approve: "approving work",
+  defer: "deferring work",
+  close: "closing work",
+  decline: "declining work",
+  acknowledge: "acknowledging work",
+  ack: "acknowledging alerts",
+  submit: "submitting changes",
+  retry: "retrying work",
+  resume: "resuming work",
+  "retry-merge": "retrying merges",
 };
 
 // The reply composer's target: the task and question the person was
@@ -450,13 +470,18 @@ const ONE_KEY = new Set(["approve"]);
                                     >{{ c.text }}</span
                                   >
                                 }
-                                @if (e.task && qaTriageChip(e.task); as qc) {
+                                @if (qaChipsByKey().get(e.key); as qc) {
                                   <span
-                                    class="gate-chip"
-                                    style="margin-left: 6px; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: var(--md-sys-color-surface-container-high);"
-                                    data-testid="row-qa-triage"
+                                    [class]="'ci-chip ' + qc.tone"
+                                    [attr.data-testid]="
+                                      qc.triageHold
+                                        ? 'row-qa-triage'
+                                        : 'row-qa-chip'
+                                    "
+                                    [attr.data-qa-flow]="qc.flowId"
+                                    [gTip]="qc.tip"
                                   >
-                                    {{ qc }}
+                                    {{ qc.text }}
                                   </span>
                                 }
                                 @if (e.gone) {
@@ -769,7 +794,7 @@ const ONE_KEY = new Set(["approve"]);
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
                     <g-capped-markdown
-                      class="resolution-question"
+                      class="resolution-question dock-summary"
                       testid="access-summary"
                       noun="request"
                       label="Access request"
@@ -790,8 +815,10 @@ const ONE_KEY = new Set(["approve"]);
                           <label>
                             <input
                               type="checkbox"
-                              [checked]="!unticked().has($index) && !it.error"
-                              [disabled]="!!it.error"
+                              [checked]="
+                                !unticked().has($index) && grantable(it)
+                              "
+                              [disabled]="!grantable(it)"
                               (change)="toggleItem($index)"
                             />
                             <span class="tabular">{{ itemText(it) }}</span>
@@ -834,12 +861,10 @@ const ONE_KEY = new Set(["approve"]);
                             (click)="grant(sel, pa.items)"
                           >
                             {{
-                              chosenItems(pa.items).length === pa.items.length
-                                ? "Grant all"
-                                : "Grant " +
-                                  chosenItems(pa.items).length +
-                                  " of " +
-                                  pa.items.length
+                              grantLabel(
+                                chosenItems(pa.items).length,
+                                pa.items.length
+                              )
                             }}
                           </button>
                           <button
@@ -1027,7 +1052,9 @@ const ONE_KEY = new Set(["approve"]);
                       sel.kind === 'notification' ? 'The alert' : 'Summary'
                     "
                     [text]="
-                      (sel.kind === 'notification' && sel.notification?.body) ||
+                      (sel.kind === 'notification' &&
+                        (store.selectedNotificationBody() ||
+                          sel.notification?.body)) ||
                       sel.summary
                     "
                   />
@@ -1322,9 +1349,19 @@ const ONE_KEY = new Set(["approve"]);
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
-  protected readonly qaTriageChip = qaTriageChip;
-
   protected readonly store = inject(InboxStore);
+  protected readonly qaChipsByKey = computed<
+    ReadonlyMap<string, QaWorkflowChip>
+  >(() => {
+    const map = new Map<string, QaWorkflowChip>();
+    for (const grp of this.store.groups()) {
+      for (const entry of grp.entries) {
+        const chip = qaWorkflowChip(entry.task);
+        if (chip) map.set(entry.key, chip);
+      }
+    }
+    return map;
+  });
   protected readonly actionErrorShown = computed(() => {
     const err = this.store.actionError();
     return err && err !== this.store.loadError() ? err : null;
@@ -1707,9 +1744,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected chosenItems(items: { error?: string }[]): number[] {
-    const un = this.unticked();
-    return items.map((_, i) => i).filter((i) => !un.has(i) && !items[i].error);
+  protected readonly grantable = accessItemGrantable;
+  protected readonly grantLabel = grantAccessLabel;
+
+  protected chosenItems(items: readonly AccessRequestItem[]): number[] {
+    return chosenAccessItems(items, this.unticked());
   }
 
   protected toggleItem(i: number): void {
@@ -1786,6 +1825,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       accept: `${label} (${n})`,
       destructive: id === "close" || id === "decline",
       scope: scopeOf(rows, this.access.viewer()),
+      actionVerb: BULK_VERB[id],
       run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
   }
@@ -2058,7 +2098,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected grant(sel: InboxEntry, items: { error?: string }[]): void {
+  protected grant(sel: InboxEntry, items: readonly AccessRequestItem[]): void {
     const chosen = this.chosenItems(items);
     const all = chosen.length === items.length;
     void this.actAndFocus(

@@ -73,6 +73,10 @@ type UpgradeStatus struct {
 	// RollbackLabel names what `grain upgrade rollback` would go back to,
 	// "" when the daemon would refuse it (upgradeStatusResponse.Rollback).
 	RollbackLabel string
+	// RollbackReplacedByThisUpgrade is whether the upgrade reported here
+	// is the one that replaced the rollback target, rather than an earlier
+	// one whose target this one carried forward.
+	RollbackReplacedByThisUpgrade bool
 	// InFlightRuns is every live run, which is what an immediate upgrade
 	// would discard.
 	InFlightRuns int
@@ -95,6 +99,9 @@ type ScheduledUpgradeStatus struct {
 	ByID        string
 	BusyRuns    int
 	BusyCIRuns  int
+	// CountError is set when the two counts could not be read and are
+	// not counts (upgradeScheduledResponse.CountError).
+	CountError string
 }
 
 // UpgradeStatus reads GET /api/upgrade -- where this deployment stands
@@ -226,6 +233,7 @@ func upgradeStatusFrom(resp upgradeStatusResponse) UpgradeStatus {
 	}
 	if resp.Rollback != nil {
 		status.RollbackLabel = resp.Rollback.Label
+		status.RollbackReplacedByThisUpgrade = resp.Rollback.ReplacedByThisUpgrade
 	}
 	if resp.Running != nil {
 		status.RunningImage = resp.Running.Image
@@ -239,6 +247,7 @@ func upgradeStatusFrom(resp upgradeStatusResponse) UpgradeStatus {
 			ByID:        resp.Scheduled.ByID,
 			BusyRuns:    resp.Scheduled.BusyRuns,
 			BusyCIRuns:  resp.Scheduled.BusyCIRuns,
+			CountError:  resp.Scheduled.CountError,
 		}
 	}
 	return status

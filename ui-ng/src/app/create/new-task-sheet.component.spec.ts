@@ -321,10 +321,18 @@ describe("NewTaskSheetComponent", () => {
     const file = new File(["repro log"], "repro.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
-    expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
-      "repro.txt",
+    // Staging reads the file (File.arrayBuffer), real I/O that can outlast
+    // settle()'s fixed pause on a busy runner, so wait for the chip itself.
+    await vi.waitFor(
+      () => {
+        f.detectChanges();
+        expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
+          "repro.txt",
+        );
+      },
+      { timeout: 5_000, interval: 20 },
     );
+    await settle(f);
 
     // Expand Capabilities & repo context section and toggle capability + read repo.
     q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();
@@ -873,6 +881,79 @@ describe("NewTaskSheetComponent", () => {
     expect(post?.body).toMatchObject({
       title: "Supervised follow-up",
       autoApproveProposals: false,
+    });
+  });
+
+  it("carries a template's Task priority on open, normalizes 1e3 -> 1000, rejects invalid priorities, and routes priority overrides to POST /api/tasks", async () => {
+    const api = new FakeApi();
+    api.templates = [
+      {
+        id: "tmpl-high",
+        name: "High priority sweep",
+        title: "chore: sweep",
+        description: "Sweep stale flags",
+        priority: 1000,
+      } as Template,
+      {
+        id: "declared:template:sidthe:grain:fast",
+        name: "Declared fast check",
+        title: "chore: fast check",
+        description: "Run fast check",
+        declaredIn: { repo: "sidthe/grain" },
+        priority: 20,
+      } as Template,
+    ];
+    const f = await render(api);
+    TestBed.inject(CreateTaskService).open({
+      templateId: "tmpl-high",
+      templatePriority: 1000,
+      repo: "sidthe/grain",
+    });
+    await settle(f);
+
+    const pri = q<HTMLInputElement>('[data-testid="nt-priority"]')!;
+    expect(pri.value).toBe("1000");
+
+    // Invalid priorities surface inline error and disable submit.
+    for (const bad of ["0", "2.5", "high"]) {
+      pri.value = bad;
+      pri.dispatchEvent(new Event("input"));
+      await settle(f);
+      expect(q('[data-testid="nt-priority-error"]')?.textContent).toContain(
+        "Use a whole number, 1 or more.",
+      );
+      expect(
+        q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
+      ).toBe(true);
+    }
+
+    // Scientific notation "1e3" normalizes to "1000" on blur.
+    pri.value = "1e3";
+    pri.dispatchEvent(new Event("input"));
+    pri.dispatchEvent(new Event("blur"));
+    await settle(f);
+    expect(pri.value).toBe("1000");
+    expect(q('[data-testid="nt-priority-error"]')).toBeNull();
+
+    // Switch to declared template and override priority -> must use POST /api/tasks
+    // (since POST /api/tasks/from-template does not accept priority).
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:fast");
+    await settle(f);
+    pri.value = "50";
+    pri.dispatchEvent(new Event("input"));
+    await settle(f);
+
+    api.calls = [];
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    expect(
+      api.calls.some((c) => c.route === "POST /api/tasks/from-template"),
+    ).toBe(false);
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      templateId: "declared:template:sidthe:grain:fast",
+      priority: 50,
     });
   });
 });

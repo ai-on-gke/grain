@@ -2343,6 +2343,7 @@ describe("Cancel running upgrade, grace countdown, and one-click rollback", () =
         rollback: {
           image: previousImage,
           label: "docker.io/grainai/grain:v3.1.0",
+          replacedByThisUpgrade: true,
         },
       });
     });
@@ -2436,7 +2437,11 @@ describe("Cancel running upgrade, grace countdown, and one-click rollback", () =
         branch: "main",
         phase: "ok",
         previousCommit,
-        rollback: { commit: previousCommit, label: "ccccccc" },
+        rollback: {
+          commit: previousCommit,
+          label: "ccccccc",
+          replacedByThisUpgrade: true,
+        },
       });
     });
 

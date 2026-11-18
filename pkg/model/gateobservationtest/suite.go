@@ -45,7 +45,7 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 	// Snapshot every legacy table affected by progress, permissions or merge.
 	legacy := func() string {
 		var all []any
-		for _, table := range []string{"task", "task_observation", "task_run", "task_state", "task_ready", "task_pause", "task_link", "task_grant", "task_grant_wait", "task_event", "integration_event"} {
+		for _, table := range []string{"task", "task_observation", "task_run", "task_run_tool", "task_comment", "task_attachment", "task_goal", "task_state", "task_ready", "task_pause", "task_link", "task_grant", "task_grant_wait", "task_event", "integration_event"} {
 			rows, err := db.QueryContext(ctx, "SELECT * FROM `"+table+"`")
 			must(err)
 			cols, err := rows.Columns()
@@ -251,6 +251,7 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 		r.Result.Work = []struct{}{{}}
 		r.Result.Actions = []struct{}{{}}
 	}
+	now = now.Add(time.Millisecond) // this failed collection starts after the accepted one
 	beforeError := legacy()
 	wake := s.Changed()
 	must(s.RecordGateObservationFailure(ctx, task.ID, now, &failure))
@@ -281,7 +282,7 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 	if v.Dirty {
 		t.Fatal("retry did not recover")
 	}
-	task.Intent = model.IntentImplement
+	task.Interactive = true // Implementation tasks are now supported; interactive policy remains unsupported.
 	must(s.PutTask(ctx, task))
 	observe("unknown", "unknown")
 	// Diagnostic expiry causes refresh, with no task transition or event.
@@ -299,6 +300,7 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 	}
 	// Backoff restores the nominal delay before adding fresh jitter. Replaying
 	// a persisted retry may never compound jitter beyond the 20% contract.
+	now = now.Add(time.Millisecond)
 	for step := 0; step < 8; step++ {
 		failure.ComparedAt = now
 		for i := range failure.Results {

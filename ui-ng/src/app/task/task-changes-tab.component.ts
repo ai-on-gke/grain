@@ -259,7 +259,13 @@ import { TaskStore } from "./task.store";
           data-testid="task-qa-section"
         >
           <div class="ci-card-head">
-            <h3 id="task-qa-h" class="section-title">Pre-PR quality checks</h3>
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              id="task-qa-h"
+              class="section-title"
+            >
+              Pre-PR quality checks
+            </h3>
             @if (taskQa()?.assignment; as assign) {
               <span
                 class="mono muted"
@@ -463,7 +469,13 @@ import { TaskStore } from "./task.store";
         data-testid="task-ci-section"
       >
         <div class="ci-card-head">
-          <h3 id="task-ci-h" class="section-title">CI checks &amp; runs</h3>
+          <h3
+            [attr.aria-level]="pane() ? 4 : null"
+            id="task-ci-h"
+            class="section-title"
+          >
+            CI checks &amp; runs
+          </h3>
           <div class="changes-toolbar">
             @if (can("POST /api/ci/runs") && (task().repo || task().branch)) {
               <button
@@ -650,7 +662,11 @@ import { TaskStore } from "./task.store";
       >
         <div class="ci-card-head">
           <div>
-            <h3 id="task-diff-h" class="section-title">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              id="task-diff-h"
+              class="section-title"
+            >
               {{ fullDiffLoaded() ? "Full branch diff" : "Diff preview" }}
             </h3>
             @if (diffSummary(); as sum) {
@@ -692,6 +708,8 @@ import { TaskStore } from "./task.store";
   `,
 })
 export class TaskChangesTabComponent {
+  protected readonly qaStageTooltip = qaStageTooltip;
+
   protected readonly qaSummaryStats = computed<{
     complexityTier?: string;
     blastTier?: string;
@@ -700,15 +718,27 @@ export class TaskChangesTabComponent {
     repairedInNextSha?: number;
   } | null>(() => {
     const runs = this.visibleQaCheckRuns();
+    const qaSummary = this.task().qaSummary;
+    const assignedComplexityTier = this.taskQa()?.assignment?.complexityTier;
     const withTiers = runs.find((x) => x.complexityTier || x.blastTier);
     const withTriage = runs.find((x) => x.triageDecision);
     const withRepair = runs.find((x) => x.repairedInNextSha === 1);
-    if (!withTiers && !withTriage && !withRepair) return null;
+    const complexityTier =
+      withTiers?.complexityTier ||
+      assignedComplexityTier ||
+      qaSummary?.complexityTier;
+    const blastTier = withTiers?.blastTier || qaSummary?.blastTier;
+    const blastScore = withTiers?.blastScore ?? qaSummary?.blastScore;
+    const triageDecision =
+      withTriage?.triageDecision || qaSummary?.triageDecision;
+    if (!complexityTier && !blastTier && !triageDecision && !withRepair) {
+      return null;
+    }
     return {
-      complexityTier: withTiers?.complexityTier,
-      blastTier: withTiers?.blastTier,
-      blastScore: withTiers?.blastScore,
-      triageDecision: withTriage?.triageDecision,
+      complexityTier,
+      blastTier,
+      blastScore,
+      triageDecision,
       repairedInNextSha: withRepair?.repairedInNextSha,
     };
   });
@@ -723,6 +753,10 @@ export class TaskChangesTabComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly task = input.required<TaskDetail>();
+  // pane is set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
+  readonly pane = input(false);
   private readonly taskId = computed(() => this.task().id);
   readonly prUrl = input<string | null>(null);
   readonly prLabel = input<string>("");
@@ -1017,16 +1051,6 @@ export class TaskChangesTabComponent {
     return "error";
   }
 
-  protected qaStageTooltip(stage: string): string {
-    if (stage === "S3") {
-      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
-    }
-    if (stage === "S4") {
-      return "Stage S4 — 1-round fresh-context orthogonal diff verifier on T2/T3 changes";
-    }
-    return `Quality stage ${stage}`;
-  }
-
   protected toggleQaEvidence(id: number): void {
     this.openQaEvidence.update((s) => {
       const next = new Set(s);
@@ -1106,6 +1130,11 @@ export class TaskChangesTabComponent {
         t0.state === "proposed"
           ? "Proposals do not have a branch diff yet."
           : "No branch associated with this task yet.";
+    } else if (!t0.repo) {
+      // The server previews only a repository branch (it answers 404
+      // for a task with no repository), so a changelist has none here.
+      skipDiff =
+        "This task's change is a changelist, with no repository branch to preview.";
     } else if (t0.repo && t0.branch) {
       const present = await this.branchRefs.hasBranch(t0.repo, t0.branch);
       if (this.task().id !== id) return;
@@ -1335,5 +1364,26 @@ export class TaskChangesTabComponent {
       this.snackbar.show(`Changelist ${name} requested for #${t.id}`);
       this.acted.emit();
     }
+  }
+}
+
+function qaStageTooltip(stage: string): string {
+  switch (stage) {
+    case "S0":
+      return "Stage S0 — pre-clone EARS acceptance criteria & ambiguity extraction";
+    case "S0b":
+      return "Stage S0b — complexity-gated slice plan or wave-ordered Workstream DAG decomposition";
+    case "S1":
+      return "Stage S1 — repository context & sibling importer discovery";
+    case "S2":
+      return "Stage S2 — fresh-context pre-edit plan critique";
+    case "S3":
+      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
+    case "S4":
+      return "Stage S4 — 1-round fresh-context orthogonal diff verifier";
+    case "S5":
+      return "Stage S5 — blast-tier scorecard & merge triage classification";
+    default:
+      return `Quality stage ${stage}`;
   }
 }

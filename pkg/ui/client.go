@@ -52,8 +52,11 @@ import (
 // call now. That is the visible half of the change: this used to be a
 // GitHub client, and a task's identity used to be an issue number.
 type Client struct {
-	Config Config
-	Store  *model.Store
+	gateDefinitionMu     sync.Mutex
+	gateDefinitionPermit chan struct{}
+	gateDefinitions      map[string]gateDefinitionCache
+	Config               Config
+	Store                *model.Store
 	// localScripts is the local-script approvals of this daemon's live
 	// runs (localScriptApprovals): Config.LocalScriptApprovals, or one of
 	// its own.
@@ -130,6 +133,9 @@ type Client struct {
 func NewClient(cfg Config, store *model.Store) *Client {
 	if cfg.GateObservationTaskIDs == nil {
 		cfg.GateObservationTaskIDs = observationEnvironment()
+	}
+	if cfg.GateObservationChildren == nil {
+		cfg.GateObservationChildren = observationChildrenEnvironment()
 	}
 	return &Client{Config: cfg, Store: store}
 }
@@ -922,6 +928,7 @@ func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]mo
 	if err != nil {
 		return nil, err
 	}
+	qaSummaries, _ := c.Store.TaskQASummaries(ctx, tasks, states, assessTaskComplexityTier)
 	var open, closedTasks []Task
 	for _, t := range tasks {
 		t.GoalKind = goalKinds[t.ID]
@@ -939,6 +946,7 @@ func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]mo
 		}
 		task := taskFrom(t, states[t.ID], states, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
 			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
+		task.QASummary = qaSummaries[t.ID]
 		if at, ok := runNow[t.ID]; ok {
 			task.RunNowAt = &at
 			task.RunNowStale = runNowStale[t.ID]
@@ -1331,6 +1339,9 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
 		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
+	if qaMap, qErr := c.Store.TaskQASummaries(ctx, []model.Task{*t}, map[string]model.State{t.ID: state}, assessTaskComplexityTier); qErr == nil {
+		task.QASummary = qaMap[t.ID]
+	}
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt
@@ -1577,6 +1588,9 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
 		c.stallNote(state, model.StateTimesFrom(*t, obs, tailRuns), c.now()))
+	if qaMap, qErr := c.Store.TaskQASummaries(ctx, []model.Task{*t}, map[string]model.State{t.ID: state}, assessTaskComplexityTier); qErr == nil {
+		task.QASummary = qaMap[t.ID]
+	}
 	pendingComment, err := c.pendingQuestionComment(ctx, id, obs, comments)
 	if err != nil {
 		return TaskDetail{}, err
@@ -1802,7 +1816,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if detail.DeploymentWide, err = c.deploymentWideGrants(ctx, *t); err != nil {
 		return TaskDetail{}, err
 	}
-	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, id)
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *t)
 	return detail, nil
 }
 

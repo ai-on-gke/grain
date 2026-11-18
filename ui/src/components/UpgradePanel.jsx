@@ -1345,7 +1345,7 @@ function RollbackPreviousAlert({ status, disabled, rollingBack, onRollback }) {
     (target.commit ? target.commit.slice(0, 7) : "");
   const label = target.label || fullPrevious;
   if (!fullPrevious || !label) return null;
-  const cutOver = status.phase === "ok" && !status.unchanged;
+  const cutOver = Boolean(target.replacedByThisUpgrade);
   return (
     <Alert
       id="upgrade-rollback"

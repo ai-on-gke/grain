@@ -49,6 +49,28 @@ func TestAssessTaskComplexity(t *testing.T) {
 			},
 			wantTier: ComplexityLow,
 		},
+		{
+			name: "ui icon tweak with dispatch envelope stays below high",
+			in: ComplexityInput{
+				Title: "[ACME-10] Add little eye visibility icon glyph at bottom of card",
+				Body: "Dispatched from **Issue Tracker** (`ACME-10` in project **Widgets**, owner `alice@example.com`).\n\n" +
+					"> **Gate Override Note:** already checked\n\n" +
+					"## Pinned Deliverables (Materialized in `./attachments/`)\n" +
+					"- **SPEC** (`abc@v1`, file `./attachments/1-spec.md`): visibility auth note\n",
+			},
+			wantTier: ComplexityLow,
+		},
+		{
+			name: "multi-deliverable cross-surface milestone feature scores high",
+			in: ComplexityInput{
+				Title: "Build attachment storage API and Angular inspector upload UI",
+				Body: "## Pinned Deliverables\n" +
+					"- **CONCEPT** (`./attachments/1-concept.md`)\n" +
+					"- **SPEC** (`./attachments/2-spec.md`)\n\n" +
+					"## Milestones\n- Wave 1: pkg/model/schema.go + internal/server\n- Wave 2: ui-ng/src/app/card.component.ts\n",
+			},
+			wantTier: ComplexityHigh,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

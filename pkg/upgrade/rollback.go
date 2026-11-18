@@ -73,7 +73,7 @@ func (t RollbackTarget) Label(branch string) string {
 // did not -- cancelled, failed short of the cut-over, unchanged, or still
 // running. Zero when no upgrade since this record began has cut over.
 func (s Status) Rollback() RollbackTarget {
-	if s.cutOver() {
+	if s.CutOver() {
 		return RollbackTarget{
 			Image:   strings.TrimSpace(s.PreviousImage),
 			Release: strings.TrimSpace(s.PreviousRelease),
@@ -87,12 +87,12 @@ func (s Status) Rollback() RollbackTarget {
 	}
 }
 
-// cutOver reports whether the upgrade s records moved this deployment
+// CutOver reports whether the upgrade s records moved this deployment
 // onto its new build: one that succeeded with a change, or one whose
 // staging all succeeded and only the restart failed (progress.restartFailed)
 // -- the ref file, binary or Deployment already names the new build then,
 // so what it replaced is what there is to go back to.
-func (s Status) cutOver() bool {
+func (s Status) CutOver() bool {
 	if s.Phase == PhaseOK {
 		return !s.Unchanged
 	}

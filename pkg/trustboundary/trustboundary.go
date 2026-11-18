@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v29"
+const Version = "trust-boundary/v31"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,32 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v31 adds what the 2026-11-17 security review of main
+// (docs/security/audits/2026-11-17.md, task 6871, finding 1) found merged
+// unclassified between 11-13 and 11-17. To auth-routes: the accept-findings
+// path (pkg/ui/accept_findings.go, AcceptReviewFindings, and
+// pkg/model/review_findings_accept.go, #1292), the only way a review's
+// findings are cleared on a gate without a clean re-review, and which only
+// a person with an unlimited role and a reason may take -- the
+// human-review hold's rule, beside human_review_hold.go; and the verifier
+// session (pkg/ui/verifier_session.go, #1574), the HMAC-signed cookie that
+// admits a request without IdentityVerifier.Verify, beside verifier.go. To
+// exec-sandbox: pkg/agentd/ and its command cmd/grain-agentd/, the rootless
+// host agent -- what it runs, and the self-update (update.go, #1533) that
+// fetches a manifest and binary, verifies them against the release key
+// pinned at install
+// (release/release.go, VerifyManifest, resolveSigningKey) and runs the
+// result as the host agent. To release-machinery: scripts/build-agentd.sh,
+// which builds the grain-agentd binaries that self-update runs.
+//
+// v30 adds the classic ui e2e freeze lists to ci-suppressions (security
+// review of task 5099): ui/e2e/QUARANTINE and ui/e2e/NONGATING take the
+// tests they name out of the gating `ui e2e` job (playwright.config.js's
+// grepInvert), ui/e2e/frozen.js turns those lists into that filter, and
+// ui/playwright.config.js applies it (and could drop tests from the gate
+// on its own, through grepInvert, testIgnore or testMatch), so an edit to
+// any of them suppresses failures the way .grain/quarantine.yml does.
 //
 // v29 adds pkg/ui/access_code_mode.go to auth-routes beside
 // pkg/ui/accesscode.go (task 5973, found in the security review of task
@@ -312,6 +338,9 @@ var Categories = []Category{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
 			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
+			// The signed session that stands in for Verify on a deployment
+			// whose verifier binds sessions.
+			"pkg/ui/verifier_session.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
 			"pkg/ui/team_scope.go",
@@ -371,6 +400,10 @@ var Categories = []Category{
 			// raise one but never release it (ReleaseHumanReviewHold,
 			// RequestHumanReview), which the security hold relies on.
 			"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
+			// The same rule for a review's findings: they are cleared on a
+			// gate by a person with an unlimited role and a reason
+			// (AcceptReviewFindings), never by an agent.
+			"pkg/ui/accept_findings.go", "pkg/model/review_findings_accept.go",
 			// The director's Tier 3 floor (WithinDirectorFloor,
 			// DirectorFloorRefusal) the gate, /api/mcp and validate_pr apply.
 			"pkg/model/director_floor.go",
@@ -427,6 +460,12 @@ var Categories = []Category{
 			"pkg/orchestrator/", "pkg/mcp/", "pkg/granule/", "pkg/safepath/",
 			"pkg/k8s/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/", "pkg/sandboximage/",
 			"pkg/hostinit/",
+			// The rootless host agent: what it runs, and the self-update
+			// that verifies and replaces it -- and the command that builds
+			// it, whose main is where a build registers extra transports
+			// and host-tool grants (agentd.RegisterTransport,
+			// hook.RegisterHostToolGrant) before calling agentd.Main.
+			"pkg/agentd/", "cmd/grain-agentd/",
 			"third_party/granule/",
 		},
 		// What every backend is wired with, what is forwarded into
@@ -530,6 +569,9 @@ var Categories = []Category{
 			// whose output it publishes on every release, and the workflow
 			// that runs them on the release train's tag pushes.
 			"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
+			// The grain-agentd binaries every enrolled host's self-update
+			// fetches and runs.
+			"scripts/build-agentd.sh",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
@@ -548,7 +590,12 @@ var Categories = []Category{
 		prefixes:      []string{".grain/baselines/"},
 		// A job the path filter skips is not a failing one, so the
 		// filter suppresses failures the same way a baseline does.
-		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh"},
+		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh",
+			// The classic ui e2e freeze (ui/e2e/README.md): what these
+			// lists name, frozen.js removes from the gating `ui e2e` job.
+			"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js",
+			// ...and the config that applies them to the gating lane.
+			"ui/playwright.config.js"},
 	},
 	{
 		ID: "path-triggers",

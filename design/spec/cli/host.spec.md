@@ -303,17 +303,17 @@ _No flags._
 
 ### 3.7a `grain accept-findings -gate <gate> <id> <reason…>` {#CLI-112}
 
-Calls `POST /api/tasks/{id}/accept-findings`. A person accepts one review's findings on one merge gate (`security-review`, `review`, or `trigger:<name>`) as they are, so the change merges without fixing them. It clears that review's findings and questions on that gate and nothing else: CI, the other gates, approvers a trigger names and security holds still apply. It is recorded with the reason on the task, its timeline and the pull request. `-review <task>` names the review when several have findings on the gate. `-head <sha>` pins the head the findings were read at, and the request is refused if the pull request has moved since. **Scope:** person (`tasks:write`, unlimited role); an agent is refused.
+Calls `POST /api/tasks/{id}/accept-findings`. A person accepts one review's findings on one merge gate (`security-review`, `review`, `targeted-review`, or `trigger:<name>`) as they are, so the change merges without fixing them. It clears that review's findings and questions on that gate and nothing else: CI, the other gates, approvers a trigger names and security holds still apply. It is recorded with the reason on the task, its timeline and the pull request. `-review <task>` names the review when several have findings on the gate. `-head <sha>` pins the head the findings were read at, and the request is refused if the pull request has moved since. **Scope:** person (`tasks:write`, unlimited role); an agent is refused.
 
 <!-- BEGIN GENERATED FLAGS: grain accept-findings -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-gate` | string |  |  | the gate whose findings you accept: security-review, review, or trigger:<name> |
+| `-gate` | string |  |  | the gate whose findings you accept: security-review, review, targeted-review, or trigger:<name> |
 | `-head` | string |  |  | the head commit you read the findings at; refused if the pull request has moved since |
 | `-review` | string |  |  | the review task whose findings you accept; needed only when several have findings on the gate |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/ui/accept_findings_test.go`: `TestAcceptFindingsRefusesAnAgent`.
+**Pinned by:** `pkg/ui/accept_findings_test.go`: `TestAcceptFindingsRefusesAnAgent`, `TestAcceptFindingsTargetedReviewGate`.
 
 ### 3.7 `grain force-merge <id> <reason…>` {#CLI-28}
 
@@ -2306,7 +2306,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks (SQLite by 
 | `-merge-rules` | bool |  |  | seed acme/widgets' merge rules (the docs/declarations.md example) and two deploy/** changes the merge queue classified under them |
 | `-model-catalog` | string |  |  | host:port of an Anthropic model listing stub (GET /v1/models) on loopback: Claude connections that advertise no models are given what it lists, as a deployment's are given what Anthropic lists |
 | `-model-discovery-interval` | duration | `the deployment's 10m` |  | how often -model-catalog's discovery asks the provider again |
-| `-notifications` | bool |  |  | run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle |
+| `-notifications` | bool |  |  | run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green, ttl or suite-run) has come true is cleared on its own, as on a daemon's cycle |
 | `-observability` | bool |  |  | serve the live CI and sandbox observability demo |
 | `-open` | bool | `true` |  | open the UI in the system's default browser once it's listening |
 | `-qualification` | bool |  |  | seed a release candidate of -default-target-repo whose qualification run is waiting for approval |

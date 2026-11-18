@@ -129,8 +129,12 @@ func TestPrintUpgradeStatusOffersOnlyARollbackTheDaemonWouldTake(t *testing.T) {
 		want string
 		not  string
 	}{
-		{"completed", ui.UpgradeStatus{Enabled: true, Phase: "ok", PreviousImage: "x:v1@sha256:a", RollbackLabel: "x:v1"},
+		{"completed", ui.UpgradeStatus{Enabled: true, Phase: "ok", PreviousImage: "x:v1@sha256:a", RollbackLabel: "x:v1", RollbackReplacedByThisUpgrade: true},
 			`replaced: x:v1 (run "grain upgrade rollback" to go back)`, ""},
+		{"restart failed", ui.UpgradeStatus{Enabled: true, Phase: "failed", PreviousImage: "x:v1@sha256:a", RollbackLabel: "x:v1", RollbackReplacedByThisUpgrade: true},
+			`replaced: x:v1 (run "grain upgrade rollback" to go back)`, "last completed upgrade"},
+		{"running", ui.UpgradeStatus{Enabled: true, Phase: "running", PreviousImage: "x:v2@sha256:b", RollbackLabel: "x:v1"},
+			"", "grain upgrade rollback"},
 		{"by tag", ui.UpgradeStatus{Enabled: true, Phase: "ok", PreviousImage: "x:v1"},
 			"replaced: x:v1\n", "grain upgrade rollback"},
 		{"cancelled", ui.UpgradeStatus{Enabled: true, Phase: "cancelled", PreviousImage: "x:v2@sha256:b", RollbackLabel: "x:v1"},
@@ -145,5 +149,19 @@ func TestPrintUpgradeStatusOffersOnlyARollbackTheDaemonWouldTake(t *testing.T) {
 		if tc.not != "" && strings.Contains(out, tc.not) {
 			t.Errorf("%s: printed\n%s\nwant no %q", tc.name, out, tc.not)
 		}
+	}
+}
+
+// TestScheduledWaitingOnSaysWhenTheRunsCannotBeCounted: a schedule whose
+// counts the daemon could not read prints why, not "waiting on 0 active
+// run(s)" (docs/test-runs/2026-11-18-upgrade-scheduled-cancel.md F8).
+func TestScheduledWaitingOnSaysWhenTheRunsCannotBeCounted(t *testing.T) {
+	if got, want := scheduledWaitingOn(&ui.ScheduledUpgradeStatus{BusyRuns: 2, BusyCIRuns: 1}),
+		"waiting on 2 active run(s), 1 CI run(s)"; got != want {
+		t.Errorf("counted: %q, want %q", got, want)
+	}
+	const why = "the runs in flight could not be counted, so the queue stays held"
+	if got := scheduledWaitingOn(&ui.ScheduledUpgradeStatus{CountError: why}); got != why {
+		t.Errorf("uncounted: %q, want %q", got, why)
 	}
 }

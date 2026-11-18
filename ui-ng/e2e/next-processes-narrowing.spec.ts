@@ -234,7 +234,12 @@ test(
       .getByTestId("suite-dialog")
       .getByRole("button", { name: "Cancel" })
       .click();
+    // On the Suites tab, New opens + New suite directly without the dropdown.
+    await expect(page.getByTestId("proc-new-suite-btn")).toHaveText(
+      "+ New suite",
+    );
 
+    await page.goto("processes/schedules");
     await page.getByTestId("proc-new-menu-btn").click();
     await page.getByTestId("proc-new-template").click();
     await expect(page).toHaveURL(/\/processes\/templates/);
@@ -242,6 +247,9 @@ test(
       page.locator('[aria-labelledby="tmpl-dialog-title"]'),
     ).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(page.getByTestId("proc-new-template-btn")).toHaveText(
+      "+ New template",
+    );
 
     // ?new=suite deep-links the same form.
     await page.goto("processes/schedules?new=suite");

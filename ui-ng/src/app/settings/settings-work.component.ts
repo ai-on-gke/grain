@@ -41,6 +41,13 @@ import type {
   QAExperimentSummary,
 } from "../telemetry/qa-experiments.models";
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
+import {
+  type CapabilityHolder,
+  type HolderLink,
+  holderLink,
+  removeMessage,
+  serverPath,
+} from "./capability-server";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -73,6 +80,19 @@ interface CapabilityServerRow {
     state?: string;
   } | null;
 }
+
+const DEFAULT_QA_FLOW_OPTIONS: readonly PillOption[] = [
+  {
+    value: "standard-workflow",
+    label: "Standard workflow · standard-workflow",
+  },
+  { value: "fast-baseline", label: "Fast baseline · fast-baseline" },
+  { value: "gates-only", label: "Gates only · gates-only" },
+];
+
+const DEFAULT_QA_FLOW_LABELS: ReadonlyMap<string, string> = new Map(
+  DEFAULT_QA_FLOW_OPTIONS.map((opt) => [opt.value, opt.label]),
+);
 
 // capServerState is the chip a server row shows: disabled when an
 // operator turned it off, otherwise the server's own status.state
@@ -677,7 +697,13 @@ export function listedSecrets(
                   @for (srv of capServers(); track srv.id) {
                     @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="s-mono">{{ srv.id }}</td>
+                      <td class="s-mono s-wrap">
+                        <a
+                          [routerLink]="serverPath(srv.id)"
+                          [attr.data-testid]="'open-cap-server-' + srv.id"
+                          >{{ srv.id }}</a
+                        >
+                      </td>
                       <td class="s-mono">
                         {{
                           srv.config?.serverUrl ||
@@ -1423,11 +1449,9 @@ export function listedSecrets(
                             track id;
                             let last = $last
                           ) {
-                            <a
-                              class="s-mono"
-                              [routerLink]="[]"
-                              fragment="capability-servers"
-                              >{{ id }}</a
+                            <a class="s-mono" [routerLink]="serverPath(id)">{{
+                              id
+                            }}</a
                             >{{ last ? "" : ", " }}
                           }
                         </span>
@@ -1691,6 +1715,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly capTestNotice = signal("");
   protected readonly capTestOk = signal(true);
   protected readonly capServerState = capServerState;
+  protected readonly serverPath = serverPath;
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
@@ -1869,40 +1894,32 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     return this.canWriteSettings() && this.qaEnabled();
   }
 
-  protected qaFlowValue(): string {
-    const current = this.state.val<unknown>("qaFlowId", "golden-v1-minimal");
+  protected readonly qaFlowValue = computed<string>(() => {
+    const current = this.state.val<unknown>("qaFlowId", "standard-workflow");
     return typeof current === "string" && current.trim() !== ""
-      ? current
-      : "golden-v1-minimal";
-  }
+      ? current.trim()
+      : "standard-workflow";
+  });
 
-  protected qaFlowOptions(): readonly PillOption[] {
+  protected readonly qaFlowOptions = computed<readonly PillOption[]>(() => {
     const serverFlows = this.state.val<unknown>("qaFlowIds", []);
-    const defaults: readonly PillOption[] = [
-      {
-        value: "golden-v1-minimal",
-        label: "golden-v1-minimal (Recommended)",
-      },
-      {
-        value: "deterministic-s3-only",
-        label: "deterministic-s3-only (Zero-LLM Ablation)",
-      },
-      {
-        value: "repo-custom",
-        label: "repo-custom (.grain/qa-flow.yml)",
-      },
-    ];
-    if (!Array.isArray(serverFlows) || serverFlows.length === 0) {
-      return defaults;
+    const current = this.qaFlowValue();
+    const baseOptions =
+      Array.isArray(serverFlows) && serverFlows.length > 0
+        ? serverFlows
+            .filter(
+              (item): item is string => typeof item === "string" && item !== "",
+            )
+            .map((value) => ({
+              value,
+              label: DEFAULT_QA_FLOW_LABELS.get(value) ?? value,
+            }))
+        : [...DEFAULT_QA_FLOW_OPTIONS];
+    if (current && !baseOptions.some((opt) => opt.value === current)) {
+      return [...baseOptions, { value: current, label: `${current} (legacy)` }];
     }
-    const labelByValue = new Map(defaults.map((opt) => [opt.value, opt.label]));
-    return serverFlows
-      .filter((item): item is string => typeof item === "string" && item !== "")
-      .map((value) => ({
-        value,
-        label: labelByValue.get(value) ?? value,
-      }));
-  }
+    return baseOptions;
+  });
 
   protected qaRolloutPercent(): number {
     const raw = this.state.val<unknown>("qaRolloutPct", 0);
@@ -1935,7 +1952,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       if (!this.state.settings()["qaEnabled"]) {
         // Clear unsaved dependent edits when flipping back off on a deployment where QA was off.
         const s = this.state.settings();
-        this.state.setField("qaFlowId", s["qaFlowId"] ?? "golden-v1-minimal");
+        this.state.setField("qaFlowId", s["qaFlowId"] ?? "standard-workflow");
         this.state.setField("qaRolloutPct", s["qaRolloutPct"] ?? 0);
         this.state.setField(
           "qaShadowOnControl",
@@ -2204,10 +2221,28 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   // Removing a server drops it from every grant naming it, so it asks
   // first, as host and Git connection removal do.
-  protected confirmRemoveCapServer(id: string): void {
+  // The confirm lists what holds a grant on the server, each linked to
+  // where it is changed, as the server's own page does.
+  protected async confirmRemoveCapServer(id: string): Promise<void> {
+    // null: who holds it could not be read, which the confirm says
+    // rather than claiming nothing grants it.
+    let items: HolderLink[] | null = null;
+    if (this.access.can("GET /api/capability-servers/usage")) {
+      try {
+        const rows = await this.api.get<
+          { id: string; holders?: CapabilityHolder[] }[]
+        >("GET /api/capability-servers/usage");
+        const mine = (Array.isArray(rows) ? rows : []).find((u) => u.id === id);
+        items = (mine?.holders ?? []).map(holderLink);
+      } catch {
+        // The confirm still asks without them.
+      }
+    }
     this.confirmReq.set({
       title: "Remove capability server?",
-      message: `Remove ${id}? Tasks that hold a grant on it can no longer use it.`,
+      message: removeMessage(id, items),
+      items: items ?? [],
+      itemsLabel: "Grants on this server",
       accept: "Remove",
       destructive: true,
       run: () => this.removeCapServer(id),

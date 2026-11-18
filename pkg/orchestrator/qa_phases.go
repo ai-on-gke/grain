@@ -44,6 +44,29 @@ var dirTokenRe = regexp.MustCompile(`(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]+`)
 var goImportLineRe = regexp.MustCompile(`"([^"]+)"`)
 var tsImportLineRe = regexp.MustCompile(`(?:from|require\()\s*['"]([^'"]+)['"]`)
 
+func isSubtaskOfWorkstream(ctx context.Context, store *model.Store, task model.Task) bool {
+	proposerTaskID := strings.TrimSpace(task.Proposer.TaskID)
+	if proposerTaskID != "" && task.Proposer.Attribution.Actor.Source != model.SourceSession {
+		return true
+	}
+	if hasTaskLink(task, model.LinkContinues) {
+		return true
+	}
+	origTask := task.WorkOrigin.Task()
+	if origTask != "" && origTask != task.ID {
+		if task.Proposer.Attribution.Actor.Source == model.SourceSession && origTask == proposerTaskID {
+			return false
+		}
+		if store != nil {
+			if orig, err := store.GetTask(ctx, origTask); err == nil && orig != nil && (orig.Interactive || orig.HasConsole()) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func matchesComplexityTier(allowed []string, actual qa.ComplexityTier) bool {
 	if len(allowed) == 0 {
 		return true
@@ -298,7 +321,7 @@ func ExecutePostCloneWorkflowPhases(
 		PathHints:   candidatePaths,
 	}, prof)
 
-	// 2. S0b (step:goal-subtask-decomposer): complexity-gated slice plan / wave DAG guidance.
+	// 2. S0b (step:goal-subtask-decomposer): complexity-gated slice plan / wave DAG coordinator.
 	if spec.Decompose.Enabled && spec.Decompose.Mode != "" && spec.Decompose.Mode != "off" {
 		if matchesComplexityTier(spec.Decompose.Complexities, comp.Tier) {
 			maxSub := spec.Decompose.MaxSubtasks
@@ -309,13 +332,21 @@ func ExecutePostCloneWorkflowPhases(
 			if targetLines <= 0 {
 				targetLines = 400
 			}
-			switch strings.ToLower(strings.TrimSpace(spec.Decompose.Mode)) {
+			effectiveMode := strings.ToLower(strings.TrimSpace(spec.Decompose.Mode))
+			isChildSubtask := isSubtaskOfWorkstream(ctx, store, task)
+			// Step down to single-PR slice_plan on medium-complexity tasks or already-decomposed child subtasks
+			// so only high-complexity root tasks spawn a multi-PR Workstream DAG and children never split recursively.
+			if effectiveMode == "propose_dag" && (comp.Tier != qa.ComplexityHigh || isChildSubtask) {
+				effectiveMode = "slice_plan"
+			}
+			switch effectiveMode {
 			case "propose_dag":
 				finalPrompt += fmt.Sprintf(
-					"\n\n## Goal Subtask Decomposition (S0b — propose_dag)\n"+
-						"Decompose multi-subsystem work into at most %d wave-ordered subtasks via `propose_task` "+
-						"(target ~%d diff lines per subtask) with non-overlapping `writes[]` scopes and explicit `depends_on` edges.",
-					maxSub, targetLines,
+					"\n\n## Workstream Subtask Decomposition (S0b — propose_dag)\n"+
+						"You are running on a high-complexity root Workstream task. Inspect the repository layout first and choose ONE of two paths:\n"+
+						"1. **Single-PR execution:** If the entire change fits cleanly inside one focused pull request (<= ~%d diff lines within one subsystem), implement and verify it directly in this run without calling `propose_task`.\n"+
+						"2. **Wave-ordered Workstream DAG:** If the work spans multiple subsystems or waves (> ~%d diff lines), decompose it into 2 to %d wave-ordered child tasks via `propose_task` (each with a clear `title`, self-contained `body` naming target files and acceptance tests, non-overlapping file scopes so parallel tasks never conflict, and explicit `depends_on` task IDs between waves). When filing a child DAG, make **zero** code edits or git commits on this root task and finish by calling `nothing_needed` with a concise summary of the proposed subtask DAG so this root closes cleanly as the Workstream header.",
+					targetLines, targetLines, maxSub,
 				)
 			default:
 				finalPrompt += fmt.Sprintf(
@@ -325,6 +356,7 @@ func ExecutePostCloneWorkflowPhases(
 					maxSub, targetLines,
 				)
 			}
+			detailJSON := fmt.Sprintf(`{"effectiveMode":%q,"isChildSubtask":%v}`, effectiveMode, isChildSubtask)
 			if store != nil {
 				_, _ = store.RecordQACheckRun(ctx, model.QACheckRun{
 					TaskID:         task.ID,
@@ -333,6 +365,7 @@ func ExecutePostCloneWorkflowPhases(
 					CheckID:        "step:goal-subtask-decomposer",
 					Arm:            model.QAArmTreatment,
 					Verdict:        "pass",
+					DetailJSON:     detailJSON,
 					ComplexityTier: string(comp.Tier),
 					ExperimentID:   expID,
 					ArmID:          armID,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Task } from "../api/models";
+import type { CustomFieldDeclaration, Task } from "../api/models";
 
 // Wire contracts for pkg/ui/schedules.go, templates.go, tasks_from_template.go,
 // suites.go, composition.go, repo_workflows.go, declarations.go, and
@@ -99,6 +99,7 @@ export interface Schedule {
   autoApproveProposals?: boolean;
   reads?: string[];
   writes?: WriteTarget[];
+  customFields?: Record<string, string | string[]>;
   networkAccess?: string;
   nothingNeededAction?: string;
   keepRunning?: boolean;
@@ -140,6 +141,7 @@ export interface CreateScheduleRequest {
   capabilities?: string[];
   reads?: string[];
   writes?: WriteTarget[];
+  customFields?: Record<string, string | string[]>;
   networkAccess?: string;
   nothingNeededAction?: string;
   keepRunning?: boolean;
@@ -164,6 +166,11 @@ export interface UpdateScheduleRequest {
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
   capabilities?: string[];
+  reads?: string[];
+  writes?: WriteTarget[];
+  customFields?: Record<string, string | string[]>;
+  networkAccess?: string;
+  nothingNeededAction?: string;
   keepRunning?: boolean;
   admission?: string;
   hosting?: string;
@@ -228,6 +235,7 @@ export interface CreateTemplateRequest {
   fields?: TemplateField[];
   repo?: string;
   base?: string;
+  priority?: number;
   autoMerge: boolean;
   networkAccess?: string;
   nothingNeededAction?: string;
@@ -250,6 +258,8 @@ export interface UpdateTemplateRequest {
   fields?: TemplateField[];
   repo?: string;
   base?: string;
+  // 0 clears the template's own priority.
+  priority?: number;
   autoMerge?: boolean;
   networkAccess?: string;
   nothingNeededAction?: string;
@@ -477,6 +487,52 @@ export function suppressionReasonLabel(reason: string): string {
     default:
       return reason;
   }
+}
+
+// formatScheduleSuppression formats the schedule detail's suppression banner
+// text without repeating the server's leading "skipped: " clause or reason
+// words (for example, publishingHeld's Detail is "skipped: publishing held by
+// task N (...)", and an overlap-group hold's Detail names the peer schedule).
+export function formatScheduleSuppression(sup: ScheduleSuppression): string {
+  const label = suppressionReasonLabel(sup.reason);
+  const detail = (sup.detail ?? "").trim().replace(/^skipped:\s*/i, "");
+  if (!detail) {
+    return `Suppressed — ${label}.`;
+  }
+  if (
+    sup.heldByScheduleId ||
+    detail.toLowerCase().startsWith(label.toLowerCase())
+  ) {
+    return `Suppressed — ${detail}`;
+  }
+  return `Suppressed — ${label}: ${detail}`;
+}
+
+// scheduleFiringTarget resolves the repository and base branch a schedule's
+// firing actually uses (model.Template.FiringTarget): when the schedule fires
+// a template bound to a repository of its own (Boolean(tmpl.repo)), that
+// binding decides both repo and base -- including an empty base, which means
+// the target repository's default branch rather than falling back to the
+// schedule's own base. When templates have not been loaded and a composed
+// preview is present for this schedule, its resolved repo and base win too.
+export function scheduleFiringTarget(
+  s: Schedule,
+  templates: readonly Template[],
+  composition?: Composition | null,
+): { repo: string; base: string } {
+  if (s.templateId && !s.suiteId && !s.system) {
+    const tmpl = templates.find((t) => t.id === s.templateId);
+    if (tmpl) {
+      if (tmpl.repo) {
+        return { repo: tmpl.repo, base: tmpl.base ?? "" };
+      }
+      return { repo: s.repo || "", base: s.base ?? "" };
+    }
+    if (composition?.repo) {
+      return { repo: composition.repo, base: composition.base ?? "" };
+    }
+  }
+  return { repo: s.repo || "", base: s.base ?? "" };
 }
 
 // skipFolded is how many later occurrences a skip that fired late
@@ -885,4 +941,143 @@ export function sameList(
   const x = a ?? [];
   const y = b ?? [];
   return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+export const NETWORK_ACCESS_OPTIONS: readonly {
+  value: string;
+  label: string;
+}[] = [
+  { value: "", label: "Deployment default" },
+  { value: "open", label: "Egress (outbound internet only)" },
+  { value: "none", label: "None (this deployment only)" },
+];
+
+export function sameWrites(
+  a: readonly WriteTarget[] | undefined,
+  b: readonly WriteTarget[] | undefined,
+): boolean {
+  const x = a ?? [];
+  const y = b ?? [];
+  return (
+    x.length === y.length &&
+    x.every(
+      (w, i) =>
+        w.repo.trim() === y[i].repo.trim() &&
+        (w.base ?? "").trim() === (y[i].base ?? "").trim(),
+    )
+  );
+}
+
+export function customFieldValueList(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v ?? "").trim()).filter(Boolean);
+  }
+  if (raw === undefined || raw === null) return [];
+  const s = String(raw).trim();
+  return s ? [s] : [];
+}
+
+/**
+ * initialCustomFields seeds a schedule form's custom-field state from the
+ * saved schedule's values, falling back to each declared field's default
+ * (matching classic ui/src/components/CustomFields.jsx initialFieldValues).
+ */
+export function initialCustomFields(
+  decls: readonly CustomFieldDeclaration[] | undefined,
+  saved: Record<string, unknown> | undefined,
+): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  for (const f of decls ?? []) {
+    const hasSaved = saved !== undefined && f.name in saved;
+    const raw = hasSaved ? saved[f.name] : (f.default ?? "");
+    if (f.multiple) {
+      out[f.name] = customFieldValueList(raw);
+    } else if (Array.isArray(raw)) {
+      const list = customFieldValueList(raw);
+      out[f.name] = list.length > 1 ? list : (list[0] ?? "");
+    } else {
+      out[f.name] = raw === undefined || raw === null ? "" : String(raw);
+    }
+  }
+  return out;
+}
+
+export function sameCustomFields(
+  a: Record<string, string | string[]> | undefined,
+  b: Record<string, string | string[]> | undefined,
+): boolean {
+  const x = a ?? {};
+  const y = b ?? {};
+  const keys = new Set([...Object.keys(x), ...Object.keys(y)]);
+  for (const k of keys) {
+    const xv = customFieldValueList(x[k]);
+    const yv = customFieldValueList(y[k]);
+    if (!sameList(xv, yv)) return false;
+  }
+  return true;
+}
+
+/**
+ * templateDisambiguatedLabels returns a map from template.id to a human
+ * label that uses name alone when unique, disambiguating collisions with
+ * the declaring/bound repository or id (classic ui/src/templateLabels.js).
+ */
+export function templateDisambiguatedLabels(
+  templates: readonly Template[],
+): Map<string, string> {
+  const counts = new Map<string, number>();
+  for (const t of templates) {
+    const base = (t.name || t.title || t.id).trim();
+    counts.set(base, (counts.get(base) ?? 0) + 1);
+  }
+  const byRepo = new Map<string, number>();
+  for (const t of templates) {
+    const base = (t.name || t.title || t.id).trim();
+    const repo = t.declaredIn?.repo || t.repo || "";
+    const key = `${base}\0${repo}`;
+    byRepo.set(key, (byRepo.get(key) ?? 0) + 1);
+  }
+  const out = new Map<string, string>();
+  for (const t of templates) {
+    const base = (t.name || t.title || t.id).trim();
+    if ((counts.get(base) ?? 0) <= 1) {
+      out.set(t.id, base);
+      continue;
+    }
+    const repo = t.declaredIn?.repo || t.repo || "";
+    if (repo && (byRepo.get(`${base}\0${repo}`) ?? 0) <= 1) {
+      out.set(t.id, `${base} (${repo})`);
+    } else {
+      out.set(t.id, `${base} (${t.id})`);
+    }
+  }
+  return out;
+}
+
+/**
+ * matchesTemplateQuery matches every whitespace-separated word of `query`
+ * (case-insensitive, in any order) against the template's label, name,
+ * title, bound repo, or declaring repo.
+ */
+export function matchesTemplateQuery(
+  t: Template,
+  label: string,
+  query: string,
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const hay = [
+    label,
+    t.id,
+    t.name,
+    t.title,
+    t.repo ?? "",
+    t.declaredIn?.repo ?? "",
+  ]
+    .join(" ")
+    .toLowerCase();
+  return q
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => hay.includes(word));
 }
