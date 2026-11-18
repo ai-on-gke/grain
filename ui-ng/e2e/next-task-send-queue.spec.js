@@ -155,6 +155,40 @@ for (const size of [
       // Reload: what was sent is the conversation now.
       await page.reload();
       await expect(sent.last()).toContainText("Sent on the second try");
+
+      // Closed while a reply is out: the one queued behind it stays as
+      // "Not sent", readable, with Discard in place of Edit.
+      let releaseLast;
+      const heldLast = new Promise((r) => (releaseLast = r));
+      let lastPosts = 0;
+      await page.route(COMMENTS, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        if (++lastPosts === 1) await heldLast;
+        return route.fallback();
+      });
+      await composer.fill("Last word before it closes");
+      await composer.press("Control+Enter");
+      await composer.fill("Too late for this one");
+      await composer.press("Control+Enter");
+      await expect(page.getByTestId("pending-1")).toContainText("Queued");
+      await apiPost(demoServer, accessCode, `/api/tasks/${id}/close`);
+      releaseLast();
+      const stuck = page.locator("article.msg.is-failed");
+      await expect(stuck).toHaveCount(1);
+      await expect(stuck).toContainText("Too late for this one");
+      await expect(stuck).toContainText("can no longer receive this comment");
+      await expect(stuck.getByRole("button", { name: "Edit" })).toHaveCount(0);
+      const [stuckBox, threadBox2] = await Promise.all([
+        stuck.boundingBox(),
+        thread.boundingBox(),
+      ]);
+      expect(stuckBox.x + stuckBox.width).toBeLessThanOrEqual(
+        threadBox2.x + threadBox2.width + 1,
+      );
+      await stuck.getByRole("button", { name: "Discard" }).click();
+      await expect(pending).toHaveCount(0);
+      expect(lastPosts).toBe(1);
+      await page.unroute(COMMENTS);
     } finally {
       await closeQuietly(demoServer, accessCode, id);
     }
