@@ -20,10 +20,15 @@ import {
   type Template,
   derivedRuns,
   formatScheduleSuppression,
+  initialCustomFields,
+  matchesTemplateQuery,
   movedOrder,
   parseProcessSort,
+  sameCustomFields,
+  sameWrites,
   scheduleFiringTarget,
   sortProcessRows,
+  templateDisambiguatedLabels,
 } from "./processes.models";
 
 function sched(over: Partial<Schedule>): Schedule {
@@ -243,5 +248,88 @@ describe("scheduleFiringTarget", () => {
         } as Composition,
       ),
     ).toEqual({ repo: "acme/comp", base: "comp-base" });
+  });
+});
+
+describe("schedule and suite parity helpers", () => {
+  it("compares write targets, seeds custom fields from saved or default values, and detects custom-field changes", () => {
+    expect(
+      sameWrites(
+        [{ repo: "acme/docs", base: "main" }, { repo: "acme/cli" }],
+        [
+          { repo: "acme/docs", base: "main" },
+          { repo: "acme/cli", base: "" },
+        ],
+      ),
+    ).toBe(true);
+    expect(
+      sameWrites(
+        [{ repo: "acme/docs", base: "main" }],
+        [{ repo: "acme/docs", base: "release" }],
+      ),
+    ).toBe(false);
+
+    const decls = [
+      { name: "severity", type: "enum", default: "p2" },
+      { name: "urgent", type: "bool" },
+      { name: "tags", type: "string", multiple: true, default: ["ops"] },
+    ];
+    const seeded = initialCustomFields(decls, undefined);
+    expect(seeded).toEqual({
+      severity: "p2",
+      urgent: "",
+      tags: ["ops"],
+    });
+    const hydrated = initialCustomFields(decls, {
+      severity: "",
+      urgent: true,
+      tags: ["sec", "infra"],
+    });
+    expect(hydrated).toEqual({
+      severity: "",
+      urgent: "true",
+      tags: ["sec", "infra"],
+    });
+    expect(sameCustomFields(hydrated, { ...hydrated })).toBe(true);
+    expect(sameCustomFields(hydrated, { ...hydrated, urgent: "false" })).toBe(
+      false,
+    );
+  });
+
+  it("disambiguates colliding template names and matches multi-word queries across name, title and repo", () => {
+    const list = [
+      {
+        id: "t-1",
+        name: "lint",
+        title: "Run Go linter",
+        declaredIn: { repo: "acme/widgets", path: ".grain/templates/lint.yml" },
+      },
+      {
+        id: "t-2",
+        name: "lint",
+        title: "Run UI linter",
+        declaredIn: { repo: "acme/web", path: ".grain/templates/lint.yml" },
+      },
+      {
+        id: "t-3",
+        name: "release-prep",
+        title: "Prepare release changelog",
+        repo: "acme/docs",
+      },
+    ] as Template[];
+    const labels = templateDisambiguatedLabels(list);
+    expect(labels.get("t-1")).toBe("lint (acme/widgets)");
+    expect(labels.get("t-2")).toBe("lint (acme/web)");
+    expect(labels.get("t-3")).toBe("release-prep");
+
+    expect(
+      matchesTemplateQuery(list[0], labels.get("t-1")!, "widgets go"),
+    ).toBe(true);
+    expect(
+      matchesTemplateQuery(list[1], labels.get("t-2")!, "widgets go"),
+    ).toBe(false);
+    expect(
+      matchesTemplateQuery(list[2], labels.get("t-3")!, "changelog acme/docs"),
+    ).toBe(true);
   });
 });

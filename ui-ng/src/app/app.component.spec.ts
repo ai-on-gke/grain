@@ -77,6 +77,24 @@ class FakeShellApi {
         changed: true,
       });
     }
+    if (route === "GET /api/schedules") {
+      return Promise.resolve({
+        body: [{ id: "s-1" }, { id: "s-2" }],
+        changed: true,
+      });
+    }
+    if (route === "GET /api/templates") {
+      return Promise.resolve({
+        body: [{ id: "t-1" }],
+        changed: true,
+      });
+    }
+    if (route === "GET /api/suites") {
+      return Promise.resolve({
+        body: [{ id: "st-1" }],
+        changed: true,
+      });
+    }
     return Promise.resolve({ body: null, changed: false });
   };
   openNotifications = () => Promise.resolve([]);
@@ -983,5 +1001,22 @@ describe("AppComponent shell", () => {
     newBoardOnInbox.click();
     await f.whenStable();
     expect(router.url).toBe("/tasks?newBoard=1");
+  });
+
+  it("renders a neutral total count badge on the Processes rail destination", async () => {
+    const { fixture: f } = await render();
+    await new Promise((r) => setTimeout(r, 25));
+    f.detectChanges();
+    await f.whenStable();
+
+    const procLink = el(f).querySelector('[data-testid="rail-processes"]')!;
+    const badge = procLink.querySelector(
+      '[data-testid="rail-processes-count"]',
+    );
+    expect(badge).not.toBeNull();
+    expect(badge?.classList.contains("is-neutral")).toBe(true);
+    // 2 schedules + 1 template + 1 suite = 4
+    expect(badge?.textContent?.trim()).toBe("4");
+    expect(procLink.querySelector(".sr-only")?.textContent?.trim()).toBe("(4)");
   });
 });
