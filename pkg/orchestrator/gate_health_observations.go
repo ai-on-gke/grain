@@ -211,7 +211,7 @@ func recordWorkflowHealthSource(ctx context.Context, deps Deps, run ConcludedGit
 	if !healthSourceWanted(ctx, deps, run.Repo, run.Ref, run.WorkflowName) {
 		return
 	}
-	r := gates.WorkflowHealthRun{ID: run.RunID, Attempt: run.Attempt, Repository: run.Repo.String(), HeadRepository: run.HeadRepo, Ref: strings.TrimPrefix(run.Ref, "refs/heads/"), Commit: run.HeadSHA, Workflow: run.WorkflowName, Path: run.WorkflowPath, Event: run.Event, Source: "github", Complete: exact && len(jobs) > 0}
+	r := gates.WorkflowHealthRun{ID: run.RunID, Attempt: run.Attempt, Repository: run.Repo.String(), HeadRepository: run.HeadRepo, Ref: strings.TrimPrefix(run.Ref, "refs/heads/"), Commit: run.HeadSHA, Workflow: run.WorkflowName, Path: run.WorkflowPath, Event: run.Event, Source: "github", Conclusion: run.Conclusion, Complete: exact && len(jobs) > 0}
 	if run.StartedAt != nil {
 		r.StartedAt = *run.StartedAt
 	}

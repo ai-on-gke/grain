@@ -105,7 +105,7 @@ func TestBaseHealthProfiles(t *testing.T) {
 	}
 }
 func healthRun() WorkflowHealthRun {
-	return WorkflowHealthRun{ID: 1, Attempt: 1, Repository: "acme/widgets", HeadRepository: "acme/widgets", Ref: "main", Commit: "head", Workflow: "nightly", Path: ".github/workflows/nightly.yml", Event: "schedule", Source: "github", StartedAt: healthNow.Add(-2 * time.Hour), CompletedAt: healthNow.Add(-time.Hour), Complete: true, Jobs: []HealthJob{{ID: "11", Name: "test", RunID: 1, Attempt: 1, Workflow: "nightly", Ref: "main", Commit: "head", Conclusion: "success", Source: "github", App: "github-actions"}}}
+	return WorkflowHealthRun{ID: 1, Attempt: 1, Repository: "acme/widgets", HeadRepository: "acme/widgets", Ref: "main", Commit: "head", Workflow: "nightly", Path: ".github/workflows/nightly.yml", Event: "schedule", Source: "github", Conclusion: "success", StartedAt: healthNow.Add(-2 * time.Hour), CompletedAt: healthNow.Add(-time.Hour), Complete: true, Jobs: []HealthJob{{ID: "11", Name: "test", RunID: 1, Attempt: 1, Workflow: "nightly", Ref: "main", Commit: "head", Conclusion: "success", Source: "github", App: "github-actions"}}}
 }
 func TestCurrentNightlySourceWindowAndJobPredicates(t *testing.T) {
 	c := NightlyHealthConfig{Workflow: "nightly", Since: healthNow.Add(-48 * time.Hour).Format(time.RFC3339), WindowSeconds: 86400, Semantics: "window_v1"}
@@ -115,6 +115,15 @@ func TestCurrentNightlySourceWindowAndJobPredicates(t *testing.T) {
 		want   string
 	}{
 		{"green", func(*WorkflowHealthRun) {}, "met"},
+		{"run-failed-with-green-jobs", func(r *WorkflowHealthRun) { r.Conclusion = "failure" }, "unmet"},
+		{"run-cancelled-with-green-jobs", func(r *WorkflowHealthRun) { r.Conclusion = "cancelled" }, "pending"},
+		{"run-skipped-with-green-jobs", func(r *WorkflowHealthRun) { r.Conclusion = "skipped" }, "pending"},
+		{"cancelled-with-failed-job", func(r *WorkflowHealthRun) {
+			r.Conclusion = "cancelled"
+			r.Jobs[0].Conclusion = "failure"
+		}, "unmet"},
+		{"run-stale-with-green-jobs", func(r *WorkflowHealthRun) { r.Conclusion = "stale" }, "unknown"},
+		{"run-conclusion-missing", func(r *WorkflowHealthRun) { r.Conclusion = "" }, "unknown"},
 		{"old", func(r *WorkflowHealthRun) { r.CompletedAt = healthNow.Add(-25 * time.Hour) }, "unknown"},
 		{"future", func(r *WorkflowHealthRun) { r.CompletedAt = healthNow.Add(time.Hour) }, "unknown"},
 		{"wrong-workflow-case", func(r *WorkflowHealthRun) { r.Workflow = "Nightly" }, "unknown"},

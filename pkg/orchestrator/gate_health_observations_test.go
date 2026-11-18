@@ -123,6 +123,47 @@ func TestHealthSourceCollectorsKeepLegacyInputsAndEffects(t *testing.T) {
 	}
 }
 
+func TestWorkflowHealthCollectorPreservesAggregateRunVerdict(t *testing.T) {
+	t.Setenv("GRAIN_GATE_OBSERVATION_TASKS", "workflow-verdict-health")
+	ctx := context.Background()
+	store := openInternalStore(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-time.Hour)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(store.PutTask(ctx, model.Task{ID: "workflow-verdict-health", Intent: model.IntentImplement, Target: &repo, Base: "main", Title: "repair"}))
+	must(store.SetTaskGoal(ctx, "workflow-verdict-health", model.GoalDecl{Kind: model.GoalNightlyGreen, Spec: model.GoalSpec{Repo: repo.String(), Workflow: "nightly"}}, "automation:test", started))
+	job := github.WorkflowRunJob{ID: 71, RunID: 7, Name: "test", Status: "completed", Conclusion: "success"}
+	forge := &healthSourceForge{latest: []github.WorkflowRunJob{job}, exact: []github.WorkflowRunJob{job}}
+	deps := Deps{Store: store, Client: forge}
+	run := ConcludedGitHubWorkflowRun{Repo: repo, WorkflowName: "nightly", WorkflowPath: ".github/workflows/nightly.yml", RunID: 7, Attempt: 1, HeadSHA: "head", HeadRepo: repo.String(), Ref: "main", Event: "schedule", Via: "webhook", StartedAt: &started, CompletedAt: &now}
+	access := model.GateHealthAccess{Repository: func(string) bool { return true }}
+	for i, tc := range []struct{ conclusion, want string }{
+		{"success", "met"}, {"cancelled", "pending"}, {"skipped", "pending"},
+		{"failure", "unmet"}, {"stale", "unknown"}, {"", "unknown"},
+	} {
+		t.Run(tc.conclusion, func(t *testing.T) {
+			at := now.Add(time.Duration(i) * time.Second)
+			run.Conclusion = tc.conclusion
+			jobs, err := ensureGitHubWorkflowRunJobs(ctx, deps, run, at)
+			must(err)
+			if len(jobs) != 1 || jobs[0].Conclusion != "success" {
+				t.Fatal("shadow changed legacy jobs")
+			}
+			v, _, err := store.ObserveTaskGates(ctx, "workflow-verdict-health", at, access)
+			must(err)
+			if v.Results[0].Result.Status != "met" || v.Results[1].Result.Status != tc.want {
+				t.Fatalf("legacy=%s current=%s; want current=%s", v.Results[0].Result.Status, v.Results[1].Result.Status, tc.want)
+			}
+		})
+	}
+}
+
 func TestBaseHealthCollectorRequiresExactPlanAndAuthenticNonreproduction(t *testing.T) {
 	t.Setenv("GRAIN_GATE_OBSERVATION_TASKS", "base-source-health")
 	ctx := context.Background()

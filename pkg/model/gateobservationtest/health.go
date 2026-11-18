@@ -239,7 +239,7 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 		must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 1, RunID: 1, RunAttempt: 1, Workflow: "nightly", Ref: "main", Commit: "old", JobName: "test", Conclusion: "success", CompletedAt: &at, RecordedAt: at, UpdatedAt: at}))
 		v, _ := read(s, "health-nightly", now, access)
 		statuses(v, "met", "unknown")
-		run := gates.WorkflowHealthRun{ID: 2, Attempt: 1, Repository: repo.String(), HeadRepository: repo.String(), Workflow: "nightly", Path: ".github/workflows/nightly.yml", Ref: "main", Commit: "head", Event: "schedule", Source: "github", Complete: true, StartedAt: now.Add(-25 * time.Hour), CompletedAt: now.Add(-24*time.Hour + time.Second), Jobs: []gates.HealthJob{{ID: "20", Name: "test", Workflow: "nightly", Ref: "main", Commit: "head", RunID: 2, Attempt: 1, Conclusion: "success", Source: "github", App: "github-actions"}}}
+		run := gates.WorkflowHealthRun{ID: 2, Attempt: 1, Repository: repo.String(), HeadRepository: repo.String(), Workflow: "nightly", Path: ".github/workflows/nightly.yml", Ref: "main", Commit: "head", Event: "schedule", Source: "github", Conclusion: "success", Complete: true, StartedAt: now.Add(-25 * time.Hour), CompletedAt: now.Add(-24*time.Hour + time.Second), Jobs: []gates.HealthJob{{ID: "20", Name: "test", Workflow: "nightly", Ref: "main", Commit: "head", RunID: 2, Attempt: 1, Conclusion: "success", Source: "github", App: "github-actions"}}}
 		before := snapshot()
 		changed := s.Changed()
 		must(s.RecordGateWorkflowSource(ctx, run, now))

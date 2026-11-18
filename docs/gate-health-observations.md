@@ -66,7 +66,11 @@ The existing concluded-workflow collector retains its exact legacy latest-job
 input and callbacks. Shadow evidence uses a separate ordinary GET for the exact
 run attempt, with total-count and pagination completeness checks. It never
 substitutes that stronger listing for legacy input or synthesizes missing job
-conclusions. The existing authenticated default-branch push collector marks the
+conclusions. The collector also retains the workflow's overall conclusion:
+a failed run cannot become healthy from green listed jobs, cancelled/skipped runs
+remain pending, and missing/stale conclusions remain unknown. Old diagnostic
+records without a run conclusion cannot establish current health. The existing
+authenticated default-branch push collector marks the
 diagnostic source after its own verification; no PR/fork job row can mark it.
 Denied, missing, partial, oversized or unsupported readers produce incomplete
 proof. No diagnostic error is returned into legacy collection. Source interests are

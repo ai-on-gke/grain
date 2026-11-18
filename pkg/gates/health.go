@@ -153,13 +153,13 @@ type HealthJob struct {
 	At                                                       time.Time
 }
 type WorkflowHealthRun struct {
-	ID                                                                     int64
-	Attempt                                                                int
-	Repository, HeadRepository, Ref, Commit, Workflow, Path, Event, Source string
-	StartedAt, CompletedAt                                                 time.Time
-	Complete                                                               bool
-	VerifiedDefaultPush                                                    bool
-	Jobs                                                                   []HealthJob
+	ID                                                                                 int64
+	Attempt                                                                            int
+	Repository, HeadRepository, Ref, Commit, Workflow, Path, Event, Source, Conclusion string
+	StartedAt, CompletedAt                                                             time.Time
+	Complete                                                                           bool
+	VerifiedDefaultPush                                                                bool
+	Jobs                                                                               []HealthJob
 }
 type PublicationReceipt struct {
 	Target, Commit, Artifact, Version, Issuer string
@@ -479,6 +479,17 @@ func nightlyHealth(c NightlyHealthConfig, subject Subject, h HealthFacts, now ti
 	if !run.Complete || len(run.Jobs) == 0 || run.ID == 0 || run.Attempt < 1 || run.Path == "" || run.Commit == "" || run.HeadRepository != run.Repository || run.Source != "github" || !slices.Contains([]string{"push", "schedule", "workflow_dispatch"}, run.Event) {
 		return "unknown", "workflow issuer/source/run/job provenance or complete job collection is missing.", expiry
 	}
+	// A complete green job listing does not override the workflow's own
+	// verdict (for example a workflow-level failure or cancellation). Older
+	// collector records without that verdict cannot establish current health.
+	if failedJob(run.Conclusion) {
+		return "unmet", "the newest eligible authenticated workflow run failed.", expiry
+	}
+	switch run.Conclusion {
+	case "success", "neutral", "cancelled", "skipped":
+	default:
+		return "unknown", "the workflow run conclusion is missing or supplies no accepted verdict.", expiry
+	}
 	idleOnly := len(run.Jobs) > 0
 	for _, j := range run.Jobs {
 		if !strings.EqualFold(strings.TrimSpace(j.Name), "idle-gate") {
@@ -501,6 +512,9 @@ func nightlyHealth(c NightlyHealthConfig, subject Subject, h HealthFacts, now ti
 		if !slices.Contains([]string{"success", "neutral", "skipped"}, strings.ToLower(j.Conclusion)) {
 			pending = true
 		}
+	}
+	if run.Conclusion == "cancelled" || run.Conclusion == "skipped" {
+		return "pending", "the newest workflow run was cancelled or skipped without a healthy verdict.", expiry
 	}
 	if pending {
 		return "pending", "the newest eligible run has jobs without an accepted verdict.", expiry
