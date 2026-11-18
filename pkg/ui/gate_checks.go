@@ -533,6 +533,7 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 			conclusion = *remote.Conclusion
 		}
 		if !found || (check.App != "" && check.App != remote.App) ||
+			(check.Name != "" && check.Name != remote.Name) ||
 			(check.Conclusion != "" && check.Conclusion != conclusion) {
 			s.Complete = false
 			f.Gap = "Complete remote checks disagree with recorded exact-head CI evidence."

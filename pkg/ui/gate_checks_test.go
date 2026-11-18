@@ -524,7 +524,7 @@ func TestGateChecksDefaultGrantsDoNotSwitchAnExistingTasksProvider(t *testing.T)
 }
 
 func TestGateChecksRecordedEventsAndLaggingReplica(t *testing.T) {
-	for _, scenario := range []string{"missing", "contradictory", "during-read", "replaced-attempt"} {
+	for _, scenario := range []string{"missing", "contradictory", "during-read", "replaced-attempt", "renamed"} {
 		t.Run(scenario, func(t *testing.T) {
 			srv, c := testServer(t)
 			ctx := context.Background()
@@ -548,6 +548,9 @@ func TestGateChecksRecordedEventsAndLaggingReplica(t *testing.T) {
 			job := model.GitHubCIJob{Repo: "acme/widgets", CheckRunID: 1, Commit: "H1", App: "trusted", JobName: "go", Conclusion: "cancelled"}
 			if scenario == "missing" {
 				job.CheckRunID = 2
+			}
+			if scenario == "renamed" {
+				job.JobName, job.Conclusion = "lint", "success"
 			}
 			if scenario == "replaced-attempt" {
 				job.App = "github-actions"
@@ -582,6 +585,7 @@ func TestGateChecksRecordedEventsAndLaggingReplica(t *testing.T) {
 			// calling any action method (the embedded nil client panics on those).
 			f.onChecks = nil
 			f.checks[0].ID = job.CheckRunID
+			f.checks[0].Name = job.JobName
 			f.checks[0].Conclusion = &job.Conclusion
 			if scenario == "replaced-attempt" {
 				f.workflows[0].RunAttempt = 2
@@ -596,7 +600,7 @@ func TestGateChecksRecordedEventsAndLaggingReplica(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := "pending"
-			if scenario == "replaced-attempt" {
+			if scenario == "replaced-attempt" || scenario == "renamed" {
 				want = "met"
 			}
 			if d.GateObservations.Results[2].Result.Status != want {

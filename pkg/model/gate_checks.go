@@ -180,10 +180,10 @@ func gateRowsVersion(ctx context.Context, q querier, query string, args ...any) 
 // event needed to detect stale remote replicas. Logs and enrichment timestamps
 // are deliberately excluded: reading or fetching a log is not a new CI verdict.
 type RecordedGateCheck struct {
-	CheckRunID      int64
-	App, Conclusion string
-	RunID           int64
-	RunAttempt      int
+	CheckRunID            int64
+	App, Name, Conclusion string
+	RunID                 int64
+	RunAttempt            int
 }
 type RecordedGateChecks struct {
 	Version string
@@ -200,7 +200,7 @@ func recordedGateChecks(ctx context.Context, q querier, repo RepoRef, head strin
 	if head == "" {
 		return out, fmt.Errorf("recorded checks require an exact head")
 	}
-	rows, err := q.QueryContext(ctx, "SELECT `check_run_id`,`app`,`conclusion`,`run_id`,`run_attempt` FROM `github_ci_job` WHERE `repo` = ? AND `commit_sha` = ? ORDER BY `check_run_id` LIMIT 513", repo.String(), head)
+	rows, err := q.QueryContext(ctx, "SELECT `check_run_id`,`app`,`job_name`,`conclusion`,`run_id`,`run_attempt` FROM `github_ci_job` WHERE `repo` = ? AND `commit_sha` = ? ORDER BY `check_run_id` LIMIT 513", repo.String(), head)
 	if err != nil {
 		return out, err
 	}
@@ -210,10 +210,10 @@ func recordedGateChecks(ctx context.Context, q querier, repo RepoRef, head strin
 			return out, fmt.Errorf("recorded checks exceed bound")
 		}
 		var c RecordedGateCheck
-		if err = rows.Scan(&c.CheckRunID, &c.App, &c.Conclusion, &c.RunID, &c.RunAttempt); err != nil {
+		if err = rows.Scan(&c.CheckRunID, &c.App, &c.Name, &c.Conclusion, &c.RunID, &c.RunAttempt); err != nil {
 			return out, err
 		}
-		if len(c.App) > 512 || len(c.Conclusion) > 512 {
+		if len(c.App) > 512 || len(c.Name) > 1024 || len(c.Conclusion) > 512 {
 			return out, fmt.Errorf("recorded check identity exceeds bound")
 		}
 		out.Checks = append(out.Checks, c)
