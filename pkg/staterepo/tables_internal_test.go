@@ -216,6 +216,7 @@ var notSettings = []string{
 	// attachment is not something a pull request against the state
 	// repository proposes, and clearing the tables to reinstate them
 	// would race the daemon writing new ones.
+	"task_pr_feedback",
 	"task_comment",
 	"task_attachment",
 	// A durable task's compaction cursor, handover version and current
@@ -230,6 +231,8 @@ var notSettings = []string{
 	// GET /api/events (model.IntegrationEvent): runtime event history
 	// written by Store transactions, never settings a PR applies.
 	"integration_event",
+	"gate_observation_shadow",
+	"gate_observation_shadow_history",
 	// config_audit is the record of who changed the configuration
 	// (operator-attribution spec §4.4): grain's own history, not settings
 	// a merged pull request applies.

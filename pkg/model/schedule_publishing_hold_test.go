@@ -199,3 +199,58 @@ func TestParseScheduleSkipWhen(t *testing.T) {
 		t.Errorf("ParseScheduleSkipWhen(ci-red) succeeded, want an unknown condition refused")
 	}
 }
+
+func TestStarvedDetectorTreatsPublishingHeldScheduleAsDeliberatelyHeld(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	triage := holdPublishing(t, store, ctx, repo)
+	sched := trainSchedule(t, store, ctx, repo, model.SkipWhenPublishingHeld)
+
+	// Record a held skip at heldStart, then evaluate past ScheduleStarvedAfter.
+	held := fireTrain(t, store, ctx, heldStart)
+	if !held.Skipped || held.Skip == nil || held.Skip.Reason != model.SuppressedByPublishingHeld {
+		t.Fatalf("firing = %+v, want SuppressedByPublishingHeld skip", held)
+	}
+	later := heldStart.Add(2 * time.Hour)
+	res, err := store.EscalateStarvedScheduleBlocker(ctx, sched, *held.Skip, later, time.UTC)
+	if err != nil {
+		t.Fatalf("EscalateStarvedScheduleBlocker: %v", err)
+	}
+	if !res.DeliberatelyHeld || res.HoldReason != model.SuppressedByPublishingHeld || res.TaskID != triage {
+		t.Fatalf("res = %+v, want DeliberatelyHeld=true HoldReason=publishingHeld TaskID=%s", res, triage)
+	}
+	if res.Raised() || res.Notified {
+		t.Errorf("res = %+v, want neither priority raise nor starved notification", res)
+	}
+	if n, err := store.OpenNotification(ctx, model.NotificationSubject(model.FamilyScheduleStarved, sched.ID)); err != nil || n != nil {
+		t.Errorf("starved notification = %+v, %v; want none for a deliberately held schedule", n, err)
+	}
+	if task, err := store.GetTask(ctx, triage); err != nil || task.Priority != model.DefaultTaskPriority {
+		t.Errorf("triage task priority = %v, %v; want untouched at default %d", task, err, model.DefaultTaskPriority)
+	}
+}
+
+func TestFireScheduleUnderPublishingHoldFiresWhileRespectingOverlap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	holdPublishing(t, store, ctx, repo)
+	sched := trainSchedule(t, store, ctx, repo, model.SkipWhenPublishingHeld)
+
+	fired, err := store.FireScheduleUnderPublishingHold(ctx, sched, heldStart, time.UTC, model.RepoRef{})
+	if err != nil || fired.Skipped || fired.TaskID == "" {
+		t.Fatalf("FireScheduleUnderPublishingHold = %+v, %v; want a filed tick", fired, err)
+	}
+	// OverlapSkip still prevents a second concurrent tick while the first is open.
+	updated, err := store.GetSchedule(ctx, sched.ID)
+	if err != nil || updated == nil {
+		t.Fatalf("GetSchedule: %v, %v", updated, err)
+	}
+	second, err := store.FireScheduleUnderPublishingHold(ctx, *updated, heldStart.Add(20*time.Minute), time.UTC, model.RepoRef{})
+	if err != nil || !second.Skipped || second.Skip == nil || second.Skip.Reason != model.SuppressedByOpenTask || second.Skip.TaskID != fired.TaskID {
+		t.Fatalf("second firing while first open = %+v, %v; want SuppressedByOpenTask on %s", second, err, fired.TaskID)
+	}
+}

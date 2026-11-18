@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { provideHttpClient, withFetch } from "@angular/common/http";
+import {
+  provideHttpClient,
+  withFetch,
+  withInterceptors,
+} from "@angular/common/http";
 import {
   type ApplicationConfig,
   provideZoneChangeDetection,
@@ -23,6 +27,7 @@ import {
   withPreloading,
 } from "@angular/router";
 import { routes } from "./app.routes";
+import { connectionInterceptor } from "./services/connection.service";
 import { IdleRoutePreload } from "./shell/route-preload";
 
 export const appConfig: ApplicationConfig = {
@@ -33,6 +38,6 @@ export const appConfig: ApplicationConfig = {
       withComponentInputBinding(),
       withPreloading(IdleRoutePreload),
     ),
-    provideHttpClient(withFetch()),
+    provideHttpClient(withFetch(), withInterceptors([connectionInterceptor])),
   ],
 };

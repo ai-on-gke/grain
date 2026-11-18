@@ -164,6 +164,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs https://grain.dev/capabilities/api#task-admin.",
 	"POST /api/notifications":                                              "Raise an operator notification, or bump the open one with the same subject; it never parks anybody.",
 	"POST /api/notifications/{id}/clear":                                   "Clear an operator notification.",
+	"POST /api/notifications/clear":                                        "Clear many operator notifications at once (subject prefix, severity, olderThan, ids; none is every open one), with a reason; a run clears only its own task's. dryRun counts without clearing. Answers how many it cleared and how many are expected back.",
 	"POST /api/tasks/{id}/wait-on":                                         "Make a task wait for the tasks in ids to close; park true ends its run and resumes it when they have.",
 	"POST /api/tasks/{id}/park-until":                                      "Park a task until a time (until, RFC 3339), when it is queued again.",
 	"POST /api/tasks/{id}/resume-later":                                    "Stop a task's run and queue it again when a condition is met (when: tasks, at, ci, message).",
@@ -414,6 +415,7 @@ var routeBodies = map[string]any{
 	"POST /api/tasks/{id}/human-review":                                 HumanReviewRequestBody{},
 	"POST /api/tasks/{id}/accept-findings":                              AcceptFindingsRequest{},
 	"POST /api/notifications":                                           RaiseNotificationRequest{},
+	"POST /api/notifications/clear":                                     ClearNotificationsRequest{},
 	"POST /api/tasks/{id}/wait-on":                                      waitOnRequest{},
 	"POST /api/tasks/{id}/park-until":                                   parkUntilRequest{},
 	"POST /api/tasks/{id}/resume-later":                                 resumeLaterRequest{},
@@ -618,6 +620,7 @@ var routeQueries = map[string]map[string]string{
 	"DELETE /api/repos/{owner}/{name}":                            {"team": "The team whose targets to remove from; the default team without one."},
 	"GET /api/tasks/{id}/diff-preview":                            {"max": "How many hunks to return (default 6, at most 30)."},
 	"GET /api/repos/{owner}/{name}/compare":                       {"base": "The branch or commit to compare from.", "head": "The branch or commit to compare to."},
+	"GET /api/repos/{owner}/{name}/release":                       {"branch": "Optional base branch to scope baseBranchPublishing to (default: longest-failing branch)."},
 	"GET /api/repos/{owner}/{name}/workflows":                     listObjectQueryDocs("workflow path or name", listPageTiny, nil),
 	"GET /api/repos/{owner}/{name}/releases/{release}/candidates": listQueryDocs("branch, status or release", listPageLarge, nil),
 	"GET /api/templates": listQueryDocs("id, name, title or repository", listPageTiny, map[string]string{

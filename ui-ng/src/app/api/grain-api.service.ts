@@ -21,6 +21,8 @@ import { Injectable, OnDestroy, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
 import type {
+  ClearNotificationsRequest,
+  ClearNotificationsResponse,
   DiffPreview,
   GrainConfig,
   LocalScriptApproval,
@@ -550,7 +552,7 @@ export class GrainApi implements OnDestroy {
   ): Promise<Record<string, TaskDetail>> {
     const chunks = chunkTaskIds(ids);
     if (chunks.length === 0) return {};
-    const responses = await Promise.all(
+    const settled = await Promise.allSettled(
       chunks.map((chunk) =>
         this.getIfChanged<TaskSummariesResponse>(
           "GET /api/tasks/summaries",
@@ -560,8 +562,18 @@ export class GrainApi implements OnDestroy {
       ),
     );
     const out: Record<string, TaskDetail> = {};
-    for (const r of responses) {
-      if (r.body?.tasks) Object.assign(out, r.body.tasks);
+    let succeeded = 0;
+    let firstError: unknown;
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        succeeded++;
+        if (r.value.body?.tasks) Object.assign(out, r.value.body.tasks);
+      } else if (firstError === undefined) {
+        firstError = r.reason;
+      }
+    }
+    if (succeeded === 0 && firstError !== undefined) {
+      throw firstError;
     }
     return out;
   }
@@ -572,6 +584,18 @@ export class GrainApi implements OnDestroy {
       | { notifications?: Notification[]; items?: Notification[] }
     >("GET /api/notifications", undefined, "open=1&fields=list").then((r) =>
       Array.isArray(r) ? r : (r?.notifications ?? r?.items ?? []),
+    );
+  }
+
+  // clearNotifications is the Inbox's Clear all / Clear these; dryRun
+  // counts for the confirm dialog without clearing.
+  clearNotifications(
+    req: ClearNotificationsRequest,
+  ): Promise<ClearNotificationsResponse> {
+    return this.post<ClearNotificationsResponse>(
+      "POST /api/notifications/clear",
+      undefined,
+      req,
     );
   }
 

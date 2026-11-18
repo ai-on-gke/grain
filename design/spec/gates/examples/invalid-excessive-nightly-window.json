@@ -1,0 +1,26 @@
+{
+  "id": "nightly_health",
+  "type": "nightly_health",
+  "version": 1,
+  "purpose": "completion",
+  "required": true,
+  "action": null,
+  "subject": {
+    "kind": "repository",
+    "repository": "ai-on-gke/grain",
+    "ref": "main"
+  },
+  "config": {
+    "workflow": "nightly",
+    "since": "2026-11-17T00:15:00Z",
+    "window_seconds": 604801,
+    "semantics": "window_v1"
+  },
+  "freshness_seconds": 300,
+  "origin": {
+    "kind": "task",
+    "id": "57",
+    "revision": "1",
+    "imported": false
+  }
+}
