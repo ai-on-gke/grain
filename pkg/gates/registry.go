@@ -32,7 +32,7 @@ var acknowledgmentSchema []byte
 //go:embed checks.schema.json
 var checksSchema []byte
 
-const Implementation = "builtin-ci-observer-v3"
+const Implementation = "builtin-ci-observer-v4"
 
 type Descriptor struct {
 	Type           string

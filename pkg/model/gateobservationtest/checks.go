@@ -45,6 +45,9 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 	f := gates.ChecksFacts{TaskID: task.ID, Subject: subject, Head: "H1", Mode: "github", PolicyVersion: gates.Digest("base-policy"), PolicyComplete: true, ObservedAt: now, ValidUntil: now.Add(time.Minute), Sources: []gates.CheckSource{{Kind: "github", Head: "H1", Version: gates.Digest("set"), Complete: true, All: true, Attempts: []gates.CheckAttempt{{Identity: "app/go", Names: []string{"go"}, Head: "H1", Version: gates.Digest("run"), Order: 1, State: "completed", Conclusion: "success"}}}}}
 	read := func(fence string, want string) (*gates.ObservationView, *model.GateObservationDiagnostics) {
 		t.Helper()
+		known, e := s.RecordedGateChecks(ctx, repo, f.Head)
+		must(e)
+		f.RecordedChecksVersion = known.Version
 		before := legacyChecksSnapshot(t, ctx, db)
 		wake, commits := s.Changed(), s.CommitCount()
 		v, d, err := s.ObserveTaskGatesWithChecks(ctx, task.ID, now, fence, []gates.ChecksFacts{f})
@@ -114,6 +117,68 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 	now = now.Add(time.Second)
 	f.PolicyVersion = gates.Digest("new base-owned definitions")
 	read(fence(), "met")
+
+	// A late remote collection from an older request must not rewind an accepted
+	// same-head pending attempt to the old passing result (including after restart).
+	now = now.Add(time.Second)
+	f.Sources[0].Attempts[0].Conclusion = "cancelled"
+	newest, nd := read(fence(), "pending")
+	stale := f
+	stale.Sources = append([]gates.CheckSource(nil), f.Sources...)
+	stale.Sources[0].Attempts = append([]gates.CheckAttempt(nil), f.Sources[0].Attempts...)
+	stale.Sources[0].Attempts[0].Conclusion = "success"
+	beforeLate := legacyChecksSnapshot(t, ctx, db)
+	lateWake, lateCommits := s.Changed(), s.CommitCount()
+	late, ld, e := model.New(db).ObserveTaskGatesWithChecks(ctx, task.ID, now.Add(-time.Second), fence(), []gates.ChecksFacts{stale})
+	must(e)
+	if late.Results[2].Result.Status != "pending" || late.Results[2].Revision != newest.Results[2].Revision || ld.Evaluations != nd.Evaluations {
+		t.Fatal("older remote CI collection rewound newer accepted evidence")
+	}
+	if beforeLate != legacyChecksSnapshot(t, ctx, db) || lateCommits != s.CommitCount() {
+		t.Fatal("late collection changed legacy state")
+	}
+	select {
+	case <-lateWake:
+		t.Fatal("late collection signalled Changed")
+	default:
+	}
+	now = now.Add(time.Second)
+	f.Sources[0].Attempts[0].Conclusion = "success"
+	read(fence(), "met")
+	// A webhook arriving during an older external read invalidates even a
+	// newer cached success. Neither accepting the gap nor recovering may emit
+	// another source event or wake legacy scheduling.
+	collected := f
+	collectedFence := fence()
+	must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 91, Commit: f.Head, App: "app", JobName: "go", Conclusion: "cancelled", RunAttempt: 2}))
+	beforeEvent := legacyChecksSnapshot(t, ctx, db)
+	eventWake, eventCommits := s.Changed(), s.CommitCount()
+	gap, _, e := model.New(db).ObserveTaskGatesWithChecks(ctx, task.ID, now.Add(-time.Second), collectedFence, []gates.ChecksFacts{collected})
+	must(e)
+	if gap.Results[2].Result.Status != "unknown" || gap.ComparedAt.Before(newest.ComparedAt) {
+		t.Fatal("CI event during an older collection did not invalidate cached success")
+	}
+	if beforeEvent != legacyChecksSnapshot(t, ctx, db) || eventCommits != s.CommitCount() {
+		t.Fatal("CI fence acceptance mutated legacy state")
+	}
+	select {
+	case <-eventWake:
+		t.Fatal("CI fence acceptance signalled Changed")
+	default:
+	}
+	known, e := s.RecordedGateChecks(ctx, repo, f.Head)
+	must(e)
+	// Other heads/repositories and log enrichment are outside this source fence.
+	must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 92, Commit: "foreign-head", Conclusion: "failure"}))
+	must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: "other/repo", CheckRunID: 91, Commit: f.Head, Conclusion: "failure"}))
+	must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 91, Output: "log enrichment", FailureTail: "bounded tail", TailFetched: true}))
+	enriched, e := s.RecordedGateChecks(ctx, repo, f.Head)
+	must(e)
+	if known.Version != enriched.Version || len(enriched.Checks) != 1 {
+		t.Fatal("unrelated CI records or logs changed the source fence")
+	}
+	now = now.Add(time.Second)
+	read(fence(), "met")
 	// Errors are reconstructed from the registry and current task scope, ignoring
 	// forged accepted evidence/predictions. This also survives a fresh Store.
 	before := legacyChecksSnapshot(t, ctx, db)
@@ -144,12 +209,24 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 	if _, _, err = s.ObserveTaskGatesWithChecks(ctx, task.ID, now.Add(time.Minute), fence(), []gates.ChecksFacts{foreign}); err == nil {
 		t.Fatal("foreign check subject accepted")
 	}
+	for i := int64(1); i <= 512; i++ {
+		must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 1000 + i, Commit: "bounded", Conclusion: "success"}))
+	}
+	bounded, e := s.RecordedGateChecks(ctx, repo, "bounded")
+	must(e)
+	if len(bounded.Checks) != 512 {
+		t.Fatal("complete recorded collection lost checks")
+	}
+	must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 2000, Commit: "bounded", Conclusion: "failure"}))
+	if _, e = s.RecordedGateChecks(ctx, repo, "bounded"); e == nil {
+		t.Fatal("oversized recorded set silently truncated")
+	}
 }
 
 func legacyChecksSnapshot(t *testing.T, ctx context.Context, db *sql.DB) string {
 	t.Helper()
 	all := []any{}
-	for _, table := range []string{"task", "task_observation", "task_run", "task_run_tool", "task_comment", "task_attachment", "task_goal", "task_state", "task_ready", "task_pause", "task_link", "task_grant", "task_grant_wait", "task_event", "integration_event", "merge_batch"} {
+	for _, table := range []string{"task", "task_observation", "task_run", "task_run_tool", "task_comment", "task_attachment", "task_goal", "task_state", "task_ready", "task_pause", "task_link", "task_grant", "task_grant_wait", "task_event", "integration_event", "merge_batch", "github_ci_job"} {
 		rows, err := db.QueryContext(ctx, "SELECT * FROM `"+table+"`")
 		if err != nil {
 			t.Fatal(err)

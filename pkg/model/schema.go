@@ -2541,6 +2541,7 @@ var Tables = []string{
 	// makes; never a verdict grain reuses.
 	gitHubCIJobTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_ref`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`ref`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_commit`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`commit_sha`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`grain_schema`" + ` (
   ` + "`id`" + `      INTEGER NOT NULL,

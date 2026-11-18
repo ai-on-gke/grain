@@ -60,23 +60,24 @@ type CheckSource struct {
 	LegacyAggregate bool
 }
 type ChecksFacts struct {
-	TaskID             string
-	Subject            Subject
-	Head               string
-	PolicyVersion      string
-	PolicyComplete     bool
-	Mode               string
-	ExplicitNone       bool
-	Sources            []CheckSource
-	LegacySources      []CheckSource
-	ObservedAt         time.Time
-	ValidUntil         time.Time
-	LegacyEmptySettled bool
-	LegacyEmptyKnown   bool
-	LegacyHealth       string
-	ReadinessVersion   string
-	Preconditions      []string
-	Gap                string
+	TaskID                string
+	Subject               Subject
+	Head                  string
+	PolicyVersion         string
+	PolicyComplete        bool
+	Mode                  string
+	ExplicitNone          bool
+	Sources               []CheckSource
+	LegacySources         []CheckSource
+	ObservedAt            time.Time
+	ValidUntil            time.Time
+	LegacyEmptySettled    bool
+	LegacyEmptyKnown      bool
+	LegacyHealth          string
+	ReadinessVersion      string
+	RecordedChecksVersion string
+	Preconditions         []string
+	Gap                   string
 }
 
 func validateChecks(raw []byte) (json.RawMessage, error) {

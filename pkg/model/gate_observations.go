@@ -270,6 +270,7 @@ func (s *Store) ObserveTaskGatesWithChecks(ctx context.Context, id string, now t
 			if err != nil {
 				return err
 			}
+			invalidated := false
 			if len(checks) > 0 {
 				task, _, current, err := gateChecksInput(ctx, tx, id)
 				if err != nil {
@@ -285,7 +286,28 @@ func (s *Store) ObserveTaskGatesWithChecks(ctx context.Context, id string, now t
 						return fmt.Errorf("foreign checks subject")
 					}
 					seen[c.Subject] = true
+					if c.Subject.ChangeKind == "pr" {
+						for _, source := range c.Sources {
+							if source.Kind != "github" {
+								continue
+							}
+							repo, e := ParseRepo(c.Subject.Repository)
+							if e != nil {
+								return e
+							}
+							known, e := recordedGateChecks(ctx, tx, repo, c.Head)
+							if e != nil {
+								return e
+							}
+							if c.RecordedChecksVersion == "" || c.RecordedChecksVersion != known.Version {
+								invalidated = true
+								c.PolicyComplete = false
+								c.Gap = "Recorded CI evidence changed during collection."
+							}
+						}
+					}
 					if fence == "" || fence != current {
+						invalidated = true
 						c.PolicyComplete = false
 						c.Gap = "Local evidence changed during collection."
 					}
@@ -320,6 +342,18 @@ func (s *Store) ObserveTaskGatesWithChecks(ctx context.Context, id string, now t
 				}
 				unsupportedCache = !currentShadowBindings(cachedView, id) || gates.Digest(cachedView.Bindings) != gates.Digest(gates.BindingsFor(id, f.Checks))
 				rejectedCache = cachedView.Dirty
+				// Remote reads start outside this transaction. A late older
+				// request must never rewind newer accepted evidence, including
+				// across a restart. A changed local fence still invalidates the
+				// result rather than returning a possibly stale cached success.
+				if len(checks) > 0 && now.Before(evaluated) {
+					if !invalidated && !unsupportedCache && !rejectedCache {
+						view = cachedView
+						diag, err = readGateDiagnostics(ctx, tx, id)
+						return err
+					}
+					now = evaluated
+				}
 			}
 			changed := missing || source != f.SourceVersion
 			if !changed && !unsupportedCache && !rejectedCache && now.Before(evaluated.Add(time.Minute)) && freshChecks(f.Checks, now) && freshObservation(previous, now) {

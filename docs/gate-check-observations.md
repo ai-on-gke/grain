@@ -62,7 +62,13 @@ sidecar is hidden, including old resource history after retargeting.
 
 Collection happens outside the diagnostic writer transaction. Acceptance rechecks
 the task/observation, grants, repository settings, accepted merge rules, declared
-workflow versions, and scoped base-CI/recheck records. A final forge read verifies
+workflow versions, scoped base-CI/recheck records, and recorded GitHub CI facts
+for the exact repository/head. Late older accepted collections cannot rewind a
+newer accepted result, including after restart. A concurrent local source change
+still invalidates a cached success. Remote complete sets must include and agree
+with already recorded check identities/conclusions and known Actions attempts;
+replica disagreement stays unknown until the sources agree. Log enrichment and
+other heads do not change this semantic fence. A final forge read verifies
 head, base ref and base tip. Check attempts and collection generations are hashed
 with their actual source versions; provider details/errors and CI logs are not
 copied into diagnostics. Context changes invalidate comparisons without changing
@@ -96,7 +102,8 @@ at most six pages per endpoint. Missing/changing totals, duplicate/foreign
 identities and over-limit collections cannot yield a passing result. Definition
 reads bound workflows/jobs to 512 and parsed definitions to 1 MiB, coalesce behind one context-aware read per
 client, and cache at most 32 immutable base/declared-definition keys for a minute.
-Scoped local readiness collections also have a 512-row bound.
+Scoped local readiness and recorded exact-head CI collections also have a
+512-row bound. An indexed repository/commit lookup bounds local collection work.
 
 Collection has a three-second context; paged reads check cancellation before
 issuing another request. Older ordinary forge/runner methods retain their transport
@@ -120,7 +127,8 @@ latest/replaced/cancelled attempts, delayed/missing jobs, source denial/errors,
 head/base/definition changes, accepted declaration events, both CI sources,
 exact-head Grain status and recheck overlay, stale originals, CL snapshot/provider
 errors, and inert remediation. Shared SQLite and required real Postgres tests cover
-replay/restart, local acceptance fences, backoff, foreign resources and snapshots
+replay/restart, out-of-order accepted reads, concurrent CI events, lagging
+remote replicas, local acceptance fences, backoff, foreign resources and snapshots
 of legacy task/run/tool/comment/attachment/goal/grant/link/readiness/event/queue
 tables and Changed/commit counters. Existing framework retention, contention,
 failure ordering and API authorization regressions remain in place.

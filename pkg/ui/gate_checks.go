@@ -265,7 +265,14 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 		Required []string
 	}{f.PolicyVersion, policy.GitHubChecks})
 	if policy.Mode.GitHub() {
-		current, legacy := collectGitHubChecks(ctx, reader, repo, number, f, policy)
+		known, err := c.Store.RecordedGateChecks(ctx, repo, f.Head)
+		if err != nil {
+			f.Sources = append(f.Sources, gates.CheckSource{Kind: "github", Head: f.Head, Error: true})
+			f.Gap = "Recorded CI evidence is unavailable."
+			return
+		}
+		f.RecordedChecksVersion = known.Version
+		current, legacy := collectGitHubChecks(ctx, reader, repo, number, f, policy, known)
 		f.Sources = append(f.Sources, current)
 		f.LegacySources = append(f.LegacySources, legacy)
 	}
@@ -502,7 +509,7 @@ func (s shadowRulesFS) ReadFile(path string) ([]byte, error) {
 	return nil, &fs.PathError{Op: "read", Path: path, Err: fs.ErrNotExist}
 }
 
-func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo model.RepoRef, number int, f *gates.ChecksFacts, p model.EffectiveMergePolicy) (gates.CheckSource, gates.CheckSource) {
+func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo model.RepoRef, number int, f *gates.ChecksFacts, p model.EffectiveMergePolicy, recorded model.RecordedGateChecks) (gates.CheckSource, gates.CheckSource) {
 	s := gates.CheckSource{Kind: "github", Head: f.Head, Required: slices.Clone(p.GitHubChecks), All: p.GitHubAllChecks}
 	legacy := s
 	bounded, ok := reader.(github.CheckCollectionReader)
@@ -513,6 +520,24 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 	collection, err := bounded.ReadCheckCollection(ctx, repo.StoredOwner(), repo.Name, f.Head, 512)
 	s.Complete = collection.Complete
 	legacy.Complete = collection.ChecksComplete
+	// A complete API listing can lag a webhook/poll already committed locally.
+	// Such disagreement is a source-state gap, never proof of CI success.
+	byID := make(map[int64]github.CheckRun, len(collection.Checks))
+	for _, check := range collection.Checks {
+		byID[check.ID] = check
+	}
+	for _, check := range recorded.Checks {
+		remote, found := byID[check.CheckRunID]
+		conclusion := ""
+		if remote.Conclusion != nil {
+			conclusion = *remote.Conclusion
+		}
+		if !found || (check.App != "" && check.App != remote.App) ||
+			(check.Conclusion != "" && check.Conclusion != conclusion) {
+			s.Complete = false
+			f.Gap = "Complete remote checks disagree with recorded exact-head CI evidence."
+		}
+	}
 	if err != nil {
 		s.Error = !github.IsPermissionDenied(err)
 		f.Gap = "Checks or Actions collection failed or was denied; incomplete sources cannot pass."
@@ -532,6 +557,18 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 				f.Gap = "Workflow suite lineage is ambiguous."
 			}
 			lineages[run.CheckSuiteID] = lineage
+		}
+	}
+	for _, check := range recorded.Checks {
+		if check.RunID <= 0 && check.RunAttempt <= 0 {
+			continue
+		}
+		remote, found := byID[check.CheckRunID]
+		lineage, resolved := lineages[remote.CheckSuiteID]
+		if !found || !resolved || (check.RunID > 0 && lineage.run != check.RunID) ||
+			(check.RunAttempt > 0 && lineage.attempt != int64(check.RunAttempt)) {
+			s.Complete = false
+			f.Gap = "Remote workflow attempt disagrees with recorded exact-head CI evidence."
 		}
 	}
 	type suiteCoverage struct {

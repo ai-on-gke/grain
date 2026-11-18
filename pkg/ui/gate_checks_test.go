@@ -49,6 +49,7 @@ type shadowForge struct {
 	policyRef     string
 	pushes        bool
 	reads         int
+	onChecks      func()
 }
 
 func (f *shadowForge) GetPullRequest(string, string, int) (github.PullRequestDetail, error) {
@@ -74,6 +75,9 @@ func (f *shadowForge) ReadFile(_, _, ref, path string) ([]byte, bool, error) {
 }
 func (f *shadowForge) ReadCheckCollection(_ context.Context, _, _, head string, limit int) (github.CheckCollection, error) {
 	f.readHead = head
+	if f.onChecks != nil {
+		f.onChecks()
+	}
 	return github.CheckCollection{Checks: f.checks, Workflows: f.workflows, ChecksComplete: f.complete, Complete: f.complete}, f.fail
 }
 func newShadowForge() *shadowForge {
@@ -516,5 +520,96 @@ func TestGateChecksDefaultGrantsDoNotSwitchAnExistingTasksProvider(t *testing.T)
 	_ = json.Unmarshal([]byte(body), &d)
 	if d.GateObservations == nil || d.GateObservations.Results[2].Result.Status != "met" {
 		t.Fatal("defaults retroactively selected a different CI source", d.GateObservations)
+	}
+}
+
+func TestGateChecksRecordedEventsAndLaggingReplica(t *testing.T) {
+	for _, scenario := range []string{"missing", "contradictory", "during-read", "replaced-attempt"} {
+		t.Run(scenario, func(t *testing.T) {
+			srv, c := testServer(t)
+			ctx := context.Background()
+			task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Observe recorded CI"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = c.Store.UpdateTask(ctx, task.ID, func(task *model.Task) error {
+				task.Links = append(task.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#7"})
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Config.GateObservationTaskIDs = []string{task.ID}
+			f := newShadowForge()
+			acceptShadowRules(t, c, f)
+			c.Config.GitHubPullRequests = f
+			now := baseTime.Add(time.Minute)
+			c.Now = func() time.Time { return now }
+			job := model.GitHubCIJob{Repo: "acme/widgets", CheckRunID: 1, Commit: "H1", App: "trusted", JobName: "go", Conclusion: "cancelled"}
+			if scenario == "missing" {
+				job.CheckRunID = 2
+			}
+			if scenario == "replaced-attempt" {
+				job.App = "github-actions"
+				job.Conclusion = "success"
+				job.RunID = 100
+				job.RunAttempt = 2
+				f.checks[0].App = job.App
+				f.workflows = []github.WorkflowRun{{ID: 100, RunAttempt: 1, CheckSuiteID: 1, Path: ".github/workflows/test.yml", Event: "pull_request", HeadBranch: "feature", HeadSHA: "H1", Status: "completed", Conclusion: "success"}}
+			}
+			put := func() {
+				if e := c.Store.PutGitHubCIJob(ctx, job); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if scenario == "during-read" {
+				f.onChecks = put
+			} else {
+				put()
+			}
+			code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "")
+			if code != 200 {
+				t.Fatalf("%d %s", code, body)
+			}
+			var d ui.TaskDetail
+			if err = json.Unmarshal([]byte(body), &d); err != nil {
+				t.Fatal(err)
+			}
+			if d.GateObservations == nil || len(d.GateObservations.Results) != 4 || d.GateObservations.Results[2].Result.Status != "unknown" {
+				t.Fatalf("lagging or concurrent CI evidence passed: %+v", d.GateObservations)
+			}
+			// Catch up the remote complete set; a later ordinary read recovers without
+			// calling any action method (the embedded nil client panics on those).
+			f.onChecks = nil
+			f.checks[0].ID = job.CheckRunID
+			f.checks[0].Conclusion = &job.Conclusion
+			if scenario == "replaced-attempt" {
+				f.workflows[0].RunAttempt = 2
+			}
+			now = now.Add(time.Second)
+			wake, commits := c.Store.Changed(), c.Store.CommitCount()
+			code, body = serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "")
+			if code != 200 {
+				t.Fatalf("%d %s", code, body)
+			}
+			if err = json.Unmarshal([]byte(body), &d); err != nil {
+				t.Fatal(err)
+			}
+			want := "pending"
+			if scenario == "replaced-attempt" {
+				want = "met"
+			}
+			if d.GateObservations.Results[2].Result.Status != want {
+				t.Fatalf("did not recover: %+v", d.GateObservations.Results[2])
+			}
+			if commits != c.Store.CommitCount() {
+				t.Fatal("diagnostic changed legacy accounting")
+			}
+			select {
+			case <-wake:
+				t.Fatal("diagnostic woke legacy")
+			default:
+			}
+		})
 	}
 }
