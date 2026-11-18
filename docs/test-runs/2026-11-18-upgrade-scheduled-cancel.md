@@ -141,14 +141,20 @@ page showed between upgrades (F9 below).
   - **Fixed `grain`:** the same steps removed the check container and
     left the tag in place.
 
-  **Fix (`96beb11eb`):** `stageImage` asks `docker image inspect` whether
-  the target tag is present before it pulls. Cancel cleanup leaves the
-  tag if it was. The question is asked only when docker both pulls and
-  removes images, so a custom `PullCmd` or `RemoveCmd` keeps the old
-  behaviour. Regression test:
-  `TestCancelKeepsATargetTagThatWasAlreadyHere` (`pkg/upgrade`). It
-  fails without the fix, and the F1 test now shares its fake docker.
-  With the tag absent, cleanup still removes what the upgrade pulled.
+  **Fix (`96beb11eb`, tightened in security review):** `stageImage` asks
+  `docker image inspect` for the image ID the target tag resolves to
+  before it pulls, and cancel cleanup leaves the tag only when it still
+  resolves to that same image ID (so a mutable branch or channel tag
+  that `docker pull` moved onto a newly fetched image is still cleaned
+  up on cancel, and a cancel during the pre-pull inspect never deletes a
+  tag when `docker pull` has not started). The question is asked only
+  when docker both pulls and removes images, so a custom `PullCmd` or
+  `RemoveCmd` keeps the old behaviour. Regression tests:
+  `TestCancelKeepsATargetTagThatWasAlreadyHere`,
+  `TestCancelRemovesATargetTagThatMovedDuringPull`, and
+  `TestCancelDuringPrePullInspectKeepsPreExistingTargetTag`
+  (`pkg/upgrade`). With the tag absent or moved onto a new image,
+  cleanup removes what the upgrade pulled.
 - **F6, still present.** After the scheduled upgrade from a fresh ref file
   (`:v1`, a tag), `grain upgrade status` printed `replaced:
   localhost:5000/acme/grain:v1 (run "grain upgrade rollback" to go
