@@ -67,7 +67,9 @@ substitutes that stronger listing for legacy input or synthesizes missing job
 conclusions. The existing authenticated default-branch push collector marks the
 diagnostic source after its own verification; no PR/fork job row can mark it.
 Denied, missing, partial, oversized or unsupported readers produce incomplete
-proof. No diagnostic error is returned into legacy collection.
+proof. No diagnostic error is returned into legacy collection. Source interests are
+restricted to the existing health goals in the explicit cohort; selecting only
+report tasks does not start unrelated health source reads.
 
 Pipeline collection is a bounded transaction over current local source records.
 Current scoped SQL does not first read unrelated tasks/notifications. Legacy

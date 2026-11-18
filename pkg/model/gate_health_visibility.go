@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"slices"
 
 	"github.com/ai-on-gke/grain/pkg/gates"
 )
@@ -93,7 +94,12 @@ func filterHealthDiagnostics(d *GateObservationDiagnostics, a GateHealthAccess) 
 // explicit broad read ceiling. Inventory never silently becomes the stronger
 // profile's expected repository policy.
 func healthScopeRepos(ctx context.Context, q querier, t Task, g TaskGoal, a GateHealthAccess) ([]string, bool, error) {
-	repos := g.Spec.Repos
+	repos := slices.Clone(g.Spec.Repos)
+	slices.Sort(repos)
+	repos = slices.Compact(repos)
+	if len(repos) > 64 {
+		return repos[:64], false, nil
+	}
 	if g.Kind != GoalPipelineHealthy || len(repos) > 0 {
 		return repos, true, nil
 	}
@@ -122,4 +128,12 @@ func healthScopeRepos(ctx context.Context, q querier, t Task, g TaskGoal, a Gate
 		repos = nil
 	}
 	return repos, false, err
+}
+
+func healthRepoScopeOversized(repos []string) bool {
+	set := map[string]bool{}
+	for _, r := range repos {
+		set[r] = true
+	}
+	return len(set) > 64
 }

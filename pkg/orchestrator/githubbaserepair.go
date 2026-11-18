@@ -166,7 +166,7 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 	if ok, err := gitHubActionsJudges(ctx, deps.Store, run.Repo); err != nil || !ok {
 		return err
 	}
-	if healthObservationEnabled() && run.Event == "push" {
+	if run.Event == "push" && healthSourceWanted(ctx, deps, run.Repo, run.Ref, run.WorkflowName) {
 		diag, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		_ = deps.Store.MarkGateWorkflowDefaultPush(diag, run.Repo, run.RunID, run.Attempt, strings.TrimPrefix(run.Ref, "refs/heads/"), run.HeadSHA, now)
 		cancel()

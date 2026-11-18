@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type BaseHealthConfig struct {
@@ -86,14 +87,14 @@ func validateHealth(typ string, raw []byte) (json.RawMessage, error) {
 			return nil, err
 		}
 		_, err := time.Parse(time.RFC3339Nano, c.Since)
-		valid = err == nil && len(c.Since) <= 35 && len(c.Workflow) > 0 && len(c.Workflow) <= 256 && c.WindowSeconds >= 60 && c.WindowSeconds <= 604800 && slices.Contains([]string{"window_v1", "legacy_500_v1", "legacy_verified_push_v1"}, c.Semantics)
+		valid = err == nil && len(c.Since) <= 35 && utf8.RuneCountInString(c.Workflow) > 0 && utf8.RuneCountInString(c.Workflow) <= 256 && c.WindowSeconds >= 60 && c.WindowSeconds <= 604800 && slices.Contains([]string{"window_v1", "legacy_500_v1", "legacy_verified_push_v1"}, c.Semantics)
 		v = c
 	case "publishing_health":
 		c := PublishingHealthConfig{}
 		if err := json.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
-		valid = len(c.ExpectedCommit) > 0 && len(c.ExpectedCommit) <= 256 && slices.Contains([]string{"positive_current_v1", "legacy_no_finding_v1"}, c.Semantics)
+		valid = utf8.RuneCountInString(c.ExpectedCommit) > 0 && utf8.RuneCountInString(c.ExpectedCommit) <= 256 && slices.Contains([]string{"positive_current_v1", "legacy_no_finding_v1"}, c.Semantics)
 		v = c
 	case "pipeline_health":
 		c := PipelineHealthConfig{}
@@ -103,7 +104,7 @@ func validateHealth(typ string, raw []byte) (json.RawMessage, error) {
 		valid = len(c.Repos) > 0 && len(c.Repos) <= 64 && slices.Contains([]string{"scoped_v1", "legacy_quiet_v1"}, c.Semantics)
 		seen := map[string]bool{}
 		for _, r := range c.Repos {
-			if len(r) == 0 || len(r) > 256 || seen[r] {
+			if len(r) == 0 || utf8.RuneCountInString(r) > 256 || seen[r] {
 				valid = false
 			}
 			seen[r] = true

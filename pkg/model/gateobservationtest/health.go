@@ -302,6 +302,16 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 		seed("health-global-steward", model.GoalDecl{Kind: model.GoalPipelineHealthy})
 		global, _ := read(s, "health-global-steward", now, access)
 		statuses(global, "met", "unknown")
+		seed("health-stalled-self", model.GoalDecl{Kind: model.GoalPipelineHealthy, Spec: model.GoalSpec{Repos: []string{repo.String()}}})
+		self, e := s.GetTask(ctx, "health-stalled-self")
+		must(e)
+		oldSelf := now.Add(-100 * time.Hour)
+		self.ApprovedAt = &oldSelf
+		must(s.PutTask(ctx, *self))
+		selfView, _ := read(s, "health-stalled-self", now, access)
+		statuses(selfView, "unmet", "met")
+		_, e = s.Pause(ctx, model.TaskPause{TaskID: self.ID, PausedAt: now, PausedBy: human})
+		must(e)
 		foreign := model.RepoRef{Owner: "acme", Name: "private"}
 		bad := model.BaseBranchCI{Repo: foreign, Branch: "main", Commit: "bad", Conclusion: "failure"}
 		must(s.PutBaseBranchCI(ctx, bad))
@@ -354,4 +364,36 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatalf("truncated legacy scan: %s", v.Results[0].Result.Summary)
 		}
 	})
+	t.Run("bounded-legacy-goal-shapes", func(t *testing.T) {
+		seed("health-duplicate-scope", model.GoalDecl{Kind: model.GoalPipelineHealthy, Spec: model.GoalSpec{Repos: []string{repo.String(), repo.String()}}})
+		v, _ := read(s, "health-duplicate-scope", now, access)
+		for _, b := range v.Bindings {
+			_, err := gates.Validate(b.Type, b.Version, b.Config)
+			must(err)
+		}
+		var c gates.PipelineHealthConfig
+		must(json.Unmarshal(v.Bindings[0].Config, &c))
+		if len(c.Repos) != 1 {
+			t.Fatal("duplicate legacy scope broke canonical binding")
+		}
+		repos := []string{}
+		for i := 0; i < 65; i++ {
+			repos = append(repos, fmt.Sprintf("acme/scope-%d", i))
+		}
+		seed("health-large-scope", model.GoalDecl{Kind: model.GoalPipelineHealthy, Spec: model.GoalSpec{Repos: repos}})
+		v, _ = read(s, "health-large-scope", now, access)
+		statuses(v, "unknown", "unknown")
+		for _, b := range v.Bindings {
+			_, err := gates.Validate(b.Type, b.Version, b.Config)
+			must(err)
+		}
+		seed("health-large-workflow", model.GoalDecl{Kind: model.GoalNightlyGreen, Spec: model.GoalSpec{Repo: repo.String(), Workflow: strings.Repeat("w", 257)}})
+		v, _ = read(s, "health-large-workflow", now, access)
+		statuses(v, "unknown", "unknown")
+		for _, b := range v.Bindings {
+			_, err := gates.Validate(b.Type, b.Version, b.Config)
+			must(err)
+		}
+	})
+
 }

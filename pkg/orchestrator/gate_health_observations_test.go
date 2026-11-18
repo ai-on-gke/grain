@@ -38,6 +38,12 @@ type healthSourceForge struct {
 	exactErr                error
 	latestCalls, exactCalls int
 }
+type healthSlowBaseForge struct{ branchClient }
+
+func (*healthSlowBaseForge) DefaultBranch(string, string) (string, error) {
+	time.Sleep(75 * time.Millisecond)
+	return "main", nil
+}
 
 func (f *healthSourceForge) CompletedWorkflowRuns(string, string, int) ([]github.WorkflowRun, error) {
 	return nil, nil
@@ -141,7 +147,7 @@ func TestBaseHealthCollectorRequiresExactPlanAndAuthenticNonreproduction(t *test
 	recheck.Conclusion = ci.ConclusionSuccess
 	recheck.Jobs = []ci.JobRun{{WorkflowPath: ".grain/workflows/tests.yml", JobID: "test", Conclusion: ci.ConclusionSuccess}}
 	runner := healthSourceCI{runs: map[string]ci.Run{"original": original, "recheck": recheck}}
-	deps := Deps{Store: store, Client: &branchClient{}, CI: runner}
+	deps := Deps{Store: store, Client: &healthSlowBaseForge{}, CI: runner}
 	yes := func(string) bool { return true }
 	access := model.GateHealthAccess{Repository: yes}
 	read := func(want string, at time.Time) {
@@ -190,5 +196,22 @@ func TestHealthStallThresholdsMatchExistingLegacyClassifier(t *testing.T) {
 		if TaskStallNote(state, since, deadline.Add(-time.Nanosecond)) != "" || TaskStallNote(state, since, deadline) == "" {
 			t.Fatalf("%s shadow deadline differs from legacy classifier", state)
 		}
+	}
+}
+
+func TestReportObservationSelectionDoesNotReadHealthSources(t *testing.T) {
+	t.Setenv("GRAIN_GATE_OBSERVATION_TASKS", "report-only")
+	store := openInternalStore(t)
+	ctx := context.Background()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	now := time.Now().UTC()
+	if err := store.PutTask(ctx, model.Task{ID: "report-only", Intent: model.IntentAnalyze, Title: "report"}); err != nil {
+		t.Fatal(err)
+	}
+	forge := &healthSourceForge{}
+	run := ConcludedGitHubWorkflowRun{Repo: repo, RunID: 42, Attempt: 1, WorkflowName: "nightly", Ref: "main", Event: "schedule", HeadRepo: repo.String(), CompletedAt: &now}
+	observeWorkflowHealthSource(ctx, Deps{Store: store, Client: forge}, run, now)
+	if forge.exactCalls != 0 {
+		t.Fatal("unrelated report monitor caused a health source read")
 	}
 }

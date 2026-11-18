@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/gates"
 )
@@ -108,7 +109,7 @@ func healthBindings(t Task, g TaskGoal, repos []string) []gates.Binding {
 		if g.DeclaredBy == "automation:github-base-repair" || slices.Contains([]string{"tests", "test", "ci"}, name) {
 			semantics = "legacy_verified_push_v1"
 		}
-		c := gates.NightlyHealthConfig{Workflow: g.Spec.Workflow, Since: g.DeclaredAt.UTC().Format(time.RFC3339Nano), WindowSeconds: 86400, Semantics: semantics}
+		c := gates.NightlyHealthConfig{Workflow: string([]rune(g.Spec.Workflow)[:min(256, utf8.RuneCountInString(g.Spec.Workflow))]), Since: g.DeclaredAt.UTC().Format(time.RFC3339Nano), WindowSeconds: 86400, Semantics: semantics}
 		add("nightly-legacy", "nightly_health", c)
 		c.Semantics = "window_v1"
 		add("nightly-current", "nightly_health", c)
@@ -179,6 +180,14 @@ func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, 
 			continue
 		}
 		h := gates.HealthFacts{Complete: true, ObservedAt: now, ValidUntil: f.ValidUntil, AuthorizationRevision: access.AuthorizationRevision}
+		if healthRepoScopeOversized(g.Spec.Repos) || g.Kind == GoalNightlyGreen && utf8.RuneCountInString(g.Spec.Workflow) > 256 {
+			h.Complete = false
+			h.Reason = "The legacy goal scope exceeds canonical observation bounds; no narrower health verdict is inferred."
+			h.Version = gates.Digest(h.Reason)
+			f.Health[b.ID] = h
+			continue
+		}
+
 		if b.ID == "pipeline-current" && !scopeKnown {
 			h.Complete = false
 			h.Reason = "The configured repository set is absent; deployment inventory is not an expected scope."
@@ -523,15 +532,22 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 	if count > 1000 || legacy && count > 200 {
 		p.ScanComplete = false
 	}
-	// Bound task collection before expanding per-task immutable local records.
-	var ids []string
-	taskQuery := "SELECT `s`.`task_id` FROM `task_state` AS `s` JOIN `task` AS `t` ON `t`.`id` = `s`.`task_id` WHERE `s`.`state` <> 'closed' AND NOT EXISTS (SELECT 1 FROM `task_pause` AS `p` WHERE `p`.`task_id` = `s`.`task_id`)"
+	// Read only the state/clock/queue columns used by this predicate, in one
+	// complete bounded query. Full task/grant/link expansion would multiply
+	// load per task and spend the diagnostic writer lease on unrelated data.
+	taskQuery := "SELECT `s`.`task_id`,`s`.`state`,`t`.`approved_at`,`t`.`undeferred_at`,`t`.`deferred_until`,`o`.`completed_at`,`o`.`retry_requested_at`,`o`.`run_now_at`," +
+		"(SELECT MAX(`r`.`finished_at`) FROM `task_run` AS `r` WHERE `r`.`task_id` = `s`.`task_id`)," +
+		"(SELECT MIN(`r`.`started_at`) FROM `task_run` AS `r` WHERE `r`.`task_id` = `s`.`task_id` AND `r`.`finished_at` IS NULL)," +
+		"`o`.`merge_queue_blocked_at`,`o`.`merge_queue_stalled_at` FROM `task_state` AS `s` JOIN `task` AS `t` ON `t`.`id` = `s`.`task_id` LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `s`.`task_id` WHERE `s`.`state` <> 'closed' AND NOT EXISTS (SELECT 1 FROM `task_pause` AS `p` WHERE `p`.`task_id` = `s`.`task_id`)"
 	taskArgs := []any{}
 	if legacy {
+		// Match pipelineStewardQuiet's complete tagged own-task set exactly.
+		// An ordinary untagged pipeline goal is not silently excluded as self.
 		taskQuery += " AND NOT EXISTS (SELECT 1 FROM `task_tag` AS `tag` WHERE `tag`.`task_id` = `s`.`task_id` AND `tag`.`tag` = ?)"
 		taskArgs = append(taskArgs, ScheduleFiringTag(PipelineStewardTemplateID))
-	}
-	if !legacy {
+	} else {
+		taskQuery += " AND `s`.`task_id` <> ?"
+		taskArgs = append(taskArgs, self)
 		clauses := []string{}
 		for _, text := range repos {
 			repo, e := ParseRepo(text)
@@ -548,56 +564,24 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 		taskQuery += " AND (" + strings.Join(clauses, " OR ") + ")"
 	}
 	taskQuery += " ORDER BY `s`.`task_id` LIMIT 1001"
+	taskCount := 0
 	err = each(ctx, q, taskQuery, taskArgs, func(rows *sql.Rows) error {
-		var id string
-		if e := rows.Scan(&id); e != nil {
+		var id, state string
+		var approved, undeferred, until, completed, retried, runNow, finished, live, blocked, stalled sql.NullTime
+		if e := rows.Scan(&id, &state, &approved, &undeferred, &until, &completed, &retried, &runNow, &finished, &live, &blocked, &stalled); e != nil {
 			return e
 		}
-		ids = append(ids, id)
-		return nil
-	})
-	if err != nil {
-		return p, err
-	}
-	if len(ids) > 1000 {
-		p.ScanComplete = false
-		ids = ids[:1000]
-	}
-	for _, id := range ids {
-		if id == self {
-			continue
-		}
-		t, e := getTask(ctx, q, id)
-		if e != nil {
-			return p, e
-		}
-		if t == nil {
+		taskCount++
+		if taskCount > 1000 {
 			p.ScanComplete = false
-			continue
+			return nil
 		}
-		if !legacy && (t.Target == nil || !slices.Contains(repos, t.Target.String())) {
-			continue
-		}
-		var state string
-		if e = q.QueryRowContext(ctx, "SELECT `state` FROM `task_state` WHERE `task_id` = ?", id).Scan(&state); e != nil {
-			return p, e
-		}
-		obs, e := getObservation(ctx, q, id)
-		if e != nil {
-			return p, e
-		}
-		times := StateTimesFrom(*t, obs, nil)
-		var finished, live sql.NullTime
-		if e = q.QueryRowContext(ctx, "SELECT MAX(`finished_at`),MIN(CASE WHEN `finished_at` IS NULL THEN `started_at` END) FROM `task_run` WHERE `task_id` = ?", id).Scan(&finished, &live); e != nil {
-			return p, e
-		}
-		times.LastRunFinishedAt = nullableTime(finished)
-		times.LiveRunStartedAt = nullableTime(live)
+		times := StateTimes{ApprovedAt: nullableTime(approved), RequeuedAt: latest(nullableTime(undeferred), nullableTime(retried), nullableTime(runNow)), DeferredUntil: nullableTime(until), CompletedAt: nullableTime(completed), LastRunFinishedAt: nullableTime(finished), LiveRunStartedAt: nullableTime(live)}
 		versions = append(versions, gates.Digest(struct {
 			ID, State        string
 			Times            StateTimes
 			Blocked, Stalled *time.Time
-		}{id, state, times, obsTimeBlocked(obs), obsTimeStalled(obs)}))
+		}{id, state, times, nullableTime(blocked), nullableTime(stalled)}))
 		st := State(state)
 		if since := times.Since(st); since != nil {
 			deadline := TaskHealthStallDeadline(st, *since)
@@ -611,22 +595,14 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 		} else if !legacy && slices.Contains([]State{StateQueued, StateRunning, StateCompleted}, st) {
 			p.ScanComplete = false
 		}
-		if st == StateCompleted && obs != nil && (obs.MergeQueueBlockedAt != nil || obs.MergeQueueStalledAt != nil) {
+		if st == StateCompleted && (blocked.Valid || stalled.Valid) {
 			p.BlockedQueue++
 		}
+		return nil
+	})
+	if err != nil {
+		return p, err
 	}
-	return p, nil
-}
 
-func obsTimeBlocked(o *Observation) *time.Time {
-	if o == nil {
-		return nil
-	}
-	return o.MergeQueueBlockedAt
-}
-func obsTimeStalled(o *Observation) *time.Time {
-	if o == nil {
-		return nil
-	}
-	return o.MergeQueueStalledAt
+	return p, nil
 }

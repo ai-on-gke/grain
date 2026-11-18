@@ -51,13 +51,60 @@ func healthObservationEnabled() bool {
 	}
 	return true
 }
-func observeBaseHealthSource(ctx context.Context, deps Deps, row model.BaseBranchCI, tip string, readable bool, now time.Time) {
+
+// Collector interests are scoped to the existing health goals in the explicit
+// cohort. Selecting a report task must not start unrelated health source reads.
+func healthSourceWanted(ctx context.Context, deps Deps, repo model.RepoRef, ref, workflow string) bool {
 	if !healthObservationEnabled() || deps.Store == nil {
+		return false
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	for _, raw := range strings.Split(os.Getenv("GRAIN_GATE_OBSERVATION_TASKS"), ",") {
+		g, err := deps.Store.TaskGoal(readCtx, strings.TrimSpace(raw))
+		if err != nil {
+			return false
+		}
+		if g == nil {
+			continue
+		}
+		switch g.Kind {
+		case model.GoalBaseGreen:
+			if workflow == "" && model.SameRepoText(g.Spec.Repo, repo.String()) && g.Spec.Branch == ref {
+				return true
+			}
+		case model.GoalNightlyGreen:
+			if workflow != "" && model.SameRepoText(g.Spec.Repo, repo.String()) && strings.EqualFold(g.Spec.Workflow, workflow) {
+				return true
+			}
+		case model.GoalPipelineHealthy:
+			if workflow != "" {
+				continue
+			}
+			repos := g.Spec.Repos
+			if len(repos) == 0 {
+				repos, err = deps.Store.TargetRepos(readCtx)
+				if err != nil {
+					return false
+				}
+			}
+			for _, r := range repos {
+				if model.SameRepoText(r, repo.String()) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func observeBaseHealthSource(ctx context.Context, deps Deps, row model.BaseBranchCI, tip string, readable bool, now time.Time) {
+	if !healthSourceWanted(ctx, deps, row.Repo, row.Branch, "") {
 		return
 	}
-	diag, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer cancel()
-	cfg, err := deps.Store.GetRepoConfig(diag, row.Repo)
+	readCtx, stopRead := context.WithTimeout(ctx, 50*time.Millisecond)
+	cfg, err := deps.Store.GetRepoConfig(readCtx, row.Repo)
+	stopRead()
 	if err != nil {
 		return
 	}
@@ -128,6 +175,9 @@ func observeBaseHealthSource(ctx context.Context, deps Deps, row model.BaseBranc
 			}
 		}
 	}
+	// The ordinary forge read above must not spend the database write budget.
+	diag, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
 	_ = deps.Store.RecordGateBaseSource(diag, row.Repo, row.Branch, p)
 }
 func baseHealthRunIdentity(run ci.Run, row model.BaseBranchCI) bool {
@@ -138,7 +188,7 @@ func baseHealthRunMatches(run ci.Run, row model.BaseBranchCI) bool {
 }
 
 func observeWorkflowHealthSource(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, now time.Time) {
-	if !healthObservationEnabled() || deps.Store == nil {
+	if !healthSourceWanted(ctx, deps, run.Repo, run.Ref, run.WorkflowName) {
 		return
 	}
 	// The shadow read is separate from the legacy latest-attempt listing;
@@ -153,7 +203,7 @@ func observeWorkflowHealthSource(ctx context.Context, deps Deps, run ConcludedGi
 	recordWorkflowHealthSource(ctx, deps, run, jobs, exact, now)
 }
 func recordWorkflowHealthSource(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, jobs []github.WorkflowRunJob, exact bool, now time.Time) {
-	if !healthObservationEnabled() || deps.Store == nil {
+	if !healthSourceWanted(ctx, deps, run.Repo, run.Ref, run.WorkflowName) {
 		return
 	}
 	r := gates.WorkflowHealthRun{ID: run.RunID, Attempt: run.Attempt, Repository: run.Repo.String(), HeadRepository: run.HeadRepo, Ref: strings.TrimPrefix(run.Ref, "refs/heads/"), Commit: run.HeadSHA, Workflow: run.WorkflowName, Path: run.WorkflowPath, Event: run.Event, Source: "github", Complete: exact && len(jobs) > 0}
