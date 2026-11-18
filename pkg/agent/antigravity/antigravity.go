@@ -618,6 +618,8 @@ func eagerToolNames() []string {
 func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]string, error) {
 	var args []string
 	switch {
+	case cfg.NoTools:
+		return []string{"mcpserver", "-no-tools"}, nil
 	case cfg.SandboxRoot != "":
 		args = []string{"mcpserver", "-sandbox-root", cfg.SandboxRoot}
 	case cfg.GranuleVM != "":
@@ -1167,36 +1169,41 @@ func hookArgsWithPolicy(cfg agent.RunConfig, home, policyPath string) []string {
 // the run's capability MCP servers, and the daemon's registered host-tool
 // grants.
 func buildToolHookPolicy(cfg agent.RunConfig, home string) ([]byte, error) {
-	published := agent.PublishedToolNames()
-	allowed := make([]string, 0, len(published)+1)
-	for _, name := range published {
-		allowed = append(allowed, mcp.AgyQualifiedToolName(name))
-	}
-	allowed = append(allowed, "exit_plan_mode")
-	for _, s := range cfg.CapabilityMCPServers {
-		for _, tool := range s.Tools {
-			allowed = append(allowed, "mcp_"+s.Name+"_"+tool)
+	var allowed []string
+	var grants []hookpolicy.HostToolGrant
+	var recordPath, taskID, runID string
+	if cfg.NoTools {
+		allowed = []string{"exit_plan_mode"}
+	} else {
+		published := agent.PublishedToolNames()
+		allowed = make([]string, 0, len(published)+1)
+		for _, name := range published {
+			allowed = append(allowed, mcp.AgyQualifiedToolName(name))
+		}
+		allowed = append(allowed, "exit_plan_mode")
+		for _, s := range cfg.CapabilityMCPServers {
+			for _, tool := range s.Tools {
+				allowed = append(allowed, "mcp_"+s.Name+"_"+tool)
+			}
+		}
+		held := heldHostToolGrants(cfg.Grants)
+		if len(held) > 0 {
+			grants = make([]hookpolicy.HostToolGrant, len(held))
+			for i, g := range held {
+				grants[i] = hookpolicy.HostToolGrant{
+					Capability: g.Capability,
+					Tools:      slices.Clone(g.Tools),
+				}
+			}
+			recordPath = filepath.Join(runScratchDir(home), hook.HostToolCallsFilename)
+			taskID = cfg.TaskID
+			runID = cfg.RunID
 		}
 	}
 	sandboxTools := mcp.NewSandboxTools("")
 	sandbox := make([]string, len(sandboxTools))
 	for i, t := range sandboxTools {
 		sandbox[i] = mcp.AgyQualifiedToolName(t.Name)
-	}
-	held := heldHostToolGrants(cfg.Grants)
-	var grants []hookpolicy.HostToolGrant
-	var recordPath, taskID, runID string
-	if len(held) > 0 {
-		grants = make([]hookpolicy.HostToolGrant, len(held))
-		for i, g := range held {
-			grants[i] = hookpolicy.HostToolGrant{
-				Capability: g.Capability,
-				Tools:      slices.Clone(g.Tools),
-			}
-		}
-		recordPath = filepath.Join(runScratchDir(home), hook.HostToolCallsFilename)
-		taskID = cfg.TaskID
-		runID = cfg.RunID
 	}
 	tp := &hookpolicy.ToolPolicy{
 		AllowedTools:         allowed,
@@ -1279,8 +1286,13 @@ func writeAgyHomeFor(ctx context.Context, host agent.Host, store *sessionstore.S
 	if len(cfg) > 0 {
 		runCfg = cfg[0]
 	}
-	isUnc := isUnconfined(host)
-	usePolicy := !isUnc && agent.SupportsHookPolicy(host)
+	origUnc := isUnconfined(host)
+	isUnc := origUnc && !runCfg.NoTools
+	usePolicy := (!isUnc && agent.SupportsHookPolicy(host)) || (origUnc && runCfg.NoTools)
+	servers := runCfg.CapabilityMCPServers
+	if runCfg.NoTools {
+		servers = nil
+	}
 	var runHookArgs []string
 	var policyBytes []byte
 	if usePolicy {
@@ -1294,7 +1306,7 @@ func writeAgyHomeFor(ctx context.Context, host agent.Host, store *sessionstore.S
 	} else if len(cfg) > 0 {
 		runHookArgs = hookArgs(runCfg, home)
 	}
-	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnc, runCfg.CapabilityMCPServers, runHookArgs...)
+	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnc, servers, runHookArgs...)
 	if err != nil {
 		cleanup()
 		return "", false, nil, err
@@ -1390,8 +1402,13 @@ func refreshAgyHomeFor(ctx context.Context, host agent.Host, home, grainBinaryPa
 	if len(cfg) > 0 {
 		runCfg = cfg[0]
 	}
-	isUnc := isUnconfined(host)
-	usePolicy := !isUnc && agent.SupportsHookPolicy(host)
+	origUnc := isUnconfined(host)
+	isUnc := origUnc && !runCfg.NoTools
+	usePolicy := (!isUnc && agent.SupportsHookPolicy(host)) || (origUnc && runCfg.NoTools)
+	servers := runCfg.CapabilityMCPServers
+	if runCfg.NoTools {
+		servers = nil
+	}
 	var runHookArgs []string
 	var policyBytes []byte
 	var err error
@@ -1405,7 +1422,7 @@ func refreshAgyHomeFor(ctx context.Context, host agent.Host, home, grainBinaryPa
 	} else if len(cfg) > 0 {
 		runHookArgs = hookArgs(runCfg, home)
 	}
-	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnc, runCfg.CapabilityMCPServers, runHookArgs...)
+	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnc, servers, runHookArgs...)
 	if err != nil {
 		return err
 	}

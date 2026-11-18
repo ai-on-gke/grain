@@ -444,3 +444,42 @@ func TestPermitsTaskRepoGrant(t *testing.T) {
 		}
 	}
 }
+
+// TestTemplateWithinTaskFoldsEmptyMethodArgs is the walkthrough's F3
+// (docs/test-runs/2026-11-13-task-source-template.md): a task records a
+// method grant as server#method={} and a declared template names it bare,
+// and the two are one grant whichever side holds which spelling. A grant
+// with real arguments still differs from both.
+func TestTemplateWithinTaskFoldsEmptyMethodArgs(t *testing.T) {
+	bare := GitHubReadIssuesRef
+	empty := GitHubReadIssuesRef + "={}"
+	withArgs := GitHubReadIssuesRef + `={"repo":"acme/widgets"}`
+	cases := []struct {
+		held, granted string
+		want          bool
+	}{
+		{empty, bare, true},
+		{bare, empty, true},
+		{empty, empty, true},
+		{bare, bare, true},
+		{bare, withArgs, false},
+		{empty, withArgs, false},
+		{withArgs, bare, false},
+		{withArgs, empty, false},
+		{"https://grain.dev/capabilities/github", bare, false},
+		{bare, "https://grain.dev/capabilities/github={}", false},
+	}
+	for _, tc := range cases {
+		acting := Task{ID: "9", Grants: []Grant{{Capability: tc.held, Via: GrantByLabel}}}
+		err := TemplateWithinTask(acting, Template{ID: "x", Grants: []Grant{{Capability: tc.granted}}})
+		if got := err == nil; got != tc.want {
+			t.Errorf("held %s, template grants %s: within = %v (%v), want %v", tc.held, tc.granted, got, err, tc.want)
+		}
+	}
+	if HeldGrantKey(empty) != HeldGrantKey(bare) {
+		t.Errorf("HeldGrantKey(%q) = %q, HeldGrantKey(%q) = %q; want equal", empty, HeldGrantKey(empty), bare, HeldGrantKey(bare))
+	}
+	if HeldGrantKey(withArgs) == HeldGrantKey(bare) {
+		t.Errorf("HeldGrantKey(%q) folded into the bare grant", withArgs)
+	}
+}

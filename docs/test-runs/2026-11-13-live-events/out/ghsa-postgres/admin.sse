@@ -1,0 +1,36 @@
+1794655580.268315255 : ready cursor=0
+1794655580.270253003 
+1794655587.954940567 id: 8
+1794655587.956787043 event: local_script.pending
+1794655587.958825745 data: {"id":"8","type":"local_script.pending","at":"2026-11-14T11:26:27.942423Z","taskId":"2","repo":"acme/widgets","summary":"deploy (2 arguments)","approvalId":"lsa-1","script":"deploy","actor":"2","actorKind":"agent","actorSource":"internal","actorLabel":"task 2"}
+1794655587.960363507 
+1794655588.142131281 id: 9
+1794655588.144203943 event: local_script.answered
+1794655588.145897196 data: {"id":"9","type":"local_script.answered","at":"2026-11-14T11:26:28.122866Z","taskId":"2","repo":"acme/widgets","summary":"deploy (2 arguments)","approvalId":"lsa-1","script":"deploy","decision":"approved","actor":"alice@example.com","actorKind":"human","actorSource":"access-code","actorLabel":"operator (access code)"}
+1794655588.147583324 
+1794655588.257255381 id: 11
+1794655588.258810819 event: local_script.pending
+1794655588.260403937 data: {"id":"11","type":"local_script.pending","at":"2026-11-14T11:26:28.247722Z","taskId":"2","repo":"acme/widgets","summary":"rollback","approvalId":"lsa-2","script":"rollback","actor":"2","actorKind":"agent","actorSource":"internal","actorLabel":"task 2"}
+1794655588.261997666 
+1794655588.442389198 id: 12
+1794655588.444311284 event: local_script.answered
+1794655588.446254948 data: {"id":"12","type":"local_script.answered","at":"2026-11-14T11:26:28.432067Z","taskId":"2","repo":"acme/widgets","summary":"rollback","approvalId":"lsa-2","script":"rollback","decision":"denied","actor":"alice@example.com","actorKind":"human","actorSource":"access-code","actorLabel":"operator (access code)"}
+1794655588.447927239 
+1794655588.591247618 id: 14
+1794655588.593046386 event: local_script.pending
+1794655588.594656721 data: {"id":"14","type":"local_script.pending","at":"2026-11-14T11:26:28.582639Z","taskId":"2","repo":"acme/widgets","summary":"migrate (1 argument)","approvalId":"lsa-3","script":"migrate","actor":"2","actorKind":"agent","actorSource":"internal","actorLabel":"task 2"}
+1794655588.596245886 
+1794655590.042323108 id: 15
+1794655590.043899980 event: local_script.answered
+1794655590.045800951 data: {"id":"15","type":"local_script.answered","at":"2026-11-14T11:26:30.030233Z","taskId":"2","repo":"acme/widgets","summary":"migrate (1 argument)","approvalId":"lsa-3","script":"migrate","decision":"expired","actor":"2","actorKind":"agent","actorSource":"internal","actorLabel":"task 2"}
+1794655590.047569257 
+1794655591.825312270 id: 16
+1794655591.826863897 event: local_script.pending
+1794655591.828397310 data: {"id":"16","type":"local_script.pending","at":"2026-11-14T11:26:31.815843Z","taskId":"2","repo":"acme/widgets","summary":"slow","approvalId":"lsa-4","script":"slow","actor":"2","actorKind":"agent","actorSource":"internal","actorLabel":"task 2"}
+1794655591.830057113 
+1794655595.001539061 id: 17
+1794655595.003151517 event: local_script.answered
+1794655595.004749307 data: {"id":"17","type":"local_script.answered","at":"2026-11-14T11:26:34.990507Z","taskId":"2","repo":"acme/widgets","summary":"slow","approvalId":"lsa-4","script":"slow","decision":"expired","actor":"grain","actorKind":"automation","actorLabel":"grain"}
+1794655595.006340936 
+1794655595.269151573 : keepalive
+1794655595.270986800 

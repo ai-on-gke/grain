@@ -92,6 +92,7 @@ func syncClosedPullRequests(ctx context.Context, store *model.Store, client gith
 		}
 		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
+			recordGatePRUnavailable(ctx, store, model.Task{ID: link.TaskID}, ref, now)
 			// Backed off like any other read that saw nothing new, so a
 			// forge refusing every read is asked every PollCap rather than
 			// every cycle -- and reported each time, not swallowed.
@@ -128,6 +129,7 @@ func recordClosedTaskPullRequest(ctx context.Context, store *model.Store, taskID
 	if err := setMergeQueueState(ctx, store, obs, taskID, queueStatus{}, now); err != nil {
 		return err
 	}
+	recordGatePRSource(ctx, store, taskID, ref, detail, now)
 	forgetEmptyChecks(ref)
 	forgetMergeRefusals(ref)
 	if err := observeField(ctx, store, taskID, now, func(o *model.Observation) {

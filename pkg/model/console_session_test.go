@@ -388,7 +388,7 @@ func TestWhoseProposalsASessionsPermissionCovers(t *testing.T) {
 
 func TestIsConsoleSessionMatchesDirectorTaskSQL(t *testing.T) {
 	valid := model.Task{
-		Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Reason: model.ReasonConsoleSession},
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 	}
@@ -413,14 +413,14 @@ func TestIsConsoleSessionMatchesDirectorTaskSQL(t *testing.T) {
 		{
 			name: "not interactive",
 			task: model.Task{
-				Origin: model.Origin{Reason: model.ReasonConsoleSession},
+				Filing: model.Filing{Reason: model.ReasonConsoleSession},
 				Tags:   []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 			},
 		},
 		{
 			name: "missing console-session tag",
 			task: model.Task{
-				Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+				Filing:      model.Filing{Reason: model.ReasonConsoleSession},
 				Interactive: true,
 			},
 		},
@@ -533,7 +533,7 @@ func TestShippedDirectorTasksApprovedAndStickyOperatorOverrides(t *testing.T) {
 
 	directorTask := func(tags ...string) model.Task {
 		return model.Task{
-			Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+			Filing:      model.Filing{Reason: model.ReasonConsoleSession},
 			Interactive: true,
 			Tags:        append([]string{model.ConsoleSessionTag(model.DirectorSessionID)}, tags...),
 		}

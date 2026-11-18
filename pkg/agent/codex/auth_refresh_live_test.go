@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -79,10 +78,7 @@ import (
 // itself sends the authority no refresh request at all, because grain
 // has always renewed the login first, and neither run is lost.
 func TestLiveCodexSharedLoginSurvivesConcurrentRefresh(t *testing.T) {
-	binary, err := exec.LookPath("codex")
-	if err != nil {
-		skipUnlessLiveRequired(t, "no codex binary on PATH")
-	}
+	binary := lookReviewedCodex(t)
 	grain := buildGrainBinary(t)
 	for _, tc := range []struct {
 		name    string

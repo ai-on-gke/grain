@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "semantics"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "pr_merged",
+        "cl_submitted"
+      ]
+    },
+    "semantics": {
+      "const": "positive_v1"
+    }
+  }
+}

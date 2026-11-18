@@ -16,11 +16,9 @@ import {
   advertisedModels,
   availabilityNote,
   containsModel,
+  effortSupport,
   modelAvailability,
-  modelFramework,
   modelGroups,
-  namedEffort,
-  noEffortReason,
   parseDefaultModels,
 } from "./model-catalog";
 
@@ -108,72 +106,53 @@ describe("model-catalog", () => {
     expect(containsModel(["Gemini-X"], "gemini-x")).toBe(true);
   });
 
-  it("says which models take no separate reasoning effort", () => {
+  it("says which models take a separate reasoning effort", () => {
     const groups = modelGroups([
-      {
-        id: "claude-off",
-        framework: "claude",
-        models: ["opus-5.5", "claude-only-off"],
-        disabled: true,
-      },
       {
         id: "agy",
         framework: "antigravity",
-        models: ["opus-5.5", "opus-5.5-high", "opus-5.5-xhigh"],
+        models: ["gemini-pro", "gemini-pro-high", "auto"],
       },
-      { id: "cx", framework: "codex", models: ["gpt-5.1-codex-max"] },
-      { id: "untyped", framework: "", models: ["o3-mini-high"] },
+      { id: "cx", framework: "codex", models: ["gpt-codex"] },
+      { id: "cl", framework: "claude", models: ["opus-5"] },
     ]);
-    expect(modelFramework("OPUS-5.5-high", groups)).toBe("antigravity");
-    // Enabled connections win over an earlier disabled one serving the same ID.
-    expect(modelFramework("opus-5.5", groups)).toBe("antigravity");
-    expect(modelFramework("claude-only-off", groups)).toBe("claude");
-    // Unadvertised or untyped models fall back to model.ModelFramework's prefixes.
-    expect(modelFramework("gpt-5.1-codex-max", [])).toBe("codex");
-    expect(modelFramework("codex-mini-latest", [])).toBe("codex");
-    expect(modelFramework("o3-mini-high", groups)).toBe("codex");
-    expect(modelFramework("o4-mini-high", [])).toBe("codex");
-    expect(modelFramework("claude-opus-5-5", [])).toBe("claude");
-    expect(modelFramework("gemini-3-pro", [])).toBe("antigravity");
-    expect(modelFramework("ghost", groups)).toBe("");
-    // Antigravity names its effort (low|medium|high|xhigh|max); Codex's -max is a model.
-    expect(namedEffort("gemini-4-carbon-medium", "antigravity")).toBe("medium");
-    expect(namedEffort("opus-5.5-xhigh", "antigravity")).toBe("xhigh");
-    expect(namedEffort("OPUS-5.5-MAX", "antigravity")).toBe("max");
-    expect(namedEffort("fable-5.2-high", "")).toBe("high");
-    expect(namedEffort("gpt-5.1-codex-max", "codex")).toBe("");
-    expect(namedEffort("gpt-5.1-codex-max", "")).toBe("");
-    expect(namedEffort("gemini-3-pro", "antigravity")).toBe("");
-    expect(noEffortReason("opus-5.5-high", "antigravity")).toBe(
-      "Effort is part of the model name: high.",
+    const vocab = {
+      gemini: ["low", "medium", "high"],
+      codex: ["low", "xhigh"],
+    };
+    expect(effortSupport("gemini-pro", groups, vocab)).toEqual({
+      separate: true,
+      choices: ["low", "medium", "high"],
+    });
+    expect(effortSupport("gpt-codex", groups, vocab)).toEqual({
+      separate: true,
+      choices: ["low", "xhigh"],
+    });
+    expect(effortSupport("gemini-pro-high", groups, vocab).separate).toBe(
+      false,
     );
-    expect(noEffortReason("opus-5.5-xhigh", "antigravity")).toBe(
-      "Effort is part of the model name: xhigh.",
-    );
-    expect(noEffortReason("auto", "antigravity")).toContain("auto");
-    expect(noEffortReason("claude-opus-5-5", "claude")).toBe(
-      "Claude takes no reasoning effort.",
-    );
-    expect(
-      noEffortReason("claude-opus-5-5", modelFramework("claude-opus-5-5", [])),
-    ).toBe("Claude takes no reasoning effort.");
-    expect(noEffortReason("claude-opus-5-5", "")).toBe(
-      "Claude takes no reasoning effort.",
-    );
-    // Models that take an effort (including unadvertised Codex -max), and no model at all, get no reason.
-    expect(noEffortReason("gpt-5.1-codex", "codex")).toBe("");
-    expect(noEffortReason("gpt-5.1-codex-max", "codex")).toBe("");
-    expect(
-      noEffortReason(
-        "gpt-5.1-codex-max",
-        modelFramework("gpt-5.1-codex-max", []),
-      ),
-    ).toBe("");
-    expect(noEffortReason("gpt-5.1-codex-max", "")).toBe("");
-    expect(noEffortReason("opus-5.5", modelFramework("opus-5.5", groups))).toBe(
-      "",
-    );
-    expect(noEffortReason("gemini-3-pro", "antigravity")).toBe("");
-    expect(noEffortReason("", "antigravity")).toBe("");
+    expect(effortSupport("auto", groups, vocab).separate).toBe(false);
+    expect(effortSupport("opus-5", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Claude takes no reasoning effort",
+    });
+    // Unadvertised: the agy rule, with its fallback vocabulary.
+    expect(effortSupport("mystery", groups, {}).separate).toBe(true);
+    expect(effortSupport("mystery-low", groups, {}).separate).toBe(false);
+    // agy's whole suffix vocabulary counts, whatever the settings offer.
+    expect(effortSupport("opus-5.5-xhigh", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Effort is part of the model name: xhigh",
+    });
+    // Unadvertised models take the framework their name implies
+    // (model.ModelFramework): Codex's -max is a model, not an effort.
+    expect(effortSupport("gpt-5.1-codex-max", groups, vocab)).toEqual({
+      separate: true,
+      choices: ["low", "xhigh"],
+    });
+    expect(effortSupport("claude-opus-5-5", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Claude takes no reasoning effort",
+    });
   });
 });

@@ -16,12 +16,12 @@ import { expect, test } from "./fixtures";
 
 // Review 5925 on PR #1551: unadvertised Codex -max rows keep their effort
 // unmarked, unadvertised Claude rows say Claude takes none, -xhigh models
-// hide the effort picker, and an enabled connection wins over an earlier
+// get no effort picker, and an enabled connection wins over an earlier
 // disabled one serving the same model ID.
 test(
   "classifies unadvertised models, -xhigh suffixes, and disabled/enabled model overlap",
   { tag: ["@phone", "@dark"] },
-  async ({ page, axe }, testInfo) => {
+  async ({ page, axe }) => {
     const settings = (url: URL) => url.pathname === "/api/settings";
     const deployment = (url: URL) => url.pathname === "/api/deployment";
     await page.route(settings, async (route) => {
@@ -80,50 +80,32 @@ test(
         .locator('[data-model="opus-5.5"]')
         .first()
         .click();
-      await expect(
-        card.getByTestId("select-model-setting-effort"),
-      ).toBeVisible();
-      await expect(card.getByTestId("model-setting-no-effort")).toHaveCount(0);
+      const effort = card.getByTestId("select-model-setting-effort");
+      await expect(effort).toBeEnabled();
+      await expect(card.getByTestId("model-setting-effort-none")).toHaveCount(
+        0,
+      );
 
-      // Selecting opus-5.5-xhigh swaps the picker for the inline hint.
+      // opus-5.5-xhigh names its effort: the picker is disabled and the
+      // hint below the row says why.
       await card.getByTestId("picker-model-setting-model").click();
       await page
         .getByTestId("picker-model-setting-model-panel")
         .locator('[data-model="opus-5.5-xhigh"]')
         .click();
-      const hint = card.getByTestId("model-setting-no-effort");
+      const hint = card.getByTestId("model-setting-effort-none");
       await expect(hint).toContainText(
         "Effort is part of the model name: xhigh.",
       );
-      await expect(card.getByTestId("select-model-setting-effort")).toHaveCount(
-        0,
-      );
+      await expect(effort).toBeDisabled();
+      await expect(card.getByTestId("add-model-setting-btn")).toBeDisabled();
 
       const cardBox = (await card.boundingBox())!;
-      const pickerBox = (await card
-        .getByTestId("picker-model-setting-model")
-        .boundingBox())!;
       const hintBox = (await hint.boundingBox())!;
-      if (testInfo.project.name === "phone") {
-        expect(hintBox.x).toBeGreaterThanOrEqual(cardBox.x);
-        expect(hintBox.x + hintBox.width).toBeLessThanOrEqual(
-          cardBox.x + cardBox.width + 1,
-        );
-      } else {
-        expect(hintBox.x).toBeGreaterThanOrEqual(
-          pickerBox.x + pickerBox.width - 2,
-        );
-        expect(
-          Math.abs(
-            hintBox.y +
-              hintBox.height / 2 -
-              (pickerBox.y + pickerBox.height / 2),
-          ),
-        ).toBeLessThanOrEqual(8);
-        expect(hintBox.x + hintBox.width).toBeLessThanOrEqual(
-          cardBox.x + cardBox.width + 1,
-        );
-      }
+      expect(hintBox.x).toBeGreaterThanOrEqual(cardBox.x);
+      expect(hintBox.x + hintBox.width).toBeLessThanOrEqual(
+        cardBox.x + cardBox.width + 1,
+      );
 
       const sideways = await page.evaluate(
         () =>

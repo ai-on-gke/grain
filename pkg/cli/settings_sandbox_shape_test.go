@@ -28,7 +28,6 @@ import (
 	"io"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -99,15 +97,7 @@ func shapelessSettingsTestServer(t *testing.T) *httptest.Server {
 
 func settingsTestServerFor(t *testing.T, cfg ui.Config) *httptest.Server {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	srv := httptest.NewServer(ui.NewServer(withAccessCode(cfg), store))
 	t.Cleanup(srv.Close)
 

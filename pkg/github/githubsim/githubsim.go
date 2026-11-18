@@ -538,6 +538,13 @@ type Sim struct {
 	// add_review_comment call produced, the same append-only shape
 	// PullRequests already uses.
 	Reviews []Review
+	// RefuseReviews is how many of the next create-review calls GitHub
+	// refuses, each with the 422 real GitHub gives a credential that
+	// already holds a pending review on the pull request ("User can only
+	// have one pending review per pull request") -- which is what two
+	// grain reviews of one head drafting under one account run into. A
+	// refused call records nothing in Reviews.
+	RefuseReviews int
 	// CollaboratorPermissions maps username (case-insensitively) to GitHub
 	// repository permission ("admin", "maintain", "write", "triage", "read",
 	// "none") for GET /repos/{owner}/{repo}/collaborators/{username}/permission.
@@ -2321,6 +2328,13 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			if err := json.Unmarshal(body, &payload); err != nil {
 				return github.ApiResponse{}, err
+			}
+			if s.RefuseReviews > 0 {
+				s.RefuseReviews--
+				return jsonResponse(422, map[string]any{
+					"message": "Unprocessable Entity",
+					"errors":  []string{"User can only have one pending review per pull request"},
+				}), nil
 			}
 			comments := make([]github.NewReviewComment, len(payload.Comments))
 			for i, c := range payload.Comments {

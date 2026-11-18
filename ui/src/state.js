@@ -210,7 +210,7 @@ export function askedCase(t) {
       let title = `Approved by ${t.humanApprovedBy} for ${what}`;
       if (
         t.reviewFindings?.length ||
-        t.humanReviewHold?.some((r) => r.category === "security-findings")
+        t.humanReviewHold?.some((r) => r.source === "security-findings")
       ) {
         title += " — held on review findings";
       } else if (t.reviewQuestions) {
@@ -1277,7 +1277,7 @@ export function awaitsHumanSubmit(t) {
     t.humanApprovedBy &&
     !t.reviewQuestions &&
     !(t.reviewFindings?.length > 0) &&
-    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+    !t.humanReviewHold?.some((r) => r.source === "security-findings")
   ) {
     return false;
   }

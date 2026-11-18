@@ -68,7 +68,7 @@ func TestCarriedReviewPriority(t *testing.T) {
 func TestReviewFloorIsNotAProposalCeiling(t *testing.T) {
 	t.Parallel()
 	review := func(priority int, tags ...string) model.Task {
-		return model.Task{ID: "9", Priority: priority, Tags: tags, Origin: model.Origin{Reason: model.ReasonReview}}
+		return model.Task{ID: "9", Priority: priority, Tags: tags, Filing: model.Filing{Reason: model.ReasonReview}}
 	}
 	for _, tc := range []struct {
 		name     string

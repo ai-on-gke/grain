@@ -148,85 +148,93 @@ export function containsModel(list: readonly string[], m: string): boolean {
   return list.some((x) => sameModel(x, m));
 }
 
-function normalizeFramework(framework: string): string {
-  const f = framework.trim().toLowerCase();
-  return f === "gemini" ? "antigravity" : f;
+/** The effort vocabularies GET /api/settings reports, per framework. */
+export interface EffortVocabularies {
+  gemini?: readonly string[] | null;
+  codex?: readonly string[] | null;
 }
 
 /**
+ * How a model takes its reasoning effort: as a separate setting with these
+ * choices, or not at all -- with why, for the row to say.
+ */
+export type EffortSupport =
+  { separate: true; choices: string[] } | { separate: false; reason: string };
+
+// What antigravity.Efforts() says when the settings carry no vocabulary.
+const AGY_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/**
  * inferredFramework mirrors model.ModelFramework's prefix fallback
- * (pkg/model/model_selection.go): when no connection advertises m (or its
- * framework is unset), claude* -> claude, gpt* / codex* / o3* / o4* -> codex,
- * and gemini* -> antigravity.
+ * (pkg/model/model_selection.go) for a model no connection advertises:
+ * claude* -> claude, gpt* / codex* / o3* / o4* -> codex, else "" (agy).
  */
 function inferredFramework(m: string): string {
   const id = m.trim().toLowerCase();
   if (id.startsWith("claude")) return "claude";
-  if (
-    id.startsWith("gpt") ||
-    id.startsWith("codex") ||
-    id.startsWith("o3") ||
-    id.startsWith("o4")
-  ) {
+  if (["gpt", "codex", "o3", "o4"].some((p) => id.startsWith(p))) {
     return "codex";
   }
-  if (id.startsWith("gemini")) return "antigravity";
   return "";
 }
 
+function isAgy(framework: string): boolean {
+  return (
+    framework === "" || framework === "antigravity" || framework === "gemini"
+  );
+}
+
+// namedEffort mirrors antigravity's modelNamesItsEffort: the effort
+// gemini-3.1-pro-high spells into its name ("high"), or "" for none. agy
+// refuses --effort beside such a name. Its whole vocabulary counts,
+// whatever the settings currently offer, so a suffixed name is never
+// taken for one that takes a separate effort.
+function namedEffort(m: string, efforts: readonly string[]): string {
+  const id = m.trim().toLowerCase();
+  const all = [...efforts.map((e) => e.toLowerCase()), ...AGY_EFFORTS];
+  return all.find((e) => id.endsWith(`-${e}`)) ?? "";
+}
+
 /**
- * modelFramework is the framework of the first enabled connection
- * advertising m, else the first disabled one, else the framework implied by
- * m's prefix (model.ModelFramework) -- or "" when none applies.
+ * effortSupport says whether m takes a separate reasoning effort
+ * (model.ModelSetting.Effort), from the framework of the connections that
+ * advertise it -- an enabled one first. Claude has no effort flag; agy
+ * drops --effort for a model whose name carries one; Codex always takes
+ * one. A model no connection advertises (or whose connection names no
+ * framework) takes the framework its name implies (inferredFramework),
+ * else the agy rule, as the classic pane gives it.
  */
-export function modelFramework(
+export function effortSupport(
   m: string,
   groups: readonly ModelGroup[],
-): string {
-  const match =
-    groups.find(
-      (g) => !g.disabled && g.framework.trim() && containsModel(g.models, m),
-    ) ?? groups.find((g) => g.framework.trim() && containsModel(g.models, m));
-  return match ? normalizeFramework(match.framework) : inferredFramework(m);
-}
-
-// The effort suffixes Antigravity's catalog spells into a model ID
-// (gemini-3.1-pro-high, opus-5.5-xhigh), as pkg/agent/antigravity.Efforts
-// and splitEffort read them (docs/agy-surface.md).
-const NAMED_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-
-/**
- * namedEffort is the reasoning effort an Antigravity model ID carries in
- * its own name ("high" for opus-5.5-high), or "" for one that carries
- * none. Codex and Claude IDs never do: gpt-5.1-codex-max is a model, not
- * an effort.
- */
-export function namedEffort(m: string, framework: string): string {
-  const f = normalizeFramework(framework) || inferredFramework(m);
-  if (f === "codex" || f === "claude") return "";
-  const id = m.trim().toLowerCase();
-  return NAMED_EFFORTS.find((e) => id.endsWith(`-${e}`)) ?? "";
-}
-
-/**
- * noEffortReason says why model m takes no separate reasoning effort, or
- * "" when it does. It mirrors the runners: Claude has no effort flag,
- * agy refuses --effort with "auto" (it picks the model, and with it the
- * effort) and with a name that already spells one
- * (antigravity.modelTakesNoEffort), so a setting for any of those is
- * never applied.
- */
-export function noEffortReason(m: string, framework: string): string {
-  const id = m.trim();
-  if (!id) return "";
-  const f = normalizeFramework(framework) || inferredFramework(id);
-  if (f === "claude") {
-    return "Claude takes no reasoning effort.";
+  vocab: EffortVocabularies,
+): EffortSupport {
+  const serving = groups.filter((g) => g.models.some((x) => sameModel(x, m)));
+  const g = serving.find((x) => !x.disabled) ?? serving[0];
+  const framework = (g?.framework ?? "").toLowerCase() || inferredFramework(m);
+  if (framework === "claude") {
+    return { separate: false, reason: "Claude takes no reasoning effort" };
   }
-  if (id.toLowerCase() === "auto") {
-    return "auto picks the model, and its effort, itself.";
+  if (framework === "codex") {
+    const choices = dedupe(vocab.codex ?? []);
+    return choices.length
+      ? { separate: true, choices }
+      : { separate: false, reason: "No effort choices are known" };
   }
-  const named = namedEffort(id, f);
-  if (named) return `Effort is part of the model name: ${named}.`;
-  return "";
+  if (!isAgy(framework) && g) {
+    return { separate: false, reason: "No effort choices are known" };
+  }
+  const gemini = dedupe(vocab.gemini ?? []);
+  const choices = gemini.length ? gemini : AGY_EFFORTS;
+  if (m.trim().toLowerCase() === "auto") {
+    return { separate: false, reason: "The provider chooses the effort" };
+  }
+  const named = namedEffort(m, choices);
+  if (named) {
+    return {
+      separate: false,
+      reason: `Effort is part of the model name: ${named}`,
+    };
+  }
+  return { separate: true, choices };
 }

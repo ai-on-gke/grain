@@ -92,6 +92,9 @@ func (s *Store) ListMemories(ctx context.Context) ([]Memory, error) {
 //
 // UpdatedBy is written exactly as given, the zero Principal included.
 func (s *Store) PutMemory(ctx context.Context, m Memory) error {
+	if err := s.CheckMemoryFrozenForActor(ctx, m.UpdatedBy); err != nil {
+		return err
+	}
 	owner, name := memoryKey(m.Repo)
 	text := strings.TrimSpace(m.Text)
 	if m.UpdatedAt.IsZero() {
@@ -220,6 +223,9 @@ func (s *Store) ListMemoryDocuments(ctx context.Context, scopes ...MemoryScope) 
 // PutMemoryDocument replaces one document wholesale, and deletes it when
 // its text is empty.
 func (s *Store) PutMemoryDocument(ctx context.Context, d MemoryDocument) error {
+	if err := s.CheckMemoryFrozenForActor(ctx, d.UpdatedBy); err != nil {
+		return err
+	}
 	if err := ValidateMemoryDocumentName(d.Name); err != nil {
 		return err
 	}

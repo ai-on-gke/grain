@@ -105,11 +105,16 @@ func (s *Store) ClearScheduledUpgrade(ctx context.Context) (bool, error) {
 // busy: liveRunCounts takes the same reading of an unattributable run,
 // and the cautious answer here is the one that makes the deployment look
 // busier rather than the one that restarts on top of work nobody can see.
+//
+// The flag is compared as `= 0` beside IS NULL rather than through
+// COALESCE(`interactive`, 0): `interactive` is BOOLEAN on PostgreSQL,
+// where COALESCE cannot mix it with an integer, and the postgres adapter
+// rewrites only a bare `= 0|1` comparison into FALSE|TRUE.
 func (s *Store) BusyRunCount(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `task_run` AS `r` LEFT JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-			"WHERE `r`.`finished_at` IS NULL AND COALESCE(`t`.`interactive`, 0) = 0").Scan(&n)
+			"WHERE `r`.`finished_at` IS NULL AND (`t`.`interactive` IS NULL OR `t`.`interactive` = 0)").Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("counting busy runs: %w", err)
 	}

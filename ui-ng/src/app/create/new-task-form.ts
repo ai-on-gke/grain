@@ -14,6 +14,7 @@
 
 import type {
   AttachmentUpload,
+  GoalModeConfig,
   GrainConfig,
   Task,
   Template,
@@ -381,6 +382,7 @@ export interface NewTaskDraft {
   generatedFrom?: string;
   workstream?: boolean;
   autoApproveProposals?: boolean;
+  goalMode: GoalModeConfig | null;
 }
 
 export function emptyDraft(
@@ -429,6 +431,7 @@ export function emptyDraft(
     sandboxDiskGb: 0,
     approved: !!f.approved.default,
     atFront: !!f.atFront.default,
+    goalMode: null,
     ...prefill,
   };
 }
@@ -491,11 +494,24 @@ export function buildPayload(
     ...(d.autoApproveProposals !== undefined
       ? { autoApproveProposals: d.autoApproveProposals }
       : {}),
+    ...(d.goalMode?.enabled
+      ? {
+          goalMode: {
+            enabled: true,
+            maxPasses: d.goalMode.maxPasses ?? 8,
+            wallClockMinutes: d.goalMode.wallClockMinutes ?? 120,
+            ...(d.goalMode.mockMissingSecrets
+              ? { mockMissingSecrets: true }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField" | "foundIn" | "form";
+  field:
+    "title" | "repo" | "newBranchName" | "templateField" | "foundIn" | "form";
   message: string;
 }
 
@@ -506,6 +522,7 @@ export function validate(
   fields?: Record<FieldId, FieldConfig>,
   template?: Template | null,
   templateValues?: Record<string, string>,
+  config?: GrainConfig | null,
 ): Problem | null {
   if (template) {
     for (const tf of template.fields ?? []) {
@@ -518,6 +535,23 @@ export function validate(
     }
   } else if (!d.title.trim()) {
     return { field: "title", message: "Give the task a title." };
+  }
+  const repoShown = !fields || fields.repo.visibility !== "hidden";
+  const hasDefaultTarget = !!String(config?.["defaultTarget"] ?? "").trim();
+  if (
+    repoShown &&
+    !hasDefaultTarget &&
+    !d.repo.trim() &&
+    !template?.repo &&
+    !template?.declaredIn?.repo
+  ) {
+    return {
+      field: "repo",
+      message:
+        fields?.repo.allowNoRepo === false
+          ? "Pick a repository."
+          : "Pick a repository, or choose No repository.",
+    };
   }
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
   if (

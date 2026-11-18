@@ -207,7 +207,7 @@ func ConfigRepoProposalHold(child Task) string {
 // too. A review that inherited more than the floor from the change it
 // gates, or whose priority a person set, keeps its own.
 func proposerPriorityCeiling(parent Task) int {
-	if parent.Origin.Reason == ReasonReview && parent.Priority <= ReviewPriorityFloor &&
+	if parent.Filing.Reason == ReasonReview && parent.Priority <= ReviewPriorityFloor &&
 		!slices.Contains(parent.Tags, ReviewPriorityHandSetTag) {
 		return DefaultTaskPriority
 	}

@@ -25,7 +25,7 @@ import (
 )
 
 // The pipeline steward (model.PipelineStewardTemplateID,
-// docs/pipeline-steward.md) is a standing job that wakes every half hour.
+// docs/pipeline-steward.md) is a standing job with a six-hour safety wake.
 // Two things in this file decide when it actually spends a sandbox:
 //
 //   - pipelineStewardQuiet, the precondition the schedule reconciler asks
@@ -33,13 +33,15 @@ import (
 //     time pays nothing for most of those wakes.
 //   - wakePipelineSteward, which the base-branch reconciler calls when a
 //     red is confirmed, so the job hears about it in the same cycle
-//     rather than up to half an hour later.
+//     rather than up to six hours later.
 
 // pipelineStewardQuiet reports whether the pipeline steward would find
 // nothing to do, and if not, the first thing it would find (why).
 //
-// Quiet is both of:
+// Quiet requires all of:
 //
+//   - no open pipeline notification, except the steward's own report
+//     regression, which must not wake it in a loop;
 //   - every base branch grain watches has a green verdict, or none yet,
 //     or one being taken -- not a failure (BaseBranchCI.Broken, which a
 //     flake a confirmation cleared is not) and not an errored or
@@ -52,6 +54,20 @@ import (
 // The pipeline steward's own task is left out of the stall check: it is
 // the thing being woken, not something it could unstick.
 func pipelineStewardQuiet(ctx context.Context, deps Deps, now time.Time) (quiet bool, why string, err error) {
+	// Notifications can precede the standing task and its subscriptions.
+	// The safety wake must see them too, or a quiet gate can prevent that
+	// first task from ever being filed. It also catches notifications a
+	// subscriber missed while busy. Match WakeNotificationSubscribers'
+	// exclusion for regressions in the steward's own reports.
+	open, err := openPipelineNotifications(ctx, deps.Store, nil)
+	if err != nil {
+		return false, "", fmt.Errorf("reading pipeline notifications: %w", err)
+	}
+	for _, subject := range open {
+		if subject != model.SubjectStewardRegression {
+			return false, fmt.Sprintf("pipeline notification %s is open", subject), nil
+		}
+	}
 	rows, err := deps.Store.ListBaseBranchCI(ctx)
 	if err != nil {
 		return false, "", fmt.Errorf("reading base-branch CI: %w", err)

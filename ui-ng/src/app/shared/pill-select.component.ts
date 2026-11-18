@@ -32,6 +32,13 @@ export interface PillOption {
   value: string;
   label: string;
   toneClass?: string;
+  // disabled options stay in the list (and in keyboard order) so the
+  // reader can see what exists, but choosing one does nothing: the
+  // server's own vocabulary says it cannot run here (label says why).
+  disabled?: boolean;
+  // hint is a second, smaller line under the label (why an option is
+  // disabled, or what choosing it means).
+  hint?: string;
 }
 
 let nextPillSelectId = 0;
@@ -54,9 +61,11 @@ let nextPillSelectId = 0;
         class="pill-select-btn"
         [class.is-open]="open()"
         [class.is-inverse]="inverse()"
+        [class.is-invalid]="invalid()"
         [disabled]="disabled()"
         [attr.data-testid]="testid() || null"
         [attr.aria-label]="resolvedAriaLabel()"
+        [attr.aria-describedby]="describedBy() || null"
         [attr.aria-expanded]="open()"
         [attr.aria-controls]="open() ? menuId() : null"
         aria-haspopup="listbox"
@@ -82,8 +91,8 @@ let nextPillSelectId = 0;
           #menuEl
           [id]="menuId()"
           class="pop-menu pill-select-menu"
-          [class.align-left]="align() === 'left'"
-          [class.open-up]="openUp()"
+          [class.align-left]="effectiveAlignLeft()"
+          [class.open-up]="openUp() || autoOpenUp()"
           role="listbox"
           [attr.aria-label]="ariaLabel() || prefix() || placeholder()"
           [attr.data-testid]="testid() ? testid() + '-menu' : null"
@@ -95,10 +104,12 @@ let nextPillSelectId = 0;
                 type="button"
                 role="option"
                 [attr.aria-selected]="active"
+                [attr.aria-disabled]="opt.disabled ? 'true' : null"
+                [class.is-disabled]="opt.disabled"
                 [attr.data-testid]="
                   testid() ? testid() + '-opt-' + opt.value : null
                 "
-                (click)="choose(opt.value, $event)"
+                (click)="choose(opt, $event)"
               >
                 @if (opt.toneClass) {
                   <span
@@ -106,7 +117,12 @@ let nextPillSelectId = 0;
                     aria-hidden="true"
                   ></span>
                 }
-                <span class="pill-opt-label">{{ opt.label }}</span>
+                <span class="pill-opt-label"
+                  >{{ opt.label }}
+                  @if (opt.hint) {
+                    <span class="pill-opt-hint">{{ opt.hint }}</span>
+                  }
+                </span>
                 @if (active) {
                   <svg
                     class="pill-check"
@@ -144,10 +160,24 @@ export class PillSelectComponent implements OnDestroy {
   readonly align = input<"left" | "right">("right");
   readonly openUp = input<boolean>(false);
   readonly inverse = input<boolean>(false);
+  readonly invalid = input<boolean>(false);
+  readonly describedBy = input<string>("");
 
   readonly valueChange = output<string>();
 
+  focus(): void {
+    this.btnEl()?.nativeElement.focus();
+  }
+
   protected readonly open = signal(false);
+  protected readonly autoAlignLeft = signal(false);
+  protected readonly forceAlignRight = signal(false);
+  protected readonly autoOpenUp = signal(false);
+  protected readonly effectiveAlignLeft = computed(
+    () =>
+      !this.forceAlignRight() &&
+      (this.align() === "left" || this.autoAlignLeft()),
+  );
   protected readonly menuId = computed(() =>
     this.testid() ? `${this.testid()}-menu` : this.fallbackId,
   );
@@ -190,6 +220,34 @@ export class PillSelectComponent implements OnDestroy {
   }
 
   private openMenu(): void {
+    const btn = this.btnEl()?.nativeElement;
+    const rect =
+      btn && typeof btn.getBoundingClientRect === "function"
+        ? btn.getBoundingClientRect()
+        : null;
+    this.autoAlignLeft.set(Boolean(rect && rect.right < 280));
+    if (rect && rect.width > 0) {
+      const vw =
+        typeof window !== "undefined" && window.innerWidth > 0
+          ? window.innerWidth
+          : 1440;
+      const vh =
+        typeof window !== "undefined" && window.innerHeight > 0
+          ? window.innerHeight
+          : 900;
+      const pane = btn?.closest(".qa-step-inspector, .proc-inspector");
+      const paneRight = pane ? pane.getBoundingClientRect().right : vw;
+      const maxRight = Math.min(vw - 8, paneRight - 4);
+      this.forceAlignRight.set(
+        this.align() === "left" &&
+          rect.left + 228 > maxRight &&
+          rect.right >= 220,
+      );
+      this.autoOpenUp.set(rect.bottom + 220 > vh - 12 && rect.top > 220);
+    } else {
+      this.forceAlignRight.set(false);
+      this.autoOpenUp.set(false);
+    }
     this.open.set(true);
     this.zone.runOutsideAngular(() => {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
@@ -210,10 +268,11 @@ export class PillSelectComponent implements OnDestroy {
     }
   }
 
-  protected choose(val: string, ev: Event): void {
+  protected choose(opt: PillOption, ev: Event): void {
     ev.stopPropagation();
+    if (opt.disabled) return;
     this.close(true);
-    this.valueChange.emit(val);
+    this.valueChange.emit(opt.value);
   }
 
   protected onDocClick(ev: Event): void {

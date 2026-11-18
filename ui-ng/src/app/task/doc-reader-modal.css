@@ -1,0 +1,175 @@
+/* Native top-layer document reader modal (<dialog class="doc-reader-modal">). */
+
+.doc-reader-modal {
+  box-sizing: border-box;
+  width: min(960px, 100vw - 32px);
+  max-width: none;
+  height: min(92dvh, 960px);
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-extra-large, 28px);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--md-sys-elevation-dialog);
+}
+
+.doc-reader-modal[open] {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-reader-modal::backdrop {
+  background: var(--md-sys-color-scrim);
+  backdrop-filter: blur(2px);
+}
+
+.doc-reader-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.doc-reader-modal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 12px 16px 12px 24px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  flex-shrink: 0;
+}
+
+.doc-reader-modal-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.doc-reader-modal-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 12px;
+}
+
+.doc-modal-source {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.doc-modal-source[data-source="prompt"] {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.doc-modal-source[data-source="pr"] {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+
+.doc-modal-source[data-source="comment"] {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.doc-reader-modal-path {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+.doc-reader-modal-title {
+  margin: 0;
+  font-family: var(--grain-font-display);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.doc-reader-modal-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.doc-reader-pos {
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.doc-reader-modal-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px 28px 36px;
+  background: var(--md-sys-color-surface);
+}
+
+.doc-reader-modal-scroll:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.doc-reader-modal-scroll .doc-reader-article {
+  max-width: 76ch;
+  width: 100%;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+
+.doc-reader-modal-scroll .doc-reader-article > :first-child {
+  margin-top: 0;
+}
+
+.doc-reader-modal-scroll .doc-reader-article > :last-child {
+  margin-bottom: 0;
+}
+
+.doc-reader-modal-scroll .doc-reader-article pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.doc-reader-modal-scroll .doc-reader-article table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+@media (max-width: 599.95px) {
+  .doc-reader-modal {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+  }
+  .doc-reader-modal-head {
+    padding: 10px 12px 10px 16px;
+  }
+  .doc-reader-modal-scroll {
+    padding: 16px 16px 28px;
+  }
+}

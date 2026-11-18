@@ -359,6 +359,24 @@ describe("awaitsHumanSubmit", () => {
     }
     expect(awaitsHumanSubmit(null)).toBe(false);
   });
+
+  it("keeps an approved task when humanReviewHold carries security-findings source", () => {
+    const held = {
+      id: "1",
+      state: "awaiting_submit",
+      pullRequest: "acme/widgets#12",
+      humanApprovedBy: "alice",
+      humanReviewHold: [
+        {
+          source: "security-findings",
+          category: "security",
+          reason: "review 77 left findings",
+        },
+      ],
+    };
+    expect(awaitsHumanSubmit(held)).toBe(true);
+    expect(askedCase(held)?.title).toContain("held on review findings");
+  });
 });
 
 describe("inboxCount", () => {

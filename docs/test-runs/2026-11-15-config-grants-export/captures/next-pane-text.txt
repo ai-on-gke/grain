@@ -1,0 +1,44 @@
+## /next/processes/templates → Walk plain access
+repo
+acme/widgets
+base
+main
+reads
+acme/docs
+writes
+acme/gadgets (main)
+repo
+customFields
+## /next/processes/templates → Walk edge access
+repo
+acme/widgets
+base
+main
+reads
+acme/docs, ghe.example.com/acme/legacy
+writes
+acme/docs (release), acme/gadgets
+repo
+customFields
+## /next/processes/templates → Walk base-less write
+repo
+acme/widgets
+base
+main
+reads
+acme/docs
+writes
+acme/gadgets
+repo
+customFields
+## /next/processes/schedules → Walk schedule
+repo
+acme/widgets
+base
+main
+reads
+acme/docs, ghe.example.com/acme/legacy
+writes
+acme/docs, acme/gadgets (main)
+repo
+customFields
