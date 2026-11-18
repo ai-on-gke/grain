@@ -41,18 +41,26 @@ export const TASK_DETAIL_MAX_PAGE = 500;
 export const DEEP_LINK_HEAD_QUERY = `comments_limit=${TASK_DETAIL_MAX_PAGE}&attempts_limit=20`;
 
 // PendingReply is a message in a task's outbox, with the check it must
-// pass against the task as read just before it is posted (refuse), what to
-// do when that check turns it back into the composer (refused) and once it
-// is posted (sent).
+// pass against the task as read just before it is posted (refuse: given
+// whether a message queued ahead of it was posted, so it follows that one
+// up), whether one that check turns down stays in the thread rather than
+// going back to the composer (keepRefused: the composer is closed), and
+// what to do once it is posted (sent).
 export interface PendingReply extends PendingMessage {
-  refuse?: (d: TaskDetail | undefined) => string;
-  refused?: () => void;
+  // Keys of the messages queued ahead of this one when it was sent.
+  after: readonly number[];
+  refuse?: (d: TaskDetail | undefined, followsSent: boolean) => string;
+  keepRefused?: () => boolean;
   sent?: () => void;
 }
 
-// MOVED_AWAY is verify's answer when the page left the task a message is
-// for before it could be checked.
-const MOVED_AWAY = "\0moved-away";
+// Verdict is verify's answer on one queued message: it may go, the page
+// left its task, the task could not be read, or refuse turned it down.
+type Verdict =
+  | { kind: "ok" }
+  | { kind: "moved" }
+  | { kind: "unread"; why: string }
+  | { kind: "refused"; why: string };
 
 export type ParsedCommentFragment =
   | { kind: "none" }
@@ -122,6 +130,8 @@ export class TaskStore {
   readonly outbox = signal<Record<string, readonly PendingReply[]>>({});
   private pendingSeq = 0;
   private readonly draining = new Set<string>();
+  // Keys of outbox messages the server has taken (PendingReply.after).
+  private readonly sentKeys = new Set<number>();
 
   // Paged history preserved across live refreshes for the current task.
   private pagedComments: Comment[] = [];
@@ -589,12 +599,14 @@ export class TaskStore {
   // next reply can be typed, and sent, while this one is still out.
   // Queued messages post in order, each verified live first (as a reply
   // when the task asked). One refuse turns down goes back into the
-  // composer, with whatever was queued behind it, and the reason is shown;
-  // one the server turns down stays put, marked not sent, holding the ones
-  // behind it until it is retried or taken back to edit.
+  // composer, with whatever was queued behind it, and the reason is shown
+  // (or, while the composer is closed, stays in the thread as not sent);
+  // one that could not be checked, or the server turns down, stays put,
+  // marked not sent, holding the ones behind it until it is retried or
+  // taken back to edit.
   send(
     expectedId: string | null = this.id(),
-    hooks: Pick<PendingReply, "refuse" | "refused" | "sent"> = {},
+    hooks: Pick<PendingReply, "refuse" | "keepRefused" | "sent"> = {},
   ): boolean {
     const body = this.draft().trim();
     const attachments = this.stagedAttachments();
@@ -609,6 +621,7 @@ export class TaskStore {
       key: ++this.pendingSeq,
       body,
       attachments,
+      after: this.outboxFor(expectedId).map((p) => p.key),
       ...hooks,
     };
     this.outbox.update((m) => ({
@@ -628,13 +641,14 @@ export class TaskStore {
   }
 
   // editSend takes a message that was not sent back out of the queue and
-  // into the composer, ahead of whatever is typed there now.
+  // into the composer, ahead of whatever is typed there now, with the
+  // messages queued behind it: they were written to follow it, so they go
+  // back in order rather than posting without it.
   editSend(id: string, key: number): void {
     const list = this.outboxFor(id);
     const i = list.findIndex((p) => p.key === key);
     if (i < 0 || this.id() !== id) return;
-    this.takeBack(id, list.slice(i, i + 1));
-    void this.drainOutbox(id);
+    this.takeBack(id, list.slice(i));
   }
 
   private takeBack(id: string, items: readonly PendingReply[]): void {
@@ -660,8 +674,8 @@ export class TaskStore {
       for (;;) {
         const next = this.outboxFor(id)[0];
         if (!next || next.failed) return;
-        const why = await this.verify(id, next);
-        if (why === MOVED_AWAY) {
+        const v = await this.verify(id, next);
+        if (v.kind === "moved") {
           // The composer now belongs to another task: the message waits in
           // this task's thread, not sent, until it is retried there.
           this.patchPending(id, next.key, {
@@ -669,10 +683,17 @@ export class TaskStore {
           });
           return;
         }
-        if (why) {
-          this.takeBack(id, this.outboxFor(id));
-          this.actionError.set(why);
-          next.refused?.();
+        if (v.kind === "unread") {
+          this.patchPending(id, next.key, { failed: v.why });
+          return;
+        }
+        if (v.kind === "refused") {
+          if (next.keepRefused?.()) {
+            this.patchPending(id, next.key, { failed: v.why });
+          } else {
+            this.takeBack(id, this.outboxFor(id));
+            this.actionError.set(v.why);
+          }
           return;
         }
         try {
@@ -687,6 +708,7 @@ export class TaskStore {
         }
         // Read the thread back before the bubble goes, so the sent message
         // replaces it rather than leaving a gap between the two.
+        this.sentKeys.add(next.key);
         await this.refresh();
         this.dropPending(id, next.key);
         void this.inbox.refresh();
@@ -698,9 +720,9 @@ export class TaskStore {
   }
 
   // verify reads task id live before one of its messages is posted and
-  // answers why the message must not go ("" when it may), or MOVED_AWAY.
-  private async verify(id: string, p: PendingReply): Promise<string> {
-    if (this.id() !== id) return MOVED_AWAY;
+  // answers whether the message may go.
+  private async verify(id: string, p: PendingReply): Promise<Verdict> {
+    if (this.id() !== id) return { kind: "moved" };
     let fresh: TaskDetail | undefined;
     try {
       const r = await this.api.getIfChanged<TaskDetail>(
@@ -715,11 +737,14 @@ export class TaskStore {
             ? (this.detail() ?? undefined)
             : undefined));
     } catch {
-      return `Could not verify #${id} before sending.`;
+      if (this.id() !== id) return { kind: "moved" };
+      return { kind: "unread", why: `Could not verify #${id} before sending.` };
     }
-    if (this.id() !== id) return MOVED_AWAY;
+    if (this.id() !== id) return { kind: "moved" };
     if (fresh) this.detail.set(this.applyPagedMerge(fresh));
-    return p.refuse?.(fresh) ?? "";
+    const followsSent = p.after.some((k) => this.sentKeys.has(k));
+    const why = p.refuse?.(fresh, followsSent) ?? "";
+    return why ? { kind: "refused", why } : { kind: "ok" };
   }
 
   private patchPending(id: string, key: number, patch: Partial<PendingReply>) {

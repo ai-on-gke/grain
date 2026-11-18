@@ -156,7 +156,12 @@ export interface ComposerConfig {
 
       <div
         class="convo-thread chat-log task-log"
-        [class.is-empty]="!comments().length && !transcript() && !olderCount()"
+        [class.is-empty]="
+          !comments().length &&
+          !pending().length &&
+          !transcript() &&
+          !olderCount()
+        "
         role="log"
         aria-label="Conversation thread"
         tabindex="0"
@@ -254,15 +259,17 @@ export interface ComposerConfig {
                 >
                   Retry
                 </button>
-                <button
-                  type="button"
-                  class="btn-text"
-                  data-testid="pending-edit"
-                  gTip="Take this message back into the composer"
-                  (click)="onPendingAction(editPending, p.key)"
-                >
-                  Edit
-                </button>
+                @if (!config()?.hidden) {
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="pending-edit"
+                    gTip="Take this message, and any queued behind it, back into the composer"
+                    (click)="onPendingAction(editPending, p.key)"
+                  >
+                    Edit
+                  </button>
+                }
               </div>
             }
           </article>

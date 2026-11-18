@@ -952,10 +952,7 @@ export function duration(from?: string, to?: string): string {
                       submitLabel: 'Send to #' + t.id,
                       disabled: !can('POST /api/tasks/{id}/comments'),
                       deniedReason: commentDenied(),
-                      hidden:
-                        t.state === 'closed' ||
-                        (this.parked() && !this.allowWordsOnParked()) ||
-                        this.isStopped(),
+                      hidden: composerHidden(),
                     }"
                     (send)="onConversationSend($event)"
                     [pending]="store.outboxFor(t.id)"
@@ -1928,6 +1925,17 @@ export class TaskDetailComponent implements OnDestroy {
       (t.state === "running" &&
         !t.paused &&
         this.can("POST /api/tasks/{id}/pause"))
+    );
+  });
+  // composerHidden is true while this task takes no words from the
+  // composer: closed, stopped, or parked on something words do not answer.
+  protected readonly composerHidden = computed(() => {
+    const t = this.t();
+    return (
+      !!t &&
+      (t.state === "closed" ||
+        (this.parked() && !this.allowWordsOnParked()) ||
+        this.isStopped())
     );
   });
   protected readonly replyBlocked = computed(() => {
@@ -2976,23 +2984,31 @@ export class TaskDetailComponent implements OnDestroy {
       !t ||
       t.id !== this.id() ||
       this.isStopped() ||
-      this.replyBlocked() ||
       !this.can("POST /api/tasks/{id}/comments")
     )
       return;
+    // The task moved on since typing started: say why the message was held
+    // back and let the next Send aim at the task as it is now.
+    const blocked = this.replyBlocked();
+    if (blocked) {
+      this.store.actionError.set(blocked);
+      this.replyTarget.set(null);
+      this.allowWordsOnParked.set(false);
+      return;
+    }
     const tgt = this.replyTarget() ?? {
       taskId: t.id,
       questionCommentId: t.questionCommentId,
       reply: t.state === "awaiting_reply",
     };
     const allowSecretWords = !!(t.pendingSecret && this.allowWordsOnParked());
-    // A message queued behind others follows them up: the task may stop
-    // waiting on a reply because one ahead of it answered, so it is checked
-    // as a comment.
-    const followUp = this.store.outboxFor(tgt.taskId).length > 0;
     const queued = this.store.send(tgt.taskId, {
-      refuse: (fresh) => {
-        if (tgt.reply && !allowSecretWords && !followUp) {
+      refuse: (fresh, followsSent) => {
+        // A reply that follows up one of ours the server took is checked
+        // as a comment while the task is no longer waiting, since that
+        // reply is what woke it; once it asks again, it is a reply again.
+        const woken = followsSent && fresh?.state !== "awaiting_reply";
+        if (tgt.reply && !allowSecretWords && !woken) {
           return replyRefusal(fresh, tgt.taskId, tgt.questionCommentId);
         }
         if (!fresh) return `#${tgt.taskId} could not be read.`;
@@ -3005,13 +3021,9 @@ export class TaskDetailComponent implements OnDestroy {
         }
         return "";
       },
-      // A refused message is back in the composer, still aimed where it
-      // was written.
-      refused: () => {
-        if (this.id() !== tgt.taskId) return;
-        this.replyTarget.set(tgt);
-        if (allowSecretWords) this.allowWordsOnParked.set(true);
-      },
+      // With the composer closed a refused message has nowhere to go back
+      // to, so it stays in the thread as not sent, readable.
+      keepRefused: () => this.composerHidden(),
       sent: () => {
         if (!this.destroyed) this.acted.emit();
       },

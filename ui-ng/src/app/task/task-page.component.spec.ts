@@ -515,7 +515,7 @@ describe("TaskPageComponent", () => {
     expect(box.value).toBe("And add a test\n\ndraft in progress");
   });
 
-  it("returns a reply its pre-send check refuses to the composer with the queue behind it", async () => {
+  it("keeps messages a closed task refuses in the thread as not sent, without Edit", async () => {
     const api = new FakeApi();
     let release!: () => void;
     const post = api.post;
@@ -534,7 +534,8 @@ describe("TaskPageComponent", () => {
     }
     expect(q(f, '[data-testid="pending-2"]')).toBeTruthy();
     // The task is closed while "First" is out: the messages behind it are
-    // refused before they post.
+    // refused before they post, and with the composer gone they stay where
+    // they can still be read.
     api.detail = { ...api.detail, state: "closed" };
     release();
     await settle(f);
@@ -544,11 +545,100 @@ describe("TaskPageComponent", () => {
     expect(posted.map((c) => (c.body as { body: string }).body)).toEqual([
       "First",
     ]);
-    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
-    expect(TestBed.inject(TaskStore).draft()).toBe("Second\n\nThird");
-    expect(q(f, '[data-testid="task-action-error"]')!.textContent).toContain(
+    expect(q(f, '[data-testid="task-composer"]')).toBeNull();
+    const failed = q(f, '[data-testid="pending-0"]')!;
+    expect(failed.textContent).toContain("Not sent");
+    expect(failed.textContent).toContain("Second");
+    expect(failed.textContent).toContain(
       "#7 can no longer receive this comment",
     );
+    expect(q(f, '[data-testid="pending-edit"]')).toBeNull();
+    expect(q(f, '[data-testid="pending-1"]')!.textContent).toContain("Third");
+    expect(TestBed.inject(TaskStore).draft()).toBe("");
+  });
+
+  it("checks a follow-up as a reply again once the task asks something new", async () => {
+    const api = new FakeApi();
+    let release!: () => void;
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise((resolve) => (release = () => resolve({})));
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    for (const text of ["First", "Second"]) {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+      await settle(f);
+    }
+    // "First" answers the question, and by the time "Second" is checked
+    // the agent has asked another: "Second" was not written for it.
+    api.detail = { ...api.detail, questionCommentId: 99 };
+    release();
+    await settle(f);
+    expect(
+      api.calls
+        .filter((c) => c.route === "POST /api/tasks/{id}/comments")
+        .map((c) => (c.body as { body: string }).body),
+    ).toEqual(["First"]);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(box.value).toBe("Second");
+    expect(q(f, '[data-testid="task-action-error"]')!.textContent).toContain(
+      "asked a new question",
+    );
+  });
+
+  it("takes a not-sent message back to edit with the ones queued behind it", async () => {
+    const api = new FakeApi();
+    let fail!: () => void;
+    const post = api.post;
+    api.post = (r: string, p?: unknown, b?: unknown) => {
+      if (r !== "POST /api/tasks/{id}/comments") return post(r, p, b);
+      api.calls.push({ method: "POST", route: r, params: p, body: b });
+      return new Promise(
+        (_, reject) => (fail = () => reject(new Error("503"))),
+      );
+    };
+    const f = await render(api);
+    const box = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
+    for (const text of ["First", "Second"]) {
+      box.value = text;
+      box.dispatchEvent(new Event("input"));
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
+      await settle(f);
+    }
+    fail();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="pending-edit"]')!.click();
+    await settle(f);
+    expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(q(f, '[data-testid="pending-0"]')).toBeNull();
+    expect(box.value).toBe("First\n\nSecond");
+  });
+
+  it("leaves a message in its own task when the page moves on while its check fails", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const store = TestBed.inject(TaskStore);
+    // The first read is send's check on #7; the ones after it are #8's.
+    const reads: (() => void)[] = [];
+    api.getIfChanged = () =>
+      new Promise((_, reject) => reads.push(() => reject(new Error("down"))));
+    store.draft.set("For seven");
+    expect(store.send("7")).toBe(true);
+    store.open("8");
+    store.draft.set("typed on eight");
+    reads[0]();
+    await settle(f);
+    expect(store.draft()).toBe("typed on eight");
+    expect(store.actionError()).toBeNull();
+    expect(store.outboxFor("7")).toMatchObject([
+      { body: "For seven", failed: "Moved away from #7 while sending." },
+    ]);
+    expect(api.calls.filter((c) => c.method === "POST")).toEqual([]);
   });
 
   it("loads earlier comments on demand via ?comments_before=", async () => {
@@ -1640,6 +1730,13 @@ describe("duration", () => {
         "#7",
       );
       expect(TestBed.inject(TaskStore).draft()).toBe("Do both");
+      // The new question is on screen now; the next Send answers it rather
+      // than being held back again.
+      q<HTMLButtonElement>(f2, '[data-testid="act-send"]')!.click();
+      await settle(f2);
+      expect(
+        api2.calls.find((c) => c.route === "POST /api/tasks/{id}/comments"),
+      ).toMatchObject({ params: { id: "7" }, body: { body: "Do both" } });
 
       const store = TestBed.inject(TaskStore);
       store.open("7");

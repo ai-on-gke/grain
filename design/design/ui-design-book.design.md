@@ -332,14 +332,19 @@ inspector and Task Detail. Sessions shares its message styles.
 - **Sending is never blocked by sending.** In Sessions and task chat
   (`g-conversation`'s `pending` outbox) a sent message shows at once
   (dashed: `Sending…`, then `Queued` behind it) and the composer clears and
-  stays enabled; one the server refuses stays as `Not sent` with its reason,
-  Retry and Edit, and either hands focus back to the composer. Task chat
-  checks each message against the task, read live, just before it posts:
-  one that check refuses (the question changed, the task closed or was
-  stopped) goes back into the composer, with whatever was queued behind it,
-  and the reason shows in the action banner. A message queued behind
-  another is checked as a comment, since the reply ahead may be what woke
-  the task.
+  stays enabled; one the server refuses, or that could not be checked,
+  stays as `Not sent` with its reason, Retry and Edit, and either hands
+  focus back to the composer. In task chat Edit takes the queued messages
+  behind it back too, in order. Task chat checks each message against the
+  task, read live, just before it posts: one that check refuses (the
+  question changed, the task closed or was stopped) goes back into the
+  composer, with whatever was queued behind it, and the reason shows in the
+  action banner; the next Send aims at the task as it is now, never at the
+  question it was refused for. While the composer is closed (closed,
+  stopped, parked) a refused message stays in the thread as `Not sent`,
+  without Edit, so its text can still be read. A reply that follows one of
+  ours the server took is checked as a comment while the task is no longer
+  waiting (that reply woke it), and as a reply again once it asks.
 - **Comment links (`#comment=<id>`)** open Conversation on any tab. A cold
   load reads 500 comments and pages back 500 at a time to the comment
   before rendering, so the thread draws once (a 3,000-comment task is at most
