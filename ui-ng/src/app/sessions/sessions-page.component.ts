@@ -467,6 +467,7 @@ const FOCUS_HEADING = "focusHeading";
                     testid="session-grants"
                     [offered]="store.offered()"
                     [held]="row.session.capabilities ?? []"
+                    [policyVerdicts]="true"
                     [disabled]="store.isBusy('grants')"
                     (heldChange)="onSessionGrantsChange($event)"
                   />

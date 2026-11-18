@@ -1438,6 +1438,7 @@ export function duration(from?: string, to?: string): string {
                 [offered]="offeredCapabilities()"
                 [held]="t.capabilities ?? []"
                 [repo]="t.repo"
+                [policyVerdicts]="true"
                 [disabled]="store.isBusy('capability', t.id)"
                 (attachGrant)="onAttachCapability($event)"
                 (detachGrant)="onDetachCapability($event)"
