@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { taskPriority } from "../shared/task-priority";
 import type {
   AttachmentUpload,
   GrainConfig,
@@ -369,7 +370,10 @@ export interface NewTaskDraft {
   networkAccess: string;
   nothingNeededAction: string;
   reviewTemplateId: string;
+  owner: string;
   reviewers: string[];
+  keepRunning: boolean;
+  priority: string;
   promptExtension: string;
   sandboxCpus: number;
   sandboxMemoryMb: number;
@@ -422,7 +426,10 @@ export function emptyDraft(
     networkAccess: String(f.networkAccess.default ?? ""),
     nothingNeededAction: String(f.nothingNeededAction.default || "close"),
     reviewTemplateId: String(f.reviewTemplateId.default ?? ""),
+    owner: "",
     reviewers: [],
+    keepRunning: false,
+    priority: "5",
     promptExtension: String(f.promptExtension.default ?? ""),
     sandboxCpus: 0,
     sandboxMemoryMb: 0,
@@ -441,6 +448,7 @@ export function buildPayload(
   const none = d.repo === NO_REPO;
   const creating = d.newBranch && !none;
   const shapeIgnored = !!config?.["sandboxShapeIgnored"];
+  const parsedPriority = taskPriority(d.priority);
   const hasCustom = Object.keys(d.customFields ?? {}).some((k) => {
     const v = d.customFields[k];
     return Array.isArray(v) ? v.length > 0 : String(v ?? "").trim() !== "";
@@ -454,13 +462,19 @@ export function buildPayload(
       : {}),
     repo: none ? "" : d.repo,
     noRepo: none,
+    ...(d.owner.trim() ? { owner: d.owner.trim() } : {}),
     ...(creating
       ? { base: d.newBranchName.trim(), newBranch: true, newBranchFrom: d.base }
-      : { base: none ? "" : d.base }),
-    autoMerge: d.autoMerge,
-    ...(d.noPort ? { noPort: true } : {}),
+      : { base: none ? "" : d.base.trim() }),
+    autoMerge: !none && d.autoMerge,
+    ...(d.noPort && !none ? { noPort: true } : {}),
+    ...(d.keepRunning ? { keepRunning: true } : {}),
     ...(d.fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
     ...(d.foundIn.trim() ? { foundIn: d.foundIn.trim() } : {}),
+    ...(!Number.isNaN(parsedPriority) &&
+    (!!templateOpts || parsedPriority !== 5)
+      ? { priority: parsedPriority }
+      : {}),
     model: d.model,
     ...(d.agentFramework ? { agentFramework: d.agentFramework } : {}),
     ...(d.agentBackendId ? { agentBackendId: d.agentBackendId } : {}),
@@ -557,6 +571,10 @@ export function directorMessage(d: NewTaskDraft): string {
     `Repository: ${d.repo === NO_REPO ? "none" : d.repo || "the default target"}`,
   );
   if (d.repo !== NO_REPO && d.base) lines.push(`Base branch: ${d.base}`);
+  if (d.owner.trim()) lines.push(`Owner: ${d.owner.trim()}`);
+  const p = taskPriority(d.priority);
+  if (!Number.isNaN(p) && p !== 5) lines.push(`Priority: ${p}`);
+  if (d.keepRunning) lines.push("Keep running: yes");
   if (d.dependsOn.length) {
     lines.push(`Depends on: ${d.dependsOn.map((id) => `#${id}`).join(", ")}`);
   }

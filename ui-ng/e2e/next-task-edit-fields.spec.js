@@ -17,10 +17,11 @@ import { test, expect } from "./fixtures.js";
 // The task fields and lifecycle controls the 2026-11-15 task intake
 // walkthrough found missing from /next/ (docs/test-runs/
 // 2026-11-15-task-intake-inbox-lifecycle.md, steps 4.9, 4.14 and 4.15):
-// Owner, External ref, Reviewers, Keep running, Admission, "This fixes a
-// red <base>", a Task priority that takes any whole number, and a reason
-// on Close -- each written to the API the classic UI writes, and each
-// still there after a reload.
+// on Edit and Close — Owner, External ref, Reviewers, Keep running,
+// Admission, "This fixes a red <base>", whole-number Task priority, and a
+// reason on Close; and on New task — No repository, Owner, Keep running,
+// whole-number Task priority, "<fork-owner>:<branch>" fork-head validation,
+// and role gating -- each written to the API the classic UI writes.
 
 async function apiJson(baseURL, code, method, p, body) {
   const res = await fetch(`${baseURL}${p}`, {
@@ -257,4 +258,205 @@ test("Close on a queued task takes a reason and Reopen restores it @phone @dark"
       {},
     ).catch(() => {});
   }
+});
+
+test("New task files no-repo, owner, keep running and priority, and checks layout @phone @dark", async ({
+  page,
+  demoServer,
+  accessCode,
+  axe,
+}) => {
+  let createdId = null;
+  try {
+    await page.goto("tasks");
+    await page.locator("body").press("c");
+    const sheet = page.getByTestId("new-task-sheet");
+    await expect(sheet).toBeVisible();
+
+    const vw = page.viewportSize().width;
+    const sheetBox = await sheet.boundingBox();
+    expect(sheetBox.x).toBeGreaterThanOrEqual(-0.5);
+    expect(sheetBox.x + sheetBox.width).toBeLessThanOrEqual(vw + 0.5);
+
+    for (const id of [
+      "nt-repo",
+      "nt-base",
+      "nt-owner",
+      "nt-priority",
+      "nt-keep-running",
+    ]) {
+      const loc = sheet.getByTestId(id);
+      await loc.scrollIntoViewIfNeeded();
+      const box = await loc.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(sheetBox.x - 0.5);
+      expect(box.x + box.width).toBeLessThanOrEqual(
+        sheetBox.x + sheetBox.width + 0.5,
+      );
+      expect(box.x + box.width).toBeLessThanOrEqual(vw + 0.5);
+    }
+
+    const ownerBox = await sheet.getByTestId("nt-owner").boundingBox();
+    const prioBox = await sheet.getByTestId("nt-priority").boundingBox();
+    if (vw >= 600) {
+      expect(Math.abs(ownerBox.y - prioBox.y)).toBeLessThanOrEqual(2);
+      expect(ownerBox.x + ownerBox.width).toBeLessThanOrEqual(prioBox.x);
+    } else {
+      expect(prioBox.y).toBeGreaterThanOrEqual(
+        ownerBox.y + ownerBox.height - 1,
+      );
+      expect(Math.abs(ownerBox.x - prioBox.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(ownerBox.width - prioBox.width)).toBeLessThanOrEqual(1);
+    }
+    expect(await axe()).toEqual([]);
+
+    await sheet.getByTestId("nt-title").fill("New task intake parity e2e");
+    const priority = sheet.getByTestId("nt-priority");
+    const submit = sheet.getByTestId("new-task-submit");
+    for (const bad of ["0", "-3", "2.5"]) {
+      await priority.fill(bad);
+      await expect(sheet.getByTestId("nt-priority-help")).toHaveText(
+        "a whole number, 1 or more; default 5, higher numbers run first",
+      );
+      await expect(submit).toBeDisabled();
+    }
+    await priority.fill("1e3");
+    await expect(submit).toBeEnabled();
+
+    await sheet.getByTestId("nt-repo").click();
+    await sheet.getByTestId("nt-repo-opt-__none__").click();
+    await expect(sheet.getByTestId("nt-base")).toHaveCount(0);
+    await expect(sheet.getByTestId("nt-new-branch")).toHaveCount(0);
+    await expect(sheet.getByTestId("nt-auto-merge")).toHaveCount(0);
+
+    await sheet.getByTestId("nt-owner").fill("e2e-new-owner@example.com");
+    await sheet.getByTestId("nt-keep-running").check();
+
+    const [req, res] = await Promise.all([
+      page.waitForRequest(
+        (r) => r.method() === "POST" && r.url().endsWith("/api/tasks"),
+      ),
+      page.waitForResponse(
+        (r) =>
+          r.request().method() === "POST" &&
+          r.url().endsWith("/api/tasks") &&
+          r.status() < 300,
+      ),
+      submit.click(),
+    ]);
+    expect(req.postDataJSON()).toMatchObject({
+      title: "New task intake parity e2e",
+      repo: "",
+      noRepo: true,
+      base: "",
+      owner: "e2e-new-owner@example.com",
+      keepRunning: true,
+      priority: 1000,
+    });
+    const created = await res.json();
+    createdId = created?.id ?? null;
+    expect(createdId).toBeTruthy();
+
+    const stored = await apiJson(
+      demoServer,
+      accessCode,
+      "GET",
+      `/api/tasks/${createdId}`,
+    );
+    expect(stored).toMatchObject({
+      owner: "e2e-new-owner@example.com",
+      keepRunning: true,
+      priority: 1000,
+    });
+    expect(stored.repo || "").toBe("");
+  } finally {
+    if (createdId) {
+      await apiJson(
+        demoServer,
+        accessCode,
+        "POST",
+        `/api/tasks/${createdId}/close`,
+        {},
+      ).catch(() => {});
+    }
+  }
+});
+
+test("New task validates <fork-owner>:<branch> fork heads and gates keep-running by role @phone @dark", async ({
+  page,
+}) => {
+  await page.goto("tasks");
+  await page.locator("body").press("c");
+  const sheet = page.getByTestId("new-task-sheet");
+  await expect(sheet).toBeVisible();
+
+  await sheet.getByTestId("nt-title").fill("Fork head intake check");
+  await sheet.getByTestId("nt-new-branch").uncheck();
+  const base = sheet.getByTestId("nt-base");
+  const submit = sheet.getByTestId("new-task-submit");
+
+  for (const bad of ["bad::label", "-bad:x", "ok:a..b"]) {
+    await base.fill(bad);
+    await expect(sheet.getByTestId("nt-fork-head-error")).toBeVisible();
+    await expect(base).toHaveAttribute("aria-invalid", "true");
+    await expect(submit).toBeDisabled();
+  }
+
+  await base.fill("octo-fork:feature/x");
+  await expect(sheet.getByTestId("nt-fork-head-error")).toHaveCount(0);
+  await expect(sheet.getByTestId("nt-fork-head-help")).toContainText(
+    "branch feature/x on octo-fork's fork",
+  );
+  await expect(submit).toBeEnabled();
+
+  let sent = null;
+  await page.route("**/api/tasks", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    sent = route.request().postDataJSON();
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "999999", title: sent.title }),
+    });
+  });
+  await submit.click();
+  await expect
+    .poll(() => sent)
+    .toMatchObject({
+      title: "Fork head intake check",
+      noRepo: false,
+      base: "octo-fork:feature/x",
+    });
+  await page.unroute("**/api/tasks");
+
+  // Limited contributor role: Owner and Priority stay available on tasks:write,
+  // while Keep running requires an unlimited operator role.
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...body,
+        access: {
+          full: false,
+          role: "grain/contributor",
+          roles: ["grain/contributor"],
+          scopes: ["tasks:write", "tasks:read"],
+        },
+      }),
+    });
+  });
+  await page.reload();
+  await page.locator("body").press("c");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByTestId("nt-owner")).toBeEnabled();
+  await expect(sheet.getByTestId("nt-priority")).toBeEnabled();
+  await expect(sheet.getByTestId("nt-keep-running")).toBeDisabled();
+  await expect(sheet.getByTestId("approved-switch")).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.unroute("**/api/config");
 });
