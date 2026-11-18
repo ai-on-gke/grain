@@ -1,7 +1,10 @@
 # Issue-tracker agents: grain tasks as issues, MCP over comments
 
-Status: design, nothing implemented (task 5799, from task 5606). The decisions
-come from the operator's chat with the director and are not reopened here.
+**Status:** draft for review, nothing implemented (task 5799, from task 5606).
+Normative. The decisions come from the operator's chat with the director and
+are not reopened here.
+
+**Specifies:** [`issue-tracker-agents.design.md`](../../design/issue-tracker-agents.design.md)
 
 Grain runs its own agents today: dispatch picks a model connection and starts
 the agent CLI on a host or in a run host beside `grain mcpserver`, and the
@@ -13,8 +16,10 @@ grain posts the results back as comments. Grain still owns the sandbox,
 credentials, git, CI and the merge queue, and it executes every call itself
 with the sandbox agent's own tool surface.
 
-Requirement headings carry `ITA-n` IDs (`docs/design-docs.md`). Headings
-without one are background, rationale or open questions.
+Requirement headings carry `ITA-n` IDs
+([`contributions.spec.md`](../contributions/contributions.spec.md) §3.5,
+[`docs/design-docs.md`](../../../docs/design-docs.md)). Headings without one
+are background, rationale or open questions.
 
 **Non-goals:** replacing host or run-host dispatch now (§9 says what it would
 take); moving task ownership into the tracker now (§2); adapters beyond the
@@ -160,8 +165,10 @@ of the comment is one JSON-RPC 2.0 message or a batch array, optionally inside
 one fenced code block, which grain strips so trackers that render markup keep
 the JSON verbatim. Any MCP method is accepted (`initialize`, `tools/list`,
 `tools/call`, `resources/list`, `resources/read`, `ping`,
-`notifications/cancelled`), plus two shorthands: `/grain describe` and `/grain
-page <cursor>` (ITA-6).
+`notifications/cancelled`), alongside grain's transport methods (`grain/page`
+in ITA-6, `grain/pause` in ITA-12, `grain/session.open` and
+`grain/session.rekey` in ITA-16, `grain/replay` in ITA-18) and two shorthands:
+`/grain describe` and `/grain page <cursor>` (ITA-6).
 
 ```
 /grain {"jsonrpc":"2.0","id":"a7","method":"tools/call",
@@ -197,11 +204,24 @@ should be nearly all the explanation an agent needs:
 ### Batches {#ITA-5}
 
 A batch is a JSON array of requests, as JSON-RPC 2.0 defines it, of at most 32
-elements. Grain runs the elements **one after another, in array order** (the
-spec allows any order; ours makes "edit, then build" safe in one batch) and
-answers the batch with one comment holding the responses in the same order.
-Notifications in a batch get no response, per the spec. Elements after a
-turn-ending call are answered `-32002` and not run.
+elements. Grain runs the elements **one after another, in array order**, and
+each element waits for the previous element's **final result** before starting
+(never merely for its `accepted`, ITA-10, so `[build, test]` in one batch never
+races). If an element is still running 10 seconds after it starts (or after the
+batch begins waiting on the in-flight cap), it and every remaining request
+element queued behind it become `accepted`
+(`"result":{"_meta":{"grain/status":"accepted"}}`, ITA-10). The batch reply
+comment posts once every element is done or `accepted`, holding the responses
+(final results and `accepted` placeholders) in array order; each `accepted`
+element's final result posts later as its own individual reply (`to=<batch
+comment id> ids=<id>`) once the preceding elements finish and it runs to
+completion. Elements of a batch that reach the lease's 4-in-flight cap (ITA-10)
+queue for a free slot rather than failing with `-32004`, and queued `accepted`
+elements waiting their turn in the batch consume no extra slot beyond the
+batch's running element. Notifications in a batch get no response, per the
+spec. Elements after a turn-ending call are answered `-32002` and not run (in
+the batch reply when it finishes synchronously, or as individual replies when
+an `accepted` element ends the lease).
 
 ### Size limits and paging {#ITA-6}
 
@@ -247,11 +267,15 @@ anywhere but its first line is not a call.
 
 ### Ordering {#ITA-8}
 
-Within an issue, calls run in tracker order (created time, then comment ID),
-and a call starts only once every earlier call on the issue has returned or
-been accepted as async (ITA-10). Issues are independent of each other. Replies
-may land out of order relative to later calls; `to=` and `id` correlate them,
-never position.
+Within an issue, call comments start in tracker order (created time, then
+comment ID), and a call comment starts only once every earlier call comment on
+the issue has posted its reply, with each element either finished or accepted
+as async (ITA-5, ITA-10). Within a batch comment, ordering is stricter: each
+element waits for the previous element's final result before starting, even
+after the batch reply has posted `accepted` placeholders and let later call
+comments proceed (ITA-5). Issues are independent of each other. Replies (and
+individual async follow-ups from an earlier batch) may land out of order
+relative to later calls; `to=` and `id` correlate them, never position.
 
 ## 4. Tool surface
 
@@ -275,9 +299,12 @@ second reply with the same `id`. No tool list decides this: `grain ci wait`, a
 long build and a blocking `wait_for_task` are async because they are slow.
 Progress notifications are not posted (they would flood the issue); the sidecar
 makes its own. `notifications/cancelled` with the request's id cancels it
-(`run_command` kills its process group). At most 4 calls per lease are in
-flight; more get `-32004`. Later calls proceed while an async one runs, since
-ITA-8 waits only for "accepted".
+(`run_command` kills its process group). At most 4 calls per lease run in
+flight at once; a new call comment past the cap gets `-32004`, while elements
+within a batch queue for a free slot rather than failing (ITA-5). Later call
+comments proceed while an async call runs, since ITA-8 waits only for the
+earlier comment's reply (`accepted` included); remaining elements of the same
+batch still wait for each previous element's final result (ITA-5).
 
 ## 5. Leases, identity and permissions
 
@@ -422,10 +449,16 @@ secrets and logs come from. The cost is that calls can hold repository code (an
 `edit_file` body), so a scope's viewers must be no wider than the repository's
 readers. Encrypted calls are Q4.
 
-**Rotation.** Every lease, and so every attempt, does a fresh handshake. A
-lease older than an hour re-keys (`grain/session.rekey`); grain drops the old
+**Rotation.** Every lease, and so every attempt, starts with a fresh handshake.
+A lease older than an hour re-keys (`grain/session.rekey`); grain drops the old
 key after the sidecar's next call, which it sends only once it has read the
-replies sealed under it.
+replies sealed under it. A second `grain/session.open` on an active lease (from
+a restarted sidecar, ITA-18, signed with the identity's registered signing key
+when one is configured) also re-keys the lease: grain derives a new `K` under a
+new key ID and zeroes the previous `K` immediately, while keeping the lease's
+seen-`id` set (ITA-7), paging cursors (ITA-6), stored reply cache for
+`grain/replay` (ITA-18), and in-flight async calls (ITA-10), whose later
+replies are sealed under the new `K`.
 
 **Destruction.** At lease end grain zeroes its private key and `K`, which are
 only ever in memory, and the sidecar does the same when it closes the session.
@@ -478,16 +511,40 @@ signing_key: file:~/.config/grain-sidecar/sign.key   # optional, ITA-16
 
 Lifecycle: watch the scope for issues assigned to `identity`; read the card; do
 the handshake (ITA-16); fetch `tools/list`; start the agent with an MCP server
-serving exactly that list; relay. On a turn-ending reply, the issue being
-assigned away, or a `-32002`, it stops the agent, zeroes the key and removes
-the session's files. A sidecar that restarts mid-lease has lost its key, so it
-posts `grain/session.open` again; grain treats that as a re-key, and the
-sidecar re-reads anything it missed with `grain/page` or by asking again.
+serving exactly that list; relay. While a lease is open, the sidecar persists
+non-secret recovery metadata in `workdir` (lease ID, last processed reply
+comment ID and pending outbound request `id`s; never `K` or its private key,
+ITA-16). On a turn-ending reply, the issue being assigned away, or a `-32002`,
+it stops the agent, zeroes the key and removes the session's files.
+
+A sidecar that restarts mid-lease has lost its key, so it generates a new
+ephemeral X25519 key pair (giving its requests a new `s<pub8>-<n>` prefix that
+cannot collide with pre-restart IDs, ITA-19) and posts `grain/session.open`
+again to re-key the lease (ITA-16). To recover replies sealed under the lost
+key or async results that landed while it was down **without re-running any
+call**, the sidecar calls `grain/replay` with either `{"ids": ["<id>", ...]}`
+(up to 32 request IDs from this lease) or `{"after": "<comment id>"}` (up to 32
+replies posted on this lease after `<comment id>`, or from lease start when
+`""`, returning `{"responses": [...], "last_comment_id": "<id>", "has_more":
+<bool>}`). Grain retains each completed request's redacted response in the
+lease's reply cache until lease end and answers `grain/replay` by re-sealing
+those stored responses under the new `K` (issuing fresh ITA-6 cursors where a
+replayed response is cut to fit the comment limit), never re-executing a tool
+or MCP method. For `{"ids": [...]}`, requests still in flight return
+`"result":{"_meta":{"grain/status":"accepted"}}` and post their final replies
+under the new `K` when they finish, and IDs grain never received are listed in
+`"unknown": [...]` so the sidecar knows they never ran.
 
 ### Request/response mapping {#ITA-19}
 
-Each MCP request from the agent gets an id unique in the lease (`s<n>`), mapped
-back to the agent's id on the reply. Requests sent within `coalesce_window` of
+Each JSON-RPC request the sidecar posts (including `grain/session.open` and
+`grain/replay`) gets an `id` unique across sidecar sessions in the lease,
+`s<pub8>-<n>`, where `<pub8>` is the first 8 hex characters of `SHA-256` of
+that sidecar session's ephemeral X25519 public key and `<n>` is a monotonic
+per-session counter, mapped back to the agent's MCP request `id` on the reply.
+Because a restarted sidecar generates a fresh key pair on `grain/session.open`,
+its IDs never collide with earlier sessions' IDs in the lease's seen-`id` set
+(ITA-7). Requests sent within `coalesce_window` of
 each other go out as one batch (ITA-5), which is what makes parallel tool calls
 cheap. The sidecar reads comments after the last it saw, matches `ids=`,
 decrypts and answers. An `accepted` reply becomes MCP progress notifications
