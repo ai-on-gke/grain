@@ -339,4 +339,46 @@ describe("Settings → Models default and fallback models", () => {
     expect(q('[data-testid="model-setting-no-effort"]')).toBeNull();
     expect(q('[data-testid="add-model-setting-btn"]')).not.toBeNull();
   });
+
+  it("classifies unadvertised models, -xhigh suffixes, and shared disabled/enabled IDs accurately", async () => {
+    const api = new FakeApi();
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "claude-off",
+        framework: "claude",
+        models: ["opus-5.5"],
+        disabled: true,
+      },
+      {
+        id: "agy",
+        framework: "antigravity",
+        models: ["opus-5.5", "opus-5.5-xhigh", "gemini-flash"],
+      },
+    ];
+    api.deploymentBody["modelSettings"] = [
+      { model: "gpt-5.1-codex-max", effort: "high" },
+      { model: "claude-opus-5-5", effort: "high" },
+      { model: "opus-5.5-xhigh", effort: "high" },
+    ];
+    const { pick, q } = await mount(api);
+    expect(
+      q('[data-testid="model-setting-unused-gpt-5.1-codex-max"]'),
+    ).toBeNull();
+    expect(
+      q('[data-testid="model-setting-unused-claude-opus-5-5"]')?.textContent,
+    ).toContain("Claude takes no reasoning effort.");
+    expect(
+      q('[data-testid="model-setting-unused-opus-5.5-xhigh"]')?.textContent,
+    ).toContain("Effort is part of the model name: xhigh.");
+
+    await pick("picker-model-setting-model", "opus-5.5");
+    expect(q('[data-testid="model-setting-no-effort"]')).toBeNull();
+    expect(q('[data-testid="select-model-setting-effort"]')).not.toBeNull();
+
+    await pick("picker-model-setting-model", "opus-5.5-xhigh");
+    expect(q('[data-testid="model-setting-no-effort"]')?.textContent).toContain(
+      "Effort is part of the model name: xhigh.",
+    );
+    expect(q('[data-testid="select-model-setting-effort"]')).toBeNull();
+  });
 });

@@ -148,20 +148,52 @@ export function containsModel(list: readonly string[], m: string): boolean {
   return list.some((x) => sameModel(x, m));
 }
 
+function normalizeFramework(framework: string): string {
+  const f = framework.trim().toLowerCase();
+  return f === "gemini" ? "antigravity" : f;
+}
+
 /**
- * modelFramework is the framework of the first connection advertising m,
- * or "" when none does.
+ * inferredFramework mirrors model.ModelFramework's prefix fallback
+ * (pkg/model/model_selection.go): when no connection advertises m (or its
+ * framework is unset), claude* -> claude, gpt* / codex* / o3* / o4* -> codex,
+ * and gemini* -> antigravity.
+ */
+function inferredFramework(m: string): string {
+  const id = m.trim().toLowerCase();
+  if (id.startsWith("claude")) return "claude";
+  if (
+    id.startsWith("gpt") ||
+    id.startsWith("codex") ||
+    id.startsWith("o3") ||
+    id.startsWith("o4")
+  ) {
+    return "codex";
+  }
+  if (id.startsWith("gemini")) return "antigravity";
+  return "";
+}
+
+/**
+ * modelFramework is the framework of the first enabled connection
+ * advertising m, else the first disabled one, else the framework implied by
+ * m's prefix (model.ModelFramework) -- or "" when none applies.
  */
 export function modelFramework(
   m: string,
   groups: readonly ModelGroup[],
 ): string {
-  return groups.find((g) => containsModel(g.models, m))?.framework ?? "";
+  const match =
+    groups.find(
+      (g) => !g.disabled && g.framework.trim() && containsModel(g.models, m),
+    ) ?? groups.find((g) => g.framework.trim() && containsModel(g.models, m));
+  return match ? normalizeFramework(match.framework) : inferredFramework(m);
 }
 
 // The effort suffixes Antigravity's catalog spells into a model ID
-// (gemini-3.1-pro-high), as pkg/agent/antigravity's splitEffort reads them.
-const NAMED_EFFORTS = ["low", "medium", "high", "max"];
+// (gemini-3.1-pro-high, opus-5.5-xhigh), as pkg/agent/antigravity.Efforts
+// and splitEffort read them (docs/agy-surface.md).
+const NAMED_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 /**
  * namedEffort is the reasoning effort an Antigravity model ID carries in
@@ -170,7 +202,7 @@ const NAMED_EFFORTS = ["low", "medium", "high", "max"];
  * an effort.
  */
 export function namedEffort(m: string, framework: string): string {
-  const f = framework.trim().toLowerCase();
+  const f = normalizeFramework(framework) || inferredFramework(m);
   if (f === "codex" || f === "claude") return "";
   const id = m.trim().toLowerCase();
   return NAMED_EFFORTS.find((e) => id.endsWith(`-${e}`)) ?? "";
@@ -187,13 +219,14 @@ export function namedEffort(m: string, framework: string): string {
 export function noEffortReason(m: string, framework: string): string {
   const id = m.trim();
   if (!id) return "";
-  if (framework.trim().toLowerCase() === "claude") {
+  const f = normalizeFramework(framework) || inferredFramework(id);
+  if (f === "claude") {
     return "Claude takes no reasoning effort.";
   }
   if (id.toLowerCase() === "auto") {
     return "auto picks the model, and its effort, itself.";
   }
-  const named = namedEffort(id, framework);
+  const named = namedEffort(id, f);
   if (named) return `Effort is part of the model name: ${named}.`;
   return "";
 }

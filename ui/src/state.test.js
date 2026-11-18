@@ -2685,6 +2685,15 @@ describe("providerDefaultModel", () => {
       "Deployment default (m-1, disabled connections only)",
     );
   });
+  it("prefers an enabled connection's framework over an earlier disabled one", () => {
+    const models = connectionModels([
+      { id: "c", framework: "claude", models: ["opus-5.5"], disabled: true },
+      { id: "a", framework: "antigravity", models: ["opus-5.5"] },
+    ]);
+    expect(models).toHaveLength(1);
+    expect(models[0].framework).toBe("antigravity");
+    expect(models[0].enabled).toBe(true);
+  });
 });
 
 describe("advertisedModels", () => {

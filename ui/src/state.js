@@ -2610,18 +2610,26 @@ export function deploymentRow(config) {
 export function connectionModels(backends) {
   const byID = new Map();
   for (const backend of backends || []) {
+    const fw = (backend.framework || "").trim();
     for (const id of advertisedModels(backend)) {
       if (!byID.has(id)) {
         byID.set(id, {
           id,
-          framework: backend.framework || "",
+          framework: fw,
           connections: [],
           enabled: false,
         });
       }
       const entry = byID.get(id);
       entry.connections.push(backend);
-      if (!backend.disabled) entry.enabled = true;
+      if (!backend.disabled) {
+        if ((!entry.enabled || !entry.framework) && fw) {
+          entry.framework = fw;
+        }
+        entry.enabled = true;
+      } else if (!entry.framework && fw) {
+        entry.framework = fw;
+      }
     }
   }
   return Array.from(byID.values());

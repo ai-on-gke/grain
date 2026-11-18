@@ -512,20 +512,21 @@ func newFramework(run runner, grainBinaryPath string, opts ...Option) *Framework
 
 // Efforts is the reasoning efforts agy's --effort accepts, in the order
 // its own help text lists them ("Reasoning effort for the current CLI
-// session (low|medium|high)"). Whether a given model offers all three is
-// the model's own business and only agy knows it -- Gemini 3.1 Pro
-// refuses medium -- so this is what can be checked without the binary,
-// and it is what ui.UpdateSettings validates a saved effort against
-// rather than letting a typo reach the run that fails on it.
-func Efforts() []string { return []string{"low", "medium", "high"} }
+// session (low|medium|high|xhigh|max)", docs/agy-surface.md). Whether a
+// given model offers every one of them is the model's own business and
+// only agy knows it -- Gemini 3.1 Pro refuses medium -- so this is what
+// can be checked without the binary, and it is what ui.UpdateSettings
+// validates a saved effort against rather than letting a typo reach the
+// run that fails on it.
+func Efforts() []string { return []string{"low", "medium", "high", "xhigh", "max"} }
 
 // modelNamesItsEffort reports whether model is one of the catalog names
 // that spells its reasoning effort into the model name itself
-// (gemini-3.1-pro-high, gemini-3.8-flash-medium -- the only spelling
-// `agy models` prints). Run passes no --effort alongside one of those;
-// DefaultEffort has why.
+// (gemini-3.1-pro-high, opus-5.5-xhigh -- matched case-insensitively, as
+// modelTakesNoEffort matches "auto"). Run passes no --effort alongside
+// one of those; DefaultEffort has why.
 func modelNamesItsEffort(model string) bool {
-	effort, _ := splitEffort(model, Efforts())
+	effort, _ := splitEffort(strings.TrimSpace(model), Efforts())
 	return effort != ""
 }
 

@@ -287,9 +287,21 @@ describe("ModelDefaults", () => {
         deployment={{ id: "default" }}
         connections={[
           {
+            id: "claude-off",
+            framework: "claude",
+            disabled: true,
+            models: ["opus-5.5"],
+          },
+          {
             id: "agy",
             framework: "antigravity",
-            models: ["opus-5.5-high", "auto", "gemini-3-pro"],
+            models: [
+              "opus-5.5",
+              "opus-5.5-high",
+              "opus-5.5-xhigh",
+              "auto",
+              "gemini-3-pro",
+            ],
           },
           { id: "cx", framework: "codex", models: ["gpt-5.1-codex-max"] },
         ]}
@@ -300,10 +312,34 @@ describe("ModelDefaults", () => {
     expect(
       screen.getByTestId("model-no-effort-opus-5.5-high"),
     ).toHaveTextContent("Effort is part of the model name: high.");
+    expect(
+      screen.getByTestId("model-no-effort-opus-5.5-xhigh"),
+    ).toHaveTextContent("Effort is part of the model name: xhigh.");
     expect(screen.getByTestId("model-no-effort-auto")).toBeInTheDocument();
-    for (const id of ["gemini-3-pro", "gpt-5.1-codex-max"]) {
+    for (const id of ["opus-5.5", "gemini-3-pro", "gpt-5.1-codex-max"]) {
       expect(screen.queryByTestId(`model-no-effort-${id}`)).toBeNull();
     }
-    expect(screen.getAllByLabelText("Reasoning effort")).toHaveLength(2);
+    expect(screen.getAllByLabelText("Reasoning effort")).toHaveLength(3);
+  });
+
+  it("keeps orphan Codex -max settings valid and marks orphan Claude models as taking no effort", () => {
+    render(
+      <ModelDefaults
+        deployment={{
+          id: "default",
+          defaultModel: "claude-opus-5-5",
+          modelSettings: [{ model: "gpt-5.1-codex-max", effort: "high" }],
+        }}
+        connections={[]}
+        efforts={{ gemini: ["low", "high"], codex: ["low", "high"] }}
+        onSave={vi.fn()}
+      />,
+    );
+    const codexRow = screen.getByTestId("model-gpt-5.1-codex-max");
+    expect(codexRow).toHaveTextContent("No connection advertises this model");
+    expect(codexRow).not.toHaveTextContent("Not applied:");
+    expect(
+      screen.getByTestId("model-no-effort-claude-opus-5-5"),
+    ).toHaveTextContent("Claude takes no reasoning effort.");
   });
 });
