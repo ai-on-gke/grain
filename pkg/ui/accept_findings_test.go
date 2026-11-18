@@ -272,6 +272,10 @@ func TestAcceptFindingsTargetedReviewGate(t *testing.T) {
 		{Kind: model.LinkMergePolicyWithdrawn, Target: "never"},
 		{Kind: model.LinkQAHold, Target: "qa-running"},
 		{Kind: model.LinkBrokenRulesHold, Target: "bad-rules"},
+		// The policy itself, with no withdrawal recorded: grain withdraws
+		// auto-merge for `auto_merge: never` only while it is on, and the
+		// targeted review's hold had already taken it (task 7054).
+		model.MergePolicyLink(model.EffectiveMergePolicy{Head: findingsHead, AutoMergeNever: true, Matched: []string{"frozen"}}),
 	} {
 		tid := "72" + string(rune('0'+i))
 		rid := "73" + string(rune('0'+i))

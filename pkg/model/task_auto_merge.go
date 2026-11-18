@@ -280,7 +280,8 @@ func restoreAfterHolds(ctx context.Context, tx *sql.Tx, t *Task) (string, error)
 	})
 	if t.AutoMerge || AutoMergeDeclined(*t) || AutoMergeAwaitsPerson(*t) || len(heldBy(t.Links)) > 0 ||
 		len(PendingApprovals(*t)) > 0 || !hasClearanceOrSubmit ||
-		slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkMergePolicyWithdrawn }) {
+		slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkMergePolicyWithdrawn }) ||
+		autoMergeNeverPolicy(*t) {
 		return "", nil
 	}
 	args := []any{t.ID}
@@ -310,6 +311,16 @@ func restoreAfterHolds(ctx context.Context, tx *sql.Tx, t *Task) (string, error)
 	t.AutoMerge = true
 	return fmt.Sprintf("back on: the hold that turned it off (%s) cleared, so it merges itself as it was filed to.",
 		strings.Join(heldBy(cleared), ", ")), nil
+}
+
+// autoMergeNeverPolicy reports whether t's head was classified under merge
+// rules saying it never merges itself (`auto_merge: never`). grain records
+// withdrawing auto-merge for that (LinkMergePolicyWithdrawn) only when it
+// was on, so a change whose review hold had already taken it carries the
+// policy without the mark.
+func autoMergeNeverPolicy(t Task) bool {
+	p, ok := MergePolicyOf(t)
+	return ok && p.AutoMergeNever
 }
 
 // declinedWhileOff is guardAutoMerge's event for a write that leaves
