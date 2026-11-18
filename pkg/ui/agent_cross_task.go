@@ -60,24 +60,31 @@ var agentSteeringRoutes = map[string]string{
 	"POST /api/tasks/{id}/stop":              "stop",
 	"POST /api/tasks/{id}/pause":             "pause",
 	"POST /api/tasks/{id}/defer":             "defer",
+	"POST /api/tasks/{id}/park-until":        "park",
 	"POST /api/tasks/{id}/resume-later":      "suspend",
+	"POST /api/tasks/{id}/wait-on":           "hold",
+	"POST /api/tasks/{id}/depends-on":        "change the dependencies of",
 	"POST /api/tasks/{id}/withdraw-approval": "withdraw approval of",
 }
 
 // agentHaltingRoutes are the agentSteeringRoutes that close a task or stop
-// its work: ending its run, pausing or deferring it, holding it on a
-// resume condition the caller picks, or taking it back out of the queue.
-// None of them lends the caller the target's grants, but each lets a
-// less-privileged run close or stall more-privileged work a person
-// approved (2026-11-11 caller-identity walkthrough, item 6), so they ride
-// the same rail -- except from the target's parent (childOf): a director
-// has to be able to stop the children it runs.
+// its work: ending its run, pausing, deferring or parking it, holding it on
+// a resume condition or dependency the caller picks, or taking it back out
+// of the queue. None of them lends the caller the target's grants, but each
+// lets a less-privileged run close or stall more-privileged work a person
+// approved (2026-11-11 caller-identity walkthrough, item 6) -- or, for
+// depends-on with attach false, release a dependency a person set on it --
+// so they ride the same rail, except from the target's parent (childOf): a
+// director has to be able to stop and sequence the children it runs.
 var agentHaltingRoutes = map[string]bool{
 	"POST /api/tasks/{id}/close":             true,
 	"POST /api/tasks/{id}/stop":              true,
 	"POST /api/tasks/{id}/pause":             true,
 	"POST /api/tasks/{id}/defer":             true,
+	"POST /api/tasks/{id}/park-until":        true,
 	"POST /api/tasks/{id}/resume-later":      true,
+	"POST /api/tasks/{id}/wait-on":           true,
+	"POST /api/tasks/{id}/depends-on":        true,
 	"POST /api/tasks/{id}/withdraw-approval": true,
 }
 

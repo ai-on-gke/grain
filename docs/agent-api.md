@@ -1129,7 +1129,11 @@ when that task is within its own task's envelope. `PATCH /api/tasks/{id}`,
 context routes `brief`, `compact` and `rollover` (a brief or handover
 becomes the target's next prompt, and a rollover files a successor
 carrying its grants), and the halting routes `close`, `stop`, `pause`,
-`defer`, `resume-later` and `withdraw-approval` are refused
+`defer`, `park-until`, `resume-later`, `wait-on`, `depends-on` and
+`withdraw-approval` (`depends-on` and `wait-on` regardless of `attach` or
+`park`: detaching a dependency would release a wider task early, and a
+run's own blocking wait uses `grain task wait` or `wait_for_task` on its
+own task) are refused
 with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
 capability's arguments bind), writes to or reads a repository the
@@ -1150,8 +1154,8 @@ Three kinds of target are exempt:
 - the calling task's own proposals (directly or down its proposal
   chain), which were held to its ceilings when filed;
 - for `agent-messages` and `notes` only, its parent or child;
-- for the halting routes only, its own children: a director can stop
-  the children it runs, but a child cannot halt its wider parent.
+- for the halting routes only, its own children: a director can stop or
+  sequence the children it runs, but a child cannot halt its wider parent.
 
 A message from a narrower parent or child reaches the
 recipient prefixed with an `[Untrusted agent input: ...]` notice, so the
