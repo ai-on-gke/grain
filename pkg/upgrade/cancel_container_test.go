@@ -30,22 +30,72 @@ import (
 // below models exactly that: a container exists from `run` until `rm -f`,
 // and `image rm` is refused while it does.
 func TestCancelDuringHealthCheckRemovesTheCheckContainer(t *testing.T) {
-	dir := t.TempDir()
+	u, dir, dockerLog, container := cancelDuringHealthCheck(t, false)
+	refFile := filepath.Join(dir, "image.env")
+	if _, err := os.Stat(container); err == nil {
+		t.Errorf("the health check's container is still there after the cancel")
+	}
+	raw, err := os.ReadFile(dockerLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(raw)
+	if !strings.Contains(log, "run --rm --pull=never --label="+u.checkContainerLabel()+" ") {
+		t.Errorf("the health check ran without its label; docker was asked:\n%s", log)
+	}
+	rmAt := strings.Index(log, "rm -f c0ffee")
+	imageRmAt := strings.Index(log, "image rm docker.io/grainai/grain:v3.2.0")
+	if rmAt < 0 || imageRmAt < 0 || imageRmAt < rmAt {
+		t.Errorf("want the check container removed, then the pulled image; docker was asked:\n%s", log)
+	}
+	if strings.Contains(log, "image rm docker.io/grainai/grain:v3.1.0") {
+		t.Errorf("the cancel removed the image this deployment runs; docker was asked:\n%s", log)
+	}
+	if got, _ := os.ReadFile(refFile); !strings.Contains(string(got), ":v3.1.0") {
+		t.Errorf("ref file = %q after the cancel, want it untouched", got)
+	}
+	// Another deployment's checks (another ref file) carry another label.
+	other := New(Config{Image: &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: refFile + ".other"}})
+	if other.checkContainerLabel() == u.checkContainerLabel() {
+		t.Errorf("two ref files share check label %q", u.checkContainerLabel())
+	}
+}
+
+// cancelDuringHealthCheck starts an image upgrade from v3.1.0 to v3.2.0
+// against a fake docker, cancels it while its health check's container
+// runs, and checks the cancel took. targetWasHere puts the v3.2.0 tag on
+// the fake host before the upgrade pulls it.
+func cancelDuringHealthCheck(t *testing.T, targetWasHere bool) (u *Upgrader, dir, dockerLog, container string) {
+	t.Helper()
+	dir = t.TempDir()
 	binDir := filepath.Join(dir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dockerLog := filepath.Join(dir, "docker.log")
-	container := filepath.Join(dir, "container")
+	dockerLog = filepath.Join(dir, "docker.log")
+	container = filepath.Join(dir, "container")
 	entered := filepath.Join(dir, "entered")
+	pulled := filepath.Join(dir, "pulled")
+	present := filepath.Join(dir, "present")
+	if targetWasHere {
+		if err := os.WriteFile(present, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	fakeDocker := `#!/bin/sh
 printf '%s\n' "$*" >> "` + dockerLog + `"
 case "$1" in
-  pull) exit 0 ;;
+  pull) touch "` + pulled + `"; exit 0 ;;
   image)
     case "$2" in
-      inspect) printf 'docker.io/grainai/grain@` + digest + `\n' ;;
+      inspect)
+        # The question asked before the pull: is the tag here already?
+        if [ "$4" = '{{.Id}}' ] && [ ! -f "` + pulled + `" ] && [ ! -f "` + present + `" ]; then
+          echo "Error: No such image: $5" >&2
+          exit 1
+        fi
+        printf 'docker.io/grainai/grain@` + digest + `\n' ;;
       rm)
         if [ -f "` + container + `" ]; then
           echo "conflict: unable to delete $3 (must be forced) - container c0ffee is using its referenced image" >&2
@@ -86,7 +136,7 @@ exit 0
 	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:v3.1.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	u := New(Config{
+	u = New(Config{
 		StatusFile:      filepath.Join(dir, "status.json"),
 		HealthCheckArgs: []string{"schema-version"},
 		Image: &ImageConfig{
@@ -109,6 +159,16 @@ exit 0
 	if st.Phase != PhaseCancelled {
 		t.Fatalf("Phase = %q (%q), want %q", st.Phase, st.Detail, PhaseCancelled)
 	}
+	return u, dir, dockerLog, container
+}
+
+// TestCancelKeepsATargetTagThatWasAlreadyHere is the regression test for
+// docs/test-runs/2026-11-13-upgrade-cancel.md F7: a cancel removed the
+// target tag even when it had been on this host before the upgrade pulled
+// it (an earlier rollback's target, or an image the operator pulled), not
+// only what the cancelled upgrade itself brought.
+func TestCancelKeepsATargetTagThatWasAlreadyHere(t *testing.T) {
+	u, _, dockerLog, container := cancelDuringHealthCheck(t, true)
 	if _, err := os.Stat(container); err == nil {
 		t.Errorf("the health check's container is still there after the cancel")
 	}
@@ -117,23 +177,14 @@ exit 0
 		t.Fatal(err)
 	}
 	log := string(raw)
-	if !strings.Contains(log, "run --rm --pull=never --label="+u.checkContainerLabel()+" ") {
-		t.Errorf("the health check ran without its label; docker was asked:\n%s", log)
+	if !strings.Contains(log, "image inspect --format {{.Id}} docker.io/grainai/grain:v3.2.0\npull ") {
+		t.Errorf("want the target tag looked for before the pull; docker was asked:\n%s", log)
 	}
-	rmAt := strings.Index(log, "rm -f c0ffee")
-	imageRmAt := strings.Index(log, "image rm docker.io/grainai/grain:v3.2.0")
-	if rmAt < 0 || imageRmAt < 0 || imageRmAt < rmAt {
-		t.Errorf("want the check container removed, then the pulled image; docker was asked:\n%s", log)
+	if !strings.Contains(log, "rm -f c0ffee") {
+		t.Errorf("want the check container removed; docker was asked:\n%s", log)
 	}
-	if strings.Contains(log, "image rm docker.io/grainai/grain:v3.1.0") {
-		t.Errorf("the cancel removed the image this deployment runs; docker was asked:\n%s", log)
+	if strings.Contains(log, "image rm docker.io/grainai/grain:v3.2.0") {
+		t.Errorf("the cancel removed a target tag that was on the host before the upgrade; docker was asked:\n%s", log)
 	}
-	if got, _ := os.ReadFile(refFile); !strings.Contains(string(got), ":v3.1.0") {
-		t.Errorf("ref file = %q after the cancel, want it untouched", got)
-	}
-	// Another deployment's checks (another ref file) carry another label.
-	other := New(Config{Image: &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: refFile + ".other"}})
-	if other.checkContainerLabel() == u.checkContainerLabel() {
-		t.Errorf("two ref files share check label %q", u.checkContainerLabel())
-	}
+	_ = u
 }

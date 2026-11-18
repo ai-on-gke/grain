@@ -671,6 +671,22 @@ func (u *Upgrader) pinImage(ctx context.Context, p *progress, step, ref string) 
 	return "", fmt.Errorf("%s has no digest from %s on this host, so there is nothing to pin the upgrade to (it printed %q)", ref, repo, strings.TrimSpace(out))
 }
 
+// imagePresent reports whether ref is already in this host's docker image
+// store, asked before an upgrade pulls it so that a cancel removes only
+// what the upgrade itself brought (docs/test-runs/2026-11-13-upgrade-cancel.md
+// F7). It asks only when docker both pulls and removes images: a custom
+// PullCmd or RemoveCmd keeps an image store docker may not see, and there
+// it answers false, the assumption cancel cleanup made of every target
+// before it asked. Any failure reads as absent for the same reason.
+func (u *Upgrader) imagePresent(ctx context.Context, ref string) bool {
+	if len(u.cfg.Image.PullCmd) > 0 || len(u.cfg.Image.RemoveCmd) > 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, imageInspectTimeout)
+	defer cancel()
+	return newCommand(ctx, "", "docker", "image", "inspect", "--format", "{{.Id}}", ref).Run() == nil
+}
+
 // imageInspectTimeout bounds pinImage's question. It reads the image
 // store's metadata and starts no container, so it is nowhere near
 // imageRunTimeout's tail.

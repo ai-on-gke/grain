@@ -1267,6 +1267,10 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		sandbox        string
 		mirroredTarget string
 		schemaPrepared bool
+		// tagWasHere: the target tag was on this host before the pull
+		// below, so a cancel leaves it where it found it -- an earlier
+		// rollback's target, say, or an image the operator pulled.
+		tagWasHere bool
 	)
 	cleanupOnCancel := func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1287,7 +1291,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		if sandbox != "" && !imageKeptBy(sandbox, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
 			u.removeImageForCancel(cleanupCtx, p, sandbox)
 		}
-		if tag != "" && !imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
+		if tag != "" && !tagWasHere && !imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
 			(ref == "" || !imageKeptBy(ref, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin)) {
 			u.removeImageForCancel(cleanupCtx, p, tag)
 		}
@@ -1314,6 +1318,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		}
 	}
 
+	tagWasHere = u.imagePresent(ctx, tag)
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
 	if pullErr == nil {
 		ref, pullErr = u.pinImage(ctx, p, stepPull, tag)
