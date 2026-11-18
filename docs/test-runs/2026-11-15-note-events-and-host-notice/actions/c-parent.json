@@ -1,0 +1,3 @@
+{"kind": "mcp_sequence", "calls": [
+ {"tool": "propose_task", "args": {"title": "Report-only sub-task", "body": "Report on the widgets README; no code change."}},
+ {"tool": "nothing_needed", "args": {"reason": "Filed the report-only sub-task."}}]}

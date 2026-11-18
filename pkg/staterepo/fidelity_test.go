@@ -290,6 +290,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	tk := task("a1b2")
 	tk.Title = awkward
 	tk.Body = ""
+	tk.QAFlowRef = "qa-flow-task"
 	// The template it was filed from (grain/task-2536), in
 	// task_filed_template.
 	tk.TemplateID = "template-7"
@@ -328,6 +329,11 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	})
 	if err != nil {
 		t.Fatalf("commenting: %v", err)
+	}
+	if err := store.RecordPRFeedback(ctx, model.Comment{TaskID: "a1b2", CreatedAt: sub, Body: awkward,
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "github-webhook"}}},
+		"issue_comment:42", false); err != nil {
+		t.Fatalf("recording PR feedback: %v", err)
 	}
 	// task_context and task_brief_edit: a compaction and a brief edit.
 	if _, err := store.CompactTask(ctx, "a1b2", awkward, commentID,
@@ -640,6 +646,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		},
 		CustomFields: map[string][]string{"customer": {"acme", awkward}},
 		Interactive:  true,
+		QAFlowRef:    "qa-flow-tpl",
 		CreatedAt:    sub,
 	}); err != nil {
 		t.Fatalf("putting a template: %v", err)
@@ -655,7 +662,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.PutSuite(ctx, model.Suite{
 		ID: "suite-1", Name: awkward, Mode: model.SuiteCount, Count: 3,
 		Items:     []model.SuiteItem{{TemplateID: "tpl-1"}, {TemplateID: "tpl-1"}},
-		AutoMerge: true, CreatedAt: sub,
+		AutoMerge: true, QAFlowRef: "qa-flow-suite", CreatedAt: sub,
 	}); err != nil {
 		t.Fatalf("putting a suite: %v", err)
 	}
@@ -665,6 +672,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		CICapabilities:      []string{"gcp-key"},
 		PromptExtension:     awkward,
 		SetupCommand:        "",
+		QAFlowRef:           "qa-flow-repo",
 		// Every one of the issue importer's columns set off its
 		// default, so the round trip has to carry each of them.
 		IssueImport: model.IssueImport{
@@ -839,6 +847,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		},
 		Grants:       []model.Grant{{Capability: "githubtoken", Via: model.GrantByLabel}},
 		CustomFields: map[string][]string{"customer": {"acme", awkward}},
+		QAFlowRef:    "qa-flow-sched",
 		Enabled:      true, NextRunAt: sub, CreatedAt: sub,
 	}); err != nil {
 		t.Fatalf("putting a schedule: %v", err)
@@ -1325,10 +1334,16 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 			[]any{"gemini-api-key", "value", "grain-inst-alice-gemini-api-key", "2", time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)}},
 		{"INSERT INTO `task_qa_assignment` (`root_origin`, `epoch`, `regime_id`, `arm`, `flow_id`, `rollout_pct_at_assign`, `complexity_tier`, `assigned_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			[]any{"task:a1b2", 1, 2, "treatment", "golden-v1-minimal", 50, "high", time.Date(2026, 11, 12, 18, 0, 0, 0, time.UTC)}},
-		{"INSERT INTO `task_qa_check_run` (`id`, `task_id`, `run_id`, `commit_sha`, `stage`, `check_id`, `arm`, `shadow`, `verdict`, `duration_ms`, `tokens_in`, `tokens_out`, `alloc_bytes`, `detail_json`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			[]any{1, "a1b2", "run-1", "0123456789abcdef0123456789abcdef01234567", "S3", "hollow-test-ast", "treatment", 0, "fail", 125, 0, 0, 65536, `{"files":1}`, time.Date(2026, 11, 12, 18, 1, 0, 0, time.UTC)}},
-		{"INSERT INTO `task_qa_check_run` (`id`, `task_id`, `run_id`, `commit_sha`, `stage`, `check_id`, `arm`, `shadow`, `verdict`, `duration_ms`, `tokens_in`, `tokens_out`, `alloc_bytes`, `detail_json`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			[]any{2, "c3d4", "run-2", "89abcdef0123456789abcdef0123456789abcdef", "shadow", "hollow-test-ast", "control", 1, "pass", 84, 0, 0, 32768, `{"files":2}`, time.Date(2026, 11, 12, 18, 2, 0, 0, time.UTC)}},
+		{"INSERT INTO `qa_flow_version` (`hash`, `key`, `version`, `parent_hash`, `label`, `summary`, `spec_json`, `source_yaml`, `qa_engine_rev`, `created_by`, `created_at`, `retired_at`, `schema_ver`, `source_kind`, `source_repo`, `source_path`, `source_commit`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{"f00baa0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "custom-flow", 1, "", "Custom Flow", "Summary", `{"id":"custom-flow@1"}`, "schema: grain.dev/qa-flow/v2\nkey: custom-flow\n", 1, "alice", time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC), nil, "grain.dev/qa-flow/v2", "ui", "", "", ""}},
+		{"INSERT INTO `qa_experiment` (`id`, `revision`, `name`, `hypothesis`, `state`, `arms_json`, `scope_json`, `allocation_json`, `salt`, `allocation_list_json`, `metrics_json`, `plan_json`, `options_json`, `engine_json`, `segment`, `enrollment_held`, `decision_json`, `readout_json`, `created_by`, `created_at`, `started_at`, `stopped_at`, `archived_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{"exp-1", 1, "golden-v2 vs control", awkward, "draft", `[{"id":"control","label":"Control","flowHash":"control","weight":50},{"id":"treatment","label":"Treatment","flowHash":"golden-v2@1","weight":50}]`, `{"repos":["owner/docs"]}`, `{"mode":"hash"}`, "00112233445566778899aabbccddeeff", "", `{"primaryMetric":"review.findings_sev.per_pr","primaryContrast":"treatment:control"}`, `{"plannedOriginsPerArm":30,"maxDays":14,"alpha":0.05}`, `{"shadowOnControl":true,"memory":"record"}`, `{"qaEngineRev":1}`, 1, "", "", "", "alice", time.Date(2026, 11, 13, 12, 5, 0, 0, time.UTC), nil, nil, nil}},
+		{"INSERT INTO `qa_enrollment` (`root_origin`, `experiment_id`, `segment`, `arm_id`, `flow_hash`, `qa_engine_rev`, `model`, `grain_build`, `allocation_key`, `bucket`, `excluded_reason`, `assigned_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{"task:a1b2", "exp-1", 1, "treatment", "golden-v2@1", 1, "gemini-pro", "v3.6.0", "", 1200, "", time.Date(2026, 11, 13, 12, 6, 0, 0, time.UTC)}},
+		{"INSERT INTO `task_qa_check_run` (`id`, `task_id`, `run_id`, `commit_sha`, `stage`, `check_id`, `arm`, `shadow`, `verdict`, `duration_ms`, `tokens_in`, `tokens_out`, `alloc_bytes`, `detail_json`, `experiment_id`, `arm_id`, `flow_hash`, `qa_engine_rev`, `model`, `base_sha`, `blast_tier`, `blast_score`, `complexity_tier`, `triage_decision`, `repaired_in_next_sha`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{1, "a1b2", "run-1", "0123456789abcdef0123456789abcdef01234567", "S3", "hollow-test-ast", "treatment", 0, "fail", 125, 0, 0, 65536, `{"files":1}`, "exp-1", "treatment", "golden-v2@1", 1, "gemini-pro", "abcdef0123", "T0", 15, "high", "shadow", 1, time.Date(2026, 11, 12, 18, 1, 0, 0, time.UTC)}},
+		{"INSERT INTO `task_qa_check_run` (`id`, `task_id`, `run_id`, `commit_sha`, `stage`, `check_id`, `arm`, `shadow`, `verdict`, `duration_ms`, `tokens_in`, `tokens_out`, `alloc_bytes`, `detail_json`, `experiment_id`, `arm_id`, `flow_hash`, `qa_engine_rev`, `model`, `base_sha`, `blast_tier`, `blast_score`, `complexity_tier`, `triage_decision`, `repaired_in_next_sha`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{2, "c3d4", "run-2", "89abcdef0123456789abcdef0123456789abcdef", "shadow", "hollow-test-ast", "control", 1, "pass", 84, 0, 0, 32768, `{"files":2}`, "exp-1", "control", "control", 1, "gemini-pro", "fedcba9876", "T1", 45, "medium", "auto_merge", 0, time.Date(2026, 11, 12, 18, 2, 0, 0, time.UTC)}},
 		{"INSERT INTO `task_qa_finding` (`id`, `check_run_id`, `task_id`, `stage`, `rule_id`, `severity`, `file_path`, `line`, `summary`, `evidence`, `human_vote`, `voted_by`, `voted_at`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			[]any{1, 1, "a1b2", "S3", "go-test-zero-assertions", "blocker", "calc/calc_test.go", 18, awkward, "func TestAdd(t *testing.T) {}", 1, "alice@example.com", time.Date(2026, 11, 12, 18, 5, 0, 0, time.UTC), time.Date(2026, 11, 12, 18, 1, 0, 0, time.UTC)}},
 		{"INSERT INTO `task_qa_finding` (`id`, `check_run_id`, `task_id`, `stage`, `rule_id`, `severity`, `file_path`, `line`, `summary`, `evidence`, `human_vote`, `voted_by`, `voted_at`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

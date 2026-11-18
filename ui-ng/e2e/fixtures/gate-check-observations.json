@@ -1,0 +1,418 @@
+{
+  "api_version": "grain.gates/v1",
+  "mode": "observation_only",
+  "authority": "legacy",
+  "lifecycle_effects": false,
+  "action_effects": false,
+  "dispatch_effects": false,
+  "automatic_cutover": false,
+  "source_revision": "sha256:3b2f34a4389cb9b1295f1f225fd6396c185b2990acde319d2b4f2e4ac1e89ea2",
+  "compared_at": "2026-08-28T12:01:00Z",
+  "legacy_state": "proposed",
+  "bindings": [
+    {
+      "id": "report",
+      "type": "delivery",
+      "version": 1,
+      "purpose": "monitor",
+      "required": false,
+      "action": null,
+      "subject": {
+        "kind": "task",
+        "task_id": "1"
+      },
+      "config": {
+        "product": "report",
+        "semantics": "current_v1"
+      },
+      "freshness_seconds": 60,
+      "origin": {
+        "kind": "task",
+        "id": "1",
+        "revision": "builtin-ci-observer-v3",
+        "imported": false
+      }
+    },
+    {
+      "id": "receipt",
+      "type": "acknowledgment",
+      "version": 1,
+      "purpose": "monitor",
+      "required": false,
+      "action": null,
+      "subject": {
+        "kind": "task",
+        "task_id": "1"
+      },
+      "config": {
+        "mode": "explicit_receipt"
+      },
+      "freshness_seconds": 60,
+      "origin": {
+        "kind": "task",
+        "id": "1",
+        "revision": "builtin-ci-observer-v3",
+        "imported": false
+      }
+    },
+    {
+      "id": "checks-c642d49ef9389e9b",
+      "type": "checks",
+      "version": 1,
+      "purpose": "monitor",
+      "required": false,
+      "action": null,
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "acme/widgets",
+        "change_kind": "pr",
+        "id": "7"
+      },
+      "config": {
+        "mode": "effective",
+        "extra_jobs": [],
+        "empty": "unknown",
+        "semantics": "current_v1"
+      },
+      "freshness_seconds": 60,
+      "origin": {
+        "kind": "task",
+        "id": "1",
+        "revision": "builtin-ci-observer-v3",
+        "imported": false
+      }
+    },
+    {
+      "id": "checks-c642d49ef9389e9b-legacy",
+      "type": "checks",
+      "version": 1,
+      "purpose": "monitor",
+      "required": false,
+      "action": null,
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "acme/widgets",
+        "change_kind": "pr",
+        "id": "7"
+      },
+      "config": {
+        "mode": "effective",
+        "extra_jobs": [],
+        "empty": "legacy_settled",
+        "semantics": "legacy_ci_v1"
+      },
+      "freshness_seconds": 60,
+      "origin": {
+        "kind": "task",
+        "id": "1",
+        "revision": "builtin-ci-observer-v3",
+        "imported": true
+      }
+    }
+  ],
+  "results": [
+    {
+      "evaluation_id": "shadow-1-1-report",
+      "revision": 1,
+      "disposition": "accepted",
+      "result": {
+        "evaluation_id": "shadow-1-1-report",
+        "binding_id": "task/1/report",
+        "type": "delivery",
+        "version": 1,
+        "context_digest": "sha256:9bd30e9bfa754d3af7735512af2892e7cf43920136dd0a04248575fc639be612",
+        "status": "unknown",
+        "summary": "Not applicable: only finite, noninteractive analyze tasks with a person receipt requirement are projected",
+        "human_text": null,
+        "agent_text": null,
+        "evidence": [],
+        "dependencies": [
+          {
+            "key": "task/1/report-receipt",
+            "subject": {
+              "kind": "task",
+              "task_id": "1"
+            },
+            "head": null,
+            "version": "sha256:3b2f34a4389cb9b1295f1f225fd6396c185b2990acde319d2b4f2e4ac1e89ea2",
+            "collection_generation": "sha256:3b2f34a4389cb9b1295f1f225fd6396c185b2990acde319d2b4f2e4ac1e89ea2",
+            "scope_digest": "sha256:97ead7dc6a0946506c65c98016fcd90e042d2b74314d4f278e9c2f85f5ebd6bb",
+            "complete": true,
+            "observed_at": "2026-08-28T12:01:00Z",
+            "valid_until": "2026-08-28T12:02:00Z",
+            "authorization_revision": 0,
+            "dirty_generation": 1,
+            "covered_generation": 1
+          }
+        ],
+        "blockers": [],
+        "work": [],
+        "waits": [],
+        "actions": [],
+        "observed_at": "2026-08-28T12:01:00Z",
+        "valid_until": "2026-08-28T12:02:00Z",
+        "error": null
+      },
+      "accepted_at": "2026-08-28T12:01:00Z",
+      "invalidated_at": null,
+      "invalidation_reason": null,
+      "retry_at": null,
+      "dirty_generation": 1,
+      "covered_generation": 1
+    },
+    {
+      "evaluation_id": "shadow-1-1-receipt",
+      "revision": 1,
+      "disposition": "accepted",
+      "result": {
+        "evaluation_id": "shadow-1-1-receipt",
+        "binding_id": "task/1/receipt",
+        "type": "acknowledgment",
+        "version": 1,
+        "context_digest": "sha256:e4b808c23ca326f4f0ce68be09fec4c3486ba0e8f401fe63edbb0e95d866ff74",
+        "status": "unknown",
+        "summary": "Not applicable: only finite, noninteractive analyze tasks with a person receipt requirement are projected",
+        "human_text": null,
+        "agent_text": null,
+        "evidence": [],
+        "dependencies": [
+          {
+            "key": "task/1/report-receipt",
+            "subject": {
+              "kind": "task",
+              "task_id": "1"
+            },
+            "head": null,
+            "version": "sha256:3b2f34a4389cb9b1295f1f225fd6396c185b2990acde319d2b4f2e4ac1e89ea2",
+            "collection_generation": "sha256:3b2f34a4389cb9b1295f1f225fd6396c185b2990acde319d2b4f2e4ac1e89ea2",
+            "scope_digest": "sha256:97ead7dc6a0946506c65c98016fcd90e042d2b74314d4f278e9c2f85f5ebd6bb",
+            "complete": true,
+            "observed_at": "2026-08-28T12:01:00Z",
+            "valid_until": "2026-08-28T12:02:00Z",
+            "authorization_revision": 0,
+            "dirty_generation": 1,
+            "covered_generation": 1
+          }
+        ],
+        "blockers": [],
+        "work": [],
+        "waits": [],
+        "actions": [],
+        "observed_at": "2026-08-28T12:01:00Z",
+        "valid_until": "2026-08-28T12:02:00Z",
+        "error": null
+      },
+      "accepted_at": "2026-08-28T12:01:00Z",
+      "invalidated_at": null,
+      "invalidation_reason": null,
+      "retry_at": null,
+      "dirty_generation": 1,
+      "covered_generation": 1
+    },
+    {
+      "evaluation_id": "shadow-1-1-checks-c642d49ef9389e9b",
+      "revision": 1,
+      "disposition": "accepted",
+      "result": {
+        "evaluation_id": "shadow-1-1-checks-c642d49ef9389e9b",
+        "binding_id": "task/1/checks-c642d49ef9389e9b",
+        "type": "checks",
+        "version": 1,
+        "context_digest": "sha256:26f2c8ae154944314f926a1f19586c5da9662edaa5666f514fcb19207c99d470",
+        "status": "met",
+        "summary": "All applicable current-head CI requirements are satisfied.",
+        "human_text": "Merge preconditions are separate from CI: review, approval, lane ordering and GitHub merge-group state are not proved by CI; no shadow enqueue; base-red repair eligibility is separate; base red alone is not a CI failure for this change; overlap/recheck applicability has not been established by this observer; base CI has no recorded verdict; this is not positive base-health evidence CI observations: github: complete collection, 1 latest check/workflow identities, 0 required selectors; ",
+        "agent_text": "Prediction only: automatic merge may proceed only if legacy review, approval, queue, overlap/recheck and executor preconditions permit it.",
+        "evidence": [
+          {
+            "kind": "policy",
+            "id": "ci-policy",
+            "version": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "digest": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9"
+          },
+          {
+            "kind": "check",
+            "id": "github",
+            "version": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "digest": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580"
+          }
+        ],
+        "dependencies": [
+          {
+            "key": "checks/policy",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "version": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9",
+            "collection_generation": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9",
+            "scope_digest": "sha256:c642d49ef9389e9bbf26c4ec050b6b66b79fa2e6bdac9df4dfe9e938b4a8ddb7",
+            "complete": true,
+            "observed_at": "2026-08-28T12:01:00Z",
+            "valid_until": "2026-08-28T12:02:00Z",
+            "authorization_revision": 0,
+            "dirty_generation": 1,
+            "covered_generation": 1
+          },
+          {
+            "key": "checks/github",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "version": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580",
+            "collection_generation": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580",
+            "scope_digest": "sha256:c642d49ef9389e9bbf26c4ec050b6b66b79fa2e6bdac9df4dfe9e938b4a8ddb7",
+            "complete": true,
+            "observed_at": "2026-08-28T12:01:00Z",
+            "valid_until": "2026-08-28T12:02:00Z",
+            "authorization_revision": 0,
+            "dirty_generation": 1,
+            "covered_generation": 1
+          }
+        ],
+        "blockers": [],
+        "work": [],
+        "waits": [],
+        "actions": [],
+        "observed_at": "2026-08-28T12:01:00Z",
+        "valid_until": "2026-08-28T12:02:00Z",
+        "error": null
+      },
+      "accepted_at": "2026-08-28T12:01:00Z",
+      "invalidated_at": null,
+      "invalidation_reason": null,
+      "retry_at": null,
+      "dirty_generation": 1,
+      "covered_generation": 1
+    },
+    {
+      "evaluation_id": "shadow-1-1-checks-c642d49ef9389e9b-legacy",
+      "revision": 1,
+      "disposition": "accepted",
+      "result": {
+        "evaluation_id": "shadow-1-1-checks-c642d49ef9389e9b-legacy",
+        "binding_id": "task/1/checks-c642d49ef9389e9b-legacy",
+        "type": "checks",
+        "version": 1,
+        "context_digest": "sha256:6f29de69463025261a401b2508e16dda98d4bcbb5f1841bfcf56b4fdccbabdc3",
+        "status": "met",
+        "summary": "Legacy CI import (observation only): All applicable current-head CI requirements are satisfied.",
+        "human_text": "Merge preconditions are separate from CI: review, approval, lane ordering and GitHub merge-group state are not proved by CI; no shadow enqueue; base-red repair eligibility is separate; base red alone is not a CI failure for this change; overlap/recheck applicability has not been established by this observer; base CI has no recorded verdict; this is not positive base-health evidence CI observations: github: complete collection, 1 latest check/workflow identities, 0 required selectors; ",
+        "agent_text": "Prediction only: automatic merge may proceed only if legacy review, approval, queue, overlap/recheck and executor preconditions permit it.",
+        "evidence": [
+          {
+            "kind": "policy",
+            "id": "ci-policy",
+            "version": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "digest": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9"
+          },
+          {
+            "kind": "check",
+            "id": "github",
+            "version": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "digest": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580"
+          }
+        ],
+        "dependencies": [
+          {
+            "key": "checks/policy",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "version": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9",
+            "collection_generation": "sha256:7002be9a3bf80b57924228ebb554c590be8bdc7f34b23a1ccd0822b1c0a444d9",
+            "scope_digest": "sha256:c642d49ef9389e9bbf26c4ec050b6b66b79fa2e6bdac9df4dfe9e938b4a8ddb7",
+            "complete": true,
+            "observed_at": "2026-08-28T12:01:00Z",
+            "valid_until": "2026-08-28T12:02:00Z",
+            "authorization_revision": 0,
+            "dirty_generation": 1,
+            "covered_generation": 1
+          },
+          {
+            "key": "checks/github",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "acme/widgets",
+              "change_kind": "pr",
+              "id": "7"
+            },
+            "head": "H1",
+            "version": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580",
+            "collection_generation": "sha256:c8161d7831c877f667578566894b59fd1668abea0e479a48feeb4170c8822580",
+            "scope_digest": "sha256:c642d49ef9389e9bbf26c4ec050b6b66b79fa2e6bdac9df4dfe9e938b4a8ddb7",
+            "complete": true,
+            "observed_at": "2026-08-28T12:01:00Z",
+            "valid_until": "2026-08-28T12:02:00Z",
+            "authorization_revision": 0,
+            "dirty_generation": 1,
+            "covered_generation": 1
+          }
+        ],
+        "blockers": [],
+        "work": [],
+        "waits": [],
+        "actions": [],
+        "observed_at": "2026-08-28T12:01:00Z",
+        "valid_until": "2026-08-28T12:02:00Z",
+        "error": null
+      },
+      "accepted_at": "2026-08-28T12:01:00Z",
+      "invalidated_at": null,
+      "invalidation_reason": null,
+      "retry_at": null,
+      "dirty_generation": 1,
+      "covered_generation": 1
+    }
+  ],
+  "dirty": false
+}

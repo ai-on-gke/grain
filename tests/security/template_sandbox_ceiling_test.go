@@ -68,11 +68,11 @@ func TestPath1TemplateSandboxShapeCeilings(t *testing.T) {
 	}
 
 	// An agent, from a task running at 2 CPUs.
-	origin := model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect}
+	origin := model.Filing{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect}
 	if err := rig.store.PutTask(ctx, model.Task{
 		ID: "940", Intent: model.IntentImplement, Title: "parent", Target: &widgets,
 		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 2,
-		Origin: origin, Approval: &origin.Attribution,
+		Filing: origin, Approval: &origin.Attribution,
 		Grants: []model.Grant{
 			{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
 			{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel},

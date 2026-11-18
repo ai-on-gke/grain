@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { LocationStrategy, NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, LocationStrategy, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -54,7 +54,7 @@ import {
 } from "../shared/priority-chip.component";
 import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
-import { boardLabels } from "./board-labels";
+import { boardLabels, classicBoardHint, nextBoardParams } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -241,17 +241,27 @@ function needsApproval(t: Task): boolean {
                           type="button"
                           class="board-apply-btn"
                           [attr.data-testid]="'board-apply-' + b.id"
-                          [attr.aria-label]="
-                            boardLabel(b) === b.name ? null : boardLabel(b)
+                          [attr.aria-label]="applyLabel(b)"
+                          [attr.title]="
+                            opensHere(b)
+                              ? null
+                              : 'Opens on the classic Boards page'
                           "
                           (click)="applyBoard(b)"
                         >
-                          {{ b.name }}
+                          <span class="board-name">{{ b.name }}</span>
                           @if (b.folder) {
                             <span
                               class="board-folder muted"
                               aria-hidden="true"
                               >{{ b.folder }}</span
+                            >
+                          }
+                          @if (!opensHere(b)) {
+                            <span
+                              class="board-folder board-classic muted"
+                              aria-hidden="true"
+                              >{{ classicHint(b) }} ↗</span
                             >
                           }
                         </button>
@@ -408,7 +418,8 @@ function needsApproval(t: Task): boolean {
           @for (g of store.baseBranchGates(); track g.repo + ":" + g.branch) {
             <span>
               <span class="mono">{{ g.repo }}</span
-              >{{ g.branch ? " (" + g.branch + ")" : "" }} —
+              >{{ g.branch ? " (" + g.branch + ")" : "" }}
+              —
               {{ g.detail || g.runDetail || g.reason }}
             </span>
           }
@@ -1215,6 +1226,13 @@ function needsApproval(t: Task): boolean {
           >Repair</span
         >
       }
+      @if (hasGoalBadge(t)) {
+        <span
+          [class]="'status-pill ' + goalBadgeTone(t)"
+          [attr.data-testid]="'goal-badge-' + t.id"
+          >{{ goalBadgeText(t) }}</span
+        >
+      }
       @if (t.rolledOverTo) {
         <span
           class="status-pill neutral"
@@ -1501,6 +1519,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private readonly filter = inject(ViewFilter);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
+  private readonly doc = inject(DOCUMENT);
   private readonly location = inject(LocationStrategy);
   private readonly keyboard = inject(KeyboardService);
   private readonly splitEl = viewChild<ElementRef<HTMLElement>>("split");
@@ -1733,6 +1752,21 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       "POST /api/tasks/{id}/close",
       t.repo ?? null,
     );
+  }
+  protected hasGoalBadge(t: Task): boolean {
+    return !!(t.goalMode?.enabled || t.goalScorecard);
+  }
+  protected goalBadgeTone(t: Task): string {
+    if (t.goalScorecard?.verified) return "healthy";
+    if (t.goalScorecard?.stoppedAtCap) return "warn";
+    return "setup";
+  }
+  protected goalBadgeText(t: Task): string {
+    if (t.goalScorecard?.verified) return "Goal ✓";
+    if (t.goalScorecard?.stoppedAtCap) return "Goal capped";
+    const cur = t.goalScorecard?.passesUsed || 1;
+    const max = t.goalScorecard?.maxPasses || t.goalMode?.maxPasses || 8;
+    return `Goal · ${cur}/${max}`;
   }
   protected canApproveSelected(): boolean {
     const rows = this.selectedRows();
@@ -2546,22 +2580,43 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected applyBoard(b: Board): void {
     this.closeMenu(false);
-    const p = new URLSearchParams(b.query || "");
-    const nextQ = p.get("q") || "";
+    const params = nextBoardParams(b);
+    if (!params) {
+      // A board this page cannot draw opens on the classic UI, which
+      // can, the way the rail links a page that has not moved over yet
+      // (shell/nav.ts).
+      this.doc.defaultView?.location.assign(
+        `/boards/${encodeURIComponent(b.id)}`,
+      );
+      return;
+    }
     // The navigation carries q, and ?q= then fills the "Filter this view"
     // box (see the constructor). Setting the box here as well started the
     // box's own ?q= write-back while this navigation was still in flight,
     // which superseded it and dropped the board's tab, group and repo.
-    this.localViewMode.set(p.get("view") === "timeline" ? "timeline" : "list");
-    void this.router.navigate(["/tasks"], {
-      queryParams: {
-        tab: p.get("tab") || null,
-        group: p.get("group") || null,
-        q: nextQ || null,
-        repo: p.get("repo") || null,
-        view: p.get("view") === "timeline" ? "timeline" : null,
-      },
-    });
+    this.localViewMode.set(params["view"] === "timeline" ? "timeline" : "list");
+    void this.router.navigate(["/tasks"], { queryParams: params });
+  }
+
+  // opensHere is whether applying a board stays on /next/tasks rather
+  // than opening the board's classic page (nextBoardParams).
+  protected opensHere(b: Board): boolean {
+    return nextBoardParams(b) !== null;
+  }
+
+  protected classicHint(b: Board): string {
+    return classicBoardHint(b);
+  }
+
+  // applyLabel is a board button's accessible name where its text is
+  // not enough: a same-named board's folder (boardLabel), and that the
+  // button leaves for the classic UI. Null keeps the visible text.
+  protected applyLabel(b: Board): string | null {
+    const label = this.boardLabel(b);
+    if (!this.opensHere(b)) {
+      return `${label}, ${classicBoardHint(b)}, opens on the classic Boards page`;
+    }
+    return label === b.name ? null : label;
   }
 
   // boardLabel is the name a board's buttons are announced by: its own

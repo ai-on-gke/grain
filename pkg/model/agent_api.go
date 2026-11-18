@@ -111,6 +111,8 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "deployment:upgrade", Description: "Upgrade grain and its database, or cancel a scheduled upgrade", Dangerous: true},
 	{Scope: "deployment:restart", Description: "Restart grain, act on persistent sandboxes, and run sandbox probes", Dangerous: true},
 	{Scope: "deployment:reboot", Description: "Reboot or shut down grain's host", Dangerous: true},
+	{Scope: "qa:read", Description: "Read quality flow versions, experiment configurations and experiment results"},
+	{Scope: "qa:admin", Description: "Publish or retire quality flow versions, manage quality experiments, and import readout manifests", Dangerous: true},
 }
 
 // impliedAPIScopes are the narrow scopes a wider one carries with it:

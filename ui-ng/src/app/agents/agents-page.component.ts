@@ -20,6 +20,7 @@ import {
   type OnDestroy,
   type OnInit,
   ViewEncapsulation,
+  afterNextRender,
   computed,
   effect,
   inject,
@@ -381,6 +382,16 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                               <a [routerLink]="['/task', a.task.id]"
                                 >#{{ a.task.id }} {{ a.task.title }}</a
                               >
+                              @if (hasGoalBadge(a.task)) {
+                                <span
+                                  [class]="
+                                    'status-pill ' + goalBadgeTone(a.task)
+                                  "
+                                  style="margin-left:6px"
+                                  [attr.data-testid]="'goal-badge-' + a.task.id"
+                                  >{{ goalBadgeText(a) }}</span
+                                >
+                              }
                               @if (partOf(a.task.id); as ps) {
                                 <a
                                   class="part-of-link"
@@ -574,6 +585,13 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
               ><span class="muted">#{{ a.task.id }}</span> {{ a.task.title }}</a
             >
           </h3>
+          @if (hasGoalBadge(a.task)) {
+            <span
+              [class]="'status-pill ' + goalBadgeTone(a.task)"
+              [attr.data-testid]="'goal-badge-' + a.task.id"
+              >{{ goalBadgeText(a) }}</span
+            >
+          }
         </div>
         <p class="sr-only">{{ statusText(a) }}</p>
         @if (a.status === "quiet") {
@@ -920,6 +938,11 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   });
 
   constructor() {
+    // Measured, the split keeps a stored ratio inside its bounds (the
+    // inspector's 320px floor) as Tasks and the Inbox do; unmeasured, a
+    // ratio dragged on a wider window left the inspector a 68px sliver
+    // (docs/test-runs/2026-11-16-next-markdown.md).
+    afterNextRender(() => this.sp.attach());
     effect(() => {
       const all = this.order();
       const sel = this.selectedId();
@@ -1028,6 +1051,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.sp.detach();
     if (this.respondTimer) clearTimeout(this.respondTimer);
     this.store.stop();
     this.unregisterF?.();
@@ -1038,6 +1062,25 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     if (a.status === "quiet") return "quiet";
     if (a.status === "setup") return "setup";
     return "healthy";
+  }
+
+  protected hasGoalBadge(t: Agent["task"]): boolean {
+    return !!(t.goalMode?.enabled || t.goalScorecard);
+  }
+
+  protected goalBadgeTone(t: Agent["task"]): string {
+    if (t.goalScorecard?.verified) return "healthy";
+    if (t.goalScorecard?.stoppedAtCap) return "warn";
+    return "setup";
+  }
+
+  protected goalBadgeText(a: Agent): string {
+    const t = a.task;
+    if (t.goalScorecard?.verified) return "Goal ✓";
+    if (t.goalScorecard?.stoppedAtCap) return "Goal capped";
+    const cur = t.goalScorecard?.passesUsed || a.attempt?.number || 1;
+    const max = t.goalScorecard?.maxPasses || t.goalMode?.maxPasses || 8;
+    return `Goal · ${cur}/${max}`;
   }
 
   protected isFresh(a: Agent): boolean {

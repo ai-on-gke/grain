@@ -31,7 +31,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -431,16 +430,8 @@ func TestCapabilityList(t *testing.T) {
 // reason that has nothing to do with repos.
 func repoServer(t *testing.T) string {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
+	store := testStore(t)
 	ctx := context.Background()
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	client := ui.NewClient(ui.Config{
 		Actor:         ui.DefaultActor("tester"),

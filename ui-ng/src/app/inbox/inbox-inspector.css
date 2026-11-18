@@ -82,6 +82,14 @@
   min-height: 0;
 }
 
+/* An access request's one-line summary keeps its line: only the reason
+   below it gives way. Left shrinkable too, the summary was squeezed until
+   its "Show full request" toggle took all its room and the line drew at
+   0px (docs/test-runs/2026-11-16-next-markdown.md). */
+.resolution-dock > g-capped-markdown.dock-summary {
+  flex-shrink: 0;
+}
+
 /* The pane is the size container the cap is read against (cqh). */
 .inbox-split > .inspector-pane {
   container-type: size;
@@ -89,6 +97,16 @@
 
 .resolution-dock .banner {
   margin: 0 0 8px;
+}
+
+.resolution-dock .banner .capped-md {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.resolution-dock .banner .capped-md > :last-child {
+  margin-bottom: 0;
 }
 
 .resolution-question {

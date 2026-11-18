@@ -106,6 +106,68 @@ func TestAGivenUpPullRequestRaisesAnInboxNotification(t *testing.T) {
 	}
 }
 
+// A change whose auto-merge a gating review has withdrawn (every-pr.yml
+// holds every pull request until its review passes) is still repaired when
+// it goes red, so its red has to be split as well: a check the repository
+// declared unfixable is escalated at once, not handed to a repair agent
+// that no commit can help (2026-11-13 merge-and-reviews walkthrough, F3).
+func TestAnUnfixableRedIsEscalatedWhileAGatingReviewHoldsAutoMerge(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.AutoMerge = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	declareUnfixableChecks(t, ctx, store, repo, "cla/google")
+	setMergeable(sim, true)
+	sim.CheckRuns[branch] = []github.CheckRun{
+		{Name: "cla/google", Status: "completed", Conclusion: strPtr("failure")},
+	}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs != nil && obs.MergeQueueRepairAt != nil {
+		t.Fatalf("the queue sent a change red only on an unfixable check to a repair (at %v)", obs.MergeQueueRepairAt)
+	}
+
+	// The review passes and gives auto-merge back: the change reaches the
+	// head of its queue and is escalated as unfixable, its repair unspent.
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.AutoMerge = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if obs, err := store.GetObservation(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	} else if obs != nil && obs.MergeQueueRepairAt != nil {
+		t.Fatalf("the queue repaired an unfixable red once auto-merge was back (at %v)", obs.MergeQueueRepairAt)
+	}
+	if !blockedOnAPerson(t, ctx, store, task.ID) {
+		t.Fatal("the queue did not give up on a check no branch reaches")
+	}
+	n, err := store.OpenNotification(ctx, model.NotificationSubject(model.FamilyMergeNeedsPerson, task.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == nil || !strings.Contains(n.Body, "cla/google") {
+		t.Fatalf("the Inbox item does not name the unfixable check: %+v", n)
+	}
+}
+
 // uiE2ETail is a Playwright failure the same on every branch: one fault,
 // not the branch's.
 const uiE2ETail = "##[group]Run npx playwright test\n" +
@@ -352,7 +414,7 @@ func TestANewerReviewSupersedesAStuckOlderOne(t *testing.T) {
 	review := func(id, head string, links ...model.Link) model.Task {
 		t.Helper()
 		r := filedTask(t, ctx, store, id, repo)
-		r.Origin.Reason = model.ReasonReview
+		r.Filing.Reason = model.ReasonReview
 		r.Base = reviewed.BranchName()
 		r.AutoMerge = true
 		r.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:" + head}
@@ -406,14 +468,14 @@ func TestANewerReviewStillWaitsOnARunningOlderOne(t *testing.T) {
 	reviewed := filedTask(t, ctx, store, "t1", repo)
 	kindTag := "path-trigger-review:acme/widgets#1:code"
 	old := filedTask(t, ctx, store, "r1", repo)
-	old.Origin.Reason = model.ReasonReview
+	old.Filing.Reason = model.ReasonReview
 	old.Base = reviewed.BranchName()
 	old.Tags = []string{model.PathTriggerMarkerTag, kindTag}
 	if err := store.PutTask(ctx, old); err != nil {
 		t.Fatal(err)
 	}
 	newer := filedTask(t, ctx, store, "r2", repo)
-	newer.Origin.Reason = model.ReasonReview
+	newer.Filing.Reason = model.ReasonReview
 	newer.Base = reviewed.BranchName()
 	newer.Tags = []string{model.PathTriggerMarkerTag, kindTag}
 	newer.Links = append(newer.Links, model.Link{Kind: model.LinkDependsOn, Target: old.ID})
@@ -445,7 +507,7 @@ func TestSupersedingAStuckReviewWidensAnIncrementalSuccessor(t *testing.T) {
 	kindTag := "path-trigger-review:acme/widgets#1:code"
 
 	old := filedTask(t, ctx, store, "r1", repo)
-	old.Origin.Reason = model.ReasonReview
+	old.Filing.Reason = model.ReasonReview
 	old.Base = reviewed.BranchName()
 	old.AutoMerge = true
 	old.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:08f6232f"}
@@ -463,7 +525,7 @@ func TestSupersedingAStuckReviewWidensAnIncrementalSuccessor(t *testing.T) {
 		t.Fatal(err)
 	}
 	newer := filedTask(t, ctx, store, "r2", repo)
-	newer.Origin.Reason = model.ReasonReview
+	newer.Filing.Reason = model.ReasonReview
 	newer.Base = reviewed.BranchName()
 	newer.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:1234abcd",
 		"path-trigger-since:08f6232f"}

@@ -175,7 +175,7 @@ func cmdForceMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 // on the gate; -head pins the head the findings were read at.
 func cmdAcceptFindings(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain accept-findings", flag.ContinueOnError)
-	gate := fs.String("gate", "", "the gate whose findings you accept: security-review, review, or trigger:<name>")
+	gate := fs.String("gate", "", "the gate whose findings you accept: security-review, review, targeted-review, or trigger:<name>")
 	review := fs.String("review", "", "the review task whose findings you accept; needed only when several have findings on the gate")
 	head := fs.String("head", "", "the head commit you read the findings at; refused if the pull request has moved since")
 	if err := fs.Parse(args); err != nil {

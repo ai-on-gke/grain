@@ -157,7 +157,7 @@ UI's "Pause"/"Resume" button rather than "Delete" for that case.
   following `SecretsPanel.jsx`'s pattern exactly, opened from a new
   sidebar entry alongside Settings. A task the overlay's own
   schedule fired shows a "Scheduled" badge in the ordinary task list
-  (`Task.Scheduled`, off `Origin.Reason == ReasonSchedule` — the same
+  (`Task.Scheduled`, off `Filing.Reason == ReasonSchedule` — the same
   treatment `Task.Stacked` already gives `ReasonFix`).
 
 ## Tests present
@@ -213,7 +213,7 @@ fired."** `model.Schedule.Interval` (a bare `time.Duration`) is
 replaced by `Recurrence` (`pkg/model/schedule.go`), a small sum type: `Kind`
 is one of `RecurrenceEveryNHours`, `RecurrenceDaily`, `RecurrenceWeekly`, or
 `RecurrenceMonthly`, and the fields that apply depend on which -- the same
-"column per case, most left unset" shape `Task.Origin`/`Task.Approval`
+"column per case, most left unset" shape `Task.Filing`/`Task.Approval`
 already use for a different sum type. `Recurrence.Next(after)` is the
 whole of the new logic: the first occurrence strictly after `after`,
 wall-clock aligned for the three new kinds (a calendar month is not a
@@ -1774,12 +1774,21 @@ skipped, so no release candidate was cut that day, and nothing said why.
   `model.ScheduleStarvedAfter` (1h) has passed since it came due, or once
   `model.ScheduleStarvedOccurrences` (3) occurrences are held behind the
   same task, whichever comes first. Three is the hour of a 20-minute
-  train. The blocker must be the skip's open task, still `queued`, and
+  train. The blocker must be the skip's open task (or a suite run: see
+  the grain/task-4609 update below), still `queued`, and
   have no run at all (`Store.Runs`). A task that started and is queued
   again (a retry or a resume) is waiting on its own backoff, which a
   priority does not fix. A running task, or one waiting on a person,
   holds the schedule exactly as before. The person-wait case already
   gets `NoteHeldScheduleOnBlocker`'s note.
+- **Workflow reviews too (grain/task-5445).** A workflow schedule held by
+  its previous firing's review (`SuppressedByOpenReview`) is escalated
+  under the same rule. A review that is still `queued` with no run never
+  got a worker, so no person is reading it, and `workflowReviewHold`
+  would otherwise hold the schedule silently for up to three cadences
+  (72h for a daily workflow). A review that has started, or finished into
+  `awaiting_reply` for somebody to read, still holds the schedule as
+  before.
 - **What.** Every cycle that skips an occurrence passes its skip to
   `Store.EscalateStarvedScheduleBlocker`. Once the occurrence is starved:
   - The task's priority is raised to the highest priority of any other
@@ -1794,11 +1803,46 @@ skipped, so no release candidate was cut that day, and nothing said why.
   - A warning notification `pipeline.schedule-starved:<schedule id>`
     (`model.FamilyScheduleStarved`) names the schedule, the task (and
     holding schedule, when in an overlap group) and how long it has been
-    held. It is raised once while open, and cleared when the task closes.
+    held. It is raised once while open, and cleared when the task closes
+    or the schedule fires again -- a workflow schedule fires over a
+    review past `workflowReviewHold` and leaves the review open. If the
+    blocker changes while it is open (another task in the overlap group,
+    or a later review while an abandoned one is still open), it is
+    cleared and raised again naming the new task.
 - **Not done: admission.** A raised priority still waits for a free
   worker. `admission: bypass` would also start the task past a full
   worker pool. It is not applied automatically, because only a person may
   grant an admission above `standard`.
+
+## Update: a firing held by a suite run that never started is raised too (grain/task-4609)
+
+The rule above covered only a skip whose blocker is one open task
+(`SuppressedByOpenTask`). A schedule held by a suite run
+(`SuppressedBySuiteRun`) stalled the same way when the run's tasks sat
+`queued`, and nothing raised them. It is now covered too:
+
+- **Which runs.** `Store.suiteRunHolding` finds the active suite run the
+  skip is held by: the schedule's own run, a peer's in its overlap group
+  (`ScheduleSkip.HeldByScheduleID`), or -- for a group held by a run
+  that names no schedule -- the oldest active run whose tasks carry the
+  group's tag. Workflow-run holders (`SuppressedByWorkflowRun`) are out
+  of scope: a CI run has no queued task a priority could raise.
+- **When.** The same starvation bound (1h, or 3 occurrences). The run's
+  current pass must have started none of its open tasks: every open task
+  of the pass is still `queued` with no run. While any open task in the
+  pass has started, the run is making progress and is left alone.
+- **What.** Every never-started task of the current pass is raised to
+  the highest queued priority, together. Each raised task gets the
+  comment, naming the suite run, its pass and the tasks raised.
+- **Naming the blocker.** The title, comment and notification say whose
+  run it is: "its previous firing" for the schedule's own, "schedule X's
+  firing in overlap group G" for a peer's, and "a start outside any
+  schedule in overlap group G" for a run (or a group task) that names no
+  schedule.
+- **Clearing.** The `pipeline.schedule-starved:<schedule id>`
+  notification carries `clears_when: {kind: suite-run, suiteRun: <id>}`
+  (`model.ClearsOnSuiteRun`). It clears when the suite run is no longer
+  active (finished, failed, or gone), not when one of its tasks closes.
 
 ## Update: a schedule can be held while its base branch's publishing is held (grain/task-4393)
 
@@ -1809,18 +1853,37 @@ its release triage task (#4256) was open, and the release train
 (`schedule.skip_when`, schema version 141), declared
 `skip-when: publishing-held`, holds such a schedule:
 
-- **Check.** `Store.publishingHold` asks `BaseBranchPublishingFindings` --
+- **Check.** `Store.PublishingHold` asks `BaseBranchPublishingFindings` --
   the reading deployment health shows -- for a `Gated` finding with a
   triage task on the repository the firing goes into and its base branch.
   `fireTaskSchedule`, `fireSuiteSchedule` and `fireWorkflowSchedule` ask it
   after their overlap checks, cadence firings only; Run now is not held.
   The `github_workflow_run` trigger drops and records its firing
   (`PublishingHeldSkip`).
+- **Split hold while an rc is in qualification.** Promoting or dropping a
+  release candidate already in qualification (`vX.Y.Z-rc.N` with neither a
+  `-discarded` marker nor a `vX.Y.Z` tag) does not depend on `main`'s
+  newest commit publishing. Before holding a `SkipWhenPublishingHeld`
+  schedule, `reconcileSchedule` and `fireOneGitHubWorkflowRunSchedule`
+  check `qualifyingRCForRepo`; while an rc is in qualification, a
+  release-train schedule (`isReleaseTrainSchedule`; no other) still fires (`FireScheduleUnderPublishingHold`, keeping overlap
+  and overlap-group holds in force) so `scripts/release-train-task.sh` can
+  run Phase 1 (`RELEASE_TRAIN_PHASES=judge,release`,
+  `RELEASE_TRAIN_HOLD=publishing`) and skip only cut
+  (`held=publishing (cut skipped)`). Once no rc is in qualification, the
+  hold applies as usual.
 - **Record.** `SuppressedByPublishingHeld` (`publishingHeld`), with the
   triage task in `TaskID`: `skipped at <time>: publishing held by task N
   (<repo> <branch> has published nothing since <time>)`. One row per
-  occurrence, as for an overlap skip; it is never escalated as starved and
-  never noted on the triage task.
+  occurrence, as for an overlap skip; never noted on the triage task.
+- **Stale and starved reporting.** `Store.StaleSchedules` marks a
+  deliberately held schedule with `Held: true`, `HeldByTaskID: <triage
+  task>` and `Reason: "held: publishing held by task N (...)"` (shown by
+  `grain health` under `WARNING: schedules deliberately held:` instead of
+  failing exit 1). `Store.EscalateStarvedScheduleBlocker` returns
+  `DeliberatelyHeld: true` naming the triage task without raising priority
+  or `pipeline.schedule-starved`, and `checkReleaseLoopIdle` stands down
+  while `describeReleaseTrainTick` names the holding triage task.
 - **Resume.** Held, not dropped: `NextRunAt` stays, and the first cycle
   after the triage task closes fires once and records the occurrence as
   fired late.

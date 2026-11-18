@@ -122,7 +122,7 @@ func newGitProxyRig(t *testing.T) *gitProxyRig {
 		target := r.target
 		task := model.Task{
 			ID: r.task, Intent: model.IntentImplement, Title: "security boundary",
-			Origin: model.Origin{
+			Filing: model.Filing{
 				Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 				Reason:      model.ReasonDirect,
 			},
