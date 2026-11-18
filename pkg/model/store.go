@@ -5684,6 +5684,36 @@ func (s *Store) GitPushFastForwardOnly(ctx context.Context, sandbox string) (boo
 	return n > 0, nil
 }
 
+// RecordReviewedBranchPush records, on the task of a sandbox's currently
+// live run when it is a review working on the reviewed change's own
+// branch (LinkPushesReviewedBranch), one fast-forward of that branch its
+// run pushed, from old to new, as a LinkReviewerPush. The git proxy calls
+// it for each such update it lets through (gitproxy's
+// ReviewedBranchPushRecorder), before forwarding it, so a push the host
+// then refused is recorded too: a reader holds a recorded push to the
+// branch's own history before crediting it. A sandbox with nothing live,
+// or a run of any other task, records nothing.
+func (s *Store) RecordReviewedBranchPush(ctx context.Context, sandbox, old, new string) error {
+	taskID, live, err := s.liveTaskID(ctx, sandbox)
+	if err != nil || !live || new == "" {
+		return err
+	}
+	target := old + ".." + new
+	return s.UpdateTask(ctx, taskID, func(t *Task) error {
+		inPlace := false
+		for _, l := range t.Links {
+			if l.Kind == LinkReviewerPush && l.Target == target {
+				return nil
+			}
+			inPlace = inPlace || l.Kind == LinkPushesReviewedBranch
+		}
+		if inPlace {
+			t.Links = append(t.Links, Link{Kind: LinkReviewerPush, Target: target})
+		}
+		return nil
+	})
+}
+
 // GitPushAnyRef reports whether a sandbox's currently live run holds
 // GitPushAnyRefGrant (IsGitPushAnyRefGrant), which lifts the one-branch rule GitPushBranch
 // feeds: the git proxy then lets it update any ref of a repository it may

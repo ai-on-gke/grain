@@ -113,6 +113,13 @@ func (s *syncedSim) pullRequestNumber(idx int) int {
 // handler.
 func githubHostServer(t *testing.T, sim github.Transport, gitRoot string) string {
 	t.Helper()
+	return githubHostServerWith(t, sim, gitRoot, nil)
+}
+
+// githubHostServerWith is githubHostServer with its git backend wrapped by
+// wrapGit, when it is not nil.
+func githubHostServerWith(t *testing.T, sim github.Transport, gitRoot string, wrapGit func(http.Handler) http.Handler) string {
+	t.Helper()
 	mux := http.NewServeMux()
 	api := func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -138,7 +145,11 @@ func githubHostServer(t *testing.T, sim github.Transport, gitRoot string) string
 	mux.HandleFunc("/repos/", api)
 	// GitHub's GraphQL endpoint, which review threads exist only on.
 	mux.HandleFunc("/graphql", api)
-	mux.Handle("/", gitHTTPBackend(gitRoot))
+	var git http.Handler = gitHTTPBackend(gitRoot)
+	if wrapGit != nil {
+		git = wrapGit(git)
+	}
+	mux.Handle("/", git)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return strings.TrimPrefix(server.URL, "http://")
