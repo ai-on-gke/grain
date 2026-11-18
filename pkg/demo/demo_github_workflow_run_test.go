@@ -206,7 +206,7 @@ func TestDemoGitHubSimDrivesWorkflowRunScheduleAndReleaseTriage(t *testing.T) {
 		}
 		var out []model.Task
 		for _, task := range tasks {
-			if task.Origin.Reason == model.ReasonSchedule {
+			if task.Filing.Reason == model.ReasonSchedule {
 				out = append(out, task)
 			}
 			if strings.Contains(task.Body, "FORK-RUN-MARKER") || strings.Contains(task.Body, "1301") {

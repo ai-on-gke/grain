@@ -151,6 +151,7 @@ export interface Workstream {
   seriesRootIds?: string[];
   paused: boolean;
   planning: boolean;
+  goalMode?: boolean;
   stale: boolean;
   excludeRootFromProgress: boolean;
   createdMs: number;
@@ -722,6 +723,7 @@ function resolveLineage(
 function nodeActivityText(t: Task): string {
   if (t.activity) return t.activity;
   if (t.questionSummary) return t.questionSummary;
+  if (t.noteSummary) return t.noteSummary;
   const block = submitBlock(t);
   if (block) return block;
   return "";
@@ -991,6 +993,9 @@ function buildWorkstream(
     crossStreamCount,
     paused,
     planning,
+    goalMode: Boolean(
+      rootTask.goalMode?.enabled || nodes.some((n) => n.task.goalMode?.enabled),
+    ),
     stale,
     excludeRootFromProgress: c.excludeRootFromProgress,
     createdMs: Number.isFinite(createdMs) ? createdMs : lastActivityMs,

@@ -1,0 +1,252 @@
+[
+  {
+    "file": "registration.json",
+    "definition": "registration",
+    "valid": true
+  },
+  {
+    "file": "resolve-request.json",
+    "definition": "resolve_request",
+    "valid": true
+  },
+  {
+    "file": "resolve-result.json",
+    "definition": "resolve_result",
+    "valid": true
+  },
+  {
+    "file": "observe-request.json",
+    "definition": "observe_request",
+    "valid": true
+  },
+  {
+    "file": "observe-result.json",
+    "definition": "observe_result",
+    "valid": true
+  },
+  {
+    "file": "unauthorized-result.json",
+    "definition": "observe_result",
+    "valid": true
+  },
+  {
+    "file": "watch-ensure.json",
+    "definition": "watch_request",
+    "valid": true
+  },
+  {
+    "file": "watch-ensure-result.json",
+    "definition": "watch_result",
+    "valid": true
+  },
+  {
+    "file": "watch-read.json",
+    "definition": "watch_request",
+    "valid": true
+  },
+  {
+    "file": "watch-read-result.json",
+    "definition": "watch_result",
+    "valid": true
+  },
+  {
+    "file": "watch-renew.json",
+    "definition": "watch_request",
+    "valid": true
+  },
+  {
+    "file": "watch-cancel.json",
+    "definition": "watch_request",
+    "valid": true
+  },
+  {
+    "file": "cursor-expired.json",
+    "definition": "watch_result",
+    "valid": true
+  },
+  {
+    "file": "watch-renew-result.json",
+    "definition": "watch_result",
+    "valid": true
+  },
+  {
+    "file": "watch-cancel-result.json",
+    "definition": "watch_result",
+    "valid": true
+  },
+  {
+    "file": "watch-describe.json",
+    "definition": "watch_request",
+    "valid": true
+  },
+  {
+    "file": "watch-describe-result.json",
+    "definition": "watch_result",
+    "valid": true
+  },
+  {
+    "file": "poll-ensure-result.json",
+    "definition": "watch_result",
+    "valid": true
+  },
+  {
+    "file": "attach-request.json",
+    "definition": "attach_request",
+    "valid": true
+  },
+  {
+    "file": "edit-request.json",
+    "definition": "edit_request",
+    "valid": true
+  },
+  {
+    "file": "remove-request.json",
+    "definition": "remove_request",
+    "valid": true
+  },
+  {
+    "file": "wait-request.json",
+    "definition": "wait_request",
+    "valid": true
+  },
+  {
+    "file": "grant-request.json",
+    "definition": "access_grant_request",
+    "valid": true
+  },
+  {
+    "file": "task-reference.json",
+    "definition": "task_reference",
+    "valid": true
+  },
+  {
+    "file": "invalid-callback.json",
+    "definition": "watch_request",
+    "valid": false,
+    "reason": "Unknown delivery_handle; v1 only uses pull replies"
+  },
+  {
+    "file": "invalid-pin.json",
+    "definition": "reference",
+    "valid": false,
+    "reason": "Pinned tracking requires a non-null immutable selector"
+  },
+  {
+    "file": "invalid-denied-facts.json",
+    "definition": "observe_result",
+    "valid": false,
+    "reason": "Unauthorized result cannot retain facts from prior success"
+  },
+  {
+    "file": "invalid-hint-facts.json",
+    "definition": "watch_result",
+    "valid": false,
+    "reason": "Hints cannot carry decision facts"
+  },
+  {
+    "file": "invalid-page-limit.json",
+    "definition": "watch_request",
+    "valid": false,
+    "reason": "Read page exceeds 100 events"
+  },
+  {
+    "file": "invalid-error-checkpoint.json",
+    "definition": "watch_result",
+    "valid": false,
+    "reason": "Error cannot advance checkpoint"
+  },
+  {
+    "file": "invalid-opaque-evidence.json",
+    "definition": "observe_result",
+    "valid": false,
+    "reason": "No evidence resolver exists; inline registered data required"
+  },
+  {
+    "file": "invalid-generation.json",
+    "definition": "watch_result",
+    "valid": false,
+    "semantic": true,
+    "request": "watch-read.json"
+  },
+  {
+    "file": "invalid-digest.json",
+    "definition": "observe_result",
+    "valid": false,
+    "semantic": true,
+    "request": "observe-request.json"
+  },
+  {
+    "file": "invalid-identity.json",
+    "definition": "observe_result",
+    "valid": false,
+    "semantic": true,
+    "request": "observe-request.json"
+  },
+  {
+    "file": "invalid-freshness.json",
+    "definition": "observe_result",
+    "valid": false,
+    "semantic": true,
+    "request": "observe-request.json"
+  },
+  {
+    "file": "revoke-request.json",
+    "definition": "revoke_request",
+    "valid": true
+  },
+  {
+    "file": "attach-result.json",
+    "definition": "resource_projection",
+    "valid": true
+  },
+  {
+    "file": "list-result.json",
+    "definition": "resource_page",
+    "valid": true
+  },
+  {
+    "file": "remove-result.json",
+    "definition": "mutation_receipt",
+    "valid": true
+  },
+  {
+    "file": "wait-result.json",
+    "definition": "wait_result",
+    "valid": true
+  },
+  {
+    "file": "grant-result.json",
+    "definition": "grant_result",
+    "valid": true
+  },
+  {
+    "file": "api-conflict.json",
+    "definition": "api_error",
+    "valid": true
+  },
+  {
+    "file": "invalid-shared-count.json",
+    "definition": "resource_projection",
+    "valid": false
+  },
+  {
+    "file": "list-request.json",
+    "definition": "list_request",
+    "valid": true
+  },
+  {
+    "file": "resolve-preview-request.json",
+    "definition": "resolve_preview_request",
+    "valid": true
+  },
+  {
+    "file": "unresolved-attach-request.json",
+    "definition": "attach_request",
+    "valid": true
+  },
+  {
+    "file": "invalid-implicit-grant.json",
+    "definition": "attach_request",
+    "valid": false
+  }
+]

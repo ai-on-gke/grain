@@ -227,6 +227,95 @@ test("a board saved from the Timeline view opens on the Timeline again", async (
   }
 });
 
+// Applying a Kanban, report, dashboard, tree or timeline board -- or a
+// list narrowed in the classic grammar (f=state:any:queued) -- from the
+// /next/tasks Boards menu used to leave the reader on the bare task list
+// with nothing changed: the URL stayed /next/tasks and the board's kind
+// and narrowing were dropped (2026-11-17 saved boards walkthrough,
+// docs/test-runs/2026-11-17-saved-boards-and-visualizations.md). Such a
+// board now says it opens on the classic Boards page, and does.
+test("a board /next/tasks cannot draw opens on its classic page and says so @phone", async ({
+  page,
+}) => {
+  const stamp = Date.now();
+  const made = [];
+  const mk = async (data) => {
+    const res = await page.request.post("/api/boards", { data });
+    expect(res.ok(), `POST /api/boards: ${res.status()}`).toBe(true);
+    const b = await res.json();
+    made.push(b.id);
+    return b;
+  };
+  try {
+    // Long enough to ellipsize in the menu, which must still show the hint.
+    const kanbanName = `E2E Kanban ${stamp} named past the width of the menu`;
+    const kanban = await mk({ name: kanbanName, kind: "kanban" });
+    const classicList = await mk({
+      name: `E2E Queued ${stamp}`,
+      kind: "list",
+      query: "f=state:any:queued",
+    });
+    const nextList = await mk({
+      name: `E2E Asked ${stamp}`,
+      kind: "list",
+      query: "tab=asked",
+    });
+
+    await page.goto("tasks");
+    const trigger = page.getByTestId("saved-boards-btn");
+    await trigger.click();
+    const menu = page.getByTestId("saved-boards-menu");
+    await expect(
+      menu.getByRole("button", {
+        name: `${kanbanName}, kanban, opens on the classic Boards page`,
+        exact: true,
+      }),
+    ).toBeVisible();
+    const kanbanApply = page.getByTestId(`board-apply-${kanban.id}`);
+    await expect(kanbanApply).toContainText("kanban ↗");
+    const btn = await kanbanApply.boundingBox();
+    const hint = await kanbanApply.getByText("kanban ↗").boundingBox();
+    expect(hint.x + hint.width).toBeLessThanOrEqual(btn.x + btn.width);
+    await expect(
+      menu.getByRole("button", {
+        name: `E2E Queued ${stamp}, filtered list, opens on the classic Boards page`,
+        exact: true,
+      }),
+    ).toBeVisible();
+    // A board this page applies keeps its plain name.
+    await expect(
+      menu.getByRole("button", { name: `E2E Asked ${stamp}`, exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId(`board-apply-${nextList.id}`),
+    ).not.toContainText("↗");
+
+    await page.getByTestId(`board-apply-${classicList.id}`).click();
+    await expect(page).toHaveURL(
+      new RegExp(`/boards/${classicList.id}(\\?|$)`),
+    );
+    await expect(
+      page.getByRole("heading", { name: `E2E Queued ${stamp}` }),
+    ).toBeVisible();
+    await page.goBack();
+    await expect(page).toHaveURL(/\/next\/tasks/);
+
+    await trigger.click();
+    await page.getByTestId(`board-apply-${kanban.id}`).click();
+    await expect(page).toHaveURL(new RegExp(`/boards/${kanban.id}(\\?|$)`));
+    await expect(page.getByRole("heading", { name: kanbanName })).toBeVisible();
+    await page.goBack();
+
+    await trigger.click();
+    await page.getByTestId(`board-apply-${nextList.id}`).click();
+    await expect(page).toHaveURL(/\/next\/tasks\?tab=asked$/);
+  } finally {
+    for (const id of made) {
+      await page.request.delete(`/api/boards/${id}`).catch(() => {});
+    }
+  }
+});
+
 // A failed GET /api/boards on /next/tasks used to leave the Boards menu
 // saying "No saved boards yet.", indistinguishable from an empty deployment
 // (2026-11-15 saved boards walkthrough,
@@ -403,83 +492,31 @@ test("the Backlog row More actions menu sits in the right-hand slot and opens on
   }
 });
 
-// Choosing a Kanban board, a timeline, a report, a tree, a dashboard,
-// or a list narrowed in the classic grammar from the Boards menu landed
-// on the bare, unnarrowed task list and named no board: applyBoard read
-// only tab, group, q, repo and view, so the four boards every deployment
-// is seeded with did nothing when chosen (2026-11-16 saved boards
-// walkthrough). A board this page cannot draw now opens its classic
-// page, and says so before it is chosen.
-test("a board this page cannot draw opens on its classic page", async ({
+// A board saved from the Boards menu here stores this page's address
+// (tab=asked&q=retry). The classic board page read only q= and repo=
+// from it and opened the board on every task matching its text, queued
+// and running ones included (2026-11-16 saved boards walkthrough);
+// ui/src/boards.js's classicBoardQuery now reads the tab as the state
+// filter that tab lists.
+test("the classic page opens a board saved here on the tab it was saved on", async ({
   page,
 }) => {
-  const made = [];
-  const mk = async (data) => {
-    const res = await page.request.post("/api/boards", { data });
-    expect(res.ok(), `POST /api/boards: ${res.status()}`).toBe(true);
-    const b = await res.json();
-    made.push(b.id);
-    return b;
-  };
+  const res = await page.request.post("/api/boards", {
+    data: { name: "E2E Native list", kind: "list", query: "tab=asked&q=retry" },
+  });
+  expect(res.ok(), `POST /api/boards: ${res.status()}`).toBe(true);
+  const b = await res.json();
   try {
-    const kanban = await mk({ name: "E2E Kanban", kind: "kanban" });
-    const classic = await mk({
-      name: "E2E Classic list",
-      kind: "list",
-      query: "f=state:any:queued",
-    });
-    const native = await mk({
-      name: "E2E Native list",
-      kind: "list",
-      query: "tab=asked",
-    });
-
-    await page.goto("tasks");
-    const trigger = page.getByTestId("saved-boards-btn");
-    await trigger.click();
-    const menu = page.getByTestId("saved-boards-menu");
-    const k = menu.getByRole("link", {
-      name: "E2E Kanban, Kanban, opens in the classic UI",
-    });
-    await expect(k).toHaveAttribute("href", `/boards/${kanban.id}`);
-    await expect(k).toContainText("Kanban");
-    await expect(
-      menu.getByRole("link", {
-        name: "E2E Classic list, List, opens in the classic UI",
-      }),
-    ).toBeVisible();
-    // A list in this page's own grammar still applies here.
-    await expect(
-      menu.getByRole("button", { name: "E2E Native list", exact: true }),
-    ).toBeVisible();
-    await expectMenuLaidOut(page, kanban.id);
-
-    await k.click();
-    await expect(page).toHaveURL(new RegExp(`/boards/${kanban.id}$`));
-    await expect(page.locator(".board-page-actions")).toBeVisible();
-
-    await page.goBack();
-    await expect(page).toHaveURL(/\/next\/tasks$/);
-    await page.getByTestId("saved-boards-btn").click();
-    await page.getByTestId(`board-apply-${classic.id}`).click();
-    // The classic page reads the board's own narrowing.
-    await expect(page).toHaveURL(
-      new RegExp(`/boards/${classic.id}\\?f=state:any:queued`),
-    );
-
+    // Still applied in place here.
     await page.goto("tasks");
     await page.getByTestId("saved-boards-btn").click();
-    await page.getByTestId(`board-apply-${native.id}`).click();
-    await expect(page).toHaveURL(/\/next\/tasks\?tab=asked$/);
+    await page.getByTestId(`board-apply-${b.id}`).click();
+    await expect(page).toHaveURL(/\/next\/tasks\?tab=asked&q=retry$/);
 
-    // The other way round: the classic page read a board saved here
-    // without its tab, and opened it on every task (boards.js's
-    // classicBoardQuery).
-    await page.goto(`/boards/${native.id}`);
+    await page.goto(`/boards/${b.id}`);
     await expect(page).toHaveURL(/f=state:any:awaiting_reply\|failed/);
+    await expect(page).toHaveURL(/q=retry/);
   } finally {
-    for (const id of made) {
-      await page.request.delete(`/api/boards/${id}`).catch(() => {});
-    }
+    await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
   }
 });

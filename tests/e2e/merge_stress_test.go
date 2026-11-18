@@ -539,7 +539,7 @@ func runMergeLivenessStressEngine(t *testing.T, cfg mergeStressConfig) {
 					ID:        taskID,
 					Intent:    model.IntentImplement,
 					Title:     fmt.Sprintf("Stress task %s", taskID),
-					Origin:    model.Origin{Attribution: model.Attribution{Actor: human("stress-runner")}, Reason: model.ReasonDirect},
+					Filing:    model.Filing{Attribution: model.Attribution{Actor: human("stress-runner")}, Reason: model.ReasonDirect},
 					Approval:  &model.Attribution{Actor: human("stress-runner")},
 					Target:    &repo,
 					Binding:   model.BindingDirective,

@@ -214,6 +214,12 @@ ran on the classic UI, and they have **no `/next/` page yet**.
 
 ### 3.1 `/next/` Boards menu dropped the kind and narrowing of boards it cannot draw
 
+> **Superseded on `main`:** the 2026-11-17 walkthrough (task 6589, PR #1819)
+> landed the same fix independently (`board-labels.ts`'s `nextBoardParams` /
+> `classicBoardHint`, announced "opens on the classic Boards page"). Merging
+> `main` into this branch took that version whole, so this branch's `/next/`
+> code for 3.1 was dropped. What stays here is fix 3.2 and its e2e scenario.
+
 - **Reproduction:** on stock `grain demo`, open `/next/tasks`, click `Boards`,
   and choose `Board` (or `Timeline`, `Report`, `Tree`). `applyBoard` read only
   `tab`, `group`, `q`, `repo` and `view` from the board's query, so the page

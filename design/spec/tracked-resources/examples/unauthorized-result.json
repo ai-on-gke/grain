@@ -1,0 +1,40 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "observe-2",
+  "reference": {
+    "version": "1",
+    "provider": {
+      "capability_id": "https://example.org/capabilities/tasks",
+      "method": "tasks"
+    },
+    "resource_kind": "example.task",
+    "identifier": {
+      "installation_id": "instance-a",
+      "task_id": "72"
+    },
+    "tracking": {
+      "facet": "outcome",
+      "mode": "follow_latest",
+      "selector": null
+    }
+  },
+  "observation_generation": 2,
+  "availability": "unauthorized",
+  "revision": null,
+  "fact_version": "1",
+  "facts": null,
+  "details": null,
+  "evidence": [],
+  "display": {
+    "summary": "Resource unavailable under this grant",
+    "url": null
+  },
+  "observed_at": "2026-11-16T21:00:01Z",
+  "valid_until": "2026-11-16T21:00:01Z",
+  "error": {
+    "code": "access_unavailable",
+    "retryable": false,
+    "summary": "Resource unavailable under this grant",
+    "retry_after_seconds": null
+  }
+}

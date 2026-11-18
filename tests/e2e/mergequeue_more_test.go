@@ -134,7 +134,7 @@ func TestMergeQueueEscalatesAfterAFailedRepairAndAdvancesToTheNextQueuedTask(t *
 
 	task1 := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "task1",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}
@@ -144,7 +144,7 @@ func TestMergeQueueEscalatesAfterAFailedRepairAndAdvancesToTheNextQueuedTask(t *
 	laterCreated := baseTime.Add(time.Second)
 	task2 := model.Task{
 		ID: "t2", Intent: model.IntentImplement, Title: "task2",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("bob")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("bob")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("bob")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &laterCreated,
 	}
@@ -307,7 +307,7 @@ func TestMergeQueueRefreshesARepairedHeadTheQueueItselfLeftBehind(t *testing.T) 
 
 	task1 := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "task1",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}
@@ -317,7 +317,7 @@ func TestMergeQueueRefreshesARepairedHeadTheQueueItselfLeftBehind(t *testing.T) 
 	laterCreated := baseTime.Add(time.Second)
 	task2 := model.Task{
 		ID: "t2", Intent: model.IntentImplement, Title: "task2",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("bob")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("bob")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("bob")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &laterCreated,
 	}
@@ -459,7 +459,7 @@ func TestMergeQueueRepairsFailingCheckRunsNotJustConflicts(t *testing.T) {
 
 	task1 := model.Task{
 		ID: "t1", Intent: model.IntentImplement, Title: "task1",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}
@@ -557,7 +557,7 @@ func TestClosingATaskWithAnOpenPullRequestDropsItFromTheMergeQueueForGood(t *tes
 
 	task := model.Task{
 		ID: "t-closed-early", Intent: model.IntentImplement, Title: "closed before merge",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("gina")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("gina")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("gina")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}
@@ -622,7 +622,7 @@ func TestAutoMergeLeavesAPullRequestOfUnknownMergeabilityAloneUntilItResolves(t 
 
 	task := model.Task{
 		ID: "t-pending", Intent: model.IntentImplement, Title: "still computing",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("hank")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("hank")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("hank")},
 		Target:   &repo, Binding: model.BindingDirective, AutoMerge: true, CreatedAt: &baseTime,
 	}

@@ -53,7 +53,7 @@ func TestNoSourceFileStillRefersToTheV2Subdirectory(t *testing.T) {
 		".js": true, ".jsx": true, ".mjs": true,
 	}
 	skip := map[string]bool{
-		".git": true, "node_modules": true, "third_party": true, "static": true,
+		".git": true, "node_modules": true, "third_party": true, "static": true, "static-next": true,
 	}
 
 	var offenders []string

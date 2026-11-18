@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { Board } from "../api/models";
-import { boardKindName, boardLabels, opensHere } from "./board-labels";
+import { boardLabels, classicBoardHint, nextBoardParams } from "./board-labels";
 
 const b = (id: string, name: string, folder?: string): Board => ({
   id,
@@ -49,29 +49,55 @@ describe("boardLabels", () => {
   });
 });
 
-describe("opensHere", () => {
-  const q = (kind: string, query?: string): Board => ({
+describe("nextBoardParams", () => {
+  const board = (kind: string, query?: string): Board => ({
     id: "1",
     name: "B",
     kind,
-    ...(query ? { query } : {}),
+    ...(query === undefined ? {} : { query }),
   });
-  it("keeps a list in this page's own grammar here", () => {
-    expect(opensHere(q("list"))).toBe(true);
-    expect(opensHere(q("list", "tab=asked&q=retry&view=timeline"))).toBe(true);
+
+  it("applies a list board saved from /next/tasks here", () => {
+    expect(
+      nextBoardParams(
+        board(
+          "list",
+          "tab=asked&group=repo&q=retry&repo=acme%2Fw&view=timeline",
+        ),
+      ),
+    ).toEqual({
+      tab: "asked",
+      group: "repo",
+      q: "retry",
+      repo: "acme/w",
+      view: "timeline",
+    });
+    expect(nextBoardParams(board("list"))).toEqual({
+      tab: null,
+      group: null,
+      q: null,
+      repo: null,
+      view: null,
+    });
   });
+
   it("sends every other kind to its classic page", () => {
-    for (const k of ["kanban", "gantt", "report", "tree", "panels"]) {
-      expect(opensHere(q(k))).toBe(false);
+    for (const kind of ["kanban", "gantt", "report", "panels", "tree"]) {
+      expect(nextBoardParams(board(kind))).toBeNull();
     }
   });
+
   it("sends a list narrowed in the classic grammar to its classic page", () => {
-    expect(opensHere(q("list", "f=state:any:queued"))).toBe(false);
-    expect(opensHere(q("list", "tab=asked&sort=priority"))).toBe(false);
+    expect(nextBoardParams(board("list", "f=state:any:queued"))).toBeNull();
+    expect(nextBoardParams(board("list", "q=retry&sort=created"))).toBeNull();
   });
-  it("names kinds as the classic UI does", () => {
-    expect(boardKindName("gantt")).toBe("Timeline");
-    expect(boardKindName("panels")).toBe("Panels");
-    expect(boardKindName(undefined)).toBe("List");
+
+  it("names a classic board by the kind the Boards index shows", () => {
+    expect(classicBoardHint(board("gantt"))).toBe("timeline");
+    expect(classicBoardHint(board("panels"))).toBe("dashboard");
+    expect(classicBoardHint(board("kanban"))).toBe("kanban");
+    expect(classicBoardHint(board("list", "f=state:any:queued"))).toBe(
+      "filtered list",
+    );
   });
 });
