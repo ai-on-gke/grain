@@ -228,6 +228,7 @@ export interface CreateTemplateRequest {
   fields?: TemplateField[];
   repo?: string;
   base?: string;
+  priority?: number;
   autoMerge: boolean;
   networkAccess?: string;
   nothingNeededAction?: string;
@@ -250,6 +251,8 @@ export interface UpdateTemplateRequest {
   fields?: TemplateField[];
   repo?: string;
   base?: string;
+  // 0 clears the template's own priority.
+  priority?: number;
   autoMerge?: boolean;
   networkAccess?: string;
   nothingNeededAction?: string;
