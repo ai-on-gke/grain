@@ -127,6 +127,293 @@ type WorkflowStepView struct {
 	Bytes       int    `json:"bytes,omitempty"`
 }
 
+const standardWorkflowYAML = `schema: grain.dev/qa-flow/v4
+key: standard-workflow
+label: Standard workflow
+summary: >
+  Default 8-stage engineering workflow: tiered subtask DAG decomposition for high-complexity
+  workstreams, caller & memory context discovery, plan critique, language readability packs,
+  deterministic S3 gates, PR contracts, S4 fresh-context verification, and enforced blast-tier merge triage.
+
+decompose:
+  enabled: true
+  mode: propose_dag
+  complexities: [medium, high]
+  max-subtasks: 4
+  target-diff-lines: 400
+
+context:
+  enabled: true
+  include-callers: true
+  include-memory: true
+  max-tokens: 12000
+  extra-paths: ["design/design/**", "docs/**"]
+
+readability-packs:
+  - id: go
+    enabled: true
+    activation: auto
+  - id: ts-angular
+    enabled: true
+    activation: auto
+  - id: python
+    enabled: true
+    activation: auto
+  - id: cpp
+    enabled: true
+    activation: auto
+
+skill-steps:
+  - id: "step:minimal-diff-discipline"
+    label: "Minimal diff & caller sweep discipline"
+    stage: coding
+    enabled: true
+    max-bytes: 600
+    text: |
+      Keep diffs focused on the requested change; update sibling callers when changing exported signatures and add regression tests that fail without your fix.
+  - id: "step:pre-pr-self-audit"
+    label: "Pre-PR self-review & verification log"
+    stage: pr
+    enabled: true
+    max-bytes: 600
+    text: |
+      Before opening or updating a pull request, re-read your full git diff for unintended edits, verify build/vet/tests pass on HEAD, and document verification commands in the PR description.
+
+pr-contract:
+  enabled: true
+  mode: warn
+  max-subject-chars: 72
+  required-sections: ["Summary", "Verification"]
+  audit-lint-suppressions: true
+  guidance-text: |
+    Write a Conventional Commits subject line <= 72 characters and include Summary and Verification sections in the PR body without unannotated lint suppressions.
+
+skills:
+  coding:
+    mode: replace
+    max-bytes: 1800
+    text: |
+      Before you open a pull request:
+      1. Scope: implement what the task asks. No unrequested subsystems or options.
+         List any deliberate extra in the PR description under "Extras".
+      2. Callers: for every exported symbol you change, update its callers (found by
+         import path) or say why not in caller_notes.
+      3. Config: decoders of config or declarations reject unknown keys, keep exact key
+         case, reject null where a value is required, use pointers where omitted and zero
+         differ, and have a marshal/unmarshal round-trip test.
+      4. Tests: each new test fails without your change; no sleeps for ordering; no
+         always-true loops; assert outcomes, not just absence of errors.
+      5. Boundaries: check overflow, wraparound and huge inputs on sizes and offsets.
+      6. Verify on the final HEAD: build, vet and tests pass.
+  intent:
+    mode: replace
+    max-bytes: 1200
+    text: |
+      Extract 2 to 6 testable WHEN ... SHALL acceptance criteria and explicit non-goals
+      strictly from the task title and body. If a load-bearing requirement is ambiguous,
+      return status: needs_clarification with one concrete question.
+  plan-critic:
+    mode: replace
+    max-bytes: 1600
+    text: |
+      Inspect the proposed file plan and sibling importers (by Go import path / TS module).
+      Flag missing caller updates, missing schema/route registrations, or scope creep
+      beyond the task specification. Do not invent unrequested architecture.
+
+stop-nudge: true
+staging-isolation: true
+
+stages:
+  s0-intent:
+    enabled: true
+    complexities: [medium, high]
+    max-seconds: 30
+    max-tokens: 15000
+    on-clarification: warn
+  s1-risk:
+    overrides:
+      - paths: ["pkg/orchestrator/**", "pkg/model/migrations.go"]
+        min-tier: T3
+        reason: "Core state machine and schema migrations"
+  s2-plan-critic:
+    enabled: true
+    complexities: [high]
+    tiers: [T2, T3]
+    max-seconds: 45
+    max-tokens: 25000
+    max-bounces: 1
+  s5-merge-triage:
+    mode: enforced
+    auto-merge-tiers: [T0, T1]
+    require-human-tiers: [T2, T3]
+
+checks:
+  golden:test-integrity-guard: {}
+  golden:strict-config-decoder: {}
+  golden:sibling-export-hazard: {severity: warn, params: {resolve: import-path}}
+  golden:ui-budget-and-spec-floor: {enabled: true}
+  golden:exported-surface-delta: {severity: warn}
+  golden:test-hygiene: {severity: warn}
+  golden:mutation-hardening: {severity: warn, params: {mutants: 25, max-seconds: 60}}
+  golden:boundary-fuzz: {severity: warn, params: {max-seconds: 15}}
+  golden:pr-description-contract: {enabled: true, severity: warn}
+
+verifier:
+  enabled: true
+  tiers: [T1, T2, T3]
+  max-repair-rounds: 1
+  max-seconds: 60
+  max-tokens: 50000
+  checklist: escape-classes-v1
+`
+
+func fastBaselineWorkflowYAML(skillText string) string {
+	var indented strings.Builder
+	for _, line := range strings.Split(normalizeSkillText(skillText), "\n") {
+		if line == "" {
+			indented.WriteString("\n")
+		} else {
+			indented.WriteString("      " + line + "\n")
+		}
+	}
+	return fmt.Sprintf(`schema: grain.dev/qa-flow/v4
+key: fast-baseline
+label: Fast baseline
+summary: >
+  Compact coding contract, staging-ref isolation, sub-second deterministic S3 AST/budget gates,
+  and 1-round fresh-context T2/T3 verifier with minimal latency and token overhead.
+
+decompose:
+  enabled: false
+  mode: "off"
+
+context:
+  enabled: false
+
+readability-packs:
+  - id: go
+    enabled: false
+    activation: auto
+  - id: ts-angular
+    enabled: false
+    activation: auto
+  - id: python
+    enabled: false
+    activation: auto
+  - id: cpp
+    enabled: false
+    activation: auto
+
+pr-contract:
+  enabled: false
+  mode: "off"
+
+skills:
+  coding:
+    mode: replace
+    max-bytes: 1800
+    text: |
+%s
+stop-nudge: true
+staging-isolation: true
+
+stages:
+  s0-intent:
+    enabled: false
+  s2-plan-critic:
+    enabled: false
+  s5-merge-triage:
+    mode: shadow
+    auto-merge-tiers: [T0, T1]
+    require-human-tiers: [T2, T3]
+
+checks:
+  golden:test-integrity-guard: {}
+  golden:strict-config-decoder: {}
+  golden:sibling-export-hazard: {enabled: true, severity: blocking, params: {resolve: import-path}}
+  golden:ui-budget-and-spec-floor: {enabled: true, severity: blocking}
+  golden:exported-surface-delta: {enabled: false, severity: warn}
+  golden:test-hygiene: {enabled: false, severity: warn}
+  golden:mutation-hardening: {enabled: false, severity: warn}
+  golden:boundary-fuzz: {enabled: false, severity: warn}
+  golden:pr-description-contract: {enabled: false, severity: warn}
+
+verifier:
+  enabled: true
+  tiers: [T2, T3]
+  max-repair-rounds: 1
+  max-seconds: 60
+  max-tokens: 50000
+  checklist: escape-classes-v1
+`, strings.TrimRight(indented.String(), "\n"))
+}
+
+const gatesOnlyWorkflowYAML = `schema: grain.dev/qa-flow/v4
+key: gates-only
+label: Deterministic gates only
+summary: >
+  Runs sub-second pure-Go deterministic S3 AST/diff checks, staging-ref isolation,
+  and blast-tier scoring with zero prompt injection and zero LLM verifier tokens.
+
+decompose:
+  enabled: false
+  mode: "off"
+
+context:
+  enabled: false
+
+readability-packs:
+  - id: go
+    enabled: false
+    activation: auto
+  - id: ts-angular
+    enabled: false
+    activation: auto
+  - id: python
+    enabled: false
+    activation: auto
+  - id: cpp
+    enabled: false
+    activation: auto
+
+pr-contract:
+  enabled: false
+  mode: "off"
+
+skills:
+  coding:
+    mode: replace
+    max-bytes: 1800
+    text: ""
+
+stop-nudge: true
+staging-isolation: true
+
+stages:
+  s0-intent:
+    enabled: false
+  s2-plan-critic:
+    enabled: false
+  s5-merge-triage:
+    mode: shadow
+    auto-merge-tiers: [T0, T1]
+    require-human-tiers: [T2, T3]
+
+checks:
+  golden:test-integrity-guard: {}
+  golden:strict-config-decoder: {}
+  golden:sibling-export-hazard: {enabled: true, severity: blocking, params: {resolve: import-path}}
+  golden:ui-budget-and-spec-floor: {enabled: true, severity: blocking}
+  golden:exported-surface-delta: {enabled: false, severity: warn}
+  golden:test-hygiene: {enabled: false, severity: warn}
+  golden:mutation-hardening: {enabled: false, severity: warn}
+  golden:boundary-fuzz: {enabled: false, severity: warn}
+  golden:pr-description-contract: {enabled: false, severity: warn}
+
+verifier:
+  enabled: false
+`
+
 const engineeringWorkflowV4YAML = `schema: grain.dev/qa-flow/v4
 key: engineering-workflow-v4
 extends: golden-v3@1

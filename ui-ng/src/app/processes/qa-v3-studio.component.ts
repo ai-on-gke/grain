@@ -2376,13 +2376,13 @@ export class QaV3StudioComponent {
       det?.declarationV4?.verifier ?? det?.declaration?.verifier;
     return {
       schema: "grain.dev/qa-flow/v4",
-      key: meta?.key || det?.key || "engineering-workflow-v4",
+      key: meta?.key || det?.key || "standard-workflow",
       extends:
         meta?.extends ||
         det?.declarationV4?.extends ||
         det?.declaration?.extends ||
-        "engineering-workflow-v4@1",
-      label: meta?.label || det?.label || "Engineering workflow v4",
+        "standard-workflow@1",
+      label: meta?.label || det?.label || "Standard workflow",
       summary: meta?.summary || det?.summary || "",
       skill: {
         mode,

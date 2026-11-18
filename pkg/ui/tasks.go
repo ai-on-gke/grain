@@ -228,10 +228,11 @@ type Task struct {
 	// port of a task that was. Omitted for a task written from scratch,
 	// and for every task filed before grain recorded it. A record for
 	// reporting, deciding nothing about the task.
-	TemplateID string `json:"templateId,omitempty"`
-	QAFlowRef  string `json:"qaFlowRef,omitempty"`
-	Owner      string `json:"owner"`
-	Creator    string `json:"creator,omitempty"`
+	TemplateID string               `json:"templateId,omitempty"`
+	QAFlowRef  string               `json:"qaFlowRef,omitempty"`
+	QASummary  *model.TaskQASummary `json:"qaSummary,omitempty"`
+	Owner      string               `json:"owner"`
+	Creator    string               `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
 	// task (model.Task.FiledVia), and Provenance the line it reads as
 	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
