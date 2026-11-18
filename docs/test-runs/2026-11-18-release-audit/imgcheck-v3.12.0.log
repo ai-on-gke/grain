@@ -1,0 +1,30 @@
+grain        v3.12.0          sha256:0150c165a1129945d7d98998f27317b8fb34e1eff1966c9691b7a44b3b84bfd1 {"rev":"e06c555103b822d3f7c264f7fd8b6aa5ee1deab8","ver":"v3.12.0"}
+grain        sha-e06c555      sha256:0150c165a1129945d7d98998f27317b8fb34e1eff1966c9691b7a44b3b84bfd1 {"rev":"e06c555103b822d3f7c264f7fd8b6aa5ee1deab8","ver":"v3.12.0"}
+grain        latest           sha256:dbd04963e96588dadc54e42b4ea12580d62aea97eb57a03b7610797c69795a30 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+grain        main             sha256:c163428eaac57a54fb66455301a241e307e9d428283c70b80fcfce7f7f559c75 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0-dev.68+46fdc11"}
+grain        candidate        sha256:f14fbf9beabe5fb14151eae175ef843528101f158a0867ca5adc156211045b8d {"rev":"cba7d44bb42bfacad6458c3cefee7becf8f38bd7","ver":"v3.2.0-rc.2.14+cba7d44"}
+grain        rc                
+hub          v3.12.0          sha256:936d5dfb2a9ea5b6ca25d9e73a6b370e004cb2debb093b72a464117a8dc8ac18 {"rev":"e06c555103b822d3f7c264f7fd8b6aa5ee1deab8","ver":"v3.12.0"}
+hub          sha-e06c555      sha256:936d5dfb2a9ea5b6ca25d9e73a6b370e004cb2debb093b72a464117a8dc8ac18 {"rev":"e06c555103b822d3f7c264f7fd8b6aa5ee1deab8","ver":"v3.12.0"}
+hub          latest           sha256:79307b408381ac0a22fc1b175838b34f12c68888bad537b1e390af176d7970b1 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+hub          main             sha256:d5dbdc827c002e14b3ad83b2d999b9512cb16e2e70c3efbdddf4f6a60e568b9c {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0-dev.68+46fdc11"}
+hub          candidate         
+hub          rc                
+registry     v3.12.0          sha256:936d5dfb2a9ea5b6ca25d9e73a6b370e004cb2debb093b72a464117a8dc8ac18 {"rev":"e06c555103b822d3f7c264f7fd8b6aa5ee1deab8","ver":"v3.12.0"}
+registry     sha-e06c555       
+registry     latest            
+registry     main              
+registry     candidate         
+registry     rc                
+sandbox      v3.12.0           
+sandbox      sha-e06c555       
+sandbox      latest            
+sandbox      main              
+sandbox      candidate         
+sandbox      rc                
+sandbox-k8s  v3.12.0           
+sandbox-k8s  sha-e06c555       
+sandbox-k8s  latest            
+sandbox-k8s  main              
+sandbox-k8s  candidate        sha256:c8cf0879258210d845f421b49c90a2c11a7ae960aa2dbb6076f6df77f6c6c767 
+sandbox-k8s  rc                

@@ -1,0 +1,30 @@
+grain        v3.13.0          sha256:dbd04963e96588dadc54e42b4ea12580d62aea97eb57a03b7610797c69795a30 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+grain        sha-46fdc11      sha256:dbd04963e96588dadc54e42b4ea12580d62aea97eb57a03b7610797c69795a30 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+grain        latest           sha256:dbd04963e96588dadc54e42b4ea12580d62aea97eb57a03b7610797c69795a30 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+grain        main             sha256:c163428eaac57a54fb66455301a241e307e9d428283c70b80fcfce7f7f559c75 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0-dev.68+46fdc11"}
+grain        candidate        sha256:f14fbf9beabe5fb14151eae175ef843528101f158a0867ca5adc156211045b8d {"rev":"cba7d44bb42bfacad6458c3cefee7becf8f38bd7","ver":"v3.2.0-rc.2.14+cba7d44"}
+grain        rc                
+hub          v3.13.0          sha256:79307b408381ac0a22fc1b175838b34f12c68888bad537b1e390af176d7970b1 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+hub          sha-46fdc11      sha256:79307b408381ac0a22fc1b175838b34f12c68888bad537b1e390af176d7970b1 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+hub          latest           sha256:79307b408381ac0a22fc1b175838b34f12c68888bad537b1e390af176d7970b1 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+hub          main             sha256:d5dbdc827c002e14b3ad83b2d999b9512cb16e2e70c3efbdddf4f6a60e568b9c {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0-dev.68+46fdc11"}
+hub          candidate         
+hub          rc                
+registry     v3.13.0          sha256:79307b408381ac0a22fc1b175838b34f12c68888bad537b1e390af176d7970b1 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+registry     sha-46fdc11      sha256:79307b408381ac0a22fc1b175838b34f12c68888bad537b1e390af176d7970b1 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+registry     latest           sha256:79307b408381ac0a22fc1b175838b34f12c68888bad537b1e390af176d7970b1 {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0"}
+registry     main             sha256:d5dbdc827c002e14b3ad83b2d999b9512cb16e2e70c3efbdddf4f6a60e568b9c {"rev":"46fdc1104ba8c6febd3abf9820dfb0055240421c","ver":"v3.13.0-dev.68+46fdc11"}
+registry     candidate        sha256:d75917d0fd2cb12427da170534ba027d12509ef91f27a6f2ae2379628b6bb5ba {"rev":"cba7d44bb42bfacad6458c3cefee7becf8f38bd7","ver":"v3.2.0-rc.3"}
+registry     rc                
+sandbox      v3.13.0          sha256:70e8e0473e6449c0adf6489cea9cd01b3bc8c429d7efabf300ff703dd985421f 
+sandbox      sha-46fdc11      sha256:70e8e0473e6449c0adf6489cea9cd01b3bc8c429d7efabf300ff703dd985421f 
+sandbox      latest           sha256:70e8e0473e6449c0adf6489cea9cd01b3bc8c429d7efabf300ff703dd985421f 
+sandbox      main             sha256:70e8e0473e6449c0adf6489cea9cd01b3bc8c429d7efabf300ff703dd985421f 
+sandbox      candidate        sha256:927c818572116a077ea28f0e489589d80e4751cfe56cf849f1472fa165a09d80 
+sandbox      rc                
+sandbox-k8s  v3.13.0          sha256:bb928be49bf5b5d15e420c0e1c1bf01f84722d9803e1eb0a66a269ddf1885d41 
+sandbox-k8s  sha-46fdc11      sha256:bb928be49bf5b5d15e420c0e1c1bf01f84722d9803e1eb0a66a269ddf1885d41 
+sandbox-k8s  latest           sha256:bb928be49bf5b5d15e420c0e1c1bf01f84722d9803e1eb0a66a269ddf1885d41 
+sandbox-k8s  main             sha256:7becfcf764df75e90a427f30173b3e6c2a8e7228b3410ec4a56b2b09dc28cff9 
+sandbox-k8s  candidate        sha256:c8cf0879258210d845f421b49c90a2c11a7ae960aa2dbb6076f6df77f6c6c767 
+sandbox-k8s  rc                
