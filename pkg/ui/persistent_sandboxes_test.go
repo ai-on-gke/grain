@@ -452,3 +452,107 @@ func TestStagingProxyKeepsAppCookiesVerbatim(t *testing.T) {
 		t.Errorf("Cookie = %q, want [%q]", got, want)
 	}
 }
+
+// TestStagingProxyForwardsVerifiedEdgeSchemeAndChain checks that a staging
+// app behind a verified identity-aware edge is told the edge's scheme and
+// the client chain the edge saw, with the edge's own address appended,
+// while a caller that reaches the daemon directly cannot forge either.
+func TestStagingProxyForwardsVerifiedEdgeSchemeAndChain(t *testing.T) {
+	var seen http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	t.Cleanup(ui.RegisterIdentityVerifier(&slowSessionVerifier{}))
+
+	_, store, ctx := testClient(t)
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakePersistentSandboxes{upstream: strings.TrimPrefix(upstream.URL, "http://"), strip: true}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{
+		Actor:               ui.DefaultActor("alice@example.com"),
+		AllowedPrincipals:   []string{"user:alice@example.com"},
+		PersistentSandboxes: fake,
+		LocalAPIToken:       testAccessCode,
+	}, store))
+	t.Cleanup(srv.Close)
+
+	for _, tc := range []struct {
+		name      string
+		viaEdge   bool
+		header    http.Header
+		wantProto string
+		wantFor   string
+	}{{
+		name:      "verified edge",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-For": {"198.51.100.42"}},
+		wantProto: "https",
+		wantFor:   "198.51.100.42, 127.0.0.1",
+	}, {
+		name:      "verified edge with a longer chain",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"HTTPS"}, "X-Forwarded-For": {"198.51.100.42, 203.0.113.9", "192.0.2.1"}},
+		wantProto: "https",
+		wantFor:   "198.51.100.42, 203.0.113.9, 192.0.2.1, 127.0.0.1",
+	}, {
+		name:      "verified edge saying http",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"http"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}, {
+		name:      "verified edge with an unknown scheme",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"javascript"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}, {
+		name:      "verified edge with several schemes",
+		viaEdge:   true,
+		header:    http.Header{"X-Forwarded-Proto": {"https", "http"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}, {
+		name:      "direct caller forging the edge's headers",
+		header:    http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-For": {"198.51.100.42"}},
+		wantProto: "http",
+		wantFor:   "127.0.0.1",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			seen = nil
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/staging/web/echo", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for k, vs := range tc.header {
+				req.Header[k] = vs
+			}
+			if tc.viaEdge {
+				req.Header.Set(slowHeader, "ok:alice@example.com")
+			} else {
+				req.Header.Set("Authorization", "Bearer "+testAccessCode)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			if got := seen.Get("X-Forwarded-Proto"); got != tc.wantProto {
+				t.Errorf("X-Forwarded-Proto = %q, want %q", got, tc.wantProto)
+			}
+			if got := strings.Join(seen.Values("X-Forwarded-For"), ", "); got != tc.wantFor {
+				t.Errorf("X-Forwarded-For = %q, want %q", got, tc.wantFor)
+			}
+			if got := seen.Get("Forwarded"); got != "" {
+				t.Errorf("Forwarded = %q, want dropped", got)
+			}
+		})
+	}
+}
