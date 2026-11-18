@@ -1,0 +1,26 @@
+1 awaiting_reply Director
+2 completed WALK-A1 tweak payments
+3 closed Targeted review (payments): WALK-A1 tweak payments
+4 completed WALK-A2 tweak payments
+5 closed Targeted review (payments): WALK-A2 tweak payments
+6 completed WALK-A3 tweak payments
+7 closed Targeted review (payments): WALK-A3 tweak payments
+8 completed WALK-A4 tweak payments
+9 closed Targeted review (ledger, payments): WALK-A4 tweak payments
+11 closed Targeted review (payments): WALK-A5 tweak payments
+10 awaiting_submit WALK-A5 tweak payments
+12 awaiting_submit WALK-A6 tweak payments
+13 closed Targeted review (payments): WALK-A6 tweak payments
+14 completed WALK-A7 tweak payments
+15 closed Targeted review (payments): WALK-A7 tweak payments
+16 completed WALK-A8 tweak payments
+17 closed Targeted review (payments): WALK-A8 tweak payments
+18 closed WALK-AGENT try to accept
+19 completed WALK-A9 tweak payments
+20 closed Targeted review (payments): WALK-A9 tweak payments
+21 closed Targeted review (payments): WALK-A9 tweak payments
+22 completed WALK-A10 tweak payments
+23 closed Targeted review (payments): WALK-A10 tweak payments
+24 closed Targeted review (payments): WALK-A10 tweak payments
+25 closed Targeted review (payments): WALK-A10 tweak payments
+26 closed Targeted review (payments): WALK-A10 tweak payments

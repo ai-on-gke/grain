@@ -1,0 +1,59 @@
+== 06:21:08 item 1: A1-A3 (one finding each)
+task 2 before: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"3","acceptable":true,"detail":"A1: Charge should reject a negative amount -- intended?"}],"findings":[{"gate":"trigger:payments","reviewTask":"3","summary":"A1: Charge should reject a negative amou"}],"questions":"3"}
+task 4 before: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"5","acceptable":true,"detail":"A2: Charge should reject a negative amount -- intended?"}],"findings":[{"gate":"trigger:payments","reviewTask":"5","summary":"A2: Charge should reject a negative amou"}],"questions":"5"}
+task 6 before: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"7","acceptable":true,"detail":"A3: Charge should reject a negative amount -- intended?"}],"findings":[{"gate":"trigger:payments","reviewTask":"7","summary":"A3: Charge should reject a negative amou"}],"questions":"7"}
+== 06:21:27 A1 accepted on /next/ at 1440 px
+== 06:21:30 A2 accepted on /next/ at 390 px
+== 06:21:32 A3 accepted on classic /tasks/6
+task 2 after: {"autoMerge":true,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting on no check reported against it at all"},{"id":"targeted-review","state":"passed","reviewTask":"3","acceptable":null,"detail":"passed (task #3)"}],"findings":[],"questions":null}
+task 4 after: {"autoMerge":true,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting on no check reported against it at all"},{"id":"targeted-review","state":"passed","reviewTask":"5","acceptable":null,"detail":"passed (task #5)"}],"findings":[],"questions":null}
+task 6 after: {"autoMerge":true,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting on no check reported against it at all"},{"id":"targeted-review","state":"passed","reviewTask":"7","acceptable":null,"detail":"passed (task #7)"}],"findings":[],"questions":null}
+== 06:21:37 item 1b: A4 touches payments and ledger
+A4 before: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"9","acceptable":true,"detail":"A4-pay: Charge rounds half-up -- confirm with finance? (and "}],"findings":[{"gate":"trigger:ledger","reviewTask":"9","summary":"A4-pay: Charge rounds half-up -- confirm"}],"questions":"9"}
+A4 accept trigger:payments (CLI): grain: 8 has no review findings on gate trigger:payments
+A4 after trigger:payments: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"9","acceptable":true,"detail":"A4-pay: Charge rounds half-up -- confirm with finance? (and "}],"findings":[{"gate":"trigger:ledger","reviewTask":"9","summary":"A4-pay: Charge rounds half-up -- confirm"}],"questions":"9"}
+A4 accept trigger:ledger (CLI): 8 WALK-A4 tweak payments
+A4 after trigger:ledger: {"autoMerge":true,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"passed","reviewTask":"9","acceptable":null,"detail":"passed (task #9)"}],"findings":[],"questions":null}
+A4 accept targeted-review (CLI): grain: 8 has no review findings on gate targeted-review
+== 06:21:44 item 2: holds
+A5 (frozen/**, auto_merge: never) before: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"11","acceptable":true,"detail":"A5: Charge should reject a negative amount -- intended?"}],"findings":[{"gate":"trigger:payments","reviewTask":"11","summary":"A5: Charge should reject a negative amou"}],"questions":"11"}
+A5 links: 
+A5 accept: 200
+A5 after: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"passed","reviewTask":"11","acceptable":null,"detail":"passed (task #11)"},{"id":"approval","state":"needed","reviewTask":null,"acceptable":null,"detail":"needed"}],"findings":[],"questions":null}
+A5 5s later: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"passed","reviewTask":"11","acceptable":null,"detail":"passed (task #11)"},{"id":"approval","state":"needed","reviewTask":null,"acceptable":null,"detail":"needed"}],"findings":[],"questions":null} links: merge-policy 
+A6 qa-hold set: qa-hold
+A6 accept: 200
+A6 after: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"qa","state":"running","reviewTask":null,"acceptable":null,"detail":"pre-PR verification running"},{"id":"targeted-review","state":"passed","reviewTask":"13","acceptable":null,"detail":"passed (task #13)"},{"id":"approval","state":"needed","reviewTask":null,"acceptable":null,"detail":"needed"}],"findings":[],"questions":null} qa-hold still: 1
+A7 accept: 200
+A7 after: {"autoMerge":true,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"passed","reviewTask":"15","acceptable":null,"detail":"passed (task #15)"}],"findings":[],"questions":null} broken-rules-hold still: 0
+== 06:22:10 item 3: authority
+agent task: 18
+agent attempt output: exit=0
+stdout:
+grain: {"error":"only a person may accept a review's findings: an agent that thinks they need no fix asks the owner (ask_question)"}
+exit=1
+
+stderr:
+A8 after the agent: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"17","acceptable":true,"detail":"A8: Charge should reject a negative amount -- intended?"}],"findings":[{"gate":"trigger:payments","reviewTask":"17","summary":"A8: Charge should reject a negative amou"}],"questions":"17"}
+owner, gate with no findings (security-review): grain: 16 has no review findings on gate security-review
+owner, gate with no findings (review): grain: 16 has no review findings on gate review
+owner, no reason: grain: say why: grain accept-findings -gate targeted-review <id> "the finding is out of scope; follow-up filed"
+owner, stale head: grain: acme/widgets#9007 has moved since you looked: you read the findings at 0000000 and its head is now c7fc16e43ce6 -- read what the review says about that head and decide again
+owner accepts A8: 16 WALK-A8 tweak payments
+owner, already accepted: grain: 16 has no review findings on gate targeted-review
+== 06:22:17 item 4: A9, draft review refused with a 422
+A9 after R9: state=awaiting_submit {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"20","acceptable":true,"detail":"Q9: should Charge log the amount it refuses?"}],"findings":[{"gate":"trigger:payments","reviewTask":"20","summary":"Q9: should Charge log the amount it refu"}],"questions":"20"}
+sim reviews for A9's PR: [{"Number":9005,"n":1},{"Number":9006,"n":1},{"Number":9007,"n":1}]
+A9 requeued by the reply: yes
+R9b=21 earlier reviews: 1 [answered] line(s):   - [answered] `payments/pay.go:3`: Q9: should Charge log the amount it refuses?
+== 06:22:36 item 5: A10 over four reviews
+A10 R1=23 closed: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"23","acceptable":true,"detail":"L01: the charge path in payments/pay.go should say who owns "}],"findings":[{"gate":"tr
+A10 R2=24 closed: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"24","acceptable":true,"detail":"R2a: does head 2 keep the rounding owner? (and 1 more)"}],"findings":[{"gate":"trigger:
+A10 R3=25 closed: {"autoMerge":false,"gates":[{"id":"ci","state":"running","reviewTask":null,"acceptable":null,"detail":"waiting for checks"},{"id":"targeted-review","state":"findings","reviewTask":"25","acceptable":true,"detail":"R3a: OPEN who signs off on refunds? (and 2 more)"}],"findings":[{"gate":"trigger:paymen
+== 06:23:07 a person force-pushes A10's branch
+R4=26 earlier reviews: 3 reviews, 3 open + 8 answered listed, 1988 B of question lines and footers (cap 2048)
+  - Task 23 (`security-review` at `a0a8298ae59e`): verdict `findings`; commits pushed: none; questions:
+  - ... (9 answered questions omitted; read full threads with `grain pr threads`)
+  - Task 24 (`security-review` at `eb57cd5827c2`): verdict `findings`; commits pushed: none; questions:
+  - Task 25 (`security-review` at `aba6e0481438`): verdict `findings`; commits pushed: none; questions:
+== 06:23:09 done A1=2 A2=4 A3=6 A4=8 A5=10 A6=12 A7=14 A8=16 AG=18 A9=19 A10=22
