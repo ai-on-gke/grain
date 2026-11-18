@@ -98,6 +98,8 @@ The collector captures:
 - Installed grain-daemon unit, effective startup/stop properties, and
   the standard `/usr/local/lib/grain/extract-host-binaries.sh` contents.
 - Bounded boot, kernel, Docker/containerd and daemon journal evidence.
+  The kernel query uses _TRANSPORT=kernel to search retained boots in the
+  fixed window, avoiding journalctl -k's implicit current-boot filter.
 - Docker's retained container events and minimal inspect metadata for
   retained event IDs plus the named daemon, without container env.
 - Overlay mountinfo per visible mount namespace, including filesystem

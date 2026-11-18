@@ -27,6 +27,7 @@ print(json.dumps({
         "builtin": "host-script",
         "run": "host",
         "command": "grain-host-script",
+        "args": [],
         "config": {"scripts": [{
             "name": "overlayfs-evidence",
             "description": "Collect bounded read-only host evidence for the 2026-11-18 OverlayFS restart warnings.",

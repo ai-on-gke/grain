@@ -146,6 +146,10 @@ class EvidenceTest(unittest.TestCase):
         script = entry["config"]["scripts"][0]
         self.assertEqual(entry["run"], "host")
         self.assertEqual(entry["command"], "grain-host-script")
+        existing = {"command": "grain", "args": ["capability", "host-script"], "env": {"KEEP": "value"}}
+        existing.update(entry)
+        self.assertEqual(existing["args"], [])
+        self.assertEqual(existing["env"], {"KEEP": "value"})
         self.assertTrue(script["approve"])
         self.assertEqual(script["max_args"], 0)
         self.assertEqual(script["max_stdin"], 0)

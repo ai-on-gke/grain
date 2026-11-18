@@ -270,7 +270,8 @@ class Collector:
         self.run("runtime_journal", ["journalctl", *window, "-u", "grain-daemon.service",
                  "-u", "docker.service", "-u", "containerd.service",
                  "-u", "grain-hostd-upgrade.service"], privileged=True)
-        self.run("kernel_journal", ["journalctl", *window, "-k"], privileged=True)
+        # A fixed historical window must not inherit -k\'s implicit current-boot filter.
+        self.run("kernel_journal", ["journalctl", *window, "_TRANSPORT=kernel"], privileged=True)
         events = self.run("container_events", DOCKER + ["events", "--since", SINCE, "--until", UNTIL,
                           "--filter", "type=container", "--format",
                           '{{json .ID}} {{json .Action}} {{json .Actor.Attributes.name}} {{json .Actor.Attributes.image}}'])
