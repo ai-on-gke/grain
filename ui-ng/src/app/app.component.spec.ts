@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { APP_BASE_HREF } from "@angular/common";
+import { APP_BASE_HREF, Location } from "@angular/common";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
 import {
   Router,
@@ -594,6 +594,55 @@ describe("AppComponent shell", () => {
     expect(resolveReloadHref(rootLoc, "/tasks")).toBe("/tasks");
     expect(resolveReloadHref(rootLoc, "/\t/evil.example.com")).toBeNull();
   });
+
+  // Open-redirect fuzz (docs/test-plans/2026-11-18.md §7 item 4) through
+  // a real Location at each mount grain is served under: only same-origin
+  // paths under the mount survive.
+  for (const base of ["/next/", "/grain/next/", "/"]) {
+    it(`resolveReloadHref keeps Reload same-origin under ${base}`, () => {
+      TestBed.configureTestingModule({
+        providers: [
+          provideRouter([]),
+          { provide: APP_BASE_HREF, useValue: base },
+        ],
+      });
+      const loc = TestBed.inject(Location);
+      const rows: [string | undefined, string | null][] = [
+        ["/tasks", `${base}tasks`],
+        ["/tasks?tab=closed#top", `${base}tasks?tab=closed#top`],
+        ["/processes/quality", `${base}processes/quality`],
+        ["/%09/evil.example.com", `${base}%09/evil.example.com`],
+        ["/%2F/evil.example.com", `${base}%2F/evil.example.com`],
+        ["/%5C/evil.example.com", `${base}%5C/evil.example.com`],
+        ["/javascript:alert(1)", `${base}javascript:alert(1)`],
+        ["//evil.example.com", null],
+        ["///evil.example.com", null],
+        ["/\\evil.example.com", null],
+        ["\\evil.example.com", null],
+        ["/\\/evil.example.com", null],
+        ["/\t/evil.example.com", null],
+        ["/\t\t//evil.example.com", null],
+        ["/\n/evil.example.com", null],
+        ["/\r\n/evil.example.com", null],
+        ["/\u0000/evil.example.com", null],
+        ["/\u007f/evil.example.com", null],
+        ["/tasks\u001b[31m", null],
+        ["javascript:alert(1)", null],
+        ["JaVaScRiPt:alert(1)", null],
+        ["data:text/html,<script>alert(1)</script>", null],
+        ["https://evil.example.com/next/tasks", null],
+        ["http:evil.example.com", null],
+        [" /tasks", null],
+        ["\t/tasks", null],
+        ["tasks", null],
+        ["", null],
+        [undefined, null],
+      ];
+      for (const [dest, want] of rows) {
+        expect(resolveReloadHref(loc, dest), JSON.stringify(dest)).toBe(want);
+      }
+    });
+  }
 
   it("skips @defer idle prefetch when navigator.connection.saveData is enabled", async () => {
     vi.useFakeTimers();
