@@ -233,6 +233,10 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
+- A page with a split calls `sp.attach()` once drawn (and `sp.detach()`
+  on destroy): only a measured split clamps a remembered share, so the
+  detail pane keeps its 320px floor whatever share a wider window stored
+  (`ui-ng/e2e/next-prompt-panes.spec.js`).
 - The detail pane is always there on desktop; it is not a modal. The
   exception is Agents, whose cards are a dashboard in their own right:
   its inspector opens only on the agent `?task=` names. With none (on
@@ -520,6 +524,12 @@ Rules:
   reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
   above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
   code blocks into one paragraph. A one-line `summary` stays the row title.
+  An alert's body is read whole from its family (`?open=1&family=`: the
+  polled list carries its first line only) and kept per raise -- id and
+  `lastRaisedAt` -- since raising it again rewrites the body under the same
+  id; until that raise is read, or when the read fails, the dock shows the
+  list's first line, never an earlier raise's body
+  (`ui-ng/e2e/next-inbox-alert-body.spec.js`).
 - **A decision's actions never leave the screen.** In the Inbox inspector
   only the message in the resolution dock gives way (it shrinks and
   scrolls); the dock's actions keep their height and the inspector body
@@ -583,7 +593,13 @@ Rules:
   matching headings) into one block with Side by side / Before / After /
   Stacked / Source (Before alone on a phone). `mermaid` is imported only
   when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
-  before it reaches the DOM. A diagram never shrinks below 75% of its
+  before it reaches the DOM. Mermaid runs in strict mode, and a
+  diagram's own `%%{init}%%` may change neither security settings nor its
+  theme, palette, fonts or CSS (`secure` in `mermaidConfigForMode`; Mermaid
+  strips those keys at every depth, front-matter `config:` and `__proto__`
+  included), so its palette follows the theme switch. A diagram's own
+  `style`/`classDef` statements are its syntax, not configuration, and
+  keep the colours they name. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
   the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
