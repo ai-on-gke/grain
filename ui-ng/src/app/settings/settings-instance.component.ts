@@ -48,6 +48,8 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import { formatStamp } from "../shared/dispatch-status";
+import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { errorText } from "../sessions/session-helpers";
 import {
@@ -76,6 +78,7 @@ interface HubScopeRule {
 interface HubSnapshot {
   enabled?: boolean;
   state?: string;
+  config?: { url?: string; entry?: string };
   effectiveHostKind?: string;
   lastHeartbeatAt?: string;
   heartbeatIntervalSeconds?: number;
@@ -130,6 +133,8 @@ function formatBytes(bytes: number): string {
     ConfirmDialogComponent,
     TipDirective,
     SandboxCommitmentNoteComponent,
+    StatusIconComponent,
+    CappedMarkdownComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -640,11 +645,11 @@ function formatBytes(bytes: number): string {
         </div>
       }
 
-      @case ("registry") {
+      @case ("hub") {
         <div class="s-card" id="registry-status" data-testid="card-registry">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">Grain Hub connection</h3>
+              <h3 class="s-card-title">Hub connection</h3>
               <p class="s-card-desc">
                 Advertise repository scopes and health heartbeats to a central
                 Grain Hub directory.
@@ -656,6 +661,7 @@ function formatBytes(bytes: number): string {
                 data-testid="registry-status-pill"
                 [attr.data-state]="registryState()"
               >
+                <g-status-icon [tone]="registryTone()" />
                 {{ registryStateLabel() }}
               </span>
               <button
@@ -667,6 +673,11 @@ function formatBytes(bytes: number): string {
                   !registryEnabled() ||
                   heartbeatSending()
                 "
+                [gTip]="
+                  access.can('POST /api/registry/heartbeat')
+                    ? ''
+                    : access.deniedReason('POST /api/registry/heartbeat')
+                "
                 (click)="sendHeartbeat()"
               >
                 {{ heartbeatSending() ? "Sending…" : "Heartbeat now" }}
@@ -674,14 +685,21 @@ function formatBytes(bytes: number): string {
             </div>
           </div>
 
-          @if (registryEnabled()) {
-            <span class="s-meta-mono" data-testid="registry-endpoint">
-              {{ hubField("url") }} · {{ hubField("entry") }}
-            </span>
-          }
-          <p class="s-hint s-num" data-testid="registry-summary">
-            {{ registrySummary() }}
-          </p>
+          <div class="hub-status-stack">
+            @if (registryEnabled()) {
+              <span class="s-meta-mono" data-testid="registry-endpoint">
+                {{ savedHubField("url") }} · {{ savedHubField("entry") }}
+              </span>
+            }
+            <p class="s-hint s-num" data-testid="registry-summary">
+              {{ registrySummary() }}
+            </p>
+            @if (!access.can("POST /api/registry/heartbeat")) {
+              <span class="s-hint" data-testid="registry-heartbeat-denied">{{
+                access.deniedReason("POST /api/registry/heartbeat")
+              }}</span>
+            }
+          </div>
           @if (heartbeatResult(); as hr) {
             <div
               class="s-banner"
@@ -693,21 +711,28 @@ function formatBytes(bytes: number): string {
               <span>{{ hr.text }}</span>
             </div>
           }
-          @if (registrySnapshot()?.lastError; as lastErr) {
+          @if (registryEnabled() && liveSnapshot()?.lastError; as lastErr) {
             <div
-              class="s-banner error"
+              class="s-banner error hub-alert"
               role="alert"
               data-testid="registry-last-error"
             >
-              <span>{{ lastErr }}</span>
+              <g-status-icon tone="error" />
+              <g-capped-markdown
+                class="hub-banner-body"
+                noun="error"
+                label="Hub error"
+                [text]="lastErr"
+              />
             </div>
           }
-          @if (scopeConflictText()) {
+          @if (registryEnabled() && scopeConflictText()) {
             <div
-              class="s-banner warn"
+              class="s-banner warn hub-alert"
               role="alert"
               data-testid="registry-scope-conflicts"
             >
+              <g-status-icon tone="warn" />
               <span
                 >Scope conflict reported by the hub:
                 {{ scopeConflictText() }}</span
@@ -755,9 +780,14 @@ function formatBytes(bytes: number): string {
                           <div class="s-inline">
                             <span
                               class="status-pill"
+                              data-testid="registry-scope-role"
                               [class.healthy]="sc.role === 'primary'"
                               [class.neutral]="sc.role !== 'primary'"
-                              >{{ sc.role }}</span
+                              ><g-status-icon
+                                [tone]="
+                                  sc.role === 'primary' ? 'healthy' : 'neutral'
+                                "
+                              />{{ scopeRoleLabel(sc.role) }}</span
                             >
                             <span
                               class="status-pill quiet"
@@ -790,6 +820,13 @@ function formatBytes(bytes: number): string {
               </p>
             </div>
           </div>
+          @if (canWriteSettings() && !canWriteHubToken()) {
+            <span class="s-hint" data-testid="registry-auth-target-denied"
+              >Hub URL, Entry name, Credential mode and OIDC audience decide
+              where this daemon sends its credential.
+              {{ access.deniedReason("PUT /api/secrets/{secret}/{key}") }}</span
+            >
+          }
           <div class="s-grid">
             <div class="s-field">
               <label class="s-label" for="reg-url">Hub URL</label>
@@ -800,7 +837,7 @@ function formatBytes(bytes: number): string {
                 data-testid="input-hub-url"
                 placeholder="https://hub.grain.internal"
                 [value]="hubField('url')"
-                [disabled]="!canWriteSettings()"
+                [disabled]="!canWriteHubAuthTarget()"
                 (input)="setHubField('url', $any($event.target).value)"
               />
               <span class="s-hint"
@@ -817,7 +854,7 @@ function formatBytes(bytes: number): string {
                 data-testid="input-hub-entry"
                 placeholder="dco-core"
                 [value]="hubField('entry')"
-                [disabled]="!canWriteSettings()"
+                [disabled]="!canWriteHubAuthTarget()"
                 (input)="setHubField('entry', $any($event.target).value)"
               />
               <span class="s-hint"
@@ -833,7 +870,7 @@ function formatBytes(bytes: number): string {
                 align="left"
                 [options]="hubAuthOptions"
                 [value]="hubField('authMode') || 'token'"
-                [disabled]="!canWriteSettings()"
+                [disabled]="!canWriteHubAuthTarget()"
                 (valueChange)="setHubField('authMode', $event)"
               />
             </div>
@@ -847,7 +884,7 @@ function formatBytes(bytes: number): string {
                 [placeholder]="hubField('url') || 'the Hub URL'"
                 [value]="hubField('oidcAudience')"
                 [disabled]="
-                  !canWriteSettings() || hubField('authMode') !== 'oidc'
+                  !canWriteHubAuthTarget() || hubField('authMode') !== 'oidc'
                 "
                 (input)="setHubField('oidcAudience', $any($event.target).value)"
               />
@@ -882,7 +919,7 @@ function formatBytes(bytes: number): string {
                 (input)="setHubField('displayName', $any($event.target).value)"
               />
             </div>
-            <div class="s-field">
+            <div class="s-field hub-field-wide">
               <label class="s-label" for="reg-purpose">Purpose</label>
               <input
                 id="reg-purpose"
@@ -925,7 +962,9 @@ function formatBytes(bytes: number): string {
                 [class.healthy]="hubTokenSet()"
                 [class.neutral]="!hubTokenSet()"
                 data-testid="registry-token-state"
-                >{{ hubTokenSet() ? "set" : "not set" }}</span
+                ><g-status-icon
+                  [tone]="hubTokenSet() ? 'healthy' : 'neutral'"
+                />{{ hubTokenSet() ? "Stored" : "Not set" }}</span
               >
             </div>
             <span class="s-hint"
@@ -952,22 +991,32 @@ function formatBytes(bytes: number): string {
                   hubTokenSet() ? 'Replace the stored grc_… token' : 'grc_…'
                 "
                 [value]="hubToken()"
-                [disabled]="!canWriteSecrets()"
+                [disabled]="!canWriteSecrets() || storingHubToken()"
                 (input)="hubToken.set($any($event.target).value)"
               />
               <button
                 type="submit"
                 class="btn-tonal s-btn-sm"
                 data-testid="save-hub-token"
-                [disabled]="!canWriteSecrets() || !hubToken().trim()"
+                [disabled]="
+                  !canWriteSecrets() || !hubToken().trim() || storingHubToken()
+                "
               >
-                Set token
+                {{
+                  storingHubToken()
+                    ? "Storing…"
+                    : hubTokenSet()
+                      ? "Replace"
+                      : "Store"
+                }}
               </button>
               <button
                 type="button"
                 class="btn-text s-btn-sm"
                 data-testid="clear-hub-token"
-                [disabled]="!hubTokenSet() || !canClearSecrets()"
+                [disabled]="
+                  !hubTokenSet() || !canClearSecrets() || storingHubToken()
+                "
                 (click)="confirmClearHubToken()"
               >
                 Clear
@@ -1027,11 +1076,21 @@ function formatBytes(bytes: number): string {
                       <td>
                         <span
                           class="status-pill"
+                          data-testid="registry-rule-mode"
                           [class.healthy]="!r.exclude && r.role !== 'secondary'"
                           [class.neutral]="!r.exclude && r.role === 'secondary'"
                           [class.quiet]="r.exclude"
-                          >{{
-                            r.exclude ? "excluded" : r.role || "primary"
+                          ><g-status-icon
+                            [tone]="
+                              r.exclude || r.role === 'secondary'
+                                ? 'neutral'
+                                : 'healthy'
+                            "
+                            [kind]="r.exclude ? 'quiet' : ''"
+                          />{{
+                            r.exclude
+                              ? "Excluded"
+                              : scopeRoleLabel(r.role || "primary")
                           }}</span
                         >
                       </td>
@@ -1040,9 +1099,8 @@ function formatBytes(bytes: number): string {
                           <button
                             type="button"
                             class="btn-text s-btn-sm"
-                            [attr.aria-label]="
-                              'Remove scope rule for ' + r.repo
-                            "
+                            [attr.aria-label]="ruleRemoveLabel(r)"
+                            [gTip]="ruleRemoveLabel(r)"
                             [disabled]="!canWriteSettings()"
                             (click)="removeHubRule($index)"
                           >
@@ -1355,9 +1413,18 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   private readonly hubReload = effect(() => {
     void this.state.settings()["hub"];
     this.hubTokenSet();
-    if (this.section() === "registry") {
+    if (this.section() === "hub") {
       untracked(() => void this.loadRegistry());
     }
+  });
+
+  // A typed registration token is never kept past a Discard, a Save or a
+  // move to another section: it is write-only, and the box reads empty
+  // whenever the form does.
+  private readonly hubTokenReset = effect(() => {
+    this.state.discardEpoch();
+    this.section();
+    untracked(() => this.hubToken.set(""));
   });
 
   protected readonly Number = Number;
@@ -1437,6 +1504,11 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     text: string;
   } | null>(null);
   protected readonly hubToken = signal("");
+  protected readonly storingHubToken = signal(false);
+  // Bumped by every GET /api/registry and POST /api/registry/heartbeat, so
+  // only the answer to the newest one is kept: a slow read started before
+  // a heartbeat or a save cannot put back the snapshot from before it.
+  private registrySeq = 0;
   // GET /api/secrets' enabled: a daemon with no secret store (grain demo,
   // a UI with no secrets directory) cannot hold the token at all.
   protected readonly secretsEnabled = signal(true);
@@ -1451,19 +1523,44 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     { value: "exclude", label: "Exclude repo" },
   ];
 
-  // The stored hub settings, or what GET /api/registry reports when the
-  // settings have not loaded them: the snapshot's own enabled flag is the
-  // daemon's, so a URL and entry staged but not saved do not count.
-  protected readonly registryEnabled = computed(() => {
+  // The hub settings as saved, not as staged in the form.
+  private readonly savedHub = computed(
+    () =>
+      (this.state.settings()["hub"] as Record<string, unknown> | null) ?? {},
+  );
+
+  // GET /api/registry describes the daemon's hub as it was when it
+  // answered. Once the saved URL or entry name differ from the one it
+  // reports, it is about another hub (or none) and is not shown until the
+  // re-read answers.
+  protected readonly liveSnapshot = computed<HubSnapshot | null>(() => {
     const snap = this.registrySnapshot();
+    if (!snap) return null;
+    const saved = this.savedHub();
+    const cfg = snap.config ?? {};
+    const url = (v: unknown) =>
+      String(v ?? "")
+        .trim()
+        .replace(/\/+$/, "");
+    return url(cfg.url) === url(saved["url"]) &&
+      String(cfg.entry ?? "") === String(saved["entry"] ?? "")
+      ? snap
+      : null;
+  });
+
+  // The daemon's own enabled flag while its snapshot is current, else the
+  // saved settings: a URL and entry staged but not saved do not count, and
+  // ones saved but not yet re-read do.
+  protected readonly registryEnabled = computed(() => {
+    const snap = this.liveSnapshot();
     if (snap) return Boolean(snap.enabled);
-    const h = this.state.settings()["hub"] as Record<string, unknown> | null;
-    return Boolean(h?.["url"] && h?.["entry"]);
+    const h = this.savedHub();
+    return Boolean(h["url"] && h["entry"]);
   });
 
   protected readonly registryState = computed(() =>
     this.registryEnabled()
-      ? String(this.registrySnapshot()?.state || "connecting")
+      ? String(this.liveSnapshot()?.state || "connecting")
       : "disabled",
   );
 
@@ -1488,7 +1585,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   );
 
   protected readonly registrySummary = computed(() => {
-    const snap = this.registrySnapshot();
+    const snap = this.liveSnapshot();
     if (!this.registryEnabled()) {
       return "Set a Hub URL and entry name below (or run grain hub register) so this daemon registers itself and heartbeats its version, health, task counts and repository scopes.";
     }
@@ -1506,7 +1603,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   });
 
   protected readonly scopeConflictText = computed(() => {
-    const c = this.registrySnapshot()?.scopeConflicts;
+    const c = this.liveSnapshot()?.scopeConflicts;
     if (!Array.isArray(c) || c.length === 0) return "";
     return c
       .map(
@@ -1531,9 +1628,11 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   // while nothing is chosen.
   protected readonly hubHostKindOptions = computed<readonly PillOption[]>(
     () => {
+      // effectiveHostKind is what the saved choice resolves to, so it
+      // names auto-detect's answer only while auto-detect is what is saved.
       const eff = this.registrySnapshot()?.effectiveHostKind;
       const auto =
-        !this.hubField("hostKind") && eff
+        !this.savedHub()["hostKind"] && eff
           ? `Auto-detect (${eff})`
           : "Auto-detect";
       return [
@@ -1616,6 +1715,18 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       !this.state.configRepoOnly() &&
       !this.state.sectionLocked(this.section())
     );
+  }
+
+  // Changing where the daemon sends its hub credential (URL, entry name,
+  // credential mode, OIDC audience) also takes secrets:write
+  // (checkHubAuthTargetWrite, pkg/ui/hub.go), the scope storing the
+  // token itself needs.
+  protected canWriteHubToken(): boolean {
+    return this.access.can("PUT /api/secrets/{secret}/{key}");
+  }
+
+  protected canWriteHubAuthTarget(): boolean {
+    return this.canWriteSettings() && this.canWriteHubToken();
   }
 
   protected openCustomizeNav(ev: Event): void {
@@ -1732,7 +1843,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
           })
           .catch(() => undefined);
       }
-    } else if (sec === "registry") {
+    } else if (sec === "hub") {
       void this.loadRegistry();
     } else if (sec === "upgrade") {
       void this.loadUpgrade();
@@ -1879,6 +1990,11 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return v === undefined || v === null ? "" : String(v);
   }
 
+  protected savedHubField(key: string): string {
+    const v = this.savedHub()[key];
+    return v === undefined || v === null ? "" : String(v);
+  }
+
   protected hubRaw(key: string): unknown {
     const h = this.state.val<Record<string, unknown> | null>("hub", {}) ?? {};
     return h[key];
@@ -1891,6 +2007,21 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected setHubValue(key: string, val: unknown): void {
     const cur = this.state.val<Record<string, unknown> | null>("hub", {}) ?? {};
     this.state.setField("hub", { ...cur, [key]: val });
+  }
+
+  protected scopeRoleLabel(role: string | undefined): string {
+    switch (role) {
+      case "primary":
+        return "Primary";
+      case "secondary":
+        return "Secondary";
+      default:
+        return role ? role.charAt(0).toUpperCase() + role.slice(1) : "";
+    }
+  }
+
+  protected ruleRemoveLabel(r: HubScopeRule): string {
+    return `Remove scope rule for ${r.repo}${r.pathPrefix ? ` (${r.pathPrefix}/)` : ""}`;
   }
 
   protected originLabel(origin: string | undefined): string {
@@ -1955,9 +2086,12 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       }
     }
     if (!this.access.can("GET /api/registry")) return;
+    const seq = ++this.registrySeq;
     try {
       const r = await this.api.get<HubSnapshot>("GET /api/registry");
-      if (r && typeof r === "object") this.registrySnapshot.set(r);
+      if (seq === this.registrySeq && r && typeof r === "object") {
+        this.registrySnapshot.set(r);
+      }
     } catch {
       // Non-fatal: the card reads the stored settings until it answers.
     }
@@ -1969,13 +2103,16 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected async sendHeartbeat(): Promise<void> {
     this.heartbeatSending.set(true);
     this.heartbeatResult.set(null);
+    const seq = ++this.registrySeq;
     try {
       const r = await this.api.post<HubSnapshot>(
         "POST /api/registry/heartbeat",
         undefined,
         {},
       );
-      if (r && typeof r === "object") this.registrySnapshot.set(r);
+      if (seq === this.registrySeq && r && typeof r === "object") {
+        this.registrySnapshot.set(r);
+      }
       const at = r?.lastHeartbeatAt
         ? formatStamp(r.lastHeartbeatAt, this.state.config()?.timeZone)
         : "";
@@ -2019,7 +2156,8 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected async saveHubToken(): Promise<void> {
     const value = this.hubToken().trim();
-    if (!value || !this.canWriteSecrets()) return;
+    if (!value || !this.canWriteSecrets() || this.storingHubToken()) return;
+    this.storingHubToken.set(true);
     try {
       await this.api.put(
         "PUT /api/secrets/{secret}/{key}",
@@ -2032,6 +2170,8 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       this.snackbar.show("Registration token stored");
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.storingHubToken.set(false);
     }
   }
 
@@ -2047,6 +2187,8 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   }
 
   private async clearHubToken(): Promise<void> {
+    if (this.storingHubToken()) return;
+    this.storingHubToken.set(true);
     try {
       await this.api.delete("DELETE /api/secrets/{secret}/{key}", {
         secret: HUB_TOKEN_SECRET,
@@ -2057,6 +2199,8 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       this.snackbar.show("Registration token cleared");
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.storingHubToken.set(false);
     }
   }
 

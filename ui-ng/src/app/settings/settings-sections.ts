@@ -31,7 +31,7 @@ export type SettingsSectionId =
   | "cli"
   | "caches"
   | "engine"
-  | "registry"
+  | "hub"
   | "upgrade";
 
 export type SettingsGroupId =
@@ -396,8 +396,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
         ],
       },
       {
-        id: "registry",
-        label: "Registry & Hub",
+        id: "hub",
+        label: "Hub",
         subtitle:
           "Grain Hub directory registration, live heartbeat telemetry, advertised repo scopes, and credentials.",
         keywords: [
@@ -441,7 +441,7 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   hosts: "hostds",
   host: "hostds",
   state: "config-repo",
-  hub: "registry",
+  registry: "hub",
   workflow: "tasks",
   accounts: "access",
   sandbox: "sandboxes",
@@ -459,7 +459,7 @@ export const SECTION_ANCHORS: Readonly<Record<string, string>> = {
   secrets: "other-secrets",
   "legacy-capabilities": "other-secrets",
   integrations: "other-secrets",
-  hub: "registry-status",
+  registry: "registry-status",
 };
 
 // settingsAnchor is the element id a settings URL asks to be scrolled
@@ -514,6 +514,7 @@ export const CONFIG_REPO_SECTION_PATHS: Readonly<
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
   caches: ["tables/grain_config.json"],
+  hub: ["tables/grain_config.json"],
 };
 
 export function isConfigRepoSection(id: SettingsSectionId): boolean {
@@ -621,12 +622,6 @@ export const SETTING_LABELS: Readonly<Record<string, string>> = {
   autoUpgradeOn: "Automatic upgrades",
   autoUpgradeMinIntervalHours: "Min interval between upgrades (hours)",
   hub: "Hub",
-  registryUrl: "Hub URL",
-  registryEntry: "Entry name",
-  registryAuthMode: "Credential source",
-  registryDisplayName: "Display name",
-  registryPurpose: "Purpose",
-  registryListed: "Listed in hub directory",
   sandboxDiskFloorShare: "Disk floor (share of each volume)",
   sandboxDiskFloorMinMb: "Disk floor minimum (MiB)",
   sandboxOvercommitCpuMin: "Auto CPU minimum",
@@ -646,20 +641,72 @@ export const SETTING_LABELS: Readonly<Record<string, string>> = {
   k8sPriorityClassCi: "Priority class for CI jobs",
 };
 
+// The fields of the hub setting (model.HubConfig), each its own row of
+// the plan: the setting is one object on the wire, but a person changes
+// one field of it at a time.
+export const HUB_SETTING_LABELS: Readonly<Record<string, string>> = {
+  url: "Hub URL",
+  entry: "Hub entry name",
+  authMode: "Hub credential mode",
+  oidcAudience: "Hub OIDC audience",
+  hostKind: "Hub platform",
+  displayName: "Hub catalog display name",
+  purpose: "Hub purpose",
+  listed: "Listed in hub directory",
+  ownerGroup: "Hub owner group",
+  tags: "Hub tags",
+  scopes: "Hub scope overrides",
+};
+
 export function settingLabel(field: string): string {
+  if (field.startsWith("hub.")) {
+    const key = field.slice(4);
+    return HUB_SETTING_LABELS[key] ?? `Hub ${key}`;
+  }
   return SETTING_LABELS[field] ?? field;
+}
+
+// formatHubScopeRule says one Scope overrides rule the way the card does:
+// "acme/monorepo (services/billing/) primary".
+function formatHubScopeRule(rule: unknown): string {
+  if (!rule || typeof rule !== "object") return String(rule);
+  const r = rule as Record<string, unknown>;
+  const where = r["pathPrefix"] ? ` (${String(r["pathPrefix"])}/)` : "";
+  const mode = r["exclude"] ? "excluded" : String(r["role"] || "primary");
+  return `${String(r["repo"] ?? "")}${where} ${mode}`;
 }
 
 export function formatSettingValue(value: unknown): string {
   if (value === undefined || value === null || value === "") return "not set";
   if (typeof value === "boolean") return value ? "on" : "off";
   if (Array.isArray(value)) {
-    return value.length === 0 ? "none" : value.map(String).join(", ");
+    return value.length === 0
+      ? "none"
+      : value
+          .map((v) =>
+            v && typeof v === "object" && "repo" in v
+              ? formatHubScopeRule(v)
+              : typeof v === "object"
+                ? formatSettingValue(v)
+                : String(v),
+          )
+          .join(", ");
   }
   if (typeof value === "object") {
-    return JSON.stringify(value);
+    // An object setting reads as its fields, "key: value", one after
+    // another -- never as raw JSON with nowhere to break a line.
+    const parts = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => `${k}: ${formatSettingValue(v)}`);
+    return parts.length === 0 ? "not set" : parts.join(" · ");
   }
   return String(value);
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
 }
 
 export interface SettingsPlanRow {
@@ -689,9 +736,58 @@ export function computeSettingsPlan(
 
   const rows: SettingsPlanRow[] = [];
   const seen = new Set<string>();
+  // hub is planned field by field (HUB_SETTING_LABELS): a row for each
+  // field it changes or was asked to set to something else, or one
+  // "unchanged" row for the whole setting when none differ.
+  const addHub = (): void => {
+    const was = asRecord(
+      unrunnable.has("hub") ? unrunnable.get("hub") : stored["hub"],
+    );
+    const becomes = asRecord(planned["hub"]);
+    const asked = "hub" in req ? asRecord(req["hub"]) : null;
+    const keys = [
+      ...Object.keys(HUB_SETTING_LABELS),
+      ...[...Object.keys(was), ...Object.keys(becomes)].filter(
+        (k) => !(k in HUB_SETTING_LABELS),
+      ),
+    ];
+    const before = rows.length;
+    const done = new Set<string>();
+    for (const key of keys) {
+      if (done.has(key)) continue;
+      done.add(key);
+      const w = formatSettingValue(was[key]);
+      const b = formatSettingValue(becomes[key]);
+      const a = asked && key in asked ? formatSettingValue(asked[key]) : null;
+      const typed = a !== null && a !== b ? a : null;
+      if (w === b && typed === null) continue;
+      rows.push({
+        field: `hub.${key}`,
+        label: settingLabel(`hub.${key}`),
+        was: w,
+        becomes: b,
+        changed: w !== b,
+        typed,
+      });
+    }
+    if (rows.length === before) {
+      rows.push({
+        field: "hub",
+        label: settingLabel("hub"),
+        was: formatSettingValue(stored["hub"]),
+        becomes: formatSettingValue(planned["hub"]),
+        changed: false,
+        typed: null,
+      });
+    }
+  };
   const add = (field: string): void => {
     if (seen.has(field)) return;
     seen.add(field);
+    if (field === "hub") {
+      addHub();
+      return;
+    }
     const was = formatSettingValue(
       unrunnable.has(field) ? unrunnable.get(field) : stored[field],
     );

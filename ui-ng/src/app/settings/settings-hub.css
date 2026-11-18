@@ -1,0 +1,73 @@
+/* Settings -> Hub (settings-instance.component.ts, @case "hub"). */
+
+/* The endpoint, its heartbeat caption and any reason Heartbeat now is
+   off read as one block under the card head, closer together than the
+   card's own gap between sections. */
+.hub-status-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hub-status-stack > p {
+  margin: 0;
+}
+
+/* The hub's error and scope-conflict alerts: the shape beside the first
+   line, the text taking the rest of the row. */
+.s-banner.hub-alert {
+  justify-content: flex-start;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+
+.s-banner.hub-alert > g-status-icon {
+  flex: none;
+  margin-top: 4px;
+}
+
+.s-banner.hub-alert > .hub-banner-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* lastError is the hub's (or a proxy's) own text, read as Markdown in a
+   capped box so a long one cannot push the form below off the pane. Its
+   paragraphs keep their spacing between them, none above the first or
+   below the last. */
+.hub-banner-body .capped-md {
+  max-height: min(160px, 40cqh);
+  color: inherit;
+}
+
+.hub-banner-body .capped-md > :first-child {
+  margin-top: 0;
+}
+
+.hub-banner-body .capped-md > :last-child {
+  margin-bottom: 0;
+}
+
+.hub-banner-body .capped-md-toggle {
+  color: inherit;
+}
+
+/* Purpose is the longest field and the last of seven: it takes the
+   columns its row leaves empty rather than sit beside a gap. The grid is
+   auto-fit columns of at least 240px with 20px gaps (.s-grid), so at
+   four columns (1020px and wider) its row has two to spare; at three or
+   fewer it is alone on its row and takes all of it. */
+#registry-config {
+  container-type: inline-size;
+}
+
+.s-field.hub-field-wide {
+  grid-column: 1 / -1;
+}
+
+@container (min-width: 1020px) {
+  .s-field.hub-field-wide {
+    grid-column: span 2;
+  }
+}

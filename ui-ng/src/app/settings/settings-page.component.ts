@@ -83,6 +83,7 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
     "../shared/pill-select.css",
     "./settings-layout.css",
     "./settings-forms.css",
+    "./settings-hub.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -304,7 +305,12 @@ const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
                       Close preview
                     </button>
                   </div>
-                  <div class="s-table-wrap">
+                  <div
+                    class="s-table-wrap"
+                    role="region"
+                    tabindex="0"
+                    aria-label="Planned setting changes"
+                  >
                     <table class="s-table" aria-label="Planned setting changes">
                       <thead>
                         <tr>
