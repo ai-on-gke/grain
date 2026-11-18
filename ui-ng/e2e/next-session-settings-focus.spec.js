@@ -24,7 +24,9 @@
 //   and Escape (or Done) closes only the builder -- not the settings panel
 //   around it -- with focus back on the button;
 // - B4: Start a fresh chat hands focus to its choices, Escape hands it
-//   back, and starting clean lands it in the composer.
+//   back, and starting clean lands it in the composer;
+// - B5: a short screen with the list beside the chat (960x540, 1024x600)
+//   keeps the conversation and Send on screen.
 //
 // The only interception is B2's: GET /api/console-sessions answered with
 // the demo's own list plus effectiveNetworkAccess "open", as a host-
@@ -93,7 +95,7 @@ test("Tasks approved is saved on the session and survives a reload", async ({
   await expect(page.getByTestId("session-tasks-approved")).not.toBeChecked();
 });
 
-test("a session whose 'none' network cannot be honoured says so", async ({
+test("a session whose 'none' network cannot be honoured says so @dark", async ({
   page,
   axe,
 }) => {
@@ -165,5 +167,43 @@ for (const size of [
     await page.getByTestId("fresh-chat-clean").click();
     await expect(page.getByTestId("fresh-chat-clean")).toHaveCount(0);
     await expect(page.getByTestId("composer")).toBeFocused();
+  });
+}
+
+// B5: on a short screen where the session list stays beside the chat, the
+// chat head left the conversation 40px tall and, at 960x540, put Send
+// below the fold with nothing to scroll.
+for (const size of [
+  { width: 960, height: 540 },
+  { width: 1024, height: 600 },
+]) {
+  test(`a short ${size.width}x${size.height} screen keeps the conversation and Send on screen`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(size);
+    await page.goto("sessions/director");
+    const send = page.getByTestId("send");
+    await expect(send).toBeVisible();
+    const geo = await page.evaluate(() => {
+      const log = document
+        .querySelector('[data-testid="chat-log"]')
+        .getBoundingClientRect();
+      const btn = document.querySelector('[data-testid="send"]');
+      const r = btn.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        r.left + r.width / 2,
+        r.top + r.height / 2,
+      );
+      return {
+        logHeight: log.height,
+        sendBottom: r.bottom,
+        sendOnTop: btn.contains(hit),
+        overflow: document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+    expect(geo.logHeight).toBeGreaterThanOrEqual(200);
+    expect(geo.sendBottom).toBeLessThanOrEqual(size.height);
+    expect(geo.sendOnTop).toBe(true);
+    expect(geo.overflow).toBeLessThanOrEqual(0);
   });
 }

@@ -341,6 +341,27 @@ g-sessions-page {
   }
 }
 
+/* The same squeeze on a short screen at any width -- a small laptop
+   (960x540), a tablet in landscape with its keyboard up (1024x600) --
+   where the list stays beside the chat: the head and grants row left the
+   conversation 40px and, at 960x540, Send below the fold with nothing to
+   scroll (2026-11-18 walkthrough, B5). The pane scrolls as on a phone. */
+@media (max-height: 760px) {
+  .sessions-split .chat-pane {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .chat-pane .chat-log {
+    flex: 1 0 0;
+    min-height: min(18rem, 45dvh);
+  }
+  .chat-pane .chat-composer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+  }
+}
+
 /* A message the server has not taken yet (sending, queued, not sent). */
 .msg.is-pending {
   border-style: dashed;
