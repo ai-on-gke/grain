@@ -19,6 +19,8 @@ import type {
   Task,
   Template,
 } from "../api/models";
+import { parseForkHead } from "./fork-head";
+import { taskPriority } from "../shared/task-priority";
 
 // The builtin fields of ui/src/newTaskForm.js, plus foundIn, which only
 // this form offers.
@@ -37,6 +39,7 @@ export type FieldId =
   | "fixesBaseBranch"
   | "foundIn"
   | "grants"
+  | "admission"
   | "model"
   | "dependsOn"
   | "agentBackendId"
@@ -95,6 +98,7 @@ const BUILTIN: Record<FieldId, { visibility: Visibility; order: number }> = {
   noPort: { visibility: "more", order: 175 },
   fixesBaseBranch: { visibility: "more", order: 180 },
   foundIn: { visibility: "more", order: 185 },
+  admission: { visibility: "more", order: 190 },
   agentBackendId: { visibility: "more", order: 200 },
   networkAccess: { visibility: "more", order: 210 },
   nothingNeededAction: { visibility: "more", order: 220 },
@@ -377,12 +381,60 @@ export interface NewTaskDraft {
   sandboxDiskGb: number;
   approved: boolean;
   atFront: boolean;
+  // Task priority as the box holds it, "" or a whole number from 1 up
+  // (taskPriority); "5", or a picked template's own priority, until edited.
+  priority: string;
+  // The account responsible for the task; "" files it as the caller's.
+  owner: string;
+  keepRunning: boolean;
+  // model.Admission: "standard", "bypass" or "durable". Starts on what
+  // the server would file with none given (defaultAdmissionForRepo).
+  admission: string;
   origin?: string;
   parentId?: string;
   generatedFrom?: string;
   workstream?: boolean;
   autoApproveProposals?: boolean;
   goalMode: GoalModeConfig | null;
+}
+
+export const DEFAULT_PRIORITY = 5;
+
+// The admission values in rank order, standard < bypass < durable
+// (model.Admission.Rank).
+export const ADMISSIONS = ["standard", "bypass", "durable"];
+
+// defaultAdmissionForRepo is the admission the server files a task with
+// when the request names none (defaultTaskAdmission in pkg/ui/client.go):
+// the higher of the deployment's defaultAdmission and the repo's own.
+// "" is the deployment's default target; NO_REPO has only the
+// deployment's.
+export function defaultAdmissionForRepo(
+  config: GrainConfig | null,
+  repo: string,
+): string {
+  const rank = (a: unknown) => ADMISSIONS.indexOf(String(a ?? "").trim());
+  let best = Math.max(0, rank(config?.["defaultAdmission"]));
+  const target =
+    repo === NO_REPO
+      ? ""
+      : repo || String(config?.["defaultTarget"] ?? "").trim();
+  const byRepo = config?.["repoDefaultAdmissions"];
+  if (target && byRepo && typeof byRepo === "object") {
+    const key = Object.keys(byRepo).find(
+      (k) => k.toLowerCase() === target.toLowerCase(),
+    );
+    if (key) {
+      best = Math.max(best, rank((byRepo as Record<string, unknown>)[key]));
+    }
+  }
+  return ADMISSIONS[best];
+}
+
+// templatePriority is what Task priority starts on with a template
+// picked: the template's own priority, which is what it files at, or 5.
+export function templatePriority(t: Template | null | undefined): string {
+  return String(t?.priority || DEFAULT_PRIORITY);
 }
 
 export function emptyDraft(
@@ -431,6 +483,12 @@ export function emptyDraft(
     sandboxDiskGb: 0,
     approved: !!f.approved.default,
     atFront: !!f.atFront.default,
+    priority: String(DEFAULT_PRIORITY),
+    owner: "",
+    keepRunning: false,
+    admission: ADMISSIONS.includes(String(f.admission.default))
+      ? String(f.admission.default)
+      : defaultAdmissionForRepo(config, repo),
     goalMode: null,
     ...prefill,
   };
@@ -449,6 +507,19 @@ export function buildPayload(
     return Array.isArray(v) ? v.length > 0 : String(v ?? "").trim() !== "";
   });
 
+  // Stated whenever a template is picked, 5 included: the server fills a
+  // missing priority from the template, so leaving out the 5 somebody
+  // chose filed the template's instead.
+  const priority = taskPriority(d.priority);
+  // Admission is said whenever it is not what the server would pick on
+  // its own -- "standard" included, on a deployment or repo whose default
+  // is higher -- and whenever a template is picked, whose own admission
+  // would otherwise be filed instead of the one chosen.
+  const admission = d.admission.trim();
+  const sayAdmission =
+    ADMISSIONS.includes(admission) &&
+    (!!templateOpts ||
+      admission !== defaultAdmissionForRepo(config, none ? NO_REPO : d.repo));
   return {
     title: d.title.trim(),
     description: d.description,
@@ -489,6 +560,13 @@ export function buildPayload(
     ...(hasCustom ? { customFields: d.customFields } : {}),
     approved: d.approved,
     atFront: d.atFront,
+    ...(!Number.isNaN(priority) &&
+    (templateOpts || priority !== DEFAULT_PRIORITY)
+      ? { priority }
+      : {}),
+    ...(d.owner.trim() ? { owner: d.owner.trim() } : {}),
+    ...(d.keepRunning ? { keepRunning: true } : {}),
+    ...(sayAdmission ? { admission } : {}),
     ...(d.origin !== undefined ? { origin: d.origin } : {}),
     ...(d.parentId ? { parentId: d.parentId } : {}),
     ...(d.autoApproveProposals !== undefined
@@ -511,7 +589,14 @@ export function buildPayload(
 
 export interface Problem {
   field:
-    "title" | "repo" | "newBranchName" | "templateField" | "foundIn" | "form";
+    | "title"
+    | "repo"
+    | "newBranchName"
+    | "templateField"
+    | "foundIn"
+    | "priority"
+    | "base"
+    | "form";
   message: string;
 }
 
@@ -565,6 +650,10 @@ export function validate(
       message: "Name the new branch, or untick the new-branch box.",
     };
   }
+  const fork = forkHeadProblem(d, fields);
+  if (fork) return fork;
+  const prio = priorityProblem(d);
+  if (prio) return prio;
   const foundInShown = !fields || fields.foundIn.visibility !== "hidden";
   if (
     foundInShown &&
@@ -577,6 +666,36 @@ export function validate(
     };
   }
   return null;
+}
+
+// The base branch box takes a GitHub fork head, "<owner>:<branch>", when
+// it names the branch the task works on (no new branch is being cut from
+// it). A malformed one is refused here in model.ParseForkHead's words,
+// rather than by the server on submit.
+export function forkHeadProblem(
+  d: NewTaskDraft,
+  fields?: Record<FieldId, FieldConfig>,
+): Problem | null {
+  if (d.repo === NO_REPO) return null;
+  if (fields && fields.base.visibility === "hidden") return null;
+  const branchShown = !fields || fields.newBranch.visibility !== "hidden";
+  if (branchShown && d.newBranch) return null;
+  const fh = parseForkHead(d.base);
+  if (fh?.error) return { field: "base", message: fh.error };
+  return null;
+}
+
+// A Task priority box that holds something other than a whole number from
+// 1 up ("0", "-2", "2.5") is refused; "" files the default, and "1e3" is
+// the 1000 it means.
+export function priorityProblem(d: NewTaskDraft): Problem | null {
+  if (!d.priority.trim() || !Number.isNaN(taskPriority(d.priority))) {
+    return null;
+  }
+  return {
+    field: "priority",
+    message: "Fix the task priority: it must be a whole number, 1 or more.",
+  };
 }
 
 export function directorMessage(d: NewTaskDraft): string {

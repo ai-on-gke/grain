@@ -58,7 +58,10 @@ import {
 import { NoGitConnectionNoticeComponent } from "../shared/no-git-connection-notice.component";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { CreateTaskService } from "./create-task.service";
+import { PRIORITY_REFUSAL, taskPriority } from "../shared/task-priority";
 import {
+  ADMISSIONS,
+  DEFAULT_PRIORITY,
   type FieldId,
   NO_REPO,
   type NewTaskDraft,
@@ -67,11 +70,14 @@ import {
   defaultCapabilitiesForRepo,
   directorMessage,
   emptyDraft,
+  forkHeadProblem,
   fromTemplateStem,
   hasHistory,
   lastBaseForRepo,
+  priorityProblem,
   resolveFields,
   targetableRepos,
+  templatePriority,
   validate,
 } from "./new-task-form";
 
@@ -419,6 +425,65 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                         [ngTemplateOutletContext]="{ $implicit: id }"
                       />
                     }
+                    <!-- Task priority, Owner and Keep running: not fields
+                         settings/new-task-form.yml places, as on the
+                         classic form. Admission is one, drawn through
+                         fieldTpl with the rest. -->
+                    <label class="field">
+                      <span>Task priority</span>
+                      <input
+                        #priorityInput
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        data-testid="nt-priority"
+                        aria-describedby="nt-priority-help"
+                        [attr.aria-invalid]="priorityBad() ? 'true' : null"
+                        [value]="draft().priority"
+                        (input)="set('priority', val($event))"
+                      />
+                      <small
+                        id="nt-priority-help"
+                        data-testid="nt-priority-help"
+                        [class.muted]="!priorityBad()"
+                        [class.nt-field-error]="priorityBad()"
+                        [attr.role]="priorityBad() ? 'alert' : null"
+                        >{{ priorityHelp() }}</small
+                      >
+                    </label>
+                    <label class="field">
+                      <span>Owner</span>
+                      <input
+                        type="text"
+                        data-testid="nt-owner"
+                        placeholder="Defaults to you"
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-describedby="nt-owner-help"
+                        [value]="draft().owner"
+                        (input)="set('owner', val($event))"
+                      />
+                      <small id="nt-owner-help" class="muted"
+                        >The account responsible for this task.</small
+                      >
+                    </label>
+                    <label class="check-row">
+                      <input
+                        type="checkbox"
+                        data-testid="nt-keep-running"
+                        aria-describedby="nt-keep-running-help"
+                        [checked]="draft().keepRunning"
+                        (change)="set('keepRunning', checked($event))"
+                      />
+                      <span>Keep running</span>
+                    </label>
+                    <small id="nt-keep-running-help" class="muted nt-check-help"
+                      >Restart the task as soon as its run exits, instead of
+                      completing or parking it.</small
+                    >
+
                     <!-- Reviewers & Auto-approve proposals -->
                     <div class="field">
                       <span>Reviewers (optional)</span>
@@ -479,6 +544,19 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
             </div>
 
             <div class="sheet-foot">
+              @if (hiddenBlocker(); as why) {
+                <p class="nt-foot-blocker" data-testid="nt-submit-blocker">
+                  {{ why }}
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="nt-submit-blocker-show"
+                    (click)="showBlocker()"
+                  >
+                    Show
+                  </button>
+                </p>
+              }
               <div class="sheet-switches">
                 @if (fields().approved.visibility !== "hidden") {
                   <div class="switch-row">
@@ -576,7 +654,8 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                   type="submit"
                   class="btn-primary"
                   data-testid="new-task-submit"
-                  [disabled]="busy() || !canFile() || !!forkHead()?.error"
+                  [disabled]="busy() || !canFile() || !!submitBlocker()"
+                  [attr.title]="submitBlocker()?.message ?? null"
                 >
                   {{
                     draft().workstream
@@ -725,9 +804,11 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                 draft().newBranch ? "Create it from" : f.label || "Base branch"
               }}</span>
               <input
+                #baseInput
                 type="text"
                 data-testid="nt-base"
                 placeholder="The repository's default branch"
+                spellcheck="false"
                 [value]="draft().base"
                 [attr.aria-invalid]="forkHead()?.error ? 'true' : null"
                 [attr.aria-describedby]="forkHead() ? 'nt-fork-head' : null"
@@ -1132,6 +1213,22 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
             }
           </label>
         }
+        @case ("admission") {
+          <div class="field">
+            <span>{{ f.label || "Admission" }}</span>
+            <g-pill-select
+              [options]="admissionOptions"
+              [value]="draft().admission"
+              [ariaLabel]="f.label || 'Admission'"
+              align="left"
+              testid="nt-admission"
+              (valueChange)="set('admission', $event)"
+            />
+            <small class="muted" data-testid="nt-admission-help">{{
+              f.helpText || admissionHelp()
+            }}</small>
+          </div>
+        }
         @case ("promptExtension") {
           <label class="field">
             <span>{{ f.label || "Extra instructions for the agent" }}</span>
@@ -1191,7 +1288,7 @@ export class NewTaskSheetComponent {
       description: d.description,
       repo: d.repo === NO_REPO ? "" : d.repo,
       base: d.base,
-      priority: 5,
+      priority: taskPriority(d.priority) || DEFAULT_PRIORITY,
       model: d.model,
       dependsOn: d.dependsOn,
     };
@@ -1208,6 +1305,73 @@ export class NewTaskSheetComponent {
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
   private readonly foundInInput =
     viewChild<ElementRef<HTMLInputElement>>("foundInInput");
+  private readonly priorityInput =
+    viewChild<ElementRef<HTMLInputElement>>("priorityInput");
+  private readonly baseInput =
+    viewChild<ElementRef<HTMLInputElement>>("baseInput");
+
+  protected readonly admissionOptions: readonly PillOption[] = [
+    { value: "standard", label: "Standard" },
+    { value: "bypass", label: "Bypass queue" },
+    { value: "durable", label: "Durable" },
+  ];
+
+  // The task pane's own wording for each admission value
+  // (ui/src/components/AdmissionField.jsx).
+  protected readonly admissionHelp = computed(
+    () =>
+      ({
+        standard: "Queued with ordinary work, under the worker limit.",
+        bypass:
+          "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
+        durable:
+          "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
+      })[this.draft().admission] ?? "",
+  );
+
+  protected readonly priorityBad = computed(
+    () => !!priorityProblem(this.draft()),
+  );
+  protected readonly priorityHelp = computed(() => {
+    if (this.priorityBad()) return PRIORITY_REFUSAL;
+    const tp = this.selectedTemplate()?.priority;
+    return tp
+      ? `default ${tp}, from the template; higher numbers run first`
+      : "default 5; higher numbers run first";
+  });
+
+  // The reason Create is held, said in the foot when the field at fault
+  // is tucked into a collapsed More options, where its own message cannot
+  // be seen (design book, section 5).
+  protected readonly hiddenBlocker = computed(() => {
+    const p = this.submitBlocker();
+    if (!p || this.moreOpen()) return "";
+    // Task priority always sits in More options; Base branch does when
+    // settings/new-task-form.yml places it there.
+    const tucked =
+      p.field === "priority" ||
+      (p.field === "base" && this.fields().base.visibility === "more");
+    return tucked ? p.message : "";
+  });
+
+  protected showBlocker(): void {
+    const field = this.submitBlocker()?.field;
+    this.moreOpen.set(true);
+    setTimeout(() =>
+      (field === "base"
+        ? this.baseInput()
+        : this.priorityInput()
+      )?.nativeElement.focus(),
+    );
+  }
+
+  // What holds Create disabled while the form is filled in: a malformed
+  // fork head or Task priority, which the server would only refuse.
+  protected readonly submitBlocker = computed(
+    () =>
+      forkHeadProblem(this.draft(), this.fields()) ??
+      priorityProblem(this.draft()),
+  );
 
   private readonly knownTasks = computed(() => {
     const byId = new Map<string, Task>();
@@ -1583,6 +1747,11 @@ export class NewTaskSheetComponent {
     const tmpl = this.templates().find((t) => t.id === id);
     if (!tmpl) {
       this.templateValues.set({});
+      this.reseed(
+        emptyDraft(this.config(), this.inbox.tasks(), {
+          repo: this.draft().repo,
+        }),
+      );
       return;
     }
     const vals: Record<string, string> = {};
@@ -1590,6 +1759,9 @@ export class NewTaskSheetComponent {
       vals[f.name] = f.default ?? "";
     }
     this.templateValues.set(vals);
+    // Task priority and Admission follow the picked template until they
+    // are edited.
+    this.draft.update((d) => this.withTemplateDefaults(d));
     if (tmpl.repo) {
       this.pickRepo(tmpl.repo);
     } else if (tmpl.declaredIn?.repo && !this.draft().repo) {
@@ -1646,12 +1818,27 @@ export class NewTaskSheetComponent {
 
   private reseed(fresh: NewTaskDraft): void {
     this.draft.update((d) => {
-      const next = { ...fresh };
+      const next = this.withTemplateDefaults({ ...fresh });
       for (const k of this.edited) {
-        (next as Record<string, unknown>)[k] = d[k];
+        (next as unknown as Record<string, unknown>)[k] = d[k];
       }
       return next;
     });
+  }
+
+  // withTemplateDefaults starts Task priority and Admission on the picked
+  // template's own, which is what it files at, as classic does. Applied
+  // by reseed too, so picking a repo (the template's own included) does
+  // not put them back to the repo's defaults.
+  private withTemplateDefaults(d: NewTaskDraft): NewTaskDraft {
+    const tmpl = this.selectedTemplate();
+    const next = { ...d };
+    if (!this.edited.has("priority")) next.priority = templatePriority(tmpl);
+    const adm = String(tmpl?.admission ?? "").trim();
+    if (!this.edited.has("admission") && ADMISSIONS.includes(adm)) {
+      next.admission = adm;
+    }
+    return next;
   }
 
   protected modelOptions(offered?: string[]): PillOption[] {
@@ -1955,6 +2142,14 @@ export class NewTaskSheetComponent {
           this.moreOpen.set(true);
         }
         queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
+      } else if (problem.field === "priority") {
+        this.moreOpen.set(true);
+        setTimeout(() => this.priorityInput()?.nativeElement.focus());
+      } else if (problem.field === "base") {
+        if (this.fields().base.visibility === "more") {
+          this.moreOpen.set(true);
+        }
+        setTimeout(() => this.baseInput()?.nativeElement.focus());
       } else if (problem.field === "repo") {
         this.repoSelect()?.focus();
       } else if (problem.field === "title") {
@@ -2007,6 +2202,8 @@ export class NewTaskSheetComponent {
         "goalMode",
         "generatedFrom",
         "customFields",
+        "owner",
+        "keepRunning",
       ];
       const hasExtraTaskOverrides =
         d.attachments.length > 0 ||
@@ -2014,6 +2211,12 @@ export class NewTaskSheetComponent {
         d.reads.length > 0 ||
         d.writes.length > 0 ||
         d.capabilities !== null ||
+        (d.priority.trim() !== "" &&
+          d.priority.trim() !== templatePriority(tmpl)) ||
+        d.admission !==
+          (ADMISSIONS.includes(String(tmpl?.admission ?? ""))
+            ? tmpl!.admission
+            : fresh.admission) ||
         OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
 
       const canOnlyPostFromTemplate =
@@ -2176,6 +2379,9 @@ export class NewTaskSheetComponent {
       ...(patch.repo !== undefined ? { repo: patch.repo || NO_REPO } : {}),
       ...(patch.base !== undefined ? { base: patch.base } : {}),
       ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.priority !== undefined
+        ? { priority: String(patch.priority) }
+        : {}),
       ...(patch.dependsOn !== undefined ? { dependsOn: patch.dependsOn } : {}),
     }));
     if (patch.title !== undefined) this.edited.add("title");
@@ -2183,6 +2389,7 @@ export class NewTaskSheetComponent {
     if (patch.repo !== undefined) this.edited.add("repo");
     if (patch.base !== undefined) this.edited.add("base");
     if (patch.model !== undefined) this.edited.add("model");
+    if (patch.priority !== undefined) this.edited.add("priority");
     if (patch.dependsOn !== undefined) this.edited.add("dependsOn");
     this.snackbar.show("Applied Director suggestions to form");
   }

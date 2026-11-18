@@ -115,6 +115,24 @@
   color: var(--md-sys-color-on-surface);
 }
 
+/* Why Create is held, when the field at fault is out of sight. */
+.nt-foot-blocker {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--md-sys-color-error);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* The helper line under a check-row, aligned with its label text. */
+.nt-check-help {
+  margin: -6px 0 0 24px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
 .nt-template-box,
 .nt-section-card {
   padding: 12px 14px;

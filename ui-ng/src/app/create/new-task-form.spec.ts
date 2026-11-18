@@ -17,15 +17,25 @@ import {
   NO_REPO,
   buildPayload,
   defaultCapabilitiesForRepo,
+  defaultAdmissionForRepo,
   directorMessage,
   emptyDraft,
+  forkHeadProblem,
   fromTemplateStem,
   lastBaseForRepo,
   openingRepo,
+  priorityProblem,
   resolveFields,
   targetableRepos,
+  templatePriority,
   validate,
 } from "./new-task-form";
+import { forkHeadHelp, parseForkHead } from "./fork-head";
+import {
+  PRIORITY_REFUSAL,
+  taskPriority,
+  wholeNumber,
+} from "../shared/task-priority";
 
 const config: GrainConfig = {
   access: null,
@@ -139,7 +149,7 @@ describe("new task form", () => {
       },
       "sidthe/grain",
     );
-    expect(Object.keys(f)).toHaveLength(24);
+    expect(Object.keys(f)).toHaveLength(25);
     expect(f.approved.default).toBe(true);
     expect(f.autoMerge.default).toBe(false);
     expect(f.model).toMatchObject({ visibility: "more", default: "fast" });
@@ -388,6 +398,159 @@ describe("new task form", () => {
     );
     expect(childPayload).toMatchObject({ origin: "task:12" });
     expect(childPayload).not.toHaveProperty("autoApproveProposals");
+  });
+
+  it("reads Task priority as a whole number from 1 up, exponents included", () => {
+    expect(taskPriority("7")).toBe(7);
+    expect(taskPriority(" 1e3 ")).toBe(1000);
+    expect(taskPriority("1")).toBe(1);
+    for (const bad of ["0", "-2", "2.5", "abc", "", "9007199254740993"]) {
+      expect(taskPriority(bad)).toBeNaN();
+    }
+    expect(wholeNumber("8e3")).toBe(8000);
+    expect(PRIORITY_REFUSAL).toBe(
+      "a whole number, 1 or more; default 5, higher numbers run first",
+    );
+  });
+
+  it("files Task priority, Owner, Keep running and Admission", () => {
+    const d = emptyDraft(config, tasks, { title: "x" });
+    expect(d).toMatchObject({
+      priority: "5",
+      owner: "",
+      keepRunning: false,
+      admission: "standard",
+    });
+    // The defaults say nothing: the server's own are the same.
+    const plain = buildPayload(d, config);
+    expect(plain).not.toHaveProperty("priority");
+    expect(plain).not.toHaveProperty("owner");
+    expect(plain).not.toHaveProperty("keepRunning");
+    expect(plain).not.toHaveProperty("admission");
+
+    expect(
+      buildPayload(
+        {
+          ...d,
+          priority: "1e3",
+          owner: "  alice@example.com ",
+          keepRunning: true,
+          admission: "durable",
+        },
+        config,
+      ),
+    ).toMatchObject({
+      priority: 1000,
+      owner: "alice@example.com",
+      keepRunning: true,
+      admission: "durable",
+    });
+    expect(
+      buildPayload({ ...d, admission: "standard" }, config),
+    ).not.toHaveProperty("admission");
+    // With a template picked a 5 is stated, or the template's own priority
+    // would be filed instead of the one chosen.
+    expect(
+      buildPayload(d, config, { templateId: "t", fields: {} }),
+    ).toMatchObject({ priority: 5 });
+    expect(templatePriority({ id: "t", priority: 8 } as Template)).toBe("8");
+    expect(templatePriority(null)).toBe("5");
+  });
+
+  it("starts Admission on the server's own default and says Standard when it is not", () => {
+    // The higher of the deployment's and the repo's, as
+    // defaultTaskAdmission in pkg/ui/client.go picks it.
+    const cfg: GrainConfig = {
+      ...config,
+      defaultAdmission: "bypass",
+      repoDefaultAdmissions: {
+        "Acme/Web": "durable",
+        "sidthe/grain": "standard",
+      },
+    };
+    expect(defaultAdmissionForRepo(config, "acme/web")).toBe("standard");
+    expect(defaultAdmissionForRepo(cfg, "acme/web")).toBe("durable");
+    expect(defaultAdmissionForRepo(cfg, "sidthe/grain")).toBe("bypass");
+    expect(defaultAdmissionForRepo(cfg, NO_REPO)).toBe("bypass");
+    // "" is the default target, SIDTHE/grain here.
+    expect(defaultAdmissionForRepo(cfg, "")).toBe("bypass");
+
+    const durable: GrainConfig = { ...config, defaultAdmission: "durable" };
+    const d = emptyDraft(durable, tasks, { title: "x", repo: "acme/web" });
+    expect(d.admission).toBe("durable");
+    // Left on the default, nothing is said and the server files durable.
+    expect(buildPayload(d, durable)).not.toHaveProperty("admission");
+    // Standard picked on a durable deployment is said, or the task would
+    // be filed durable anyway.
+    expect(
+      buildPayload({ ...d, admission: "standard" }, durable),
+    ).toMatchObject({ admission: "standard" });
+    // A template picked always hears it: its own would win otherwise.
+    expect(
+      buildPayload({ ...d, admission: "durable" }, durable, {
+        templateId: "t",
+        fields: {},
+      }),
+    ).toMatchObject({ admission: "durable" });
+
+    // settings/new-task-form.yml places Admission like any other field.
+    const placed: GrainConfig = {
+      ...config,
+      newTaskForm: {
+        default: {
+          fields: { admission: { visibility: "hidden", default: "bypass" } },
+        },
+      },
+    };
+    expect(resolveFields(placed).admission.visibility).toBe("hidden");
+    expect(emptyDraft(placed, tasks, { title: "x" }).admission).toBe("bypass");
+  });
+
+  it("refuses a zero, negative or non-whole priority before submit", () => {
+    const d = emptyDraft(config, tasks, { title: "x" });
+    expect(priorityProblem(d)).toBeNull();
+    expect(priorityProblem({ ...d, priority: "" })).toBeNull();
+    expect(priorityProblem({ ...d, priority: "1e3" })).toBeNull();
+    for (const bad of ["0", "-3", "2.5"]) {
+      expect(validate({ ...d, priority: bad })).toEqual({
+        field: "priority",
+        message: "Fix the task priority: it must be a whole number, 1 or more.",
+      });
+    }
+  });
+
+  it("explains a well-formed fork head and refuses a malformed one", () => {
+    expect(parseForkHead("main")).toBeNull();
+    expect(parseForkHead("release/1.2")).toBeNull();
+    expect(parseForkHead(" octo:fix/thing ")).toEqual({
+      owner: "octo",
+      branch: "fix/thing",
+    });
+    expect(parseForkHead("bad:label:here")).toEqual({
+      error: `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
+    });
+    expect(parseForkHead("  :nope")).toEqual({
+      error: `":nope" is not a fork head: it needs both an owner and a branch, as <owner>:<branch>`,
+    });
+    expect(parseForkHead("-x:y")).toEqual({
+      error: `"-x:y" is not a fork head: "-x" is not a GitHub login`,
+    });
+    expect(parseForkHead("octo:a..b")).toEqual({
+      error: `"octo:a..b" is not a fork head: "a..b" is not a usable branch name`,
+    });
+    expect(forkHeadHelp({ owner: "octo", branch: "fix" }, "acme/web")).toBe(
+      "GitHub fork head: branch fix on octo's fork. grain files this task against the open pull request on acme/web it heads.",
+    );
+
+    const d = emptyDraft(config, tasks, { title: "x", base: "bad:label:here" });
+    const fields = resolveFields(config);
+    expect(validate(d, fields)).toMatchObject({ field: "base" });
+    expect(forkHeadProblem({ ...d, base: "octo:fix" }, fields)).toBeNull();
+    // Cutting a new branch from it, or filing with no repo, uses no label.
+    expect(
+      forkHeadProblem({ ...d, newBranch: true, newBranchName: "n" }, fields),
+    ).toBeNull();
+    expect(forkHeadProblem({ ...d, repo: NO_REPO }, fields)).toBeNull();
   });
 
   it("omits goalMode on supervised drafts and emits normalized goalMode on autonomous goal drafts", () => {

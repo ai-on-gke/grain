@@ -747,6 +747,236 @@ describe("NewTaskSheetComponent", () => {
     ).toBeTruthy();
   });
 
+  it("files Task priority, Owner, Keep running and Admission from More options", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Priority parity");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q<HTMLInputElement>('[data-testid="nt-priority"]')!.value).toBe("5");
+
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+    for (const bad of ["0", "-1", "2.5"]) {
+      type('[data-testid="nt-priority"]', bad);
+      await settle(f);
+      expect(submit.disabled).toBe(true);
+      expect(q('[data-testid="nt-priority-help"]')!.textContent).toBe(
+        "a whole number, 1 or more; default 5, higher numbers run first",
+      );
+      expect(
+        q('[data-testid="nt-priority"]')!.getAttribute("aria-invalid"),
+      ).toBe("true");
+    }
+
+    // Collapsed, More options cannot show its own message: the foot does.
+    expect(q('[data-testid="nt-submit-blocker"]')).toBeNull();
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-priority"]')).toBeNull();
+    expect(q('[data-testid="nt-submit-blocker"]')!.textContent).toContain(
+      "Fix the task priority",
+    );
+    q<HTMLButtonElement>('[data-testid="nt-submit-blocker-show"]')!.click();
+    await settle(f);
+    expect(document.activeElement).toBe(q('[data-testid="nt-priority"]'));
+    expect(q('[data-testid="nt-submit-blocker"]')).toBeNull();
+
+    type('[data-testid="nt-priority"]', "1e3");
+    type('[data-testid="nt-owner"]', "alice@example.com");
+    const keep = q<HTMLInputElement>('[data-testid="nt-keep-running"]')!;
+    keep.checked = true;
+    keep.dispatchEvent(new Event("change"));
+    await pickPill(f, "nt-admission", "bypass");
+    await settle(f);
+    expect(q('[data-testid="nt-admission-help"]')!.textContent).toContain(
+      "Admitted past the worker and merger limits",
+    );
+    expect(submit.disabled).toBe(false);
+    submit.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Priority parity",
+      priority: 1000,
+      owner: "alice@example.com",
+      keepRunning: true,
+      admission: "bypass",
+    });
+  });
+
+  it("holds Create while Base branch is a malformed fork head, and explains a well-formed one", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Fork head");
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+
+    for (const bad of ["  :nope", "bad:label:here"]) {
+      type('[data-testid="nt-base"]', bad);
+      await settle(f);
+      expect(submit.disabled).toBe(true);
+      expect(q('[data-testid="nt-fork-head-error"]')!.textContent).toContain(
+        "fork head",
+      );
+      expect(q('[data-testid="nt-base"]')!.getAttribute("aria-invalid")).toBe(
+        "true",
+      );
+    }
+    expect(q('[data-testid="nt-fork-head-error"]')!.textContent).toBe(
+      `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
+    );
+
+    type('[data-testid="nt-base"]', "octo:fix-login");
+    await settle(f);
+    expect(q('[data-testid="nt-fork-head-error"]')).toBeNull();
+    expect(q('[data-testid="nt-fork-head-help"]')!.textContent).toBe(
+      "GitHub fork head: branch fix-login on octo's fork. grain files this task against the open pull request on sidthe/grain it heads.",
+    );
+    expect(submit.disabled).toBe(false);
+
+    // Cutting a new branch from it is not a fork head at all.
+    type('[data-testid="nt-base"]', "bad:label:here");
+    const nb = q<HTMLInputElement>('[data-testid="nt-new-branch"]')!;
+    nb.checked = true;
+    nb.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(q('[data-testid="nt-fork-head-error"]')).toBeNull();
+  });
+
+  it("says a malformed Base branch beside Create when settings put it in a collapsed More options", async () => {
+    const api = new FakeApi();
+    api.cfg = {
+      ...api.cfg,
+      newTaskForm: {
+        default: { fields: { base: { visibility: "more" } } },
+      },
+    };
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Hidden fork head");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    type('[data-testid="nt-base"]', "bad:label:here");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+
+    expect(q('[data-testid="nt-base"]')).toBeNull();
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+    expect(submit.disabled).toBe(true);
+    expect(q('[data-testid="nt-submit-blocker"]')!.textContent).toContain(
+      `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
+    );
+
+    q<HTMLButtonElement>('[data-testid="nt-submit-blocker-show"]')!.click();
+    await settle(f);
+    await new Promise((r) => setTimeout(r));
+    expect(
+      q('[data-testid="more-options"]')!.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(document.activeElement).toBe(q('[data-testid="nt-base"]'));
+    expect(q('[data-testid="nt-submit-blocker"]')).toBeNull();
+  });
+
+  it("keeps a template's priority on Task priority until it is edited", async () => {
+    const api = new FakeApi();
+    api.templates = [{ ...api.templates[0], priority: 8 }];
+    const f = await render(api);
+    await open(f);
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+    const box = () => q<HTMLInputElement>('[data-testid="nt-priority"]')!;
+    expect(box().value).toBe("8");
+    expect(q('[data-testid="nt-priority-help"]')!.textContent).toBe(
+      "default 8, from the template; higher numbers run first",
+    );
+    await pickPill(f, "nt-template", "");
+    await settle(f);
+    expect(box().value).toBe("5");
+
+    type('[data-testid="nt-priority"]', "3");
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+    expect(box().value).toBe("3");
+
+    // A priority other than the template's own cannot go through
+    // from-template, which takes none: it files through POST /api/tasks.
+    type('[data-testid="nt-tfield-area"]', "auth");
+    await settle(f);
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/from-template"),
+    ).toBeUndefined();
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks")?.body,
+    ).toMatchObject({
+      templateId: "declared:template:sidthe:grain:bugfix",
+      priority: 3,
+    });
+  });
+
+  it("starts Admission on a durable default and files Standard when it is picked", async () => {
+    const api = new FakeApi();
+    api.cfg = { ...api.cfg, defaultAdmission: "durable" };
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Standard on purpose");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-admission"]')!.textContent).toContain("Durable");
+    await pickPill(f, "nt-admission", "standard");
+    await settle(f);
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks")?.body,
+    ).toMatchObject({ admission: "standard" });
+  });
+
+  it("leaves Admission out when settings/new-task-form.yml hides it", async () => {
+    const api = new FakeApi();
+    api.cfg = {
+      ...api.cfg,
+      newTaskForm: {
+        default: { fields: { admission: { visibility: "hidden" } } },
+      },
+    };
+    const f = await render(api);
+    await open(f);
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-priority"]')).not.toBeNull();
+    expect(q('[data-testid="nt-admission"]')).toBeNull();
+  });
+
+  it("keeps a template's priority and admission when the template picks its repo", async () => {
+    const api = new FakeApi();
+    api.templates = [
+      {
+        id: "stored-urgent",
+        name: "Urgent",
+        title: "Urgent",
+        repo: "acme/web",
+        priority: 9,
+        admission: "bypass",
+      } as Template,
+    ];
+    const f = await render(api);
+    await open(f);
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    await pickPill(f, "nt-template", "stored-urgent");
+    await settle(f);
+    expect(q<HTMLInputElement>('[data-testid="nt-priority"]')!.value).toBe("9");
+    expect(q('[data-testid="nt-admission"]')!.textContent).toContain(
+      "Bypass queue",
+    );
+  });
+
   it("filters title and body out of inline template composition preview pills", async () => {
     const api = new FakeApi();
     const baseGet = api.get;
