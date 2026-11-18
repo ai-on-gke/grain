@@ -30,7 +30,7 @@ func fileTaggedTask(t *testing.T, ctx context.Context, store *model.Store, id st
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: id, Intent: model.IntentImplement, Title: id, Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Target:   &repo, Base: "main", Binding: model.BindingDirective, Tags: tags,
 	}); err != nil {

@@ -161,10 +161,11 @@ const VIEW_GUIDES: Record<string, ViewGuide> = {
     ],
   },
   repos: {
-    title: "Repository settings",
+    title: "Repos",
     summary:
-      "Per-repository Git connections, CI mode and workflows, merge gates, branches, issue import, and release qualification.",
+      "Every repository this deployment works in, and per repository its Git connection, CI mode and workflows, merge gates, branches, issue import, and release qualification.",
     steps: [
+      "On Repos, filter or sort the list, add a repository, and drag a row's handle (or press Space on it, then the arrow keys) to keep the ones you watch at the top.",
       "Switch tabs across Overview, CI & Workflows, Merge Queue, Agents & Grants, Branches, and Releases.",
       "Cut release candidates, approve qualification checks, promote candidates, and approve or reject pending trunk releases.",
     ],

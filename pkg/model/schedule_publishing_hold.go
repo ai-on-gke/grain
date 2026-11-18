@@ -120,13 +120,21 @@ func publishingHeldDetail(hold BaseBranchPublishing) string {
 		hold.TriageTaskID, hold.Repo, branch, hold.FailingSince.UTC().Format("2006-01-02 15:04 MST"))
 }
 
-// publishingSuppression is publishingHold for SuppressedFiring: the same
-// question, for a schedule that has come due.
-func (s *Store) publishingSuppression(ctx context.Context, sched Schedule, now time.Time) (*ScheduleSuppression, error) {
+// PublishingHold returns the gated BaseBranchPublishing finding holding
+// sched, or nil when sched does not declare skip-when: publishing-held or
+// its target repository's base branch is not held.
+func (s *Store) PublishingHold(ctx context.Context, sched Schedule, now time.Time) (*BaseBranchPublishing, error) {
 	if sched.SkipWhen != SkipWhenPublishingHeld {
 		return nil, nil
 	}
-	hold, err := s.publishingHold(ctx, sched, s.overlapGroupRepo(ctx, sched), sched.Base, now)
+	repo, base := s.scheduleFiringTarget(ctx, sched)
+	return s.publishingHold(ctx, sched, repo, base, now)
+}
+
+// publishingSuppression is publishingHold for SuppressedFiring: the same
+// question, for a schedule that has come due.
+func (s *Store) publishingSuppression(ctx context.Context, sched Schedule, now time.Time) (*ScheduleSuppression, error) {
+	hold, err := s.PublishingHold(ctx, sched, now)
 	if err != nil || hold == nil {
 		return nil, err
 	}

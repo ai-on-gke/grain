@@ -1,0 +1,571 @@
+[
+  {
+    "id": "registry",
+    "method": "GET",
+    "path": "/api/gates",
+    "tool": "api_list_builtin_gates",
+    "status": "proposed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "registry_request",
+    "response": "registry_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Complete release catalogue; no pagination or filters.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "schema",
+    "method": "GET",
+    "path": "/api/gates/{type}/{version}",
+    "tool": "api_get_builtin_gate",
+    "status": "proposed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "schema_request",
+    "response": "schema_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Unknown pair 404; no remote schema fetching.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "task",
+    "method": "GET",
+    "path": "/api/tasks/{id}",
+    "tool": "api_get_task",
+    "status": "changed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "task_request",
+    "response": "task_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "edit",
+    "method": "PATCH",
+    "path": "/api/tasks/{id}",
+    "tool": "api_update_task",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": false,
+    "request": "edit_request",
+    "response": "edit_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Replace task-owned attachments only; inherited entries retained; weakening requires person tasks:admin.",
+    "conditional_authority": [
+      {
+        "condition": "weakening_or_authority_handoff",
+        "scopes": [
+          "tasks:admin"
+        ],
+        "human_only": true,
+        "ownership_rule": "contract_owner_and_inherited_source_authority"
+      },
+      {
+        "condition": "guard_attachment",
+        "scopes": [
+          "repos:write"
+        ],
+        "human_only": false,
+        "ownership_rule": "explicit_resource_policy_attach_authority_within_task_scope"
+      }
+    ],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "evidence",
+    "method": "GET",
+    "path": "/api/gates/evidence",
+    "tool": "api_get_gate_evidence",
+    "status": "proposed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "evidence_request",
+    "response": "evidence_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Immutable exact evidence ID/version lookup; authorize owning task/resource plus source observation scope. No recollection or freshness claim.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "history",
+    "method": "GET",
+    "path": "/api/tasks/{id}/gate-history",
+    "tool": "api_list_gate_history",
+    "status": "proposed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "history_request",
+    "response": "history_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "reevaluate",
+    "method": "POST",
+    "path": "/api/tasks/{id}/gate-evaluations",
+    "tool": "api_evaluate_task_gates",
+    "status": "proposed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": false,
+    "request": "reevaluate_request",
+    "response": "reevaluate_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Empty binding_ids means all effective gates; acceptance still validates full required union.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "operation",
+    "method": "GET",
+    "path": "/api/gates/operations/{id}",
+    "tool": "api_get_gate_operation",
+    "status": "proposed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "operation_request",
+    "response": "operation_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Operation read requires tasks:read and authorization on owning task OR canonical resource for taskless operations.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "action_preview",
+    "method": "POST",
+    "path": "/api/gates/action-preview",
+    "tool": "api_preview_guarded_action",
+    "status": "proposed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "action_preview_request",
+    "response": "action_preview_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Read only; taskless contract revision and epoch are 0, resource policy remains mandatory.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "submit",
+    "method": "POST",
+    "path": "/api/tasks/{id}/submit",
+    "tool": "api_submit",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": true,
+    "request": "submit_request",
+    "response": "submit_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "PR approval/queue intent is not merge completion. CL executes only via person-only existing adapter.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "pr_submit",
+    "method": "POST",
+    "path": "/api/pull-requests/submit",
+    "tool": "api_submit_pull_request",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": true,
+    "request": "pr_submit_request",
+    "response": "pr_submit_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Taskless canonical PR path; resolves every protecting task; aliases must agree.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "exceptions",
+    "method": "GET",
+    "path": "/api/gates/exceptions",
+    "tool": "api_list_gate_exceptions",
+    "status": "proposed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "exceptions_request",
+    "response": "exceptions_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "issue",
+    "method": "POST",
+    "path": "/api/gates/exceptions",
+    "tool": "api_issue_gate_exception",
+    "status": "proposed",
+    "scopes": [
+      "tasks:admin"
+    ],
+    "human_only": true,
+    "request": "issue_request",
+    "response": "issue_response",
+    "success_status": 201,
+    "error": "failure",
+    "notes": "Completion requires person tasks:admin+contract ownership; action override requires merge:force+repos:write+repo-admin+source authority. task_id may be null for taskless action.",
+    "conditional_authority": [
+      {
+        "condition": "action_override",
+        "scopes": [
+          "merge:force",
+          "repos:write"
+        ],
+        "human_only": true,
+        "ownership_rule": "repository_admin_and_every_named_source_policy_owner"
+      }
+    ],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "revoke",
+    "method": "POST",
+    "path": "/api/gates/exceptions/{id}/revoke",
+    "tool": "api_revoke_gate_exception",
+    "status": "proposed",
+    "scopes": [
+      "tasks:admin"
+    ],
+    "human_only": true,
+    "request": "revoke_request",
+    "response": "revoke_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Same authority as issuance; expected_exception_revision is the record revision. Same-key replay returns prior revocation.",
+    "conditional_authority": [
+      {
+        "condition": "action_override",
+        "scopes": [
+          "merge:force",
+          "repos:write"
+        ],
+        "human_only": true,
+        "ownership_rule": "repository_admin_and_every_named_source_policy_owner"
+      }
+    ],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "repo_read",
+    "method": "GET",
+    "path": "/api/repos/{owner}/{name}/settings",
+    "tool": "api_get_repo_settings",
+    "status": "changed",
+    "scopes": [
+      "repos:read"
+    ],
+    "human_only": false,
+    "request": "repo_read_request",
+    "response": "repo_read_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "repo_edit",
+    "method": "PUT",
+    "path": "/api/repos/{owner}/{name}/settings",
+    "tool": "api_set_repo_settings",
+    "status": "changed",
+    "scopes": [
+      "repos:write"
+    ],
+    "human_only": true,
+    "request": "repo_edit_request",
+    "response": "repo_edit_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Gate profile replaces only gate_policy, not other repository settings. Person repository policy owner required.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "template_read",
+    "method": "GET",
+    "path": "/api/templates/{id}/composition",
+    "tool": "api_template_composition",
+    "status": "changed",
+    "scopes": [
+      "templates:read"
+    ],
+    "human_only": false,
+    "request": "template_read_request",
+    "response": "template_read_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Unmaterialized declared gate defaults; use preview with typed fields for effective contract.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "template_edit",
+    "method": "PATCH",
+    "path": "/api/templates/{id}",
+    "tool": "api_update_template",
+    "status": "changed",
+    "scopes": [
+      "templates:write"
+    ],
+    "human_only": false,
+    "request": "template_edit_request",
+    "response": "template_edit_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Template authority within repo ceilings; weakening existing defaults requires person with template and policy authority.",
+    "conditional_authority": [
+      {
+        "condition": "weakening",
+        "scopes": [
+          "repos:write"
+        ],
+        "human_only": true,
+        "ownership_rule": "template_owner_and_repository_policy_owner"
+      }
+    ],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "preview",
+    "method": "POST",
+    "path": "/api/tasks/gate-preview",
+    "tool": "api_preview_gate_contract",
+    "status": "proposed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": false,
+    "request": "preview_request",
+    "response": "preview_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "No task created. self remains a reserved preview task ID; filing replaces it atomically.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "file",
+    "method": "POST",
+    "path": "/api/tasks",
+    "tool": "api_create_task",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": false,
+    "request": "file_request",
+    "response": "file_response",
+    "success_status": 201,
+    "error": "failure",
+    "notes": "Files unapproved as today; no auto_merge, grants or goal rewrite in this gate profile. Sources rechecked atomically.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "from_template",
+    "method": "POST",
+    "path": "/api/tasks/from-template",
+    "tool": "api_create_task_from_template",
+    "status": "changed",
+    "scopes": [
+      "tasks:from-template",
+      "tasks:write"
+    ],
+    "human_only": false,
+    "conditional_authority": [],
+    "request": "from_template_request",
+    "response": "from_template_response",
+    "success_status": 201,
+    "error": "failure",
+    "notes": "Existing repository-declared template alias; current nested task admission/grants still apply. Body <=64 KiB; propagates preview/idempotency to the same filing transaction.",
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "review",
+    "method": "POST",
+    "path": "/api/pull-requests/review",
+    "tool": "api_review_pull_request",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": false,
+    "request": "review_request",
+    "response": "review_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Creates/reuses exact-head review assignment through existing review service; not a positive review result.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "ci",
+    "method": "POST",
+    "path": "/api/ci/runs",
+    "tool": "api_start_ci_run",
+    "status": "changed",
+    "scopes": [
+      "ci:write"
+    ],
+    "human_only": false,
+    "request": "ci_request",
+    "response": "ci_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Task-derived repo/ref/commit must match. Empty jobs=complete suite. Selective jobs cannot satisfy required full-suite evidence.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "rerun",
+    "method": "POST",
+    "path": "/api/ci/runs/{id}/rerun",
+    "tool": "api_rerun_ci_run",
+    "status": "changed",
+    "scopes": [
+      "ci:write"
+    ],
+    "human_only": false,
+    "request": "rerun_request",
+    "response": "rerun_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Default explicit jobs=[], all=false means failed/canceled only; max three reruns per run/head including automatic retries.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "reply",
+    "method": "POST",
+    "path": "/api/tasks/{id}/reply",
+    "tool": "api_reply_task",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": true,
+    "request": "reply_request",
+    "response": "reply_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Eligible addressed person only; exact question and incoming watermark. Agent comments do not answer a pending person question.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "ack",
+    "method": "POST",
+    "path": "/api/tasks/{id}/close",
+    "tool": "api_close",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": true,
+    "request": "ack_request",
+    "response": "ack_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Acknowledgment is a versioned receipt, not processing a pending request. succeed requires closure fences; cancel records non-success.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "findings",
+    "method": "POST",
+    "path": "/api/tasks/{id}/accept-findings",
+    "tool": "api_accept_findings",
+    "status": "changed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": true,
+    "request": "findings_request",
+    "response": "findings_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Existing unlimited operator role still required. One review/head/category only; not an action override.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "reconcile",
+    "method": "POST",
+    "path": "/api/gates/operations/{id}/reconcile",
+    "tool": "api_reconcile_gate_operation",
+    "status": "proposed",
+    "scopes": [
+      "tasks:write"
+    ],
+    "human_only": false,
+    "request": "reconcile_request",
+    "response": "reconcile_response",
+    "success_status": 202,
+    "error": "failure",
+    "notes": "Requests collector reconciliation of uncertain operation; never dispatches effect again.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  },
+  {
+    "id": "events",
+    "method": "GET",
+    "path": "/api/events",
+    "tool": "api_events",
+    "status": "changed",
+    "scopes": [
+      "tasks:read"
+    ],
+    "human_only": false,
+    "request": "events_request",
+    "response": "events_response",
+    "success_status": 200,
+    "error": "failure",
+    "notes": "Existing JSON/long-poll/SSE protocol; new four types only. Agent default limit=20. No evaluator-created subscription.",
+    "conditional_authority": [],
+    "tool_result": "tool_result"
+  }
+]

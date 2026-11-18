@@ -183,6 +183,13 @@ func hostingSourceOf(hosting Hosting, said CompositionLayer) CompositionLayer {
 	return said
 }
 
+func qaFlowSourceOf(qaFlowRef string, said CompositionLayer) CompositionLayer {
+	if qaFlowRef == "" {
+		return LayerDeployment
+	}
+	return said
+}
+
 // CompositionSources is which layer decided each field of a Composition
 // -- one CompositionLayer per field of it, in the same order, so a
 // reader can put "from the suite" beside "auto-merge: on".
@@ -205,6 +212,7 @@ type CompositionSources struct {
 	KeepRunning          CompositionLayer
 	Admission            CompositionLayer
 	Hosting              CompositionLayer
+	QAFlowRef            CompositionLayer
 }
 
 // Composition is one task a firing will file, resolved: every value it
@@ -286,6 +294,9 @@ type Composition struct {
 	// and its two siblings). Only a template says so (Template.Sandbox):
 	// an inline schedule's firing takes the deployment's default.
 	Sandbox SandboxShape
+	// QAFlowRef is the operator-only QA flow binding resolved across
+	// Suite.QAFlowRef > Schedule.QAFlowRef > Template.QAFlowRef.
+	QAFlowRef string
 
 	// TemplateID and TemplateName name the template this task's content
 	// came from, both empty for a schedule firing its own inline
@@ -317,13 +328,13 @@ type Composition struct {
 // standing human approval that let it land queued -- a schedule somebody
 // created, a suite somebody started -- and Task.Approval names an actor,
 // not a moment of judgement (LandsQueued's own reading of it).
-func (c Composition) Task(id string, actor Principal, reason OriginReason, now time.Time) Task {
+func (c Composition) Task(id string, actor Principal, reason FilingReason, now time.Time) Task {
 	task := Task{
 		ID:     id,
 		Intent: IntentImplement,
 		Title:  c.Title,
 		Body:   c.Body,
-		Origin: Origin{
+		Filing: Filing{
 			Attribution: Attribution{Actor: actor},
 			Reason:      reason,
 		},
@@ -351,6 +362,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		SandboxCPUs:          c.Sandbox.CPUs,
 		SandboxMemoryMB:      c.Sandbox.MemoryMB,
 		SandboxDiskGB:        c.Sandbox.DiskGB,
+		QAFlowRef:            c.QAFlowRef,
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -475,6 +487,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Skills:               tmpl.Skills.Clone(),
 		Priority:             priority,
 		Sandbox:              tmpl.Sandbox,
+		QAFlowRef:            tmpl.QAFlowRef,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
 		Sources: CompositionSources{
@@ -496,6 +509,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 			KeepRunning:          LayerTemplate,
 			Admission:            admissionSourceOf(tmpl.Admission, LayerTemplate),
 			Hosting:              hostingSourceOf(tmpl.Hosting, LayerTemplate),
+			QAFlowRef:            qaFlowSourceOf(tmpl.QAFlowRef, LayerTemplate),
 		},
 	}
 }
@@ -541,6 +555,9 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 				comp.Hosting = sched.Hosting
 				comp.Sources.Hosting = LayerSchedule
 			}
+		}
+		if sched.QAFlowRef != "" {
+			comp.QAFlowRef, comp.Sources.QAFlowRef = sched.QAFlowRef, LayerSchedule
 		}
 		// A template-backed schedule's grants are its own, beside the
 		// template's (Schedule.Grants), but one of grain's own schedules
@@ -593,6 +610,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		KeepRunning:          sched.KeepRunning,
 		Admission:            sched.Admission,
 		Hosting:              sched.Hosting,
+		QAFlowRef:            sched.QAFlowRef,
 		Priority:             DefaultTaskPriority,
 		Sources: CompositionSources{
 			Title:                LayerSchedule,
@@ -613,6 +631,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			KeepRunning:          LayerSchedule,
 			Admission:            admissionSourceOf(sched.Admission, LayerSchedule),
 			Hosting:              hostingSourceOf(sched.Hosting, LayerSchedule),
+			QAFlowRef:            qaFlowSourceOf(sched.QAFlowRef, LayerSchedule),
 		},
 	}
 }
@@ -925,12 +944,30 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 func composeSuitePass(ctx context.Context, q querier, suiteID string, items []SuiteItem, templates map[string]Template,
 	target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool, opts SuiteRunOptions) ([]Composition, error) {
 
+	suiteQAFlowRef := opts.QAFlowRef
+	if suiteQAFlowRef == "" && suiteID != "" && q != nil {
+		if suite, err := getSuite(ctx, q, suiteID); err == nil && suite != nil {
+			suiteQAFlowRef = suite.QAFlowRef
+		}
+	}
+	schedQAFlowRef := opts.ScheduleQAFlowRef
+	if schedQAFlowRef == "" && opts.Tag != "" && q != nil {
+		if sched, err := getSchedule(ctx, q, opts.Tag); err == nil && sched != nil {
+			schedQAFlowRef = sched.QAFlowRef
+		}
+	}
+
 	// Read at most once for the whole pass, and not at all for a suite
 	// whose templates say nothing about any declared field.
 	declarations := customFieldDeclarations{q: q}
 	out := make([]Composition, 0, len(items))
 	for _, it := range items {
 		comp := composeSuiteTask(templates[it.TemplateID], opts.Fields, target, base, requireApproval, autoMerge, autoApproveProposals)
+		if suiteQAFlowRef != "" {
+			comp.QAFlowRef, comp.Sources.QAFlowRef = suiteQAFlowRef, LayerSuite
+		} else if schedQAFlowRef != "" {
+			comp.QAFlowRef, comp.Sources.QAFlowRef = schedQAFlowRef, LayerSchedule
+		}
 		if opts.Priority != 0 {
 			comp.Priority = opts.Priority
 		}
@@ -1026,7 +1063,13 @@ func (s *Store) ScheduleComposition(ctx context.Context, sched Schedule, stateRe
 		if suite == nil {
 			return nil, fmt.Errorf("suite %s no longer exists", *sched.SuiteID)
 		}
-		return s.SuiteComposition(ctx, *suite, sched.Target, sched.Base)
+		templates, err := resolveSuiteTemplates(ctx, s, suite.Items)
+		if err != nil {
+			return nil, err
+		}
+		return composeSuitePass(ctx, s.db, suite.ID, suite.Items, templates, sched.Target, sched.Base,
+			suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals,
+			SuiteRunOptions{Tag: sched.ID, QAFlowRef: suite.QAFlowRef, ScheduleQAFlowRef: sched.QAFlowRef})
 	}
 	comp, _, err := s.composeScheduleTask(ctx, sched, stateRepo)
 	if err != nil {
@@ -1044,7 +1087,8 @@ func (s *Store) SuiteComposition(ctx context.Context, suite Suite, target RepoRe
 		return nil, err
 	}
 	return composeSuitePass(ctx, s.db, suite.ID, suite.Items, templates, target, base,
-		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, SuiteRunOptions{})
+		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals,
+		SuiteRunOptions{QAFlowRef: suite.QAFlowRef})
 }
 
 // TemplateComposition is the task filing tmpl with values against

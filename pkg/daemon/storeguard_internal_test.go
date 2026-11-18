@@ -127,7 +127,7 @@ func openGuardedStore(t *testing.T, dataDir string, n int, runAt time.Time) *mod
 	if !runAt.IsZero() {
 		human := model.Principal{ID: "op@example.com", Kind: model.PrincipalHuman}
 		if err := store.PutTask(ctx, model.Task{ID: last, Intent: model.IntentImplement, Title: "t",
-			Origin:  model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:  model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Binding: model.BindingDirective, Approval: &model.Attribution{Actor: human}}); err != nil {
 			t.Fatal(err)
 		}

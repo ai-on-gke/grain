@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -248,6 +249,12 @@ type upgradeScheduledResponse struct {
 	ByID        string    `json:"byId,omitempty"`
 	BusyRuns    int       `json:"busyRuns"`
 	BusyCIRuns  int       `json:"busyCiRuns"`
+	// CountError says that BusyRuns or BusyCIRuns could not be read, and
+	// so are not a count: the reconciler holds the queue and does not
+	// start the upgrade until it can count again, and without this the
+	// response read "waiting on 0 active run(s)" over a schedule that
+	// was going nowhere.
+	CountError string `json:"countError,omitempty"`
 }
 
 // upgradeRunningResponse is upgradeStatusResponse's "running" object:
@@ -482,10 +489,10 @@ type FrameworkCount struct {
 // frameworkLabel is the name a run is counted under in frameworkCounts.
 func frameworkLabel(framework string, setup bool) string {
 	switch {
-	case framework != "":
-		return framework
 	case setup:
 		return "setup"
+	case framework != "":
+		return framework
 	}
 	return "unknown"
 }
@@ -528,9 +535,9 @@ func (s *Server) atRisk(r *http.Request) *upgradeAtRiskResponse {
 			resp.Survive++
 			continue
 		}
-		// A live run with no framework yet is in setup: its CLI has not
-		// been chosen, let alone started.
-		lost = append(lost, frameworkLabel(run.Framework, run.Framework == ""))
+		// A live run whose CLI has not started is in setup, whatever
+		// framework RunDispatch has already assigned it.
+		lost = append(lost, frameworkLabel(run.Framework, !run.Started))
 	}
 	resp.Lost = len(lost)
 	if len(lost) > 0 {
@@ -643,15 +650,22 @@ func (s *Server) scheduledUpgrade(r *http.Request) *upgradeScheduledResponse {
 		ByKind:      string(scheduled.By.Kind),
 		ByID:        scheduled.By.ID,
 	}
+	var countErrs []string
 	if runs, err := s.tasks.Store.BusyRunCount(ctx); err != nil {
 		log.Printf("ui: counting the runs a scheduled upgrade is waiting for: %v", err)
+		countErrs = append(countErrs, "the runs in flight could not be counted")
 	} else {
 		resp.BusyRuns = runs
 	}
 	if ciRuns, err := s.tasks.Store.LiveCIRunCount(ctx); err != nil {
 		log.Printf("ui: counting the CI runs a scheduled upgrade is waiting for: %v", err)
+		countErrs = append(countErrs, "the CI runs in flight could not be counted")
 	} else {
 		resp.BusyCIRuns = ciRuns
+	}
+	if len(countErrs) > 0 {
+		resp.CountError = strings.Join(countErrs, " and ") +
+			", so the queue stays held and the upgrade waits until they can be; the daemon log has the error"
 	}
 	return resp
 }
@@ -818,6 +832,9 @@ type startUpgradeRequest struct {
 	// the upgrade outright and needs no borrowed name to do it.
 	RequestedBy     string `json:"requestedBy,omitempty"`
 	RequestedByKind string `json:"requestedByKind,omitempty"`
+	// StopExperiment stops an active QA experiment (and promotes stranded
+	// staging branches fail-open) before starting or scheduling an upgrade.
+	StopExperiment bool `json:"stopExperiment,omitempty"`
 }
 
 // deploymentChannel is the channel up's deployment follows, or "" when
@@ -854,6 +871,42 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 	if req.Rollback {
 		s.startRollback(w, r, req)
 		return
+	}
+	if s.tasks.Store != nil {
+		if runningExp, rErr := s.tasks.Store.GetRunningQAExperiment(r.Context()); rErr == nil && runningExp != nil {
+			if !req.StopExperiment {
+				writeError(w, http.StatusConflict, fmt.Errorf("cannot upgrade while QA experiment %s is running (pass stopExperiment: true or stop the experiment first)", runningExp.ID))
+				return
+			}
+			now := s.tasks.now()
+			actor := s.tasks.requestActor(r.Context())
+			if _, sErr := s.tasks.Store.UpdateQAExperiment(r.Context(), runningExp.ID, 0, func(e *model.QAExperiment) error {
+				if e.State == model.QAExpStateRunning {
+					e.State = model.QAExpStateStopped
+					e.StoppedAt = &now
+					e.Decision = &model.QAExperimentDecision{
+						Outcome:   "invalid",
+						Reason:    "stopped for deployment upgrade",
+						DecidedBy: actor.Actor.ID,
+						DecidedAt: now.Format(time.RFC3339),
+					}
+				}
+				return nil
+			}); sErr != nil {
+				writeError(w, http.StatusInternalServerError, sErr)
+				return
+			}
+			_, _ = s.tasks.Store.RecordConfigAudit(r.Context(), model.ConfigAuditEntry{
+				At:         now,
+				By:         actor.Actor,
+				OnBehalfOf: actor.OnBehalfOf,
+				Surface:    "qa-experiment:" + runningExp.ID,
+				Summary:    fmt.Sprintf("stopped QA experiment %s before deployment upgrade", runningExp.ID),
+			})
+			if hooks := resolve.GetRuntimeHooks(); hooks != nil && hooks.PromoteExperimentStages != nil {
+				hooks.PromoteExperimentStages(r.Context(), runningExp.ID, "experiment stopped for deployment upgrade")
+			}
+		}
 	}
 	if strings.TrimSpace(req.Branch) == "" {
 		// No branch means "a newer build of what this deployment already

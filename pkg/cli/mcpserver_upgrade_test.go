@@ -27,7 +27,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -36,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
@@ -63,15 +61,7 @@ func (f *fakeDeploymentUpgrader) Running() (upgrade.Running, error) {
 
 func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grants ...string) (string, *model.Store) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	_ = store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval})
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	var taskGrants []model.Grant
@@ -81,7 +71,7 @@ func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grants ...string) (stri
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "335", Intent: model.IntentImplement, Title: "manage upgrades", Body: "please",
 		Grants:   taskGrants,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Binding:  model.BindingDirective,
 	}); err != nil {
@@ -376,7 +366,7 @@ func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "336", Intent: model.IntentImplement, Title: "work", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Binding:  model.BindingDirective,
 	}); err != nil {

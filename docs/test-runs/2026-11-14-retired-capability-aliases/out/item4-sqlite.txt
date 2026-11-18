@@ -1,0 +1,226 @@
+== version
+v0.0.0-20261115130308-e0b6807aa018+dirty (unversioned) · e0b6807-dirty · 2026-11-15 13:03Z
+== A. hand-added bare names in the v3.5.0 export
+schema-version: 136
+hand-add bare names
+ settings/schedules.yml   | 2 ++
+ settings/templates.yml   | 4 ++++
+ tables/grain_config.json | 6 +++---
+ tables/repo_config.json  | 8 ++++----
+ 4 files changed, 13 insertions(+), 7 deletions(-)
+add settings/capabilities.yml
+ settings/capabilities.yml | 6 ++++++
+ 1 file changed, 6 insertions(+)
+settings/templates.yml:30:      - self-debug
+settings/templates.yml:31:      - grain-ci
+settings/templates.yml:32:      - read-issues
+settings/templates.yml:33:      - github-credential:bot
+settings/schedules.yml:34:      - bootstrap-playbooks
+settings/schedules.yml:35:      - grain-log
+tables/grain_config.json:38:    "default_capabilities": "https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"claude\"},https://grain.dev/capabilities/config-map#config-map={\"config_m
+tables/repo_config.json:45:    "default_capabilities": "github-sandbox",
+tables/repo_config.json:50:    "ci_capabilities": "grain-log,self-debug,github-credential:bot",
+-- daemon log lines about the upgrade and import
+2026/11/15 13:04:52 grain: migrated the store in place from schema 136 to 147
+2026/11/15 13:04:52 staterepo: wrote settings snapshot to /var/tmp/retired-aliases/sqlite/data/settings-snapshots/20261115T130452Z-536791aa8e8d before applying 536791aa8e8d60a2f66457caa02760c657817135
+2026/11/15 13:04:52 staterepo: this deployment held 4 settings rows that had never been exported to the state repository (it last agreed with it at e7e475ae); the arriving change did not touch them, so they are kept the database's versions rather than rewinding to the old export, and the next export writes them out: tables/grain_config.json (id = 1): auto_upgrade_min_interval_hours; tables/grain_config.json (id = 1): hub_environment_name; tables/grain_config.json (id = 1): qa; tables/grain_confi
+2026/11/15 13:04:52 grain: applied 2 previously unapplied config commit(s) (e7e475ae4806..536791aa8e8d) before rewriting /var/tmp/retired-aliases/sqlite/data/state-repo at schema 147: dc440df hand-add bare names; 536791a add settings/capabilities.yml
+2026/11/15 13:04:52 grain: the config repository's dump was rewritten at schema 147 from the database it was imported into; the prior dump is the preceding commit in /var/tmp/retired-aliases/sqlite/data/state-repo
+2026/11/15 13:04:52 grain daemon: host sandboxes run every command under bubblewrap with /var/tmp/retired-aliases/sqlite/data hidden
+2026/11/15 13:04:52 grain daemon: host sandboxing -- one plain directory per run under /var/tmp/retired-aliases/sqlite/scratch/runs, on this host, with NO isolation: every run's commands execute as this daemon's own user, with this host's own network, tools and filesystem. HOME is pinned to the run's directory and only an allowlist of environment variables is passed through, which keeps this daemon's own secrets out of a run's environment but is not a security boundary.
+2026/11/15 13:04:52 grain daemon: the package cache is serving at http://127.0.0.1:39649, holding at most 20 GiB under /var/tmp/retired-aliases/sqlite/scratch/cache/packages
+2026/11/15 13:04:52 grain daemon: the Actions cache is serving at http://127.0.0.1:34951, holding at most 20 GiB under /var/tmp/retired-aliases/sqlite/scratch/cache/actions (0 entries, 0 MiB, carried over from before this restart): every CI job is handed it, and every branch of a repository shares one
+2026/11/15 13:04:52 grain daemon: single-tenant: every caller, this host's loopback included, presents the access code in /var/tmp/retired-aliases/sqlite/data/local-api-token -- a browser on the UI's "Enter access code" page, the grain CLI as a bearer token; `grain access-code` prints it
+2026/11/15 13:04:52 ci: job results are cached in /var/tmp/retired-aliases/sqlite/data/state/ci-cache for up to 720h0m0s, within 268435456 bytes and 4096 entries (a single result past 4194304 bytes is not kept) -- `grain ci cache` reports it, `grain ci cache clear` empties it, and the bounds are editable in Settings
+2026/11/15 13:04:52 ci: a failing job's declared artifacts are kept in /var/tmp/retired-aliases/sqlite/data/state/ci-artifacts for up to 336h0m0s, within 2147483648 bytes (134217728 per run, and a single artifact past 33554432 bytes is not kept) -- the bounds are editable in Settings
+schema-version now: 147
+3fdeefa Migrate grain state to schema 147
+536791a add settings/capabilities.yml
+dc440df hand-add bare names
+e7e475a Update grain state after a write by the access code
+-- rows after HEAD applied it
+template_grant:
+https://grain.dev/capabilities/api#self-debug
+https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+https://grain.dev/capabilities/github#read-issues={}
+https://grain.dev/capabilities/github#sandbox-repo={}
+https://grain.dev/capabilities/grain#ci={}
+https://grain.dev/capabilities/grain#journal={}
+https://grain.dev/capabilities/grain#source={}
+https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}
+https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+local-scripts:deploy
+schedule_grant:
+https://grain.dev/capabilities/api#self-debug
+https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+https://grain.dev/capabilities/github#read-issues={}
+https://grain.dev/capabilities/github#sandbox-repo={}
+https://grain.dev/capabilities/grain#journal={}
+https://grain.dev/capabilities/grain#source={}
+https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}
+https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+local-scripts:deploy
+grain_config.default_capabilities:
+https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"},https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]},https://grain.dev/capabilities/repo#credential={"credential":"bot"},https://grain.dev/capabilities/github#read-issues={},https://grain.dev/capabilities/github#sandbox-repo={},https://grain.dev/capabilities/api#self-debug,https://grain.dev/capabilities/grain#source={},local-scripts:deploy,https://grain.dev/capabilities/grain#journal={}
+repo_config:
+acme|lib|||https://grain.dev/capabilities/release#registry-push={}
+acme|widgets|grain|https://grain.dev/capabilities/github#sandbox-repo={}|https://grain.dev/capabilities/grain#journal={},https://grain.dev/capabilities/api#self-debug,https://grain.dev/capabilities/grain#source={},https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+== A. the dump HEAD rewrote (schema 147): bare names left (local-scripts:deploy is F3's)
+(none)
+-- settings/capabilities.yml as re-exported
+# grain's capability catalogue (design/design/config-repo-settings.design.md §3):
+# every capability server, in-process capability and agent API preset a
+# run may hold, who may hold it, and what runs hold by default. It is the
+# source of grain_config.mcp_servers, capability_policy and
+# default_capabilities, of api_scope_set, and of repo_config's
+# default_capabilities and ci_capabilities: where this file speaks, it
+# wins over tables/. Secrets are named ($secret:<name>), never written.
+# Edit it in a pull request; a person approves every change to it.
+defaults:
+  task:
+    - https://grain.dev/capabilities/model-proxy#model-proxy:
+        with:
+          vendor: claude
+    - https://grain.dev/capabilities/config-map#config-map:
+        with:
+          config_maps:
+            - bootstrap
+    - https://grain.dev/capabilities/repo#credential:
+        with:
+          credential: bot
+    - https://grain.dev/capabilities/github#read-issues={}
+    - https://grain.dev/capabilities/github#sandbox-repo={}
+    - https://grain.dev/capabilities/api#self-debug
+    - https://grain.dev/capabilities/grain#source={}
+    - local-scripts:deploy
+    - https://grain.dev/capabilities/grain#journal={}
+  ci: []
+  repos:
+    acme/lib:
+      ci: ['https://grain.dev/capabilities/release#registry-push={}']
+    acme/widgets:
+      task: ['https://grain.dev/capabilities/github#sandbox-repo={}']
+      ci:
+        - https://grain.dev/capabilities/grain#journal={}
+        - https://grain.dev/capabilities/api#self-debug
+        - https://grain.dev/capabilities/grain#source={}
+        - https://grain.dev/capabilities/repo#credential:
+            with:
+              credential: bot
+servers:
+  - id: https://grain.dev/capabilities/config-map
+    command: grain
+    args:
+      - capability
+      - config-map
+    enabled: true
+    builtin: config-map
+  - id: https://grain.dev/capabilities/figma
+    command: grain
+    args:
+      - capability
+      - figma
+      - -listen
+      - 127.0.0.1:4253
+    enabled: true
+    builtin: figma
+  - id: https://grain.dev/capabilities/gchat
+    command: grain
+    args:
+      - capability
+      - gchat
+      - -listen
+      - 127.0.0.1:4251
+    enabled: true
+    builtin: gchat
+  - id: https://grain.dev/capabilities/gcp
+    command: grain
+    args:
+      - capability
+      - gcp
+    enabled: true
+    builtin: gcp
+  - id: https://grain.dev/capabilities/git
+    command: grain
+    args:
+      - capability
+      - git
+    enabled: true
+    builtin: git
+  - id: https://grain.dev/capabilities/host-script
+    command: grain
+    args:
+      - capability
+      - host-script
+    enabled: true
+    builtin: host-script
+in_process:
+  grain-ci:
+    enabled: false
+  self-debug:
+    restrictions:
+      repos:
+        - acme/lib
+api_scopes:
+  presets: {}
+-- template grants as re-exported
+30:    grants:
+31-      - https://grain.dev/capabilities/api#self-debug
+32-      - https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+33-      - https://grain.dev/capabilities/github#read-issues={}
+34-      - https://grain.dev/capabilities/github#sandbox-repo={}
+35-      - https://grain.dev/capabilities/grain#ci={}
+36-      - https://grain.dev/capabilities/grain#journal={}
+37-      - https://grain.dev/capabilities/grain#source={}
+38-      - https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}
+39-      - https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+40-      - local-scripts:deploy
+41-    created-at: "2026-11-15T13:04:36.452857739Z"
+{"error":null,"defaultCapabilities":[]}
+== B. catalogue at filing (in_process.self-debug restricted to acme/lib, in_process.grain-ci disabled)
+widgets + api#self-debug -> {"id":null,"state":null,"error":"capability api:self-debug is not granted on acme/widgets by settings/capabilities.yml (repos: acme/lib) (in_process.self-debug, the capability it replaced)"}
+lib + api#self-debug -> {"id":"10","state":"proposed","error":null}
+widgets plain (ci_mode grain) -> {"id":"11","state":"proposed","error":null}
+10: {"capabilities":["https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/lib\"}","https://grain.dev/capabilities/api#self-debug","https://grain.dev/capabilities/grain#source={}"],"grants":[]}
+11: {"capabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"],"grants":[]}
+== B. dispatch
+null
+{"id":"10","state":"queued","error":null}
+{"id":"11","state":"queued","error":null}
+-- task 10
+{"tools":["ask_question","comment_on_issue","edit_file","nothing_needed","propose_task","read_file","recreate_sandbox","request_access","request_secret","resume_later","run_command","wait_for_task","write_file"]}
+api_routes: exit=0 | stdout: | GET    /api/restart-watch                         (deployment:read) | GET    /api/fs/ci/{path...}                       (ci:read) | GET    /api/fs/task/{path...}                     (tasks:read) | GET    /api/fs/deploy/{path...}                   (deployment:read) | GET    /api/fs/src/{path...}                      (deployment:read) | GET    /api/registry/status                       (deployment:read) | GET    /api/tasks                                 (tasks:read) | GET    /api/tasks/states                          (tasks:read) | GET    /api/tasks/wait                      
+ls_src: exit=0 | stdout: | grain: not found: src:// is not configured on this daemon | exit=0 |  | stderr: | 
+ci_log: exit=0 | stdout: | grain: not found: no CI run (GitHub in a repository this sandbox may read | grain: not found: ci://acme/lib/(GitHub | exit=0 |  | stderr: | 
+git_push: exit=0 | stdout: | To http://127.0.0.1:41449/acme/lib.git |  * [new branch]      HEAD -> grain/be14af4e/task-10-cat-lib-self-debug | exit=0 |  | stderr: | 
+propose_bare: propose_task: self-debug is a retired capability name and grants nothing any longer: it became https://grain.dev/capabilities/api#self-debug and https://grain.dev/capabilities/grain#source={}; name that instead
+request_access_bare: This request cannot be relayed as it stands: requests[0] (grant self-debug): self-debug is a retired capability name and grants nothing any longer: it became https://grain.dev/capabilities/api#self-debug and https://grain.dev/capabilities/grain#source={}; grant that instead. Fix it and call request_access again.
+-- task 11
+no hook output
+{"state":"awaiting_reply","last":"This task could not be dispatched: the capability `https://grain.dev/capabilities/github#sandbox-repo` was refused, so no sandbox was built for it.\n\nWhat was said, verbatim -- untrusted text from capability:https://grain.dev/capabilities/github#sandbox-repo, not grain's own words:\n\n```\nthis deployment has no GitHub App configured (github-app/app-id is unset) -- run `grain controller bootstrap-github-app` on the host, or detach this capability from the task\n```\n\nChange the task's capabilities, or"}
+== B. F5: the run's propose_task(self-debug, grain-ci) (f5.sh walks the build before the fix)
+task 10 state: awaiting_submit
+[]
+10 comments: []
+11 comments: ["This task could not be dispatched: the capability `https://grain.dev/capabilities/github#sandbox-repo` was refused, so no sandbox was built for it.\n\nWhat was said, verbatim -- untrusted text from capability:https://grain.dev/capabilities/github#sandbox-repo, not grain's own words:\n\n```\nthis deployment has no GitHub App configured (github-app/app-id is unset) -- run `grain controller bootstrap-github-app` on the host, or detach this capability from the task\n```\n\nChange the task's capabilities, or"]
+== C. .grain/workflows job declaring a bare name (acme/widgets, ci_mode grain)
+{"id":"bc7ca82bc364bd92","state":null,"status":null,"error":null}
+{"conclusion":"errored","error":""}
+bc7ca82bc364bd92|0|walk|.grain/workflows/walk.yml|bare|bare|job:b7c6425875a662ba69578366db89dac29b8fdbff579d0e58d645813237017bd7|0|||2026-11-15 13:08:00.079002406 +0000 UTC|errored|this job requires the capability "self-debug" and this deployment does not provide it for acme/widgets: self-debug is a retired capability name and grants nothing any longer: it became https://grain.dev/capabilities/api#self-debug and https://grain.dev/capabilities/grain#source={}; declare that instead|||0|||0||0|0||||||
+bc7ca82bc364bd92|1|walk|.grain/workflows/walk.yml|bareci|bareci|job:9fa8754cc2ad7ccb5ec8fe5e2a4a10f0f4aa80c02a0dc5eec44cba95b64f557f|0|||2026-11-15 13:08:00.078969658 +0000 UTC|errored|this job requires the capability "grain-ci" and this deployment does not provide it for acme/widgets: grain-ci is a retired capability name and grants nothing any longer: it became https://grain.dev/capabilities/grain#ci={}; declare that instead|||0|||0||0|0||||||
+== D. local policy
+repos: [acme/widgets, acme/lib]
+local_requesters: [owner@example.com]
+capabilities:
+  deny: [self-debug, "gcp-key*"]
+2026/11/15 13:08:00 grain daemon: enforcing local policy /var/tmp/retired-aliases/sqlite/grain_policy.yml (2 repositories allowed; local requesters: owner@example.com); edits to the file take effect when the daemon restarts
+lib + api#self-debug -> {"id":"12","state":"proposed","error":null}
+lib plain (gcp grant written by SQL) -> {"id":"13","state":"proposed","error":null}
+{"id":"12","state":"queued","error":null}
+{"id":"13","state":"queued","error":null}
+12: {"state":"queued","grants":[],"blocked":null,"last":null}
+   no run started
+13: {"state":"queued","grants":[],"blocked":null,"last":null}
+   no run started
+dispatch: candidate 12 skipped: held by local policy: local policy forbids capability "https://grain.dev/capabilities/api#self-debug"
+dispatch: candidate 13 skipped: held by local policy: local policy forbids capability "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"default\",\"primary\":true}"

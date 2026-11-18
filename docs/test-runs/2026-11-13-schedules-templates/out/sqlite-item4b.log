@@ -1,0 +1,30 @@
+=== daemon A (sqlite)
+environment up (sqlite): http://127.0.0.1:4275 (token in /var/tmp/walk-sched-dump-sqlite/data/local-api-token)
+{"id":"template-1","sandbox":{"cpus":4,"diskGb":80}}
+--- A's dump: settings/templates.yml and settings/schedules.yml
+24-    skills: ""
+25:    sandbox: {disk-gb: 60}
+93-    skills: ""
+94:    sandbox: {cpus: 4, disk-gb: 80}
+73:    skip-when: publishing-held
+id                              sandbox               
+------------------------------  ----------------------
+repo:template:acme:widgets:big  {"diskGb":60}         
+template-1                      {"cpus":4,"diskGb":80}
+id                               skip_when      
+-------------------------------  ---------------
+repo:schedule:acme:widgets:held  publishing-held
+--- grain state check on A's dump
+  template_read                1
+  template_sequence            1
+ok: grain can load this
+=== daemon B: a fresh store whose state repository is a clone of A's
+2026/11/13 04:22:10 staterepo: loading /var/tmp/walk-sched-dump-sqlite/b/data/state-repo as the deployment's state repository; importing its settings
+id                              sandbox               
+------------------------------  ----------------------
+repo:template:acme:widgets:big  {"diskGb":60}         
+template-1                      {"cpus":4,"diskGb":80}
+id                               skip_when      
+-------------------------------  ---------------
+repo:schedule:acme:widgets:held  publishing-held
+[{"id":"template-1","sandbox":{"cpus":4,"diskGb":80}},{"id":"repo:template:acme:widgets:big","sandbox":{"diskGb":60}}]

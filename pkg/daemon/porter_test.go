@@ -146,3 +146,57 @@ func TestNewPorterPropagatesAmbientCommitIdentityAndSigningKey(t *testing.T) {
 		t.Errorf("SigningKey = %q, want %q", remote.SigningKey, pubLine)
 	}
 }
+
+func TestNewQAMirrorResolverMintsReadOnlyProxyTokenAndFallsBackForLocalPaths(t *testing.T) {
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "sandbox-tokens.json")
+	tokens := gitproxy.NewSandboxTokenStore(tokenPath)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	resolveMirror := NewQAMirrorResolver("http://127.0.0.1:9/", nil, tokens, nil)
+	remoteURL, token, release, err := resolveMirror(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("NewQAMirrorResolver: %v", err)
+	}
+	if remoteURL != "http://127.0.0.1:9/acme/widgets.git" {
+		t.Fatalf("remoteURL = %q, want proxy repo URL", remoteURL)
+	}
+	known, err := gitproxy.LoadSandboxTokens(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := known.Authenticate(token)
+	if !ok || !strings.HasPrefix(identity, "qa-mirror-") {
+		t.Fatalf("token authenticates as %q (%v), want qa-mirror-*", identity, ok)
+	}
+	if got := CiReadScopes.Repos(identity); len(got) != 1 || !got[0].Same(repo) {
+		t.Fatalf("read scope = %v, want [%s]", got, repo)
+	}
+	if got := CiWriteScopes.Repos(identity); len(got) != 0 {
+		t.Fatalf("write scope must be empty for mirror fetches, got %v", got)
+	}
+
+	release()
+	if got := CiReadScopes.Repos(identity); len(got) != 0 {
+		t.Fatalf("read scope after release = %v, want none", got)
+	}
+	afterRelease, err := gitproxy.LoadSandboxTokens(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := afterRelease.Authenticate(token); ok {
+		t.Fatal("qa mirror token still authenticates after release")
+	}
+
+	// Fallback path when no git proxy is active.
+	fallbackCalled := false
+	noProxy := NewQAMirrorResolver("", nil, nil, func(_ context.Context, r model.RepoRef) (string, string, error) {
+		fallbackCalled = true
+		return "https://example.invalid/" + r.String() + ".git", "tok-fallback", nil
+	})
+	fbURL, fbTok, fbRel, err := noProxy(context.Background(), repo)
+	if err != nil || !fallbackCalled || fbTok != "tok-fallback" || !strings.Contains(fbURL, "acme/widgets.git") {
+		t.Fatalf("fallback resolver mismatch: url=%q tok=%q called=%v err=%v", fbURL, fbTok, fallbackCalled, err)
+	}
+	fbRel()
+}
