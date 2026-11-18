@@ -716,7 +716,6 @@ export interface GateObservationResult {
   result: {
     type: string;
     binding_id?: string;
-    agent_text?: string | null;
     version: number;
     status: string;
     summary: string;
