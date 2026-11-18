@@ -453,3 +453,20 @@ func TestBindingASecretUnderAnExternalConfigRepoGivesTheEdit(t *testing.T) {
 		t.Errorf("a refused binding was written: %v", env)
 	}
 }
+
+// Saving a built-in server with a malformed or non-loopback -listen flag is
+// refused even when Config.Config is empty (before Server settings are filled).
+func TestSetCapabilityServerRefusesBadBuiltinListenArgsWithEmptyConfig(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	srv := ui.NewServerWithClient(client)
+
+	for _, bad := range []string{"0.0.0.0:4253", "127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:"} {
+		rec := do(t, srv, http.MethodPut, "/api/capability-servers",
+			`{"id":"https://grain.dev/capabilities/figma","config":{"command":"grain","args":["capability","figma","-listen","`+bad+`"]}}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), bad) {
+			t.Errorf("PUT figma with -listen %q: %d %s, want 400 naming %q", bad, rec.Code, rec.Body.String(), bad)
+		}
+	}
+}

@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   type CapabilityServerDetail,
   type JsonSchema,
+  boolDefault,
   configFromForm,
   fieldApplies,
   fieldKind,
@@ -25,11 +26,14 @@ import {
   hostChoice,
   linesToPairs,
   newItem,
+  normalizeConfigErrors,
   removeMessage,
   renameMessage,
+  renderedConfigPaths,
   schemaFields,
   secretFieldState,
 } from "./capability-server";
+import { capServerState } from "./settings-work.component";
 
 describe("connection form", () => {
   it("round-trips a stdio entry placed on a named host", () => {
@@ -215,5 +219,109 @@ describe("remove and rename confirms", () => {
     expect(removeMessage("x", [])).toMatch(/Nothing grants it now/);
     expect(removeMessage("x", [h])).toMatch(/these grants/);
     expect(renameMessage("x", "y", [h])).toMatch(/leaves these grants/);
+  });
+});
+
+describe("validation paths, boolean defaults, and runtime status chips", () => {
+  it("normalizes bracket validation paths to schema-form dot paths", () => {
+    expect(
+      normalizeConfigErrors({
+        "scripts[0].description": "is required",
+        "permission_sets[2].roles": "grants no roles",
+        "permission_sets[2]": "bad lease",
+        "config.grain_url": "must be https",
+        "": "refused",
+      }),
+    ).toEqual({
+      "scripts.0.description": "is required",
+      "permission_sets.2.roles": "grants no roles",
+      "permission_sets.2": "bad lease",
+      grain_url: "must be https",
+      "": "refused",
+    });
+  });
+
+  it("tracks rendered dot paths and defaults person_granted true when service_account is set", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        permission_sets: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              service_account: { type: "string" },
+              person_granted: { type: "boolean" },
+              pool_max: { type: "integer" },
+              credential: {
+                type: "string",
+                enum: ["token", "key"],
+                default: "token",
+              },
+            },
+          },
+        },
+      },
+    };
+    const itemSchema = schema.properties!["permission_sets"].items!;
+    const pgField = schemaFields(schema, itemSchema).find(
+      (f) => f.name === "person_granted",
+    )!;
+    expect(boolDefault(pgField, {}, itemSchema)).toBe(false);
+    expect(
+      boolDefault(
+        pgField,
+        { service_account: "sa@proj.iam.gserviceaccount.com" },
+        itemSchema,
+      ),
+    ).toBe(true);
+    const paths = renderedConfigPaths(schema, schema, {
+      permission_sets: [
+        { name: "org", service_account: "sa@proj.iam.gserviceaccount.com" },
+      ],
+    });
+    expect(paths.has("permission_sets.0")).toBe(true);
+    expect(paths.has("permission_sets.0.person_granted")).toBe(true);
+    expect(paths.has("permission_sets.0.pool_max")).toBe(false);
+  });
+
+  it("reports startError, waiting, and configRefused on capServerState", () => {
+    expect(
+      capServerState({
+        id: "https://grain.dev/capabilities/git",
+        status: {
+          state: "failed",
+          startError: "could not start: port 4254 in use",
+        },
+      }),
+    ).toEqual({
+      label: "failed (could not start: port 4254 in use)",
+      tone: "error",
+    });
+    expect(
+      capServerState({
+        id: "https://grain.dev/capabilities/gcp",
+        status: {
+          state: "needs-config",
+          waiting: "ADC renewal",
+        },
+      }),
+    ).toEqual({
+      label: "waiting for ADC renewal",
+      tone: "blast",
+    });
+    expect(
+      capServerState({
+        id: "https://grain.dev/capabilities/git",
+        status: {
+          state: "needs-config",
+          configRefused: true,
+        },
+      }),
+    ).toEqual({
+      label: "config refused",
+      tone: "error",
+    });
   });
 });

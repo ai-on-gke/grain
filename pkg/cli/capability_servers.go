@@ -184,6 +184,11 @@ func printCapabilityServers(out *printer, list []ui.CapabilityServer) {
 		state := "unknown"
 		if s.Status != nil {
 			state = string(s.Status.State)
+			if state == "needs-hostd" {
+				state = "needs host"
+			} else if sel, ok := strings.CutPrefix(state, "needs-hostd:"); ok {
+				state = "needs host " + strings.TrimSpace(sel)
+			}
 			if s.Status.StartError != "" {
 				state += " (" + s.Status.StartError + ")"
 			}

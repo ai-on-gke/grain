@@ -25,6 +25,48 @@ import "./style.css";
 // become deployment-wide ones (design/design/settings-panel.design.md §6.3).
 migrateStorage();
 
+// Under Cross-Origin-Opener-Policy: same-origin, Figma's cross-origin consent
+// redirect severs the opener WindowProxy. Relay ?code/&error + ?state back to
+// the opener over same-origin BroadcastChannel, scrub the URL and close.
+(function relayFigmaOAuthCallback() {
+  if (typeof window === "undefined") return;
+  const path = window.location.pathname.replace(/\/+$/, "");
+  if (path !== "/settings/capabilities" || !window.location.search) return;
+  const params = new URLSearchParams(window.location.search);
+  const state = params.get("state");
+  const code = params.get("code");
+  const error = params.get("error");
+  if (!state || (!code && !error)) return;
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const ch = new BroadcastChannel("grain-figma-oauth");
+      ch.postMessage({
+        type: "figma-oauth-callback",
+        code: code || "",
+        error: error || "",
+        state,
+      });
+      ch.close();
+    }
+  } catch {
+    // Ignore BroadcastChannel unavailability.
+  }
+  params.delete("code");
+  params.delete("error");
+  params.delete("state");
+  const rest = params.toString();
+  window.history.replaceState(
+    null,
+    "",
+    window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash,
+  );
+  try {
+    window.close();
+  } catch {
+    // Browser may keep non-popup tabs open.
+  }
+})();
+
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <AppThemeProvider>

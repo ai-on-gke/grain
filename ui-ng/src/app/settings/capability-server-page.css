@@ -19,6 +19,15 @@ g-capability-server-page .cap-head {
   overflow-wrap: anywhere;
 }
 
+g-capability-server-page [data-testid="capability-server-state"] {
+  max-width: 100%;
+  height: auto;
+  min-height: 24px;
+  padding: 4px 8px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 g-capability-server-page .cap-id-line {
   display: flex;
   flex-wrap: wrap;

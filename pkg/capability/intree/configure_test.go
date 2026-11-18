@@ -160,18 +160,27 @@ func TestAProbeKeepsAnInvalidListenPort(t *testing.T) {
 	if got := listenAddr(probe, "127.0.0.1:4254"); got != "127.0.0.1:0" {
 		t.Errorf("listenAddr(probe, 127.0.0.1:4254) = %q, want 127.0.0.1:0", got)
 	}
-	for _, badAddr := range []string{"127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:", "127.0.0.1:-1", "not-host-port"} {
+	for _, badAddr := range []string{"0.0.0.0:4254", "127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:", "127.0.0.1:-1", "not-host-port"} {
 		if got := listenAddr(probe, badAddr); got != badAddr {
 			t.Errorf("listenAddr(probe, %q) = %q, want it unchanged", badAddr, got)
 		}
-		s, err := newConfigurableGit(GitConfig{Listen: listenAddr(probe, badAddr)})
+		if err := CheckBuiltinArgs("git", []string{"capability", "git", "-listen", badAddr}); err == nil {
+			t.Errorf("CheckBuiltinArgs(git, -listen %q) = nil, want error", badAddr)
+		}
+		s, err := newConfigurableGit(GitConfig{Listen: listenAddr(probe, badAddr), Repos: []string{"o/r"}, Token: "t", Upstream: "http://127.0.0.1:1"})
 		if err != nil {
 			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
 		}
-		_, err = attachConfigured(t, s, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
-		if err == nil || protocol.IsStartError(err) {
-			t.Errorf("probing with -listen %q: %v (IsStartError=%v), want a configuration refusal", badAddr, err, protocol.IsStartError(err))
+		_, err = attachConfigured(t, s, nil, nil)
+		if err == nil || protocol.IsStartError(err) || !strings.Contains(err.Error(), badAddr) {
+			t.Errorf("probing with -listen %q: %v (IsStartError=%v), want a configuration refusal naming %q", badAddr, err, protocol.IsStartError(err), badAddr)
 		}
+	}
+	if err := CheckBuiltinArgs("git", []string{"capability", "git", "-listen", "127.0.0.1:4254"}); err != nil {
+		t.Errorf("CheckBuiltinArgs(git, valid -listen) = %v, want nil", err)
+	}
+	if BuiltinConfigSchema("git") == nil {
+		t.Error("BuiltinConfigSchema(\"git\") = nil, want git's static configure schema")
 	}
 }
 

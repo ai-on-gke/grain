@@ -25,7 +25,8 @@ import {
   signal,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
-import { GrainApi } from "../api/grain-api.service";
+import type { RouteKey } from "../api/generated-routes";
+import { GrainApi, routeScope } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
@@ -36,6 +37,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import type {
   QAExperimentArm,
   QAExperimentSummary,
@@ -78,14 +80,18 @@ interface CapabilityServerRow {
     error?: string;
     reason?: string;
     state?: string;
+    startError?: string;
+    waiting?: string;
+    configRefused?: boolean;
   } | null;
 }
 
 // capServerState is the chip a server row shows: disabled when an
 // operator turned it off, otherwise the server's own status.state
 // ("attached" reads as enabled; needs-config / needs-hostd say what is
-// missing, in host wording; failed reads as an error) rather than
-// "enabled" for a server that cannot attach yet.
+// missing, in host wording; failed reads as an error, including any
+// startError such as a port in use) rather than "enabled" for a server
+// that cannot attach yet.
 export function capServerState(srv: CapabilityServerRow): {
   label: string;
   tone: string;
@@ -94,6 +100,11 @@ export function capServerState(srv: CapabilityServerRow): {
   const st = String(srv.status?.state ?? "").trim();
   if (!st || st === "attached") return { label: "enabled", tone: "healthy" };
   if (st === "needs-config") {
+    const waiting = String(srv.status?.waiting ?? "").trim();
+    if (waiting) return { label: `waiting for ${waiting}`, tone: "blast" };
+    if (srv.status?.configRefused) {
+      return { label: "config refused", tone: "error" };
+    }
     return { label: "needs-configuring", tone: "blast" };
   }
   // needs-hostd:<selector> is wire format (daemon.NeedsHostd); the chip
@@ -102,7 +113,13 @@ export function capServerState(srv: CapabilityServerRow): {
     const sel = st.slice("needs-hostd:".length).trim();
     return { label: sel ? `needs host ${sel}` : "needs host", tone: "blast" };
   }
-  if (st === "failed") return { label: "failed", tone: "error" };
+  if (st === "failed") {
+    const startErr = String(srv.status?.startError ?? "").trim();
+    return {
+      label: startErr ? `failed (${startErr})` : "failed",
+      tone: "error",
+    };
+  }
   return { label: st, tone: st.startsWith("needs") ? "blast" : "neutral" };
 }
 
@@ -185,7 +202,12 @@ export function listedSecrets(
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent, ConfirmDialogComponent, RouterLink],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    RouterLink,
+    StatusIconComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./settings-capabilities.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -707,7 +729,7 @@ export function listedSecrets(
                             srv.status?.error || srv.status?.reason || null
                           "
                         >
-                          {{ chip.label }}
+                          <g-status-icon [tone]="chip.tone" />{{ chip.label }}
                         </span>
                       </td>
                       <td class="s-actions-cell">
@@ -934,7 +956,9 @@ export function listedSecrets(
                             'status-pill ' + (r.deny ? 'error' : 'healthy')
                           "
                         >
-                          {{ r.deny ? "Deny" : "Admit" }}
+                          <g-status-icon
+                            [tone]="r.deny ? 'error' : 'healthy'"
+                          />{{ r.deny ? "Deny" : "Admit" }}
                         </span>
                       </td>
                       <td class="s-mono">
@@ -1458,7 +1482,7 @@ export function listedSecrets(
                           <span
                             class="status-pill blast"
                             title="Grain made this for a capability server that no configured server uses any more"
-                            >orphaned</span
+                            ><g-status-icon tone="blast" />orphaned</span
                           >
                         }
                         <span class="s-secret-keys">
@@ -2094,8 +2118,12 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  private canGlobal(route: RouteKey): boolean {
+    return this.access.canGlobalScope(routeScope(route));
+  }
+
   private async loadCapabilities(): Promise<void> {
-    if (this.access.can("GET /api/capability-servers")) {
+    if (this.canGlobal("GET /api/capability-servers")) {
       try {
         const s = await this.api.get<
           CapabilityServerRow[] | { servers?: CapabilityServerRow[] }
@@ -2105,7 +2133,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         // Non-fatal
       }
     }
-    if (this.access.can("GET /api/capability-policy")) {
+    if (this.canGlobal("GET /api/capability-policy")) {
       try {
         const p = await this.api.get<{
           policy?: {
@@ -2120,7 +2148,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         // Non-fatal
       }
     }
-    if (this.access.can("GET /api/api-scope-sets")) {
+    if (this.canGlobal("GET /api/api-scope-sets")) {
       try {
         const ss = await this.api.get<ScopeSetRow[] | { sets?: ScopeSetRow[] }>(
           "GET /api/api-scope-sets",
@@ -2134,7 +2162,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   }
 
   private async loadSecrets(): Promise<void> {
-    if (!this.access.can("GET /api/secrets")) return;
+    if (!this.canGlobal("GET /api/secrets")) return;
     try {
       const sec = await this.api.get<
         SecretMetaRow[] | { secrets?: SecretMetaRow[]; enabled?: boolean }
@@ -2222,7 +2250,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     // null: who holds it could not be read, which the confirm says
     // rather than claiming nothing grants it.
     let items: HolderLink[] | null = null;
-    if (this.access.can("GET /api/capability-servers/usage")) {
+    if (this.canGlobal("GET /api/capability-servers/usage")) {
       try {
         const rows = await this.api.get<
           { id: string; holders?: CapabilityHolder[] }[]

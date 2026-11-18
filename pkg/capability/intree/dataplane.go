@@ -28,15 +28,8 @@ import (
 // on it until the server closes. Data-plane ports are reached only through
 // Grain's forwarders (§5.3.3), so anything but loopback is refused.
 func (s *Server) listen(addr string, h http.Handler) (*net.TCPAddr, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("listen address %q: %v", addr, err)
-	}
-	if !validPort(port) {
-		return nil, fmt.Errorf("listen address %q: port %q is not a TCP port number (0-65535)", addr, port)
-	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return nil, fmt.Errorf("listen address %q is not a loopback IP address", addr)
+	if err := validateListenAddr(addr); err != nil {
+		return nil, err
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -51,6 +44,22 @@ func (s *Server) listen(addr string, h http.Handler) (*net.TCPAddr, error) {
 	return ln.Addr().(*net.TCPAddr), nil
 }
 
+// validateListenAddr checks that addr is a loopback IP and valid TCP port
+// (0-65535), returning a configuration error rather than a StartFailure.
+func validateListenAddr(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("listen address %q: %v", addr, err)
+	}
+	if !validPort(port) {
+		return fmt.Errorf("listen address %q: port %q is not a TCP port number (0-65535)", addr, port)
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("listen address %q is not a loopback IP address", addr)
+	}
+	return nil
+}
+
 // listenAddr is where a data-plane listener given addr binds: addr
 // itself, or an ephemeral port on its host when Grain started this
 // process only to probe it (protocol.ProbeEnv). A probe never mints, and
@@ -59,11 +68,11 @@ func listenAddr(env Env, addr string) string {
 	if env == nil || env(protocol.ProbeEnv) != "1" {
 		return addr
 	}
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil || !validPort(port) {
-		// listen refuses it with the reason.
+	if validateListenAddr(addr) != nil {
+		// listen refuses it with the reason, naming addr itself.
 		return addr
 	}
+	host, _, _ := net.SplitHostPort(addr)
 	return net.JoinHostPort(host, "0")
 }
 

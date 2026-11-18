@@ -286,21 +286,26 @@ func newConfigurableGit(fallback GitConfig) (*Server, error) {
 		listening = true
 		return nil
 	}
-	if _, err := checkGit(fallback); err == nil {
-		if err := ensureListen(); err != nil {
-			s.Close(context.Background())
-			return nil, err
-		}
-		if m, err := newGitMethod(fallback, p); err == nil {
-			if err := s.SetMethods(m); err != nil {
+	if validateListenAddr(listen) == nil {
+		if _, err := checkGit(fallback); err == nil {
+			if err := ensureListen(); err != nil {
 				s.Close(context.Background())
 				return nil, err
 			}
-			s.Methods = []*protocol.Method{m}
-			s.Log.Printf("git: proxying %s on %s", p.origin(), s.addr)
+			if m, err := newGitMethod(fallback, p); err == nil {
+				if err := s.SetMethods(m); err != nil {
+					s.Close(context.Background())
+					return nil, err
+				}
+				s.Methods = []*protocol.Method{m}
+				s.Log.Printf("git: proxying %s on %s", p.origin(), s.addr)
+			}
 		}
 	}
 	err = s.configurable(gitConfigSchema, func(_ context.Context, config map[string]any) ([]*protocol.Method, error) {
+		if err := validateListenAddr(listen); err != nil {
+			return nil, fmt.Errorf("git: %w", err)
+		}
 		if _, err := checkGit(withGitConfig(fallback, config)); err != nil {
 			return nil, err
 		}

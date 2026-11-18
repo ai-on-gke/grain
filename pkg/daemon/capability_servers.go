@@ -113,6 +113,7 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 			go orchestrator.RetryCapabilityReleases(ctx, store)
 		}
 		opts.OnClear = clearDrop
+		opts.Alerted = openCapabilityServerAlertIDs(ctx, store)
 		// A server declaring grain's identity fields is sent the same
 		// deployment id the branch names carry (§4.5.7).
 		opts.Identity = servers.StoreIdentity(store, logf)
@@ -286,6 +287,33 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		}
 	}
 	return onDrop, onAttach
+}
+
+// openCapabilityServerAlertIDs lists the deployment-level capability server IDs
+// that already have an open FamilyCapabilityServerDown notification in store,
+// so a daemon restart clears any alert whose server has since been removed,
+// disabled or returned to an unalerted needs-config.
+func openCapabilityServerAlertIDs(ctx context.Context, store *model.Store) map[string]bool {
+	if store == nil {
+		return nil
+	}
+	open, err := store.ListNotifications(ctx, model.NotificationFilter{
+		Open:   true,
+		Family: model.FamilyCapabilityServerDown,
+	})
+	if err != nil || len(open) == 0 {
+		return nil
+	}
+	prefix := model.FamilyCapabilityServerDown + ":"
+	out := map[string]bool{}
+	for _, n := range open {
+		id, ok := strings.CutPrefix(n.Subject, prefix)
+		if !ok || id == "" || strings.Contains(id, "@") {
+			continue
+		}
+		out[id] = true
+	}
+	return out
 }
 
 // serverLogStamp is the date and time a server's own log.Logger puts

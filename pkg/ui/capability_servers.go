@@ -568,6 +568,15 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			return configValidationError(err)
 		}
 	}
+	if bName := cfg.Builtin; bName != "" {
+		if err := intree.CheckBuiltinArgs(bName, cfg.Args); err != nil {
+			return validationErrorf("%s", err)
+		}
+	} else if bName := intree.InTreeName(cfg); bName != "" {
+		if err := intree.CheckBuiltinArgs(bName, cfg.Args); err != nil {
+			return validationErrorf("%s", err)
+		}
+	}
 	// A built-in's own rules beyond its schema are checked here too, so a
 	// save its configure would refuse never reaches the store and takes
 	// the server out of use.

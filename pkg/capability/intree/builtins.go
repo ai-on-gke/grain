@@ -402,6 +402,45 @@ func CheckBuiltinConfig(name string, config map[string]any) error {
 	return nil
 }
 
+// CheckBuiltinArgs checks the command-line flags of a built-in server (such as
+// -listen on git, figma, gchat, gcp and host-script) so Settings refuses a bad
+// flag even before Server settings are filled in.
+func CheckBuiltinArgs(name string, args []string) error {
+	switch name {
+	case "git", FigmaName, "gchat", "gcp", "host-script":
+	default:
+		return nil
+	}
+	start := 0
+	if len(args) >= 2 && args[0] == "capability" && args[1] == name {
+		start = 2
+	}
+	for i := start; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		if a == "-listen" || a == "--listen" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s: flag needs an argument: %s", name, a)
+			}
+			if err := validateListenAddr(args[i+1]); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			i++
+			continue
+		}
+		for _, prefix := range []string{"-listen=", "--listen="} {
+			if v, ok := strings.CutPrefix(a, prefix); ok {
+				if err := validateListenAddr(v); err != nil {
+					return fmt.Errorf("%s: %w", name, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // BuiltinConfigSchema returns the operator-facing configure schema for a
 // configurable built-in capability server, or nil when name is not one.
 func BuiltinConfigSchema(name string) map[string]any {
@@ -415,6 +454,8 @@ func BuiltinConfigSchema(name string) map[string]any {
 		raw = gchatConfigSchema()
 	case "gcp":
 		raw = gcpConfigSchema()
+	case "git":
+		raw = gitConfigSchema
 	case "host-script":
 		raw = hostScriptConfigSchema
 	default:

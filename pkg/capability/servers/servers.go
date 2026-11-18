@@ -228,6 +228,10 @@ type Options struct {
 	// outside the registry's lock, so an alert OnDrop raised does not
 	// outlive the entry.
 	OnClear func(id string)
+	// Alerted names capability_ids that already have an open alert from an
+	// earlier process, so an entry removed before or settling into an
+	// unalerted needs-config on the first Sync clears it via OnClear.
+	Alerted map[string]bool
 }
 
 type entry struct {
@@ -277,10 +281,11 @@ type Registry struct {
 
 	syncMu sync.Mutex // one Sync at a time
 
-	mu      sync.RWMutex
-	entries map[string]*entry
-	applied map[string]protocol.ServerConfig // the configuration last synced to
-	aliases map[string]string                // alias capability_id -> entry id
+	mu             sync.RWMutex
+	entries        map[string]*entry
+	applied        map[string]protocol.ServerConfig // the configuration last synced to
+	aliases        map[string]string                // alias capability_id -> entry id
+	initialAlerted map[string]bool
 
 	wake    chan struct{}
 	pending map[string]protocol.ServerConfig
@@ -307,7 +312,16 @@ func New(opts Options) *Registry {
 	if opts.Identity == nil {
 		opts.Identity = func() protocol.Identity { return protocol.Identity{} }
 	}
-	return &Registry{opts: opts, entries: map[string]*entry{}, wake: make(chan struct{}, 1)}
+	var initialAlerted map[string]bool
+	if len(opts.Alerted) > 0 {
+		initialAlerted = make(map[string]bool, len(opts.Alerted))
+		for id, ok := range opts.Alerted {
+			if ok {
+				initialAlerted[id] = true
+			}
+		}
+	}
+	return &Registry{opts: opts, entries: map[string]*entry{}, initialAlerted: initialAlerted, wake: make(chan struct{}, 1)}
 }
 
 // Lookup returns the attached server for capabilityID, refusing one that
@@ -498,6 +512,14 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	var cleared []string
 	wasAttached := map[string]bool{}
 	alerted := map[string]bool{}
+	for id := range r.initialAlerted {
+		if _, ok := servers[id]; !ok {
+			cleared = append(cleared, id)
+		} else {
+			alerted[id] = true
+		}
+	}
+	r.initialAlerted = nil
 	for id, e := range r.entries {
 		cfg, ok := servers[id]
 		if ok && reflect.DeepEqual(cfg, e.cfg) && e.identity == identity {

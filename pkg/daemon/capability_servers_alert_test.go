@@ -16,9 +16,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -122,5 +124,49 @@ func TestAStartFailureCapabilityServerIsRaisedWithoutBlamingSettings(t *testing.
 	onAttach(id)
 	if n, err := store.OpenNotification(ctx, subject); err != nil || n != nil {
 		t.Errorf("after attaching, open notification = %+v (err %v), want none", n, err)
+	}
+}
+
+// An open capability.server-down alert persisted before a daemon restart is
+// cleared once the restarted registry settles that built-in into an unalerted
+// needs-config (or removes/disables an entry), while a hostd-scoped alert is
+// left to its own hostd registry.
+func TestStaleCapabilityServerAlertClearsAfterRestartWhenUnconfiguredOrRemoved(t *testing.T) {
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	defer closeStore()
+	const (
+		gitID     = "https://grain.dev/capabilities/git"
+		removedID = "https://walk.example/capabilities/removed"
+	)
+	onDrop, clearDrop := capabilityServerAlerts(ctx, store)
+	wsDrop, _ := capabilityServerAlertsOnHostd(ctx, store, "ws-a")
+
+	onDrop(servers.Status{ID: gitID, State: servers.Failed, StartError: "could not start"})
+	onDrop(servers.Status{ID: removedID, State: servers.Failed, Error: "connection refused"})
+	wsDrop(servers.Status{ID: gitID, State: servers.Failed, Error: "ws-a down"})
+
+	reg := servers.New(servers.Options{
+		OnDrop:  onDrop,
+		OnClear: clearDrop,
+		Alerted: openCapabilityServerAlertIDs(ctx, store),
+		Attach: func(_ context.Context, id string, _ protocol.ServerConfig, _ protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
+			return nil, &protocol.ConfigureError{ID: id, Err: errors.New("no repositories are configured")}
+		},
+	})
+	t.Cleanup(reg.Close)
+	reg.Sync(ctx, map[string]protocol.ServerConfig{
+		gitID: {Command: "grain", Args: []string{"capability", "git"}, Builtin: "git"},
+	})
+
+	for _, id := range []string{gitID, removedID} {
+		subj := model.NotificationSubject(model.FamilyCapabilityServerDown, id)
+		if n, err := store.OpenNotification(ctx, subj); err != nil || n != nil {
+			t.Errorf("after restart Sync, %s notification = %+v (err %v), want cleared", subj, n, err)
+		}
+	}
+	wsSubj := model.NotificationSubject(model.FamilyCapabilityServerDown, gitID+"@ws-a")
+	if n, err := store.OpenNotification(ctx, wsSubj); err != nil || n == nil {
+		t.Errorf("hostd-scoped %s notification = %+v (err %v), want preserved", wsSubj, n, err)
 	}
 }

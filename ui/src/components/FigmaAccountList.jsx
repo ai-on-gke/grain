@@ -52,18 +52,74 @@ export function figmaRedirectURI(origin = window.location.origin) {
 // waitForOAuthCode polls the popup until Figma has sent it back to this
 // origin, and resolves to its code and state; reading a cross-origin
 // popup's location throws, which only means it is still at Figma.
-export function waitForOAuthCode(popup, { interval = 500, timeout } = {}) {
+export function waitForOAuthCode(
+  popup,
+  { interval = 500, timeout, expectedState } = {},
+) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
+    let settled = false;
+    let ch = null;
+    const cleanup = () => {
+      clearInterval(timer);
+      if (ch) {
+        try {
+          ch.close();
+        } catch {
+          // Ignore close errors.
+        }
+        ch = null;
+      }
+    };
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(arg);
+    };
+    if (expectedState && typeof BroadcastChannel !== "undefined") {
+      try {
+        ch = new BroadcastChannel("grain-figma-oauth");
+        ch.onmessage = (ev) => {
+          const d = ev?.data;
+          if (
+            !d ||
+            d.type !== "figma-oauth-callback" ||
+            d.state !== expectedState
+          ) {
+            return;
+          }
+          if (popup && !popup.closed) popup.close();
+          if (d.error) {
+            finish(reject, new Error(`Figma refused: ${d.error}`));
+          } else if (d.code) {
+            finish(resolve, { code: d.code, state: d.state });
+          }
+        };
+      } catch {
+        ch = null;
+      }
+    }
     const timer = setInterval(() => {
       if (!popup || popup.closed) {
-        clearInterval(timer);
-        reject(new Error("the Figma window was closed before it finished"));
+        // With Cross-Origin-Opener-Policy: same-origin, navigating the popup
+        // to www.figma.com severs the WindowProxy (popup.closed === true)
+        // while the consent tab is still open; BroadcastChannel carries the
+        // same-origin callback back instead.
+        if (!ch) {
+          finish(
+            reject,
+            new Error("the Figma window was closed before it finished"),
+          );
+          return;
+        }
+        if (timeout && Date.now() - started > timeout) {
+          finish(reject, new Error("timed out waiting for Figma"));
+        }
         return;
       }
       if (timeout && Date.now() - started > timeout) {
-        clearInterval(timer);
-        reject(new Error("timed out waiting for Figma"));
+        finish(reject, new Error("timed out waiting for Figma"));
         return;
       }
       let search;
@@ -77,13 +133,12 @@ export function waitForOAuthCode(popup, { interval = 500, timeout } = {}) {
       const code = params.get("code");
       const error = params.get("error");
       if (!code && !error) return;
-      clearInterval(timer);
       popup.close();
       if (error) {
-        reject(new Error(`Figma refused: ${error}`));
+        finish(reject, new Error(`Figma refused: ${error}`));
         return;
       }
-      resolve({ code, state: params.get("state") || "" });
+      finish(resolve, { code, state: params.get("state") || "" });
     }, interval);
   });
 }
@@ -174,7 +229,10 @@ function FigmaAccountRow({ serverID, account, attached, readOnly }) {
         );
       }
       popup.location.href = auth.authorizeUrl;
-      const { code, state } = await waitForOAuthCode(popup);
+      const { code, state } = await waitForOAuthCode(popup, {
+        expectedState: auth.state,
+        timeout: 300_000,
+      });
       if (state !== auth.state) {
         throw new Error("Figma answered with a different OAuth state");
       }

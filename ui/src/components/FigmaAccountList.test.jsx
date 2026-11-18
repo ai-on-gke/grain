@@ -228,4 +228,24 @@ describe("waitForOAuthCode", () => {
       "closed before it finished",
     );
   });
+
+  it("receives the callback over BroadcastChannel when COOP severs popup.closed", async () => {
+    const severed = fakePopup();
+    severed.closed = true;
+    const wait = waitForOAuthCode(severed, {
+      interval: 5,
+      expectedState: "coop-state",
+    });
+    const sender = new BroadcastChannel("grain-figma-oauth");
+    sender.postMessage({
+      type: "figma-oauth-callback",
+      code: "coop-code",
+      state: "coop-state",
+    });
+    sender.close();
+    await expect(wait).resolves.toEqual({
+      code: "coop-code",
+      state: "coop-state",
+    });
+  });
 });
