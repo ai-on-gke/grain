@@ -299,3 +299,12 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* A form field's own refusal, under its input (the template dialog's
+   Task priority). */
+.proc-field-error {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--md-sys-color-error);
+}
