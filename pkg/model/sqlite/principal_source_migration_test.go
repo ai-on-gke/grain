@@ -35,7 +35,7 @@ func seedPrincipalRows(t *testing.T, ctx context.Context, store *model.Store, so
 	operator := operator
 	operator.Source = source
 	tk := task("t1", false)
-	tk.Origin.Attribution = model.Attribution{Actor: operator, OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: source}}
+	tk.Filing.Attribution = model.Attribution{Actor: operator, OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: source}}
 	tk.Approval = &model.Attribution{Actor: operator}
 	if err := store.PutTask(ctx, tk); err != nil {
 		t.Fatal(err)
@@ -82,8 +82,8 @@ func checkPrincipalRows(t *testing.T, ctx context.Context, store *model.Store, w
 	if err != nil || got == nil {
 		t.Fatalf("reading the task: %v, %v", got, err)
 	}
-	check("origin actor", got.Origin.Attribution.Actor)
-	if b := got.Origin.Attribution.OnBehalfOf; b == nil || b.ID != "alice" || b.Source != want {
+	check("origin actor", got.Filing.Attribution.Actor)
+	if b := got.Filing.Attribution.OnBehalfOf; b == nil || b.ID != "alice" || b.Source != want {
 		t.Errorf("origin on-behalf-of = %+v, want alice with source %q", b, want)
 	}
 	if got.Approval == nil {

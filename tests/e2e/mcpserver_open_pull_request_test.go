@@ -120,7 +120,7 @@ func fileTaskForBranch(t *testing.T, ctx context.Context, store *model.Store, id
 	actor := human("operator")
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "fold the widget", Body: "please",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: actor},
 		Target:   &repo,
 		Binding:  model.BindingDirective,

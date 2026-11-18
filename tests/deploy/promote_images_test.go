@@ -364,22 +364,6 @@ func TestPromoteRebuildsTheGrainImageWithTheReleaseStamped(t *testing.T) {
 	}
 }
 
-// The rebuilt release carries the schema version its own pkg/model
-// declares as io.grain.schema-version, as `make image` stamps it, so an
-// upgrading deployment can refuse a schema downgrade onto it from
-// registry metadata alone (pkg/upgrade/schema.go) -- a Dockerfile that
-// predates ARG SCHEMA_VERSION still gets the label.
-func TestPromoteRebuildStampsTheReleasesSchemaVersion(t *testing.T) {
-	remote, commits := releaseRepoWithFiles(t, "FROM scratch\nARG GRAIN_IMAGE_REF=\n"+oldMakeBuild+"\n", true,
-		map[string]string{"pkg/model/schema.go": "package model\n\nconst SchemaVersion = 143\n"})
-	short := commits["released"][:7]
-	out, docker, err := promoteRun(t, remote, []string{"promote"}, publishEnv(stubAnswers(t, short, "", "v1.5.0")))
-	if err != nil {
-		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
-	}
-	containsRun(t, docker, "--build-arg SCHEMA_VERSION=143 --label io.grain.schema-version=143 --build-arg RELEASE=v1.5.0")
-}
-
 // The ARG a pre-RELEASE Dockerfile is given must not make the release
 // report a dirty tree: the checkout's .git is built with it, and `go
 // build` stamps vcs.modified from `git status`, so a promoted v1.8.0

@@ -1,0 +1,297 @@
+New
+1
+Inbox
+Workstreams
+Tasks
+Agents
+Sessions
+Processes
+CI
+Telemetry
+Context
+Fleet
+More
+Settings
+Grain
+Next up
+#7
+Run the release train (check, release, cut)
+Pipeline paused
+Director
+/
+AL
+Pipeline paused (manual Run now allowed) — walkthrough: keep filed tasks open
+Telemetry
+Controls
+Processes
+New schedule
+
+Standing schedules, event triggers, reusable templates, multi-pass suites, and repository .grain/ declarations.
+
+Schedules & Triggers
+23
+Templates
+27
+Suites & Runs
+3
+Repo Workflows & Declarations
+1
+All
+Active
+Paused
+Event triggers
+Suppressed
+Suppressed
+Review last night's "live-secrets-repo" workflow run
+.grain
+Daily at 05:53 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Weekly dead-code scan
+.grain
+Weekly · Sunday 04:30 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Walkthrough release/v3.5.1 train (template-bound)
+.grain
+Every 20 min
+· acme/grain
+· overlap: skip
+Enabled
+Walkthrough release/v3.5.1 tick
+.grain
+Every 20 min
+· acme/grain
+· overlap: skip
+Enabled
+Update agent CLI clients
+.grain
+Weekly · Monday 06:00 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+UI walkthrough coverage review
+.grain
+Weekly · Monday 05:00 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+UI walkthrough
+.grain
+Daily at 03:00 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Release watchdog
+.grain
+Every 6 hr
+· acme/grain
+· overlap: skip
+Enabled
+Release train (Stage 1 verdict)
+Trigger
+.grain
+On GitHub workflow: nightly.yml (on v*-rc.*)
+· acme/grain
+· overlap: skip
+Enabled
+Release train
+.grain
+Every 20 min
+· acme/grain
+· overlap: skip
+Enabled
+Release process review
+.grain
+Weekly · Monday 07:00 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Release manager (patch)
+Trigger
+.grain
+On GitHub workflow: release.yml (success, failure · on release/v*)
+· acme/grain
+· overlap: skip
+Enabled
+Release manager (rc cut)
+Trigger
+.grain
+On GitHub workflow: release-train-assets.yml (success, failure · on v*-rc.*)
+· acme/grain
+· overlap: skip
+Enabled
+Prune GHCR packages
+.grain
+Weekly · Sunday 04:00 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Nightly security review
+.grain
+Daily at 03:30 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Nightly new features test plan
+.grain
+Daily at 03:00 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Nightly CI review
+Trigger
+.grain
+On GitHub workflow: nightly.yml (failure, timed_out, startup_failure · on main)
+· acme/grain
+· overlap: skip
+Enabled
+Live secrets repository
+.grain
+Daily at 05:53 (UTC)
+· acme/grain
+· overlap: skip
+Enabled
+Audit sampled pipeline steward reports
+Weekly · Monday 03:00 (UTC)
+· overlap: skip
+Enabled
+Write up what the cluster shipped this week
+Weekly · Monday 03:00 (UTC)
+· overlap: skip
+Enabled
+Pipeline steward
+Every 360 min
+· overlap: skip
+Enabled
+Write down what grain has learned about working here
+Daily at 03:00 (UTC)
+· overlap: skip
+Enabled
+Suggest what to tune for throughput and reliability
+Daily at 03:00 (UTC)
+· overlap: skip
+Enabled
+Release train
+Run now
+Pause
+acme/grain
+Every 20 min
+Repo: acme/grain @ main
+Overlap: skip
+Next: 2026-11-15T07:41:57Z
+Last: 2026-11-15T07:32:00.668893031Z
+
+Declared in acme/grain at .grain/schedules/release-train.yml. Update that file in git to modify this schedule.
+
+Prompt / instructions
+Run one tick of grain's continuous release train
+(`design/playbook/releases.playbook.md` §0.4). A schedule
+(`.grain/schedules/release-train.yml`) files this every 20 minutes; most
+ticks find nothing to do.
+
+Run exactly this, once, and nothing else:
+```
+bash ~/work/scripts/release-train-task.sh 2>&1 | tee ~/train.log | tail -n 60
+```
+It makes a scratch clone, writes the CI verdicts from grain's own forge
+connection (`grain ci list` / `grain ci checks`, unedited), and runs
+`scripts/release-from-trunk.sh` in train mode under this template's tag
+grant (`RELEASE_PUSH_GRANT=train`). In one run it may:
+
+- **check**: judge the rc in qualification (Stage 1 `nightly.yml`, Stage 2
+  `grain/release-qualification`);
+- **release** an rc that passed both: tag `vX.Y.0` on its commit and move
+  `latest` onto it, with no person's approval. CI publishes the images
+  and the GitHub Release from the tag (`publish-release.yml`);
+- **stage** `vX.Y.0-pending` instead, for a person, when the train may
+  not release it itself: a major bump, breaking changes, or
+  `RELEASE_AUTO_PROMOTE=false`;
+- **drop** an rc that failed (`vX.Y.Z-rc.N-discarded`) and cut the next
+  rc once `grain/rc-hold` lets it;
+- **cut**: tag the newest known-good `main` commit `vX.Y.Z-rc.N` and
+  force-move `refs/heads/candidate` onto it.
+
+Then end the task by the last line it printed, always closing with
+`nothing_needed` (never `comment_on_issue`, which parks a branchless task
+in `awaiting_reply` and holds the 20-minute `overlap: skip` schedule):
+
+- `RELEASE_TRAIN_RESULT=noop`: call `nothing_needed`, with the train's
+  one-line reason (its last `phase` line). Do not investigate further.
+- `RELEASE_TRAIN_RESULT=acted`: call `nothing_needed` with the full report
+  of what it did, from its `output` lines: the rc it cut (and the commit),
+  the rc it released as `vX.Y.0` or staged as `-pending` and why (a staged
+  release already raises `release.pending` in the Inbox), or the rc it
+  dropped and the failing jobs.
+- `RELEASE_TRAIN_RESULT=failed`: raise an Inbox notification first with
+  `grain notify --severity warning --subject <subject> --title "Release train tick failed: <one-line error>" --body "<the script's output>"`
+  (use `--subject release-escalated:<version>` when `escalated_version=<version>`
+  was printed -- meaning `RELEASE_MAX_RC_ATTEMPTS` rcs of that version were
+  dropped and a person decides -- and `--subject release-train-failed`
+  otherwise), then call `nothing_needed` with the script's output so the
+  task closes rather than stalling future ticks.
+
+Never re-run it with different settings, never write, edit or filter a
+verdict file, never run the script's `approve`, `reject` or `rollback`
+modes or `release-images.sh`, and never push a tag yourself. A refusal
+from the script or the proxy is the grant doing its job, not something
+to work around. This task changes no file, so it never opens a pull
+request.
+
+Composition preview (what next firing files)
+acme/grain @ main
+#1
+Run the release train (check, release, cut)
+· from Release train
+title
+Run the release train (check, release, cut)
+template
+body
+Run one tick of grain's continuous release train (`design/playbook/releases.playbook.md` §0.4). A schedule (`.grain/schedules/release-train.yml`) files this every 20 minutes; most ticks find nothing to do. Run exactly this, once, and nothing else: ``` bash ~/work/scripts/release-train-task.sh 2>&1 | tee ~/train.log | tail -n 60 ``` It makes a scratch clone, writes the CI verdicts from grain's own forge connection (`grain ci list` / `grain ci checks`, unedited), and runs `scripts/release-from-trunk.sh` in train mode under this template's tag grant (`RELEASE_PUSH_GRANT=train`). In one run it may: - **check**: judge the rc in qualification (Stage 1 `nightly.yml`, Stage 2 `grain/release-qualification`); - **release** an rc that passed both: tag `vX.Y.0` on its commit and move `latest` onto it, with no person's approval. CI publishes the images and the GitHub Release from the tag (`publish-release.yml`); - **stage** `vX.Y.0-pending` instead, for a person, when the train may not release it itself: a major bump, breaking changes, or `RELEASE_AUTO_PROMOTE=false`; - **drop** an rc that failed (`vX.Y.Z-rc.N-discarded`) and cut the next rc once `grain/rc-hold` lets it; - **cut**: tag the newest known-good `main` commit `vX.Y.Z-rc.N` and force-move `refs/heads/candidate` onto it. Then end the task by the last line it printed, always closing with `nothing_needed` (never `comment_on_issue`, which parks a branchless task in `awaiting_reply` and holds the 20-minute `overlap: skip` schedule): - `RELEASE_TRAIN_RESULT=noop`: call `nothing_needed`, with the train's one-line reason (its last `phase` line). Do not investigate further. - `RELEASE_TRAIN_RESULT=acted`: call `nothing_needed` with the full report of what it did, from its `output` lines: the rc it cut (and the commit), the rc it released as `vX.Y.0` or staged as `-pending` and why (a staged release already raises `release.pending` in the Inbox), or the rc it dropped and the failing jobs. - `RELEASE_TRAIN_RESULT=failed`: raise an Inbox notification first with `grain notify --severity warning --subject <subject> --title "Release train tick failed: <one-line error>" --body "<the script's output>"` (use `--subject release-escalated:<version>` when `escalated_version=<version>` was printed -- meaning `RELEASE_MAX_RC_ATTEMPTS` rcs of that version were dropped and a person decides -- and `--subject release-train-failed` otherwise), then call `nothing_needed` with the script's output so the task closes rather than stalling future ticks. Never re-run it with different settings, never write, edit or filter a verdict file, never run the script's `approve`, `reject` or `rollback` modes or `release-images.sh`, and never push a tag yourself. A refusal from the script or the proxy is the grant doing its job, not something to work around. This task changes no file, so it never opens a pull request.
+template
+repo
+acme/grain
+template
+base
+main
+template
+reads
+—
+template
+writes
+—
+template
+capabilities
+https://grain.dev/capabilities/api#ci-read={"repo":"ai-on-gke/grain"}, https://grain.dev/capabilities/api#ci-read={"repo":"acme/grain"}
+template
+customFields
+—
+template
+network
+—
+deployment
+nothingNeeded
+close
+template
+model
+—
+deployment
+autoMerge
+off
+template
+approval
+approved when filed
+schedule
+priority
+9
+template
+Recent fired tasks & skips
+skipped at 2026-11-15 07:26 UTC: publishing held by task 2 (acme/grain main has published nothing since 2026-11-15 06:56 UTC)
+#2
+grain v0.0.0-20261115070552-c6743dc5d17b+dirty
+·
+0 running
+· Updated 5s ago
+Shortcuts on

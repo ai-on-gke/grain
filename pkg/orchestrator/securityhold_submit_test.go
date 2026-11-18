@@ -232,7 +232,7 @@ func TestHumanSubmitOfAnUnclassifiedFixIsNotStranded(t *testing.T) {
 	store, ctx := openStore(t)
 	sim, client, task, branch := heldAt(t, ctx, store, "pkg/ui/server.go")
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
-		t.Origin.Reason = model.ReasonFix
+		t.Filing.Reason = model.ReasonFix
 		t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
 			return l.Kind == model.LinkTrustBoundaryCleared
 		})

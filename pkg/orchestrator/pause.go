@@ -203,7 +203,7 @@ type CredentialFramework interface {
 // FallbackFramework is implemented by a framework built on a model
 // further down the deployment's default list than the first, which can
 // say why the earlier ones were passed over ("gemini-3-pro is paused
-// until 14:05 UTC"). "" means the run is on the model it preferred.
+// until 10:05 AM PDT"). "" means the run is on the model it preferred.
 type FallbackFramework interface {
 	FallbackReason() string
 }

@@ -22,6 +22,7 @@ package orchestrator_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,7 +100,7 @@ func liveRun(t *testing.T, store *model.Store, id string, interactive bool, at t
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	if err := store.PutTask(t.Context(), model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "work", Body: "please",
-		Origin:      model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:      model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval:    &model.Attribution{Actor: human},
 		Binding:     model.BindingDirective,
 		Interactive: interactive,
@@ -169,6 +170,40 @@ func TestAScheduledUpgradeHoldsTheQueueUntilTheWorkIsDone(t *testing.T) {
 		t.Error("the queue opened as the upgrade started")
 	} else if pause.By != orchestrator.UpgradePrincipal {
 		t.Errorf("the hold is still %+v's; the upgrade should own it by now", pause.By)
+	}
+}
+
+// TestAScheduledUpgradeHoldsTheQueueWhenItCannotCount: a deployment that
+// cannot read how busy it is -- the shape of BusyRunCount failing on every
+// call on PostgreSQL, which once left the queue open for as long as the
+// upgrade stayed scheduled -- still shuts the queue, and does not start the
+// upgrade on a count nobody could read.
+func TestAScheduledUpgradeHoldsTheQueueWhenItCannotCount(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	now := time.Now().UTC()
+
+	schedule(t, store, "main", now)
+	if _, err := store.DB().ExecContext(ctx, "DROP TABLE `ci_run`"); err != nil {
+		t.Fatalf("breaking the CI run count: %v", err)
+	}
+
+	up := &upgrades{}
+	err := orchestrator.RunCycle(ctx, orchestrator.Deps{
+		Store:  store,
+		Config: orchestrator.Config{StartUpgrade: up.start},
+	}, now.Add(time.Second))
+	if err == nil || !strings.Contains(err.Error(), "counting live CI runs") {
+		t.Fatalf("cycle = %v, want the failed count reported", err)
+	}
+	if pause := pauseNow(t, store); pause == nil || pause.By != model.ScheduledUpgradePrincipal {
+		t.Fatalf("the queue is held by %+v, want the scheduled upgrade's hold", pause)
+	}
+	if len(up.started) != 0 {
+		t.Errorf("started %v without knowing whether anything was still running", up.started)
+	}
+	if scheduledUpgrade(t, store) == nil {
+		t.Error("the schedule was forgotten while its wait could not be read")
 	}
 }
 

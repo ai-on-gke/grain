@@ -58,7 +58,7 @@ func TestInteractiveSubsequentExchangeLatencyOverRealMCPServer(t *testing.T) {
 		Title:       "Interactive MCP chat latency test",
 		Body:        "initial prompt",
 		Interactive: true,
-		Origin:      model.Origin{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
+		Filing:      model.Filing{Attribution: model.Attribution{Actor: actor}, Reason: model.ReasonDirect},
 		Approval:    &model.Attribution{Actor: actor},
 		CreatedAt:   &now,
 	}); err != nil {

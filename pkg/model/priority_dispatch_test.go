@@ -28,14 +28,14 @@ import (
 func TestHasPriorityDispatchIsSessionsAndHoldersOfTheGrant(t *testing.T) {
 	t.Parallel()
 	session := model.Task{
-		Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Reason: model.ReasonConsoleSession},
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Grants:      model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID}),
 		Admission:   model.AdmissionDurable,
 	}
 	bareSession := model.Task{
-		Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Reason: model.ReasonConsoleSession},
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 	}

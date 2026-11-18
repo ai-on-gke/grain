@@ -1,0 +1,434 @@
+[
+  {
+    "name": "exact-head-check-override",
+    "operation": "issue",
+    "request": {
+      "body": {
+        "mutation": {
+          "idempotency_key": "override-execute-key",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "kind": "action_override",
+        "binding_ids": [
+          "task/57/checks"
+        ],
+        "target": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expires_at": "2026-11-17T01:15:00Z",
+        "operation_id": "merge-exec-1",
+        "action_request": {
+          "request_id": "merge-exec-1",
+          "idempotency_key": "override-execute-key",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "task_id": "57"
+      },
+      "reason": "Evaluate the current contract for this exact evidence."
+    },
+    "response": {
+      "id": "override-1",
+      "kind": "action_override",
+      "binding_ids": [
+        "task/57/checks"
+      ],
+      "target": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "contract_revision": 1,
+      "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "operation_id": "merge-exec-1",
+      "actor": "person/owner",
+      "reason": "Named CI exception for this operation/head.",
+      "issued_at": "2026-11-17T00:15:00Z",
+      "expires_at": "2026-11-17T01:15:00Z",
+      "revoked_at": null,
+      "revision": 1
+    },
+    "response_status": 201
+  },
+  {
+    "name": "merge-executing",
+    "operation": "operation",
+    "request": {
+      "id": "merge-exec-1"
+    },
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-exec-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "executing",
+      "revision": 2,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "merge-exec-key",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "execute"
+    },
+    "response_status": 200
+  },
+  {
+    "name": "merge-outcome_unknown",
+    "operation": "operation",
+    "request": {
+      "id": "merge-exec-1"
+    },
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-exec-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "outcome_unknown",
+      "revision": 3,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "merge-exec-key",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": {
+        "operation_id": "merge-exec-1",
+        "request": {
+          "request_id": "merge-exec-1",
+          "idempotency_key": "merge-exec-key",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "actor": "automation/merge-queue",
+        "disposition": "outcome_unknown",
+        "result_version": null,
+        "recorded_at": "2026-11-17T00:20:00Z",
+        "evidence": [],
+        "exception_ids": [],
+        "intent": "execute"
+      },
+      "error": {
+        "error": {
+          "code": "outcome_unknown",
+          "message": "Request rejected without changing the protected resource.",
+          "retryable": false,
+          "recovery": "poll_operation",
+          "operation_id": "merge-exec-1",
+          "field": null,
+          "current": null
+        }
+      },
+      "retry_at": null,
+      "submit_intent": "execute"
+    },
+    "response_status": 200
+  },
+  {
+    "name": "merge-completed",
+    "operation": "operation",
+    "request": {
+      "id": "merge-exec-1"
+    },
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-exec-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "completed",
+      "revision": 4,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "merge-exec-key",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [
+        "merge/M1"
+      ],
+      "receipt": {
+        "operation_id": "merge-exec-1",
+        "request": {
+          "request_id": "merge-exec-1",
+          "idempotency_key": "merge-exec-key",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "actor": "automation/merge-queue",
+        "disposition": "succeeded",
+        "result_version": "merge-commit-M1",
+        "recorded_at": "2026-11-17T00:20:00Z",
+        "evidence": [
+          {
+            "kind": "integration",
+            "id": "merge/M1",
+            "version": "attempt-1",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "head": "H1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "exception_ids": [],
+        "intent": "execute"
+      },
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "execute"
+    },
+    "response_status": 200
+  },
+  {
+    "name": "approval-and-enrollment-only",
+    "operation": "operation",
+    "request": {
+      "id": "merge-1"
+    },
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "completed",
+      "revision": 2,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "request-59-1",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [
+        "approval/owner/H1",
+        "queue/pr1710/H1"
+      ],
+      "receipt": {
+        "operation_id": "merge-1",
+        "request": {
+          "request_id": "merge-1",
+          "idempotency_key": "merge/pr1710/H1",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "actor": "person/owner",
+        "disposition": "no_effect",
+        "result_version": null,
+        "recorded_at": "2026-11-17T00:20:00Z",
+        "evidence": [
+          {
+            "kind": "approval",
+            "id": "approval/record-1",
+            "version": "attempt-1",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "head": "H1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "exception_ids": [],
+        "intent": "approve_and_queue"
+      },
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "approve_and_queue"
+    },
+    "response_status": 200
+  },
+  {
+    "operation": "submit",
+    "request": {
+      "id": "57",
+      "query": {
+        "view": "gates"
+      },
+      "body": {
+        "mutation": {
+          "idempotency_key": "override-execute-key",
+          "reason": "Evaluate the current contract for this exact evidence.",
+          "expected": {
+            "contract_revision": 1,
+            "authority_epoch": 1,
+            "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "head": "H1",
+            "resource_version": "pr-v3"
+          }
+        },
+        "intent": "execute",
+        "action_request": {
+          "request_id": "merge-exec-1",
+          "idempotency_key": "override-execute-key",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    "response_status": 202,
+    "response": {
+      "api_version": "grain.gates/v1",
+      "operation_id": "merge-exec-1",
+      "task_id": "57",
+      "kind": "submit",
+      "state": "requested",
+      "revision": 1,
+      "created_at": "2026-11-17T00:15:00Z",
+      "updated_at": "2026-11-17T00:15:00Z",
+      "actor": "person/owner",
+      "idempotency_key": "override-execute-key",
+      "expected": {
+        "contract_revision": 1,
+        "authority_epoch": 1,
+        "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head": "H1",
+        "resource_version": "pr-v3"
+      },
+      "result_ids": [],
+      "external_ids": [],
+      "receipt": null,
+      "error": null,
+      "retry_at": null,
+      "submit_intent": "execute"
+    },
+    "name": "execute-with-exact-head-override"
+  }
+]

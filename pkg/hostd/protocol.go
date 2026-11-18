@@ -148,6 +148,15 @@ type Hello struct {
 	// server placed on it needs a `grain host` instead. An older build
 	// says nothing, which is "not known".
 	AgentsOnly bool `json:"agents_only,omitempty"`
+	// Platform is the host agent's GOOS/GOARCH ("linux/amd64"): which
+	// per-platform release the controller compares its build with.
+	Platform string `json:"platform,omitempty"`
+	// UpdateMode and UpdatePin are the allowlist's update: policy
+	// (UpdatePolicy), said only by a host agent that lists
+	// FeatureSelfUpdate: the controller offers nothing to "off", and
+	// nothing outside UpdatePin.
+	UpdateMode string `json:"update_mode,omitempty"`
+	UpdatePin  string `json:"update_pin,omitempty"`
 
 	// Features are the contract features this side's build implements
 	// (features.go). Check one with Has, never by comparing Protocol: a

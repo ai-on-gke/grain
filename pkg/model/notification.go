@@ -77,6 +77,9 @@ const (
 	ClearsOnBaseGreen = "base-green"
 	// ClearsOnTTL clears at a time.
 	ClearsOnTTL = "ttl"
+	// ClearsOnSuiteRun clears when a suite run is no longer active
+	// (finished, failed, or gone from the store).
+	ClearsOnSuiteRun = "suite-run"
 )
 
 // Notification subjects raised by steward verification (DT-14).
@@ -99,6 +102,8 @@ type NotificationClear struct {
 	Repo   string     `json:"repo,omitempty"`
 	Branch string     `json:"branch,omitempty"`
 	At     *time.Time `json:"at,omitempty"`
+	// SuiteRun is the run a ClearsOnSuiteRun condition waits on.
+	SuiteRun int64 `json:"suiteRun,omitempty"`
 	// TTL is how a caller asks for a ClearsOnTTL condition ("6h"); the
 	// store turns it into At at the first raise and keeps only At.
 	TTL string `json:"ttl,omitempty"`
@@ -137,8 +142,12 @@ func (c *NotificationClear) Validate(now time.Time) error {
 			c.At = &at
 		}
 		c.TTL = ""
+	case ClearsOnSuiteRun:
+		if c.SuiteRun <= 0 {
+			return errors.New("clears_when kind suite-run needs a suite run")
+		}
 	default:
-		return fmt.Errorf("clears_when kind %q: want task, base-green or ttl", c.Kind)
+		return fmt.Errorf("clears_when kind %q: want task, base-green, ttl or suite-run", c.Kind)
 	}
 	return nil
 }
@@ -305,6 +314,43 @@ const (
 	// clears it.
 	FamilyCapabilityServerDown = "capability.server-down"
 )
+
+// levelTriggeredFamilies are the families a reconciler finds again on
+// every cycle while their condition holds and raises again when no
+// instance is open (orchestrator's ensurePipelineNotification, which
+// fails a test that raises a family missing here). Clearing
+// one only clears the instance: the next cycle raises a new one if the
+// condition still holds. Credential notices (pkg/change's
+// credentials-expired.*) are not among them -- they are raised once,
+// when a provider is first blocked, and are not raised again until the
+// block lifts and recurs.
+var levelTriggeredFamilies = map[string]bool{
+	FamilyNotPublishing:        true,
+	FamilyReleaseNotStarting:   true,
+	FamilyRCFailed:             true,
+	FamilyReleaseInfraStalled:  true,
+	FamilyMergeStalled:         true,
+	FamilyMergeNeedsPerson:     true,
+	FamilyCIWakeStalled:        true,
+	FamilyNightlyRedUnattended: true,
+	FamilyBaseRedUnattended:    true,
+	FamilyBaseNoVerdict:        true,
+	FamilyReleaseLoopIdle:      true,
+	FamilyRepairFailing:        true,
+	FamilyReleaseEscalated:     true,
+	FamilyFlakeBudget:          true,
+	SubjectStewardRegression:   true,
+	// orchestrator's FamilyTaskStalled and FamilyPortStale, and the
+	// steward's JudgementModelUnresolvedSubject (a subject with no ':',
+	// so its own family).
+	"pipeline.task-stalled":         true,
+	"pipeline.port-stale":           true,
+	JudgementModelUnresolvedSubject: true,
+}
+
+// LevelTriggeredFamily reports whether family is raised again after a
+// clear for as long as its condition holds (levelTriggeredFamilies).
+func LevelTriggeredFamily(family string) bool { return levelTriggeredFamilies[family] }
 
 // ReleasePendingActions are the actions a FamilyReleasePending
 // notification offers: the UI's Approve and Reject buttons, which call

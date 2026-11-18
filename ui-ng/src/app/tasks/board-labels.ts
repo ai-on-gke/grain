@@ -49,3 +49,51 @@ export function boardLabels(
   }
   return out;
 }
+
+// NEXT_BOARD_PARAMS are the parts of a board's query /next/tasks can
+// apply: the ones its own Save current view writes (currentBoardQuery).
+const NEXT_BOARD_PARAMS = new Set(["tab", "group", "q", "repo", "view"]);
+
+// nextBoardParams is what applying a board on /next/tasks navigates
+// with, or null when /next/tasks cannot show the board as it was saved
+// -- a Kanban, timeline, report, dashboard or tree board, or a list
+// narrowed in the classic grammar (`f=state:any:queued`, `sort=`) --
+// and the board's own classic page has to open instead. Applying one of
+// those here used to leave the reader on the bare task list with
+// nothing changed, so a board called "Report" or "Running only" quietly
+// showed every task as a list (2026-11-17 saved boards walkthrough).
+export function nextBoardParams(
+  b: Board,
+): Record<string, string | null> | null {
+  if ((b.kind || "list") !== "list") return null;
+  const p = new URLSearchParams(b.query || "");
+  let foreign = false;
+  p.forEach((_, k) => {
+    if (!NEXT_BOARD_PARAMS.has(k)) foreign = true;
+  });
+  if (foreign) return null;
+  return {
+    tab: p.get("tab") || null,
+    group: p.get("group") || null,
+    q: p.get("q") || null,
+    repo: p.get("repo") || null,
+    view: p.get("view") === "timeline" ? "timeline" : null,
+  };
+}
+
+// classicBoardHint is the word shown beside a board that opens on the
+// classic Boards page: what it is, in the classic Boards index's words.
+export function classicBoardHint(b: Board): string {
+  switch (b.kind) {
+    case "gantt":
+      return "timeline";
+    case "panels":
+      return "dashboard";
+    case "kanban":
+    case "report":
+    case "tree":
+      return b.kind;
+    default:
+      return "filtered list";
+  }
+}

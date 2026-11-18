@@ -116,7 +116,7 @@ var standingCases = []standingCase{
 		tk.OrderKey = -1
 	}},
 	{name: "session", workers: 1, give: func(t *testing.T, ctx context.Context, store *model.Store, tk *model.Task) {
-		tk.Origin.Reason = model.ReasonConsoleSession
+		tk.Filing.Reason = model.ReasonConsoleSession
 		tk.Tags = append(tk.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 		tk.Interactive = true
 		tk.Admission = model.AdmissionDurable
@@ -165,7 +165,7 @@ func stdTask(id string) model.Task {
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}
 	return model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "task " + id,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Binding:  model.BindingDirective,
 		Approval: &model.Attribution{Actor: human},
 	}

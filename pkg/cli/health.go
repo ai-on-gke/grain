@@ -35,6 +35,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -57,6 +58,20 @@ func cmdHealth(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	return nil
 }
 
+// partitionStaleSchedules separates schedules that silently stopped running
+// (failing) from those deliberately held by a declared condition such as
+// skip-when: publishing-held (warning only).
+func partitionStaleSchedules(all []model.StaleSchedule) (unheld, held []model.StaleSchedule) {
+	for _, s := range all {
+		if s.Held {
+			held = append(held, s)
+		} else {
+			unheld = append(unheld, s)
+		}
+	}
+	return unheld, held
+}
+
 // healthFailing names each FAILING section the printer shows for h, in
 // the order it shows them: what makes `grain health` exit 1.
 func healthFailing(h ui.SandboxHealthResponse) []string {
@@ -67,8 +82,8 @@ func healthFailing(h ui.SandboxHealthResponse) []string {
 	if len(h.CapabilityServers) > 0 {
 		failing = append(failing, fmt.Sprintf("%d capability server(s) out of use", len(h.CapabilityServers)))
 	}
-	if len(h.StaleSchedules) > 0 {
-		failing = append(failing, fmt.Sprintf("%d stale schedule(s)", len(h.StaleSchedules)))
+	if unheld, _ := partitionStaleSchedules(h.StaleSchedules); len(unheld) > 0 {
+		failing = append(failing, fmt.Sprintf("%d stale schedule(s)", len(unheld)))
 	}
 	if len(h.RefusedDeclarations) > 0 {
 		failing = append(failing, fmt.Sprintf("%d repository declaration set(s) not read in full", len(h.RefusedDeclarations)))
@@ -111,6 +126,8 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 			state := string(s.State)
 			if s.ConfigRefused {
 				state = "refused its saved config"
+			} else if s.StartError != "" {
+				state = s.StartError
 			} else if s.Waiting != "" {
 				state = "waiting for " + s.Waiting + ", retried every minute"
 			}
@@ -138,11 +155,15 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	}
 	// Schedules that stopped running: a cron that comes due and is
 	// dropped every time looks exactly like one that is fine from
-	// everywhere else (the live model suites, two weeks dark).
-	if len(h.StaleSchedules) > 0 {
+	// everywhere else (the live model suites, two weeks dark). Schedules
+	// deliberately held by a declared condition (such as skip-when:
+	// publishing-held) are shown as WARNING naming the holding task rather
+	// than FAILING.
+	unheldStale, heldStale := partitionStaleSchedules(h.StaleSchedules)
+	if len(unheldStale) > 0 {
 		printed = true
 		fmt.Println("FAILING: schedules with no run in more than twice their cadence:")
-		for _, s := range h.StaleSchedules {
+		for _, s := range unheldStale {
 			last := "never"
 			if s.LastRunAt != nil {
 				last = s.LastRunAt.UTC().Format(time.RFC3339)
@@ -154,6 +175,28 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 			fmt.Printf("  %s on %s: every %s, last ran %s\n", name, s.Repo, s.Cadence, last)
 			if s.Reason != "" {
 				fmt.Printf("    why: %s\n", s.Reason)
+			}
+		}
+		fmt.Println()
+	}
+	if len(heldStale) > 0 {
+		printed = true
+		fmt.Println("WARNING: schedules deliberately held:")
+		for _, s := range heldStale {
+			last := "never"
+			if s.LastRunAt != nil {
+				last = s.LastRunAt.UTC().Format(time.RFC3339)
+			}
+			name := s.ID
+			if s.Workflow != "" {
+				name += " (workflow " + s.Workflow + ")"
+			}
+			fmt.Printf("  %s on %s: every %s, last ran %s\n", name, s.Repo, s.Cadence, last)
+			switch {
+			case s.Reason != "":
+				fmt.Printf("    why: %s\n", s.Reason)
+			case s.HeldByTaskID != "":
+				fmt.Printf("    why: held by task %s\n", s.HeldByTaskID)
 			}
 		}
 		fmt.Println()
@@ -176,6 +219,29 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 			for _, line := range strings.Split(d.Error, "\n") {
 				fmt.Printf("    %s\n", line)
 			}
+		}
+		fmt.Println()
+	}
+	// Base branches that have stopped publishing (model.BaseBranchPublishing,
+	// grain/task-511), and whether a release triage task holds them --
+	// which is what holds a `skip-when: publishing-held` schedule. The
+	// response carried them, System → Health showed them, and this printer
+	// said "no counters" over a held release train
+	// (docs/test-runs/2026-11-15-release-train-publishing-held.md, F1).
+	// A WARNING: a release that publishes nothing holds no merge.
+	if len(h.BaseBranchPublishing) > 0 {
+		printed = true
+		fmt.Println("WARNING: base branches publishing nothing:")
+		for _, p := range h.BaseBranchPublishing {
+			branch := p.Branch
+			if branch == "" {
+				branch = "(default branch)"
+			}
+			state := "not held"
+			if p.Gated && p.TriageTaskID != "" {
+				state = "held by release triage task " + p.TriageTaskID
+			}
+			fmt.Printf("  %s %s (%s): %s\n", p.Repo, branch, state, p.Detail)
 		}
 		fmt.Println()
 	}
