@@ -410,8 +410,8 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				// request must never rewind newer accepted evidence, including
 				// across a restart. A changed local fence still invalidates the
 				// result rather than returning a possibly stale cached success.
-				if len(f.Checks) > 0 && now.Before(evaluated) {
-					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged {
+				if len(checks) > 0 && now.Before(evaluated) {
+					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && (f.Health == nil || source == f.SourceVersion) {
 						view = cachedView
 						if history {
 							diag, err = readGateDiagnostics(ctx, tx, id)
@@ -420,6 +420,17 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 						return nil
 					}
 					now = evaluated
+					if f.Health != nil {
+						// The external read may have started before this task
+						// acquired a health goal. Recollect local health facts
+						// at the newer clock; never replay a changed source or
+						// rewind its accepted timestamp with the old CI request.
+						f, state, err = captureGateFacts(ctx, tx, id, now, access)
+						if err != nil {
+							return err
+						}
+						bindings = observationBindings(id, f)
+					}
 				}
 			}
 			changed := missing || source != f.SourceVersion || bindingsChanged

@@ -161,7 +161,9 @@ expiry and absence of operational controls. Existing framework retention,
 contention, concurrent failure and API regression suites remain required.
 The merged CI/check and review/approval extensions are covered on both database
 engines: PR to health-goal and back transitions during error backoff select the current family,
-including the external-CI preflight, stale CI input and restart. Resource-restricted
+including the external-CI preflight, stale CI input and restart. A late pre-goal
+CI request cannot rewind a newer accepted health timestamp or replay it across a
+local health-source change. Resource-restricted
 preflight reads filter old health samples and withhold aggregate metadata;
 scoped collection and failure writes reauthorize the task, and current-only reads
 remain independent of retained history. The shared registry implementation pin is

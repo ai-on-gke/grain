@@ -189,6 +189,18 @@ func runHealthChecksFamilies(t *testing.T, s *model.Store, db *sql.DB) {
 	if len(health.Bindings) != 2 || health.Bindings[0].Type != "base_health" || health.Results[0].Result.Status != "met" {
 		t.Fatal("old external CI input replaced current health scope")
 	}
+	late := read(now.Add(time.Second), oldFence)
+	if late.ComparedAt.Before(health.ComparedAt) || late.Results[0].Result.Status != "met" {
+		t.Fatal("late pre-goal CI request rewound accepted health")
+	}
+	// A source event after acceptance must still defeat that newer cache.
+	must(s.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: repo, Branch: "main", RunID: "red-base", Commit: "new-base-head", Conclusion: "failure", StartedAt: now, FinishedAt: &now}))
+	late = read(now.Add(time.Second), oldFence)
+	if late.ComparedAt.Before(health.ComparedAt) || late.Results[0].Result.Status != "unmet" {
+		t.Fatal("late CI conversion replayed health across a base source change")
+	}
+	must(s.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: repo, Branch: "main", RunID: "green-base", Commit: "new-base-head", Conclusion: "success", StartedAt: now, FinishedAt: &now}))
+	read(now.Add(2500*time.Millisecond), oldFence)
 	failure = gates.UnavailableObservation(id, now.Add(3*time.Second), facts)
 	must(s.RecordGateObservationFailure(ctx, id, now.Add(3*time.Second), &failure, access))
 	if len(failure.Bindings) != 2 || failure.Bindings[0].Type != "base_health" {
