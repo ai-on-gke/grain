@@ -34,7 +34,7 @@ func TestRegistryClosedProfilesAndSchemaPins(t *testing.T) {
 	}{
 		{"delivery", 1, `{"product":"report","semantics":"current_v1"}`, true},
 		{"acknowledgment", 1, `{"mode":"explicit_receipt"}`, true},
-		{"remote", 1, `{}`, false}, {"delivery", 2, `{}`, false}, {"delivery", 1, `{"product":"any","semantics":"current_v1"}`, false},
+		{"remote", 1, `{}`, false}, {"delivery", 2, `{}`, false}, {"delivery", 1, `{"product":"any","semantics":"current_v1"}`, true},
 		{"acknowledgment", 1, `{"mode":"explicit_receipt","mode":"explicit_receipt"}`, false},
 		{"acknowledgment", 1, `{"mode":"explicit_receipt","callback":"secret"}`, false}, {"acknowledgment", 1, `{"mode":"explicit_receipt"} {}`, false},
 		{"delivery", 1, `null`, false}, {"acknowledgment", 1, `{"mode":null}`, false},

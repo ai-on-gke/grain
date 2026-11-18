@@ -324,3 +324,85 @@ func TestConfigReportsListenPortAndProxy(t *testing.T) {
 		t.Errorf("relayed: proxied = %v, want true", relayed["proxied"])
 	}
 }
+
+func TestStagingProxyStripsVerifierAssertionsAndProxyCredentials(t *testing.T) {
+	var seen http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	v := &slowSessionVerifier{ttl: time.Minute}
+	t.Cleanup(ui.RegisterIdentityVerifier(v))
+
+	_, store, ctx := testClient(t)
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakePersistentSandboxes{upstream: strings.TrimPrefix(upstream.URL, "http://"), strip: true}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{
+		Actor:               ui.DefaultActor("alice@example.com"),
+		AllowedPrincipals:   []string{"user:alice@example.com"},
+		PersistentSandboxes: fake,
+		LocalAPIToken:       testAccessCode,
+	}, store))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/staging/web/echo", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(slowHeader, "ok:alice@example.com")
+	req.Header.Set("Proxy-Authorization", "Bearer id-token-secret")
+	req.Header.Set("X-Grain-Tunnel-Token", "tunnel-secret")
+	req.Header.Set("X-Grain-Subject-Token", "subject-secret")
+	req.Header.Set(ui.ActingRunHeader, "run-secret")
+	req.Header.Set(ui.ActingReasonHeader, "reason-secret")
+	req.Header.Set(ui.ChannelHeader, ui.SandboxCLIChannel)
+	req.Header.Set(ui.IAPAssertionHeader, "iap-jwt-secret")
+	req.Header.Set("X-Goog-Iap-Attr-Sub", "iap-attr-secret")
+	req.Header.Set(ui.HubAssertionHeader, "hub-jwt-secret")
+	req.Header.Set(ui.RegistryAssertionHeader, "registry-jwt-secret")
+	req.Header.Set("X-Custom-App-Header", "keep-me")
+	req.AddCookie(&http.Cookie{Name: ui.VerifierSessionCookieName, Value: "session-secret"})
+	req.AddCookie(&http.Cookie{Name: "GCP_IAAP_AUTH_TOKEN_ABC123", Value: "iap-browser-session"})
+	req.AddCookie(&http.Cookie{Name: "__Host-edge_sso", Value: "edge-sso-session"})
+	req.AddCookie(&http.Cookie{Name: "staging_sess", Value: "keep-cookie"})
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	for _, forbidden := range []string{
+		slowHeader,
+		"Authorization",
+		"Proxy-Authorization",
+		"X-Grain-Tunnel-Token",
+		"X-Grain-Subject-Token",
+		ui.AccessCodeHeader,
+		ui.ActingTaskHeader,
+		ui.ActingRunHeader,
+		ui.ActingReasonHeader,
+		ui.ChannelHeader,
+		ui.IAPAssertionHeader,
+		"X-Goog-Iap-Attr-Sub",
+		ui.HubAssertionHeader,
+		ui.RegistryAssertionHeader,
+	} {
+		if got := seen.Get(forbidden); got != "" {
+			t.Errorf("staging upstream received %s = %q, want stripped", forbidden, got)
+		}
+	}
+	if got := seen.Get("X-Custom-App-Header"); got != "keep-me" {
+		t.Errorf("X-Custom-App-Header = %q, want keep-me", got)
+	}
+	if got := seen.Get("Cookie"); got != "staging_sess=keep-cookie" {
+		t.Errorf("Cookie = %q, want staging_sess=keep-cookie", got)
+	}
+}

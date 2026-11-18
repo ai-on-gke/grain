@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, Location, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -70,6 +70,7 @@ import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
 import { NavProgressComponent } from "./shell/nav-progress.component";
+import { resolveReloadHref, saveDataEnabled } from "./shell/route-preload";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -78,8 +79,6 @@ const ICONS: Record<string, string> = {
   // cloud_off: the daemon is not answering (the disconnected banner).
   cloudOff:
     "M19.35 10.04A7.49 7.49 0 0 0 12 4c-1.48 0-2.85.43-4.01 1.17l1.46 1.46A5.497 5.497 0 0 1 17.5 11.5v.5H19a3 3 0 0 1 3 3c0 1.13-.64 2.11-1.56 2.62l1.45 1.45A4.97 4.97 0 0 0 24 15c0-2.64-2.05-4.78-4.65-4.96zM3 5.27l2.75 2.74C2.56 8.15 0 10.77 0 14c0 3.31 2.69 6 6 6h11.73l2 2L21 20.73 4.27 4 3 5.27zM7.73 10l8 8H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h1.73z",
-  // warning: the host-mode install notice.
-  warning: "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
   inbox:
     "M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 12h-4a3 3 0 0 1-6 0H5V5h14v10z",
   workstreams:
@@ -187,42 +186,32 @@ export class DeferErrorDirective implements OnInit {
   },
   template: `
     <g-nav-progress />
+    @if (installNotice(); as notice) {
+      <div
+        class="install-banner"
+        role="status"
+        data-testid="install-notice-banner"
+      >
+        <span
+          >{{ notice.text }}
+          @if (notice.docsUrl) {
+            <a
+              [href]="notice.docsUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="install-notice-docs"
+              >Migration docs</a
+            >
+          }
+        </span>
+      </div>
+    }
     @if (disconnectedText(); as text) {
       <div class="conn-banner" role="status" data-testid="disconnected-banner">
         <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
           <path [attr.d]="icons['cloudOff']" fill="currentColor" />
         </svg>
         <span>{{ text }}</span>
-      </div>
-    }
-    @if (installNotice(); as notice) {
-      <div
-        class="conn-banner install-banner"
-        role="status"
-        data-testid="install-notice-banner"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-          <path [attr.d]="icons['warning']" fill="currentColor" />
-        </svg>
-        <span>
-          {{ notice.text }}
-          @if (notice.clis) {
-            Cannot run until then:
-            <span data-testid="install-notice-banner-clis">{{
-              notice.clis
-            }}</span
-            >.
-          }
-          @if (notice.docsUrl) {
-            <a
-              [href]="notice.docsUrl"
-              target="_blank"
-              rel="noreferrer"
-              data-testid="install-notice-docs"
-              >Migration docs</a
-            >
-          }
-        </span>
       </div>
     }
     <div class="app-shell">
@@ -978,7 +967,7 @@ export class DeferErrorDirective implements OnInit {
       </ng-template>
 
       <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-      @defer (when createTask.isOpen(); prefetch on idle) {
+      @defer (when createTask.isOpen(); prefetch when idlePrefetch()) {
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
@@ -1030,6 +1019,21 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly feed = inject(TaskFeedStore);
   private readonly connection = inject(ConnectionStatus);
 
+  // The standing banner for an install only its operator can fix (GET
+  // /api/config's installNotice, classic InstallNoticeBanner): what is
+  // wrong, the CLIs that cannot run until then, and where the migration
+  // is written up. It has no close button, since nothing changes until
+  // the install is migrated and the daemon restarted.
+  protected readonly installNotice = computed(() => {
+    const n = this.access.rawConfig()?.installNotice;
+    if (!n?.message) return null;
+    const clis = (n.affectedClis ?? []).map((c) => c.split(":")[0]);
+    const text =
+      `${n.message[0].toUpperCase()}${n.message.slice(1)}.` +
+      (clis.length ? ` Cannot run until then: ${clis.join(", ")}.` : "");
+    return { text, docsUrl: n.docsUrl ?? "" };
+  });
+
   // The standing banner for a daemon that is not answering at all
   // (ConnectionStatus): when it stopped, in the deployment's time zone,
   // and that the page keeps retrying and recovers on its own.
@@ -1049,25 +1053,6 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     return `${d.reason} Unreachable${at ? ` since ${at}` : ""} — retrying automatically; this page will pick back up on its own once it answers again.`;
   });
-  // The standing notice GET /api/config's installNotice carries
-  // (pkg/ui/install_notice.go): something about how this deployment is
-  // installed that only its operator can fix -- today a host-mode install
-  // still to be migrated. It has no close button, as classic's
-  // InstallNoticeBanner has none: nothing changes until the install is
-  // migrated and the daemon restarted.
-  protected readonly installNotice = computed(() => {
-    const n = this.access.rawConfig()?.["installNotice"] as
-      | { message?: string; affectedClis?: string[]; docsUrl?: string }
-      | null
-      | undefined;
-    if (!n?.message) return null;
-    const msg = n.message.trim().replace(/\.$/, "");
-    return {
-      text: `${msg[0].toUpperCase()}${msg.slice(1)}.`,
-      clis: (n.affectedClis ?? []).map((c) => c.split(":")[0]).join(", "),
-      docsUrl: /^https?:\/\//.test(n.docsUrl ?? "") ? n.docsUrl : "",
-    };
-  });
   protected readonly navConfig = inject(NavConfigService);
   protected readonly help = inject(HelpService);
   protected readonly keyboard = inject(KeyboardService);
@@ -1079,9 +1064,12 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly router = inject(Router);
+  private readonly location = inject(Location);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  protected readonly idlePrefetch = signal(false);
+  private cancelIdlePrefetch: (() => void) | null = null;
 
   protected readonly icons = ICONS;
   protected readonly rosettePath = CHLADNI_ROSETTE_PATH;
@@ -1430,6 +1418,27 @@ export class AppComponent implements OnInit, OnDestroy {
     });
 
     this.zone.runOutsideAngular(() => {
+      if (!saveDataEnabled()) {
+        const w = this.doc.defaultView as
+          | (Window & {
+              requestIdleCallback?: (cb: () => void) => number;
+              cancelIdleCallback?: (id: number) => void;
+            })
+          | null;
+        const fire = () => {
+          this.cancelIdlePrefetch = null;
+          if (!this.destroyed) {
+            this.zone.run(() => this.idlePrefetch.set(true));
+          }
+        };
+        if (w && typeof w.requestIdleCallback === "function") {
+          const id = w.requestIdleCallback(fire);
+          this.cancelIdlePrefetch = () => w.cancelIdleCallback?.(id);
+        } else {
+          const t = setTimeout(fire, 1);
+          this.cancelIdlePrefetch = () => clearTimeout(t);
+        }
+      }
       this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
       this.dispatchPollTimer = setInterval(() => {
         if (this.doc.visibilityState !== "hidden") {
@@ -1483,6 +1492,8 @@ export class AppComponent implements OnInit, OnDestroy {
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
     this.dispatchEventSub?.unsubscribe();
+    this.cancelIdlePrefetch?.();
+    this.cancelIdlePrefetch = null;
     if (this.dispatchPollTimer) clearInterval(this.dispatchPollTimer);
     if (this.dispatchTickTimer) clearInterval(this.dispatchTickTimer);
     this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
@@ -1569,13 +1580,29 @@ export class AppComponent implements OnInit, OnDestroy {
     this.directorCtx.toggle(this.activeOpener());
   }
 
+  // Exposed as a method so specs can spy on full-page navigation in jsdom.
+  navigateTo(url?: string): void {
+    const loc = this.doc.defaultView?.location;
+    if (!loc) return;
+    if (url) loc.assign(url);
+    else loc.reload();
+  }
+
+  reloadApp(dest?: string): void {
+    const href = resolveReloadHref(this.location, dest);
+    if (href) this.navigateTo(href);
+    else this.navigateTo();
+  }
+
   protected onDeferError(
     which: "create" | "help" | "account" | "customize" | "director",
   ): void {
+    const action = { label: "Reload", run: () => this.reloadApp() };
     if (which === "director") {
       this.directorCtx.close(false);
       this.snackbar.show(
         "The Director drawer could not load. Reload the page and try again.",
+        action,
       );
       return;
     }
@@ -1583,19 +1610,25 @@ export class AppComponent implements OnInit, OnDestroy {
       this.createTask.close();
       this.snackbar.show(
         "The New task form could not load. Reload the page and try again.",
+        action,
       );
     } else if (which === "help") {
       this.help.close();
-      this.snackbar.show("Help could not load. Reload the page and try again.");
+      this.snackbar.show(
+        "Help could not load. Reload the page and try again.",
+        action,
+      );
     } else if (which === "account") {
       this.onAccountClosed(true);
       this.snackbar.show(
         "Account menu could not load. Reload the page and try again.",
+        action,
       );
     } else {
       this.onCustomizeNavClosed();
       this.snackbar.show(
         "Navigation settings could not load. Reload the page and try again.",
+        action,
       );
     }
   }
@@ -1627,7 +1660,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   open(d: Destination): void {
-    if (d.route) void this.router.navigateByUrl(d.route);
+    if (d.route) void this.router.navigateByUrl(d.route).catch(() => undefined);
     else if (d.classic) this.doc.defaultView?.location.assign(d.classic);
   }
 

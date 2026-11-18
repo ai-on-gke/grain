@@ -779,49 +779,42 @@ test("CI's Run workflow dialog says why a run was refused", async ({
   await expect(page.getByTestId("ci-dialog-error")).toHaveCount(0);
 });
 
-// The 2026-11-17 walkthrough (docs/test-runs/2026-11-17-deployment-
-// operations.md): /next/ never showed GET /api/config's installNotice, so
-// an operator on the new UI was not told that a host-mode install still
-// needed migrating; and /system/top landed on Fleet with Host top folded.
-
-test("the host-mode install notice stands above the shell and clears once the install is migrated", async ({
+// The 2026-11-18 walkthrough (docs/test-runs/2026-11-18-deployment-
+// operations.md): an unmigrated host-mode install raised classic's
+// standing install notice, and nothing at all under /next/, so an operator
+// on the new UI never learned why claude would not run or why an in-place
+// upgrade was refused.
+test("an unmigrated install raises a standing notice above the shell and on Upgrade", async ({
   page,
 }) => {
-  test.setTimeout(90_000);
-  let notice = {
+  const notice = {
     kind: "host-mode",
     message:
-      "this host-mode install has not been migrated: it still runs on the bare machine",
-    command: "sudo grain install --migrate",
-    affectedClis: [
-      "claude: no host binary, and no host is registered to run it",
-      "gemini: no host binary",
-    ],
-    docsUrl: "https://example.com/docs/host-mode-migration",
+      "this install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it",
+    command: "sudo ./scripts/setup.sh",
+    affectedClis: ["claude: no host binary"],
+    docsUrl: "https://example.com/docs/migrating-a-host-mode-install",
   };
-  await page.route("**/api/config", async (r) => {
-    const res = await r.fetch();
+  let migrated = false;
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
     const body = await res.json();
-    await r.fulfill({
+    await route.fulfill({
       response: res,
-      json: notice ? { ...body, installNotice: notice } : body,
+      json: migrated ? body : { ...body, installNotice: notice },
     });
   });
-  await page.goto("inbox");
+
+  await page.goto("fleet");
   const banner = page.getByTestId("install-notice-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toHaveAttribute("role", "status");
   await expect(banner).toContainText(
-    "This host-mode install has not been migrated: it still runs on the bare machine.",
+    "This install is still host mode, which v2.3.0 no longer supports",
   );
-  await expect(page.getByTestId("install-notice-banner-clis")).toHaveText(
-    "claude, gemini",
-  );
-  const docs = page.getByTestId("install-notice-docs");
-  await expect(docs).toHaveAttribute(
-    "href",
-    "https://example.com/docs/host-mode-migration",
-  );
+  await expect(banner).toContainText("Cannot run until then: claude.");
+  const docs = banner.getByTestId("install-notice-docs");
+  await expect(docs).toHaveAttribute("href", notice.docsUrl);
   await expect(docs).toHaveAttribute("target", "_blank");
 
   // It stands above the rail and the page rather than over them.
@@ -831,16 +824,33 @@ test("the host-mode install notice stands above the shell and clears once the in
   expect(b.y).toBe(0);
   expect(rail.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
   expect(top.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
 
-  // Migrated: the next config read carries no notice, and it goes without
-  // a reload. The shell reads config again on a navigation at least 5s
-  // after its last read (AppComponent refreshDispatchStatus).
-  notice = null;
-  await page.waitForTimeout(5_500);
-  await page.locator('.nav-rail a[href="/next/fleet"]').click();
-  await expect(page).toHaveURL(/\/next\/fleet$/);
-  await expect(banner).toHaveCount(0, { timeout: 45_000 });
+  // Upgrade says it in full: what to run and which CLIs lost their place.
+  await page.goto("settings/upgrade");
+  const full = page.getByTestId("install-notice");
+  await expect(full).toContainText("Unmigrated host-mode install.");
+  await expect(full).toContainText("This install is still host mode");
+  await expect(full.getByTestId("install-notice-command")).toHaveText(
+    "sudo ./scripts/setup.sh",
+  );
+  await expect(full).toContainText("claude: no host binary");
+
+  // Once the install is migrated the daemon stops reporting it.
+  migrated = true;
+  await page.reload();
+  await expect(page.getByTestId("card-upgrade")).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await expect(full).toHaveCount(0);
 });
+
+// The 2026-11-17 walkthrough (docs/test-runs/2026-11-17-deployment-
+// operations.md): /system/top landed on Fleet with Host top folded, and
+// Fleet drew host figures it was never given.
 
 test("the classic /system/top address opens Fleet's host top snapshot", async ({
   page,

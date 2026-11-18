@@ -6,9 +6,10 @@ Settings → Upgrade, the rail's CI page, the alerts bell and the standing
 banners. They were walked in a real headless Chromium against real `grain demo`
 servers. Following "Two UIs" in `PROMPT.md`, every step ran on `/next/` where
 `ui-ng/src/app/shell/nav.ts` and `app.routes.ts` give it a page, and on
-classic `/` only where they do not. Four bugs were found on `/next/` and fixed
-in this branch. Each has a Playwright regression test in
-`ui-ng/e2e/next-deployment-operations.spec.js`.
+classic `/` only where they do not. Four bugs were found on `/next/`. Three are fixed
+in this branch, each with a Playwright regression test in
+`ui-ng/e2e/next-deployment-operations.spec.js`. The fourth (F1) was fixed
+here too, and then by `main` independently, whose fix this branch adopted.
 
 ## Environment
 
@@ -62,7 +63,15 @@ in this branch. Each has a Playwright regression test in
 
 ## Findings and fixes
 
-### F1 (fixed): `/next/` never showed the host-mode install notice
+### F1 (fixed, then superseded by `main`): `/next/` never showed the host-mode install notice
+
+> **Update, 2026-11-18:** `main` landed its own install notice from the
+> 2026-11-18 walkthrough (`AppComponent.installNotice`, `.install-banner`,
+> the full notice on Settings → Upgrade, and the design book's "Install
+> notice" entry) while this branch was in the merge queue. When `main` was
+> merged in, this branch's copy of the banner, its CSS and its e2e test were
+> dropped in favour of `main`'s, which covers the same behaviour plus
+> Upgrade. What follows records what this walk found and verified.
 
 - **Where:** `ui-ng/src/app/app.component.ts`, `ui-ng/src/styles.css`.
 - **Reproduction:** start Demo B (`-host-mode-install`). Classic `/` shows
@@ -81,8 +90,9 @@ in this branch. Each has a Playwright regression test in
   desktop and 390×108 on a phone. The rail starts at `y=53`, the top bar at
   `y=53` / `y=108`, and there is 0 px horizontal overflow at 1440, 1024 and
   390 px, in light and dark.
-- **Regression test:** `the host-mode install notice stands above the shell
-  and clears once the install is migrated`.
+- **Regression test:** `main`'s `an unmigrated install raises a standing
+  notice above the shell and on Upgrade` (this branch's own test was dropped
+  with its copy of the banner).
 
 ### F2 (fixed): Fleet drew host CPU, memory and a green vCPU cap it was never given
 
@@ -346,3 +356,7 @@ the named spec. The real server, frontend and gestures stayed in the loop.
   including the four new tests.
 - `npx playwright test e2e/next-full-system.spec.js`: 5 passed (every
   destination in desktop / phone × light / dark, plus contrast).
+- After merging `main` (2026-11-18, which brought `main`'s own install
+  notice): lint and format clean; `npx vitest run src/app/fleet
+  src/app/settings src/app/app.component.spec.ts` 7 files, 99 tests passed;
+  `npx playwright test e2e/next-deployment-operations.spec.js` 20 passed.

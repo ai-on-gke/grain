@@ -14,11 +14,15 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  type Composition,
   type Schedule,
   type SuiteRun,
+  type Template,
   derivedRuns,
+  formatScheduleSuppression,
   movedOrder,
   parseProcessSort,
+  scheduleFiringTarget,
   sortProcessRows,
 } from "./processes.models";
 
@@ -154,5 +158,90 @@ describe("movedOrder", () => {
       "x",
     ]);
     expect(movedOrder([], ["k:a", "k:b"], "k:a", -1)).toBeNull();
+  });
+});
+
+describe("formatScheduleSuppression", () => {
+  it("strips leading 'skipped: ' and drops a repeated reason prefix", () => {
+    expect(
+      formatScheduleSuppression({
+        reason: "publishingHeld",
+        taskId: "2",
+        detail:
+          "skipped: publishing held by task 2 (acme/grain main has published nothing since 2026-11-15 06:40 UTC)",
+      }),
+    ).toBe(
+      "Suppressed — publishing held by task 2 (acme/grain main has published nothing since 2026-11-15 06:40 UTC)",
+    );
+    expect(
+      formatScheduleSuppression({
+        reason: "standingWork",
+        detail:
+          "skipped: this deployment doesn't run acme/grain's standing work",
+      }),
+    ).toBe(
+      "Suppressed — standing work off: this deployment doesn't run acme/grain's standing work",
+    );
+    expect(
+      formatScheduleSuppression({
+        reason: "task",
+        heldByScheduleId: "sched-peer",
+        detail:
+          'the task schedule "Release train" (sched-peer) filed is still open, and both are in overlap group "release-train"',
+      }),
+    ).toBe(
+      'Suppressed — the task schedule "Release train" (sched-peer) filed is still open, and both are in overlap group "release-train"',
+    );
+    expect(formatScheduleSuppression({ reason: "suiteRun" })).toBe(
+      "Suppressed — suite run unfinished.",
+    );
+  });
+});
+
+describe("scheduleFiringTarget", () => {
+  const templates = [
+    { id: "t-bound", repo: "acme/bound", base: "release/v1" },
+    { id: "t-bound-default", repo: "acme/bound", base: "" },
+    { id: "t-unbound", repo: "", base: "" },
+  ] as Template[];
+
+  it("uses a bound template's repo and base (including empty default-branch base) over the schedule's own", () => {
+    expect(
+      scheduleFiringTarget(
+        sched({ templateId: "t-bound", repo: "acme/sched", base: "main" }),
+        templates,
+      ),
+    ).toEqual({ repo: "acme/bound", base: "release/v1" });
+    expect(
+      scheduleFiringTarget(
+        sched({
+          templateId: "t-bound-default",
+          repo: "acme/bound",
+          base: "stale-branch",
+        }),
+        templates,
+      ),
+    ).toEqual({ repo: "acme/bound", base: "" });
+  });
+
+  it("keeps the schedule's own repo and base for unbound templates and falls back to composition when templates are unloaded", () => {
+    expect(
+      scheduleFiringTarget(
+        sched({ templateId: "t-unbound", repo: "acme/sched", base: "dev" }),
+        templates,
+      ),
+    ).toEqual({ repo: "acme/sched", base: "dev" });
+    expect(
+      scheduleFiringTarget(
+        sched({ templateId: "t-missing", repo: "acme/sched", base: "dev" }),
+        templates,
+        {
+          kind: "schedule",
+          repo: "acme/comp",
+          base: "comp-base",
+          tasks: [],
+        } as Composition,
+      ),
+    ).toEqual({ repo: "acme/comp", base: "comp-base" });
   });
 });

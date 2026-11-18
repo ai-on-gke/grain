@@ -25,6 +25,7 @@ import {
   signal,
   untracked,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   APIScopeSetRow,
@@ -76,6 +77,9 @@ export function grantRef(grant: string): string {
   }
   return ref;
 }
+
+// Where a policy verdict's note sends somebody to change the policy.
+const POLICY_PLACE = "Settings → Capabilities";
 
 /**
  * policyVerdictFor is the capability policy's word on a grant of method m
@@ -133,7 +137,7 @@ export interface GrantAttachEvent {
 
 @Component({
   selector: "g-grants-picker",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./grants-picker.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -212,9 +216,21 @@ export interface GrantAttachEvent {
           [attr.data-testid]="(testid() || 'gp') + '-policy-notes'"
         >
           @for (n of heldVerdicts(); track n.grant) {
+            @let parts = policyNoteParts(n.verdict);
             <li>
               <code>{{ shortGrant(n.grant) }}</code
-              >: {{ n.verdict.note }}
+              >:
+              @if (parts) {
+                {{ parts[0]
+                }}<a
+                  routerLink="/settings/capabilities"
+                  fragment="capability-policy"
+                  [attr.data-testid]="(testid() || 'gp') + '-policy-link'"
+                  >Settings → Capabilities</a
+                >{{ parts[1] }}
+              } @else {
+                {{ n.verdict.note }}
+              }
             </li>
           }
         </ul>
@@ -561,6 +577,18 @@ export class GrantsPickerComponent {
       this.access.can("GET /api/api-scope-sets", repo) ||
       this.access.can("POST /api/capability-grants/check", repo)
     );
+  }
+
+  /**
+   * policyNoteParts splits a policy verdict's note around its
+   * "Settings → Capabilities" so the list can link that back to the
+   * capability policy, as the classic GrantsPicker does; null for a
+   * note that names no policy (CI only).
+   */
+  protected policyNoteParts(v: GrantPolicyVerdict): [string, string] | null {
+    const at = v.note.indexOf(POLICY_PLACE);
+    if (at < 0) return null;
+    return [v.note.slice(0, at), v.note.slice(at + POLICY_PLACE.length)];
   }
 
   protected shortGrant(g: string): string {

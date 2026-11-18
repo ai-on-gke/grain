@@ -25,8 +25,13 @@ import (
 )
 
 type Subject struct {
-	Kind   string `json:"kind"`
-	TaskID string `json:"task_id"`
+	Kind       string `json:"kind"`
+	TaskID     string `json:"task_id,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+	Authority  string `json:"authority,omitempty"`
+	ChangeKind string `json:"change_kind,omitempty"`
+	ID         string `json:"id,omitempty"`
 }
 type Origin struct {
 	Kind     string `json:"kind"`
@@ -40,6 +45,14 @@ type DeliveryConfig struct {
 }
 type AcknowledgmentConfig struct {
 	Mode string `json:"mode"`
+}
+type IntegrationConfig struct {
+	Kind      string `json:"kind"`
+	Semantics string `json:"semantics"`
+}
+type ChildrenConfig struct {
+	Tasks     []string `json:"tasks"`
+	Predicate string   `json:"predicate"`
 }
 type Binding struct {
 	ID               string          `json:"id"`

@@ -90,6 +90,16 @@ export interface DispatchCondition {
   check?: boolean | string;
 }
 
+// InstallNotice is pkg/ui/install_notice.go's InstallNotice.
+export interface InstallNotice {
+  kind: string;
+  message: string;
+  command?: string;
+  signals?: string[];
+  affectedClis?: string[];
+  docsUrl?: string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
@@ -99,6 +109,11 @@ export interface GrainConfig {
   configRepo?: string;
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
+  // installNotice is something about how this deployment is installed
+  // that only its operator can fix -- today a host-mode install no
+  // installer has migrated (pkg/ui/install_notice.go). The shell shows
+  // it as a standing banner until the install is migrated.
+  installNotice?: InstallNotice | null;
   capabilities?: CapabilityOption[];
   // ciCapabilities is what can be granted to a repository's CI jobs
   // (the repo page's CI capabilities card).
@@ -715,16 +730,23 @@ export interface GateObservationResult {
   retry_at: string | null;
   result: {
     type: string;
+    binding_id?: string;
     version: number;
     status: string;
     summary: string;
     human_text: string | null;
+    agent_text?: string | null;
     observed_at: string;
     valid_until: string;
     context_digest: string;
-    evidence: { kind: string; id: string; version: string }[];
+    evidence: {
+      kind: string;
+      id: string;
+      version: string;
+      head?: string | null;
+    }[];
     dependencies: { key: string; version: string; complete: boolean }[];
-    waits: { event: string; owner: string; deadline: string }[];
+    waits: { event: string; key?: string; owner: string; deadline: string }[];
     error: { code: string; message: string } | null;
   };
 }
@@ -740,7 +762,21 @@ export interface GateObservations {
     type: string;
     version: number;
     config: unknown;
-    origin: unknown;
+    origin: {
+      kind?: string;
+      id?: string;
+      revision?: string;
+      imported?: boolean;
+    };
+    subject?: {
+      kind: string;
+      authority?: string;
+      repository?: string;
+      ref?: string;
+      task_id?: string;
+      change_kind?: string;
+      id?: string;
+    };
   }[];
   results: GateObservationResult[];
 }
