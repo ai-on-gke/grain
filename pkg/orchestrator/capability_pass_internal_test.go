@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -364,6 +365,14 @@ func TestExtendIsSafeFromConcurrentRuns(t *testing.T) {
 		later := base.Add(4 * time.Hour)
 		earlier := base.Add(time.Hour)
 
+		var waitCalls atomic.Int32
+		secondWaiting := make(chan struct{})
+		passes.beforeRenewWait = func() {
+			if waitCalls.Add(1) == 2 {
+				close(secondWaiting)
+			}
+		}
+
 		inFlight := make(chan struct{})
 		unblock := make(chan struct{})
 		var once sync.Once
@@ -389,11 +398,10 @@ func TestExtendIsSafeFromConcurrentRuns(t *testing.T) {
 				t.Errorf("extend earlier: %v", err)
 			}
 		}()
-		// Give the second Extend a moment to enter Extend while the first
-		// renewal is still blocked inside Renew.
-		time.Sleep(20 * time.Millisecond)
+		<-secondWaiting
 		close(unblock)
 		wg.Wait()
+		passes.beforeRenewWait = nil
 		caller.setOnMint(nil)
 
 		if _, got := passes.held("7-1"); !got.Equal(later) {
@@ -407,6 +415,96 @@ func TestExtendIsSafeFromConcurrentRuns(t *testing.T) {
 			if !minted[i].After(minted[i-1]) {
 				t.Errorf("minted deadlines moved backwards or repeated: %v", minted)
 			}
+		}
+	})
+
+	t.Run("renewal finishing after release takes the pass keeps unreachable grant until renewed deadline", func(t *testing.T) {
+		caller := &mintCaller{}
+		deps, _, ctx, now := passHarness(t, caller)
+		baseSrv := deps.CapabilityServers
+		var down atomic.Bool
+		deps.CapabilityServers = lookupFunc(func(id string) (*protocol.Server, error) {
+			if down.Load() {
+				return nil, &protocol.RefusedError{Reason: "capability server " + id + " needs configuring"}
+			}
+			return baseSrv.Lookup(id)
+		})
+		passes := deps.CapabilityPasses
+		var clockMu sync.Mutex
+		curNow := *now
+		passes.now = func() time.Time {
+			clockMu.Lock()
+			defer clockMu.Unlock()
+			return curNow
+		}
+		if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+			t.Fatalf("admit = %+v, %v", adm, err)
+		}
+		base := capabilityDeadline(*now, deps.Config.maxRunRuntime())
+		later := base.Add(4 * time.Hour)
+
+		var waitCalls atomic.Int32
+		releaseWaiting := make(chan struct{})
+		passes.beforeRenewWait = func() {
+			if waitCalls.Add(1) == 2 {
+				close(releaseWaiting)
+			}
+		}
+
+		inFlight := make(chan struct{})
+		unblock := make(chan struct{})
+		var once sync.Once
+		caller.setOnMint(func(d time.Time) {
+			if d.Equal(later) {
+				once.Do(func() { close(inFlight) })
+				<-unblock
+			}
+		})
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := passes.Extend(ctx, "7-1", later); err != nil {
+				t.Errorf("extend later: %v", err)
+			}
+		}()
+		<-inFlight
+
+		// The server renewed the lease to `later` and then went unreachable,
+		// while the clock moved past the original `base` deadline.
+		clockMu.Lock()
+		curNow = base.Add(time.Hour)
+		clockMu.Unlock()
+		down.Store(true)
+
+		go func() {
+			defer wg.Done()
+			passes.Release(ctx, "7-1")
+		}()
+		// Wait until release has removed "7-1" from h.passes and reached
+		// renewMu, then let Renew finish.
+		<-releaseWaiting
+		close(unblock)
+		wg.Wait()
+		passes.beforeRenewWait = nil
+		caller.setOnMint(nil)
+
+		passes.mu.Lock()
+		kept := passes.unreleased["7-1"]
+		passes.mu.Unlock()
+		if kept == nil {
+			t.Fatal("unreachable grant was dropped at release instead of kept until renewed deadline")
+		}
+		if !kept.deadline.Equal(later) {
+			t.Errorf("unreleased deadline = %v, want %v", kept.deadline, later)
+		}
+
+		down.Store(false)
+		passes.RetryReleases(ctx)
+		calls := caller.called()
+		if calls[len(calls)-1] != "release_gcp-key grain-7-1-0" {
+			t.Errorf("calls = %q, want kept grant released once server reattaches", calls)
 		}
 	})
 }
