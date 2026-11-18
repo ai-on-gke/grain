@@ -2475,7 +2475,7 @@ These edit a colocated deployment's files on disk, or the host itself, rather th
 - `rotate` replaces the code, prints the new one, and ends every UI session and bearer use of the old one within a second. It refuses when there is no existing installation.
 - `mode [on|recovery|off]` reads or writes `DIR/access-code-mode` beside `local-api-token` and never prints the code:
   - with no mode argument, prints the current mode (`on` when the file is absent; `off` when the file holds any unrecognised value);
-  - with `on`, `recovery` or `off`, checks that `local-api-token` exists, writes the mode file (`0600`) and prints the mode (plus a stderr note on `recovery` and `off`). The daemon re-reads the file within a second: `on` accepts the code everywhere configured, `recovery` holds the code to access and settings routes (raising an Inbox notification on use) once a verified full-role person on the allowlist can sign in, and `off` refuses the code everywhere except a run's own `grain mcpserver` plumbing (`X-Grain-Acting-Task`).
+  - with `on`, `recovery` or `off`, checks that `local-api-token` exists, writes the mode file (`0600`) and prints the mode (plus a stderr note on `recovery` and `off`). The daemon re-reads the file within a second: `on` accepts the code everywhere configured, `recovery` holds the code to access and settings routes (raising an Inbox notification on use) once a verified full-role person on the allowlist can sign in, and `off` refuses the code on every request, a run's own `grain mcpserver` requests (`X-Grain-Acting-Task`) included: runs reach the daemon with their own run credential instead.
 
 The code is read from `DIR/local-api-token`, else `$GRAIN_LOCAL_API_TOKEN_FILE`, else `local-api-token` in `$GRAIN_DATA_DIR` or cli.env's. Flags (hand-written usage): `-data-dir` (string).
 
@@ -2793,9 +2793,9 @@ _No flags._
 |---|---|---|---|---|
 | `-admin-account` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
 | `-admin-user` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
-| `-claude-cli-sha256-amd64` | string | `"dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"` |  | expected sha256 of the linux-x64 claude release |
-| `-claude-cli-sha256-arm64` | string | `"a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"` |  | expected sha256 of the linux-arm64 claude release |
-| `-claude-cli-version` | string | `"2.1.319"` |  | claude CLI release to install |
+| `-claude-cli-sha256-amd64` | string | `"0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf"` |  | expected sha256 of the linux-x64 claude release |
+| `-claude-cli-sha256-arm64` | string | `"7b6e484b1989a5a14a4b354709ccc8672518a3ec5b9ccd7981fc6254327fde67"` |  | expected sha256 of the linux-arm64 claude release |
+| `-claude-cli-version` | string | `"2.1.325"` |  | claude CLI release to install |
 | `-claude-home` | string |  |  | $HOME for the claude installer (default <data-dir>/claude) |
 | `-daemon-arg` | value |  |  | extra argument appended to the daemon's own command line, repeatable |
 | `-daemon-group` | string |  |  | run the daemon as this group (systemd Group=) instead of -daemon-user's own name; only meaningful alongside -daemon-user |
