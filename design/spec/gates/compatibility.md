@@ -23,23 +23,24 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 
 ## Implemented observation-only subset
 
-The [runtime observation guide](../../../docs/gate-observations.md) describes the
-shipped nonrequired v1 monitors: `delivery/report/current_v1`,
-`acknowledgment/explicit_receipt`, current/explicit legacy `checks`, and canonical
-`review`/`approval` predicates. The [checks adapter](../../../docs/gate-check-observations.md)
-projects typed modes, base-owned definitions, complete exact-head collections
-and inert merge context. The [review/approval adapter](../../../docs/gate-review-observations.md)
-imports ordinary/security/path/targeted/takeover legacy comparisons and named,
-Submit and human-hold scopes. Missing provider and rendered policy/role receipt
-pins remain unknown. Ordinary authorized
-task reads and the Angular task detail carry the optional closed observation_view
-and bounded sibling diagnostic history. There is no contract/decision authority,
-`?view=gates` implementation, discovery/mutation/action/waiver API or migration.
-Finite analysis tasks and scoped CI changes are selected by the same disabled-by-default deployment
-allowlist; attachment-bearing/unsupported shapes and missing provenance are unknown.
-The [independent framework review](../../../docs/gate-observation-review.md) records
-repair coverage and stable extension rules, including conservative receipt ordering,
-failure/acceptance races and bounded retention on both engines.
+The [runtime observation guide](../../../docs/gate-observations.md) covers seven
+implemented v1 types: delivery variants, acknowledgment compatibility profiles,
+positive integration, explicit child outcome predicates, checks, review and approval. Ordinary authorized
+reads and Angular task detail carry optional observation-only projections and
+bounded history. Existing goal declarations propose monitor contracts only;
+`tasks-closed` retains its actual closed/merged predicate, never relabeled success.
+No contract, task, goal limit, controller disposition or actual wait is migrated.
+Implementation/review/coordinator comparisons retain exact local source fences,
+head/policy receipts and unknown states for missing/private/stale evidence.
+The [framework review](../../../docs/gate-observation-review.md) and operator guide
+record the inherited receipt/body limits and source-specific coverage.
+The existing [review/approval adapter](../../../docs/gate-review-observations.md)
+remains intact, including its current provider, rendered-policy and role-receipt
+gaps; those observations remain unknown without exact positive proof.
+There is no contract/decision authority, `?view=gates` implementation or
+discovery/mutation/action/waiver API.
+The shipped [CI checks adapter](../../../docs/gate-check-observations.md) retains
+its scoped collectors, complete collections, acceptance fences and inert merge context.
 All current legacy writers listed below retain authority in this implementation.
 Legacy comparisons are imported only as inert monitors; enforced imports and
 handoff requirements remain future specifications.

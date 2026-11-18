@@ -42,6 +42,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/mergelogins"
@@ -140,6 +141,8 @@ func OfferedCapabilities() []Capability {
 type Config struct {
 	// GateObservationTaskIDs selects at most 32 read-only shadow tasks.
 	GateObservationTaskIDs []string
+	// GateObservationChildren selects explicit read-only success/closed/merged comparisons.
+	GateObservationChildren map[string][]gates.ChildrenConfig
 
 	// OfferedGitCredentials lists the named GitHub credentials under
 	// secrets/github this process started with (non-nil when a credential

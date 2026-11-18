@@ -81,8 +81,9 @@ import {
   placement,
   planMove,
   priorityOf,
+  mergeStuck,
   sorted,
-  stateLabel,
+  taskStateLabel,
   timelineEndMs,
 } from "./task-view";
 import { type BatchResult, type Undo, TasksStore } from "./tasks.store";
@@ -478,7 +479,7 @@ function needsApproval(t: Task): boolean {
                             ><g-status-icon
                               [tone]="toneOf(t)"
                               [kind]="t.state"
-                            />{{ label(t.state) }}</span
+                            />{{ label(t) }}</span
                           >
                           <a
                             class="timeline-row-title"
@@ -742,7 +743,7 @@ function needsApproval(t: Task): boolean {
                         />
                         <span class="status-pill proposal"
                           ><g-status-icon tone="proposal" kind="proposed" />{{
-                            label(t.state)
+                            label(t)
                           }}</span
                         >
                         <div class="row-main">
@@ -1261,7 +1262,7 @@ function needsApproval(t: Task): boolean {
         />
         <span [class]="'status-pill ' + toneOf(t)"
           ><g-status-icon [tone]="toneOf(t)" [kind]="t.state" />{{
-            label(t.state)
+            label(t)
           }}</span
         >
         <div class="row-main">
@@ -1608,7 +1609,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly tabs = TABS;
   protected readonly sorts = SORTS;
   protected readonly ago = ago;
-  protected readonly label = stateLabel;
+  protected readonly label = taskStateLabel;
   protected readonly prio = priorityOf;
   protected readonly jumps = jumpsQueue;
 
@@ -2345,6 +2346,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected toneOf(t: Task): string {
+    if (mergeStuck(t)) return "error";
     switch (t.state) {
       case "running":
         return "setup";
