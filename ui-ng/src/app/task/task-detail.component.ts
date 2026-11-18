@@ -196,6 +196,7 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       (scroll)="rememberTabScroll()"
+      (keydown)="onDetailsScrollKey($event)"
       [class.is-details-view]="current() === 'details'"
       [attr.tabindex]="current() === 'details' ? 0 : null"
       aria-labelledby="task-title"
@@ -1709,6 +1710,36 @@ export class TaskDetailComponent implements OnDestroy {
     TaskTab,
     { page: number; body: number }
   >();
+
+  protected onDetailsScrollKey(event: KeyboardEvent): void {
+    const page = this.taskPage()?.nativeElement;
+    const body = this.tabBody()?.nativeElement;
+    if (
+      this.current() !== "details" ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey ||
+      (event.key !== "PageDown" && event.key !== "PageUp") ||
+      (event.target !== page && event.target !== body)
+    )
+      return;
+    // Native page-key animation can swallow a following Control+Home on a
+    // touch viewport. Page the focused surface immediately; retain native
+    // Home/End (including touch-fling cancellation) and editor key behavior.
+    const owner =
+      body && body.scrollHeight > body.clientHeight + 1 ? body : page;
+    if (!owner) return;
+    event.preventDefault();
+    const step = owner.clientHeight * 0.9;
+    owner.scrollTo({
+      top: Math.max(
+        0,
+        owner.scrollTop + (event.key === "PageDown" ? step : -step),
+      ),
+      behavior: "instant",
+    });
+  }
 
   protected rememberTabScroll(): void {
     // Read while the user scrolls: by the time a tab has rendered, the old
