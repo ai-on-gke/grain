@@ -10,11 +10,11 @@ PRs in scope: #1762 (schedule firing base, held wording, `→ held`, Fleet live 
 |---|---|
 | Commit walked | `848f5271c` (`main` with PR #1834), built with `make frontend && go build ./cmd/grain` |
 | Fix commit | `fix(ui-ng): stop Agents cards and a workstream's section skipping a heading level` (this branch) |
-| Real daemon (items 1, 2, 3, 6, 7) | `grain daemon -sandbox-port-base=0 -host-sandboxes` over **SQLite 3.40.1**. It runs the 2026-11-13 harness (`docs/test-runs/2026-11-13-grain-health-exit-codes/env.sh`: ghsim `127.0.0.1:4284`, daemon `127.0.0.1:4280`, a fake agent CLI). The agent wrapper `2026-11-18-next-fixes/fake-agent.sh` records each run's checkout. From item 6 on, the daemon is the `grain_headerverifier.go` build (`-ui-require-verifier=walk-header`), so a browser can sign in as a real `grain/viewer`. PostgreSQL was **not** walked; see "Not covered". |
+| Real daemon (items 1, 2, 3, 6, 7) | `grain daemon -sandbox-port-base=0 -host-sandboxes` over **SQLite 3.40.1** (and PostgreSQL 15.20 for part of item 1). It runs the 2026-11-13 harness (`docs/test-runs/2026-11-13-grain-health-exit-codes/env.sh`: ghsim `127.0.0.1:4284`, daemon `127.0.0.1:4280`, a fake agent CLI). The agent wrapper `2026-11-18-next-fixes/fake-agent.sh` records each run's checkout. From item 6 on, the daemon is the `grain_headerverifier.go` build (`-ui-require-verifier=walk-header`), so a browser can sign in as a real `grain/viewer`. PostgreSQL was **not** walked; see "Not covered". |
 | Demo (items 4, 5, 8) | `grain demo -github-sim -fake-ci -reconcile 2s` on `127.0.0.1:4290` (old build) and `127.0.0.1:4291` (fixed build) |
 | Browser | Playwright Chromium 151.0.7922.34 (headless), Node 20.19.0 |
 | Widths and themes | 1440×900 and 390×844, light and dark |
-| Helpers | `docs/test-runs/2026-11-18-next-fixes/` (`lib.mjs`, `item1-firing-base.mjs`, `item2-fleet-live-region.mjs`, `item3-alert-reraise.mjs`, `item4-hostile-mermaid.mjs`, `item5-heading-outline.mjs`, `item6-roles-changelist.mjs`, `item7-unsaved-guards.mjs`, `item8-phone-sweep.mjs`, `fake-agent.sh`, `grain_headerverifier.go` with `//go:build ignore`). Run each from the repository root: `PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright BASE=… CODE=… node docs/test-runs/2026-11-18-next-fixes/<item>.mjs` |
+| Helpers | `docs/test-runs/2026-11-18-next-fixes/` (`lib.mjs`, `item1-firing-base.mjs`, `item2-fleet-live-region.mjs`, `item3-alert-reraise.mjs`, `item4-hostile-mermaid.mjs`, `item5-heading-outline.mjs`, `item6-roles-changelist.mjs`, `item7-unsaved-guards.mjs`, `item8-phone-sweep.mjs`, `item1-postgres.sh`, `fake-agent.sh`, `grain_headerverifier.go` with `//go:build ignore`). Run each from the repository root: `PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright BASE=… CODE=… node docs/test-runs/2026-11-18-next-fixes/<item>.mjs` |
 
 ## Outcomes
 
@@ -41,6 +41,11 @@ Setup: `acme/widgets` has `main` (`d96e7e9`) and `release` (`e79e47d`, one commi
 6. When I closed task 10, the held occurrence fired late as task 11. The row then read **`→ fired #11`** and the suppression banner was gone.
 
 No console errors or 4xx/5xx responses on any page.
+
+**Over PostgreSQL (15.20, `item1-postgres.sh`, daemon `127.0.0.1:4281`): partial.**
+
+- **Firing base:** the same setup with stale stored bases gave the same `/api/schedules` answer (`sched-1` `release`, `sched-2` `null`). The cycle filed task 2 with base `release` and task 3 with no base.
+- **Dispatch and the hold were not proved.** The harness's model was paused by a usage limit (`admission refused by model availability -- model gemini-3.1-pro is paused after a usage limit`), so the filed tasks stayed queued. Each later occurrence was then skipped for overlap (`reason: task`) before the publishing hold was consulted. The check-out commit and the held, then fired path are therefore SQLite-only.
 
 ### Item 2: Fleet's live region (real findings, not a stub)
 
@@ -138,6 +143,6 @@ The fix for F3 and F4 is commit `fix(ui-ng): stop Agents cards and a workstream'
 
 ## Not covered
 
-- **PostgreSQL:** the real-daemon items ran over SQLite only.
+- **PostgreSQL:** only item 1's firing base was checked over PostgreSQL 15.20, and its dispatch and publishing-hold steps were blocked (see item 1). Items 2, 3, 6 and 7 ran over SQLite only.
 - **The three-review mandate** (Design, Functional, Adversarial) for the F3/F4 change needs reviewers other than the author. This run is the author, so those reviews were not done here.
 - **QA studio publish settle (PR #1506) and the disconnected banner (PR #1624):** only rendered (`/next/processes/quality` in the sweep). They were not exercised beyond what CI covers.
