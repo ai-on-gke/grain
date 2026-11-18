@@ -13,15 +13,19 @@
 // limitations under the License.
 
 import type { Task } from "../api/models";
+import { taskPriority } from "./batch-edit-dialog.component";
 import {
   ago,
+  heldForRunNow,
   bands,
   inTab,
   levelOf,
   nextUp,
   placement,
   planMove,
+  mergeStuck,
   sorted,
+  taskStateLabel,
   timelineEndMs,
 } from "./task-view";
 
@@ -186,5 +190,65 @@ describe("timelineEndMs", () => {
     expect(timelineEndMs(task("completed"), now)).toBe(
       Date.parse("2026-11-14T08:00:00Z"),
     );
+  });
+});
+
+describe("heldForRunNow", () => {
+  const manual = { paused: true, runNowPasses: true };
+  it("marks a queued task only while a pause Run now passes holds it", () => {
+    expect(heldForRunNow(manual, t("1", 5))).toBe(true);
+    expect(heldForRunNow({ paused: true }, t("1", 5))).toBe(false);
+    expect(heldForRunNow(null, t("1", 5))).toBe(false);
+    expect(heldForRunNow(manual, t("1", 5, { state: "running" }))).toBe(false);
+  });
+  it("drops the marker once the task has been asked to run", () => {
+    expect(heldForRunNow(manual, t("1", 5, { runNowAt: "x" }))).toBe(false);
+  });
+  it("leaves blocked, admitted and awaited tasks unmarked", () => {
+    expect(heldForRunNow(manual, t("1", 5, { blocked: true }))).toBe(false);
+    expect(heldForRunNow(manual, t("1", 5, { admission: "bypass" }))).toBe(
+      false,
+    );
+    expect(heldForRunNow({ ...manual, untilTask: "1" }, t("1", 5))).toBe(false);
+  });
+});
+
+describe("taskPriority", () => {
+  it("takes whole numbers from 1 up and refuses the rest", () => {
+    expect(taskPriority("7")).toBe(7);
+    expect(taskPriority(" 12 ")).toBe(12);
+    expect(taskPriority("1e3")).toBe(1000);
+    expect(taskPriority("1.5E3")).toBe(1500);
+    for (const bad of ["0", "-1", "2.5", "1e-3", "0x10", "", "abc", "1e400"])
+      expect(taskPriority(bad)).toBeNaN();
+  });
+});
+
+describe("taskStateLabel", () => {
+  it("names a stuck merge rather than calling it Merging", () => {
+    const failed = t("29", 5, {
+      state: "completed",
+      mergeQueueState: "merge_failed",
+    });
+    expect(taskStateLabel(failed)).toBe("Merge failed");
+    expect(mergeStuck(failed)).toBe(true);
+    expect(
+      taskStateLabel(
+        t("30", 5, { state: "completed", mergeQueueState: "unreadable" }),
+      ),
+    ).toBe("Can't read the pull request");
+    const landing = t("5", 5, {
+      state: "completed",
+      mergeQueueState: "merging",
+    });
+    expect(taskStateLabel(landing)).toBe("Merging");
+    expect(mergeStuck(landing)).toBe(false);
+    // A closed task's stale observation does not relabel it.
+    expect(
+      taskStateLabel(
+        t("31", 5, { state: "closed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe("Closed");
+    expect(taskStateLabel(t("2", 5))).toBe("Waiting");
   });
 });

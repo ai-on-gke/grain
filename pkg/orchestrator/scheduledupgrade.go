@@ -141,10 +141,12 @@ func reconcileScheduledUpgrade(ctx context.Context, deps Deps, now time.Time) er
 		return nil
 	}
 
-	waiting, err := scheduledUpgradeWait(ctx, deps)
-	if err != nil {
-		return err
-	}
+	// A failure to count is held on to rather than returned straight
+	// away: the queue is shut below either way, so a deployment that
+	// cannot tell how busy it is still stops taking on work it would only
+	// lose to the restart, and the upgrade is never started on a count
+	// nobody could read.
+	waiting, waitErr := scheduledUpgradeWait(ctx, deps)
 
 	// Somebody else's pause -- an operator's, or the upgrade check's --
 	// is left exactly where it is: the queue is shut either way, so
@@ -167,11 +169,17 @@ func reconcileScheduledUpgrade(ctx context.Context, deps Deps, now time.Time) er
 		}
 		ours = true
 		held := "this deployment is already idle"
-		if waiting != "" {
+		switch {
+		case waitErr != nil:
+			held = "how busy it is could not be read"
+		case waiting != "":
 			held = waiting
 		}
 		log.Printf("orchestrator: holding the queue until this deployment is idle, then upgrading to %s (%s)",
 			scheduled.Branch, held)
+	}
+	if waitErr != nil {
+		return waitErr
 	}
 
 	why := "this deployment is idle"

@@ -1,0 +1,23 @@
+{
+  "id": "exception-1",
+  "kind": "completion_waiver",
+  "binding_ids": [
+    "task/57/children"
+  ],
+  "target": {
+    "kind": "task",
+    "task_id": "57"
+  },
+  "head": null,
+  "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contract_revision": 1,
+  "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "operation_id": null,
+  "actor": "person/owner",
+  "reason": "Accept this explicit child outcome exception for this delivery.",
+  "issued_at": "2026-11-17T00:15:00Z",
+  "expires_at": "2026-11-18T00:15:00Z",
+  "revoked_at": null,
+  "revision": 1
+}

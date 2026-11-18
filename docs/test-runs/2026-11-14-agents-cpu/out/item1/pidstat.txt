@@ -1,0 +1,81 @@
+Linux 6.1.0-54-amd64 (debuerreotype) 	11/15/26 	_x86_64_	(7 CPU)
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:17     1000     10819   99.50    0.00    0.00    0.00   99.50     0  stress-ng-cpu
+02:09:17     1000     10822   99.50    0.00    0.00    0.00   99.50     3  stress-ng-cpu
+02:09:17     1000     10823   99.50    0.00    0.00    0.00   99.50     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:19     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:19     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:19     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:21     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:21     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:21     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:23     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:23     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:23     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:25     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:25     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:25     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:27     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:27     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:27     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:29     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:29     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:29     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:31     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:31     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:31     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:33     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:33     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:33     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:35     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:35     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:35     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:37     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:37     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:37     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:39     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:39     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:39     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:41     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:41     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:41     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:43     1000     10819  100.50    0.00    0.00    0.00  100.50     0  stress-ng-cpu
+02:09:43     1000     10822  100.50    0.00    0.00    0.00  100.50     3  stress-ng-cpu
+02:09:43     1000     10823  100.50    0.00    0.00    0.00  100.50     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:45     1000     10819   99.50    0.00    0.00    0.00   99.50     0  stress-ng-cpu
+02:09:45     1000     10822   99.50    0.00    0.00    0.00   99.50     3  stress-ng-cpu
+02:09:45     1000     10823   99.50    0.00    0.00    0.00   99.50     4  stress-ng-cpu
+
+# Time        UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+02:09:47     1000     10819  100.00    0.00    0.00    0.00  100.00     0  stress-ng-cpu
+02:09:47     1000     10822  100.00    0.00    0.00    0.00  100.00     3  stress-ng-cpu
+02:09:47     1000     10823  100.00    0.00    0.00    0.00  100.00     4  stress-ng-cpu

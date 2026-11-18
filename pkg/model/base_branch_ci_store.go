@@ -33,7 +33,11 @@ const baseBranchCIStreakColumns = "`red_streak`,`red_streak_jobs`,`red_streak_si
 // just upgraded across this, and is read as "not broken" rather than as
 // "unknown, hold everything". See BaseBranchCI.
 func (s *Store) GetBaseBranchCI(ctx context.Context, repo RepoRef, branch string) (*BaseBranchCI, error) {
-	row := s.db.QueryRowContext(ctx,
+	return getBaseBranchCI(ctx, s.db, repo, branch)
+}
+
+func getBaseBranchCI(ctx context.Context, q querier, repo RepoRef, branch string) (*BaseBranchCI, error) {
+	row := q.QueryRowContext(ctx,
 		"SELECT `run_id`,`commit`,`started_at`,`finished_at`,`attempts`,`conclusion`,`detail`,"+
 			"`merged_task_id`,`pending_task_id`,`repair_task_id`,`confirmation`,`confirm_run_id`,"+
 			"`confirm_jobs`,`confirm_attempts`,`confirm_detail`,`covers`,`pending_merges`,"+
@@ -74,13 +78,21 @@ func (s *Store) GetBaseBranchCI(ctx context.Context, repo RepoRef, branch string
 // set is one row per base branch that has had a merge, which is a handful
 // even on a busy deployment.
 func (s *Store) ListBaseBranchCI(ctx context.Context) ([]BaseBranchCI, error) {
+	return listBaseBranchCI(ctx, s.db)
+}
+
+func listBaseBranchCI(ctx context.Context, q querier, limit ...int) ([]BaseBranchCI, error) {
+	suffix := ""
+	if len(limit) > 0 && limit[0] > 0 {
+		suffix = fmt.Sprintf(" LIMIT %d", limit[0])
+	}
 	var out []BaseBranchCI
-	err := each(ctx, s.db,
+	err := each(ctx, q,
 		"SELECT `owner`,`name`,`branch`,`run_id`,`commit`,`started_at`,`finished_at`,`attempts`,"+
 			"`conclusion`,`detail`,`merged_task_id`,`pending_task_id`,`repair_task_id`,"+
 			"`confirmation`,`confirm_run_id`,`confirm_jobs`,`confirm_attempts`,`confirm_detail`,"+
 			"`covers`,`pending_merges`,`run_requested_at`,`run_requested_by`,"+baseBranchCIStreakColumns+" "+
-			"FROM `base_branch_ci` ORDER BY `owner`,`name`,`branch`", nil,
+			"FROM `base_branch_ci` ORDER BY `owner`,`name`,`branch`"+suffix, nil,
 		func(rows *sql.Rows) error {
 			var b BaseBranchCI
 			var startedAt time.Time

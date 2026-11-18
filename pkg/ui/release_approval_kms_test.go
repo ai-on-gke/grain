@@ -74,8 +74,47 @@ func TestAnUnreadableKMSReleaseApprovalKeyIsNamedInA502(t *testing.T) {
 	if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 		t.Fatalf("answer = %v; want code %s and an error naming -release-approval-kms-key", got, apierror.CodeUpstream)
 	}
-	if leaksKMSAnswer(got["error"]) {
+	if carriesKMSAnswer(got) {
 		t.Fatalf("answer %q carries KMS's own answer; want it only in the log", got["error"])
+	}
+}
+
+// trailingLogRef is the random hex log reference apierror appends to an
+// answer (" (ref 7bd403ca3aa3)"), anchored to the end so nothing else in
+// the answer can be mistaken for it.
+var trailingLogRef = regexp.MustCompile(`\s*\(ref [0-9a-f]+\)$`)
+
+// carriesKMSAnswer reports whether a withheld 502 answer repeats what
+// KMS said. The answer ends in a random hex log reference, "(ref
+// 403f98cf2908)", which is cut off first so a reference that happens to
+// contain "403" is not mistaken for KMS's status. Only the exact trailing
+// hex reference is dropped rather than reading the body's omitempty ref
+// field or cutting at an unanchored "(ref ".
+func carriesKMSAnswer(answer map[string]string) bool {
+	msg := trailingLogRef.ReplaceAllString(answer["error"], "")
+	for _, word := range []string{"403", "denied", "Permission '", "cloudkms."} {
+		if strings.Contains(msg, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCarriesKMSAnswerIgnoresTheLogReference(t *testing.T) {
+	const withheld = "release approval signing failed; check -release-approval-kms-key"
+	for _, tc := range []struct {
+		answer map[string]string
+		want   bool
+	}{
+		{map[string]string{"error": withheld + " (ref 074a53540387)", "ref": "074a53540387"}, false},
+		{map[string]string{"error": withheld + " (ref 403f98cf2908)", "ref": "403f98cf2908"}, false},
+		{map[string]string{"error": withheld + " (ref 403f98cf2908)"}, false},
+		{map[string]string{"error": withheld + ": HTTP 403 (ref 0123456789ab)", "ref": "0123456789ab"}, true},
+		{map[string]string{"error": withheld + ": permission denied (ref 403403403403)", "ref": "403403403403"}, true},
+	} {
+		if got := carriesKMSAnswer(tc.answer); got != tc.want {
+			t.Errorf("carriesKMSAnswer(%q) = %v, want %v", tc.answer["error"], got, tc.want)
+		}
 	}
 }
 
@@ -158,26 +197,11 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 			t.Fatalf("POST %s answer = %v; want code %s and an error naming -release-approval-kms-key", tc.path, got, apierror.CodeUpstream)
 		}
-		if leaksKMSAnswer(got["error"]) {
+		if carriesKMSAnswer(got) {
 			t.Fatalf("POST %s answer %q carries KMS's own answer; want it only in the log", tc.path, got["error"])
 		}
 	}
 	if forge.dispatches != 0 {
 		t.Fatalf("dispatched %d workflows after KMS refused signing, want 0", forge.dispatches)
 	}
-}
-
-// trailingLogRef is the random hex log reference apierror appends to an
-// answer (" (ref 7bd403ca3aa3)"), anchored to the end so nothing else in
-// the answer can be mistaken for it.
-var trailingLogRef = regexp.MustCompile(`\s*\(ref [0-9a-f]+\)$`)
-
-// leaksKMSAnswer reports whether an API answer carries KMS's own response.
-// The answer ends with a random hex log reference, which can itself
-// contain "403", so only that exact trailing reference is dropped before
-// the rest of the answer is checked.
-func leaksKMSAnswer(answer string) bool {
-	answer = trailingLogRef.ReplaceAllString(answer, "")
-	return strings.Contains(answer, "denied") || strings.Contains(answer, "403") ||
-		strings.Contains(answer, "cloudkms.")
 }

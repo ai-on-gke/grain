@@ -1,0 +1,7 @@
+{
+  "after_sequence": 2,
+  "max_wait_seconds": 30,
+  "park": false,
+  "expected_reference_revision": 1,
+  "idempotency_key": "wait-1"
+}

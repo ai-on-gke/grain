@@ -15,6 +15,8 @@
 package model
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -109,6 +111,8 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "deployment:upgrade", Description: "Upgrade grain and its database, or cancel a scheduled upgrade", Dangerous: true},
 	{Scope: "deployment:restart", Description: "Restart grain, act on persistent sandboxes, and run sandbox probes", Dangerous: true},
 	{Scope: "deployment:reboot", Description: "Reboot or shut down grain's host", Dangerous: true},
+	{Scope: "qa:read", Description: "Read quality flow versions, experiment configurations and experiment results"},
+	{Scope: "qa:admin", Description: "Publish or retire quality flow versions, manage quality experiments, and import readout manifests", Dangerous: true},
 }
 
 // impliedAPIScopes are the narrow scopes a wider one carries with it:
@@ -845,6 +849,54 @@ func RetiredGrantsBecame(name string) []string {
 	return []string{name}
 }
 
+// RetiredGrantRefusal says that name is a retired bare capability name,
+// which grants nothing now, and names the canonical grant(s) it became;
+// ok is false when name is not retired (RetiredGrantsBecame returns it
+// unchanged). The paths that record a grant refuse a retired name with
+// it, so whoever still writes the old spelling is told the new one rather
+// than "unknown capability".
+func RetiredGrantRefusal(name string) (msg string, became []string, ok bool) {
+	trimmed := strings.TrimSpace(name)
+	became = RetiredGrantsBecame(trimmed)
+	if len(became) == 0 || (len(became) == 1 && became[0] == trimmed) {
+		return "", nil, false
+	}
+	return fmt.Sprintf("%s is a retired capability name and grants nothing any longer: it became %s",
+		trimmed, strings.Join(became, " and ")), became, true
+}
+
+// RetiredTaskGrantRefusal is RetiredGrantRefusal for a grant named on
+// work being filed -- a propose_task call, or the proposal relayed from
+// one: a retired bare name is refused naming what it became, and
+// grain#ci, which no task names, is said to come from the target
+// repository's CI Mode. ok is false for any other name, a registered
+// alias (RegisterLegacyGrantAlias) still honoured included.
+func RetiredTaskGrantRefusal(name string) (msg string, ok bool) {
+	trimmed := strings.TrimSpace(name)
+	if _, alias := registeredLegacyAlias(trimmed); alias {
+		return "", false
+	}
+	msg, became, ok := RetiredGrantRefusal(trimmed)
+	if !ok {
+		return "", false
+	}
+	if len(became) == 1 && IsGrainCIGrant(became[0]) {
+		return msg + ", which no task names: grain grants it to every task on a repository whose CI Mode is \"Use Grain CI\", so leave it off", true
+	}
+	return msg + "; name that instead", true
+}
+
+// RefuseRetiredTaskGrants is the first RetiredTaskGrantRefusal among
+// grants, as an error, or nil when none is a retired bare name.
+func RefuseRetiredTaskGrants(grants []string) error {
+	for _, g := range grants {
+		if msg, ok := RetiredTaskGrantRefusal(g); ok {
+			return errors.New(msg)
+		}
+	}
+	return nil
+}
+
 // RetiredGrantNames is every retired bare capability name
 // RetiredGrantsBecame rewrites, in no particular order.
 func RetiredGrantNames() []string {
@@ -1277,4 +1329,54 @@ func CIAPIScopes() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// CIAPICall is the verified CI API token grant carried in-process on a
+// request forwarded by pkg/capability/ciapi to grain's API server, so every
+// handler -- including non-JSON namespace/log/attachment reads, task/{id}
+// sub-resources, event streams, and template filings -- holds the request to
+// that token's repository and automation principal rather than treating the
+// in-process forward as an unrestricted human operator.
+type CIAPICall struct {
+	ID         string
+	Repo       RepoRef
+	RunID      string
+	Scopes     []APIScope
+	authorized *bool
+}
+
+type ciAPICallContextKey struct{}
+
+// WithCIAPICall attaches call to ctx, with a fresh authorized slot that an
+// upstream server aware of CIAPICall sets via MarkAuthorized once its own
+// repository-scoped gate has admitted the request.
+func WithCIAPICall(ctx context.Context, call CIAPICall) (context.Context, CIAPICall) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	auth := false
+	call.authorized = &auth
+	return context.WithValue(ctx, ciAPICallContextKey{}, call), call
+}
+
+// CIAPICallFromContext returns the CIAPICall on ctx, if any.
+func CIAPICallFromContext(ctx context.Context) (CIAPICall, bool) {
+	if ctx == nil {
+		return CIAPICall{}, false
+	}
+	call, ok := ctx.Value(ciAPICallContextKey{}).(CIAPICall)
+	return call, ok
+}
+
+// MarkAuthorized records that an upstream server's own repository-scoped
+// authorization gate admitted this CI API request.
+func (c CIAPICall) MarkAuthorized() {
+	if c.authorized != nil {
+		*c.authorized = true
+	}
+}
+
+// Authorized reports whether MarkAuthorized was called on this CIAPICall.
+func (c CIAPICall) Authorized() bool {
+	return c.authorized != nil && *c.authorized
 }

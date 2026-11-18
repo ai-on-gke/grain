@@ -394,8 +394,9 @@ func (u *Upgrader) cheapTargetSchema(ctx context.Context, branch, imageRef strin
 	}
 
 	// Cheap OCI manifest + config-blob probe (only fetches tiny JSON metadata,
-	// never image layers) when talking to a real registry.
-	if allowRegistryProbe && (u.Mode() == ModeImage || u.Mode() == ModeKube) && u.cfg.ListTags == nil {
+	// never image layers) when talking to a real registry rather than unit-test
+	// command stubs.
+	if allowRegistryProbe && u.usesRealRegistry() {
 		ref := imageRef
 		if ref == "" && branch != "" {
 			if r, err := u.targetImageRef(branch); err == nil {
@@ -409,6 +410,20 @@ func (u *Upgrader) cheapTargetSchema(ctx context.Context, branch, imageRef strin
 		}
 	}
 	return TargetBuildInfo{}, false
+}
+
+func (u *Upgrader) usesRealRegistry() bool {
+	if u.cfg.ListTags != nil {
+		return false
+	}
+	switch u.Mode() {
+	case ModeImage:
+		return u.cfg.Image != nil && len(u.cfg.Image.PullCmd) == 0 && len(u.cfg.Image.RunCmd) == 0
+	case ModeKube:
+		return u.cfg.Kube != nil
+	default:
+		return false
+	}
 }
 
 func (u *Upgrader) targetImageRef(branch string) (string, error) {

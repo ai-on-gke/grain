@@ -61,7 +61,7 @@ func taskWorld(t *testing.T, observe func(ctx context.Context, store *model.Stor
 	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}
 	task := model.Task{
 		ID: "task-7", Intent: model.IntentImplement,
-		Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: human, Reason: model.ReasonDirect},
 		Title:    "Teach the merge queue to wait",
 		Body:     "It merges before the checks finish.",
 		Approval: &human, Target: &repo, Binding: model.BindingDirective,

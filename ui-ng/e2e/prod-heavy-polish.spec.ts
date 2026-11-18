@@ -298,7 +298,9 @@ test("production-heavy flows: zero API/console errors, quota banner, Workstreams
     const detailGate = new Promise<void>((r) => {
       releaseDetail = r;
     });
-    const detailPattern = (url: URL) => url.pathname === `/api/tasks/${wsId}`;
+    const detailPattern = (url: URL) =>
+      url.pathname === "/api/tasks/summaries" &&
+      (url.searchParams.get("ids")?.split(",").includes(wsId) ?? false);
     await page.route(detailPattern, async (route) => {
       if (released) {
         await route.continue();
@@ -622,10 +624,16 @@ test("heavy Telemetry progressive disclosure stays <2400px tall with grouped quo
   await saveShot(page, "heavy-telemetry-desktop-light");
 
   // Toggle notices, People filter, and Show all.
-  await page.getByTestId("usage-warnings-toggle").click();
-  expect(
-    await page.getByTestId("usage-warnings-banner").locator("li").count(),
-  ).toBe(12);
+  // Expanding is a signal flip and a re-render, which a loaded runner can
+  // land after a one-shot count() has already read the collapsed list:
+  // ui-ng e2e failed twice on 1dd87d1 reading 2 here. Wait for the toggle
+  // to say it has expanded, then for the list to grow.
+  const toggle = page.getByTestId("usage-warnings-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveText("Show fewer");
+  await expect(
+    page.getByTestId("usage-warnings-banner").locator("li"),
+  ).toHaveCount(12);
   const peopleBtn = page.getByTestId("actors-filter-people");
   await peopleBtn.click();
   await expect(peopleBtn).toHaveAttribute("aria-pressed", "true");

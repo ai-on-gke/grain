@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { defineConfig } from "@playwright/test";
+import { gatingGrepInvert } from "./e2e/frozen.js";
 
 // e2e is the one suite in this tree that is not jsdom (vite.config.js's
 // own `test` block, which vitest reads): a real browser, driven by
@@ -41,6 +42,11 @@ export default defineConfig({
   // may assume about each other, not a free one.
   fullyParallel: false,
   retries: 0,
+  // The classic suite is frozen (e2e/README.md): what e2e/QUARANTINE and
+  // e2e/NONGATING list is left out of the gating `ui e2e` job here and
+  // run by e2e/run-frozen.mjs in the non-gating `ui e2e (quarantined)`
+  // one instead, which sets GRAIN_E2E_LANE so this is undefined there.
+  grepInvert: gatingGrepInvert(),
   // "list" everywhere, and on CI the github reporter beside it: it
   // writes each failure out as a workflow annotation, which is the only
   // part of a job an agent -- or anyone without admin on this repository

@@ -14,7 +14,7 @@
 
 import type { Task } from "../api/models";
 import { isMerged, submitBlock } from "../shared/gates";
-import { ago, stateLabel } from "../tasks/task-view";
+import { ago, taskStateLabel } from "../tasks/task-view";
 
 export type InitiatorKind = "user" | "system";
 export type SystemKind =
@@ -151,6 +151,7 @@ export interface Workstream {
   seriesRootIds?: string[];
   paused: boolean;
   planning: boolean;
+  goalMode?: boolean;
   stale: boolean;
   excludeRootFromProgress: boolean;
   createdMs: number;
@@ -251,9 +252,7 @@ function waitsOnHuman(t: Task): boolean {
     (!t.humanApprovedBy ||
       Boolean(t.reviewQuestions) ||
       Boolean(t.reviewFindings?.length) ||
-      Boolean(
-        t.humanReviewHold?.some((h) => h.category === "security-findings"),
-      ))
+      Boolean(t.humanReviewHold?.some((h) => h.source === "security-findings")))
   ) {
     return true;
   }
@@ -724,6 +723,7 @@ function resolveLineage(
 function nodeActivityText(t: Task): string {
   if (t.activity) return t.activity;
   if (t.questionSummary) return t.questionSummary;
+  if (t.noteSummary) return t.noteSummary;
   const block = submitBlock(t);
   if (block) return block;
   return "";
@@ -865,7 +865,7 @@ function buildWorkstream(
             ? "Done"
             : cls.category === "blocked" && t.state === "queued"
               ? "Blocked"
-              : stateLabel(t.state),
+              : taskStateLabel(t),
       activityText: nodeActivityText(t),
       createdMs,
       updatedMs,
@@ -993,6 +993,9 @@ function buildWorkstream(
     crossStreamCount,
     paused,
     planning,
+    goalMode: Boolean(
+      rootTask.goalMode?.enabled || nodes.some((n) => n.task.goalMode?.enabled),
+    ),
     stale,
     excludeRootFromProgress: c.excludeRootFromProgress,
     createdMs: Number.isFinite(createdMs) ? createdMs : lastActivityMs,

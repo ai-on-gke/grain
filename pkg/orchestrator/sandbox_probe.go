@@ -81,6 +81,13 @@ func (k *K8sGranuleSandboxes) AccessMode() string {
 var ErrSandboxProbeUnsupported = errors.New(
 	"sandbox probes need the Kubernetes granule sandbox backend (-k8s-granule-sandboxes), which this daemon is not running")
 
+// CanProbeSandboxes reports whether ProbeSandbox can build a sandbox on
+// s, rather than answer ErrSandboxProbeUnsupported.
+func CanProbeSandboxes(s Sandboxes) bool {
+	_, ok := s.(sandboxProber)
+	return ok
+}
+
 // SandboxProbeDeps is what a probe is built and paid for through: the
 // same backend, admission ledger and usage meter every other sandbox this
 // deployment builds goes through, so a probe can neither overcommit the

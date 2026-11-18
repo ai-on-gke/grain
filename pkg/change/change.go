@@ -119,8 +119,10 @@ type Person struct{ Name string }
 
 // Result is a Submit's outcome.
 type Result struct {
-	Target  string
-	Message string
+	// Snapshot is the exact submitted snapshot when the provider returns it.
+	Snapshot int
+	Target   string
+	Message  string
 }
 
 // SyncResult is a Sync's outcome.
@@ -162,7 +164,7 @@ type OpenRequest struct {
 // spec §4.6).
 func VerifiedRequester(task model.Task) string {
 	creator := strings.TrimSpace(task.Creator)
-	filer := task.Origin.Attribution.Actor
+	filer := task.Filing.Attribution.Actor
 	if creator == "" || !filer.Verified() || !strings.EqualFold(creator, strings.TrimSpace(filer.ID)) {
 		return ""
 	}

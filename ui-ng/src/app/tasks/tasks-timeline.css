@@ -113,7 +113,15 @@
     flex: 1 1 calc(100% - 130px);
     min-width: 150px;
   }
-  g-tasks-page .tasks-list-pane .approval-row .row-actions {
+  /* A backlog row also carries the 28px drag handle before the checkbox
+     and status pill, so 130px pushed .row-main onto a second line and
+     left the ⋮ menu alone at the far-left edge, where its right-aligned
+     popup opened off-screen underneath the rail. */
+  g-tasks-page .tasks-list-pane .backlog-row .row-main {
+    flex-basis: calc(100% - 165px);
+  }
+  g-tasks-page .tasks-list-pane .approval-row .row-actions,
+  g-tasks-page .tasks-list-pane .backlog-row .row-menu-wrap {
     margin-left: auto;
   }
 }
@@ -196,11 +204,20 @@
 .boards-menu.pop-menu .boards-menu-row .board-apply-btn {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
   border-radius: 6px;
   padding: 7px 10px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The name gives way first, so a long one ellipsizes and leaves its
+   folder and the classic-page hint on screen. */
+.boards-menu.pop-menu .boards-menu-row .board-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* A board's folder, after its name: what tells two same-named boards
@@ -208,6 +225,7 @@
 .boards-menu.pop-menu .boards-menu-row .board-folder {
   margin-left: 6px;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .boards-menu.pop-menu .boards-menu-row .board-del-btn {
@@ -231,6 +249,12 @@
   height: 1px;
   margin: 4px 0;
   background: var(--md-sys-color-outline-variant);
+}
+
+.boards-menu.pop-menu .boards-load-error {
+  color: var(--md-sys-color-error);
+  max-width: 300px;
+  white-space: normal;
 }
 
 .board-save-bar {
