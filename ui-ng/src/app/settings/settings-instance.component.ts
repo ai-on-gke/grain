@@ -1186,8 +1186,13 @@ function formatBytes(bytes: number): string {
             <div class="s-banner warn" data-testid="scheduled-upgrade-banner">
               <span
                 >Upgrade scheduled (waiting for running tasks):
-                {{ scheduledUpgradeBranch() }}</span
-              >
+                {{ scheduledUpgradeBranch() }}
+                @if (scheduledUpgradeCountError()) {
+                  <br /><span data-testid="scheduled-upgrade-count-error">{{
+                    scheduledUpgradeCountError()
+                  }}</span>
+                }
+              </span>
               <button
                 type="button"
                 class="s-btn-danger s-btn-sm"
@@ -1540,6 +1545,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected readonly activeUpgradeState = signal("");
   protected readonly upgradeCancellable = signal(false);
   protected readonly scheduledUpgradeBranch = signal("");
+  protected readonly scheduledUpgradeCountError = signal("");
   protected readonly upgradeTargets = signal<UpgradeTargetRow[]>([]);
   protected readonly selectedUpgradeBranch = signal("latest");
   protected readonly afterTasksFinish = signal(true);
@@ -2046,16 +2052,28 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     this.managementUrl.set(safeManagementUrl(u["managementUrl"]));
 
     const scheduled = u["scheduled"] as
-      { branch?: string; requestedBy?: string } | undefined | null;
+      | { branch?: string; requestedBy?: string; countError?: string }
+      | undefined
+      | null;
     this.scheduledUpgradeBranch.set(
       scheduled ? String(scheduled.branch || "latest") : "",
+    );
+    // Set when the daemon could not count the runs the schedule waits on:
+    // the queue is held and the upgrade will not start until it can.
+    this.scheduledUpgradeCountError.set(
+      scheduled && typeof scheduled.countError === "string"
+        ? scheduled.countError
+        : "",
     );
 
     const phase = typeof u["phase"] === "string" ? u["phase"] : "";
     const cancellable = Boolean(u["cancellable"]);
     this.upgradeCancellable.set(cancellable);
+    // "ok" is the phase pkg/upgrade leaves a finished upgrade in (and
+    // keeps across the restart), so it is no upgrade "in progress".
     const terminalPhases = new Set([
       "",
+      "ok",
       "idle",
       "none",
       "done",

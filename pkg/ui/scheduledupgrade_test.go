@@ -47,6 +47,7 @@ type scheduledUpgradeResponse struct {
 	ByID        string    `json:"byId"`
 	BusyRuns    int       `json:"busyRuns"`
 	BusyCIRuns  int       `json:"busyCiRuns"`
+	CountError  string    `json:"countError"`
 }
 
 type upgradeWithScheduleResponse struct {
@@ -132,6 +133,41 @@ func TestSchedulingAnUpgradeStartsNothingAndIsReportedBack(t *testing.T) {
 	if polled := decode[upgradeWithScheduleResponse](t, rec); polled.Scheduled == nil ||
 		polled.Scheduled.Branch != "grain/task-156" {
 		t.Fatalf("GET reports %+v", polled.Scheduled)
+	}
+}
+
+// TestAScheduledUpgradeSaysWhenItsRunsCannotBeCounted: when the store
+// cannot count the busy runs, the reconciler holds the queue and never
+// starts the upgrade -- and GET /api/upgrade used to report that as
+// "busyRuns": 0, so the pane and `grain upgrade status` read "waiting on
+// 0 active run(s)" over a schedule going nowhere
+// (docs/test-runs/2026-11-18-upgrade-scheduled-cancel.md F8). The
+// response now says the counts could not be read.
+func TestAScheduledUpgradeSaysWhenItsRunsCannotBeCounted(t *testing.T) {
+	t.Parallel()
+	srv, store := serverAndStoreWithUpgrader(t, &fakeUpgrader{})
+	if code, _ := scheduleUpgrade(t, srv, "main"); code != http.StatusAccepted {
+		t.Fatalf("schedule = %d, want 202", code)
+	}
+	rec := do(t, srv, http.MethodGet, "/api/upgrade", "")
+	if got := decode[upgradeWithScheduleResponse](t, rec); got.Scheduled == nil || got.Scheduled.CountError != "" {
+		t.Fatalf("before breaking the count, scheduled = %+v, want no count error", got.Scheduled)
+	}
+	if _, err := store.DB().ExecContext(t.Context(), "DROP TABLE `task_run`"); err != nil {
+		t.Fatalf("breaking the busy run count: %v", err)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/upgrade", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET = %d: %s", rec.Code, rec.Body)
+	}
+	got := decode[upgradeWithScheduleResponse](t, rec)
+	if got.Scheduled == nil {
+		t.Fatal("the schedule vanished from the status when its runs could not be counted")
+	}
+	if !strings.Contains(got.Scheduled.CountError, "runs in flight could not be counted") ||
+		!strings.Contains(got.Scheduled.CountError, "queue stays held") {
+		t.Errorf("countError = %q, want it to say the runs could not be counted and the queue is held",
+			got.Scheduled.CountError)
 	}
 }
 
