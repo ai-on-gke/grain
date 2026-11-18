@@ -21,7 +21,12 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { scopeOf } from "../shared/scope";
-import { ciChip, repoShort } from "../shared/chips";
+import {
+  type QaWorkflowChip,
+  ciChip,
+  qaWorkflowChip,
+  repoShort,
+} from "../shared/chips";
 import { withDetailGates } from "../shared/gates";
 import { TipDirective } from "../shared/tip.directive";
 import {
@@ -79,13 +84,6 @@ import {
 import { InboxStore } from "./inbox.store";
 import { replyRefusal, whyGone } from "./departure";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
-
-function qaTriageChip(t: Task): string | null {
-  const hr = t.humanReviewHold?.find((h) => h.source === "qa-triage");
-  if (!hr) return null;
-  const m = hr.reason?.match(/\[(T[0-3])\b/);
-  return m ? `[${m[1]} · Review]` : "[T2 · Review]";
-}
 
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: "all", label: "All" },
@@ -472,13 +470,18 @@ const ONE_KEY = new Set(["approve"]);
                                     >{{ c.text }}</span
                                   >
                                 }
-                                @if (e.task && qaTriageChip(e.task); as qc) {
+                                @if (qaChipsByKey().get(e.key); as qc) {
                                   <span
-                                    class="gate-chip"
-                                    style="margin-left: 6px; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: var(--md-sys-color-surface-container-high);"
-                                    data-testid="row-qa-triage"
+                                    [class]="'ci-chip ' + qc.tone"
+                                    [attr.data-testid]="
+                                      qc.triageHold
+                                        ? 'row-qa-triage'
+                                        : 'row-qa-chip'
+                                    "
+                                    [attr.data-qa-flow]="qc.flowId"
+                                    [gTip]="qc.tip"
                                   >
-                                    {{ qc }}
+                                    {{ qc.text }}
                                   </span>
                                 }
                                 @if (e.gone) {
@@ -1346,9 +1349,19 @@ const ONE_KEY = new Set(["approve"]);
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
-  protected readonly qaTriageChip = qaTriageChip;
-
   protected readonly store = inject(InboxStore);
+  protected readonly qaChipsByKey = computed<
+    ReadonlyMap<string, QaWorkflowChip>
+  >(() => {
+    const map = new Map<string, QaWorkflowChip>();
+    for (const grp of this.store.groups()) {
+      for (const entry of grp.entries) {
+        const chip = qaWorkflowChip(entry.task);
+        if (chip) map.set(entry.key, chip);
+      }
+    }
+    return map;
+  });
   protected readonly actionErrorShown = computed(() => {
     const err = this.store.actionError();
     return err && err !== this.store.loadError() ? err : null;

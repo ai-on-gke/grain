@@ -24,6 +24,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +74,37 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 	if !c.observesGates(id) {
 		return nil, nil
 	}
+	// Apply resource scopes independently of task visibility, including for
+	// cached/history evidence collected by a more privileged reader.
+	allows := func(scope APIScope, repo string) bool {
+		if call, ok := agentCallFromContext(ctx); ok {
+			return call.grants.Allows(scope, repo)
+		}
+		if role := accessRoleFromContext(ctx); role != nil {
+			return role.allows(scope, repo)
+		}
+		return true // existing trusted in-process/loopback/access-code ceiling
+	}
+	authorizationFence := gates.Digest("trusted internal health read ceiling")
+	if call, ok := agentCallFromContext(ctx); ok {
+		authorizationFence = gates.Digest(grantListFromSet(call.grants))
+	}
+	if role := accessRoleFromContext(ctx); role != nil {
+		authorizationFence = gates.Digest(struct {
+			Grants []string
+			Deny   map[APIScope]bool
+			Full   bool
+		}{role.grants, role.deny, role.Full})
+	}
+	authorizationRevision, _ := strconv.ParseUint(authorizationFence[7:23], 16, 64)
+	authorizationRevision &= (1 << 53) - 1 // canonical JSON-safe opaque scope fence
+
+	resource := func(repo string) bool { return allows("ci:read", repo) && allows("repos:read", repo) }
+	access := model.GateHealthAccess{AuthorizationRevision: authorizationRevision, Repository: resource,
+		PublicationRepository: func(repo string) bool { return resource(repo) && allows("releases:read", repo) },
+		PipelineRepository:    func(repo string) bool { return resource(repo) && allows("tasks:read", repo) },
+		DeploymentWide:        allows("deployment:read", "") && allows("tasks:read", "") && allows("ci:read", "") && allows("repos:read", "")}
+	access.ScopeLimited = !(access.DeploymentWide && access.PublicationRepository(""))
 	// A failed diagnostic never becomes a failed ordinary task read.
 	collectCtx, cancel := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 3*time.Second)
 	defer cancel()
@@ -87,41 +119,50 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		return permitted
 	}
 	now := c.now()
-	backoffCtx, stopBackoff := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 50*time.Millisecond)
-	cached, history, cacheErr := c.Store.GateObservationRetry(backoffCtx, id, now, !taskReadScopedForContext(ctx))
-	stopBackoff()
-	if cacheErr == nil && cached != nil {
-		c.redactGateHistoryScopes(collectCtx, id, cached, history)
-		if !observationVisible(ctx, cached, canReadTask) {
-			return nil, nil
+	goalCtx, stopGoal := context.WithTimeout(collectCtx, 50*time.Millisecond)
+	goal, err := c.Store.TaskGoal(goalCtx, id)
+	stopGoal()
+	healthProjection := goal != nil && slices.Contains([]model.GoalKind{model.GoalBaseGreen, model.GoalNightlyGreen, model.GoalPipelineHealthy}, goal.Kind)
+	var fence string
+	var checks []gates.ChecksFacts
+	checksDenied := false
+	if err == nil && !healthProjection {
+		backoffCtx, stopBackoff := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 50*time.Millisecond)
+		cached, history, cacheErr := c.Store.GateObservationRetry(backoffCtx, id, now, !taskReadScopedForContext(ctx), access)
+		stopBackoff()
+		if cacheErr == nil && cached != nil {
+			c.redactGateHistoryScopes(collectCtx, id, cached, history)
+			if !observationVisible(ctx, cached, canReadTask) {
+				return nil, nil
+			}
+			if history != nil {
+				for _, sample := range history.History {
+					if !observationVisible(ctx, &sample.View, canReadTask) {
+						return nil, nil
+					}
+				}
+			}
+			return cached, history
 		}
-		if history != nil {
-			for _, sample := range history.History {
-				if !observationVisible(ctx, &sample.View, canReadTask) {
-					return nil, nil
+		// Domain reads happen before acquiring the diagnostic writer lock.
+		fence, checks, err = c.collectGateChecks(collectCtx, id, now)
+		if err == nil {
+			for _, f := range checks {
+				for _, source := range f.Sources {
+					if source.Error {
+						err = fmt.Errorf("CI observation source unavailable")
+					}
 				}
 			}
 		}
-		return cached, history
-	}
-	// Domain reads happen before acquiring the diagnostic writer lock.
-	fence, checks, err := c.collectGateChecks(collectCtx, id, now)
-	if err == nil {
-		for _, f := range checks {
-			for _, source := range f.Sources {
-				if source.Error {
-					err = fmt.Errorf("CI observation source unavailable")
-				}
-			}
+		checksDenied = errors.Is(err, errGateCheckDenied)
+		if checksDenied {
+			// CI read authority is independent of the already authorized local
+			// report/review projection. Do not read or display any CI source.
+			fence, checks, err = "", nil, nil
 		}
 	}
-	checksDenied := errors.Is(err, errGateCheckDenied)
-	if checksDenied {
-		// CI read authority is independent of the already authorized local
-		// report/review projection. Do not read or display any CI source.
-		fence, checks, err = "", nil, nil
-	}
-	readCtx, stopRead := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 250*time.Millisecond)
+	readCtx, stopRead := context.WithTimeout(model.WithGateHealthAccess(model.WithExternalRefReadable(ctx, readable), access), 250*time.Millisecond)
 	defer stopRead()
 	var v *gates.ObservationView
 	var d *model.GateObservationDiagnostics
@@ -133,7 +174,7 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 		}
 	}
 	if err == nil {
-		c.redactGateHistoryScopes(collectCtx, id, v, d)
+		c.redactGateHistoryScopes(readCtx, id, v, d)
 		if !observationVisible(ctx, v, canReadTask) {
 			return nil, nil
 		}
@@ -151,7 +192,7 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 	}
 	// No raw database errors, comment bodies, principals or credentials escape.
 	unavailableChecks := []gates.ChecksFacts{}
-	if !checksDenied {
+	if !checksDenied && !healthProjection {
 		for _, subject := range model.CheckSubjects(task) {
 			if len(unavailableChecks) < 8 {
 				unavailableChecks = append(unavailableChecks, gates.ChecksFacts{TaskID: id, Subject: subject})
@@ -164,7 +205,7 @@ func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.
 	// own 250ms budget expired. Never delay an already canceled request.
 	if ctx.Err() == nil {
 		failureCtx, stop := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 50*time.Millisecond)
-		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v)
+		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v, access)
 		stop()
 	}
 	if !observationVisible(ctx, v, canReadTask) {
@@ -190,6 +231,9 @@ func observationVisible(ctx context.Context, v *gates.ObservationView, relatedRe
 		return readable(s.Repository)
 	}
 	for _, b := range v.Bindings {
+		if isHealthObservationType(b.Type) {
+			continue
+		}
 		if !subject(b.Subject) {
 			return false
 		}
@@ -198,6 +242,9 @@ func observationVisible(ctx context.Context, v *gates.ObservationView, relatedRe
 		}
 	}
 	for _, r := range v.Results {
+		if isHealthObservationType(r.Result.Type) {
+			continue
+		}
 		for _, e := range r.Result.Evidence {
 			if !subject(e.Subject) {
 				return false
@@ -336,4 +383,8 @@ func (c *Client) redactGateHistoryScopes(ctx context.Context, parentID string, v
 			redact(&d.History[i].View)
 		}
 	}
+}
+
+func isHealthObservationType(typ string) bool {
+	return typ == "base_health" || typ == "nightly_health" || typ == "publishing_health" || typ == "pipeline_health"
 }

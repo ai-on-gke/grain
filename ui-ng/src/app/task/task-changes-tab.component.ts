@@ -708,6 +708,8 @@ import { TaskStore } from "./task.store";
   `,
 })
 export class TaskChangesTabComponent {
+  protected readonly qaStageTooltip = qaStageTooltip;
+
   protected readonly qaSummaryStats = computed<{
     complexityTier?: string;
     blastTier?: string;
@@ -716,15 +718,27 @@ export class TaskChangesTabComponent {
     repairedInNextSha?: number;
   } | null>(() => {
     const runs = this.visibleQaCheckRuns();
+    const qaSummary = this.task().qaSummary;
+    const assignedComplexityTier = this.taskQa()?.assignment?.complexityTier;
     const withTiers = runs.find((x) => x.complexityTier || x.blastTier);
     const withTriage = runs.find((x) => x.triageDecision);
     const withRepair = runs.find((x) => x.repairedInNextSha === 1);
-    if (!withTiers && !withTriage && !withRepair) return null;
+    const complexityTier =
+      withTiers?.complexityTier ||
+      assignedComplexityTier ||
+      qaSummary?.complexityTier;
+    const blastTier = withTiers?.blastTier || qaSummary?.blastTier;
+    const blastScore = withTiers?.blastScore ?? qaSummary?.blastScore;
+    const triageDecision =
+      withTriage?.triageDecision || qaSummary?.triageDecision;
+    if (!complexityTier && !blastTier && !triageDecision && !withRepair) {
+      return null;
+    }
     return {
-      complexityTier: withTiers?.complexityTier,
-      blastTier: withTiers?.blastTier,
-      blastScore: withTiers?.blastScore,
-      triageDecision: withTriage?.triageDecision,
+      complexityTier,
+      blastTier,
+      blastScore,
+      triageDecision,
       repairedInNextSha: withRepair?.repairedInNextSha,
     };
   });
@@ -1035,16 +1049,6 @@ export class TaskChangesTabComponent {
     if (f.severity === "info") return "neutral";
     if (this.isShadowFinding(f) || f.severity === "warning") return "proposal";
     return "error";
-  }
-
-  protected qaStageTooltip(stage: string): string {
-    if (stage === "S3") {
-      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
-    }
-    if (stage === "S4") {
-      return "Stage S4 — 1-round fresh-context orthogonal diff verifier on T2/T3 changes";
-    }
-    return `Quality stage ${stage}`;
   }
 
   protected toggleQaEvidence(id: number): void {
@@ -1360,5 +1364,26 @@ export class TaskChangesTabComponent {
       this.snackbar.show(`Changelist ${name} requested for #${t.id}`);
       this.acted.emit();
     }
+  }
+}
+
+function qaStageTooltip(stage: string): string {
+  switch (stage) {
+    case "S0":
+      return "Stage S0 — pre-clone EARS acceptance criteria & ambiguity extraction";
+    case "S0b":
+      return "Stage S0b — complexity-gated slice plan or wave-ordered Workstream DAG decomposition";
+    case "S1":
+      return "Stage S1 — repository context & sibling importer discovery";
+    case "S2":
+      return "Stage S2 — fresh-context pre-edit plan critique";
+    case "S3":
+      return "Stage S3 — fast deterministic AST & diff gate run before pull request creation";
+    case "S4":
+      return "Stage S4 — 1-round fresh-context orthogonal diff verifier";
+    case "S5":
+      return "Stage S5 — blast-tier scorecard & merge triage classification";
+    default:
+      return `Quality stage ${stage}`;
   }
 }

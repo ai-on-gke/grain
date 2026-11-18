@@ -90,6 +90,16 @@ export interface DispatchCondition {
   check?: boolean | string;
 }
 
+// InstallNotice is pkg/ui/install_notice.go's InstallNotice.
+export interface InstallNotice {
+  kind: string;
+  message: string;
+  command?: string;
+  signals?: string[];
+  affectedClis?: string[];
+  docsUrl?: string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
@@ -99,6 +109,11 @@ export interface GrainConfig {
   configRepo?: string;
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
+  // installNotice is something about how this deployment is installed
+  // that only its operator can fix -- today a host-mode install no
+  // installer has migrated (pkg/ui/install_notice.go). The shell shows
+  // it as a standing banner until the install is migrated.
+  installNotice?: InstallNotice | null;
   capabilities?: CapabilityOption[];
   // ciCapabilities is what can be granted to a repository's CI jobs
   // (the repo page's CI capabilities card).
@@ -270,6 +285,19 @@ export interface GoalScorecard {
   updatedAt?: string;
 }
 
+export interface TaskQASummary {
+  readonly flowId: string;
+  readonly flowLabel?: string;
+  readonly arm: string;
+  readonly complexityTier?: string;
+  readonly blastTier?: string;
+  readonly blastScore?: number;
+  readonly triageDecision?: string;
+  readonly verdict?: string;
+  readonly stageCount?: number;
+  readonly pending?: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -430,6 +458,7 @@ export interface Task {
   // is on the queue; its control (Retry merge on merge_failed) stands in
   // when the task's own sub-case names none.
   mergeQueueReason?: { reason: string; class?: string; control?: string };
+  readonly qaSummary?: TaskQASummary | null;
 }
 
 export type MergeGateState =
@@ -757,6 +786,8 @@ export interface GateObservations {
       kind: string;
       authority?: string;
       repository?: string;
+      ref?: string;
+      task_id?: string;
       change_kind?: string;
       id?: string;
     };

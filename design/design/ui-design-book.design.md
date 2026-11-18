@@ -182,8 +182,15 @@ do not pull in an icon font.
   timezone with relative countdowns. A page that changes the pause itself
   (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
   so the banner follows the click rather than the next poll.
-- **Disconnected banner:** the one standing banner above the whole shell
-  (`services/connection.service.ts`). It is raised when requests fail to
+- **Install notice:** `/api/config`'s `installNotice` (an unmigrated
+  host-mode install) is the other standing banner above the shell
+  (`.install-banner`, error colours, `role="status"`, no close button). It
+  says what is wrong, the CLIs that cannot run until then and links the
+  migration docs. It sits in flow above the rail like the disconnected banner,
+  and Settings → Upgrade shows the same notice in full with the command to
+  run.
+- **Disconnected banner:** the standing banner for a daemon that is not
+  answering (`services/connection.service.ts`). It is raised when requests fail to
   connect, when a gateway answers 502/503/504, or when a polled read goes
   10 s unanswered. It says when the outage began, in the deployment's time
   zone, and clears itself on the first answer. It sits in flow above the
@@ -920,7 +927,7 @@ The **Telemetry Cards** (`/next/telemetry?tab=quality`) adds three new compact e
 - A **Stage Funnel & Cost Attribution** ops-card, measuring `p95 latency`, `runs`, and `tokensMedian` per stage and arm.
 - A **Human-Review Triage (S5)** ops-card highlighting escape rates, human-routed precision, and reviews saved.
 
-The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage chip natively in queue rows (via `qaTriageChip()`), reducing UI noise while ensuring safety-critical `qa-triage` tasks are immediately identifiable in `<span class="row-line3">`. The Task Changes tab also explicitly flags `Complexity` and `Blast` tiers.
+The **Inbox, Tasks, Workstreams, and Task Detail views** surface a compact workflow and classifier chip via `qaWorkflowChip()` (`shared/chips.ts`), displaying the active workflow family (`Standard`, `Fast`, `Gates only`, or `Control`) alongside complexity (`Low`, `Med`, `High`), blast tier (`T0`–`T3`), or triage review state (`T2 Review`, `Held`). In Task Detail (`[data-testid="task-qa-chip"]`), the chip links directly to `/next/processes/quality?flow=<flowId>`. The Task Changes tab displays `Complexity`, `Blast`, and `Triage` summary pills (`[data-testid="qa-summary-stats"]`) together with recorded stage runs across `S0`–`S5`.
 
 ## 13. V4 Software Workflow & QA Studio, Tab-Strip Underline, & Full-Width Composition Body Well
 
@@ -937,7 +944,7 @@ The **Inbox & Tasks views** now integrate a compact `[T2/T3 · Review]` triage c
    - At `@container wf-studio (max-width: 1179.95px)` (covering `1024×860` and `1280px` when the Director drawer is open), the left catalog collapses into the center header's `<g-pill-select align="left" testid="qa-flow-switcher">`, leaving 2 columns (`Stage Spine | Focused Drawer`) with compact `padding-inline: 8px; font-size: 13px` inspector tabs that never clip on `340px` panes. At `@media (max-width: 599.95px)` (`390×844`), navigation uses a 3-step progressive view: Step 1 single-column catalog (`Workflows (N)`), Step 2 stage spine with `← Back` (`[data-testid="qa-mobile-back"]`), and Step 3 full-screen substep/guide drawer with `← Back to stages` (`[data-testid="qa-mobile-back-stages"]`).
    - Published workflow versions open in **Read-Only Inspect Mode** with zero disabled form controls, `[gMarkdown]` rendering on read-only prompt guidance, an explicit **`Customize as v1 override`** (when only a built-in `@v1` exists) or **`Customize as vN`** CTA (`[data-testid="qa-new-version-btn"]`), and version/hash-aware **`Set as default…`** (`[data-testid="qa-set-default-btn"]`). Entering Draft Mode enables unsaved-draft navigation guards (`[data-qa-unsaved-draft="true"]`, `beforeunload`, and `<g-confirm-dialog>`) and swaps header actions to `Test on recent PRs ▾` (`qa-dry-run-btn`, `qa-v3-open-probe`), `Discard draft` (`qa-cancel-edit-btn`), `Publish vN` (`qa-publish-version-btn`), and `⋯` (`qa-more-actions-btn`).
    - All 8 lifecycle stages start collapsed by default (`[data-testid="qa-expand-all-stages"]`), partial read-only workflows summarize skipped stages in `[data-testid="qa-toggle-skipped-stages"]`, and custom checks validate via zero-JSON single-line examples (`pattern`) or auto-synthesized fixtures (`companion`, `diff-budget`) with live `Caught` / `Allowed` status pills.
-   - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus active/built-in flows such as `engineering-workflow-v4@1`, `golden-v3-enforced@1`, `golden-v3@1`, `golden-v2@1`), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
+   - Operator-owned Schedule, Template, and Suite create/edit drawers include a **`Software workflow`** `<g-pill-select>` picker (`[data-testid="process-qa-flow-select"]`) populated from `GET /api/qa/flow-versions` (defaulting to `Deployment default` plus the 3 canonical built-in workflows `standard-workflow@1`, `fast-baseline@1`, and `gates-only@1` alongside any active custom versions), persisting `qaFlowRef` and displaying a `Workflow: <qaFlowRef>` badge (`[data-testid="process-qa-flow-badge"]`) in the detail header when set.
 
 ## 14. Autonomous Goal Mode
 

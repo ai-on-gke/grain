@@ -284,3 +284,37 @@ describe("review and approval shadow scopes", () => {
     fixture.destroy();
   });
 });
+
+describe("health shadow profiles", () => {
+  it("compares labeled legacy and current profiles without remediation controls", async () => {
+    await TestBed.configureTestingModule({
+      imports: [TaskObservationsComponent],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(TaskObservationsComponent);
+    const data = view();
+    data.bindings[0].type = "base_health";
+    data.bindings[0].config = {
+      semantics: "legacy_recorded_v1",
+      allow_nonreproduction: true,
+    };
+    data.results[0].result.type = "base_health";
+    data.results[0].result.summary =
+      "Legacy observation profile legacy_recorded_v1: the base verdict is successful.";
+    const current = structuredClone(data.results[0]);
+    current.evaluation_id = "shadow-current";
+    current.result.status = "unknown";
+    current.result.summary =
+      "Current profile current_tip_v1: the recorded verdict is for an older base tip.";
+    data.results.push(current);
+    fixture.componentRef.setInput("observations", data);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain("Shadow predictions");
+    expect(el.textContent).toContain(
+      "Legacy observation profile legacy_recorded_v1",
+    );
+    expect(el.textContent).toContain("older base tip");
+    expect(el.textContent).toContain("no operational effects");
+    expect(el.querySelectorAll("button,a,input,form").length).toBe(0);
+  });
+});

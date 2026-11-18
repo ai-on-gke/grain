@@ -39,6 +39,18 @@ var childrenSchema []byte
 //go:embed acknowledgment.schema.json
 var acknowledgmentSchema []byte
 
+//go:embed base_health.schema.json
+var baseHealthSchema []byte
+
+//go:embed nightly_health.schema.json
+var nightlyHealthSchema []byte
+
+//go:embed publishing_health.schema.json
+var publishingHealthSchema []byte
+
+//go:embed pipeline_health.schema.json
+var pipelineHealthSchema []byte
+
 //go:embed checks.schema.json
 var checksSchema []byte
 
@@ -48,7 +60,7 @@ var reviewSchema []byte
 //go:embed approval.schema.json
 var approvalSchema []byte
 
-const Implementation = "builtin-outcome-ci-review-observer-v1"
+const Implementation = "builtin-task-observer-v7"
 
 type Descriptor struct {
 	Type           string
@@ -60,7 +72,7 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return []Descriptor{{"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"integration", 1, Digest(json.RawMessage(integrationSchema)), append([]byte(nil), integrationSchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}, {"children", 1, Digest(json.RawMessage(childrenSchema)), append([]byte(nil), childrenSchema...), Implementation}}
+	return append(healthDescriptors(), []Descriptor{{"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"integration", 1, Digest(json.RawMessage(integrationSchema)), append([]byte(nil), integrationSchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}, {"children", 1, Digest(json.RawMessage(childrenSchema)), append([]byte(nil), childrenSchema...), Implementation}}...)
 }
 
 var registryDigest = sync.OnceValue(func() string { return Digest(Discover()) })
@@ -93,6 +105,14 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		allowedKeys = map[string]bool{"requirement_ids": true, "semantics": true}
 	case "acknowledgment":
 		allowedKeys = map[string]bool{"mode": true}
+	case "base_health":
+		allowedKeys = map[string]bool{"semantics": true, "allow_nonreproduction": true}
+	case "nightly_health":
+		allowedKeys = map[string]bool{"workflow": true, "since": true, "window_seconds": true, "semantics": true}
+	case "publishing_health":
+		allowedKeys = map[string]bool{"semantics": true, "expected_commit": true}
+	case "pipeline_health":
+		allowedKeys = map[string]bool{"semantics": true, "repos": true}
 	default:
 		return nil, fmt.Errorf("unregistered gate type")
 	}
@@ -128,6 +148,12 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	}
 	if _, err = d.Token(); err != io.EOF {
 		return nil, fmt.Errorf("trailing config data")
+	}
+	if isHealthType(typ) {
+		if len(keys) != len(allowedKeys) {
+			return nil, fmt.Errorf("all config fields are required")
+		}
+		return validateHealth(typ, raw)
 	}
 	decode := func(v any) error {
 		dec := json.NewDecoder(bytes.NewReader(raw))
@@ -232,6 +258,7 @@ func oneOf(s string, values ...string) bool {
 // Facts contains only the scoped reader's immutable evidence, never private
 // evaluator state. CompleteEmpty is meaningful: no report is not success.
 type Facts struct {
+	Health          map[string]HealthFacts
 	LegacyMet       map[string]bool
 	Bindings        []Binding
 	Product         string
@@ -281,6 +308,9 @@ func BindingsFor(taskID string, checks []ChecksFacts) []Binding {
 // Evaluate is pure. Predictions are text and inert wait descriptors; work and
 // actions are always empty. The controller alone accepts diagnostic versions.
 func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
+	if isHealthType(b.Type) {
+		return evaluateHealth(b, f, now, generation)
+	}
 	if b.Type == "checks" {
 		for _, c := range f.Checks {
 			if c.Subject == b.Subject {
@@ -388,12 +418,16 @@ func UnavailableObservation(taskID string, now time.Time, checks ...ChecksFacts)
 	return UnavailableObservationForBindings(taskID, now, BindingsFor(taskID, checks))
 }
 
-// UnavailableObservationForBindings preserves only validated scope descriptions.
-// It never reuses evidence or accepted predictions.
+// UnavailableObservationForBindings retains only a validated diagnostic scope,
+// never accepted evidence or operational predictions.
 func UnavailableObservationForBindings(taskID string, now time.Time, bindings []Binding) ObservationView {
 	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: bindings, Results: []EvaluationState{}, Dirty: true}
-	for _, b := range v.Bindings {
-		r := Evaluate(b, Facts{TaskID: taskID, ObservedAt: now, ValidUntil: now, SourceVersion: Implementation}, now, 0)
+	for _, b := range bindings {
+		f := Facts{TaskID: taskID, ObservedAt: now, ValidUntil: now, SourceVersion: Implementation}
+		if isHealthType(b.Type) {
+			f.Health = map[string]HealthFacts{b.ID: {Version: Implementation, ObservedAt: now, ValidUntil: now}}
+		}
+		r := Evaluate(b, f, now, 0)
 		r.Status = "error"
 		r.Summary = "Observation collection unavailable; legacy behavior is unaffected."
 		r.Error = &EvaluationError{Code: "unavailable", Message: "Diagnostic read failed or timed out.", Retryable: true}

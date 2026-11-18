@@ -23,9 +23,10 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 
 ## Runtime observation coverage
 
-Task #61 (PR #1739), Task #64 (PR #1803), Task #65, Task #66 and Task #67 extend the existing
+Task #61 (PR #1739), Task #64 (PR #1803), Task #65, Task #66, Task #67 and Task #68 extend the existing
 registry, preserving the canonical v1 schemas. All attachments remain nonrequired
 monitors with legacy authority and every effect/cutover flag false.
+Eleven of the twelve canonical types are registered.
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
@@ -34,13 +35,22 @@ monitors with legacy authority and every effect/cutover flag false.
 | `integration`, `positive_v1` | Current PR from complete links and exact-head merge receipt, or every scoped CL/snapshot with canonical renumbering. Positive landed/empty equivalence requires pinned proof. Missing snapshots, denied/stale/incomplete data are unknown. |
 | `children`, explicit success/closed/merged | Only selected IDs or a labeled existing tasks-closed goal. Missing/private children and unknown legacy success stay unknown; failure/cancel does not satisfy success. Reopen/message/relation revisions invalidate, and bounded cycle diagnostics never modify waits. |
 | `checks` v1, `current_v1` and explicitly imported `legacy_ci_v1` | Nonrequired change monitors; typed effective/github/grain/both/provider/none modes, inherited/extra required identities, complete bounded exact-head CI collections and base-owned definitions. Legacy empty-clock, recorded Grain status/narrowing and budget-exception comparisons are explicitly labeled. Merge context remains separate and inert. See [CI checks coverage](../../../docs/gate-check-observations.md). |
+| `base_health` v1, `legacy_recorded_v1` / `current_tip_v1` | Existing base-green goals only. Legacy recorded-row predicate; current additionally pins collector tip, source row, CI policy and complete Grain plan, including authentic exact-commit noncached confirmation coverage. Unsupported/missing source proof stays unknown. |
+| `nightly_health` v1, `legacy_500_v1`, `legacy_verified_push_v1` / `window_v1` | Existing nightly-green goals only. Preserve newest-500 case-insensitive default-like/RC selection and saved verified-push goal disposition. Current requires same-repository branch event, exact workflow/ref/head/run attempt, counted complete raw jobs and declaration/24-hour window. Idle-skipped/cancelled newest runs cannot establish health. |
+| `publishing_health` v1, `legacy_no_finding_v1` / `positive_current_v1` | Optional publishing portion of existing base-green goals. Legacy calls the actual configured BaseBranchPublishingOf thresholds and preserves absent-row/no-finding behavior. Current receipt predicate is implemented; existing release collectors lack complete target/commit/artifact publication receipts, so runtime positive publication remains explained unknown. |
+| `pipeline_health` v1, `legacy_quiet_v1` / `scoped_v1` | Existing pipeline-healthy goals only. Explicit deployment read ceiling for legacy broad scan; current SQL-scoped notifications/tasks/queue plus configured managed refs and complete current base proofs. Missing expected repository/ref sets, visibility gaps and truncated scans stay unknown. Paused/self exclusions are preserved. |
 | `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
 | `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
 
-The other five catalogue types remain unsupported by this registry.
+The remaining `qa_stage` type is unsupported by this registry.
 Representative read-only selection and monitor-only mappings for existing
 `pr-merged`, `cl-submitted`, and `tasks-closed` goals do not migrate stored goals
 or tasks; success contracts make no legacy closure parity claim.
+
+See [health evidence, source gaps and validation](../../../docs/gate-health-observations.md).
+The legacy publishing reader uses the running code's configured threshold (currently
+three failures or a default three hours, with its existing environment override);
+it does not substitute the historical 24-hour description for concrete behavior.
 The [review/approval guide](../../../docs/gate-review-observations.md) records
 runtime scope, bounded readers, tests and the explicit positive-proof/CL/multiple-change
 limitations; registration does not claim provider-backed positive qualification.

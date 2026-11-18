@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "semantics",
+    "allow_nonreproduction"
+  ],
+  "properties": {
+    "semantics": {
+      "enum": [
+        "current_tip_v1",
+        "legacy_recorded_v1"
+      ]
+    },
+    "allow_nonreproduction": {
+      "type": "boolean"
+    }
+  }
+}

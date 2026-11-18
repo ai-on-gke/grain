@@ -523,6 +523,9 @@ func shadowRequirementID(id string) string {
 }
 
 func observationBindings(id string, f gates.Facts) []gates.Binding {
+	if f.Health != nil {
+		return f.Bindings
+	}
 	b := gates.BindingsFor(id, f.Checks)
 	if len(f.Bindings) > 2 {
 		b = append(b, f.Bindings[2:]...)
