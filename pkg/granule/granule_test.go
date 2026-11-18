@@ -474,6 +474,33 @@ exit 2
 		t.Fatal(err)
 	}
 	t.Setenv("GRANULE_DOCKER", path)
+	t.Cleanup(func() { waitUntilNothingRuns(t, path) })
+}
+
+// waitUntilNothingRuns waits, for up to 10s, until no process has path
+// on its command line. A Delete whose ctx runs out kills granule, but not
+// the fake docker it was running at the time: that shell carries on and
+// writes into its t.TempDir, and the TempDir cleanup failed with "directory
+// not empty" when it got there first. It reads /proc, so off Linux it
+// returns at once.
+func waitUntilNothingRuns(t *testing.T, path string) {
+	t.Helper()
+	running := func() bool {
+		cmdlines, _ := filepath.Glob("/proc/[0-9]*/cmdline")
+		for _, f := range cmdlines {
+			data, err := os.ReadFile(f)
+			if err == nil && slices.Contains(strings.Split(string(data), "\x00"), path) {
+				return true
+			}
+		}
+		return false
+	}
+	for deadline := time.Now().Add(10 * time.Second); running(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Logf("a fake docker at %s is still running after 10s", path)
+			return
+		}
+	}
 }
 
 func writeSavedState(t *testing.T, stateDir, name string) string {
