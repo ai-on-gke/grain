@@ -3017,7 +3017,11 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                       <button
                         type="button"
                         class="proc-chip-remove"
-                        [attr.aria-label]="'Remove write target ' + w.repo"
+                        [attr.aria-label]="
+                          'Remove write target ' +
+                          w.repo +
+                          (w.base ? ' @ ' + w.base : '')
+                        "
                         [attr.data-testid]="'sched-remove-write-' + $index"
                         (click)="removeSchedWrite($index)"
                       >
@@ -6667,7 +6671,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const base = this.sDraftWriteBase().trim();
     this.sDraftWrites.update((list) => {
       const idx = list.findIndex(
-        (w) => w.repo.toLowerCase() === repo.toLowerCase(),
+        (w) =>
+          w.repo.toLowerCase() === repo.toLowerCase() &&
+          (w.base ?? "").trim() === base,
       );
       const item: WriteTarget = base ? { repo, base } : { repo };
       if (idx >= 0) {
@@ -7489,7 +7495,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     if (
       !this.access.can(route, boundRepos.length > 0 ? boundRepos : undefined)
     ) {
-      return this.access.deniedReason(route, boundRepos[0]);
+      return this.access.deniedReason(
+        route,
+        boundRepos.length > 0 ? boundRepos : undefined,
+      );
     }
     return "";
   }

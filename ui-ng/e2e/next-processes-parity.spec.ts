@@ -72,28 +72,30 @@ test(
     );
 
     const stamp = Date.now();
-    await page.getByTestId("proc-new-template-btn").click();
-    const tmplDlg = page.getByTestId("template-dialog");
-    await expect(tmplDlg).toBeVisible();
-    await tmplDlg.getByTestId("tmpl-name-input").fill(`parity-count-${stamp}`);
-    await tmplDlg.getByTestId("tmpl-title-input").fill("chore: parity count");
-    await tmplDlg.getByTestId("tmpl-save-btn").click();
-    await expect(tmplDlg).toBeHidden();
-
-    const afterTemplates = (
-      (await (await page.request.get("/api/templates")).json()) as {
-        id: string;
-        name: string;
-      }[]
-    ).find((x) => x.name === `parity-count-${stamp}`);
-    expect(afterTemplates).toBeTruthy();
-
+    let createdId: string | undefined;
     try {
-      await expect(badge).toHaveText(
-        new RegExp(`^${initialExpected + 1}|\\d+$`),
-      );
-      const countAfterCreate = Number(await badge.textContent());
-      expect(countAfterCreate).toBeGreaterThanOrEqual(initialExpected + 1);
+      await page.getByTestId("proc-new-template-btn").click();
+      const tmplDlg = page.getByTestId("template-dialog");
+      await expect(tmplDlg).toBeVisible();
+      await tmplDlg
+        .getByTestId("tmpl-name-input")
+        .fill(`parity-count-${stamp}`);
+      await tmplDlg.getByTestId("tmpl-title-input").fill("chore: parity count");
+      await tmplDlg.getByTestId("tmpl-save-btn").click();
+      await expect(tmplDlg).toBeHidden();
+
+      const afterTemplates = (
+        (await (await page.request.get("/api/templates")).json()) as {
+          id: string;
+          name: string;
+        }[]
+      ).find((x) => x.name === `parity-count-${stamp}`);
+      createdId = afterTemplates?.id;
+      expect(afterTemplates).toBeTruthy();
+
+      await expect
+        .poll(async () => Number(await badge.textContent()))
+        .toBeGreaterThanOrEqual(initialExpected + 1);
 
       // Suites tab shows + New suite directly; Schedules tab keeps New ▾.
       await page.getByTestId("proc-tab-suites").click();
@@ -106,8 +108,8 @@ test(
       await expect(page.getByTestId("proc-new-menu-btn")).toHaveText("New ▾");
       await axe();
     } finally {
-      if (afterTemplates?.id) {
-        await page.request.delete(`/api/templates/${afterTemplates.id}`);
+      if (createdId) {
+        await page.request.delete(`/api/templates/${createdId}`);
       }
     }
   },

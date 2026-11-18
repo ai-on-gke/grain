@@ -3153,18 +3153,27 @@ describe("ProcessesPageComponent (D-9)", () => {
     const wRepo = root.querySelector<HTMLInputElement>(
       '[data-testid="sched-writes-repo-input"]',
     )!;
-    wRepo.value = "acme/sdk";
-    wRepo.dispatchEvent(new Event("input"));
     const wBase = root.querySelector<HTMLInputElement>(
       '[data-testid="sched-writes-base-input"]',
     )!;
-    wBase.value = "v2";
-    wBase.dispatchEvent(new Event("input"));
-    await flush(harness);
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="sched-writes-add"]')!
-      .click();
-    await flush(harness);
+
+    // Two distinct branches of the same repository (acme/cli @ release + acme/cli @ release/v2) both persist,
+    // while adding an identical (repo, base) pair a second time deduplicates in place.
+    for (const [repo, base] of [
+      ["acme/cli", "release/v2"],
+      ["acme/cli", "release/v2"],
+      ["acme/sdk", "v2"],
+    ] as const) {
+      wRepo.value = repo;
+      wRepo.dispatchEvent(new Event("input"));
+      wBase.value = base;
+      wBase.dispatchEvent(new Event("input"));
+      await flush(harness);
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="sched-writes-add"]')!
+        .click();
+      await flush(harness);
+    }
 
     root
       .querySelector<HTMLButtonElement>('[data-testid="sched-network"]')!
@@ -3202,6 +3211,7 @@ describe("ProcessesPageComponent (D-9)", () => {
       reads: ["acme/docs", "acme/proto"],
       writes: [
         { repo: "acme/cli", base: "release" },
+        { repo: "acme/cli", base: "release/v2" },
         { repo: "acme/sdk", base: "v2" },
       ],
       customFields: {
@@ -3223,6 +3233,7 @@ describe("ProcessesPageComponent (D-9)", () => {
       reads: ["acme/docs", "acme/proto"],
       writes: [
         { repo: "acme/cli", base: "release" },
+        { repo: "acme/cli", base: "release/v2" },
         { repo: "acme/sdk", base: "v2" },
       ],
       customFields: {
@@ -3339,6 +3350,11 @@ describe("ProcessesPageComponent (D-9)", () => {
     };
     const pageComp = harness.routeDebugElement!.componentInstance as {
       access: { setConfig: (c: GrainConfig) => void };
+      store: {
+        templates: { update: (fn: (t: Template[]) => Template[]) => void };
+      };
+      stDraftTemplateIds: { set: (ids: string[]) => void };
+      suiteSaveDeniedReason: () => string;
     };
     pageComp.access.setConfig(api.configBody);
     await harness.navigateByUrl("/processes/suites/suite-1?edit=1");
@@ -3355,5 +3371,49 @@ describe("ProcessesPageComponent (D-9)", () => {
         '[data-testid="suite-save-btn"]',
       )!.disabled,
     ).toBe(true);
+
+    // Repo-limited suites:write where boundRepos[0] is allowed and boundRepos[1] is outside the grant
+    // still surfaces an explanatory deniedReason tooltip on the disabled Save suite button.
+    pageComp.store.templates.update((list) => [
+      ...list,
+      {
+        id: "tmpl-forbidden-repo",
+        name: "Forbidden repo check",
+        title: "chore: forbidden check",
+        description: "Check",
+        repo: "acme/forbidden",
+        autoMerge: false,
+        capabilities: [],
+      },
+    ]);
+    pageComp.access.setConfig({
+      ...api.configBody,
+      access: {
+        role: "grain/repo-suite-editor",
+        roles: ["grain/repo-suite-editor"],
+        full: false,
+        scopes: [
+          "tasks:read",
+          "schedules:read",
+          "templates:read",
+          "suites:read",
+          "suites:write",
+        ],
+        repoLimits: { "suites:write": ["acme/widgets"] },
+      },
+    });
+    pageComp.stDraftTemplateIds.set([
+      "repo:template:acme/widgets:release-notes",
+      "tmpl-forbidden-repo",
+    ]);
+    await flush(harness);
+    expect(
+      editSuiteDlg.querySelector<HTMLButtonElement>(
+        '[data-testid="suite-save-btn"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(pageComp.suiteSaveDeniedReason()).toContain(
+      "does not hold suites:write on this repository",
+    );
   });
 });

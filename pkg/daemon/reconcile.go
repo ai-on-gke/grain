@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
@@ -156,6 +157,15 @@ func reconcile(ctx context.Context, deps orchestrator.Deps, live *LiveConfig) {
 // tick has grown expensive.
 const minWakeInterval = 50 * time.Millisecond
 
+// dispatchedWakeHeadStart is the quiet window a woken full RunCycle gives a
+// run that RunDispatchCycle has just admitted and spawned (capped at
+// PollInterval). RunDispatchCycle has already served the task wake; holding
+// the background 47-reconciler pass back keeps SQLite write locks and CPU out
+// of the new run's sandbox setup and interactive first turn (and resets across
+// back-to-back interactive chat turns), while ticker.C still bounds how long
+// periodic background reconcilers wait.
+const dispatchedWakeHeadStart = 5 * time.Second
+
 // reconcileWith is reconcile with the wake channel as an argument, so a
 // test can drive it. See reconcile and cycleWakes.
 func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig, wakes <-chan struct{}, iapSyncs <-chan struct{}) {
@@ -201,11 +211,14 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 	defer reapTicker.Stop()
 
 	loopWakes := wakes
+	var dispatchedWake atomic.Bool
 	var wakeWG sync.WaitGroup
 	defer wakeWG.Wait()
 	if deps.Runs != nil && wakes != nil {
 		forwarded := make(chan struct{}, 1)
 		loopWakes = forwarded
+		runDone, stopRunDone := deps.Runs.SubscribeDone()
+		defer stopRunDone()
 		wakeWG.Add(1)
 		go func() {
 			defer wakeWG.Done()
@@ -216,22 +229,41 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 			}
 			defer fastTimer.Stop()
 			fastPending := false
-			inFlightRetry := false
-			runFast := func(allowInFlightRetry bool) {
+			fromExternalWake := false
+			retryOnRunDone := false
+			runFast := func(externalWake bool) {
 				lastFastWake = time.Now()
 				d := snapshotDeps()
-				hadInFlight := d.Runs != nil && d.Runs.Len() > 0
+				var beforeStarted uint64
+				hadInFlight := false
+				if d.Runs != nil {
+					// Drain any stale completion before reading Len() so a run
+					// finishing *during* RunDispatchCycle (after dispatch.Cycle
+					// saw Busy == true) leaves its signal in runDone.
+					select {
+					case <-runDone:
+					default:
+					}
+					hadInFlight = d.Runs.Len() > 0
+					beforeStarted = d.Runs.Started()
+				}
+				if externalWake && hadInFlight {
+					retryOnRunDone = true
+				} else if !hadInFlight {
+					retryOnRunDone = false
+				}
 				if err := orchestrator.RunDispatchCycle(ctx, d, time.Now().UTC()); err != nil {
 					log.Printf("grain daemon: woken dispatch cycle: %v", err)
 				}
-				if allowInFlightRetry && hadInFlight && !fastPending {
-					fastPending = true
-					inFlightRetry = true
-					fastTimer.Reset(minWakeInterval)
+				spawned := d.Runs != nil && d.Runs.Started() > beforeStarted
+				if spawned {
+					dispatchedWake.Store(true)
 				}
-				select {
-				case forwarded <- struct{}{}:
-				default:
+				if externalWake || spawned {
+					select {
+					case forwarded <- struct{}{}:
+					default:
+					}
 				}
 			}
 			for {
@@ -239,23 +271,35 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 				case <-ctx.Done():
 					return
 				case <-wakes:
+					fromExternalWake = true
 					if fastPending {
-						inFlightRetry = false
 						continue
 					}
 					wait := max(0, minWakeInterval-time.Since(lastFastWake))
 					if wait == 0 {
-						runFast(true)
+						ext := fromExternalWake
+						fromExternalWake = false
+						runFast(ext)
 					} else {
 						fastPending = true
-						inFlightRetry = false
+						fastTimer.Reset(wait)
+					}
+				case <-runDone:
+					if !retryOnRunDone || fastPending {
+						continue
+					}
+					wait := max(0, minWakeInterval-time.Since(lastFastWake))
+					if wait == 0 {
+						runFast(false)
+					} else {
+						fastPending = true
 						fastTimer.Reset(wait)
 					}
 				case <-fastTimer.C:
-					allowRetry := !inFlightRetry
 					fastPending = false
-					inFlightRetry = false
-					runFast(allowRetry)
+					ext := fromExternalWake
+					fromExternalWake = false
+					runFast(ext)
 				}
 			}
 		}()
@@ -271,6 +315,16 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 	}
 	defer woken.Stop()
 	wakePending := false
+	resetWoken := func(wait time.Duration) {
+		if wakePending && !woken.Stop() {
+			select {
+			case <-woken.C:
+			default:
+			}
+		}
+		wakePending = true
+		woken.Reset(wait)
+	}
 	cycle := func() {
 		// Before the cycle, so a settings change made since the last
 		// tick is in effect for the dispatches this one decides on
@@ -290,21 +344,24 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 		case <-ticker.C:
 			cycle()
 		case <-loopWakes:
-			if wakePending {
+			justDispatched := dispatchedWake.Swap(false)
+			if wakePending && !justDispatched {
 				// A cycle is already coming for an earlier wake, and it
 				// will read the store as it stands when it runs -- which
 				// includes whatever this wake was about.
 				continue
 			}
-			wakePending = true
 			wait := max(0, minWakeInterval-time.Since(lastTick))
-			if deps.Runs != nil {
-				// RunDispatchCycle has already dispatched ready work;
-				// give newly spawned runs a brief head start on the
-				// store before running the full background cycle.
+			if justDispatched {
+				// RunDispatchCycle has already dispatched ready work; keep
+				// the full background cycle out of the newly spawned run's
+				// setup and interactive exchange window.
+				headStart := min(dispatchedWakeHeadStart, live.Current().PollInterval)
+				wait = max(wait, headStart)
+			} else if deps.Runs != nil && deps.Runs.Len() > 0 {
 				wait = max(wait, 500*time.Millisecond)
 			}
-			woken.Reset(wait)
+			resetWoken(wait)
 		case <-woken.C:
 			wakePending = false
 			// The periodic tick is pushed out a whole interval by a woken
