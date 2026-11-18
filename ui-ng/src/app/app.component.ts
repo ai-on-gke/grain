@@ -186,6 +186,26 @@ export class DeferErrorDirective implements OnInit {
   },
   template: `
     <g-nav-progress />
+    @if (installNotice(); as notice) {
+      <div
+        class="install-banner"
+        role="status"
+        data-testid="install-notice-banner"
+      >
+        <span
+          >{{ notice.text }}
+          @if (notice.docsUrl) {
+            <a
+              [href]="notice.docsUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="install-notice-docs"
+              >Migration docs</a
+            >
+          }
+        </span>
+      </div>
+    }
     @if (disconnectedText(); as text) {
       <div class="conn-banner" role="status" data-testid="disconnected-banner">
         <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
@@ -998,6 +1018,21 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly filter = inject(ViewFilter);
   protected readonly feed = inject(TaskFeedStore);
   private readonly connection = inject(ConnectionStatus);
+
+  // The standing banner for an install only its operator can fix (GET
+  // /api/config's installNotice, classic InstallNoticeBanner): what is
+  // wrong, the CLIs that cannot run until then, and where the migration
+  // is written up. It has no close button, since nothing changes until
+  // the install is migrated and the daemon restarted.
+  protected readonly installNotice = computed(() => {
+    const n = this.access.rawConfig()?.installNotice;
+    if (!n?.message) return null;
+    const clis = (n.affectedClis ?? []).map((c) => c.split(":")[0]);
+    const text =
+      `${n.message[0].toUpperCase()}${n.message.slice(1)}.` +
+      (clis.length ? ` Cannot run until then: ${clis.join(", ")}.` : "");
+    return { text, docsUrl: n.docsUrl ?? "" };
+  });
 
   // The standing banner for a daemon that is not answering at all
   // (ConnectionStatus): when it stopped, in the deployment's time zone,
