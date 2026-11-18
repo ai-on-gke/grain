@@ -550,7 +550,18 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 		run, attempt int64
 	}
 	lineages := map[int64]suiteLineage{}
+	latestWorkflows := map[string]github.WorkflowRun{}
+	suiteStarted := map[int64]*time.Time{}
+	recordedByID := map[int64]model.RecordedGateCheck{}
+	for _, check := range recorded.Checks {
+		recordedByID[check.CheckRunID] = check
+	}
 	for _, run := range collection.Workflows {
+		key := run.Path + "/" + run.Event + "/" + run.HeadBranch
+		old, found := latestWorkflows[key]
+		if !found || run.ID > old.ID || (run.ID == old.ID && run.RunAttempt > old.RunAttempt) {
+			latestWorkflows[key] = run
+		}
 		if run.CheckSuiteID > 0 && run.Path != "" && run.Event != "" && run.HeadBranch != "" {
 			lineage := suiteLineage{run.Path + "/" + run.Event + "/" + run.HeadBranch, run.ID, int64(run.RunAttempt)}
 			if prior, ok := lineages[run.CheckSuiteID]; ok && prior != lineage {
@@ -558,6 +569,7 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 				f.Gap = "Workflow suite lineage is ambiguous."
 			}
 			lineages[run.CheckSuiteID] = lineage
+			suiteStarted[run.CheckSuiteID] = run.StartedAt
 		}
 	}
 	for _, check := range recorded.Checks {
@@ -567,7 +579,7 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 		remote, found := byID[check.CheckRunID]
 		lineage, resolved := lineages[remote.CheckSuiteID]
 		if !found || !resolved || (check.RunID > 0 && lineage.run != check.RunID) ||
-			(check.RunAttempt > 0 && lineage.attempt != int64(check.RunAttempt)) {
+			(check.RunAttempt > 0 && lineage.attempt < int64(check.RunAttempt)) {
 			s.Complete = false
 			f.Gap = "Remote workflow attempt disagrees with recorded exact-head CI evidence."
 		}
@@ -579,6 +591,7 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 	suites := map[string]*suiteCoverage{}
 	type generationOrder struct{ leaf, leafRun, run int64 }
 	generationOrders := map[string]*generationOrder{}
+	currentJobs := map[suiteLineage]bool{}
 	for _, a := range collection.Checks {
 		conclusion := ""
 		if a.Conclusion != nil {
@@ -597,9 +610,6 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 		lineage, known := lineages[a.CheckSuiteID]
 		if a.App == "github-actions" && known {
 			attempt.Identity = a.App + "/" + lineage.key + "/" + a.Name
-			attempt.Order = lineage.run
-			attempt.Attempt = lineage.attempt
-			attempt.LeafOrder = a.ID
 			order := generationOrders[lineage.key]
 			if order == nil {
 				order = &generationOrder{}
@@ -612,8 +622,29 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 				order.leaf = a.ID
 				order.leafRun = lineage.run
 			}
+			attempt.Order, attempt.Attempt, attempt.LeafOrder = lineage.run, lineage.attempt, a.ID
+			// A suite can survive reruns. Its latest parent attempt is not
+			// evidence that every historical leaf belongs to that attempt.
+			if record, found := recordedByID[a.ID]; found && record.RunAttempt > 0 {
+				attempt.Attempt = int64(record.RunAttempt)
+			} else if lineage.attempt > 1 {
+				start := suiteStarted[a.CheckSuiteID]
+				if start == nil || a.StartedAt == nil || !a.StartedAt.After(*start) {
+					f.Gap = "Job membership in the latest workflow attempt is unproved."
+					continue
+				}
+			}
+			parent := latestWorkflows[lineage.key]
+			if attempt.Order != parent.ID || attempt.Attempt != int64(parent.RunAttempt) {
+				continue // Retained history is not part of the current check set.
+			}
+			currentJobs[suiteLineage{lineage.key, attempt.Order, attempt.Attempt}] = true
 		} else {
 			coverage.unresolved = true
+			if a.App == "github-actions" {
+				s.Complete = false
+				f.Gap = "Actions job has no proved workflow lineage."
+			}
 		}
 
 		if a.CheckSuiteID <= 0 {
@@ -623,6 +654,13 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 		s.Attempts = append(s.Attempts, attempt)
 	}
 
+	for key, run := range latestWorkflows {
+		positive := run.Status == "completed" && (run.Conclusion == "success" || run.Conclusion == "neutral" || run.Conclusion == "skipped")
+		if positive && !currentJobs[suiteLineage{key, run.ID, int64(run.RunAttempt)}] {
+			s.Complete = false
+			f.Gap = "Latest successful workflow has no proved current-attempt job checks."
+		}
+	}
 	for _, order := range generationOrders {
 		if order.leafRun < order.run {
 			s.Complete = false

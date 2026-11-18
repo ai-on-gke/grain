@@ -617,3 +617,91 @@ func TestGateChecksRecordedEventsAndLaggingReplica(t *testing.T) {
 		})
 	}
 }
+
+func TestGateChecksLatestWorkflowNeedsCurrentAttemptJobs(t *testing.T) {
+	for _, rerun := range []bool{false, true} {
+		t.Run(map[bool]string{false: "new-run", true: "same-run-rerun"}[rerun], func(t *testing.T) {
+			srv, c := testServer(t)
+			ctx := context.Background()
+			now := baseTime.Add(time.Minute)
+			c.Now = func() time.Time { return now }
+			task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Delayed current workflow jobs"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+				t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#7"})
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			c.Config.GateObservationTaskIDs = []string{task.ID}
+			f := newShadowForge()
+			c.Config.GitHubPullRequests = f
+			success := "success"
+			oldStarted, oldJob := now.Add(-time.Minute), now.Add(-50*time.Second)
+			f.checks = []github.CheckRun{{ID: 1, CheckSuiteID: 11, Name: "go", App: "github-actions", HeadSHA: "H1", Status: "completed", Conclusion: &success, StartedAt: &oldJob}}
+			oldRun := github.WorkflowRun{ID: 101, CheckSuiteID: 11, Path: "unit.yml", Event: "push", HeadBranch: "feature", HeadSHA: "H1", Status: "completed", Conclusion: "success", RunAttempt: 1, StartedAt: &oldStarted}
+			f.workflows = []github.WorkflowRun{oldRun}
+			put := func(id, run int64, attempt int, conclusion string) {
+				if e := c.Store.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: "acme/widgets", CheckRunID: id, Commit: "H1", App: "github-actions", JobName: "go", RunID: run, RunAttempt: attempt, Conclusion: conclusion}); e != nil {
+					t.Fatal(e)
+				}
+			}
+			put(1, 101, 1, "success")
+			read := func(want string) {
+				t.Helper()
+				wake, commits := c.Store.Changed(), c.Store.CommitCount()
+				code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "")
+				if code != 200 {
+					t.Fatalf("%d %s", code, body)
+				}
+				var d ui.TaskDetail
+				if e := json.Unmarshal([]byte(body), &d); e != nil {
+					t.Fatal(e)
+				}
+				if d.GateObservations == nil || d.GateObservations.Results[2].Result.Status != want {
+					t.Fatalf("want %s, current workflow job proof: %+v", want, d.GateObservations)
+				}
+				if commits != c.Store.CommitCount() {
+					t.Fatal("diagnostic changed legacy commits")
+				}
+				select {
+				case <-wake:
+					t.Fatal("diagnostic woke legacy")
+				default:
+				}
+			}
+			read("met")
+			current := oldRun
+			currentStarted := now
+			current.StartedAt = &currentStarted
+			if rerun {
+				current.RunAttempt = 2
+				f.workflows = []github.WorkflowRun{current}
+			} else {
+				current.ID, current.CheckSuiteID = 102, 12
+				f.workflows = append(f.workflows, current)
+			}
+			now = now.Add(time.Second)
+			read("unknown") // Parent success cannot reuse the previous generation's only job.
+			newJob := now.Add(time.Second)
+			f.checks = append(f.checks, github.CheckRun{ID: 2, CheckSuiteID: current.CheckSuiteID, Name: "go", App: "github-actions", HeadSHA: "H1", Status: "completed", Conclusion: &success, StartedAt: &newJob})
+			now = now.Add(2 * time.Second)
+			read("met") // Ordinary source timestamps can prove the current attempt.
+			if rerun {
+				f.checks[1].StartedAt = nil
+				now = now.Add(time.Second)
+				read("unknown") // Membership is ambiguous without either time or stored attempt proof.
+				put(2, current.ID, current.RunAttempt, "success")
+				now = now.Add(time.Second)
+				read("met") // Historical attempt 1 records must not poison valid attempt 2 proof.
+			}
+			cancelled := "cancelled"
+			f.checks[1].Conclusion, f.workflows[len(f.workflows)-1].Conclusion = &cancelled, cancelled
+			put(2, current.ID, current.RunAttempt, cancelled)
+			now = now.Add(time.Second)
+			read("pending")
+		})
+	}
+}

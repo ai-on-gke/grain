@@ -69,7 +69,11 @@ microsecond. Acceptance and failure ordering retain the original request timesta
 from the persisted JSON record rather than relying on rounded SQL timestamps. A concurrent local source change
 still invalidates a cached success. Remote complete sets must include and agree
 with already recorded check identities/conclusions and known Actions attempts;
-replica disagreement stays unknown until the sources agree. Log enrichment and
+replica disagreement stays unknown until the sources agree. A suite can span
+reruns: recorded exact job attempts or strictly later job/run start timestamps
+prove leaf membership. Equal/missing timestamps without recorded attempt proof
+remain unknown. Historical jobs cannot fill a newer successful workflow's empty
+check set, and historical attempt records do not poison a proved newer attempt. Log enrichment and
 other heads do not change this semantic fence. A final forge read verifies
 head, base ref and base tip. Check attempts and collection generations are hashed
 with their actual source versions; provider details/errors and CI logs are not
