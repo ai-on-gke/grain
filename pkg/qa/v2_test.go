@@ -21,8 +21,14 @@ import (
 
 func TestBuiltInFlowVersionsIncludeGoldenV2AndAblations(t *testing.T) {
 	versions := BuiltInFlowVersions()
-	if len(versions) < 4 {
-		t.Fatalf("len(BuiltInFlowVersions()) = %d, want >= 4", len(versions))
+	if len(versions) != 3 {
+		t.Fatalf("len(BuiltInFlowVersions()) = %d, want 3 (standard-workflow, fast-baseline, gates-only)", len(versions))
+	}
+	wantKeys := []string{"standard-workflow", "fast-baseline", "gates-only"}
+	for i, wantKey := range wantKeys {
+		if versions[i].Key != wantKey {
+			t.Errorf("BuiltInFlowVersions()[%d].Key = %q, want %q", i, versions[i].Key, wantKey)
+		}
 	}
 
 	v2, ok := LookupBuiltInOrRegisteredVersion("golden-v2@1")

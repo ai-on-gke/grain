@@ -216,7 +216,7 @@ export class ProcessesStore {
           flowId:
             typeof s["qaFlowId"] === "string" && s["qaFlowId"]
               ? s["qaFlowId"]
-              : "golden-v1-minimal",
+              : "standard-workflow",
           rolloutPct:
             typeof s["qaRolloutPct"] === "number" ? s["qaRolloutPct"] : 0,
           shadowOnControl: s["qaShadowOnControl"] !== false,

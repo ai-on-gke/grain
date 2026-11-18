@@ -49,15 +49,43 @@ type S4VerifyFunc func(ctx context.Context, task model.Task, prompt string) (out
 // MirrorRemoteResolver returns the clone URL and optional HTTP bearer token for repo on the controller.
 type MirrorRemoteResolver func(ctx context.Context, repo model.RepoRef) (remoteURL, bearerToken string, err error)
 
+// MirrorSessionResolver returns a clone URL, optional HTTP bearer token, and cleanup callback
+// (for example, an ephemeral read-only gitproxy token lease) for repo on the controller.
+type MirrorSessionResolver func(ctx context.Context, repo model.RepoRef) (remoteURL, bearerToken string, release func(), err error)
+
 // QARuntime holds controller-level dependencies used by pre-PR quality checks during
 // `OpenPullRequestForTaskWithQA`, `salvagePushedBranch`, and async Control shadow runs.
 type QARuntime struct {
-	DataDir           string
-	Profiler          *qa.Profiler
-	ResolveRemote     MirrorRemoteResolver
-	VerifyS4          S4VerifyFunc
-	RunIsolatedPrompt func(ctx context.Context, task model.Task, runPrefix, prompt string, maxTokens int) (output string, tokensIn, tokensOut int64, err error)
-	ExecInSandbox     func(ctx context.Context, dir string, argv []string, timeout time.Duration) (string, int, error)
+	DataDir             string
+	Profiler            *qa.Profiler
+	ResolveRemote       MirrorRemoteResolver
+	ResolveMirrorRemote MirrorSessionResolver
+	VerifyS4            S4VerifyFunc
+	RunIsolatedPrompt   func(ctx context.Context, task model.Task, runPrefix, prompt string, maxTokens int) (output string, tokensIn, tokensOut int64, err error)
+	ExecInSandbox       func(ctx context.Context, dir string, argv []string, timeout time.Duration) (string, int, error)
+}
+
+func (rt *QARuntime) hasMirrorResolver() bool {
+	return rt != nil && (rt.ResolveMirrorRemote != nil || rt.ResolveRemote != nil)
+}
+
+func (rt *QARuntime) resolveMirror(ctx context.Context, repo model.RepoRef) (string, string, func(), error) {
+	noop := func() {}
+	if rt == nil {
+		return "", "", noop, fmt.Errorf("no remote resolver configured")
+	}
+	if rt.ResolveMirrorRemote != nil {
+		u, tok, rel, err := rt.ResolveMirrorRemote(ctx, repo)
+		if rel == nil {
+			rel = noop
+		}
+		return u, tok, rel, err
+	}
+	if rt.ResolveRemote != nil {
+		u, tok, err := rt.ResolveRemote(ctx, repo)
+		return u, tok, noop, err
+	}
+	return "", "", noop, fmt.Errorf("no remote resolver configured")
 }
 
 var liveQARuntime atomic.Pointer[QARuntime]
@@ -394,15 +422,7 @@ func salvageQAStageIfPresent(
 				// stages pass vacuously over an empty diff: hold the promoted PR instead,
 				// matching the pre-PR mirror-error path above.
 				var openErr error
-				if rt.ResolveRemote == nil {
-					openErr = fmt.Errorf("no remote resolver configured")
-				} else if remoteURL, bearer, rErr := rt.ResolveRemote(ctx, *task.Target); rErr != nil {
-					openErr = rErr
-				} else if remoteURL == "" {
-					openErr = fmt.Errorf("empty remote URL")
-				} else {
-					mirrorWS, openErr = checks.OpenMirrorWorkspace(ctx, filepath.Join(rt.DataDir, "qa-repos"), remoteURL, bearer, task.Base, checkBranch)
-				}
+				mirrorWS, openErr = openMirrorWithSession(ctx, rt, *task.Target, task.Base, checkBranch)
 				if mirrorWS == nil {
 					if openErr == nil {
 						openErr = fmt.Errorf("mirror workspace unavailable")
@@ -526,7 +546,7 @@ func effectiveTaskPushHead(ctx context.Context, store *model.Store, client githu
 
 func maybeRunControlShadowS3(store *model.Store, client github.Client, task model.Task, assign *resolve.Resolution) {
 	rt := LiveQARuntime()
-	if rt == nil || rt.DataDir == "" || rt.ResolveRemote == nil || store == nil || client == nil || task.Target == nil || assign == nil {
+	if rt == nil || rt.DataDir == "" || !rt.hasMirrorResolver() || store == nil || client == nil || task.Target == nil || assign == nil {
 		return
 	}
 	taskCopy := task
@@ -562,6 +582,26 @@ func runMirrorS3IfConfigured(
 	return rep, ran, err
 }
 
+func openMirrorWithSession(ctx context.Context, rt *QARuntime, target model.RepoRef, base, branch string) (*checks.MirrorWorkspace, error) {
+	if rt == nil || rt.DataDir == "" {
+		return nil, fmt.Errorf("qa runtime data directory unavailable")
+	}
+	if !rt.hasMirrorResolver() {
+		return nil, fmt.Errorf("no remote resolver configured")
+	}
+	remoteURL, bearer, release, err := rt.resolveMirror(ctx, target)
+	if release != nil {
+		defer release()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(remoteURL) == "" {
+		return nil, fmt.Errorf("empty remote URL")
+	}
+	return checks.OpenMirrorWorkspace(ctx, filepath.Join(rt.DataDir, "qa-repos"), remoteURL, bearer, base, branch)
+}
+
 func runMirrorS3WithWorkspace(
 	ctx context.Context,
 	store *model.Store,
@@ -571,14 +611,10 @@ func runMirrorS3WithWorkspace(
 	branch, callerNotes string,
 ) (checks.Report, *checks.MirrorWorkspace, bool, error) {
 	rt := LiveQARuntime()
-	if rt == nil || rt.DataDir == "" || rt.ResolveRemote == nil || task.Target == nil || assign == nil {
+	if rt == nil || rt.DataDir == "" || !rt.hasMirrorResolver() || task.Target == nil || assign == nil {
 		return checks.Report{}, nil, false, nil
 	}
-	remoteURL, bearer, err := rt.ResolveRemote(ctx, *task.Target)
-	if err != nil || strings.TrimSpace(remoteURL) == "" {
-		return checks.Report{}, nil, false, err
-	}
-	ws, err := checks.OpenMirrorWorkspace(ctx, filepath.Join(rt.DataDir, "qa-repos"), remoteURL, bearer, task.Base, branch)
+	ws, err := openMirrorWithSession(ctx, rt, *task.Target, task.Base, branch)
 	if err != nil {
 		return checks.Report{}, nil, false, err
 	}
@@ -1193,10 +1229,8 @@ func runFreshContextS4(
 	if rt == nil || (rt.VerifyS4 == nil && rt.RunIsolatedPrompt == nil) || task.Target == nil {
 		return nil, nil
 	}
-	if ws == nil && rt.DataDir != "" && rt.ResolveRemote != nil {
-		if remoteURL, bearer, rErr := rt.ResolveRemote(ctx, *task.Target); rErr == nil && remoteURL != "" {
-			ws, _ = checks.OpenMirrorWorkspace(ctx, filepath.Join(rt.DataDir, "qa-repos"), remoteURL, bearer, task.Base, branch)
-		}
+	if ws == nil && rt.DataDir != "" && rt.hasMirrorResolver() {
+		ws, _ = openMirrorWithSession(ctx, rt, *task.Target, task.Base, branch)
 	}
 	if ws == nil {
 		return nil, nil

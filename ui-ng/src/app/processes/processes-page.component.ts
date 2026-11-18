@@ -106,10 +106,9 @@ import { MarkdownDirective } from "../shared/code-highlight";
 import { taskPriority } from "../tasks/batch-edit-dialog.component";
 
 const DEFAULT_QA_FLOW_REFS = [
-  "engineering-workflow-v4@1",
-  "golden-v1-minimal@1",
-  "golden-v3@1",
-  "golden-v2@1",
+  "standard-workflow@1",
+  "fast-baseline@1",
+  "gates-only@1",
 ] as const;
 
 const TABS: readonly { id: ProcessTab; label: string; tip: string }[] = [

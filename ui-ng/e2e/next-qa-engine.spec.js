@@ -30,7 +30,7 @@ test.afterEach(async ({ demoServer, accessCode }) => {
     },
     body: JSON.stringify({
       qaEnabled: false,
-      qaFlowId: "golden-v1-minimal",
+      qaFlowId: "standard-workflow",
       qaRolloutPct: 0,
       qaShadowOnControl: true,
     }),
@@ -52,13 +52,13 @@ test("Processes -> Quality checks and Task Detail -> Pre-PR quality checks work 
     "Content-Type": "application/json",
   };
 
-  // 1. Enable 50% golden-v1-minimal rollout on the demo server.
+  // 1. Enable 50% fast-baseline rollout on the demo server.
   const putSettings = await fetch(`${demoServer}/api/settings`, {
     method: "PUT",
     headers: authHeaders,
     body: JSON.stringify({
       qaEnabled: true,
-      qaFlowId: "golden-v1-minimal",
+      qaFlowId: "fast-baseline",
       qaRolloutPct: 50,
       qaShadowOnControl: true,
     }),
@@ -69,20 +69,18 @@ test("Processes -> Quality checks and Task Detail -> Pre-PR quality checks work 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/next/processes/quality");
 
-  const goldenRow = page.getByTestId("qa-flow-row-golden-v1-minimal");
-  const detRow = page.getByTestId("qa-flow-row-deterministic-s3-only");
-  const archivedToggle = page.getByTestId("qa-toggle-archived-flows");
-  await expect(goldenRow).toBeVisible();
-  await expect(detRow).toBeHidden();
-  await expect(goldenRow).toContainText("Active (50%)");
-
-  await archivedToggle.click();
-  await expect(detRow).toBeVisible();
-  await expect(detRow).toContainText("Available");
+  const stdRow = page.getByTestId("qa-flow-row-standard-workflow");
+  const fastRow = page.getByTestId("qa-flow-row-fast-baseline");
+  const gatesRow = page.getByTestId("qa-flow-row-gates-only");
+  await expect(stdRow).toBeVisible();
+  await expect(fastRow).toBeVisible();
+  await expect(gatesRow).toBeVisible();
+  await expect(fastRow).toContainText("Active (50%)");
+  await expect(gatesRow).toContainText("Available");
+  await expect(page.getByTestId("qa-toggle-archived-flows")).toHaveCount(0);
 
   const inspTitle = page.getByTestId("qa-flow-insp-title");
-  const detailCard = page.getByTestId("qa-flow-detail-card");
-  await expect(inspTitle).toContainText("Recommended baseline");
+  await expect(inspTitle).toContainText("Fast baseline");
   await expect(page.getByTestId("qa-mobile-back")).toBeHidden();
 
   // All stages start collapsed by default; expanding reveals stage substeps & rule hooks.
@@ -109,16 +107,15 @@ test("Processes -> Quality checks and Task Detail -> Pre-PR quality checks work 
     .analyze();
   expect(axeProcLight.violations).toEqual([]);
 
-  await detRow.click();
-  await expect(inspTitle).toContainText("Deterministic checks only");
-  await expect(detailCard).toContainText("disabled");
-  await goldenRow.click();
-  await expect(inspTitle).toContainText("Recommended baseline");
-  // Browser Back twice: first back to ?flow=deterministic-s3-only, then back to bare /next/processes/quality.
+  await gatesRow.click();
+  await expect(inspTitle).toContainText("Deterministic gates only");
+  await fastRow.click();
+  await expect(inspTitle).toContainText("Fast baseline");
+  // Browser Back twice: first back to ?flow=gates-only, then back to bare /next/processes/quality.
   await page.goBack();
-  await expect(inspTitle).toContainText("Deterministic checks only");
+  await expect(inspTitle).toContainText("Deterministic gates only");
   await page.goBack();
-  await expect(inspTitle).toContainText("Recommended baseline");
+  await expect(inspTitle).toContainText("Fast baseline");
 
   // 3. Create a real task via POST /api/tasks and record a Pre-PR S3 check run + finding.
   const createTaskRes = await fetch(`${demoServer}/api/tasks`, {
@@ -287,8 +284,8 @@ test("Processes -> Quality checks and Task Detail -> Pre-PR quality checks work 
   }
 
   await page.goto("/next/processes/quality");
-  await expect(page.getByTestId("qa-flow-row-golden-v1-minimal")).toBeVisible();
-  await page.getByTestId("qa-flow-row-golden-v1-minimal").click();
+  await expect(page.getByTestId("qa-flow-row-fast-baseline")).toBeVisible();
+  await page.getByTestId("qa-flow-row-fast-baseline").click();
   await expect(page.getByTestId("qa-mobile-back")).toBeVisible();
   if (shotsDir) {
     await page.screenshot({
@@ -299,7 +296,7 @@ test("Processes -> Quality checks and Task Detail -> Pre-PR quality checks work 
     });
   }
   await page.getByTestId("qa-mobile-back").click();
-  await expect(page.getByTestId("qa-flow-row-golden-v1-minimal")).toBeVisible();
+  await expect(page.getByTestId("qa-flow-row-fast-baseline")).toBeVisible();
   const procPhoneOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,
   );
@@ -317,9 +314,7 @@ test("Processes -> Quality checks and Task Detail -> Pre-PR quality checks work 
     await page.setViewportSize({ width: 2048, height: 1200 });
     await page.evaluate(() => localStorage.setItem("grain.themeMode", "light"));
     await page.reload();
-    await expect(
-      page.getByTestId("qa-flow-row-golden-v1-minimal"),
-    ).toBeVisible();
+    await expect(page.getByTestId("qa-flow-row-fast-baseline")).toBeVisible();
     await page.screenshot({
       path: path.join(shotsDir, "m2-processes-quality-wide-light.png"),
     });
@@ -328,7 +323,7 @@ test("Processes -> Quality checks and Task Detail -> Pre-PR quality checks work 
   // 6. Verify prefers-reduced-motion zeroes transitions on interactive rows and buttons.
   await page.emulateMedia({ reducedMotion: "reduce" });
   const procRowTransition = await page
-    .getByTestId("qa-flow-row-golden-v1-minimal")
+    .getByTestId("qa-flow-row-fast-baseline")
     .evaluate((el) => getComputedStyle(el).transitionDuration);
   expect(procRowTransition).toBe("0s");
 });
@@ -347,32 +342,26 @@ test("/next/processes/quality syncs selected flow to ?flow= URL and preserves se
     headers: authHeaders,
     body: JSON.stringify({
       qaEnabled: true,
-      qaFlowId: "golden-v1-minimal",
+      qaFlowId: "fast-baseline",
       qaRolloutPct: 50,
       qaShadowOnControl: true,
     }),
   });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/next/processes/quality?flow=deterministic-s3-only");
-  await expect(page.getByTestId("qa-toggle-archived-flows")).toHaveAttribute(
-    "aria-expanded",
-    "true",
-  );
-  await expect(
-    page.getByTestId("qa-flow-row-deterministic-s3-only"),
-  ).toBeVisible();
+  await page.goto("/next/processes/quality?flow=gates-only");
+  await expect(page.getByTestId("qa-flow-row-gates-only")).toBeVisible();
   await expect(page.getByTestId("qa-flow-insp-title")).toContainText(
-    "Deterministic checks only",
+    "Deterministic gates only",
   );
 
-  await page.getByTestId("qa-flow-row-repo-custom").click();
-  await expect(page).toHaveURL(/flow=repo-custom/);
+  await page.getByTestId("qa-flow-row-standard-workflow").click();
+  await expect(page).toHaveURL(/flow=standard-workflow/);
   await page.getByTestId("qa-configure-rollout-link").click();
   await expect(page).toHaveURL(/\/next\/settings\/tasks/);
   await page.goBack();
   await expect(page.getByTestId("qa-flow-insp-title")).toContainText(
-    "Repository custom (.grain/qa-flow.yml)",
+    "Standard workflow",
   );
 });
 

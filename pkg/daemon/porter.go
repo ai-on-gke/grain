@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -110,5 +111,66 @@ func NewPorter(dataDir, proxyURL string, store *model.Store, tokens *gitproxy.Sa
 				},
 			}, nil
 		},
+	}
+}
+
+// NewQAMirrorResolver returns a controller-side mirror resolver that fetches through the
+// deployment's git proxy using an ephemeral read-only token lease (supporting command-backed
+// enterprise git hosts and GitHub App credentials), falling back to direct clone URLs when
+// no proxy is active or a local file:// clone URL is configured.
+func NewQAMirrorResolver(
+	proxyURL string,
+	store *model.Store,
+	tokens *gitproxy.SandboxTokenStore,
+	fallback orchestrator.MirrorRemoteResolver,
+) orchestrator.MirrorSessionResolver {
+	return func(ctx context.Context, repo model.RepoRef) (string, string, func(), error) {
+		noop := func() {}
+		if store != nil {
+			if rc, err := store.GetRepoConfig(ctx, repo); err == nil && rc != nil {
+				cu := strings.TrimSpace(rc.CloneURL)
+				if cu != "" && (proxyURL == "" || tokens == nil || strings.HasPrefix(cu, "file://") || strings.HasPrefix(cu, "/")) {
+					if fallback != nil {
+						u, tok, fErr := fallback(ctx, repo)
+						return u, tok, noop, fErr
+					}
+					return cu, "", noop, nil
+				}
+			}
+		}
+		if proxyURL == "" || tokens == nil {
+			if fallback != nil {
+				u, tok, err := fallback(ctx, repo)
+				return u, tok, noop, err
+			}
+			return "", "", noop, fmt.Errorf("qa mirror: git proxy is unavailable")
+		}
+		team := ""
+		if store != nil && store.SingleTenant {
+			team = model.DefaultTeamID
+		}
+		suffix := make([]byte, 6)
+		if _, err := rand.Read(suffix); err != nil {
+			return "", "", noop, err
+		}
+		identity := "qa-mirror-" + hex.EncodeToString(suffix)
+		token, err := tokens.EnsureToken(identity)
+		if err != nil {
+			return "", "", noop, fmt.Errorf("minting a qa mirror git proxy token: %w", err)
+		}
+		CiReadScopes.Grant(identity, repo)
+		if team != "" {
+			CiSandboxTeams.Grant(identity, team)
+		}
+		release := func() {
+			CiReadScopes.Drop(identity)
+			if team != "" {
+				CiSandboxTeams.Drop(identity)
+			}
+			if rErr := tokens.Revoke(identity); rErr != nil {
+				log.Printf("qa mirror: revoking %s's git proxy token: %v", identity, rErr)
+			}
+		}
+		return orchestrator.CloneURL(proxyURL, repo), token, release, nil
 	}
 }
