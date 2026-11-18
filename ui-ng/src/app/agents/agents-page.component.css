@@ -18,6 +18,33 @@ g-agents-page {
   display: contents;
 }
 
+/* The inspector's bar. Its layout lived only in tasks-timeline.css, which
+   loads with the Tasks page, so on a fresh /next/agents the bar drew
+   unstyled; and at the inspector's 320px floor its four controls (346px)
+   ran past the pane's clipped edge, cutting "Close inspector" off. They
+   wrap instead, right-aligned under the label. */
+g-agents-page .tasks-pane-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px 8px;
+  min-height: 40px;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  flex-shrink: 0;
+}
+g-agents-page .tasks-pane-bar-label {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+g-agents-page .tasks-pane-bar .split-controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
 .agents-header {
   padding-bottom: 12px;
 }

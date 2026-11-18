@@ -312,6 +312,13 @@ func (s *Store) fireSchedule(ctx context.Context, sched Schedule, now time.Time,
 			foldedOccurrences(sched, now, loc)); err != nil {
 			return firing, err
 		}
+		// The schedule is no longer starved. Its blocker closing clears
+		// the notification as well, but a workflow schedule fires over a
+		// review past workflowReviewHold and leaves it open.
+		if _, err := s.ClearNotification(ctx, NotificationSubject(FamilyScheduleStarved, sched.ID),
+			PrincipalString(SchedulePrincipal)); err != nil {
+			return firing, err
+		}
 	}
 	return firing, nil
 }
@@ -693,11 +700,11 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	}
 	// A condition the schedule declared (Schedule.SkipWhen), after both:
 	// a previous firing still going is the more useful thing to name.
-	base := comp.Base
-	if base == "" {
-		base = sched.Base
-	}
-	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, base, now, advance); err != nil || held != nil {
+	// ComposeScheduleTask has already resolved comp.Base via
+	// Template.FiringTarget, so a bound template's empty Base (meaning the
+	// target repository's default branch) stays empty rather than falling
+	// back to a stale sched.Base.
+	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, comp.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}
@@ -772,13 +779,17 @@ func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.Target, sc.Base = tmpl.FiringTarget(sc.Target, sc.Base)
 }
 
-// WithTemplateSettings is sc's admission, hosting and grants as its
-// firings hold them: tmpl's admission and hosting raised by sc's own, and
-// tmpl's grants with sc's own beside them -- what ComposeScheduleTask
-// files. A template-backed schedule's own columns hold only what it adds
-// to its template (Schedule.Grants), so this is what it is shown as, and
-// what a request resending it is measured against (ui.scheduleFrom).
+// WithTemplateSettings is sc's target, base, admission, hosting and
+// grants as its firings hold them: tmpl's bound target and base when tmpl
+// is bound (Template.FiringTarget), tmpl's admission and hosting raised
+// by sc's own, and tmpl's grants with sc's own beside them -- what
+// ComposeScheduleTask files. A template-backed schedule's own columns
+// hold only what it adds to its template (Schedule.Grants) and can lag a
+// bound template's target or base between declaration syncs and firings,
+// so this is what it is shown as, and what a request resending it is
+// measured against (ui.scheduleFrom).
 func (sc Schedule) WithTemplateSettings(tmpl Template) Schedule {
+	sc.Target, sc.Base = tmpl.FiringTarget(sc.Target, sc.Base)
 	sc.Admission = MaxAdmission(tmpl.Admission, sc.Admission)
 	sc.Hosting = MaxHosting(tmpl.Hosting, sc.Hosting)
 	grants := slices.Clone(tmpl.Grants)

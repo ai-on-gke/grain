@@ -244,3 +244,114 @@ test("reads a long question as Markdown in a capped box, and keeps the actions a
     await closeQuietly(demoServer, accessCode, id);
   }
 });
+
+// docs/test-runs/2026-11-16-next-markdown.md: an access request whose
+// reason is long kept its one-line summary shrinkable beside it, and the
+// summary was squeezed until its own "Show full request" toggle took its
+// room and the line drew 0px tall. An alert showed only the first line
+// of its body: the list the Inbox polls (?fields=list) cuts each body to
+// its first line, and the dock rendered that as the whole alert.
+const LONG_REASON = [
+  "I need write access to `acme/gadgets` because:",
+  "",
+  "1. The cache client lives there",
+  "   - `pkg/cache/client.go` pins the old tier",
+  "2. Without it the migration cannot finish:",
+  "",
+  `   ${FENCE}sh`,
+  "   git -C gadgets grep -n cache-a",
+  `   ${FENCE}`,
+  "",
+  ...Array.from({ length: 30 }, (_, i) => `- detail ${i + 1} of the request`),
+].join("\n");
+
+test("a long access request keeps its summary line, and an alert shows its whole body", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const title = `Long access request ${Date.now()}`;
+  const subject = `walk-alert-${Date.now()}`;
+  const { id } = await apiPost(demoServer, accessCode, "/api/tasks", {
+    title,
+    approved: true,
+  });
+  let alertId;
+  try {
+    await apiPost(
+      demoServer,
+      accessCode,
+      `/api/e2e/tasks/${id}/pending-access`,
+      {
+        summary: "Grant write to acme/gadgets so the cache client can move",
+        reason: LONG_REASON,
+        items: [{ kind: "write", repo: "acme/gadgets" }],
+      },
+    );
+    alertId = (
+      await apiPost(demoServer, accessCode, "/api/notifications", {
+        subject,
+        title: `Cache tier degraded ${subject}`,
+        severity: "warning",
+        body: [
+          "The cache tier is degraded:",
+          "",
+          "1. Reads miss on `cache-a`",
+          "   - since 09:00 UTC",
+          "2. Writes queue behind the migration",
+          "",
+          "| Tier | Hit rate |",
+          "|---|---|",
+          "| cache-a | 12% |",
+        ].join("\n"),
+      })
+    )?.id;
+
+    for (const size of [...SIZES, { width: 390, height: 844 }]) {
+      await page.setViewportSize(size);
+      await page.goto("inbox");
+      await page
+        .getByTestId("queue-row")
+        .filter({ hasText: title })
+        .locator(".row-main")
+        .click();
+      const summary = page.getByTestId("access-summary");
+      await expect(summary).toContainText("Grant write to acme/gadgets");
+      // The summary is a whole line, not squeezed to nothing, and asks
+      // for no "Show full request" of its own.
+      const box = await summary.boundingBox();
+      expect(box.height).toBeGreaterThanOrEqual(18);
+      expect(
+        await summary.evaluate((el) => el.scrollHeight - el.clientHeight),
+      ).toBeLessThanOrEqual(1);
+      await expect(page.getByTestId("access-summary-toggle")).toHaveCount(0);
+      // The long reason is what gives way, in its own capped box.
+      const reason = page.getByTestId("access-reason");
+      await expect(reason.locator("ol > li")).toHaveCount(2);
+      await expect(page.getByTestId("access-reason-toggle")).toHaveText(
+        "Show full reason",
+      );
+
+      // On a phone the request's sheet covers the list: start again.
+      await page.goto("inbox");
+      await page
+        .getByTestId("queue-row")
+        .filter({ hasText: subject })
+        .locator(".row-main")
+        .click();
+      const alert = page.getByTestId("resolution-question");
+      await expect(alert.locator("ol > li")).toHaveCount(2);
+      await expect(alert.locator("table")).toContainText("cache-a");
+      await expect(alert.locator("code").first()).toHaveText("cache-a");
+    }
+  } finally {
+    await closeQuietly(demoServer, accessCode, id);
+    if (alertId) {
+      await apiPost(
+        demoServer,
+        accessCode,
+        `/api/notifications/${alertId}/clear`,
+      ).catch(() => {});
+    }
+  }
+});
