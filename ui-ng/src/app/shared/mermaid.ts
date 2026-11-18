@@ -506,7 +506,8 @@ const FORBIDDEN_FETCH_ATTRS = new Set([
 // `@import`, `url(...)` or `image-set(...)` tokens cannot slip past regexes.
 function normalizeCss(css: string): string {
   return css
-    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "")
+    .replace(/\\(?:\r\n|[\n\r\f])/g, "")
     .replace(
       /\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|([^\r\n\f]))/g,
       (_, hex: string | undefined, lit: string | undefined) => {
@@ -746,10 +747,28 @@ function stripMermaidFrontMatter(text: string): string {
   return text;
 }
 
-// Mirror Mermaid 12.2.0's `preprocessDiagram` + `encodeEntities` pipeline so
-// directives (`%%{init:...}%%`), `%%` comment lines, CR line endings and
-// `#word;` entity placeholders cannot split or comment-hide a shape token.
-function preprocessMermaidSource(src: string): string {
+function encodeMermaidEntities(text: string): string {
+  const encoded = text
+    .replace(/style.*:\S*#.*;/g, (s) => s.slice(0, -1))
+    .replace(/classDef.*:\S*#.*;/g, (s) => s.slice(0, -1))
+    .replace(/#\w+;/g, (s) => {
+      const inner = s.slice(1, -1);
+      return /^\+?\d+$/.test(inner)
+        ? `\ufb02°°${inner}¶ß`
+        : `\ufb02°${inner}¶ß`;
+    });
+  return `${encoded}\n`;
+}
+
+// Mirror Mermaid 12.2.0's `preprocessDiagram` + `encodeEntities` pipeline across
+// both comment-stripped (`code.cleaned`) and comment-preserving
+// (`code.withComments`, used when `db.preserveCommentsWhenParsing` is set)
+// inputs so directives, `%%` comment lines, CR line endings and `#word;`
+// placeholders cannot split or comment-hide a shape token.
+function preprocessMermaidVariants(src: string): {
+  cleaned: string;
+  withComments: string;
+} {
   const normalized = src
     .replace(/\r\n?/g, "\n")
     .replace(
@@ -762,69 +781,160 @@ function preprocessMermaidSource(src: string): string {
     MERMAID_DIRECTIVE_RE,
     "",
   );
-  const cleaned = withoutDirectives
+  const cleanedRaw = withoutDirectives
     .replace(/^\s*%%(?!\{)[^\n]+\n?/gm, "")
     .trimStart();
-  const encoded = cleaned
-    .replace(/style.*:\S*#.*;/g, (s) => s.slice(0, -1))
-    .replace(/classDef.*:\S*#.*;/g, (s) => s.slice(0, -1))
-    .replace(/#\w+;/g, (s) => {
-      const inner = s.slice(1, -1);
-      return /^\+?\d+$/.test(inner)
-        ? `\ufb02°°${inner}¶ß`
-        : `\ufb02°${inner}¶ß`;
-    });
-  return `${encoded}\n`;
+  const cleaned = encodeMermaidEntities(cleanedRaw);
+  const withComments =
+    withoutDirectives.trimStart() === cleanedRaw
+      ? cleaned
+      : encodeMermaidEntities(withoutDirectives);
+  return { cleaned, withComments };
 }
 
-// Extract `@{...}` shape blocks using Mermaid's Jison `shapeData` /
-// `shapeDataStr` rules: `"` toggles string mode (collapsing `\n\s*` to `<br/>`
-// without backslash escapes) and the first unquoted `}` closes the block.
-function extractShapeBlocks(src: string): string[] {
-  const blocks: string[] = [];
-  for (let i = 0; i < src.length - 1; i++) {
-    if (src[i] !== "@" || src[i + 1] !== "{") continue;
-    let j = i + 2;
-    let buf = "";
-    let inStr = false;
-    let closed = false;
-    while (j < src.length) {
-      const ch = src[j];
-      if (!inStr) {
-        if (ch === '"') {
-          inStr = true;
-          buf += '"';
-          j++;
-          continue;
-        }
-        if (ch === "}") {
-          closed = true;
-          j++;
-          break;
-        }
-        buf += ch;
+// Read one `@{...}` shape block starting right after `@{` using Mermaid's Jison
+// `shapeData` / `shapeDataStr` rules: `"` toggles string mode (collapsing
+// `\n\s*` to `<br/>` without backslash escapes) and the first unquoted `}`
+// closes the block.
+function readShapeBlockAt(
+  src: string,
+  startAfterBrace: number,
+): { block: string; endIndex: number } {
+  let j = startAfterBrace;
+  let buf = "";
+  let inStr = false;
+  let closed = false;
+  while (j < src.length) {
+    const ch = src[j];
+    if (!inStr) {
+      if (ch === '"') {
+        inStr = true;
+        buf += '"';
         j++;
-      } else {
-        if (ch === '"') {
-          inStr = false;
-          buf += '"';
-          j++;
-          continue;
-        }
-        if (ch === "\n") {
-          j++;
-          while (j < src.length && /\s/.test(src[j])) j++;
-          buf += "<br/>";
-          continue;
-        }
-        buf += ch;
-        j++;
+        continue;
       }
+      if (ch === "}") {
+        closed = true;
+        j++;
+        break;
+      }
+      buf += ch;
+      j++;
+    } else {
+      if (ch === '"') {
+        inStr = false;
+        buf += '"';
+        j++;
+        continue;
+      }
+      if (ch === "\n") {
+        j++;
+        while (j < src.length && /\s/.test(src[j])) j++;
+        buf += "<br/>";
+        continue;
+      }
+      buf += ch;
+      j++;
     }
-    blocks.push(closed && !inStr ? buf : UNTERMINATED_SHAPE_BLOCK);
-    i = j - 1;
+  }
+  return {
+    block: closed && !inStr ? buf : UNTERMINATED_SHAPE_BLOCK,
+    endIndex: j,
+  };
+}
+
+// Extract top-level `@{...}` shape blocks while skipping outer `"..."` and
+// `` "`...`" `` label strings so literal `@{` inside a quoted node label does
+// not look like an unterminated or malformed shape block.
+function extractTopLevelShapeBlocks(src: string): string[] {
+  const blocks: string[] = [];
+  let outerStr: "none" | "str" | "md" = "none";
+  for (let i = 0; i < src.length - 1; i++) {
+    if (outerStr === "md") {
+      if (src[i] === "`" && src[i + 1] === '"') {
+        outerStr = "none";
+        i++;
+      }
+      continue;
+    }
+    if (outerStr === "str") {
+      if (src[i] === '"') outerStr = "none";
+      continue;
+    }
+    if (src[i] === '"' && src[i + 1] === "`") {
+      outerStr = "md";
+      i++;
+      continue;
+    }
+    if (src[i] === '"') {
+      outerStr = "str";
+      continue;
+    }
+    if (src[i] === "@" && src[i + 1] === "{") {
+      const { block, endIndex } = readShapeBlockAt(src, i + 2);
+      blocks.push(block);
+      i = endIndex - 1;
+    }
   }
   return blocks;
+}
+
+// Mirror AgentFlowDB's `stripLineTrailingCommas` fallback so multi-line shape
+// blocks with trailing commas are parsed identically when `js-yaml` rejects the
+// unstripped text.
+function stripLineTrailingCommas(body: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  let flowDepth = 0;
+  let blockScalarIndent: number | undefined;
+  const out: string[] = [];
+  for (const line of body.split("\n")) {
+    if (blockScalarIndent !== undefined) {
+      const indent = line.length - line.trimStart().length;
+      if (line.trim() === "" || indent > blockScalarIndent) {
+        out.push(line);
+        continue;
+      }
+      blockScalarIndent = undefined;
+    }
+    let commentStart = -1;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inDouble) {
+        if (ch === "\\") i++;
+        else if (ch === '"') inDouble = false;
+      } else if (inSingle) {
+        if (ch === "'") inSingle = false;
+      } else if (ch === '"') {
+        inDouble = true;
+      } else if (ch === "'") {
+        inSingle = true;
+      } else if (
+        ch === "#" &&
+        (i === 0 || line[i - 1] === " " || line[i - 1] === "\t")
+      ) {
+        commentStart = i;
+        break;
+      } else if (ch === "[" || ch === "{") {
+        flowDepth++;
+      } else if (ch === "]" || ch === "}") {
+        flowDepth = Math.max(0, flowDepth - 1);
+      }
+    }
+    if (inSingle || inDouble || flowDepth > 0) {
+      out.push(line);
+      continue;
+    }
+    const code = commentStart >= 0 ? line.slice(0, commentStart) : line;
+    const comment = commentStart >= 0 ? line.slice(commentStart) : "";
+    if (/:\s*[>|][\d+-]*\s*$/.test(code)) {
+      blockScalarIndent = line.length - line.trimStart().length;
+      out.push(line);
+      continue;
+    }
+    out.push(code.replace(/,([\t ]*)$/, "$1") + comment);
+  }
+  return out.join("\n");
 }
 
 function docHasImgKey(value: unknown, seen: Set<unknown>): boolean {
@@ -857,35 +967,104 @@ function blockHasImgKey(block: string): boolean {
   }
 }
 
-function decodeBasicEntities(s: string): string {
-  return s
-    .replace(/&quot;|&#34;|&#x22;/gi, '"')
-    .replace(/&apos;|&#39;|&#x27;/gi, "'")
-    .replace(/&equals;|&#61;|&#x3d;/gi, "=")
-    .replace(/&amp;|&#38;|&#x26;/gi, "&");
+// Belt-and-suspenders check independent of outer quote/lexer state: test every
+// raw `@{` offset in `src` without skipping ahead, so no earlier token in any
+// diagram grammar can mask a subsequent `@{...}` block that parses with `img`.
+function anyRawShapeOffsetHasImgKey(src: string): boolean {
+  for (let i = 0; i < src.length - 1; i++) {
+    if (src[i] !== "@" || src[i + 1] !== "{") continue;
+    const { block } = readShapeBlockAt(src, i + 2);
+    if (block === UNTERMINATED_SHAPE_BLOCK) continue;
+    const yamlData = block.includes("\n") ? `${block}\n` : `{\n${block}\n}`;
+    try {
+      const doc = loadYaml(yamlData, { schema: JSON_SCHEMA });
+      if (docHasImgKey(doc, new Set())) return true;
+    } catch {
+      if (block.includes("\n")) {
+        const stripped = stripLineTrailingCommas(block);
+        if (stripped !== block) {
+          try {
+            const doc = loadYaml(`${stripped}\n`, { schema: JSON_SCHEMA });
+            if (docHasImgKey(doc, new Set())) return true;
+          } catch {
+            // Non-shape or invalid block; top-level malformed blocks fail in
+            // extractTopLevelShapeBlocks.
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
 
-function hasSequenceRemoteIcon(src: string): boolean {
-  const re = /(?:^|[;\n])[ \t]*properties[ \t]+[^:\n;]+:[ \t]*([^\n]+)/gi;
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&#(\d{1,7});/g, (_, dec: string) => {
+      const cp = parseInt(dec, 10);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/&#x([0-9a-fA-F]{1,6});/g, (_, hex: string) => {
+      const cp = parseInt(hex, 16);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&equals;/gi, "=")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&tab;/gi, "\t")
+    .replace(/&newline;/gi, "\n")
+    .replace(/&amp;/gi, "&");
+}
+
+function hasSequenceRemoteIcon(
+  src: string,
+  isSequenceDiagram: boolean,
+): boolean {
+  if (
+    isSequenceDiagram &&
+    /(?:^|[;\n])[ \t]*details(?=[ \t]+[^/\\+()<>:\n,;\s-])[ \t]+[^:\n;#]+:/i.test(
+      src,
+    )
+  ) {
+    return true;
+  }
+  const re =
+    /(?:^|[;\n])[ \t]*properties[ \t]+[^:\n;#]+:[ \t]*(?:[:]?(?:no)?wrap\b[ \t]*)?([^\n]*)/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) {
-    const raw = m[1].trim().replace(/;+\s*$/, "");
-    for (const candidate of [raw, decodeBasicEntities(raw)]) {
+    const full = m[1].trim().replace(/;+\s*$/, "");
+    const lexed = m[1].split(/[#;]/, 1)[0].trim();
+    const candidates = new Set<string>();
+    for (const piece of [lexed, full]) {
+      if (!piece) continue;
+      const withoutHtml = piece
+        .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+        .replace(/<(?:style|script)\b[^>]*>[\s\S]*?<\/(?:style|script)>/gi, "")
+        .replace(/<\/?[A-Za-z!][^>]*>/g, "");
+      candidates.add(piece);
+      candidates.add(decodeHtmlEntities(piece));
+      candidates.add(withoutHtml);
+      candidates.add(decodeHtmlEntities(withoutHtml));
+    }
+    let parsedAnyObject = false;
+    for (const candidate of candidates) {
       try {
         const parsed = JSON.parse(candidate) as unknown;
-        if (
-          parsed &&
-          typeof parsed === "object" &&
-          typeof (parsed as Record<string, unknown>)["icon"] === "string"
-        ) {
-          const icon = (
-            (parsed as Record<string, unknown>)["icon"] as string
-          ).trim();
-          if (icon && !icon.startsWith("@")) return true;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          parsedAnyObject = true;
+          const icon = (parsed as Record<string, unknown>)["icon"];
+          if (typeof icon === "string") {
+            const trimmed = icon.trim();
+            if (trimmed && !trimmed.startsWith("@")) return true;
+          }
         }
       } catch {
-        // Malformed JSON is ignored by Mermaid's addProperties as well.
+        // Try next candidate; sequenceDiagram fails closed below.
       }
+    }
+    if (isSequenceDiagram && (!parsedAnyObject || lexed.includes("<"))) {
+      return true;
     }
   }
   return false;
@@ -897,14 +1076,19 @@ function hasSequenceRemoteIcon(src: string): boolean {
 // mappings) or a sequenceDiagram actor `icon` property, whose URL Mermaid
 // loads in the live document before sanitizeMermaidSvg runs.
 export function hasImageShape(src: string): boolean {
-  const prepared = preprocessMermaidSource(src);
-  if (
-    prepared.includes("@{") &&
-    extractShapeBlocks(prepared).some(blockHasImgKey)
-  ) {
-    return true;
+  const { cleaned, withComments } = preprocessMermaidVariants(src);
+  const variants =
+    cleaned === withComments ? [cleaned] : [cleaned, withComments];
+  for (const variant of variants) {
+    if (!variant.includes("@{")) continue;
+    if (extractTopLevelShapeBlocks(variant).some(blockHasImgKey)) return true;
+    if (anyRawShapeOffsetHasImgKey(variant)) return true;
   }
-  return hasSequenceRemoteIcon(src) || hasSequenceRemoteIcon(prepared);
+  const isSequence = /^\s*sequenceDiagram\b/i.test(cleaned);
+  return (
+    hasSequenceRemoteIcon(src, isSequence) ||
+    hasSequenceRemoteIcon(cleaned, isSequence)
+  );
 }
 
 function sourceHasExternalStyleUrl(src: string): boolean {
@@ -913,7 +1097,8 @@ function sourceHasExternalStyleUrl(src: string): boolean {
   while ((m = stmtRe.exec(src)) !== null) {
     if (hasUnsafeCssFetch(m[1])) return true;
   }
-  const c4Re = /Update(?:Element|Boundary|Rel)Style\s*\(([^)]*)\)/gi;
+  const c4Re =
+    /Update(?:Element|Boundary|Rel)Style\s*\(((?:[^)"']|"[^"]*"|'[^']*')*)\)/gi;
   while ((m = c4Re.exec(src)) !== null) {
     if (hasUnsafeCssFetch(m[1])) return true;
   }
@@ -924,9 +1109,11 @@ function sourceHasExternalStyleUrl(src: string): boolean {
 // directive carrying `@import` or a non-`#` `url(...)` / `image-set(...)`,
 // which Mermaid would attach to `document.body` while measuring the diagram.
 export function hasExternalStyleUrl(src: string): boolean {
+  const { cleaned, withComments } = preprocessMermaidVariants(src);
   return (
     sourceHasExternalStyleUrl(src) ||
-    sourceHasExternalStyleUrl(preprocessMermaidSource(src))
+    sourceHasExternalStyleUrl(cleaned) ||
+    (withComments !== cleaned && sourceHasExternalStyleUrl(withComments))
   );
 }
 

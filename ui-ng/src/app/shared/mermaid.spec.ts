@@ -285,9 +285,17 @@ describe("image shapes and pre-render fetches", () => {
         'flowchart TD\n  A@{ i%%{init: {}}%%mg: "https://evil.example/p.png" }',
         'flowchart TD\n  A@{ label: x #a;, img: "https://evil.example/p.png" }',
         "flowchart TD\n  A@{\n  label: |\n    '\n  }\n  B@{\n    img: \"https://evil.example/p.png\"\n    # '\n  }",
-        // Sequence diagram remote actor icons.
+        'flowchart TD\n  X["@{ k: "]\n  B@{ x: " #", img: "https://evil.example/p.png", label: "x" }\n  C["}"]',
+        'agentflow-beta\n  X["@{ k: "]\n  B@{\n    img: "https://evil.example/p.png",\n    label: "x",\n  }\n  C["}"]',
+        'flowchart TD\n  A@{\n    k: "\n%% "\n  }\n  B@{ x: " #", img: "https://evil.example/p.png", label: "x", y: "\n%% " }',
+        // Sequence diagram remote actor icons and DOM details injection.
         'sequenceDiagram\n  participant A\n  properties A: {"icon": "https://evil.example/p.png"}\n  A->>A: hi',
         "sequenceDiagram\n  participant A\n  properties A: {&quot;icon&quot;: &quot;https://evil.example/p.png&quot;}\n  A->>A: hi",
+        'sequenceDiagram\n  participant A\n  properties A: {"icon": "https://evil.example/p.png"} # trailing comment\n  A->>A: hi',
+        'sequenceDiagram\n  participant A\n  properties A: {"icon": "https://evil.example/p.png"}; A->>A: hi',
+        'sequenceDiagram\n  participant A\n  properties A: {"ic<!--x-->on": "https://evil.example/p.png"}\n  A->>A: hi',
+        'sequenceDiagram\n  participant A\n  properties A: {"ic<style>x</style>on": "https://evil.example/p.png"}\n  A->>A: hi',
+        "sequenceDiagram\n  participant A\n  details A: host-dom-json\n  A->>A: hi",
       ];
       for (const src of blocked) {
         expect(hasImageShape(src), src).toBe(true);
@@ -303,8 +311,11 @@ describe("image shapes and pre-render fetches", () => {
         'flowchart LR\n  A@{ shape: rect, label: "img: local caption" }',
         "flowchart LR\n  A@{ &a shape: rect, alias: *a }",
         "flowchart LR\n  A@{ &a self: *a, shape: rect }",
+        'flowchart LR\n  A["docs @{not: : yaml}"] --> B',
+        'flowchart LR\n  A["`docs @{not: : yaml}`"] --> B',
         '---\ntitle: "docs @{not: : yaml}"\n---\nflowchart LR\n  A --> B',
         'sequenceDiagram\n  participant A\n  properties A: {"icon": "@clock"}\n  A->>A: hi',
+        "gantt\n  title Plan\n  properties release : done, 2026-01-01, 1d",
       ];
       for (const src of safe) {
         expect(hasImageShape(src), src).toBe(false);
@@ -321,6 +332,7 @@ describe("image shapes and pre-render fetches", () => {
       "flowchart LR\n  A[hi]\n  style A fill:\\75 rl(https://evil.example/p.png)",
       "flowchart LR\n  A --> B\n  linkStyle 0 stroke:url('https://evil.example/p.png')",
       'C4Context\n  Person(a, "A")\n  UpdateElementStyle(a, $bgColor="url(https://evil.example/p.png)")',
+      'C4Context\n  Person(a, "A")\n  UpdateElementStyle(a, $fontColor="rgb(0,0,0)", $bgColor="url(https://evil.example/p.png)")',
     ];
     for (const src of blockedStyles) {
       expect(hasExternalStyleUrl(src), src).toBe(true);
