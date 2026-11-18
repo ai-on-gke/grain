@@ -95,7 +95,10 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		if finish.Product != "" && finish.Product != "report" {
 			f.Product = finish.Product
 			version := gates.Digest(finish)
-			f.ProductEvidence = &gates.Evidence{Kind: finish.Product, ID: runID, Version: version, Subject: gates.Subject{Kind: "task", TaskID: f.TaskID}, Digest: version}
+			f.ProductEvidence = &gates.Evidence{Kind: "report", ID: finish.Product + "/" + runID, Version: version, Subject: gates.Subject{Kind: "task", TaskID: f.TaskID}, Digest: version}
+			if finish.Product == "review" {
+				f.ProductEvidence.Kind = "review"
+			}
 		}
 	}
 	if f.Product == "report" && f.Report == nil {
@@ -151,7 +154,6 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			if resource.State == "equivalent" && resource.Complete && !resource.ObservedAt.Before(started) && now.Before(resource.ValidUntil) {
 				f.Product = "change"
 				e := resource.Evidence
-				e.Kind = "delivered_equivalent_change"
 				f.ProductEvidence = &e
 				f.ProductUnknown = ""
 			}
@@ -160,7 +162,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 	if outcome == NothingNeededOutcome && (!recorded || finish.Product != "nothing_needed" || finish.Policy != GateOutcomePolicy(*t)) {
 		f.ProductUnknown = "No-work settlement lacks current authenticated finish provenance."
 	}
-	if f.Product == "change" && f.ProductEvidence != nil && f.ProductEvidence.Kind != "accepted_in_place_change" {
+	if f.Product == "change" && f.ProductEvidence != nil && inPlace == nil {
 		verified := false
 		for _, resources := range f.Resources {
 			if len(resources) == 0 {
@@ -175,7 +177,6 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 			if known {
 				verified = true
 				evidence := resources[0].Evidence
-				evidence.Kind = "delivered_change"
 				evidence.Version = gates.Digest(resources)
 				evidence.Digest = evidence.Version
 				f.ProductEvidence = &evidence
@@ -557,7 +558,7 @@ func captureChildOutcome(ctx context.Context, q querier, parent Task, id string,
 		Delivered         *int64
 		ReportVersion     string
 	}{t.Links, GateOutcomePolicy(*t), o.ClosedAt, o.CompletedAt, outcome, runID, event, comment, t.Filing, t.Proposer, sources, o.DeliveredCommentID, reportVersion})
-	child.Evidence = gates.Evidence{Kind: "task_outcome", ID: id, Version: version, Subject: gates.Subject{Kind: "task", TaskID: id}, Digest: version}
+	child.Evidence = gates.Evidence{Kind: "child_outcome", ID: id, Version: version, Subject: gates.Subject{Kind: "task", TaskID: id}, Digest: version}
 	return child, nil
 }
 
@@ -664,7 +665,7 @@ func captureInPlaceDelivery(ctx context.Context, q querier, review Task, now tim
 		Source GateOutcomeSource
 		Review []Link
 	}{revision, source, review.Links})
-	return &gates.Evidence{Kind: "accepted_in_place_change", ID: pr.String(), Version: version, Subject: gates.Subject{Kind: "task", TaskID: ownerID}, Head: &head, Digest: version}, revision, nil
+	return &gates.Evidence{Kind: "review", ID: pr.String(), Version: version, Subject: gates.Subject{Kind: "task", TaskID: ownerID}, Head: &head, Digest: version}, revision, nil
 }
 
 func oneOfOutcome(s string, values ...string) bool {

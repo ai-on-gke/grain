@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,18 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	var canonical struct {
+		Defs map[string]struct {
+			Properties map[string]struct{ Enum []string }
+		} `json:"$defs"`
+	}
+	schema, err := os.ReadFile("../../../design/spec/gates/contracts.schema.json")
+	must(err)
+	must(json.Unmarshal(schema, &canonical))
+	evidenceKinds := canonical.Defs["evidence"].Properties["kind"].Enum
+	if len(evidenceKinds) == 0 {
+		t.Fatal("canonical evidence kinds unavailable")
 	}
 	seed := func(id string) model.Task {
 		task := model.Task{ID: id, Intent: model.IntentImplement, Title: "Observe " + id, Target: &repo, Filing: model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect}, Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective, CreatedAt: &now}
@@ -91,7 +104,21 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatal("shadow observation woke legacy listeners")
 		default:
 		}
+		if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+			raw, err := json.Marshal(v)
+			must(err)
+			file, err := os.OpenFile(path+".jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+			must(err)
+			_, err = file.Write(append(raw, '\n'))
+			must(err)
+			must(file.Close())
+		}
 		for _, result := range v.Results {
+			for _, evidence := range result.Result.Evidence {
+				if !slices.Contains(evidenceKinds, evidence.Kind) {
+					t.Fatalf("noncanonical evidence kind %q for %s", evidence.Kind, result.Result.BindingID)
+				}
+			}
 			if len(result.Result.Work) > 0 || len(result.Result.Actions) > 0 {
 				t.Fatal("shadow emitted work or actions")
 			}
@@ -151,7 +178,21 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		if status(v, "pr_merged") != "unknown" || status(v, "delivery-change") != "unknown" {
 			t.Fatal("bare change link proved integration or lost authenticated delivery")
 		}
+		if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+			raw, err := json.Marshal(v)
+			must(err)
+			file, err := os.OpenFile(path+".jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+			must(err)
+			_, err = file.Write(append(raw, '\n'))
+			must(err)
+			must(file.Close())
+		}
 		for _, result := range v.Results {
+			for _, evidence := range result.Result.Evidence {
+				if !slices.Contains(evidenceKinds, evidence.Kind) {
+					t.Fatalf("noncanonical evidence kind %q for %s", evidence.Kind, result.Result.BindingID)
+				}
+			}
 			for _, dependency := range result.Result.Dependencies {
 				if dependency.Head != nil && *dependency.Head == "" {
 					t.Fatal("missing head violated the nullable v1 wire contract")
@@ -175,6 +216,9 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatal("positive merge receipt missing")
 		}
 		raw, _ := json.Marshal(v)
+		if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+			must(os.WriteFile(path+".positive", raw, 0600))
+		}
 		if !strings.Contains(string(raw), "external-test-observation") || !strings.Contains(string(raw), "head-1") {
 			t.Fatal("attribution/head provenance missing")
 		}
@@ -195,7 +239,7 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		if status(observe(task), "pr_merged") != "met" {
 			t.Fatal("older source replaced current receipt")
 		}
-		task.Grants = append(task.Grants, model.CanonicalGrant("api:tasks:read@acme/outcomes"))
+		task.Grants = append(task.Grants, model.CanonicalGrant(model.APIGrantString("tasks:read", "acme/outcomes")))
 		must(s.PutTask(ctx, task))
 		if status(observe(task), "pr_merged") != "unknown" {
 			t.Fatal("old authorization policy reused")
@@ -233,6 +277,11 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		v := observe(task)
 		if status(v, "cl_submitted") != "met" {
 			t.Fatal("complete submitted CL set missing")
+		}
+		if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+			raw, err := json.Marshal(v)
+			must(err)
+			must(os.WriteFile(path+".cls", raw, 0600))
 		}
 		task.Links = append(task.Links, model.Link{Kind: model.LinkChangelist, Target: "cl/13"})
 		must(s.PutTask(ctx, task))

@@ -37,7 +37,7 @@ var childrenSchema []byte
 //go:embed acknowledgment.schema.json
 var acknowledgmentSchema []byte
 
-const Implementation = "builtin-outcome-observer-v3"
+const Implementation = "builtin-outcome-observer-v4"
 
 type Descriptor struct {
 	Type           string

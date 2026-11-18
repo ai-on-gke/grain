@@ -65,7 +65,7 @@ func TestOutcomeProfilesAreClosed(t *testing.T) {
 }
 func TestDeliveryVariantsAndCompatibilityAreInert(t *testing.T) {
 	now := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
-	e := &Evidence{Kind: "change", ID: "pr/1", Version: "v1"}
+	e := &Evidence{Kind: "integration", ID: "pr/1", Version: "v1"}
 	for _, product := range []string{"change", "review", "nothing_needed", "report"} {
 		for _, selected := range []string{"change", "review", "nothing_needed", "report", "any"} {
 			f := outcomeFacts(now)

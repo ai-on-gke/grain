@@ -85,6 +85,12 @@ values; internal task/evidence source versions are local opaque SHA-256 identiti
 
 ### Outcome provenance and limitations
 
+Evidence uses the canonical API envelopes: scoped change observations use
+`integration`, accepted in-place fixes use `review`, selected child outcomes use
+`child_outcome`, and authenticated no-work dispositions use `report`. The delivery
+profile and source-version digest preserve the precise product and provenance;
+an integration evidence envelope alone does not assert a positive merge.
+
 Existing successful finish, verified PR webhook/detail reads, ordinary CL
 provider reads/polls and submission settlement emit compact typed provenance into
 `gate_outcome_source`. This is a bounded diagnostic receipt cache, not snapshot
