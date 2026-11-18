@@ -14,7 +14,7 @@
 
 import type { Task } from "../api/models";
 import { isMerged, submitBlock } from "../shared/gates";
-import { ago, stateLabel } from "../tasks/task-view";
+import { ago, taskStateLabel } from "../tasks/task-view";
 
 export type InitiatorKind = "user" | "system";
 export type SystemKind =
@@ -723,6 +723,7 @@ function resolveLineage(
 function nodeActivityText(t: Task): string {
   if (t.activity) return t.activity;
   if (t.questionSummary) return t.questionSummary;
+  if (t.noteSummary) return t.noteSummary;
   const block = submitBlock(t);
   if (block) return block;
   return "";
@@ -864,7 +865,7 @@ function buildWorkstream(
             ? "Done"
             : cls.category === "blocked" && t.state === "queued"
               ? "Blocked"
-              : stateLabel(t.state),
+              : taskStateLabel(t),
       activityText: nodeActivityText(t),
       createdMs,
       updatedMs,

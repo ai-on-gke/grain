@@ -323,6 +323,38 @@ describe("GrainApi.getIfChanged", () => {
     const afterMutation = await p4;
     expect(afterMutation["t1"].title).toBe("Updated");
   });
+
+  it("taskSummaries preserves fulfilled chunks when another chunk fails and rejects if all chunks fail", async () => {
+    const ids = Array.from({ length: 75 }, (_, i) => `p${i + 1}`);
+    const partial = api.taskSummaries(ids, 1, 1);
+    const reqs = http.match((r) => r.url.startsWith("/api/tasks/summaries?"));
+    expect(reqs.length).toBe(2);
+
+    reqs[0].flush({ tasks: { p1: { id: "p1", title: "Kept" } } });
+    reqs[1].flush("upstream failure", {
+      status: 500,
+      statusText: "Internal Server Error",
+    });
+    const merged = await partial;
+    expect(Object.keys(merged)).toEqual(["p1"]);
+    expect(merged["p1"].title).toBe("Kept");
+
+    // When every chunk fails, taskSummaries still rejects with the error.
+    const allFail = api.taskSummaries(ids, 1, 1);
+    const failReqs = http.match((r) =>
+      r.url.startsWith("/api/tasks/summaries?"),
+    );
+    expect(failReqs.length).toBe(2);
+    failReqs[0].flush("boom-1", {
+      status: 500,
+      statusText: "Internal Server Error",
+    });
+    failReqs[1].flush("boom-2", {
+      status: 502,
+      statusText: "Bad Gateway",
+    });
+    await expect(allFail).rejects.toMatchObject({ status: 500 });
+  });
 });
 
 function verifierUnavailableOpts(retryAfter?: string) {

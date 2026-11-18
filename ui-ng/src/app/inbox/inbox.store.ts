@@ -24,6 +24,8 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { RouteKey } from "../api/generated-routes";
 import type {
+  ClearNotificationsRequest,
+  ClearNotificationsResponse,
   DiffPreview,
   LocalScriptApproval,
   Notification,
@@ -296,6 +298,20 @@ export class InboxStore implements OnDestroy {
     const id = this.selected()?.taskId;
     return id ? (this.details()[id] ?? null) : null;
   });
+  // The selected alert's whole body: the open list the Inbox polls holds
+  // only each body's first line (?fields=list), and the dock renders the
+  // alert in full. Kept per raise (notificationBodyKey), since raising an
+  // alert again rewrites its body under the same id: keyed by id alone, a
+  // re-raise showed the previous raise's body until the read came back,
+  // and for good when it failed.
+  private readonly notificationBodies = signal<Record<string, string>>({});
+  private readonly notificationBodyInFlight = new Set<string>();
+  readonly selectedNotificationBody = computed<string | null>(() => {
+    const n = this.selected()?.notification;
+    return n
+      ? (this.notificationBodies()[notificationBodyKey(n)] ?? null)
+      : null;
+  });
   readonly selectedTranscript = signal<string | null>(null);
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptKey = "";
@@ -359,6 +375,7 @@ export class InboxStore implements OnDestroy {
       this.ensureDetail(),
       this.ensureQueueDetails(),
       this.ensureDiff(),
+      this.ensureNotificationBody(),
     ]);
     if (this.isInspectorActive()) {
       this.syncSelectedTranscript();
@@ -538,7 +555,10 @@ export class InboxStore implements OnDestroy {
       const hasExplicitRef = Boolean(
         branch || e?.task?.pullRequest || e?.task?.changelists?.length,
       );
-      if (isProposal && !hasExplicitRef) {
+      // A task with no repository (a changelist's) has no branch the
+      // server can preview: it answers 404, which only adds a console
+      // error.
+      if ((isProposal && !hasExplicitRef) || (e && !e.repo)) {
         this.diffs.update((m) => ({ ...m, [id]: null }));
         return;
       }
@@ -908,6 +928,39 @@ export class InboxStore implements OnDestroy {
     this.markSeen(key);
     void this.ensureDetail(true);
     void this.ensureDiff();
+    void this.ensureNotificationBody();
+  }
+
+  // ensureNotificationBody reads the selected alert's whole body, once per
+  // time it is raised again (lastRaisedAt), from its own family's list.
+  async ensureNotificationBody(): Promise<void> {
+    const n = this.selected()?.notification;
+    if (!n) return;
+    const key = notificationBodyKey(n);
+    if (this.notificationBodyInFlight.has(key)) return;
+    this.notificationBodyInFlight.add(key);
+    try {
+      const all = await this.api.openNotificationsInFamily(
+        n.family || n.subject,
+      );
+      // The family's list is read as it is now: a body raised again since
+      // the selection was drawn belongs to the next raise, not this one.
+      const hit = all.find((x) => String(x.id) === String(n.id));
+      if (hit?.body && notificationBodyKey(hit) === key) {
+        const body = hit.body;
+        const prefix = `${n.id}:`;
+        // An earlier raise's body is never shown again.
+        this.notificationBodies.update((m) => ({
+          ...Object.fromEntries(
+            Object.entries(m).filter(([k]) => !k.startsWith(prefix)),
+          ),
+          [key]: body,
+        }));
+      }
+    } catch {
+      // The first line from the list stays; the next selection tries again.
+      this.notificationBodyInFlight.delete(key);
+    }
   }
 
   // next selects the row that now stands where the selected one was (or
@@ -1039,6 +1092,29 @@ export class InboxStore implements OnDestroy {
     const id = (a.params as { id?: string } | undefined)?.id;
     if (id && a.route.startsWith("POST /api/tasks/{id}/")) {
       this.answered.set(String(id), a.label);
+    }
+  }
+
+  // clearNotifications is the Clear all / Clear these call: a dry run for
+  // the confirm dialog's count, or the clear itself, after which the
+  // cleared rows leave at once. null when it failed (actionError says why).
+  async clearNotifications(
+    req: ClearNotificationsRequest,
+  ): Promise<ClearNotificationsResponse | null> {
+    if (!req.dryRun) this.busy.set("clear-notifications");
+    this.actionError.set(null);
+    try {
+      const res = await this.api.clearNotifications(req);
+      if (!req.dryRun) {
+        await this.refresh();
+        this.applyUpdates();
+      }
+      return res;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return null;
+    } finally {
+      if (!req.dryRun) this.busy.set(null);
     }
   }
 
@@ -1365,4 +1441,13 @@ export function stopperOf(
   if (!d || !questionCommentId) return "";
   const c = d.comments?.find((x) => x.id === questionCommentId);
   return c?.authorLabel || c?.author || "";
+}
+
+// notificationBodyKey names one raise of an alert: raising it again keeps
+// its id but rewrites its body and lastRaisedAt.
+function notificationBodyKey(n: {
+  id: number | string;
+  lastRaisedAt?: string | null;
+}): string {
+  return `${n.id}:${n.lastRaisedAt ?? ""}`;
 }

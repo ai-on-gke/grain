@@ -606,10 +606,11 @@ type RepoDeclarationsStatus struct {
 	Error string `json:"error,omitempty"`
 	// Templates, Suites, Schedules and Triggers are what this repository
 	// declares right now, each as the file it is declared in.
-	Templates []string `json:"templates,omitempty"`
-	Suites    []string `json:"suites,omitempty"`
-	Schedules []string `json:"schedules,omitempty"`
-	Triggers  []string `json:"triggers,omitempty"`
+	Templates      []string            `json:"templates,omitempty"`
+	Suites         []string            `json:"suites,omitempty"`
+	Schedules      []string            `json:"schedules,omitempty"`
+	Triggers       []string            `json:"triggers,omitempty"`
+	TriggerDetails []model.PathTrigger `json:"triggerDetails,omitempty"`
 	// Pushes is every declared template here with a `push:` list
 	// (grain/task-2536): what the runs of tasks filed from it may push in
 	// this repository beyond their own branch.
@@ -1523,6 +1524,7 @@ func (c *Client) repoDeclarationsStatus(ctx context.Context, repo model.RepoRef)
 	}
 	for _, tr := range triggers {
 		status.Triggers = append(status.Triggers, tr.Trigger.Path)
+		status.TriggerDetails = append(status.TriggerDetails, tr.Trigger)
 	}
 	rules, err := c.Store.MergeRulesOf(ctx, repo)
 	if err != nil {

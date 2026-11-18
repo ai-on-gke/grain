@@ -1,0 +1,3 @@
+{"kind": "mcp_sequence", "calls": [
+ {"tool": "run_command", "args": {"command": "cd work && echo walk > walk.txt && git add walk.txt && git -c user.name=Walk -c user.email=walk@example.com commit -qm 'docs: add walk.txt' -m 'Walkthrough commit for a note beside a pull request.' && git push -q origin HEAD", "description": "pushing a branch"}},
+ {"tool": "comment_on_issue", "args": {"comment": "Pushed walk.txt; the pull request has the details.", "summary": "Report: walk.txt pushed for review"}}]}

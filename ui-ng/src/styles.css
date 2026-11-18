@@ -195,6 +195,62 @@ body {
   background: var(--md-sys-color-surface);
 }
 
+/* The disconnected banner (AppComponent, ConnectionStatus) stands above the
+   rail and the page rather than over them: while it is up the root becomes a
+   column and the shell takes what is left of the viewport. */
+g-root:has(> .conn-banner),
+g-root:has(> .install-banner) {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+g-root:has(> .conn-banner) > .app-shell,
+g-root:has(> .install-banner) > .app-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
+.conn-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  border-bottom: 1px solid var(--md-sys-color-warning);
+  z-index: 30;
+}
+
+/* The install notice (AppComponent.installNotice) stands above the shell the
+   same way, in the error colours: the install has to be migrated by hand. */
+.install-banner {
+  flex: none;
+  padding: 8px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  overflow-wrap: anywhere;
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  border-bottom: 1px solid var(--md-sys-color-error);
+  z-index: 30;
+}
+
+.install-banner a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.conn-banner svg {
+  flex: none;
+}
+
 .nav-rail {
   grid-area: rail;
   display: flex;

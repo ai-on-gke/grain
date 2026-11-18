@@ -2909,6 +2909,10 @@ type TaskSpan struct {
 
 // Run is one attempt. A live run is a Run with no FinishedAt.
 type Run struct {
+	// RequireReady rechecks ordinary dispatch eligibility inside the claim transaction.
+	// Explicit Run now callers leave it false. It is not persisted.
+	RequireReady bool `json:"-"`
+
 	ID     string
 	TaskID string
 	// Sandbox is the sandbox this run was given -- the kontur VM name, or

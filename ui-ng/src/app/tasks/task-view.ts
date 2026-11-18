@@ -139,6 +139,35 @@ export function stateLabel(state: string): string {
   return STATE_LABELS[state] ?? state.replace(/_/g, " ");
 }
 
+// A completed task whose merge failed, or whose pull request grain cannot
+// read, is not a change being landed, so its oval does not say "Merging":
+// it says what classic's row says (MERGE_QUEUE_PHRASES in ui/src/state.js,
+// "the states that used to be dressed up as progress").
+const STUCK_MERGE_LABELS: Record<string, string> = {
+  merge_failed: "Merge failed",
+  unreadable: "Can't read the pull request",
+};
+
+// mergeStuck is whether t sits in one of those states.
+export function mergeStuck(t: {
+  state: string;
+  mergeQueueState?: string;
+}): boolean {
+  return (
+    t.state === "completed" && !!STUCK_MERGE_LABELS[t.mergeQueueState ?? ""]
+  );
+}
+
+// taskStateLabel is t's state oval: stateLabel, except for a stuck merge.
+export function taskStateLabel(t: {
+  state: string;
+  mergeQueueState?: string;
+}): string {
+  return mergeStuck(t)
+    ? STUCK_MERGE_LABELS[t.mergeQueueState!]
+    : stateLabel(t.state);
+}
+
 // ---------- Run order (D-28) ----------
 
 export interface Band {
