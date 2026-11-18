@@ -384,6 +384,12 @@ any condition in `when` is met. With no `when`, it is re-queued on the
 next cycle, which suits a durable task splitting long work into steps.
 `message: true` adds "or when anybody posts to this task".
 
+Current PR feedback also permits a dispatch despite a CI/message wait or an
+ordinary pending question, retaining its evidence and questions. See the
+[PR feedback wake specification](../spec/pr-feedback-wake/pr-feedback-wake.spec.md)
+for supported events, eligibility and delivery races. This applies to the
+current runtime independently of the future built-in gates protocol.
+
 How it relates to what exists:
 
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
@@ -593,7 +599,8 @@ The rules:
   goes away (`Store.ClearNotification(subject, by)`). A notification with
   `clears_when` is checked each cycle by `reconcileNotifications`. The
   conditions are a `WaitTarget` (a task closed or merged, a CI verdict),
-  `base-green {repo, branch}`, or `ttl`. A cleared notification stays
+  `base-green {repo, branch}`, `ttl`, or `suite-run {suiteRun}` (the
+  suite run is no longer active: finished, failed, or gone). A cleared notification stays
   readable in history, and a later raise of the same subject is a new
   instance.
 - **Acknowledge is not clear.** Acknowledging hides it from the Alerts

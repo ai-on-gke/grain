@@ -92,7 +92,10 @@ import { TaskStore } from "./task.store";
 
         <div class="goal-card-grid">
           <div class="goal-section" data-testid="goal-deliverables">
-            <h3 class="goal-section-title">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              class="goal-section-title"
+            >
               Deliverables
               @if (deliverables().length) {
                 ({{ verifiedCount() }}/{{ deliverables().length }} verified)
@@ -124,7 +127,10 @@ import { TaskStore } from "./task.store";
           </div>
 
           <div class="goal-section" data-testid="goal-assumptions">
-            <h3 class="goal-section-title">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              class="goal-section-title"
+            >
               Assumptions ({{ assumptions().length }})
             </h3>
             @if (assumptions().length) {
@@ -161,6 +167,9 @@ import { TaskStore } from "./task.store";
 export class TaskGoalCardComponent {
   readonly task = input.required<Task>();
   readonly attemptsCount = input<number>(0);
+  // pane is set when the task detail sits in a split pane: its sections
+  // are h3 there, so these headings step down to level 4 under them.
+  readonly pane = input(false);
   readonly acted = output<void>();
 
   private readonly api = inject(GrainApi);

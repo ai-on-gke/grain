@@ -14,12 +14,16 @@
 
 // The Inbox's Alerts group offers Clear all, and Clear these once the view
 // is filtered, against a real `grain demo`: it counts with a dry run,
-// confirms with that count and a reason, and clears through POST
-// /api/notifications/clear. The button sits in its group's head and the
-// dialog fits a phone. Only an alert this file raises itself is cleared, so
-// the demo store's own alerts are left for the specs that read them.
+// confirms with that count and a reason, and clears only the counted ids
+// through POST /api/notifications/clear so an alert raised while the dialog
+// is open stays open. The button sits in its group's head and the dialog fits
+// a phone.
 
 import { test, expect } from "./fixtures.js";
+
+// A distinct demoArgs gives this spec a demo server of its own so the
+// unfiltered Clear all test never clears alerts another spec reads.
+test.use({ demoArgs: ["-open=false", "-as", "next-inbox-clear-alerts"] });
 
 async function api(baseURL, code, method, path, data) {
   const res = await fetch(`${baseURL}${path}`, {
@@ -159,3 +163,100 @@ test(
     await expect(clear).toBeVisible();
   },
 );
+
+test("Clear all clears only the alerts counted by the dry run and keeps a new alert open", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const key = `e2e-clear-all-${Date.now()}`;
+  const early = await api(
+    demoServer,
+    accessCode,
+    "POST",
+    "/api/notifications",
+    {
+      subject: `ops.${key}:early`,
+      title: `Early warning on ${key}`,
+      severity: "warning",
+    },
+  );
+  const earlyId = early.notification.id;
+  let lateId = null;
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/next/inbox");
+    const group = page.getByTestId("inbox-group-notification");
+    const clear = group.getByRole("button", {
+      name: /^Clear all \d+ alerts?$/,
+    });
+    await expect(clear).toBeVisible();
+    await clear.click();
+
+    const dialog = page.getByRole("dialog", {
+      name: /^Clear all \d+ alerts?\?$/,
+    });
+    await expect(dialog).toBeVisible();
+    const accept = dialog.getByRole("button", { name: /^Clear \d+$/ });
+    const acceptLabel = (await accept.textContent()).trim();
+    const counted = Number(acceptLabel.replace(/^Clear\s+/, ""));
+    expect(counted).toBeGreaterThanOrEqual(1);
+
+    // Raise a critical alert after the dry run completed, while the
+    // confirmation dialog is open.
+    const late = await api(
+      demoServer,
+      accessCode,
+      "POST",
+      "/api/notifications",
+      {
+        subject: `ops.${key}:late-critical`,
+        title: `Late critical on ${key}`,
+        severity: "critical",
+      },
+    );
+    lateId = late.notification.id;
+
+    await dialog
+      .getByLabel("Reason (kept in the audit log)")
+      .fill("e2e: clear only counted alerts");
+    await expect(accept).toBeEnabled();
+    await accept.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByText(new RegExp(`^Cleared ${counted} alerts?(;|$)`)),
+    ).toBeVisible();
+
+    const open = await api(
+      demoServer,
+      accessCode,
+      "GET",
+      "/api/notifications?open=1",
+    );
+    const list = Array.isArray(open)
+      ? open
+      : (open.items ?? open.notifications ?? []);
+    const openIds = list.map((n) => n.id);
+    expect(openIds).not.toContain(earlyId);
+    expect(openIds).toContain(lateId);
+    await expect(
+      group.getByRole("button", { name: "Clear all 1 alert" }),
+    ).toBeVisible();
+    const lateRow = group.getByRole("button", {
+      name: new RegExp(`Late critical on ${key}`),
+    });
+    await lateRow.scrollIntoViewIfNeeded();
+    await expect(lateRow).toBeVisible();
+  } finally {
+    for (const id of [earlyId, lateId]) {
+      if (id !== null) {
+        await api(
+          demoServer,
+          accessCode,
+          "POST",
+          `/api/notifications/${id}/clear`,
+        ).catch(() => {});
+      }
+    }
+  }
+});

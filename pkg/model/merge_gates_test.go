@@ -56,8 +56,8 @@ func TestTargetedReviewsAreAGateApartFromTheCodeReview(t *testing.T) {
 	model.AddReviewFindings(&task, model.ReviewFindingsRecord{Gate: "trigger:release-machinery", ReviewTask: "r2",
 		Summary: "review r2 left findings", At: time.Unix(0, 0)})
 	gates = gatesByID(task, map[string]model.State{"r1": model.StateCompleted, "r2": model.StateCompleted})
-	if g := gates[model.GateTargetedReview]; g.State != model.GateStateFindings {
-		t.Errorf("targeted review gate = %+v, want its trigger's findings", g)
+	if g := gates[model.GateTargetedReview]; g.State != model.GateStateFindings || !g.Acceptable {
+		t.Errorf("targeted review gate = %+v, want acceptable findings from its trigger", g)
 	}
 	if g := gates[model.GateReview]; g.State != model.GateStatePassed {
 		t.Errorf("code review gate = %+v, want it passed: the findings are the targeted review's", g)

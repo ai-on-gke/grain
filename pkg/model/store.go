@@ -2895,6 +2895,14 @@ var ErrDurableCeiling = fmt.Errorf("%w: the durable-run ceiling is full", ErrAtC
 // test starting a run directly.
 func (s *Store) StartRun(ctx context.Context, r Run, limits Limits) error {
 	return s.write(ctx, "start run "+r.ID+" for task "+r.TaskID, func(tx *sql.Tx) error {
+		if r.RequireReady {
+			var one int
+			if err := tx.QueryRowContext(ctx, "SELECT 1 FROM task_ready WHERE task_id = ?", r.TaskID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+				return ErrTaskNotReady
+			} else if err != nil {
+				return err
+			}
+		}
 		// A paused task is never dispatched (TaskPause), whichever path
 		// asked: the ready list, a run-now request, a schedule's wake or a
 		// console session. Checked here, in the transaction that records
@@ -3020,6 +3028,10 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 	if err != nil {
 		return err
 	}
+	feedbackWait, err := prFeedbackWait(ctx, tx, r.TaskID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO `task_run` (`id`,`task_id`,`sandbox`,`unit`,`attempt`,"+
 			"`started_at`,`finished_at`,`outcome`,`run_now_at`,`standing`) VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -3027,8 +3039,10 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 		r.StartedAt.UTC(), timeOf(r.FinishedAt), nullable(r.Outcome), spent, standingText); err != nil {
 		return err
 	}
-	if err := resumeSuspensionsTx(ctx, tx, r.TaskID, r.ID, r.StartedAt); err != nil {
-		return err
+	if !feedbackWait {
+		if err := resumeSuspensionsTx(ctx, tx, r.TaskID, r.ID, r.StartedAt); err != nil {
+			return err
+		}
 	}
 	for _, l := range r.Leases {
 		if _, err := tx.ExecContext(ctx,

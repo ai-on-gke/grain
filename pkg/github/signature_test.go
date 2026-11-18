@@ -128,3 +128,20 @@ func TestRESTClientSignsPullRequestsAndCommentsWithDelegatedAuthor(t *testing.T)
 		t.Fatalf("SubmitReview body missing signature:\n%s", body)
 	}
 }
+
+func TestIsGrainSignedCommentRecognizesOnlyTheTrailingFooter(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{SignCommentBody("answer", "Alice"), true},
+		{SignCommentBody("answer", "Alice") + "\n  ", true},
+		{"a human's ordinary review", false},
+		{"*Signed by Alice (via Grain)*\nquoted example above; please fix the bug", false},
+		{"> *Signed by Alice (via Grain)*", false},
+	} {
+		if got := IsGrainSignedComment(tc.body); got != tc.want {
+			t.Errorf("IsGrainSignedComment(%q) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+}

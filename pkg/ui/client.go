@@ -128,6 +128,9 @@ type Client struct {
 
 // NewClient builds a Client over a store.
 func NewClient(cfg Config, store *model.Store) *Client {
+	if cfg.GateObservationTaskIDs == nil {
+		cfg.GateObservationTaskIDs = observationEnvironment()
+	}
 	return &Client{Config: cfg, Store: store}
 }
 
@@ -1799,6 +1802,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if detail.DeploymentWide, err = c.deploymentWideGrants(ctx, *t); err != nil {
 		return TaskDetail{}, err
 	}
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *t)
 	return detail, nil
 }
 

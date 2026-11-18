@@ -91,7 +91,12 @@ func (s *Server) handleRefSummary(w http.ResponseWriter, r *http.Request) {
 // permission reaches across agent grants, external-agent tokens and limited
 // verified-identity RBAC roles.
 func (s *Server) taskReadable(r *http.Request) func(string) bool {
-	ctx := r.Context()
+	return taskReadableForContext(r.Context())
+}
+
+// Share the exact repository-read decision with optional projections that read
+// transitive evidence; an implicit self-task read is a narrower permission.
+func taskReadableForContext(ctx context.Context) func(string) bool {
 	call, isAgent := agentCallFromContext(ctx)
 	tok := externalTokenFromContext(ctx)
 	role := accessRoleFromContext(ctx)
@@ -149,7 +154,10 @@ func (s *Server) taskReadableContext(r *http.Request) context.Context {
 // tasks:read reach s.taskReadable(r) narrows, rather than an unrestricted
 // operator or full-role caller.
 func taskReadScoped(r *http.Request) bool {
-	ctx := r.Context()
+	return taskReadScopedForContext(r.Context())
+}
+
+func taskReadScopedForContext(ctx context.Context) bool {
 	_, isAgent := agentCallFromContext(ctx)
 	tok := externalTokenFromContext(ctx)
 	_, isCIAPI := model.CIAPICallFromContext(ctx)

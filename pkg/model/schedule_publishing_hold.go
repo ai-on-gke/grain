@@ -127,13 +127,8 @@ func (s *Store) PublishingHold(ctx context.Context, sched Schedule, now time.Tim
 	if sched.SkipWhen != SkipWhenPublishingHeld {
 		return nil, nil
 	}
-	base := sched.Base
-	if base == "" && sched.TemplateID != nil && !IsSystemTemplateID(*sched.TemplateID) {
-		if tmpl, err := s.GetTemplate(ctx, *sched.TemplateID); err == nil && tmpl != nil {
-			base = tmpl.Base
-		}
-	}
-	return s.publishingHold(ctx, sched, s.overlapGroupRepo(ctx, sched), base, now)
+	repo, base := s.scheduleFiringTarget(ctx, sched)
+	return s.publishingHold(ctx, sched, repo, base, now)
 }
 
 // publishingSuppression is publishingHold for SuppressedFiring: the same

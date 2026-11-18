@@ -467,7 +467,7 @@ func TestListNotificationsNarrowsToWhatARepoScopedReaderMayRead(t *testing.T) {
 	seedAPITask(t, h.client, "723", "acme/secret")
 	store := h.client.Store
 	for _, n := range []model.Notification{
-		{Subject: "ci.red:acme/widgets", Title: "widgets red", TaskID: "721"},
+		{Subject: "ci.red:acme/widgets", Title: "widgets red", TaskID: "721", Body: "widgets red\n\nsecond line"},
 		{Subject: "ci.red:acme/widgets-repo", Title: "widgets repo", Repo: "acme/widgets"},
 		{Subject: "ci.red:acme/secret", Title: "secret red", TaskID: "723"},
 		{Subject: "ci.red:acme/secret-repo", Title: "secret repo", Repo: "acme/secret"},
@@ -505,6 +505,28 @@ func TestListNotificationsNarrowsToWhatARepoScopedReaderMayRead(t *testing.T) {
 	// GET /api/events streams it.
 	if all := subjects("viewer@example.com"); len(all) != 5 {
 		t.Fatalf("grain/viewer's notifications = %v, want all five, hosts.down included", all)
+	}
+	// The Inbox reads a selected alert's whole body from its family
+	// (?open=1&family=, ui-ng's openNotificationsInFamily). ci.red is a
+	// family this reader can read only part of: it answers that part, its
+	// bodies whole, and nothing of acme/secret's.
+	code, body := h.call("widgets@example.com", http.MethodGet, "/api/notifications?open=1&family=ci.red", "")
+	if code != http.StatusOK {
+		t.Fatalf("widgets-reader GET /api/notifications?family=ci.red: %d %s", code, body)
+	}
+	var fam []model.Notification
+	if err := json.Unmarshal([]byte(body), &fam); err != nil {
+		t.Fatalf("%v in %s", err, body)
+	}
+	var whole bool
+	for _, n := range fam {
+		if strings.Contains(n.Subject, "secret") || n.Family != "ci.red" {
+			t.Fatalf("widgets-reader's ci.red family = %+v, want only acme/widgets' ci.red", fam)
+		}
+		whole = whole || strings.Contains(n.Body, "second line")
+	}
+	if len(fam) != 2 || !whole {
+		t.Fatalf("widgets-reader's ci.red family = %+v, want acme/widgets' two with the body whole", fam)
 	}
 	// Naming another repository is still refused rather than narrowed.
 	if code, body := h.call("widgets@example.com", http.MethodGet, "/api/notifications?repo=acme/secret", ""); code != http.StatusForbidden {

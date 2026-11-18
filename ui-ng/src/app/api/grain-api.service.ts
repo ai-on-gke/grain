@@ -587,6 +587,18 @@ export class GrainApi implements OnDestroy {
     );
   }
 
+  // clearNotifications is the Inbox's Clear all / Clear these; dryRun
+  // counts for the confirm dialog without clearing.
+  clearNotifications(
+    req: ClearNotificationsRequest,
+  ): Promise<ClearNotificationsResponse> {
+    return this.post<ClearNotificationsResponse>(
+      "POST /api/notifications/clear",
+      undefined,
+      req,
+    );
+  }
+
   // openNotificationsInFamily answers one family's open notifications with
   // their bodies whole: the list above cuts each body to its first line.
   openNotificationsInFamily(family: string): Promise<Notification[]> {
@@ -599,18 +611,6 @@ export class GrainApi implements OnDestroy {
       `open=1&family=${encodeURIComponent(family)}`,
     ).then((r) =>
       Array.isArray(r) ? r : (r?.notifications ?? r?.items ?? []),
-    );
-  }
-
-  // clearNotifications is the Inbox's Clear all / Clear these; dryRun
-  // counts for the confirm dialog without clearing.
-  clearNotifications(
-    req: ClearNotificationsRequest,
-  ): Promise<ClearNotificationsResponse> {
-    return this.post<ClearNotificationsResponse>(
-      "POST /api/notifications/clear",
-      undefined,
-      req,
     );
   }
 
