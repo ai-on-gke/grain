@@ -201,6 +201,58 @@ func TestAQuietQueueCostsThePipelineStewardNoRun(t *testing.T) {
 	}
 }
 
+// A notification can arrive before the first task exists to subscribe to it.
+// The safety firing must bootstrap the task even with no base-CI or stall rows.
+func TestPipelineStewardSafetyWakeInitializesNotificationSubscriber(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		subject string
+		cleared bool
+		wantRun bool
+	}{
+		{"open publishing failure", model.NotificationSubject(model.FamilyNotPublishing, "acme/widgets@main"), false, true},
+		{"cleared publishing failure", model.NotificationSubject(model.FamilyNotPublishing, "acme/widgets@main"), true, false},
+		{"unrelated notification", "deployment.test", false, false},
+		{"own report regression", model.SubjectStewardRegression, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := recreateStore(t)
+			if _, err := store.RaiseNotification(ctx, model.Notification{
+				Subject: tc.subject, Title: "Needs attention", RaisedAt: pipelineStewardSeeded,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.cleared {
+				if _, err := store.ClearNotification(ctx, tc.subject, "operator"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sched, task := firePipelineStewardAt(t, ctx, store, pipelineStewardSeeded)
+			if (task != nil) != tc.wantRun {
+				t.Fatalf("task = %v, want run %v", task, tc.wantRun)
+			}
+			if !tc.wantRun {
+				if sched.LastRunAt != nil {
+					t.Fatal("quiet firing recorded a run")
+				}
+				return
+			}
+			if sched.LastRunAt == nil || !sched.NextRunAt.After(*sched.LastRunAt) {
+				t.Fatal("first safety wake did not record the firing and advance the cadence")
+			}
+			subs, err := store.TaskNotificationSubscriptions(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(subs, model.PipelineStewardSubscriptions) {
+				t.Fatalf("subscriptions = %v, want %v", subs, model.PipelineStewardSubscriptions)
+			}
+		})
+	}
+}
+
 // Each thing the gate looks for, on its own, is enough to wake it.
 func TestEachKindOfTroubleWakesThePipelineSteward(t *testing.T) {
 	t.Parallel()
