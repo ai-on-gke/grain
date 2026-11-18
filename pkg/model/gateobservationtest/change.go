@@ -192,10 +192,13 @@ func RunChangeGates(t *testing.T, s *model.Store, db *sql.DB) {
 				t.Fatal("normal assignment change suppressed the independently known legacy comparison")
 			}
 		}
+		previousGeneration := generation
 		v = next
 		generation = v.Results[0].Revision
-		if len(diag.History) < 2 {
-			t.Fatal("source event missing from bounded history")
+		var retained int
+		must(db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `gate_observation_shadow_history` WHERE `task_id` = ? AND `generation` IN (?,?)", parent, previousGeneration, generation).Scan(&retained))
+		if retained != 2 || len(diag.History) == 0 || diag.History[0].Generation != generation {
+			t.Fatal("source event missing from persisted history or newest read sample")
 		}
 	}
 	// Closing an empty-handed review is weak legacy success, never an exact-head
@@ -355,8 +358,14 @@ func RunChangeScopeOverflow(t *testing.T, s *model.Store, db *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(large.Bindings) != 5 {
-		t.Fatal("oversized metadata was expanded instead of rejected as incomplete")
+	changeBindings := 0
+	for _, binding := range large.Bindings {
+		if binding.Type == "review" || binding.Type == "approval" {
+			changeBindings++
+		}
+	}
+	if changeBindings != 3 || len(large.Bindings) > 64 {
+		t.Fatal("oversized review metadata was expanded instead of rejected as incomplete")
 	}
 	for i, binding := range large.Bindings {
 		if binding.Type == "review" && !binding.Origin.Imported && (large.Results[i].Result.Status != "unknown" || !strings.Contains(large.Results[i].Result.Summary, "metadata")) {

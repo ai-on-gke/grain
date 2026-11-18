@@ -554,6 +554,7 @@ func reconcileOneBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBran
 	// verdict even about the tree the branch is on? See the file's own
 	// "The tip, not the merge".
 	tip, err := baseBranchTip(ctx, deps, row)
+	observeBaseHealthSource(ctx, deps, row, tip, err == nil, now)
 	if err != nil {
 		return err
 	}

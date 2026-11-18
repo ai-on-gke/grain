@@ -361,6 +361,10 @@ type GitHubCIFilter struct {
 // ListGitHubCIJobs returns recorded GitHub CI jobs, most recently
 // completed first.
 func (s *Store) ListGitHubCIJobs(ctx context.Context, f GitHubCIFilter) ([]GitHubCIJob, error) {
+	return listGitHubCIJobs(ctx, s.db, f)
+}
+
+func listGitHubCIJobs(ctx context.Context, q querier, f GitHubCIFilter) ([]GitHubCIJob, error) {
 	var where []string
 	var args []any
 	if f.Repo != "" {
@@ -397,7 +401,7 @@ func (s *Store) ListGitHubCIJobs(ctx context.Context, f GitHubCIFilter) ([]GitHu
 		query += fmt.Sprintf(" LIMIT %d", f.Limit)
 	}
 	var out []GitHubCIJob
-	err := each(ctx, s.db, query, args, func(rows *sql.Rows) error {
+	err := each(ctx, q, query, args, func(rows *sql.Rows) error {
 		j, err := scanGitHubCIJob(rows.Scan)
 		if err != nil {
 			return err

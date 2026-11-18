@@ -315,9 +315,28 @@ func RunReviewRegressions(t *testing.T, s *model.Store, db *sql.DB) {
 		failureAt := now.Add(time.Second)
 		must(t, s.RecordGateObservationFailure(ctx, id, failureAt, accepted))
 		_, diag := read(t, id, failureAt)
-		if len(diag.History) != 20 {
-			t.Fatalf("history page = %d", len(diag.History))
+		assertHistoryPage := func(newest uint64) {
+			if len(diag.History) == 0 || len(diag.History) > 20 || diag.History[0].Generation != newest {
+				t.Fatalf("history page omitted the newest sample or exceeded its row bound: %d", len(diag.History))
+			}
+			loadedBytes := 0
+			for _, sample := range diag.History {
+				raw, err := json.Marshal(sample.View)
+				must(t, err)
+				loadedBytes += len(raw)
+			}
+			if len(diag.History) > 1 && loadedBytes > 64*1024 {
+				t.Fatal("history page exceeded its byte bound")
+			}
+			if len(diag.History) < 20 {
+				var nextRaw string
+				must(t, db.QueryRowContext(ctx, "SELECT `view_json` FROM `gate_observation_shadow_history` WHERE `task_id` = ? AND `generation` < ? ORDER BY `generation` DESC LIMIT 1", id, diag.History[len(diag.History)-1].Generation).Scan(&nextRaw))
+				if loadedBytes+len(nextRaw) <= 64*1024 {
+					t.Fatal("history page stopped before filling its load budget")
+				}
+			}
 		}
+		assertHistoryPage(1031)
 		var count int
 		must(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `gate_observation_shadow_history` WHERE `task_id` = ?", id).Scan(&count))
 		if count != 1024 {
@@ -344,9 +363,7 @@ func RunReviewRegressions(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatalf("global history retention = %d", count)
 		}
 		_, diag = read(t, id, now.Add(3*time.Second))
-		if len(diag.History) != 20 {
-			t.Fatal("global pruning lost current task history page")
-		}
+		assertHistoryPage(1032)
 		// Normal collection must still recover at capacity, including a one-row
 		// per-task/global overflow. Record latency without asserting production
 		// wall-clock budgets under the race detector's SQLite instrumentation.

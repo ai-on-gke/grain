@@ -103,6 +103,7 @@ import {
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
 import { MarkdownDirective } from "../shared/code-highlight";
+import { taskPriority } from "../tasks/batch-edit-dialog.component";
 
 const DEFAULT_QA_FLOW_REFS = [
   "engineering-workflow-v4@1",
@@ -1928,6 +1929,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <dt>Priority</dt>
                           <dd class="tabular">{{ t.priority }}</dd>
                         }
+                        @if (t.interactive) {
+                          <dt>Interactive</dt>
+                          <dd>on</dd>
+                        }
                         <dt>Auto-merge</dt>
                         <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
                       </dl>
@@ -3435,6 +3440,46 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             ></span
           >
         </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Interactive"
+            data-testid="tmpl-interactive"
+            [attr.aria-checked]="tDraftInteractive()"
+            (click)="tDraftInteractive.set(!tDraftInteractive())"
+          ></button>
+          <span
+            >Interactive
+            <span class="muted"
+              >— file a live chat: the agent can talk with you while it
+              works</span
+            ></span
+          >
+        </div>
+        <label class="field">
+          <span>Task priority</span>
+          <input
+            type="text"
+            inputmode="numeric"
+            data-testid="tmpl-priority-input"
+            placeholder="5"
+            [value]="tDraftPriority()"
+            [attr.aria-invalid]="tDraftPriorityInvalid() ? 'true' : null"
+            (input)="tDraftPriority.set($any($event.target).value)"
+            (blur)="normalizeTemplatePriority()"
+          />
+          @if (tDraftPriorityInvalid()) {
+            <span class="proc-field-error" data-testid="tmpl-priority-error"
+              >Use a whole number, 1 or more.</span
+            >
+          } @else {
+            <span class="muted proc-field-help"
+              >Blank uses the default, 5; higher runs first.</span
+            >
+          }
+        </label>
         <div class="proc-field-grid">
           <div class="field">
             <span>Admission</span>
@@ -4132,6 +4177,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftAutoMerge = signal(false);
   protected readonly tDraftModel = signal("");
   protected readonly tDraftKeepRunning = signal(false);
+  // tDraftPriority is the Task priority field as typed: blank leaves the
+  // template's tasks on the deployment's default (5).
+  protected readonly tDraftPriority = signal("");
+  protected readonly tDraftInteractive = signal(false);
+  protected readonly tDraftPriorityInvalid = computed(
+    () =>
+      this.tDraftPriority().trim() !== "" &&
+      Number.isNaN(taskPriority(this.tDraftPriority())),
+  );
   protected readonly tDraftAdmission = signal("standard");
   protected readonly tDraftHosting = signal("unattended");
   protected readonly tDraftCaps = signal<string[]>([]);
@@ -5565,6 +5619,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAutoMerge(),
       this.tDraftModel(),
       this.tDraftKeepRunning(),
+      this.tDraftPriority(),
+      this.tDraftInteractive(),
       this.tDraftAdmission(),
       this.tDraftHosting(),
       this.tDraftCaps(),
@@ -6164,6 +6220,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAutoMerge.set(existing.autoMerge);
       this.tDraftModel.set(existing.model || "");
       this.tDraftKeepRunning.set(!!existing.keepRunning);
+      this.tDraftPriority.set(
+        existing.priority ? String(existing.priority) : "",
+      );
+      this.tDraftInteractive.set(!!existing.interactive);
       this.tDraftAdmission.set(existing.admission || "standard");
       this.tDraftHosting.set(existing.hosting || "unattended");
       this.tDraftCaps.set([...(existing.capabilities ?? [])]);
@@ -6178,6 +6238,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftAutoMerge.set(false);
       this.tDraftModel.set("");
       this.tDraftKeepRunning.set(false);
+      this.tDraftPriority.set("");
+      this.tDraftInteractive.set(false);
       this.tDraftAdmission.set("standard");
       this.tDraftHosting.set("unattended");
       this.tDraftCaps.set([]);
@@ -6228,8 +6290,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     );
   }
 
+  // draftTemplatePriority is the typed Task priority as a number, 0 when
+  // blank (the deployment's default).
+  private draftTemplatePriority(): number {
+    const n = taskPriority(this.tDraftPriority());
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  // normalizeTemplatePriority shows the number a typed priority is ("1e3"
+  // reads back as 1000) once the field is left.
+  protected normalizeTemplatePriority(): void {
+    const n = taskPriority(this.tDraftPriority());
+    if (!Number.isNaN(n) && String(n) !== this.tDraftPriority()) {
+      this.tDraftPriority.set(String(n));
+    }
+  }
+
   protected canSaveTemplate(): boolean {
     if (!this.tDraftName().trim() || !this.tDraftTitle().trim()) return false;
+    if (this.tDraftPriorityInvalid()) return false;
     const editing = this.editingTemplate();
     const route = editing ? "PATCH /api/templates/{id}" : "POST /api/templates";
     const targetRepo = this.tDraftRepo().trim() || editing?.repo || undefined;
@@ -6259,6 +6338,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
     if (this.tDraftKeepRunning() !== !!editing.keepRunning) {
       req.keepRunning = this.tDraftKeepRunning();
+    }
+    // 0 clears the template's own priority (UpdateTemplateRequest).
+    const priority = this.draftTemplatePriority();
+    if (priority !== (editing.priority || 0)) {
+      req.priority = priority;
+    }
+    if (this.tDraftInteractive() !== !!editing.interactive) {
+      req.interactive = this.tDraftInteractive();
     }
     if (this.tDraftAdmission() !== (editing.admission || "standard")) {
       req.admission = this.tDraftAdmission();
@@ -6301,6 +6388,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
           keepRunning: this.tDraftKeepRunning(),
+          ...(this.draftTemplatePriority()
+            ? { priority: this.draftTemplatePriority() }
+            : {}),
+          ...(this.tDraftInteractive() ? { interactive: true } : {}),
           ...(this.tDraftModel() ? { model: this.tDraftModel() } : {}),
           ...(this.tDraftAdmission() !== "standard"
             ? { admission: this.tDraftAdmission() }

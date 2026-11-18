@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -310,6 +311,93 @@ func TestGateObservationStorageOutageIsAnInertSidecar(t *testing.T) {
 	recovered := read()
 	if recovered.GateObservations == nil || recovered.GateObservations.Dirty || recovered.State != initial.State {
 		t.Fatal("diagnostic recovery changed task state")
+	}
+}
+
+func TestGateChildComparisonSelectionIsClosedAndBounded(t *testing.T) {
+	for _, raw := range []string{`null`, `[]`, `{"1":[{"tasks":[],"predicate":"success"}]}`, `{"1":[{"tasks":["2","2"],"predicate":"closed"}]}`, `{"1":[],"1":[]}`, `{"1":[{"tasks":["2"],"predicate":"success","callback":"remote"}]}`, `{} {}`} {
+		if _, err := ui.ObservationChildSelection(raw); err == nil {
+			t.Errorf("admitted %s", raw)
+		}
+	}
+	selected, err := ui.ObservationChildSelection(`{"1":[{"tasks":["2"],"predicate":"success"},{"tasks":["3"],"predicate":"closed"}]}`)
+	if err != nil || len(selected["1"]) != 2 {
+		t.Fatalf("selection=%v %v", selected, err)
+	}
+}
+func TestGateChildHistoryUsesCurrentReadPermissions(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, c, "child-observe-caller", "acme/widgets", "api:tasks:read@acme/widgets")
+	seedAPITask(t, c, "child-observe-parent", "acme/widgets", "")
+	seedAPITask(t, c, "child-observe-visible", "acme/widgets", "")
+	at := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	if err := c.Store.ObserveClose(ctx, "child-observe-visible", at, model.GrainPrincipal, "closed", func(o *model.Observation) { o.ClosedAt = &at }); err != nil {
+		t.Fatal(err)
+	}
+	c.Config.GateObservationTaskIDs = []string{"child-observe-parent"}
+	c.Config.GateObservationChildren = map[string][]gates.ChildrenConfig{"child-observe-parent": {{Tasks: []string{"child-observe-visible"}, Predicate: "closed"}}}
+	read := func() struct {
+		View        gates.ObservationView            `json:"gate_observations"`
+		Diagnostics model.GateObservationDiagnostics `json:"gate_observation_diagnostics"`
+	} {
+		t.Helper()
+		code, body := asAgent(t, srv, "child-observe-caller", http.MethodGet, "/api/tasks/child-observe-parent", "", "")
+		if code != 200 {
+			t.Fatalf("read=%d %s", code, body)
+		}
+		var result struct {
+			View        gates.ObservationView            `json:"gate_observations"`
+			Diagnostics model.GateObservationDiagnostics `json:"gate_observation_diagnostics"`
+		}
+		if err := json.Unmarshal([]byte(body), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	before := read()
+	found := false
+	for _, r := range before.View.Results {
+		if r.Result.Type == "children" {
+			found = true
+			if r.Result.Status != "met" {
+				t.Fatalf("visible closed child=%s", r.Result.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("read-only selection was not projected")
+	}
+	if err := c.Store.UpdateTask(ctx, "child-observe-visible", func(task *model.Task) error { task.Target = &model.RepoRef{Owner: "acme", Name: "private"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	after := read()
+	// Scoped agents receive current predictions only after the base's history
+	// hardening. Also exercise actual retained samples through a privileged read
+	// so this child-scope regression cannot pass on an empty history.
+	code, body := serve(t, srv, http.MethodGet, "/api/tasks/child-observe-parent", "")
+	if code != http.StatusOK {
+		t.Fatalf("history read: %d %s", code, body)
+	}
+	var retained ui.TaskDetail
+	if err := json.Unmarshal([]byte(body), &retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained.GateObservationDiagnostics == nil || len(retained.GateObservationDiagnostics.History) == 0 {
+		t.Fatal("child history was not exercised")
+	}
+	after.Diagnostics = *retained.GateObservationDiagnostics
+	for _, r := range after.View.Results {
+		if r.Result.Type == "children" && (r.Result.Status != "unknown" || len(r.Result.Evidence) > 0) {
+			t.Fatal("private child leaked current evidence")
+		}
+	}
+	for _, sample := range after.Diagnostics.History {
+		for _, r := range sample.View.Results {
+			if r.Result.Type == "children" && (r.Result.Status != "unknown" || len(r.Result.Evidence) > 0) {
+				t.Fatal("private child leaked retained outcome evidence")
+			}
+		}
 	}
 }
 
