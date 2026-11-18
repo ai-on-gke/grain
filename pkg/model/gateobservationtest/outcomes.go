@@ -369,6 +369,65 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 			}
 		}
 	})
+	t.Run("child-success-cannot-replay-a-cleared-or-reopened-finish", func(t *testing.T) {
+		parent := seed("outcome-stale-finish-parent")
+		for _, product := range []string{"nothing_needed", "report"} {
+			t.Run(product, func(t *testing.T) {
+				child := seed("outcome-stale-finish-" + product)
+				outcome := model.NothingNeededOutcome
+				if product == "report" {
+					outcome = "succeeded"
+					child.Intent = model.IntentAnalyze
+					child.Proposer = model.TaskProposer{TaskID: parent.ID, RunID: "filing-run", Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: parent.ID}}}
+					must(s.PutTask(ctx, child))
+				}
+				settle(child, outcome, product, "The original successful disposition")
+				must(s.ObserveClose(ctx, child.ID, now, model.GrainPrincipal, "finished", func(o *model.Observation) { o.ClosedAt = &now }))
+				selection := gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "success"}
+				childStatus := func() string {
+					t.Helper()
+					for _, r := range observe(parent, selection).Results {
+						if r.Result.Type == "children" {
+							return r.Result.Status
+						}
+					}
+					t.Fatal("missing child result")
+					return ""
+				}
+				if got := childStatus(); got != "met" {
+					t.Fatalf("original disposition=%s", got)
+				}
+				// A reply can clear completion independently of reopening.
+				completedAt := now
+				must(s.ObserveField(ctx, child.ID, now, func(o *model.Observation) { o.CompletedAt = nil }))
+				if got := childStatus(); got != "unknown" {
+					t.Fatalf("child without current completion reused success: %s", got)
+				}
+				must(s.ObserveField(ctx, child.ID, now, func(o *model.Observation) { o.CompletedAt = &completedAt }))
+				if got := childStatus(); got != "met" {
+					t.Fatalf("restored original completion=%s", got)
+				}
+				// Reopen preserves delivered-product milestones, but a later
+				// manual close cannot restore the child's previous success proof.
+				now = now.Add(time.Second)
+				must(s.ObserveField(ctx, child.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+				_, err := s.RecordTaskEvent(ctx, model.TaskEvent{TaskID: child.ID, Kind: model.TaskEventReopened, At: now, By: human})
+				must(err)
+				now = now.Add(time.Second)
+				must(s.ObserveClose(ctx, child.ID, now, human, "stop this work", func(o *model.Observation) { o.ClosedAt = &now }))
+				if got := childStatus(); got != "unknown" {
+					t.Fatalf("reclosed child reused pre-reopen success: %s", got)
+				}
+				closed := gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "closed"}
+				for _, r := range observe(parent, closed).Results {
+					if r.Result.Type == "children" && r.Result.Status != "met" {
+						t.Fatal("explicit closure predicate changed with success provenance")
+					}
+				}
+			})
+		}
+	})
+
 	t.Run("no-action-is-not-success-and-goal-contracts-are-inert", func(t *testing.T) {
 		task := seed("outcome-no-action")
 		settle(task, "no_action", "report", "a tool ran")

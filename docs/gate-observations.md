@@ -138,8 +138,10 @@ filtered against current related-task scope. Explicit `closed` can pass for a
 failed/canceled child; success cannot. New success has no exact legacy counterpart:
 it needs positive integration or a provenance-backed report/no-work outcome and
 no observed unseen-message/goal gap. Unverifiable legacy closure stays unknown.
-Reopened children lose their closed outcome. Diagnostic relation traversal follows
-explicit goal edges only, is bounded to 64 nodes, and diagnoses cycles/incomplete
+Reopened children need new finish or integration proof for success; clearing
+completion also invalidates prior report/no-work success. Explicit closure
+predicates continue to reflect whether the child is closed. Diagnostic relation
+traversal follows explicit goal edges only, is bounded to 64 nodes, and diagnoses cycles/incomplete
 graphs without touching dispatch links or waits.
 
 ## Collection, replay and isolation

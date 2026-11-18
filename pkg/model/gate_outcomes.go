@@ -524,7 +524,13 @@ func captureChildOutcome(ctx context.Context, q querier, parent Task, id string,
 	child.Success = child.Closed && child.Merged && !child.Failed
 	finish := sources["finish"]
 	var reportVersion string
-	if child.Closed && !child.Failed && finished.Valid && finish.RunID == runID && finish.Policy == GateOutcomePolicy(*t) && now.Before(finish.At.Add(72*time.Hour)) {
+	// Reopening preserves delivery under legacy policy, but closes after that
+	// transition need new outcome proof. In particular, a manual cancellation
+	// must not reuse a no-work receipt after a reply cleared completion.
+	currentFinish := o.CompletedAt != nil && !o.CompletedAt.Before(runStarted) &&
+		finish.State == "settled" && !finish.At.Before(runStarted) && !finish.At.After(now) &&
+		(reopened.IsZero() || finish.At.After(reopened))
+	if child.Closed && !child.Failed && finished.Valid && currentFinish && finish.RunID == runID && finish.Policy == GateOutcomePolicy(*t) && now.Before(finish.At.Add(72*time.Hour)) {
 		if outcome == NothingNeededOutcome && finish.Product == "nothing_needed" {
 			child.Success = true
 			child.SuccessKnown = true
