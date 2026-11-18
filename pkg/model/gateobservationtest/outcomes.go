@@ -423,4 +423,35 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 	})
 
+	t.Run("reopen-and-source-order-cannot-replay-old-product", func(t *testing.T) {
+		task := seed("outcome-reopened-no-work")
+		settle(task, model.NothingNeededOutcome, "nothing_needed", "Validated no-work reason")
+		if status(observe(task), "delivery-nothing_needed") != "met" {
+			t.Fatal("no-work product missing")
+		}
+		must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = nil; o.ClosedAt = nil }))
+		if status(observe(task), "delivery-any") == "met" || status(observe(task), "delivery-nothing_needed") == "met" {
+			t.Fatal("finish receipt restored a legacy settlement cleared by reopen/message")
+		}
+		change := seed("outcome-ambiguous-heads")
+		change.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/outcomes#100"}}
+		must(s.PutTask(ctx, change))
+		source(change, "acme/outcomes#100", "head-a", "open", "")
+		source(change, "acme/outcomes#100", "head-b", "open", "")
+		if status(observe(change), "pr_merged") != "unknown" {
+			t.Fatal("same-time conflicting heads were ordered by last writer")
+		}
+		source(change, "acme/outcomes#100", "head-a", "open", "")
+		restarted, _, err := model.New(db).ObserveTaskGates(ctx, change.ID, now)
+		must(err)
+		if status(restarted, "pr_merged") != "unknown" {
+			t.Fatal("replay resolved an ambiguous collection without a new version")
+		}
+		now = now.Add(time.Second)
+		source(change, "acme/outcomes#100", "head-b", "open", "")
+		if status(observe(change), "pr_merged") != "unmet" {
+			t.Fatal("new scoped observation did not recover ambiguity")
+		}
+	})
+
 }

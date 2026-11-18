@@ -80,7 +80,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 	f.Resources = map[string][]gates.ResourceFact{}
 	f.Children = map[string]gates.ChildFact{}
 	rest := sources["goal-rest"]
-	goalRest := rest.RunID == runID && rest.State == "resting_on_goal" && rest.Policy == GateOutcomePolicy(*t) && !rest.At.Before(started)
+	goalRest := rest.RunID == runID && rest.State == "resting_on_goal" && rest.Policy == GateOutcomePolicy(*t) && !rest.At.Before(started) && t.DeferredAt != nil && t.DeferredAt.Truncate(time.Microsecond).Equal(rest.At.Truncate(time.Microsecond))
 	f.Blocked = o.PendingQuestionCommentID != nil || o.PendingAccess != nil || o.PendingSecret != "" || outcome == ParkedOutcome && !goalRest
 	f.Applicable = !NeverCompletes(*t) && !t.Interactive && !t.HasConsole() && !t.KeepRunning
 	f.UnsupportedReason = "Interactive or standing controller policy has no finite completion prediction."
@@ -91,8 +91,7 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 		f.ProductEvidence = f.Report
 	}
 	finish, recorded := sources["finish"]
-	if recorded && finish.RunID == runID && finished.Valid && !finish.At.Before(started) && finish.Policy == GateOutcomePolicy(*t) && !f.Blocked {
-		f.Settled = true
+	if f.Settled && recorded && finish.RunID == runID && finished.Valid && !finish.At.Before(started) && finish.Policy == GateOutcomePolicy(*t) && !f.Blocked {
 		if finish.Product != "" && finish.Product != "report" {
 			f.Product = finish.Product
 			version := gates.Digest(finish)

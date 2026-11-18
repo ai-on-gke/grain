@@ -23,6 +23,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 func shadowStatus(t *testing.T, store *model.Store, id, binding string, now time.Time) string {
@@ -86,6 +87,41 @@ func TestShadowProductsFollowActualFinishDecisions(t *testing.T) {
 			case <-wake:
 				t.Fatal("shadow woke dispatch")
 			default:
+			}
+			if tc.name == "nothing-needed" {
+				client := ui.NewClient(ui.Config{Actor: ui.DefaultActor("alice")}, store)
+				client.Now = func() time.Time { return now.Add(time.Second) }
+				person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: model.SourceIAP})
+				beforeReopen, _, err := store.ObserveTaskGates(ctx, task.ID, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := client.Reopen(person, task.ID); err != nil {
+					t.Fatal(err)
+				}
+				afterReopen, _, err := store.ObserveTaskGates(ctx, task.ID, now.Add(time.Second))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if afterReopen.SourceRevision == beforeReopen.SourceRevision {
+					t.Fatal("reopen did not invalidate the source fence")
+				}
+				reopened, err := store.GetObservation(ctx, task.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if reopened.ClosedAt != nil {
+					t.Fatal("delivery prediction reclosed the task")
+				}
+				// Legacy Reopen preserves a delivered product. A reply requesting
+				// more work clears settlement; diagnostics must preserve that.
+				if err := client.AddComment(person, task.ID, "Please do the next part", nil); err != nil {
+					t.Fatal(err)
+				}
+				if got := shadowStatus(t, store, task.ID, "delivery-nothing_needed", now.Add(time.Second)); got == "met" {
+					t.Fatal("diagnostic receipt restored settlement cleared by a reply")
+				}
+
 			}
 		})
 	}

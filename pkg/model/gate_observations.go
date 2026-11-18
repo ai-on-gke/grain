@@ -107,14 +107,14 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		f.UnsupportedReason = "the latest run declared nothing needed; report delivery and receipt are not equivalent milestones"
 	}
 	settledAt := o.CompletedAt
-	if settledAt == nil && goals > 0 && finished.Valid {
+	if settledAt == nil && goals > 0 && finished.Valid && t.DeferredAt != nil {
 		var raw string
 		sourceErr := q.QueryRowContext(ctx, "SELECT `data` FROM `gate_outcome_source` WHERE `task_id` = ? AND `resource` = 'goal-rest'", id).Scan(&raw)
 		if sourceErr != nil && !errors.Is(sourceErr, sql.ErrNoRows) {
 			return f, "", sourceErr
 		}
 		var rest GateOutcomeSource
-		if sourceErr == nil && json.Unmarshal([]byte(raw), &rest) == nil && rest.RunID == runID && rest.State == "resting_on_goal" && rest.Policy == GateOutcomePolicy(*t) && !rest.At.Before(started) {
+		if sourceErr == nil && json.Unmarshal([]byte(raw), &rest) == nil && rest.RunID == runID && rest.State == "resting_on_goal" && rest.Policy == GateOutcomePolicy(*t) && !rest.At.Before(started) && t.DeferredAt.Truncate(time.Microsecond).Equal(rest.At.Truncate(time.Microsecond)) {
 			settledAt = &rest.At
 		}
 	}

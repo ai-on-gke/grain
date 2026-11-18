@@ -4267,7 +4267,9 @@ func seedEmptyRepoBase(ctx context.Context, store *model.Store, client github.Cl
 		}); err != nil {
 			return github.PullRequest{}, landedWork{}, err
 		}
-		store.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{Resource: "equivalent", Head: head.SHA, BaseHead: head.SHA, State: "equivalent", Policy: model.GateOutcomePolicy(task), Proof: head.SHA, Attribution: "initialized-empty-repository", At: now})
+		if !exists {
+			store.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{Resource: "equivalent", Head: head.SHA, BaseHead: head.SHA, State: "equivalent", Policy: model.GateOutcomePolicy(task), Proof: head.SHA, Attribution: "initialized-empty-repository", At: now})
+		}
 	}
 	return github.PullRequest{}, landedWork{
 		Base:       targetBase,
