@@ -46,6 +46,7 @@ const ROUTES = [
   "processes/templates",
   "processes/suites",
   "ci",
+  "repos",
   "telemetry",
   "context",
   "fleet",

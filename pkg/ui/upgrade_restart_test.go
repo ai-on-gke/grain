@@ -47,15 +47,21 @@ func TestUpgradeStatusSaysWhichRunsARestartWouldLoseAndWhatTheLastOneLost(t *tes
 	_ = store.PutConfig(ctx, model.DefaultConfig())
 	at := time.Date(2026, 10, 27, 6, 0, 0, 0, time.UTC)
 	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
-	for i, r := range []struct{ id, framework string }{
-		{"claude-a", "claude"},
-		{"claude-b", "claude"},
-		{"agy", "antigravity"},
-		{"setup", ""},
+	// The setup run has been assigned antigravity (RunDispatch records
+	// the framework before building the sandbox) but has not started its
+	// CLI, so it counts under setup rather than antigravity (task 5665).
+	for i, r := range []struct {
+		id, framework string
+		started       bool
+	}{
+		{"claude-a", "claude", true},
+		{"claude-b", "claude", true},
+		{"agy", "antigravity", true},
+		{"setup", "antigravity", false},
 	} {
 		if err := store.PutTask(ctx, model.Task{
 			ID: r.id, Intent: model.IntentImplement, Title: r.id,
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: alice}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: alice}, Reason: model.ReasonDirect},
 			Binding:  model.BindingDirective,
 			Approval: &model.Attribution{Actor: alice},
 		}); err != nil {
@@ -71,6 +77,11 @@ func TestUpgradeStatusSaysWhichRunsARestartWouldLoseAndWhatTheLastOneLost(t *tes
 				t.Fatal(err)
 			}
 		}
+		if r.started {
+			if err := store.SetRunAgentStarted(ctx, run.ID, run.StartedAt.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	// The agy run's CLI started detached in grain hostd.
 	if err := store.SetHostdCursor(ctx, "agy-1", 0, at); err != nil {
@@ -82,7 +93,7 @@ func TestUpgradeStatusSaysWhichRunsARestartWouldLoseAndWhatTheLastOneLost(t *tes
 		Lost: []ui.RestartRun{
 			{Run: "r-2", Task: "t-2", Framework: "claude", Reason: "stopped"},
 			{Run: "r-3", Task: "t-3", Framework: "claude", Reason: "stopped"},
-			{Run: "r-4", Task: "t-4", Setup: true, Reason: "setting up"},
+			{Run: "r-4", Task: "t-4", Framework: "antigravity", Setup: true, Reason: "setting up"},
 		},
 	}
 	srv := ui.NewServer(ui.Config{

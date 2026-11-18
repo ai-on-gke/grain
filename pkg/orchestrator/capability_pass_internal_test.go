@@ -1005,7 +1005,7 @@ func TestAdmissionWithholdsWhatALocalScriptsDeclarationBecameFromAScheduledRun(t
 		"local-scripts:ops": {passTestCap + `#gcp-key={"account":"staging"}`},
 	}))
 	if err := store.UpdateTask(ctx, "7", func(task *model.Task) error {
-		task.Origin.Reason = model.ReasonSchedule
+		task.Filing.Reason = model.ReasonSchedule
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -1022,7 +1022,7 @@ func TestAdmissionWithholdsWhatALocalScriptsDeclarationBecameFromAScheduledRun(t
 	adm.Release()
 
 	if err := store.UpdateTask(ctx, "7", func(task *model.Task) error {
-		task.Origin.Reason = model.ReasonDirect
+		task.Filing.Reason = model.ReasonDirect
 		return nil
 	}); err != nil {
 		t.Fatal(err)

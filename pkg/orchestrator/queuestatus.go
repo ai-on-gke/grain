@@ -498,7 +498,7 @@ func repairNeededNote(e queueEntry) string {
 	// queue members only), so saying one is coming, or that it is waiting
 	// its turn, left review 4713 reading "repair needed" for seventeen
 	// hours with nothing ever going to file it. Say what does unblock it.
-	if isReviewTask(e.task) || e.task.Origin.Reason == model.ReasonFix {
+	if isReviewTask(e.task) || e.task.Filing.Reason == model.ReasonFix {
 		return cause + ", and the merge queue does not repair a pull request stacked on another " +
 			"task's branch: push a fix to it by hand, or close this task so the change it is " +
 			"stacked on stops waiting for it (a newer review of that change supersedes it)"

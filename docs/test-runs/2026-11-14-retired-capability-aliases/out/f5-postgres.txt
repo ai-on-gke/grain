@@ -1,0 +1,12 @@
+== version
+v0.0.0-20261115130308-e0b6807aa018+dirty (unversioned) · e0b6807-dirty · 2026-11-15 13:03Z
+null
+{"id":"2","state":"proposed","error":null}
+{"id":"2","state":"queued","error":null}
+proposer: task 2
+propose_task answered: {"isError":true,"text":"propose_task: self-debug is a retired capability name and grants nothing any longer: it became https://grain.dev/capabilities/api#self-debug and https://grain.dev/capabilities/grain#source={}; name that instead"}
+proposer state once the run ended: awaiting_submit
+-- every task now
+[{"id":"1","title":"Director","state":"awaiting_reply"},{"id":"2","title":"f5 proposer","state":"awaiting_submit"}]
+-- what the proposer's conversation says
+-- daemon log about proposals

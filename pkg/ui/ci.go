@@ -328,7 +328,7 @@ func (c *Client) reconcileTaskBase(ctx context.Context, task *model.Task) {
 	// never classified on its own account (orchestrator's
 	// holdForTrustBoundary), so one moved onto that branch's base loses its
 	// AutoMerge and waits for a person, as the orchestrator's retarget does.
-	unattended := task.Origin.Reason == model.ReasonReview || task.Origin.Reason == model.ReasonFix
+	unattended := task.Filing.Reason == model.ReasonReview || task.Filing.Reason == model.ReasonFix
 	if err := c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		if t.Base == oldBase {
 			t.Base = targetBase

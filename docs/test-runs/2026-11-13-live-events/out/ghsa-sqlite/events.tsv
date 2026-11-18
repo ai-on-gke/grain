@@ -1,0 +1,13 @@
+6	task.state	-	-	-	human	alice@example.com	access-code
+7	task.state	-	-	-	automation	grain	-
+8	local_script.pending	lsa-1	deploy	-	agent	2	internal
+9	local_script.answered	lsa-1	deploy	approved	human	alice@example.com	access-code
+10	task.comment	-	-	-	human	alice@example.com	access-code
+11	local_script.pending	lsa-2	rollback	-	agent	2	internal
+12	local_script.answered	lsa-2	rollback	denied	human	alice@example.com	access-code
+13	task.comment	-	-	-	human	alice@example.com	access-code
+14	local_script.pending	lsa-3	migrate	-	agent	2	internal
+15	local_script.answered	lsa-3	migrate	expired	agent	2	internal
+16	local_script.pending	lsa-4	slow	-	agent	2	internal
+17	local_script.answered	lsa-4	slow	expired	automation	grain	-
+18	task.state	-	-	-	automation	grain	-

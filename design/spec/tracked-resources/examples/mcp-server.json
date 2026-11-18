@@ -1,0 +1,6 @@
+{
+  "serverUrl": "https://provider.example.org/mcp",
+  "headers": {
+    "Authorization": "$secret:example-resource-controller"
+  }
+}

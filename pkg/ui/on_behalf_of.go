@@ -136,7 +136,7 @@ func (c *Client) sessionTitles(ctx context.Context) func(id string) string {
 // in the same order.
 func (c *Client) nameSessions(ctx context.Context, detail *TaskDetail, t model.Task, comments []model.Comment, transitions []model.Transition) {
 	title := c.sessionTitles(ctx)
-	if a := t.Origin.Attribution; a.Actor.Source == model.SourceSession {
+	if a := t.Filing.Attribution; a.Actor.Source == model.SourceSession {
 		detail.Task.AuthorLabel = sessionLabel(a.Actor, a.OnBehalfOf, title)
 	}
 	if a := t.Approval; a != nil && a.Actor.Source == model.SourceSession && detail.Task.ApprovedByLabel != "" {

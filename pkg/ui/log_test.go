@@ -41,6 +41,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 )
 
 // testLog is that route. One package-level value, because log.SetOutput
@@ -60,7 +62,11 @@ func TestMain(m *testing.M) {
 	// and the wall clock of a log line is not what someone reading a
 	// failed test is short of.
 	log.SetFlags(0)
-	os.Exit(m.Run())
+	code := m.Run()
+	// The Postgres-backed tests (task_list_postgres_test.go) may have
+	// started an embedded server; it must not outlive the binary.
+	postgrestest.Shutdown()
+	os.Exit(code)
 }
 
 // testJournal is the io.Writer behind log.Printf while these tests run:

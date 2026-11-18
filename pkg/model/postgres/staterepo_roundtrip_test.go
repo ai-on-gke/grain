@@ -367,3 +367,117 @@ func TestSyncSequencesRespectsWriteFence(t *testing.T) {
 		t.Fatalf("SyncSequences(B) = %+v, want seq_fence_probe synced to 25", synced)
 	}
 }
+
+// TestStateRepoImportsTemplateWithoutTargetOnPostgres verifies that a
+// hand-written template in grain/config's settings/templates.yml that omits
+// target:, auto-merge: and created-at: imports cleanly into PostgreSQL without
+// violating NOT NULL constraints (SQLSTATE 23502), applies via staterepo.Apply,
+// and round-trips byte-for-byte on re-export.
+func TestStateRepoImportsTemplateWithoutTargetOnPostgres(t *testing.T) {
+	postgrestest.SkipUnlessAvailable(t)
+	ctx := context.Background()
+	store, db := postgrestest.Open(t)
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+
+	bound := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "tpl-bound", Name: "bound", Title: "Bound template", Body: "initial body",
+		Target: &bound, AutoMerge: true, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("PutTemplate(tpl-bound): %v", err)
+	}
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runCmd(t, "", "git", "init", "--quiet", "--bare", "--initial-branch=main", remote)
+	repo, err := staterepo.Open(ctx, staterepo.Config{
+		Dir:    filepath.Join(t.TempDir(), "state"),
+		Remote: remote,
+	})
+	if err != nil {
+		t.Fatalf("staterepo.Open: %v", err)
+	}
+	if err := staterepo.Load(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("staterepo.Load: %v", err)
+	}
+
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+	runCmd(t, "", "git", "clone", "--quiet", remote, cloneDir)
+	tplPath := filepath.Join(cloneDir, filepath.FromSlash(staterepo.DumpPath("template")))
+	if err := os.WriteFile(tplPath, []byte(`templates:
+  - id: tpl-bound
+    name: bound
+    title: Unbound by omitting target
+    body: updated body
+  - id: template-1
+    name: minimal
+    title: A minimal hand-written template
+    body: written in grain/config by hand
+  - id: template-null-target
+    name: explicit-null
+    target: null
+    title: Explicit null target
+    body: written with null target
+`), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", tplPath, err)
+	}
+
+	_, checkDB := postgrestest.Open(t)
+	if _, err := staterepo.Check(ctx, checkDB, cloneDir, model.SchemaVersion); err != nil {
+		t.Fatalf("staterepo.Check on Postgres failed: %v", err)
+	}
+
+	runCmd(t, cloneDir, "git", "config", "user.name", "Alice")
+	runCmd(t, cloneDir, "git", "config", "user.email", "alice@example.com")
+	runCmd(t, cloneDir, "git", "commit", "-am", "add a minimal template")
+	runCmd(t, cloneDir, "git", "push", "--quiet", "origin", "main")
+
+	if applied, err := staterepo.Apply(ctx, repo, db, model.SchemaVersion); err != nil || !applied {
+		t.Fatalf("staterepo.Apply on Postgres: applied=%v err=%v", applied, err)
+	}
+
+	minimal, err := store.GetTemplate(ctx, "template-1")
+	if err != nil || minimal == nil {
+		t.Fatalf("GetTemplate(template-1): %v, %v", minimal, err)
+	}
+	if minimal.Name != "minimal" || minimal.Title != "A minimal hand-written template" || minimal.Body != "written in grain/config by hand" {
+		t.Errorf("minimal text = %+v", minimal)
+	}
+	if minimal.Target != nil || minimal.AutoMerge || !minimal.CreatedAt.IsZero() {
+		t.Errorf("minimal defaults = (Target=%v, AutoMerge=%v, CreatedAt=%v), want nil/false/zero",
+			minimal.Target, minimal.AutoMerge, minimal.CreatedAt)
+	}
+
+	nullTarget, err := store.GetTemplate(ctx, "template-null-target")
+	if err != nil || nullTarget == nil || nullTarget.Target != nil {
+		t.Errorf("GetTemplate(template-null-target) = (%+v, %v), want unbound", nullTarget, err)
+	}
+
+	unbound, err := store.GetTemplate(ctx, "tpl-bound")
+	if err != nil || unbound == nil {
+		t.Fatalf("GetTemplate(tpl-bound): %v, %v", unbound, err)
+	}
+	if unbound.Target != nil || unbound.AutoMerge || unbound.Title != "Unbound by omitting target" {
+		t.Errorf("tpl-bound after omitting target/auto-merge = %+v, want unbound with AutoMerge=false", unbound)
+	}
+
+	// Verify ExportConfig -> ImportTables -> ExportConfig stability on Postgres.
+	dir1 := t.TempDir()
+	if err := staterepo.ExportConfig(ctx, db, dir1); err != nil {
+		t.Fatalf("ExportConfig(dir1): %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(dir1, model.SchemaVersion); err != nil {
+		t.Fatalf("WriteSchemaVersion(dir1): %v", err)
+	}
+	_, db2 := postgrestest.Open(t)
+	if err := staterepo.ImportTables(ctx, db2, dir1, staterepo.SettingsTables); err != nil {
+		t.Fatalf("ImportTables(db2): %v", err)
+	}
+	dir2 := t.TempDir()
+	if err := staterepo.ExportConfig(ctx, db2, dir2); err != nil {
+		t.Fatalf("ExportConfig(dir2): %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(dir2, model.SchemaVersion); err != nil {
+		t.Fatalf("WriteSchemaVersion(dir2): %v", err)
+	}
+	compareDirsRecursively(t, dir1, dir2)
+}

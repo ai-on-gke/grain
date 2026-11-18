@@ -251,6 +251,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/notifications` | `notifications:write` | `writer` | Raises notification in `/inbox`. |
 | `POST /api/notifications/{id}/ack` | `internal` | `writer` | Human acknowledgement of inbox notification. |
 | `POST /api/notifications/{id}/clear` | `notifications:write` | `writer` | Clears notification. |
+| `POST /api/notifications/clear` | `notifications:write` | `writer` | Clears every open notification a filter matches, with a reason; one audit entry per call. A run clears only its own task's. |
 | `POST /api/notifications/{id}/investigate` | `internal` | `writer` | Files investigation task from notification. |
 | `PUT /api/tasks/{id}/secret` | `secrets:write` | `admin` | Writes secret value requested by `request_secret` into secret store. |
 | `POST /api/tasks/{id}/force-merge` | `merge:force` | `admin` | Bypasses CI/review merge gates. |
@@ -507,7 +508,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/agent-keys` | `secrets:read` | `admin` | Lists configured model API key statuses (never values). |
 | `PUT /api/agent-keys/{framework}` | `secrets:write` | `admin` | Sets model framework API key. |
 | `DELETE /api/agent-keys/{framework}` | `secrets:write` | `admin` | Deletes model framework API key. |
-| `POST /api/agent-keys/{framework}/check` | `secrets:read` | `admin` | Probes model framework API key against vendor. |
+| `POST /api/agent-keys/{framework}/check` | `secrets:read` | `admin` | Probes model framework API key against vendor. Optional `?backend={id}` checks only the saved connection’s dispatch credential; missing/mismatched connections are refused and unsupported authentication modes never report success. |
 | `PUT /api/agent-backends/{id}/credential` | `secrets:write` | `admin` | Sets model backend credential. |
 | `DELETE /api/agent-backends/{id}/credential` | `secrets:write` | `admin` | Deletes model backend credential. |
 | `GET /api/agent-backends/{id}/codex-auth` | `secrets:read` | `admin` | Codex auth status (never secret bytes). |

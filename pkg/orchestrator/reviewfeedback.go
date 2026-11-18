@@ -225,9 +225,22 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 
 		log.Printf("orchestrator: task %s could not post its %d review finding(s) as a review on %s (%v); "+
 			"relaying them into the task's conversation instead", task.ID, len(findings), ref, err)
-		return 0, relayFindingsToConversation(ctx, store, task, findings,
+		if err := relayFindingsToConversation(ctx, store, task, findings,
 			fmt.Sprintf("Posting these findings as a review on %s failed (%v), so they are "+
-				"recorded here instead:", ref, err), now)
+				"recorded here instead:", ref, err), now); err != nil {
+			return 0, err
+		}
+		if reviewed == nil {
+			return 0, nil
+		}
+		// No review on GitHub holds them -- most often GitHub's 422 to a
+		// credential that already has a pending review on the pull
+		// request, which a parallel review of the same head drafted --
+		// but they are still questions for the change's owner, put to
+		// them exactly as a posted draft's are, so that their reply
+		// answers them (SyncReviewQuestions, prQuestionAnswerState).
+		return len(findings), noteFindingsOnReviewedTask(ctx, store, task, *reviewed, ref.String(), "",
+			findings, wantedAutoMerge, 0, now)
 	}
 
 	if err := noteFindingsOnReview(ctx, store, task, ref, findings, submitted, now); err != nil {
@@ -284,7 +297,7 @@ func reviewedWantsAutoMerge(ctx context.Context, store *model.Store, review mode
 //
 // Only for a review task. LinkProposedBy is also what a propose_task
 // proposal carries back to the run that proposed it, and a proposal is
-// not a review of anything -- Origin.Reason is what tells the two apart
+// not a review of anything -- Filing.Reason is what tells the two apart
 // (isReviewTask), the same field syncEntry reads to keep a review out of
 // its repo's merge queue.
 //
@@ -423,11 +436,13 @@ func submittedReviewBody(task model.Task, findings []reviewFinding) string {
 // findingsList renders findings as one markdown bullet each, prefixed
 // with the line they are about when they name one. Multi-line bodies are
 // indented under their own bullet so a finding that quotes code is still
-// one item rather than the list ending at its first newline.
+// one item rather than the list ending at its first newline. A body
+// written as GitHub's HTML (<code>, &quot;) is put in Markdown first
+// (findingMarkdown), since the classic UI shows raw HTML as text.
 func findingsList(findings []reviewFinding) string {
 	var b strings.Builder
 	for _, f := range findings {
-		body := strings.TrimSpace(f.Body)
+		body := findingMarkdown(strings.TrimSpace(f.Body))
 		if f.Located {
 			body = fmt.Sprintf("`%s:%d` -- %s", f.Path, f.Line, body)
 		}
@@ -509,6 +524,10 @@ func noteFindingsOnReview(ctx context.Context, store *model.Store, task model.Ta
 // starts a clock, because the thing being waited on is a person who has
 // been asked, in their own conversation.
 //
+// kind is what the findings were posted to GitHub as ("a draft review",
+// "a review"), or "" when posting them failed and this note is the only
+// place the owner can read them.
+//
 // draftID, when the draft review was posted, is recorded so the review
 // thread reconciler (reviewthreads.go) never reads the draft's own inline
 // comments as threads somebody else opened.
@@ -530,6 +549,11 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 		return nil
 	}
 
+	where := fmt.Sprintf("The same questions are on %s as %s, on the lines they are about.", ref, kind)
+	if kind == "" {
+		where = fmt.Sprintf("Posting them as a review on %s failed, so they are here and on task %s only.",
+			ref, review.ID)
+	}
 	// The question first, so the hold can name it: a human comment newer
 	// than this one is the owner's answer (reviewquestions.go).
 	body := fmt.Sprintf(
@@ -538,10 +562,10 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 			"Reply here (or on task %s) with your decision, and grain sends another run on "+
 			"this task to carry it out -- it fixes what you decided and a clean re-review "+
 			"clears the gate. Pressing Submit records your approval only and will not merge "+
-			"over open findings; merging without fixing them requires a force-merge override "+
-			"with a reason. The same questions are on %s as %s, on the lines they are about.",
+			"over open findings; to merge without fixing them, accept them with **Accept findings** "+
+			"(`grain accept-findings`, a reason required) rather than Force merge. %s",
 		review.ID, countOf(len(findings), "open question"), ref, findingsList(findings),
-		review.ID, ref, kind)
+		review.ID, where)
 	commentID, err := store.AddComment(ctx, model.Comment{
 		TaskID:    reviewed.ID,
 		Author:    model.Attribution{Actor: reviewer},

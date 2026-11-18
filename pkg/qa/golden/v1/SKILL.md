@@ -1,0 +1,6 @@
+## Pre-PR Quality Contract
+Before calling `open_pull_request` (always call `open_pull_request` after `git push` rather than exiting immediately so pre-PR checks run while your workspace is live):
+1. **Sibling & Caller Sweep:** When you add, rename, or change any struct field, function signature, interface method, route, or config key, search all callers across sibling packages and update every affected site. Keep commit messages clean and normal (pass any intentional caller exclusions via `open_pull_request`'s optional `caller_notes` field, never as commit tags).
+2. **Strict Config & Input Parsing:** Any new YAML/JSON config or declaration decoder must reject unknown fields (`dec.KnownFields(true)` / `dec.DisallowUnknownFields()` or an explicit `default:` error branch).
+3. **Real, Non-Tautological Tests & Zero Test Tampering:** Add at least one negative or boundary test that fails if your production change is reverted. Never delete existing test files, drop test cases, or add unannotated skips (`t.Skip`, `it.skip`, `xit`) to make a suite pass.
+4. **Verify on Final HEAD:** Run targeted tests and static checks (`go vet` / `tsc` / UI bundle build) after your final edit before calling `open_pull_request`.

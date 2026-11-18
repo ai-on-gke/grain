@@ -144,3 +144,12 @@ func SignCommentBody(body, author string) string {
 	}
 	return trimmed + "\n\n---\n" + sig
 }
+
+// IsGrainSignedComment recognizes the existing delegated-author footer. It is
+// provenance for suppressing relay echoes, never an authentication or approval
+// check. Only the final nonempty line counts, so quoted examples do not match.
+func IsGrainSignedComment(body string) bool {
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	return strings.HasPrefix(last, "*Signed by ") && strings.HasSuffix(last, " (via Grain)*")
+}

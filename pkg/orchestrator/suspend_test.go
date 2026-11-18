@@ -309,6 +309,16 @@ func TestRunDispatchSendsDeltaSuspendedPromptOnResume(t *testing.T) {
 		t.Fatalf("adding reply attachment: %v", err)
 	}
 
+	// Automation history normally truncates bodies to 240 characters. Unread
+	// external feedback must reach both resumed and fallback prompts in full.
+	if err := store.RecordPRFeedback(ctx, model.Comment{TaskID: "t1", CreatedAt: baseTime.Add(time.Minute),
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "github-webhook"}},
+		Body: "External feedback by bob (https://github.com/acme/widgets/pull/7#issuecomment-42): " +
+			strings.Repeat("review detail ", 100) + "UNTRUNCATED-PR-FEEDBACK-END"},
+		"issue_comment:42", false); err != nil {
+		t.Fatal(err)
+	}
+
 	// Simulate an operator editing the task body and granting a capability while
 	// the task is parked between dispatches.
 	task.Body = "UPDATED-TASK-BODY-INSTRUCTIONS"
@@ -340,6 +350,7 @@ func TestRunDispatchSendsDeltaSuspendedPromptOnResume(t *testing.T) {
 	}
 	for _, want := range []string{
 		"NEW-FOLLOW-UP-COMMENT-AFTER-SUSPEND",
+		"UNTRUNCATED-PR-FEEDBACK-END",
 		"UPDATED-TASK-BODY-INSTRUCTIONS",
 		orchestrator.AttachmentsDir + "/1-reply-diag.png",
 		"capability extra-cap is ready",
