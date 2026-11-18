@@ -4668,6 +4668,9 @@ var Tables = []string{
 	ciStepAttachmentTable,
 
 	// Local shadow diagnostics, separate from lifecycle and event outboxes.
+	gateHealthBaseTable,
+	gateHealthWorkflowTable,
+	"CREATE INDEX IF NOT EXISTS `gate_health_workflow_order` ON `gate_health_workflow_source` (`completed_at`,`repo`,`run_id`,`attempt`)",
 	gateOutcomeSourceTable,
 	"CREATE INDEX IF NOT EXISTS `gate_outcome_source_at` ON `gate_outcome_source` (`at`,`task_id`,`resource`)",
 	gateObservationTable,

@@ -276,7 +276,9 @@ func (s *Store) ObserveTaskGatePredictionsWithChecks(ctx context.Context, id str
 
 var ErrGateObservationScopeDenied = errors.New("gate observation task repository is outside the authorized read scope")
 
-func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, history bool, fence string, checks []gates.ChecksFacts, selected ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, history bool, fence string, checks []gates.ChecksFacts, children ...gates.ChildrenConfig) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+	access := gateHealthAccessFrom(ctx)
+	transient := false
 	var view gates.ObservationView
 	var diag GateObservationDiagnostics
 	var last error
@@ -286,20 +288,17 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			return nil, nil, err
 		}
 		err = func() error {
-			// Authorize the current repository inside the collection transaction,
-			// before any cache/backoff replay or transitive evidence read.
-			if HasExternalRefReadable(ctx) {
-				var owner, name string
-				if err := tx.QueryRowContext(ctx, "SELECT COALESCE(`target_owner`,''),COALESCE(`target_name`,'') FROM `task` WHERE `id` = ?", id).Scan(&owner, &name); err != nil {
-					return err
-				}
-				repo := ""
-				if owner != "" || name != "" {
-					repo = RepoFromStored(owner, name).String()
-				}
-				if !ExternalRefReadable(ctx, repo) {
-					return ErrGateObservationScopeDenied
-				}
+			if err := authorizeObservationTask(ctx, tx, id); err != nil {
+				return err
+			}
+			selected, err := gateFailureBindings(ctx, tx, id, access)
+			if err != nil {
+				return err
+			}
+			healthProjection := len(selected) > 0 && selected[0].Subject.Kind == "repository"
+			canUseCache := true
+			for _, b := range selected {
+				canUseCache = canUseCache && healthBindingAllowed(b, access)
 			}
 			// Persisted error backoff survives restarts and coalesces failed
 			// refreshes. It expires only into another diagnostic collection.
@@ -307,7 +306,7 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			cacheErr := tx.QueryRowContext(ctx, "SELECT `view_json` FROM `gate_observation_shadow` WHERE `task_id` = ?", id).Scan(&cached)
 			if cacheErr == nil {
 				var failure gates.ObservationView
-				if json.Unmarshal([]byte(cached), &failure) == nil && failure.Dirty && currentShadowBindings(failure, id) && len(failure.Results) > 0 && failure.Results[0].RetryAt != nil && now.Before(*failure.Results[0].RetryAt) {
+				if canUseCache && json.Unmarshal([]byte(cached), &failure) == nil && failure.Dirty && currentShadowBindings(failure, id) && sameObservationFamily(failure, selected, healthProjection) && len(failure.Results) > 0 && failure.Results[0].RetryAt != nil && now.Before(*failure.Results[0].RetryAt) {
 					view = failure
 					if history {
 						diag, cacheErr = readGateDiagnostics(ctx, tx, id)
@@ -318,24 +317,22 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			} else if !errors.Is(cacheErr, sql.ErrNoRows) {
 				return cacheErr
 			}
-			task, err := getTask(ctx, tx, id)
+			f, state, err := captureGateFacts(ctx, tx, id, now, access, children...)
 			if err != nil {
 				return err
 			}
-			o, err := getObservation(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			f, state, err := captureReportFacts(ctx, tx, id, now, task, o)
-			if err != nil {
-				return err
-			}
-			if err = captureOutcomeFacts(ctx, tx, &f, now, selected, task, o); err != nil {
-				return err
+			if f.Health != nil && !f.Complete {
+				transient = true
+				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: observationBindings(id, f), Results: []gates.EvaluationState{}}
+				for _, b := range view.Bindings {
+					r := gates.Evaluate(b, f, now, 0)
+					view.Results = append(view.Results, gates.EvaluationState{EvaluationID: r.EvaluationID, Disposition: "rejected", Result: r})
+				}
+				return nil
 			}
 			invalidated := false
-			if len(checks) > 0 {
-				_, _, current, err := gateChecksInputFrom(ctx, tx, task, o)
+			if len(checks) > 0 && f.Health == nil {
+				task, _, current, err := gateChecksInput(ctx, tx, id)
 				if err != nil {
 					return err
 				}
@@ -422,7 +419,7 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				// across a restart. A changed local fence still invalidates the
 				// result rather than returning a possibly stale cached success.
 				if len(checks) > 0 && now.Before(evaluated) {
-					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged {
+					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && (f.Health == nil || source == f.SourceVersion) {
 						view = cachedView
 						if history {
 							diag, err = readGateDiagnostics(ctx, tx, id)
@@ -431,6 +428,17 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 						return nil
 					}
 					now = evaluated
+					if f.Health != nil {
+						// The external read may have started before this task
+						// acquired a health goal. Recollect local health facts
+						// at the newer clock; never replay a changed source or
+						// rewind its accepted timestamp with the old CI request.
+						f, state, err = captureGateFacts(ctx, tx, id, now, access, children...)
+						if err != nil {
+							return err
+						}
+						bindings = observationBindings(id, f)
+					}
 				}
 			}
 			changed := missing || source != f.SourceVersion || bindingsChanged
@@ -448,6 +456,7 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 						r.Status = "unknown"
 						r.Summary = "Cached gate configuration or implementation is unsupported; the observation profile was regenerated."
 						r.HumanText = nil
+						r.AgentText = nil
 						r.Waits = []gates.Wait{}
 					}
 					// IDs are namespaced diagnostics, never accepted by an authority API.
@@ -461,8 +470,11 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				if len(data) > 256*1024 {
 					return fmt.Errorf("observation view exceeds diagnostic byte bound")
 				}
-				if changed || unsupportedCache || !now.Before(historyAt.Add(time.Hour)) {
+				if changed || unsupportedCache || !now.Before(historyAt.Add(time.Hour)) || f.Health != nil && healthPredictionsChanged(previous, view) {
 					comparison := compareReportMilestones(f, view)
+					if f.Health != nil {
+						comparison = compareHealthPredictions(view)
+					}
 					if unsupportedCache {
 						comparison = "unknown_unsupported_config"
 					}
@@ -493,6 +505,10 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 		_ = tx.Rollback()
 		release()
 		if err == nil {
+			if transient || !history {
+				return &view, nil, nil
+			}
+			filterHealthDiagnostics(&diag, access)
 			return &view, &diag, nil
 		}
 		last = err
@@ -582,23 +598,28 @@ func compareOutcomeMilestones(f gates.Facts, v gates.ObservationView) string {
 // RecordGateObservationFailure retains safe rejected diagnostics with bounded
 // exponential retry. No raw infrastructure errors or evidence bodies are stored.
 // This is controller state, never evaluator-private durable state.
-func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now time.Time, view *gates.ObservationView) error {
+func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now time.Time, view *gates.ObservationView, healthAccess ...GateHealthAccess) error {
 	tx, release, err := s.beginGateObservation(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(); release() }()
-	if HasExternalRefReadable(ctx) {
-		var owner, name string
-		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(`target_owner`,''),COALESCE(`target_name`,'') FROM `task` WHERE `id` = ?", id).Scan(&owner, &name); err != nil {
-			return err
-		}
-		repo := ""
-		if owner != "" || name != "" {
-			repo = RepoFromStored(owner, name).String()
-		}
-		if !ExternalRefReadable(ctx, repo) {
-			return ErrGateObservationScopeDenied
+	access := gateHealthAccessFrom(ctx)
+	if len(healthAccess) > 0 {
+		access = healthAccess[0]
+	}
+	if err := authorizeObservationTask(ctx, tx, id); err != nil {
+		return err
+	}
+	selected, err := gateFailureBindings(ctx, tx, id, access)
+	if err != nil {
+		return err
+	}
+	healthProjection := len(selected) > 0 && selected[0].Subject.Kind == "repository"
+	for _, b := range selected {
+		if !healthBindingAllowed(b, access) {
+			*view = gates.UnavailableObservationForBindings(id, now, selected)
+			return nil
 		}
 	}
 	var raw string
@@ -618,7 +639,7 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 	delay := time.Second
 	if raw != "" {
 		var old gates.ObservationView
-		if json.Unmarshal([]byte(raw), &old) == nil && currentShadowBindings(old, id) {
+		if json.Unmarshal([]byte(raw), &old) == nil && currentShadowBindings(old, id) && sameObservationFamily(old, selected, healthProjection) {
 			if old.ComparedAt.After(evaluated) {
 				evaluated = old.ComparedAt
 			}
@@ -640,49 +661,54 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 			}
 		}
 	}
-	task, err := getTask(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	requestedChecks := false
-	for _, b := range view.Bindings {
-		if b.Type == "checks" {
-			requestedChecks = true
+	if healthProjection {
+		*view = gates.UnavailableObservationForBindings(id, now, selected)
+	} else {
+		task, err := getTask(ctx, tx, id)
+		if err != nil {
+			return err
 		}
-	}
-	if raw != "" {
-		var previous gates.ObservationView
-		if json.Unmarshal([]byte(raw), &previous) == nil && currentShadowBindings(previous, id) {
-			for _, b := range previous.Bindings {
-				if b.Type == "checks" {
-					requestedChecks = true
+		requestedChecks := false
+		for _, b := range view.Bindings {
+			if b.Type == "checks" {
+				requestedChecks = true
+			}
+		}
+		if raw != "" {
+			var previous gates.ObservationView
+			if json.Unmarshal([]byte(raw), &previous) == nil && currentShadowBindings(previous, id) && sameObservationFamily(previous, selected, false) {
+				for _, b := range previous.Bindings {
+					if b.Type == "checks" {
+						requestedChecks = true
+					}
 				}
 			}
 		}
-	}
-	unavailableChecks := []gates.ChecksFacts{}
-	if task != nil && requestedChecks {
-		for _, sub := range CheckSubjects(*task) {
-			if len(unavailableChecks) < 8 {
-				unavailableChecks = append(unavailableChecks, gates.ChecksFacts{TaskID: id, Subject: sub})
-			}
-		}
-	}
-	bindings := gates.BindingsFor(id, unavailableChecks)
-	if raw != "" {
-		var previous gates.ObservationView
-		if json.Unmarshal([]byte(raw), &previous) == nil && currentShadowBindings(previous, id) {
-			for _, b := range previous.Bindings[2:] {
-				if b.Type != "checks" {
-					bindings = append(bindings, b)
+		unavailableChecks := []gates.ChecksFacts{}
+		if task != nil && requestedChecks {
+			for _, sub := range CheckSubjects(*task) {
+				if len(unavailableChecks) < 8 {
+					unavailableChecks = append(unavailableChecks, gates.ChecksFacts{TaskID: id, Subject: sub})
 				}
 			}
 		}
+		bindings := gates.BindingsFor(id, unavailableChecks)
+		if raw != "" {
+			var previous gates.ObservationView
+			if json.Unmarshal([]byte(raw), &previous) == nil && currentShadowBindings(previous, id) && sameObservationFamily(previous, selected, false) {
+				for _, b := range previous.Bindings[2:] {
+					if b.Type != "checks" {
+						bindings = append(bindings, b)
+					}
+				}
+			}
+		}
+		if len(bindings) > 64 {
+			bindings = bindings[:64]
+		}
+		*view = gates.UnavailableObservationForBindings(id, now, bindings)
 	}
-	if len(bindings) > 64 {
-		bindings = bindings[:64]
-	}
-	*view = gates.UnavailableObservationForBindings(id, now, bindings)
+
 	generation++
 	evaluations++
 
@@ -794,6 +820,29 @@ func currentShadowBindings(v gates.ObservationView, id string) bool {
 	if v.APIVersion != "grain.gates/v1" || v.Mode != "observation_only" || v.Authority != "legacy" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover {
 		return false
 	}
+	if len(v.Bindings) > 0 && v.Bindings[0].Subject.Kind == "repository" {
+		if len(v.Bindings) < 2 || len(v.Bindings) > 4 || len(v.Results) != len(v.Bindings) {
+			return false
+		}
+		seen := map[string]bool{}
+		for i, b := range v.Bindings {
+			if seen[b.ID] || b.Purpose != "monitor" || b.Required || b.Action != nil || b.Origin.ID != id || b.Origin.Revision == "" || b.Subject.Kind != "repository" || b.Subject.Repository == "" || b.Subject.Ref == "" || b.Subject.TaskID != "" || b.Subject.Authority != "" || b.Subject.ChangeKind != "" || b.Subject.ID != "" {
+				return false
+			}
+			seen[b.ID] = true
+			if b.Type != "base_health" && b.Type != "nightly_health" && b.Type != "publishing_health" && b.Type != "pipeline_health" {
+				return false
+			}
+			if _, err := gates.Validate(b.Type, b.Version, b.Config); err != nil {
+				return false
+			}
+			r := v.Results[i].Result
+			if r.Type != b.Type || r.Version != b.Version || len(r.Work) > 0 || len(r.Actions) > 0 {
+				return false
+			}
+		}
+		return true
+	}
 	base := gates.Bindings(id)
 	if len(v.Bindings) < 2 || len(v.Bindings) > 64 || len(v.Results) != len(v.Bindings) || gates.Digest(v.Bindings[:2]) != gates.Digest(base) {
 		return false
@@ -852,6 +901,35 @@ func gateHistoryFloor(ctx context.Context, q querier, id string, now time.Time) 
 	return generation, started, err
 }
 
+// Family selection precedes failure replay: an old health cohort cannot replace
+// a new report/change projection, or vice versa.
+func sameObservationFamily(v gates.ObservationView, selected []gates.Binding, health bool) bool {
+	if len(v.Bindings) == 0 {
+		return false
+	}
+	if health {
+		return gates.Digest(v.Bindings) == gates.Digest(selected)
+	}
+	return v.Bindings[0].Subject.Kind == "task"
+}
+func authorizeObservationTask(ctx context.Context, q querier, id string) error {
+	if !HasExternalRefReadable(ctx) {
+		return nil
+	}
+	var owner, name string
+	if err := q.QueryRowContext(ctx, "SELECT COALESCE(`target_owner`,''),COALESCE(`target_name`,'') FROM `task` WHERE `id` = ?", id).Scan(&owner, &name); err != nil {
+		return err
+	}
+	repo := ""
+	if owner != "" || name != "" {
+		repo = RepoFromStored(owner, name).String()
+	}
+	if !ExternalRefReadable(ctx, repo) {
+		return ErrGateObservationScopeDenied
+	}
+	return nil
+}
+
 func freshChecks(checks []gates.ChecksFacts, now time.Time) bool {
 	for _, c := range checks {
 		if !now.Before(c.ValidUntil) {
@@ -877,10 +955,20 @@ func freshObservation(raw string, now time.Time) bool {
 // GateObservationRetry is a read-only persisted diagnostic backoff check. It
 // prevents source outages from creating one set of remote reads per UI poll.
 // Authorization and resource/history redaction remain the ordinary caller's job.
-func (s *Store) GateObservationRetry(ctx context.Context, id string, now time.Time, history bool) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+func (s *Store) GateObservationRetry(ctx context.Context, id string, now time.Time, history bool, healthAccess ...GateHealthAccess) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+	if err := authorizeObservationTask(ctx, s.db, id); err != nil {
+		return nil, nil, err
+	}
+	goal, err := gateTaskGoal(ctx, s.db, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if healthGoal(goal) {
+		return nil, nil, nil
+	}
 	var raw string
 	var owner, name string
-	err := s.db.QueryRowContext(ctx, "SELECT g.`view_json`, COALESCE(t.`target_owner`,''), COALESCE(t.`target_name`,'') FROM `gate_observation_shadow` g JOIN `task` t ON g.`task_id` = t.`id` WHERE g.`task_id` = ?", id).Scan(&raw, &owner, &name)
+	err = s.db.QueryRowContext(ctx, "SELECT g.`view_json`, COALESCE(t.`target_owner`,''), COALESCE(t.`target_name`,'') FROM `gate_observation_shadow` g JOIN `task` t ON g.`task_id` = t.`id` WHERE g.`task_id` = ?", id).Scan(&raw, &owner, &name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	}
@@ -895,7 +983,7 @@ func (s *Store) GateObservationRetry(ctx context.Context, id string, now time.Ti
 		return nil, nil, ErrGateObservationScopeDenied
 	}
 	var v gates.ObservationView
-	if json.Unmarshal([]byte(raw), &v) != nil || !currentShadowBindings(v, id) || !v.Dirty || len(v.Results) == 0 || v.Results[0].RetryAt == nil || !now.Before(*v.Results[0].RetryAt) {
+	if json.Unmarshal([]byte(raw), &v) != nil || !currentShadowBindings(v, id) || !sameObservationFamily(v, gates.Bindings(id), false) || !v.Dirty || len(v.Results) == 0 || v.Results[0].RetryAt == nil || !now.Before(*v.Results[0].RetryAt) {
 		return nil, nil, nil
 	}
 	if !history {
@@ -905,5 +993,10 @@ func (s *Store) GateObservationRetry(ctx context.Context, id string, now time.Ti
 	if err != nil {
 		return nil, nil, err
 	}
+	access := gateHealthAccessFrom(ctx)
+	if len(healthAccess) > 0 {
+		access = healthAccess[0]
+	}
+	filterHealthDiagnostics(&d, access)
 	return &v, &d, nil
 }
