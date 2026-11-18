@@ -794,14 +794,15 @@ LABEL io.grain.schema-version="${SCHEMA_VERSION}"
 # file. Both paths run this image unprivileged; neither does it from a
 # USER line, because the right uid is the deployment's to know.
 #
-# tini as PID 1: the daemon forks agent CLIs which fork MCP servers of
-# their own (pkg/procgroup), and a container's PID 1 is the only reaper
-# there is -- without one, every one of those that outlives its parent
-# stays a zombie in this namespace for as long as the daemon runs.
+# The daemon forks agent CLIs which fork MCP servers of their own
+# (pkg/procgroup). Tini reaps descendants that outlive their parents.
+# setup.sh uses --pid host so Top can see the host's process table: Tini
+# is not PID 1 there and must register as a child subreaper (-s). The
+# same entrypoint also works in a private PID namespace, including k8s.
 #
 # ENTRYPOINT is the binary and CMD its subcommand, so `docker run <image>
 # schema-version` reads as running the CLI (which is exactly how
 # setup.sh's own /usr/local/bin/grain wrapper and pkg/upgrade's image
 # health check use it) while the unit passes `daemon` and its flags.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/grain"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/grain"]
 CMD ["daemon"]
