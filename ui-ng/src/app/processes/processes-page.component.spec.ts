@@ -2741,7 +2741,7 @@ describe("ProcessesPageComponent (D-9)", () => {
       "1",
     );
 
-    // Fallback DEFAULT_QA_FLOW_REFS advertises golden-v1-minimal@1, never unseeded golden-v3-enforced@1.
+    // Fallback DEFAULT_QA_FLOW_REFS advertises standard-workflow@1, never unseeded golden-v3-enforced@1.
     const schedFlowBtn = root.querySelector<HTMLButtonElement>(
       '[data-testid="process-qa-flow-select"]',
     );
@@ -2750,7 +2750,7 @@ describe("ProcessesPageComponent (D-9)", () => {
     await flush(harness);
     expect(
       root.querySelector(
-        '[data-testid="process-qa-flow-select-opt-golden-v1-minimal@1"]',
+        '[data-testid="process-qa-flow-select-opt-standard-workflow@1"]',
       ),
     ).not.toBeNull();
     expect(

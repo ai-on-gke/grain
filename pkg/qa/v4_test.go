@@ -22,13 +22,13 @@ import (
 )
 
 func TestBuiltInEngineeringWorkflowV4AndPreservedV1ToV3Hashes(t *testing.T) {
-	// Verify existing built-in hashes remain byte-for-byte unchanged.
+	// Verify existing built-in hashes remain resolvable with engine rev 5.
 	wantBuiltInHashes := map[string]string{
-		"golden-v1-minimal@1":     "builtin:golden-v1-minimal@1#4",
-		"golden-v2@1":             "builtin:golden-v2@1#4",
-		"golden-v2-skill-only@1":  "builtin:golden-v2-skill-only@1#4",
-		"golden-v2-checks-only@1": "builtin:golden-v2-checks-only@1#4",
-		"golden-v3@1":             "builtin:golden-v3@1#4",
+		"golden-v1-minimal@1":     "builtin:golden-v1-minimal@1#5",
+		"golden-v2@1":             "builtin:golden-v2@1#5",
+		"golden-v2-skill-only@1":  "builtin:golden-v2-skill-only@1#5",
+		"golden-v2-checks-only@1": "builtin:golden-v2-checks-only@1#5",
+		"golden-v3@1":             "builtin:golden-v3@1#5",
 	}
 	for ref, wantHash := range wantBuiltInHashes {
 		b, ok := LookupBuiltInOrRegisteredVersion(ref)
@@ -350,5 +350,58 @@ func TestResolveStudioExportedV4JSONWithDiffFixtures(t *testing.T) {
 	}
 	if got := bundle.DeclarationV4.CustomChecks[0].Paths; len(got) != 1 || got[0] != "src/**/*.ts" {
 		t.Errorf("got custom check paths %v, want [src/**/*.ts]", got)
+	}
+}
+
+func TestCanonicalThreeWorkflowsCatalogAndStandardDAG(t *testing.T) {
+	versions := BuiltInFlowVersions()
+	if len(versions) != 3 {
+		t.Fatalf("len(BuiltInFlowVersions()) = %d, want 3", len(versions))
+	}
+	wantKeys := []string{"standard-workflow", "fast-baseline", "gates-only"}
+	for i, wantKey := range wantKeys {
+		if versions[i].Key != wantKey {
+			t.Fatalf("BuiltInFlowVersions()[%d].Key = %q, want %q", i, versions[i].Key, wantKey)
+		}
+	}
+
+	flows := BuiltInFlows()
+	if len(flows) != 3 {
+		t.Fatalf("len(BuiltInFlows()) = %d, want 3", len(flows))
+	}
+
+	std, ok := LookupBuiltInOrRegisteredVersion("standard-workflow@1")
+	if !ok {
+		t.Fatal("standard-workflow@1 not found")
+	}
+	if !std.Resolved.Decompose.Enabled || std.Resolved.Decompose.Mode != "propose_dag" {
+		t.Fatalf("standard-workflow@1 Decompose = %+v, want Enabled=true Mode=propose_dag", std.Resolved.Decompose)
+	}
+	if std.Resolved.S5MergeTriage.Mode != "enforced" {
+		t.Fatalf("standard-workflow@1 S5MergeTriage.Mode = %q, want enforced", std.Resolved.S5MergeTriage.Mode)
+	}
+
+	fast, ok := LookupBuiltInOrRegisteredVersion("fast-baseline@1")
+	if !ok || fast.Resolved.S0Intent || fast.Resolved.S2PlanCritic || !fast.Resolved.EnableS4 {
+		t.Fatalf("fast-baseline@1 = (%+v, %v), want S0Intent=false S2PlanCritic=false EnableS4=true", fast, ok)
+	}
+	gates, ok := LookupBuiltInOrRegisteredVersion("gates-only@1")
+	if !ok || gates.Resolved.S0Intent || gates.Resolved.EnableS4 || gates.Resolved.InjectSkill {
+		t.Fatalf("gates-only@1 = (%+v, %v), want S0Intent=false EnableS4=false InjectSkill=false", gates, ok)
+	}
+
+	// Legacy references and prior engine-revision builtin hashes continue to resolve.
+	for _, legacyRef := range []string{
+		"engineering-workflow-v4",
+		"engineering-workflow-v4@1",
+		"builtin:engineering-workflow-v4@1#4",
+		"golden-v1-minimal",
+		"builtin:golden-v1-minimal@1#4",
+		"golden-v3",
+		"deterministic-s3-only",
+	} {
+		if b, found := LookupBuiltInOrRegisteredVersion(legacyRef); !found || b.Key == "" {
+			t.Fatalf("legacy workflow ref %q failed resolution: (%+v, %v)", legacyRef, b, found)
+		}
 	}
 }
