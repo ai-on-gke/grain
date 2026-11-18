@@ -11,12 +11,18 @@ name: release
 # person's token needs "Manage Actions access" set on the package). Where
 # that cannot be arranged, set the GHCR_TOKEN secret to a token with
 # write:packages, and GHCR_USERNAME to its owner, and it is used instead.
+#
+# The trigger is every release event, with the job itself checking for
+# "published", rather than `types: [published]`: grain CI also reads this
+# file and applies no filter but branches and branches-ignore, so a
+# `types` key fails every grain CI run. The concurrency group carries the
+# action so a created/edited/released run, which skips, never replaces a
+# pending published one.
 on:
   release:
-    types: [published]
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event.action }}
   cancel-in-progress: false
 
 permissions:
@@ -25,6 +31,7 @@ permissions:
 jobs:
   publish:
     name: publish guest images
+    if: github.event.action == 'published'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
