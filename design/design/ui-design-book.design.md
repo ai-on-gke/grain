@@ -430,9 +430,10 @@ beside the box, and a cleared box saves the server's `<key>Default` --
 so the greyed placeholder is always what Save stores.
 
 A built-in capability server whose configuration is a list of things
-gets a card of its own below the server table rather than a schema
-form: the config-map server's config maps and secret maps
-(`#config-maps`), the host-script server's scripts (`#host-scripts`).
+gets a card of its own on its server's page, in place of the
+schema-driven Server settings form: the config-map server's config maps
+and secret maps (`#config-maps`), the host-script server's scripts
+(`#host-scripts`).
 The card lists what is saved: each map with the directory it lands in
 and its files as chips, a secret key's chip saying `set` or `not set`
 and never the value, and each script with its usage and limits. An edit

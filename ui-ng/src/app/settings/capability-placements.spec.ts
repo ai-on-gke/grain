@@ -25,6 +25,7 @@ import {
   type PlacementServer,
   droppedPlacements,
   isConfigMapServer,
+  isCleanAbsolutePath,
   isHostScriptServer,
   placementErrors,
   placementPayload,
@@ -193,6 +194,14 @@ describe("host scripts", () => {
     expect(scriptDraftErrors({ ...ok, cwd: "/a/../b" }, []).cwd).toBeTruthy();
     expect(scriptDraftErrors({ ...ok, cwd: "/srv/" }, []).cwd).toBeTruthy();
     expect(scriptDraftErrors({ ...ok, cwd: "/srv/a.b" }, [])).toEqual({});
+    // The first segment is checked too (review 6488).
+    for (const bad of ["/..", "/../etc", "/.", "/./x", "//x", "x/y", "/a//b"]) {
+      expect(isCleanAbsolutePath(bad), bad).toBe(false);
+      expect(scriptDraftErrors({ ...ok, cwd: bad }, []).cwd, bad).toBeTruthy();
+    }
+    for (const good of ["/", "/srv", "/srv/a.b", "/srv/..x", "/.hidden/x"]) {
+      expect(isCleanAbsolutePath(good), good).toBe(true);
+    }
     expect(scriptDraftErrors({ ...ok, max_args: "0" }, [])).toEqual({});
     expect(
       scriptDraftErrors({ ...ok, max_calls: "0" }, []).max_calls,

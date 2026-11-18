@@ -390,6 +390,18 @@ export function scriptDraft(s?: HostScriptRow): ScriptDraft {
   };
 }
 
+// isCleanAbsolutePath is the server's check on a script's cwd,
+// filepath.IsAbs(p) && filepath.Clean(p) == p: "/" or "/"-joined
+// segments with none empty, "." or "..", the first one included.
+export function isCleanAbsolutePath(p: string): boolean {
+  if (p === "/") return true;
+  if (!p.startsWith("/")) return false;
+  return p
+    .slice(1)
+    .split("/")
+    .every((seg) => seg !== "" && seg !== "." && seg !== "..");
+}
+
 const SCRIPT_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -415,9 +427,7 @@ export function scriptDraftErrors(
     errs.timeout = "Whole seconds from 1 to 86400.";
   }
   const cwd = d.cwd.trim();
-  if (cwd && (!cwd.startsWith("/") || /\/\.{0,2}(\/|$)/.test(cwd.slice(1)))) {
-    errs.cwd = "A clean absolute path.";
-  }
+  if (cwd && !isCleanAbsolutePath(cwd)) errs.cwd = "A clean absolute path.";
   for (const f of SCRIPT_LIMIT_FIELDS) {
     const raw = d[f].trim();
     if (!raw) continue;

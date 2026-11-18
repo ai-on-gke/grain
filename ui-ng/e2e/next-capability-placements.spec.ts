@@ -16,7 +16,8 @@ import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 
 // The config-map server's config maps and secret maps, and the
-// host-script server's scripts, on /next/settings/capabilities (task
+// host-script server's scripts, on their servers' pages under
+// /next/settings/capabilities/<id> in place of the schema form (task
 // 6219, ported from the classic ConfigMapList and HostScriptList). Runs
 // over `grain demo -secrets-store`, so a secret map's value really is
 // written to the secret store, and Test really runs the demo's "ops"
@@ -26,6 +27,10 @@ test.use({ demoArgs: ["-secrets-store"] });
 
 const CONFIG_MAP = "https://grain.dev/capabilities/config-map";
 const HOST_SCRIPT = "https://grain.dev/capabilities/host-script";
+
+// Each card sits on its server's own page, in place of the schema form.
+const pagePath = (id: string) =>
+  `/next/settings/capabilities/${encodeURIComponent(id)}`;
 
 interface ServerRow {
   id: string;
@@ -84,9 +89,10 @@ test("Config maps and secret maps: add, list where they land, edit and remove @d
   const before = await serverConfig(request, CONFIG_MAP);
   const secretsBefore = await secretNames(request);
   try {
-    await page.goto("/next/settings/capabilities#config-maps");
+    await page.goto(pagePath(CONFIG_MAP));
     const card = page.getByTestId("card-config-maps");
-    await expect(card).toBeInViewport();
+    await expect(card).toBeVisible();
+    await expect(page.getByTestId("configure-btn")).toHaveCount(0);
     await expect(
       card.getByRole("heading", { name: "Config maps and secret maps" }),
     ).toBeVisible();
@@ -191,9 +197,10 @@ test("Config maps and secret maps: add, list where they land, edit and remove @d
 test("Host scripts: Test runs the saved script with each argument as one @phone", async ({
   page,
 }) => {
-  await page.goto("/next/settings/capabilities#host-scripts");
+  await page.goto(pagePath(HOST_SCRIPT));
   const card = page.getByTestId("card-host-scripts");
-  await expect(card).toBeInViewport();
+  await expect(card).toBeVisible();
+  await expect(page.getByTestId("configure-btn")).toHaveCount(0);
   const ops = card.getByRole("listitem", { name: "Script ops" });
   await expect(ops).toContainText("Demo operations script");
   await expect(ops.getByRole("list", { name: "Limits of ops" })).toContainText(
@@ -240,7 +247,7 @@ test("Host scripts: add, edit and remove a script, refusing bad fields by name @
   const before = await serverConfig(request, HOST_SCRIPT);
   const secretsBefore = await secretNames(request);
   try {
-    await page.goto("/next/settings/capabilities#host-scripts");
+    await page.goto(pagePath(HOST_SCRIPT));
     const card = page.getByTestId("card-host-scripts");
     await card.getByRole("button", { name: "Add script" }).click();
     const form = card.getByRole("form", { name: "New script" });
