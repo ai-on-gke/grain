@@ -955,6 +955,70 @@ var attributedRoutes = map[string]attributedRoute{
 			return model.Principal{ID: findings[0].VotedBy}
 		},
 	},
+	"POST /api/tasks/{id}/qa/bypass-s3": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			ctx := context.Background()
+			id := fileTask(true)(t, client, nil)
+			if err := client.Store.UpdateTask(ctx, id, func(tk *model.Task) error {
+				tk.Target = &model.RepoRef{Owner: "acme", Name: "widgets"}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Store.RecordQACheckRun(ctx, model.QACheckRun{
+				TaskID:    id,
+				CommitSHA: "deadbeef00000000000000000000000000000001",
+				Stage:     "S3",
+				CheckID:   "golden:test-integrity-guard",
+				Arm:       model.QAArmTreatment,
+				Verdict:   "fail",
+			}, nil); err != nil {
+				t.Fatal(err)
+			}
+			client.Config.PullRequests = &stubS3BypassPRs{store: client.Store}
+			return id
+		},
+		path:   "/api/tasks/{id}/qa/bypass-s3",
+		body:   `{"reason":"false positive on generic repo"}`,
+		bareID: true,
+		recorded: func(t *testing.T, ctx context.Context, client *ui.Client, id, _ string) model.Principal {
+			runs, err := client.Store.ListQACheckRunsForTask(ctx, id)
+			if err != nil || len(runs) == 0 {
+				t.Fatalf("qa check runs for %s: %v, %v", id, runs, err)
+			}
+			var meta struct {
+				BypassedBy string `json:"bypassedBy"`
+			}
+			if err := json.Unmarshal([]byte(runs[len(runs)-1].DetailJSON), &meta); err != nil {
+				t.Fatalf("unmarshal bypass detail: %v", err)
+			}
+			return model.Principal{ID: meta.BypassedBy}
+		},
+	},
+}
+
+type stubS3BypassPRs struct {
+	store *model.Store
+}
+
+func (s *stubS3BypassPRs) OpenForTask(context.Context, string) (ui.PullRequestStatus, error) {
+	return ui.PullRequestStatus{Number: 1, URL: "https://github.com/acme/widgets/pull/1"}, nil
+}
+
+func (s *stubS3BypassPRs) BypassS3ForTask(ctx context.Context, taskID, bypassedBy, reason, _ string) (ui.PullRequestStatus, error) {
+	detail, _ := json.Marshal(map[string]string{"bypassedBy": bypassedBy, "reason": reason})
+	if _, err := s.store.RecordQACheckRun(ctx, model.QACheckRun{
+		TaskID:     taskID,
+		Stage:      "S3",
+		CheckID:    model.QACheckIDS3OperatorBypass,
+		Arm:        model.QAArmTreatment,
+		Verdict:    "bypassed",
+		DetailJSON: string(detail),
+	}, nil); err != nil {
+		return ui.PullRequestStatus{}, err
+	}
+	return ui.PullRequestStatus{Number: 1, URL: "https://github.com/acme/widgets/pull/1"}, nil
 }
 
 // neverAttributedRoutes are non-GET routes that write nothing a person

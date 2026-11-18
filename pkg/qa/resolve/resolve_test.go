@@ -407,7 +407,7 @@ func TestQAFlowRefOperatorBindingPrecedenceAndTightenOnlyFloors(t *testing.T) {
 	if pRes.Spec == nil || !pRes.Spec.StagingIsolation {
 		t.Fatalf("ComposeTightenOnly must enforce StagingIsolation=true, got %+v", pRes.Spec)
 	}
-	foundIntegrity, foundStrict := false, false
+	foundIntegrity := false
 	for _, r := range pRes.Spec.Rules {
 		switch r.ID {
 		case qa.RuleTestIntegrityGuard:
@@ -416,14 +416,13 @@ func TestQAFlowRefOperatorBindingPrecedenceAndTightenOnlyFloors(t *testing.T) {
 				t.Fatalf("ComposeTightenOnly failed to preserve RuleTestIntegrityGuard floor: %+v", r)
 			}
 		case qa.RuleStrictConfigDecoder:
-			foundStrict = true
-			if !r.Enabled || r.Severity != "blocking" {
-				t.Fatalf("ComposeTightenOnly failed to preserve RuleStrictConfigDecoder floor: %+v", r)
+			if r.Severity == "blocking" {
+				t.Fatalf("ComposeTightenOnly must not force repo-opinionated RuleStrictConfigDecoder to blocking: %+v", r)
 			}
 		}
 	}
-	if !foundIntegrity || !foundStrict {
-		t.Fatalf("ComposeTightenOnly missing mandatory rules: integrity=%v strict=%v", foundIntegrity, foundStrict)
+	if !foundIntegrity {
+		t.Fatalf("ComposeTightenOnly missing mandatory universal floor rule %s", qa.RuleTestIntegrityGuard)
 	}
 
 	// 3. Kill switch (qaCfg.Enabled = false) still overrides operator bindings.
@@ -449,11 +448,14 @@ func TestComposeTightenOnlyOverlaysAndFloors(t *testing.T) {
 	if !empty.StagingIsolation {
 		t.Fatal("expected StagingIsolation=true on bare flow")
 	}
-	for _, id := range []string{qa.RuleTestIntegrityGuard, qa.RuleStrictConfigDecoder} {
+	for _, id := range []string{qa.RuleTestIntegrityGuard} {
 		r, ok := empty.Rule(id)
 		if !ok || !r.Enabled || r.Severity != "blocking" || r.Stage != "S3" || r.Label == "" || r.Summary == "" || len(r.TargetPaths) == 0 {
 			t.Fatalf("synthesized floor rule %s incomplete: %+v (ok=%v)", id, r, ok)
 		}
+	}
+	if r, ok := empty.Rule(qa.RuleStrictConfigDecoder); ok && r.Severity == "blocking" {
+		t.Fatalf("ComposeTightenOnly must not synthesize blocking RuleStrictConfigDecoder on bare flow: %+v", r)
 	}
 
 	// Overlay tightens stages, severities, S5 triage, V4 packs/steps, and never weakens base settings.

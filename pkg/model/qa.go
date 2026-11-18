@@ -60,6 +60,13 @@ const (
 	// QAStageBranchPrefix namespaces pre-PR staging branches pushed by treatment-arm sandboxes
 	// before S3/S4 quality verification promotes commits to the task's live PR branch.
 	QAStageBranchPrefix = "grain-qa-stage/"
+
+	// QACheckIDS3OperatorBypass records an explicit human operator override of a blocked S3 gate.
+	QACheckIDS3OperatorBypass = "qa:s3-operator-bypass"
+
+	// QACheckIDBaseResolution records an explicit S3 base-commit resolution failure
+	// (instead of silently falling back to the repository's initial commit).
+	QACheckIDBaseResolution = "qa:base-resolution"
 )
 
 // ActiveQAResolution is a callback to avoid import cycles when reading the current QA arm for a task.

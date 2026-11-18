@@ -506,10 +506,11 @@ func (a SandboxCLIActions) WaitForGitHubChecks(ctx context.Context, taskID strin
 	if reader == nil {
 		return mcp.GitHubCheckWaitResult{}, errors.New("this deployment has no GitHub client wired to read check runs")
 	}
+	branch := a.Client.taskActiveCIBranch(ctx, task)
 	scope := mcp.PullRequestScope{
 		Owner:  task.Target.StoredOwner(),
 		Repo:   task.Target.Name,
-		Branch: task.BranchName(),
+		Branch: branch,
 		Base:   task.Base,
 	}
 	if a.Client != nil && a.Client.Store != nil {
@@ -520,8 +521,10 @@ func (a SandboxCLIActions) WaitForGitHubChecks(ctx context.Context, taskID strin
 			}
 		}
 	}
-	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
-		scope.PullRequestNumber = pr.Number
+	if branch == task.BranchName() {
+		if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
+			scope.PullRequestNumber = pr.Number
+		}
 	}
 	return mcp.WaitForGitHubChecks(ctx, reader, scope, timeout, poll, 0, onPoll)
 }

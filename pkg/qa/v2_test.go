@@ -117,7 +117,7 @@ func TestResolveFlowDeclarationV2RejectsInvalidConfigs(t *testing.T) {
 		},
 		{
 			name: "disable floor",
-			yaml: "schema: grain.dev/qa-flow/v2\nkey: bad\nextends: golden-v2@1\nchecks:\n  golden:strict-config-decoder: {enabled: false}\n",
+			yaml: "schema: grain.dev/qa-flow/v2\nkey: bad\nextends: golden-v2@1\nchecks:\n  golden:test-integrity-guard: {enabled: false}\n",
 			want: "cannot be disabled",
 		},
 		{

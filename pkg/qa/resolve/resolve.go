@@ -51,7 +51,7 @@ func init() {
 		if err != nil {
 			return "", err
 		}
-		if res != nil && res.IsEnforcedTreatment() {
+		if res != nil && res.IsEnforcedTreatment() && (res.Spec == nil || res.Spec.StagingIsolation) {
 			return model.QAArmTreatment, nil
 		}
 		return "", nil
@@ -427,8 +427,8 @@ func floorRuleTemplate(ruleID string) qa.RuleSpec {
 // and optionally merges one or more overlay specs using tighten-only semantics
 // (an overlay can enable stages/checks or raise severities/triage modes, but can
 // never disable an enabled stage/check or lower a severity/triage floor).
-// StagingIsolation is always true, and RuleTestIntegrityGuard and
-// RuleStrictConfigDecoder are always Enabled: true with Severity: "blocking".
+// StagingIsolation is always true, and RuleTestIntegrityGuard is always
+// Enabled: true with Severity: "blocking".
 func ComposeTightenOnly(spec qa.FlowSpec, overlays ...qa.FlowSpec) qa.FlowSpec {
 	rules := make([]qa.RuleSpec, len(spec.Rules))
 	for i := range spec.Rules {
@@ -722,7 +722,7 @@ func ComposeTightenOnly(spec qa.FlowSpec, overlays ...qa.FlowSpec) qa.FlowSpec {
 
 	// Enforce mandatory global floors unconditionally.
 	spec.StagingIsolation = true
-	for _, floorID := range []string{qa.RuleTestIntegrityGuard, qa.RuleStrictConfigDecoder} {
+	for _, floorID := range []string{qa.RuleTestIntegrityGuard} {
 		tmpl := floorRuleTemplate(floorID)
 		found := false
 		for i := range spec.Rules {

@@ -438,6 +438,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/tasks/{id}/qa":                                               "tasks:read",
 	"POST /api/tasks/{id}/qa/check-runs":                                   "internal",
 	"POST /api/tasks/{id}/qa/findings/{finding}/feedback":                  "internal",
+	"POST /api/tasks/{id}/qa/bypass-s3":                                    "internal",
 	"POST /api/mcp":                                                        "internal",
 	"POST /mcp":                                                            "internal",
 }

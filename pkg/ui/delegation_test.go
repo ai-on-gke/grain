@@ -474,6 +474,14 @@ func TestPersonOnlyOperationsRefuseDelegation(t *testing.T) {
 	if recConnect.Code != http.StatusForbidden {
 		t.Fatalf("delegated GET /api/hostd/connect = %d %s, want 403", recConnect.Code, recConnect.Body.String())
 	}
+
+	// 6. Bypassing an S3 QA gate (POST /api/tasks/{id}/qa/bypass-s3) -> 403 requires_person
+	// even though grain/delegated includes merge:write.
+	recBypass := h.do(http.MethodPost, "/api/tasks/held-priority-1/qa/bypass-s3",
+		`{"reason":"delegated attempt"}`, hdr)
+	if recBypass.Code != http.StatusForbidden || !strings.Contains(recBypass.Body.String(), `"requires_person"`) {
+		t.Fatalf("delegated POST /api/tasks/{id}/qa/bypass-s3 = %d %s, want 403 requires_person", recBypass.Code, recBypass.Body.String())
+	}
 }
 
 func TestDelegatedWriteRecordsAppAndPerson(t *testing.T) {

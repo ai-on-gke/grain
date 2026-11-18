@@ -266,6 +266,17 @@ class FakeApi {
         votedBy: "ana@example.com",
       });
     }
+    if (route === "POST /api/tasks/{id}/qa/bypass-s3") {
+      this.detail.pullRequest = "acme/web#43";
+      this.qaResponse = { ...this.qaResponse, s3Blocked: false };
+      return Promise.resolve({
+        ok: true,
+        pullRequest: "acme/web#43",
+        branch: this.detail.branch ?? "grain/task-7",
+        stageBranch: this.qaResponse.stageBranch ?? "grain-qa-stage/7",
+        bypassedBy: "ana@example.com",
+      });
+    }
     return Promise.resolve({});
   }
   post = (r: string, p?: unknown, b?: unknown) => this.rec("POST", r, p, b);
@@ -2153,6 +2164,114 @@ describe("duration", () => {
     f.detectChanges();
     await settle(f);
     expect(q(f, '[data-testid="qa-vote-up-11"]')).toBeNull();
+  });
+
+  it("shows Bypass S3 gate action on blocked staging tasks, submits override reason, and hides it without merge:write", async () => {
+    const api = new FakeApi();
+    api.detail.pullRequest = undefined;
+    api.detail.state = "awaiting_reply";
+    api.qaResponse = {
+      enabled: true,
+      stageBranch: "grain-qa-stage/7",
+      s3Blocked: true,
+      s3HeadSha: "deadbeef12345678",
+      assignment: {
+        taskId: "7",
+        arm: "treatment",
+        policyId: "builtin:standard-workflow@1#6",
+        complexityTier: "medium",
+        assignedAt: "2026-11-12T10:00:00Z",
+      },
+      checkRuns: [
+        {
+          id: 21,
+          taskId: "7",
+          runId: "7-1",
+          commitSha: "deadbeef12345678",
+          stage: "S3",
+          checkId: "go-test-integrity",
+          arm: "treatment",
+          shadow: false,
+          verdict: "fail",
+          durationMs: 12,
+          tokensIn: 0,
+          tokensOut: 0,
+          allocBytes: 0,
+          createdAt: "2026-11-12T10:01:00Z",
+        },
+      ],
+      findings: [],
+    };
+
+    const f = await render(api, "changes");
+    expect(q(f, '[data-testid="changes-stage-branch"]')?.textContent).toContain(
+      "grain-qa-stage/7",
+    );
+    expect(q(f, '[data-testid="qa-s3-blocked-bar"]')).not.toBeNull();
+
+    // Viewer without merge:write cannot see the bypass button.
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read", "ci:read"],
+      },
+    });
+    f.detectChanges();
+    await settle(f);
+    expect(q(f, '[data-testid="qa-bypass-s3-btn"]')).toBeNull();
+
+    // Operator with merge:write sees the button and can confirm override.
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "grain/maintainer",
+        roles: ["grain/maintainer"],
+        full: false,
+        scopes: ["tasks:read", "tasks:write", "ci:read", "merge:write"],
+      },
+    });
+    f.detectChanges();
+    await settle(f);
+
+    const bypassBtn = q<HTMLButtonElement>(
+      f,
+      '[data-testid="qa-bypass-s3-btn"]',
+    )!;
+    expect(bypassBtn).not.toBeNull();
+    bypassBtn.click();
+    await settle(f);
+
+    expect(q(f, '[data-testid="bypass-s3-dialog"]')).not.toBeNull();
+    const reasonEl = q<HTMLTextAreaElement>(
+      f,
+      '[data-testid="bypass-s3-reason"]',
+    )!;
+    reasonEl.value = "False positive on generated fixture test";
+    reasonEl.dispatchEvent(new Event("input"));
+    await settle(f);
+
+    const confirmBtn = q<HTMLButtonElement>(
+      f,
+      '[data-testid="bypass-s3-confirm"]',
+    )!;
+    expect(confirmBtn.disabled).toBe(false);
+    confirmBtn.click();
+    await settle(f);
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/qa/bypass-s3"),
+    ).toEqual({
+      method: "POST",
+      route: "POST /api/tasks/{id}/qa/bypass-s3",
+      params: { id: "7" },
+      body: {
+        reason: "False positive on generated fixture test",
+        head: "deadbeef12345678",
+      },
+    });
+    expect(q(f, '[data-testid="bypass-s3-dialog"]')).toBeNull();
+    expect(q(f, '[data-testid="qa-s3-blocked-bar"]')).toBeNull();
   });
 
   it("renders actionError once, ignores page Escape when modal is open, skips missing remote branches, and guards close(expectedId)", async () => {

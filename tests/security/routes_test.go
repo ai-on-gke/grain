@@ -215,6 +215,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/tasks/{id}/qa":                                        trusted,
 	"POST /api/tasks/{id}/qa/check-runs":                            trusted,
 	"POST /api/tasks/{id}/qa/findings/{finding}/feedback":           trusted,
+	"POST /api/tasks/{id}/qa/bypass-s3":                             trusted,
 	"GET /api/local-script-approvals":                               trusted,
 	"GET /api/declarations":                                         trusted,
 	"POST /api/declarations/accept":                                 trusted,

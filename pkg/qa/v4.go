@@ -230,11 +230,6 @@ stages:
     max-seconds: 45
     max-tokens: 15000
     on-clarification: warn
-  s1-risk:
-    overrides:
-      - paths: ["pkg/orchestrator/**", "pkg/model/migrations.go"]
-        min-tier: T3
-        reason: "Core state machine and schema migrations"
   s2-plan-critic:
     enabled: true
     complexities: [high]
@@ -249,9 +244,9 @@ stages:
 
 checks:
   golden:test-integrity-guard: {}
-  golden:strict-config-decoder: {}
+  golden:strict-config-decoder: {enabled: true, severity: warn}
   golden:sibling-export-hazard: {severity: warn, params: {resolve: import-path}}
-  golden:ui-budget-and-spec-floor: {enabled: true}
+  golden:ui-budget-and-spec-floor: {enabled: true, severity: warn}
   golden:exported-surface-delta: {severity: warn}
   golden:test-hygiene: {severity: warn}
   golden:mutation-hardening: {severity: warn, params: {mutants: 25, max-seconds: 60}}
@@ -329,9 +324,9 @@ stages:
 
 checks:
   golden:test-integrity-guard: {}
-  golden:strict-config-decoder: {}
-  golden:sibling-export-hazard: {enabled: true, severity: blocking, params: {resolve: import-path}}
-  golden:ui-budget-and-spec-floor: {enabled: true, severity: blocking}
+  golden:strict-config-decoder: {enabled: true, severity: warn}
+  golden:sibling-export-hazard: {enabled: true, severity: warn, params: {resolve: import-path}}
+  golden:ui-budget-and-spec-floor: {enabled: true, severity: warn}
   golden:exported-surface-delta: {enabled: false, severity: warn}
   golden:test-hygiene: {enabled: false, severity: warn}
   golden:mutation-hardening: {enabled: false, severity: warn}
@@ -401,9 +396,9 @@ stages:
 
 checks:
   golden:test-integrity-guard: {}
-  golden:strict-config-decoder: {}
-  golden:sibling-export-hazard: {enabled: true, severity: blocking, params: {resolve: import-path}}
-  golden:ui-budget-and-spec-floor: {enabled: true, severity: blocking}
+  golden:strict-config-decoder: {enabled: true, severity: warn}
+  golden:sibling-export-hazard: {enabled: true, severity: warn, params: {resolve: import-path}}
+  golden:ui-budget-and-spec-floor: {enabled: true, severity: warn}
   golden:exported-surface-delta: {enabled: false, severity: warn}
   golden:test-hygiene: {enabled: false, severity: warn}
   golden:mutation-hardening: {enabled: false, severity: warn}
@@ -1086,7 +1081,7 @@ func BuildWorkflowStagesView(b FlowVersionBundle) []WorkflowStageView {
 		if r.Stage == "S4" || r.ID == RuleS4OrthogonalVerifier {
 			continue
 		}
-		locked := r.ID == RuleTestIntegrityGuard || r.ID == RuleStrictConfigDecoder
+		locked := r.ID == RuleTestIntegrityGuard
 		s3Steps = append(s3Steps, WorkflowStepView{
 			ID:          r.ID,
 			Label:       r.Label,
