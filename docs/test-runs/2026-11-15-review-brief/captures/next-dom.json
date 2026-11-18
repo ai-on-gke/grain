@@ -1,0 +1,84 @@
+[
+ {
+  "id": "3",
+  "headings": [
+   "H3: The change under review",
+   "H2: Parallel reviews of this head"
+  ],
+  "pres": [
+   {
+    "lines": 6,
+    "first": "Add a CI hook for widgets.",
+    "quotesEarlier": false,
+    "quotesIncremental": false,
+    "width": 297,
+    "overflowX": "auto"
+   }
+  ],
+  "docScrollWidth": 1440
+ },
+ {
+  "id": "9",
+  "headings": [
+   "H3: The change under review",
+   "H2: Earlier reviews of this pull request",
+   "H2: Parallel reviews of this head"
+  ],
+  "pres": [
+   {
+    "lines": 6,
+    "first": "Add a CI hook for widgets.",
+    "quotesEarlier": false,
+    "quotesIncremental": false,
+    "width": 297,
+    "overflowX": "auto"
+   }
+  ],
+  "docScrollWidth": 1440
+ },
+ {
+  "id": "13",
+  "headings": [
+   "H3: The change under review",
+   "H2: Parallel reviews of this head"
+  ],
+  "pres": [
+   {
+    "lines": 42,
+    "first": "HOSTILE-BRIEF-START Ship the widget exporter.",
+    "quotesEarlier": true,
+    "quotesIncremental": true,
+    "width": 297,
+    "overflowX": "auto"
+   }
+  ],
+  "docScrollWidth": 1440
+ },
+ {
+  "id": "17",
+  "headings": [
+   "H3: The change under review",
+   "H2: Parallel reviews of this head"
+  ],
+  "pres": [
+   {
+    "lines": 45,
+    "first": "### Earlier reviews of this pull request",
+    "quotesEarlier": true,
+    "quotesIncremental": true,
+    "width": 297,
+    "overflowX": "auto"
+   }
+  ],
+  "docScrollWidth": 1440
+ },
+ {
+  "id": "18",
+  "headings": [
+   "H3: The change under review",
+   "H2: Parallel reviews of this head"
+  ],
+  "pres": [],
+  "docScrollWidth": 1440
+ }
+]

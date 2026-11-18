@@ -105,6 +105,9 @@ type CapabilityPasses struct {
 	// now is the clock unreleased grants' deadlines are read against;
 	// nil is time.Now.
 	now func() time.Time
+	// beforeRenewWait is a test hook called just before acquiring a
+	// pass's renewMu in Extend or release.
+	beforeRenewWait func()
 }
 
 type heldPass struct {
@@ -299,6 +302,9 @@ func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protoco
 	held := h.take(runID)
 	if held == nil {
 		return nil, "", nil
+	}
+	if h.beforeRenewWait != nil {
+		h.beforeRenewWait()
 	}
 	held.renewMu.Lock()
 	defer held.renewMu.Unlock()
@@ -556,6 +562,9 @@ func (h *CapabilityPasses) Extend(ctx context.Context, runID string, deadline ti
 	// Serialise renewals per pass so an earlier deadline cannot re-mint on
 	// the capability servers after a later one has already finished, and so
 	// a waiting caller re-checks held.deadline before minting again.
+	if h.beforeRenewWait != nil {
+		h.beforeRenewWait()
+	}
 	held.renewMu.Lock()
 	defer held.renewMu.Unlock()
 
@@ -568,10 +577,12 @@ func (h *CapabilityPasses) Extend(ctx context.Context, runID string, deadline ti
 	if err := held.pass.Renew(ctx, deadline); err != nil {
 		return err
 	}
+	// Write held.deadline unconditionally: renewMu guarantees it is later,
+	// and if release removed held from h.passes while Renew was in flight,
+	// keepUnreleased (waiting on renewMu) needs the lease expiry the
+	// servers now actually hold.
 	h.mu.Lock()
-	if h.passes[runID] == held {
-		held.deadline = deadline
-	}
+	held.deadline = deadline
 	h.mu.Unlock()
 	return nil
 }
@@ -909,7 +920,7 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	}
 	// What a local-scripts declaration became on host-script stays withheld
 	// from scheduled runs, whose prompt can come from an untrusted source.
-	if task.Origin.Reason == model.ReasonSchedule {
+	if task.Filing.Reason == model.ReasonSchedule {
 		const why = "a scheduled run cannot verify the prompt it runs on"
 		kept := grants[:0]
 		for _, g := range grants {

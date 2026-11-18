@@ -1331,6 +1331,7 @@ function ArgsSection({
   const pending = useRef(false);
   const inFlight = useRef(false);
   const timer = useRef(null);
+  const blurTimer = useRef(null);
   const mounted = useRef(true);
 
   const save = async () => {
@@ -1379,6 +1380,7 @@ function ArgsSection({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      clearTimeout(blurTimer.current);
       if (timer.current) saveRef.current();
     };
   }, []);
@@ -1415,9 +1417,25 @@ function ArgsSection({
       data-grant-draft={grant ? undefined : ""}
       aria-label={ariaLabel}
       className="grant-section"
+      // Focus leaving the section saves at once -- but a select's menu
+      // is a portal outside this element's DOM, so opening one blurs
+      // the section with relatedTarget outside it. React still bubbles
+      // the menu's own focus back through here, so the save waits a
+      // tick and an onFocus from inside (the menu) calls it off. Saving
+      // as the menu opened re-rendered the whole list mid-pick on pages
+      // that save as they go (a console session's), and the option
+      // click could land on a menu that no longer took it.
       onBlur={(e) => {
-        if (timer.current && !e.currentTarget.contains(e.relatedTarget))
-          saveRef.current();
+        if (!timer.current || e.currentTarget.contains(e.relatedTarget)) return;
+        clearTimeout(blurTimer.current);
+        blurTimer.current = setTimeout(() => {
+          blurTimer.current = null;
+          if (timer.current) saveRef.current();
+        }, 0);
+      }}
+      onFocus={() => {
+        clearTimeout(blurTimer.current);
+        blurTimer.current = null;
       }}
       sx={{ ...sectionSx, px: 1.5, pt: 0.75, pb: 1.5 }}
     >

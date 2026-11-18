@@ -107,7 +107,7 @@ func putModelDispatchTask(t *testing.T, ctx context.Context, store *model.Store,
 	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "Exercise model dispatch " + id,
-		Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: human, Reason: model.ReasonDirect},
 		Approval: &human, AgentFramework: framework,
 	}
 	if err := store.PutTask(ctx, task); err != nil {

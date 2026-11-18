@@ -1,0 +1,27 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "resolve-1",
+  "status": "resolved",
+  "reference": {
+    "version": "1",
+    "provider": {
+      "capability_id": "https://example.org/capabilities/tasks",
+      "method": "tasks"
+    },
+    "resource_kind": "example.task",
+    "identifier": {
+      "installation_id": "instance-a",
+      "task_id": "72"
+    },
+    "tracking": {
+      "facet": "outcome",
+      "mode": "follow_latest",
+      "selector": null
+    }
+  },
+  "display": {
+    "summary": "Task 72",
+    "url": null
+  },
+  "error": null
+}

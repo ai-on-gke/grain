@@ -158,7 +158,7 @@ func TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys(t *testin
 	task := model.Task{
 		ID: taskID, Intent: model.IntentImplement, Interactive: true,
 		Title: "warm session across restarts", Body: "hello session",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: human},
 			Reason:      model.ReasonDirect,
 		},

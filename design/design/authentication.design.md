@@ -31,8 +31,9 @@ type AccessCodePrecedence interface {
 }
 
 type VerifiedIdentity struct {
-	Email string              // normalized lower-case email; becomes Principal.ID
-	Kind  model.PrincipalKind // model.PrincipalHuman or model.PrincipalService
+	Email        string              // normalized lower-case email; becomes Principal.ID
+	Kind         model.PrincipalKind // model.PrincipalHuman or model.PrincipalService
+	SessionGrace bool                // admitted on the request's session during an outage (below)
 }
 
 func RegisterIdentityVerifier(v IdentityVerifier) (unregister func())
@@ -40,13 +41,33 @@ func RegisterIdentityVerifier(v IdentityVerifier) (unregister func())
 
 `Server.activeVerifiers` (`pkg/ui/verifier.go`) places `NewIAPVerifier` (`Name() == "iap"`, `Headers() == ["X-Goog-IAP-JWT-Assertion"]`) first whenever `IAPConfig.Enabled()` is true, followed by verifiers registered via `RegisterIdentityVerifier` in registration order.
 
-`Server.verifyCallerNow` (`pkg/ui/server.go`, `pkg/ui/verifier.go`) runs once per HTTP request before external-agent token authentication and `singleTenantGate`, caching its `callerVerification` in the request context:
+`Server.verifyCallerNow` (`pkg/ui/server.go`, `pkg/ui/verifier.go`) runs once per HTTP request (except for exact-match content-hashed frontend bundles served by `Server.serveHashedFrontendBundle`; see §4) before external-agent token authentication and `singleTenantGate`, caching its `callerVerification` in the request context:
 
 - **First present header decides.** `verifyCaller` inspects active verifiers in order. Verifiers with none of their `Headers()` set on the request are skipped. The first verifier with a non-empty header decides the request; later verifiers are never consulted, even on error.
 - **A bad assertion fails closed (`401`).** When a verifier's header is present and `Verify` returns an error, the request is refused with `401` (`writeAssertionRefused` in `pkg/ui/principalrefusal.go`). It never falls back to the access code, to a `gma_…` external-agent token, to a session cookie, or to an unauthenticated open route (including `/api/hostd/connect`). A caller that reaches the pod directly past the Gateway cannot forge the signature, so network topology is not trusted on its own.
 - **An unavailable verifier fails closed too, but as `503`.** When `Verify`'s error (anywhere in its wrapped chain) has `Unavailable() bool` returning true (`VerifierUnavailableError` in `pkg/ui/verifier.go`) -- a backend the verifier consults is not reachable yet, say just after a daemon restart -- the refusal is `503 Service Unavailable` with `Retry-After: 5`: for a browser navigation a page saying sign-in verification is temporarily unavailable ("is starting up" only when the error says the verifier is starting up); for everything else JSON with `code: "verifier_unavailable"`, `retryAfter: 5`, a log `ref`, and -- when the error also has `UnavailableReason() string` -- a machine-readable `reason` such as `tonic_unreachable`, but never the error's own text; and `503` from `hostdConnectIdentity`. Only the status and the page change; the access code and later verifiers are still not consulted. The UI retries a `verifier_unavailable` read quietly -- no toast, no "cannot be reached" banner -- and says so, naming sign-in verification, only once such refusals have gone on for 30 seconds with no request getting through.
 - **Bounded diagnostic logging (`pkg/ui/assertion_diagnostics.go`).** Refused IAP assertions are logged by `logRefusedAssertion` with the unverified `iss`, unverified `aud`, configured audience(s), and failure reason, deduplicated by `(iss, aud, refusalKind)` across nine failure categories (`malformed`, `signature`, `unverifiable`, `expired`, `not-yet-valid`, `issued-in-future`, `issuer`, `claim-missing`, `other`) up to 64 distinct keys (`maxLoggedRefusedAssertions`). When the unverified `aud` already matches a configured audience (and the failure is not `issuer`), the log line notes that the audience is this deployment's own—pointing to clock skew, a replayed header, or an untrusted signer rather than telling the operator to change `-ui-iap-audience`. Raw tokens and signatures are never logged. If `X-Goog-IAP-JWT-Assertion` arrives when no IAP audience is configured, grain logs a one-time configuration hint naming `-ui-iap-audience`. Non-IAP verifier failures log once per `(verifier.Name(), header)` via `logRefusedVerifierHeader` (also capped at 64 entries).
 - **Plaintext identity headers never authenticate.** Unsigned headers (`PlaintextIdentityHeaders` in `pkg/ui/principal.go`: `X-Goog-Authenticated-User-Email`, `X-User-LDAP`, `X-Forwarded-User`, `X-Goog-Authenticated-User-Id`, `X-Grain-User`, `Grain-User`) never establish a principal or satisfy `singleTenantGate`, whether from the network or loopback. Proxy-sent headers outside grain's own client headers (`X-Grain-User`, `Grain-User`, `X-Forwarded-User`) are logged once per header name (`logIgnoredIdentityHeader`) and ignored.
+
+### Verified sessions for slow verifiers (`pkg/ui/verifier_session.go`)
+
+A verifier that can only check its header by asking a remote service (a proxy that signs a fresh header for every request, which only that service can verify) would otherwise pay that round trip on every API read, and fan-out on a page load turns a slow backend into `503 verifier_unavailable`. Two optional interfaces let it check once and then trust a short session, without core giving the verifier the `ResponseWriter`:
+
+```go
+type SessionBinder interface {
+	SessionTTL() time.Duration // > 0 opts in; capped at MaxVerifierSessionTTL (5m)
+}
+
+type LocalVerifier interface {
+	VerifyLocal(r *http.Request) (id VerifiedIdentity, ok bool, err error)
+}
+
+func VerifierSessionFromRequest(r *http.Request) (VerifierSession, bool)
+```
+
+- **Issued only after a full `Verify` and admission.** Once `Verify` admits an identity and `singleTenantGate` lets it through (not on an open route, never for a delegated identity, never over the hub tunnel), `serveHTTP` sets `__Host-grain_verified`: `HttpOnly`, `Secure`, `SameSite=Strict`, host-only, `Path=/`. It is `v1.<payload>.<HMAC-SHA256>` over the verifier's name, the identity (email, sub, kind), the request's `Host` (lowercased, port included) and an expiry `SessionTTL` away. The key is 32 random bytes made at process start. It is never written anywhere, so a restart ends every session. Every full verification issues the cookie again. Like grain's other cookies, the staging proxy (`pkg/ui/persistent_sandboxes.go`) neither forwards it to a staging environment nor lets one set it: `isGrainCookie` sees `grain_*` behind a `__Host-`/`__Secure-` prefix too.
+- **Admitted without `Verify` only on a live session and a header that names the same principal.** The request must carry the verifier's header as well. The cookie must verify under this daemon's key, name this verifier and this `Host`, and be unexpired. `VerifyLocal` must accept the header (in-process checks only: shape, host, timestamp window, email) for the same email, kind and (when it reports one) sub. Anything else -- no cookie, a forged or tampered one, an expired one, another host, verifier or principal, or `VerifyLocal` returning `ok=false` or an error -- goes to `Verify` as if there were no session. So a header `Verify` would refuse is still refused. The one thing a session accepts that `Verify` might not is a well-formed header for the session's own principal whose signature only the remote service can judge, and only within the TTL. The cap of 5 minutes matches the replay window of the headers this is for, so a sniffed cookie is worth no more than a replayed header. Admission, roles and CSRF checks run on every request whatever admitted the identity.
+- **Grace through a backend outage.** While `Verify` runs, `VerifierSessionFromRequest` returns the request's session (signed, same verifier and `Host`) until `VerifierSessionGrace` (5 minutes) past its expiry. A verifier whose backend is unreachable -- never one that got a refusal -- may admit the identity that session names, once its local checks find the header names the same principal, by returning it with `VerifiedIdentity.SessionGrace` set. Core holds it to that in `verifyWithVerifier`, which every verifier path goes through: a `SessionGrace` identity from a verifier that binds no sessions (`SessionTTL() <= 0`), over the hub tunnel, or with no session on the request for this verifier and principal is refused with `401`, and admission on grace never re-issues the cookie, so a grace period cannot extend itself.
 
 ### IAP JWT checks (`pkg/ui/principal.go`)
 
@@ -127,6 +148,23 @@ Browser navigations (`GET` or `HEAD` outside `/api/`) receive self-contained HTM
 - **`403` `"Not allowed on this grain"` (`writePrincipalRefusedPage`).** Rendered when a caller's assertion verifies (`cv.err == nil`) but `checkAllowedPrincipal` refuses admission. The page displays the verified email and verifier name, any underlying lookup error (for example a Cloud Identity timeout), remediation guidance from `ui.RegisterPrincipalAdvice` (defaulting to `Settings → Access` and `grain access allow user:<email>` for human callers, or `grain host register --owner <email>` for service accounts), and an `"Owner: sign in with the access code"` section that renders `<form method="post" action="/api/auth/access-code">` **only** when `AccessCodeWins()` is true—otherwise explaining that the verifier's identity takes precedence over the access code and instructing the owner to connect directly or over an SSH tunnel.
 - **`401` `"Sign-in could not be verified"` (`writeAssertionRefused`).** Rendered when a verifier header is present on a browser navigation but fails verification, naming the failure reason and configuration/clock checklist with no access-code fallback.
 - **`401` `"Sign in through <verifier>"` / `"Sign in through IAP"` (`writeVerifierRequiredPage` / `writeIAPRequiredPage`).** Rendered when `-ui-require-verifier` (or `-ui-require-iap`) refuses an unauthenticated network browser navigation, in place of the `"Enter access code"` login form.
+
+### Content-hashed frontend bundle exemption (`pkg/ui/spa.go`, `pkg/ui/server.go`)
+
+`Server.serveHashedFrontendBundle` runs at the top of `Server.serveHTTP`—after `setSecurityHeaders` and `checkCrossOrigin`, and before `verifyCallerNow` and `singleTenantGate`—and serves content-hashed frontend bundles directly from the embedded filesystem without running identity verification or the single-tenant access-code gate.
+
+A request is exempt **only if all** six conditions hold:
+
+1. The method is `GET` or `HEAD`.
+2. It is not a hub tunnel request (`isHubTunnelRequest(r)` is false); tunnelled requests keep their full verification and tunnel-ingress checks.
+3. `r.URL.RawQuery` is empty (with no bare `?` or fragment).
+4. The raw escaped path (`r.URL.EscapedPath()`) contains no percent-escapes (`%`), no `//`, no `.` or `..` segments, no trailing `/`, and equals both `path.Clean` of itself and `r.URL.Path`.
+5. The path is a two-segment path of the form `/next/<name>` (Angular UI) or `/assets/<name>` (legacy React UI) with a single segment `<name>`.
+6. `<name>` exists as a regular file in the same embedded filesystem that serves the route (`static-next/` for `/next/<name>`, `static/assets/` for `/assets/<name>`) and `isContentHashedAsset` accepts it (matching a build-time content hash and an allowlisted `.js`, `.css`, `.woff2`, `.woff`, `.ttf`, `.svg`, `.png`, `.jpg`, or `.webp` extension)—never `index.html`, never the SPA fallback, never directories, and never `.map` source maps.
+
+For an exempt request, `serveHashedFrontendBundle` serves the file with `Cache-Control: private, max-age=31536000, immutable` and `Vary: Accept-Encoding`: when the client accepts gzip, it serves a cached gzipped body computed once on first request (keyed by path) with `Content-Encoding: gzip` and a weak `W/` ETag without re-compressing in `withCompression`; otherwise it serves the identity bytes straight from the embedded filesystem with the strong `ETag` (holding no raw bundle copy in the cache); conditional requests match only the active variant's ETag and omit `Content-Type`, `Content-Length`, and `Content-Encoding` on `304`; and `Range` headers are ignored (always `200` with the full body). It attaches no principal to the request context, neither reads nor sets cookies, logs no identity or assertion headers, and never touches the task store.
+
+**Why this is safe:** The embedded frontend bundles are deterministic build output of this open-source repository and contain no deployment state, tenant data, or configuration. Frontend bundles must never embed build-time deployment data such as env injection, secrets or hostnames, because the exemption serves them to anyone who can reach the port. Public bundle names let an unauthenticated caller fingerprint the deployed version; this is accepted, since the code is open source and `index.html` (the list of names) stays gated. Behind an identity-aware proxy that attaches a fresh single-use signed assertion to every request—where each verification costs a remote call—a hard reload otherwise triggers 15–20 redundant verifications just for JavaScript and CSS, and a transient `503` from the verifier causes the stylesheet request to return an HTML refusal page (`no-store`) and leave the UI unstyled. Because the exemption is an exact-match check on embedded content-hashed files at a single entry point before `verifyCallerNow`, HTML entry points (`/`, `/index.html`, `/next/`, `/next/index.html`), SPA client routes (`/next/inbox`, `/tasks/…`), unhashed assets, source maps, hub-tunnelled requests, and every `/api/*` route remain gated by `verifyCallerNow` and `singleTenantGate`.
 
 ## 5. How each client signs in
 
@@ -273,6 +311,7 @@ This follows [`operator-attribution.design.md`](operator-attribution.design.md)'
 - **Per-hostd registry and remote `hostd` owner verification** (`pkg/ui/hostds.go`, `pkg/ui/hostd_connect.go`, `pkg/hostd/connect_identity.go`, `pkg/hostd/remote.go`, `pkg/hostd/iap_auth.go`, `pkg/cli/hostds.go`): `/api/hostds`, `grain hostds`, `hostd.ConnectIdentity`, and `-hostd-token-owner` (tasks 2164, 2316).
 - **Operator attribution foundation** (`pkg/model/task.go`, `pkg/ui/request_actor.go`, `pkg/ui/principal_label.go`): `Principal.Source`, `Principal.Verified()`, `ui.RequestActor(ctx)`, and `*_source` database columns across mutating routes (tasks 2310, 2311).
 - **Simulated IAP end-to-end and deployment verification:** 112 checks passed, 0 failed across browser UI, CLI, external agents, and remote `hostd` (`docs/test-runs/2026-11-02-iap-end-to-end.md`, task 2510), plus Terraform/script flag rendering, refused-principal and own-audience logging, phone drawer stacked layout, and external-config-repo walkthroughs (`docs/test-runs/2026-11-03-iap-deployment.md`, task 2710).
+- **Content-hashed frontend bundle exemption** (`pkg/ui/spa.go`, `pkg/ui/server.go`): exact-match exemption before `verifyCallerNow` and `singleTenantGate` for embedded content-hashed `/next/<name>` and `/assets/<name>` bundles, served with `Cache-Control: private, max-age=31536000, immutable` without invoking registered `IdentityVerifier`s (task 509).
 
 ### Remaining
 

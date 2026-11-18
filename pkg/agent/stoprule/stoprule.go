@@ -85,6 +85,12 @@ const BackgroundContinueReason = "A reply without a tool call ends your run, and
 	"`request_secret`, ask for more access with `request_access`, park on another task with `wait_for_task`, " +
 	"suspend with `resume_later`, or say no change is needed with `nothing_needed`. If you meant to keep working, keep working now."
 
+// QAPrePRContinueReason is the one-time stop-hook nudge on quality-gated runs
+// that pushed a branch without invoking open_pull_request.
+const QAPrePRContinueReason = "A reply without a tool call ends your run. If you have pushed your branch, " +
+	"call `open_pull_request` now so pre-PR quality checks run while your workspace is live; otherwise push your " +
+	"branch and call `open_pull_request`, or finish with `ask_question`, `comment_on_issue`, or `nothing_needed`."
+
 // Block is one time the stop rule sent a run back, recorded on the
 // run's agent.Result (Result.StopBlocks) so that the run's transcript and
 // its tool census both show it.
@@ -118,9 +124,10 @@ var defaultClosingTools = []string{
 }
 
 // defaultClosingCalls are the conditional tool-call rules that close a
-// background run: resume_later on success, wait_for_task when it parks,
-// and run_command when it ran git push without failing.
+// background run: complete_goal and resume_later on success, wait_for_task
+// when it parks, and run_command when it ran git push without failing.
 var defaultClosingCalls = []hookpolicy.ClosingCallRule{
+	{Tool: "complete_goal", RequireSuccess: true},
 	{Tool: "resume_later", RequireSuccess: true},
 	{Tool: "wait_for_task", ArgBoolTrue: "park"},
 	{Tool: "wait_for_task", ArgNonEmpty: "resume_at"},
@@ -211,6 +218,23 @@ func DefaultPolicy() hookpolicy.StopPolicy {
 		ConditionalPrefixes:      []string{"if "},
 		ConditionalPhrases:       []string{" if ", "want me to", "would you like"},
 	}
+}
+
+// QATreatmentPolicy returns DefaultPolicy adapted for a treatment-arm coding run
+// that holds open_pull_request: bare `git push` alone no longer closes the run,
+// prompting one reminder to call `open_pull_request` before exiting.
+func QATreatmentPolicy() hookpolicy.StopPolicy {
+	p := DefaultPolicy()
+	p.BackgroundContinueReason = QAPrePRContinueReason
+	var filtered []hookpolicy.ClosingCallRule
+	for _, c := range p.ClosingCalls {
+		if c.Tool == "run_command" && c.Substring == "git push" {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	p.ClosingCalls = filtered
+	return p
 }
 
 // Decide applies this build's stop rule (DefaultPolicy) to a run that is

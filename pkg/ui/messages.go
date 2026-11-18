@@ -230,6 +230,16 @@ func (c *Client) messagesSince(ctx context.Context, id string, after int64, from
 	if err != nil {
 		return nil, err
 	}
+	feedbackIDs := map[int64]bool{}
+	if fromAgents && len(comments) > 0 {
+		feedback, err := c.Store.PendingPRFeedback(ctx, id, comments[len(comments)-1].ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, comment := range feedback {
+			feedbackIDs[comment.ID] = true
+		}
+	}
 	attachmentMetas, err := c.Store.AttachmentMetas(ctx, id)
 	if err != nil {
 		return nil, err
@@ -250,6 +260,8 @@ func (c *Client) messagesSince(ctx context.Context, id string, after int64, from
 		case comment.Author.Actor.Kind == model.PrincipalHuman:
 		case fromAgents && isAgentMessage(comment, id):
 			author = "task " + author
+		case fromAgents && feedbackIDs[comment.ID]:
+			author = "external PR feedback"
 		case fromAgents && (comment.Author.Actor == model.CLThreadsPrincipal ||
 			comment.Author.Actor == model.CapabilityChangePrincipal):
 			author = "grain"
@@ -496,7 +508,8 @@ func messageKey(m Message) string { return strconv.FormatInt(m.ID, 10) }
 // deliveredRequest is POST /api/tasks/{id}/delivered's body: the last
 // comment the run reporting it has now been shown.
 type deliveredRequest struct {
-	Through int64 `json:"through"`
+	Through    int64 `json:"through"`
+	PRFeedback bool  `json:"prFeedback,omitempty"`
 }
 
 // RecordDelivered records that the run working on id has been shown
@@ -575,6 +588,14 @@ func (s *Server) handleRecordDelivered(w http.ResponseWriter, r *http.Request) {
 	if err := s.tasks.RecordDelivered(r.Context(), r.PathValue("id"), req.Through); err != nil {
 		writeClientError(w, err)
 		return
+	}
+	// Only addenda acknowledgments attest that external feedback was shown;
+	// ordinary chat replies can skip those comments entirely.
+	if req.PRFeedback {
+		if err := s.tasks.Store.AcknowledgePRFeedback(r.Context(), r.PathValue("id"), req.Through); err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"through": req.Through})
 }

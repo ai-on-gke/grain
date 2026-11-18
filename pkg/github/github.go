@@ -953,6 +953,9 @@ type Commit struct {
 // merged pull request compares to nothing at all, and why reconstructing
 // the fork point needs the merge commit rather than this.
 type Comparison struct {
+	// Exact response pins for diagnostic provenance; absent on older readers.
+	BaseSHA   string
+	HeadSHA   string
 	Status    string
 	MergeBase string
 	Commits   []Commit
@@ -2182,8 +2185,12 @@ func (c *RESTClient) CompareRefs(owner, repo, base, head string) (Comparison, er
 		return Comparison{}, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
 	var data struct {
-		Status    string `json:"status"`
-		MergeBase struct {
+		Status     string `json:"status"`
+		BaseCommit struct {
+			SHA string `json:"sha"`
+		} `json:"base_commit"`
+		TotalCommits *int `json:"total_commits"`
+		MergeBase    struct {
 			SHA string `json:"sha"`
 		} `json:"merge_base_commit"`
 		Commits []struct {
@@ -2223,7 +2230,14 @@ func (c *RESTClient) CompareRefs(owner, repo, base, head string) (Comparison, er
 			Parents: parents,
 		})
 	}
-	return Comparison{Status: data.Status, MergeBase: data.MergeBase.SHA, Commits: commits,
+	headSHA := ""
+	if data.TotalCommits != nil && *data.TotalCommits == len(commits) && len(commits) > 0 {
+		headSHA = commits[len(commits)-1].SHA
+	}
+	if data.Status == "identical" || data.Status == "behind" {
+		headSHA = data.MergeBase.SHA
+	}
+	return Comparison{BaseSHA: data.BaseCommit.SHA, HeadSHA: headSHA, Status: data.Status, MergeBase: data.MergeBase.SHA, Commits: commits,
 		Files: files, FilesTruncated: len(files) >= compareFileCap}, nil
 }
 
@@ -4037,19 +4051,20 @@ type JobLogTailer interface {
 // WorkflowRun is one GitHub Actions workflow run returned by
 // GET /repos/{owner}/{repo}/actions/runs.
 type WorkflowRun struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	Path       string     `json:"path"`
-	HeadBranch string     `json:"head_branch"`
-	HeadSHA    string     `json:"head_sha"`
-	HeadRepo   string     `json:"head_repo,omitempty"`
-	Event      string     `json:"event"`
-	Status     string     `json:"status"`
-	Conclusion string     `json:"conclusion"`
-	HTMLURL    string     `json:"html_url"`
-	RunAttempt int        `json:"run_attempt"`
-	StartedAt  *time.Time `json:"run_started_at"`
-	UpdatedAt  *time.Time `json:"updated_at"`
+	CheckSuiteID int64      `json:"check_suite_id,omitempty"`
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	Path         string     `json:"path"`
+	HeadBranch   string     `json:"head_branch"`
+	HeadSHA      string     `json:"head_sha"`
+	HeadRepo     string     `json:"head_repo,omitempty"`
+	Event        string     `json:"event"`
+	Status       string     `json:"status"`
+	Conclusion   string     `json:"conclusion"`
+	HTMLURL      string     `json:"html_url"`
+	RunAttempt   int        `json:"run_attempt"`
+	StartedAt    *time.Time `json:"run_started_at"`
+	UpdatedAt    *time.Time `json:"updated_at"`
 	// DisplayTitle is the run's own name (a workflow's `run-name`), which
 	// is how an on-demand release build of one commit names itself.
 	DisplayTitle string `json:"display_title,omitempty"`
@@ -4074,6 +4089,13 @@ type WorkflowRunJob struct {
 type WorkflowRunsReader interface {
 	CompletedWorkflowRuns(owner, repo string, limit int) ([]WorkflowRun, error)
 	ListWorkflowRunJobs(owner, repo string, runID int64) ([]WorkflowRunJob, error)
+}
+
+// WorkflowRunAttemptJobsReader pins a complete job listing to an exact run
+// attempt. Older clients can still supply legacy rows, but cannot prove this
+// stronger source contract.
+type WorkflowRunAttemptJobsReader interface {
+	ListWorkflowRunAttemptJobs(owner, repo string, runID int64, attempt int) ([]WorkflowRunJob, error)
 }
 
 var _ WorkflowRunsReader = (*RESTClient)(nil)
@@ -4247,9 +4269,24 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 	if runID <= 0 {
 		return nil, nil
 	}
+	return c.workflowRunJobs(owner, repo, runID, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100", owner, repo, runID))
+}
+func (c *RESTClient) ListWorkflowRunAttemptJobs(owner, repo string, runID int64, attempt int) ([]WorkflowRunJob, error) {
+	if runID <= 0 || attempt < 1 {
+		return nil, fmt.Errorf("run ID and attempt are required")
+	}
+	return c.workflowRunJobs(owner, repo, runID, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/attempts/%d/jobs?per_page=100", owner, repo, runID, attempt), 513)
+}
+func (c *RESTClient) workflowRunJobs(owner, repo string, runID int64, path string, limit ...int) ([]WorkflowRunJob, error) {
 	var out []WorkflowRunJob
-	path := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100", owner, repo, runID)
+	expected := -1
+	pages := 0
 	for path != "" {
+		pages++
+		if len(limit) > 0 && pages > 6 {
+			return nil, fmt.Errorf("exact workflow job pagination is incomplete or oversized")
+		}
+
 		resp, err := c.get(owner, repo, path)
 		if err != nil {
 			return nil, err
@@ -4261,7 +4298,8 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 		}
 		var data struct {
-			Jobs []struct {
+			TotalCount *int `json:"total_count"`
+			Jobs       []struct {
 				ID          int64      `json:"id"`
 				RunID       int64      `json:"run_id"`
 				Name        string     `json:"name"`
@@ -4280,6 +4318,16 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 		if err := json.Unmarshal(resp.Body, &data); err != nil {
 			return nil, err
 		}
+		if len(limit) > 0 {
+			if data.TotalCount == nil || *data.TotalCount < 0 || *data.TotalCount >= limit[0] {
+				return nil, fmt.Errorf("exact workflow job count is missing or exceeds the observation bound")
+			}
+			if expected < 0 {
+				expected = *data.TotalCount
+			} else if expected != *data.TotalCount {
+				return nil, fmt.Errorf("exact workflow job collection changed during pagination")
+			}
+		}
 		for _, job := range data.Jobs {
 			j := WorkflowRunJob{
 				ID:          job.ID,
@@ -4291,7 +4339,7 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 				CompletedAt: job.CompletedAt,
 				HTMLURL:     job.HTMLURL,
 			}
-			if j.RunID == 0 {
+			if j.RunID == 0 && len(limit) == 0 {
 				j.RunID = runID
 			}
 			for _, step := range job.Steps {
@@ -4301,8 +4349,14 @@ func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]Wor
 				}
 			}
 			out = append(out, j)
+			if len(limit) > 0 && len(out) >= limit[0] {
+				return out, nil
+			}
 		}
 		path = nextPagePath(resp.Headers["Link"])
+	}
+	if len(limit) > 0 && len(out) != expected {
+		return nil, fmt.Errorf("exact workflow job listing is incomplete")
 	}
 	return out, nil
 }

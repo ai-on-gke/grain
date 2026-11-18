@@ -1,0 +1,332 @@
+{
+  "api_version": "grain.gates/v1",
+  "task_id": "57",
+  "revision": 1,
+  "authority": "builtins",
+  "authority_epoch": 1,
+  "lifecycle": {
+    "intent": "finite",
+    "on_met": "close",
+    "on_limit": "hold",
+    "max_resumes": 5,
+    "max_stall_seconds": 43200
+  },
+  "attachments": [
+    {
+      "id": "delivery",
+      "type": "delivery",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "config": {
+        "product": "report",
+        "semantics": "current_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "acknowledgment",
+      "type": "acknowledgment",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "config": {
+        "mode": "explicit_receipt"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "checks",
+      "type": "checks",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "config": {
+        "mode": "effective",
+        "extra_jobs": [],
+        "empty": "unknown",
+        "semantics": "current_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "review",
+      "type": "review",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "config": {
+        "category": "security",
+        "requirement_id": "security/default",
+        "semantics": "current_head_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "approval",
+      "type": "approval",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "config": {
+        "requirement_ids": [
+          "owners"
+        ],
+        "semantics": "exact_head_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "integration",
+      "type": "integration",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "config": {
+        "kind": "pr_merged",
+        "semantics": "positive_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "children",
+      "type": "children",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "config": {
+        "tasks": [
+          "58"
+        ],
+        "predicate": "success"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "base_health",
+      "type": "base_health",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "config": {
+        "semantics": "current_tip_v1",
+        "allow_nonreproduction": true
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "nightly_health",
+      "type": "nightly_health",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "config": {
+        "workflow": "nightly",
+        "since": "2026-11-17T00:15:00Z",
+        "window_seconds": 86400,
+        "semantics": "window_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "publishing_health",
+      "type": "publishing_health",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "config": {
+        "semantics": "positive_current_v1",
+        "expected_commit": "current_tip"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "pipeline_health",
+      "type": "pipeline_health",
+      "version": 1,
+      "purpose": "completion",
+      "required": true,
+      "action": null,
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "config": {
+        "repos": [
+          "ai-on-gke/grain"
+        ],
+        "semantics": "scoped_v1"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    },
+    {
+      "id": "qa_stage",
+      "type": "qa_stage",
+      "version": 1,
+      "purpose": "guard",
+      "required": true,
+      "action": "change.merge",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "config": {
+        "stage": "s3",
+        "flow_revision": "approved-qa-flow/7",
+        "assignment": "treatment"
+      },
+      "freshness_seconds": 300,
+      "origin": {
+        "kind": "task",
+        "id": "57",
+        "revision": "1",
+        "imported": false
+      }
+    }
+  ],
+  "source_revisions": [
+    {
+      "source": "template/change",
+      "revision": "7"
+    },
+    {
+      "source": "repo/ai-on-gke/grain",
+      "revision": "9"
+    }
+  ]
+}

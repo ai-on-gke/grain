@@ -206,8 +206,10 @@ the methods reach only a job that declares them.
 
 A workflow file is the repository's to write, so a job that declares a
 capability only a person may grant is asking for it, not granted it. That
-covers a GCP key, a host script, a GitHub credential or a dangerous
-`api:<scope>` (`model.DeclaredGrantNeedsPerson`). Such a job fails before
+covers a GCP key, a host script, a GitHub credential
+(`…/repo#credential`), a `…/repo#write` that names anything beyond its
+`repo` (`refs` or `force`) or a dangerous `api:<scope>`
+(`model.DeclaredGrantNeedsPerson`). Such a job fails before
 anything is minted, with an error naming what it waits for, until a person
 accepts that set for the job. Accept it on **Settings → Capabilities →
 Repository declarations**. Accepting takes `capabilities:admin` for a

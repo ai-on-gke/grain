@@ -1,0 +1,4 @@
+{"who":"alice@example.com","models":["Refresh models of anthro"],"connections":["Refresh models of anthro"]}
+{"who":"admin2@example.com","models":["Refresh models of anthro"],"connections":["Refresh models of anthro"]}
+{"who":"ops@example.com","models":[],"connections":[]}
+{"who":"viewer@example.com","models":[],"connections":[]}

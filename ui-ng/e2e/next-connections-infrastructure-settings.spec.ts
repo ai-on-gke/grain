@@ -112,7 +112,7 @@ test("Settings -> Git saves plain-git SSH + GitHub App connections, clears refus
     await page.getByLabel("App private key (PEM)").fill("not-a-valid-pem");
     await page.getByRole("button", { name: "Add Git connection" }).click();
 
-    const errBanner = page.getByTestId("settings-error-banner");
+    const errBanner = page.getByTestId("git-connections-error");
     await expect(errBanner).toContainText(/no PEM block/i);
 
     await page.getByLabel("App private key (PEM)").fill(keys.rsaPrivateKey);
@@ -129,7 +129,7 @@ test("Settings -> Git saves plain-git SSH + GitHub App connections, clears refus
     createdCreds.push(appConn.credential);
     await expect(
       page.getByTestId(`git-conn-row-${appConn.credential}`),
-    ).toContainText("via http://proxy.example.test:3128");
+    ).toContainText("via proxy http://proxy.example.test:3128");
 
     // Remove asks first; Cancel keeps the row, and dialog stays inside the viewport with aligned buttons.
     await page
@@ -194,17 +194,12 @@ test("Settings -> Capabilities, Engine & Sandboxes enforce confirmations, masked
       "/next/system/integrations",
       "/next/settings/credentials",
       "/next/settings/secrets",
-      "/next/settings/capabilities/gcp",
     ]) {
       await page.goto(oldPath);
       await expect(page.getByTestId("settings-section-heading")).toHaveText(
         "Capabilities",
       );
-      if (!oldPath.endsWith("/gcp")) {
-        await expect(
-          page.getByTestId("card-scope-sets-secrets"),
-        ).toBeInViewport();
-      }
+      await expect(page.getByTestId("card-credentials")).toBeInViewport();
     }
     expect(await axe()).toEqual([]);
 
@@ -221,13 +216,13 @@ test("Settings -> Capabilities, Engine & Sandboxes enforce confirmations, masked
     await expect(secRow).toBeVisible();
     await expect(secRow).not.toContainText("e2e-throwaway-secret");
 
-    await page.getByTestId("delete-secret-e2e-next-sec").click();
+    await page.getByTestId("remove-secret-e2e-next-sec").click();
     const dialog = page.getByTestId("confirm-dialog");
-    await expect(dialog).toContainText("Delete secret e2e-next-sec?");
+    await expect(dialog).toContainText("Remove the secret e2e-next-sec?");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(secRow).toBeVisible();
-    await page.getByTestId("delete-secret-e2e-next-sec").click();
-    await dialog.getByRole("button", { name: "Delete secret" }).click();
+    await page.getByTestId("remove-secret-e2e-next-sec").click();
+    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(secRow).toHaveCount(0);
 
     const servers = await (await request.get("/api/capability-servers")).json();

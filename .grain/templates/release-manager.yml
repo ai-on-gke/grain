@@ -109,8 +109,10 @@ body: |
   - **Train ticks.** The newest release-train tasks
     (`grain task list --search 'Run the release train' --limit 10`, then
     `grain task read <id>` on the newest few): their `phase` and `output`
-    lines, `release_waits=`, `promotion_waits=`, `rc_held=`, and "no new
-    LKG".
+    lines, `release_waits=`, `promotion_waits=`, `rc_held=`,
+    `held=publishing (cut skipped)` (publishing on `main` is held by a
+    base-branch triage task, so the tick judged/promoted/dropped any
+    qualifying rc and skipped cutting a new one), and "no new LKG".
   - **rc tags.** `git for-each-ref --sort=-creatordate --format='%(refname:short) %(creatordate:iso) %(*objectname:short)' 'refs/tags/vX.Y.Z*'`.
     For each `-discarded` tag, its reason (`git tag -l --format='%(contents)' vX.Y.Z-rc.N-discarded`).
     The same reason on two or more rcs is a blocker nobody fixed (v3.6.0
@@ -227,8 +229,16 @@ body: |
   ## 5. Close
 
   When core `vX.Y.Z` is tagged and published and the edition's `vX.Y.Z`
-  is released with its images published, close with `nothing_needed`
-  and a report: core's release commit and the image digests
+  is released with its images published, first file the release's audit
+  with `propose_task`: `repo: "ai-on-gke/grain"`,
+  `template_id: repo:template:ai-on-gke:grain:release-audit` and
+  `template_fields: {version: vX.Y.Z}`, unless an open
+  `Release audit for vX.Y.Z` exists already. The audit is read-only and
+  checks the end state as a whole (tags, images, channels, leftover
+  tasks, the upgrade path). It checks a downstream edition only as far as
+  core can see it: the edition files its own audit for its own refs and
+  images, so do not file that one from here. Then close with
+  `nothing_needed` and a report: core's release commit and the image digests
   (`docker.io/grainai/grain`, `hub`, `sandbox`, ... at `vX.Y.Z`, from the
   `publish-release.yml` run or `docker buildx imagetools inspect`), the
   edition's release commit and its image digests, every rc and why each

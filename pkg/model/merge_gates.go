@@ -29,6 +29,7 @@ const (
 	GateSecurityReview = "security-review"
 	GateReview         = "review"
 	GateTargetedReview = "targeted-review"
+	GateQA             = "qa"
 	GateApproval       = "approval"
 )
 
@@ -48,6 +49,7 @@ var KnownOverrideGates = []string{
 	GateSecurityReview,
 	GateReview,
 	GateTargetedReview,
+	GateQA,
 }
 
 // MergeGateState is the current status of one merge gate on a task or PR.
@@ -76,12 +78,19 @@ type MergeGate struct {
 	ReviewTask  string         `json:"reviewTask,omitempty"`
 	ApprovedBy  string         `json:"approvedBy,omitempty"`
 	Overridable bool           `json:"overridable,omitempty"`
+	// Acceptable marks a findings gate whose findings are ReviewTask's to
+	// accept as they are (AcceptReviewFindings), which is when the task
+	// pane offers "Accept findings…". A findings record no review stands
+	// behind -- a review that could not be filed, fixes closed unmerged --
+	// is not, and leaves it false.
+	Acceptable bool `json:"acceptable,omitempty"`
 }
 
 // ReviewFindingsRecord records that a required review left findings, open
 // questions, or unmerged fixes on a task's pull request, blocking that review
-// gate until a re-review passes after fixes or an operator overrides the gate
-// under merge:force.
+// gate until a re-review passes after fixes, a person accepts the review's
+// findings (AcceptReviewFindings), or an operator overrides the gate under
+// merge:force.
 type ReviewFindingsRecord struct {
 	Gate       string    `json:"gate"`
 	ReviewTask string    `json:"reviewTask,omitempty"`
@@ -185,7 +194,7 @@ func ClearReviewFindingsForGate(t *Task, gate string) {
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 		if l.Kind == LinkReviewFindings {
 			r, ok := ParseReviewFindingsRecord(l.Target)
-			return !ok || r.Gate == gate || (gate == GateReview && strings.HasPrefix(r.Gate, "trigger:"))
+			return !ok || findingsGateCovers(*t, gate, r.Gate)
 		}
 		if gate == GateSecurityReview && l.Kind == LinkHumanReviewHold {
 			r, ok := ParseHumanReviewReason(l.Target)
@@ -324,7 +333,7 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	if TaskPullRequest(t) == nil {
 		return nil
 	}
-	var secHold, secTask, reviewTask, pathTriggerHold, humanOnlyHold, brokenRulesHold string
+	var secHold, secTask, reviewTask, pathTriggerHold, humanOnlyHold, brokenRulesHold, qaHold string
 	var approvalMarker string
 	var triggerTasks []string
 	targetedTriggers := map[string]bool{}
@@ -333,6 +342,8 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		switch l.Kind {
 		case LinkSecurityHold:
 			secHold = l.Target
+		case LinkQAHold:
+			qaHold = l.Target
 		case LinkSecurityReviewTask:
 			secTask = l.Target
 		case LinkReviewTask:
@@ -463,14 +474,37 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		gates = append(gates, g)
 	}
 
+	// 2b. Pre-PR quality control gate (when held or carrying unresolved QA findings).
+	qaFindings := ReviewFindingsForGate(t, GateQA)
+	if qaHold != "" || len(qaFindings) > 0 {
+		g := MergeGate{ID: GateQA, Label: "Quality gate"}
+		switch {
+		case hasOv && GateOverriddenBy(GateQA, ovGates):
+			g.State = GateStateOverridden
+			g.Detail = formatOverrideDetail(ov)
+		case len(qaFindings) > 0:
+			g.State = GateStateFindings
+			g.Detail = qaFindings[len(qaFindings)-1].Summary
+			g.Overridable = true
+		case qaHold != "":
+			g.State = GateStateRunning
+			g.Detail = "pre-PR verification running"
+			g.Overridable = true
+		default:
+			g.State = GateStatePassed
+			g.Detail = "passed"
+		}
+		gates = append(gates, g)
+	}
+
 	// 3. Configured / trigger code review gate, and 4. the targeted review
 	// gate: the reviews sensitive triggers with no template of their own
 	// filed (LinkTargetedReviewTrigger), shown apart from the code review.
 	var codeFindings, targetedFindings []ReviewFindingsRecord
 	for _, rf := range ReviewFindings(t) {
 		switch {
-		case rf.Gate == GateSecurityReview:
-		case strings.HasPrefix(rf.Gate, "trigger:") && targetedTriggers[strings.TrimPrefix(rf.Gate, "trigger:")]:
+		case rf.Gate == GateSecurityReview || rf.Gate == GateQA:
+		case rf.Gate == GateTargetedReview || (strings.HasPrefix(rf.Gate, "trigger:") && targetedTriggers[strings.TrimPrefix(rf.Gate, "trigger:")]):
 			targetedFindings = append(targetedFindings, rf)
 		default:
 			codeFindings = append(codeFindings, rf)
@@ -564,6 +598,11 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		gates = append(gates, g)
 	}
 
+	for i := range gates {
+		if gates[i].State == GateStateFindings && gates[i].ReviewTask != "" {
+			_, gates[i].Acceptable = AcceptableReviewFindings(t, gates[i].ID, gates[i].ReviewTask)
+		}
+	}
 	return gates
 }
 
