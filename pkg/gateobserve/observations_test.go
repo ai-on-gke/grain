@@ -33,6 +33,7 @@ import (
 
 type readOnlySource struct {
 	missingTag              bool
+	checkReads              int
 	tagReads, moveTagOnRead int
 	head                    string
 	err                     error
@@ -66,8 +67,12 @@ func (s *readOnlySource) ListTags(_, _ string) ([]github.Tag, error) {
 var _ releaseObservationChecks = (*readOnlySource)(nil)
 var _ github.ReleaseTagReader = (*readOnlySource)(nil)
 
-func (s *readOnlySource) CheckRunApp(_, _ string) (string, error) { return "grain", s.err }
+func (s *readOnlySource) CheckRunApp(_, _ string) (string, error) {
+	s.checkReads++
+	return "grain", s.err
+}
 func (s *readOnlySource) ListCheckRuns(_, _, _ string) ([]github.CheckRun, error) {
+	s.checkReads++
 	return s.checks, s.err
 }
 
@@ -273,6 +278,11 @@ func TestQualificationObservationReleaseUsesExistingAuthenticatedVerdict(t *test
 			t.Fatal("missing release projection")
 		}
 		return c
+	}
+	denied, err := CollectQualificationObservationsWithCIRead(ctx, s, src, id, now, func(string) bool { return false })
+	require(t, err)
+	if denied.Release != nil || src.checkReads != 0 || src.tagReads != 0 {
+		t.Fatal("denied CI scope read qualification evidence")
 	}
 	c := read()
 	if path := os.Getenv("GRAIN_RELEASE_OBSERVATION_FIXTURE"); path != "" {

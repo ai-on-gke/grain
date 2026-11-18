@@ -44,6 +44,13 @@ type releaseObservationChecks interface {
 // authorizes the subject, and only for the existing bounded observation allowlist.
 // It neither assigns QA exposure nor starts/retries/judges qualification tasks.
 func CollectQualificationObservations(ctx context.Context, store *model.Store, source any, id string, now time.Time) (gates.QualificationCollection, error) {
+	return CollectQualificationObservationsWithCIRead(ctx, store, source, id, now, nil)
+}
+
+// CollectQualificationObservationsWithCIRead additionally checks the caller's
+// ordinary CI read scope before reading qualification verdicts or readiness.
+// A denied optional family is omitted, as for the checks observation family.
+func CollectQualificationObservationsWithCIRead(ctx context.Context, store *model.Store, source any, id string, now time.Time, ciReadable func(string) bool) (gates.QualificationCollection, error) {
 	out := gates.QualificationCollection{}
 	task, err := store.GetTask(ctx, id)
 	if err != nil {
@@ -78,10 +85,12 @@ func CollectQualificationObservations(ctx context.Context, store *model.Store, s
 	if ctx.Err() != nil {
 		return out, ctx.Err()
 	}
-	release, err := collectReleaseObservation(ctx, store, source, *task, now)
-	out.Release = release
-	if err != nil {
-		return out, err
+	if ciReadable == nil || ciReadable(repoScope) {
+		release, readErr := collectReleaseObservation(ctx, store, source, *task, now)
+		out.Release = release
+		if readErr != nil {
+			return out, readErr
+		}
 	}
 	fence, err := store.QualificationObservationFence(ctx, id)
 	if err != nil {

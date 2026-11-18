@@ -29,6 +29,11 @@ func TestGateObservationReviewRegressions(t *testing.T) {
 	gateobservationtest.RunReviewRegressions(t, s, db)
 }
 
+func TestGateChecksPersistWithoutLifecycleEffects(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunChecks(t, s, db)
+}
+
 func TestReviewApprovalGateObservations(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.RunChangeGates(t, s, db)

@@ -222,6 +222,57 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 	if len(combined.Bindings) > 64 || qaCount != 3 || releaseCount != 8 || reviewCount == 0 {
 		t.Fatal("combined projection lost monitor families or exceeded its bound")
 	}
+	// The CI port can contribute two profiles for each of eight changes.
+	// Preserve all typed families when review scope collection also overflows.
+	must(s.UpdateTask(ctx, id, func(task *model.Task) error {
+		for i := 78; i < 85; i++ {
+			task.Links = append(task.Links, model.Link{Kind: model.LinkExternalPR, Target: fmt.Sprintf("%s#%d", repo.String(), i)})
+		}
+		return nil
+	}))
+	c.StoreFence, err = s.QualificationObservationFence(ctx, id)
+	must(err)
+	currentTask, _, checkFence, err := s.GateChecksInput(ctx, id)
+	must(err)
+	checks := []gates.ChecksFacts{}
+	for _, subject := range model.CheckSubjects(*currentTask) {
+		checks = append(checks, gates.ChecksFacts{TaskID: id, Subject: subject, ObservedAt: now, ValidUntil: now.Add(time.Minute)})
+	}
+	beforeCombined, wakeCombined := legacy(), s.Changed()
+	all, _, err := s.ObserveTaskGatesWithEvidence(ctx, id, now.Add(24*time.Second), checkFence, checks, c)
+	must(err)
+	counts := map[string]int{}
+	for _, b := range all.Bindings {
+		counts[b.Type]++
+	}
+	if len(all.Bindings) > 64 || counts["checks"] != 16 || counts["qa_stage"] != 3 || counts["release_qualification"] != 8 || counts["review"] == 0 {
+		t.Fatalf("combined CI/QA/release/review families lost or unbounded: %v (%d bindings)", counts, len(all.Bindings))
+	}
+	if legacy() != beforeCombined {
+		t.Fatal("combined observations changed legacy rows")
+	}
+	select {
+	case <-wakeCombined:
+		t.Fatal("combined observations woke legacy scheduling")
+	default:
+	}
+	restart, _, err := model.New(db).ObserveTaskGatesWithEvidence(ctx, id, now.Add(25*time.Second), checkFence, checks, c)
+	must(err)
+	if restart.Results[0].Revision != all.Results[0].Revision {
+		t.Fatal("combined restart generated an event")
+	}
+	failed := gates.UnavailableObservationForBindings(id, now.Add(26*time.Second), all.Bindings)
+	must(s.RecordGateQualificationFailure(ctx, id, now.Add(26*time.Second), &failed, c))
+	backoff, _, err := model.New(db).GateObservationRetry(ctx, id, now.Add(26*time.Second), false)
+	must(err)
+	if backoff == nil || !backoff.Dirty || len(backoff.Bindings) != len(all.Bindings) {
+		t.Fatal("combined failure lost bounded source families after restart")
+	}
+	for _, r := range backoff.Results {
+		if len(r.Result.Evidence) != 0 || len(r.Result.Actions) != 0 || len(r.Result.Work) != 0 {
+			t.Fatal("combined failure retained accepted evidence or effects")
+		}
+	}
 	for i := 0; i < 513; i++ {
 		_, err := s.RecordQACheckRun(ctx, model.QACheckRun{TaskID: id, CommitSHA: f.Head, Stage: "S3", CheckID: "check", Verdict: "pass"}, nil)
 		must(err)
