@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v31"
+const Version = "trust-boundary/v32"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,17 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v32 adds pkg/model/merge_gates.go to hold-policy beside
+// pkg/model/task_auto_merge.go (task 7091, found in the 2026-11-18 security
+// review of main, docs/security/audits/2026-11-18.md, task 7035, finding 1):
+// it holds the review-findings and pending-hold predicates
+// (HasReviewFindings, HasPendingReviewHold) that securityhold.go,
+// pathtriggerhold.go, mergegates.go and task_auto_merge.go consult before
+// handing auto-merge back once a hold clears, ClearReviewFindingsForGate
+// (the only path besides AcceptReviewFindings that removes review findings),
+// ComputeMergeGates, and the force-merge override records (GateOverrides,
+// LatestGateOverride, NormalizeOverrideGates, GateOverriddenBy).
 //
 // v31 adds what the 2026-11-17 security review of main
 // (docs/security/audits/2026-11-17.md, task 6871, finding 1) found merged
@@ -328,6 +339,12 @@ var Categories = []Category{
 			// The store-level guard that keeps auto-merge off a held task,
 			// and the one place it is handed back once the hold clears.
 			"pkg/model/task_auto_merge.go",
+			// The predicates (HasReviewFindings, HasPendingReviewHold),
+			// the findings clearing (ClearReviewFindingsForGate) and the
+			// force-merge override records (ComputeMergeGates,
+			// GateOverrides, LatestGateOverride, NormalizeOverrideGates,
+			// GateOverriddenBy) that guard and the hold's release read.
+			"pkg/model/merge_gates.go",
 		},
 	},
 	{
