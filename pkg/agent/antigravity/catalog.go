@@ -82,11 +82,10 @@ type ModelCatalog struct {
 }
 
 // Efforts() is what a catalog falls back to when agy's own --help no
-// longer spells the vocabulary out: the same three words this package
-// already validates a stored effort against, which is what 1.1.26
-// documents and what every model name in its catalog is suffixed with. A
-// guess only in the sense that it is not this binary's own answer, and it
-// never overrides one that parsed.
+// longer spells the vocabulary out: the same five words this package
+// validates a stored effort against (docs/agy-surface.md). A guess only
+// in the sense that it is not this binary's own answer, and it never
+// overrides one that parsed.
 
 // Catalog asks the agy binary at agyPath what models it can run.
 //
@@ -282,11 +281,13 @@ func parseModels(out string, efforts []string) []Model {
 // splitEffort reads the effort agy spelled into a model name, against the
 // vocabulary that same binary documents rather than a list hard-coded
 // here -- "gemini-3.1-pro-high" is a family and an effort only because
-// "high" is one of the words --effort takes.
+// "high" is one of the words --effort takes. Suffixes match without case
+// so an uppercase model ID still drops --effort at dispatch.
 func splitEffort(id string, efforts []string) (effort, family string) {
 	for _, e := range efforts {
-		if suffix := "-" + e; strings.HasSuffix(id, suffix) {
-			return e, strings.TrimSuffix(id, suffix)
+		suffix := "-" + e
+		if len(id) > len(suffix) && strings.EqualFold(id[len(id)-len(suffix):], suffix) {
+			return e, id[:len(id)-len(suffix)]
 		}
 	}
 	return "", id

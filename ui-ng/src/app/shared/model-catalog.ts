@@ -162,7 +162,21 @@ export type EffortSupport =
   { separate: true; choices: string[] } | { separate: false; reason: string };
 
 // What antigravity.Efforts() says when the settings carry no vocabulary.
-const AGY_EFFORTS = ["low", "medium", "high"];
+const AGY_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * inferredFramework mirrors model.ModelFramework's prefix fallback
+ * (pkg/model/model_selection.go) for a model no connection advertises:
+ * claude* -> claude, gpt* / codex* / o3* / o4* -> codex, else "" (agy).
+ */
+function inferredFramework(m: string): string {
+  const id = m.trim().toLowerCase();
+  if (id.startsWith("claude")) return "claude";
+  if (["gpt", "codex", "o3", "o4"].some((p) => id.startsWith(p))) {
+    return "codex";
+  }
+  return "";
+}
 
 function isAgy(framework: string): boolean {
   return (
@@ -170,13 +184,15 @@ function isAgy(framework: string): boolean {
   );
 }
 
-// namesItsEffort mirrors antigravity's modelTakesNoEffort: "auto" leaves
-// agy to choose, and gemini-3.1-pro-high spells its effort into the name,
-// so agy refuses --effort beside either.
-function namesItsEffort(m: string, efforts: readonly string[]): boolean {
+// namedEffort mirrors antigravity's modelNamesItsEffort: the effort
+// gemini-3.1-pro-high spells into its name ("high"), or "" for none. agy
+// refuses --effort beside such a name. Its whole vocabulary counts,
+// whatever the settings currently offer, so a suffixed name is never
+// taken for one that takes a separate effort.
+function namedEffort(m: string, efforts: readonly string[]): string {
   const id = m.trim().toLowerCase();
-  if (id === "auto") return true;
-  return efforts.some((e) => id.endsWith(`-${e.toLowerCase()}`));
+  const all = [...efforts.map((e) => e.toLowerCase()), ...AGY_EFFORTS];
+  return all.find((e) => id.endsWith(`-${e}`)) ?? "";
 }
 
 /**
@@ -184,8 +200,9 @@ function namesItsEffort(m: string, efforts: readonly string[]): boolean {
  * (model.ModelSetting.Effort), from the framework of the connections that
  * advertise it -- an enabled one first. Claude has no effort flag; agy
  * drops --effort for a model whose name carries one; Codex always takes
- * one. A model no connection advertises gets the agy rule, as the classic
- * pane gave it.
+ * one. A model no connection advertises (or whose connection names no
+ * framework) takes the framework its name implies (inferredFramework),
+ * else the agy rule, as the classic pane gives it.
  */
 export function effortSupport(
   m: string,
@@ -194,7 +211,7 @@ export function effortSupport(
 ): EffortSupport {
   const serving = groups.filter((g) => g.models.some((x) => sameModel(x, m)));
   const g = serving.find((x) => !x.disabled) ?? serving[0];
-  const framework = (g?.framework ?? "").toLowerCase();
+  const framework = (g?.framework ?? "").toLowerCase() || inferredFramework(m);
   if (framework === "claude") {
     return { separate: false, reason: "Claude takes no reasoning effort" };
   }
@@ -209,13 +226,14 @@ export function effortSupport(
   }
   const gemini = dedupe(vocab.gemini ?? []);
   const choices = gemini.length ? gemini : AGY_EFFORTS;
-  if (namesItsEffort(m, choices)) {
+  if (m.trim().toLowerCase() === "auto") {
+    return { separate: false, reason: "The provider chooses the effort" };
+  }
+  const named = namedEffort(m, choices);
+  if (named) {
     return {
       separate: false,
-      reason:
-        m.trim().toLowerCase() === "auto"
-          ? "The provider chooses the effort"
-          : "Effort is part of the model name",
+      reason: `Effort is part of the model name: ${named}`,
     };
   }
   return { separate: true, choices };
