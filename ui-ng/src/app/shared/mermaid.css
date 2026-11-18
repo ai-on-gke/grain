@@ -195,3 +195,29 @@
 .mermaid-block[data-view="after"] [data-mermaid-pane="before"] {
   display: none;
 }
+
+/* The view buttons and Expand share the toolbar's right-hand end. */
+.mermaid-toolbar > .mermaid-views {
+  margin-left: auto;
+}
+
+/* Expand: the diagram in the full-screen viewer (shared/media-viewer). */
+.mermaid-expand-btn {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-xs);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font: 500 11px/16px var(--grain-font-body);
+  cursor: pointer;
+}
+
+.mermaid-expand-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.mermaid-block[data-view="source"] .mermaid-expand-btn,
+.mermaid-block:not(:has(.mermaid-canvas svg)) .mermaid-expand-btn {
+  display: none;
+}

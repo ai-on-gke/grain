@@ -171,6 +171,12 @@ function viewButtons(
   return `<span class="mermaid-views" role="group" aria-label="${esc(label)}">${buttons}</span>`;
 }
 
+// Expand opens the drawn diagram(s) in the shell's full-screen viewer
+// ([gMarkdown] handles the click; shared/media-viewer.component.ts).
+function expandButton(): string {
+  return `<button type="button" class="mermaid-expand-btn" data-mermaid-expand="1" aria-label="Open diagram full screen">Expand</button>`;
+}
+
 function pane(source: string, pane: string, label: string): string {
   const tag =
     pane === "only"
@@ -201,6 +207,7 @@ export function renderMermaidBlock(source: string, title: string): string {
       ],
       "diagram",
     ) +
+    expandButton() +
     `</div>` +
     pane(source, "only", name) +
     `</div>`
@@ -228,6 +235,7 @@ export function renderMermaidComparison(
       ],
       "split",
     ) +
+    expandButton() +
     `</div>` +
     `<div class="mermaid-panes">` +
     pane(before, "before", beforeLabel || "Before") +
@@ -422,7 +430,8 @@ export function mermaidConfigForMode(mode: MermaidMode) {
     // SVG <text> labels rather than <foreignObject> HTML, so a node label
     // cannot load a remote image or hang Mermaid's image wait.
     htmlLabels: false,
-    // Diagram sources are untrusted: %%{init}%% may not loosen these.
+    // Diagram sources are untrusted: %%{init}%% may not loosen these or inject
+    // themeCSS rules that fetch external resources during layout.
     secure: [
       "secure",
       "securityLevel",
@@ -431,6 +440,10 @@ export function mermaidConfigForMode(mode: MermaidMode) {
       "maxEdges",
       "htmlLabels",
       "flowchart",
+      "theme",
+      "themeVariables",
+      "themeCSS",
+      "fontFamily",
     ],
     suppressErrorRendering: true,
     theme: "base" as const,
@@ -460,13 +473,51 @@ const FORBIDDEN_SVG_TAGS = [
   "foreignObject",
   "img",
   "image",
+  "feImage",
   "audio",
   "video",
+  "source",
+  "track",
+  "mpath",
+  "discard",
   "animate",
   "set",
   "animateMotion",
   "animateTransform",
 ];
+
+const FORBIDDEN_FETCH_ATTRS = new Set([
+  "src",
+  "srcset",
+  "ping",
+  "poster",
+  "data",
+  "action",
+  "formaction",
+]);
+
+// Strip CSS comments and decode CSS backslash escapes so obfuscated
+// `@import`, `url(...)` or `image-set(...)` tokens cannot slip past regexes.
+function normalizeCss(css: string): string {
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(
+      /\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|([^\r\n\f]))/g,
+      (_, hex: string | undefined, lit: string | undefined) => {
+        if (hex !== undefined) {
+          const cp = parseInt(hex, 16);
+          return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+        }
+        return lit ?? "";
+      },
+    );
+}
+
+function hasUnsafeCssFetch(css: string): boolean {
+  return /@import|(?:url|image-set)\s*\(\s*['"]?\s*(?!#)/i.test(
+    normalizeCss(css),
+  );
+}
 
 // sanitizeMermaidSvg is defence in depth over Mermaid's strict mode: the
 // sources come from agents and GitHub comments, so every element, event
@@ -491,7 +542,7 @@ export function sanitizeMermaidSvg(
   for (const el of [svg, ...Array.from(svg.querySelectorAll("*"))]) {
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name.toLowerCase();
-      if (name.startsWith("on") || name === "src") {
+      if (name.startsWith("on") || FORBIDDEN_FETCH_ATTRS.has(name)) {
         el.removeAttribute(attr.name);
         continue;
       }
@@ -499,17 +550,31 @@ export function sanitizeMermaidSvg(
         const val = attr.value.trim();
         // Marker and clip-path references (#arrowhead) stay.
         if (val.startsWith("#")) continue;
+        // Only a link may point outside the diagram: on any other element
+        // (<use>, <pattern>, ...) a remote href is fetched just by drawing.
+        if (el.localName.toLowerCase() !== "a") {
+          el.removeAttribute(attr.name);
+          continue;
+        }
         const safe = safeHref(val);
         if (!safe) el.removeAttribute(attr.name);
         else el.setAttribute(attr.name, safe);
         continue;
       }
-      if (
-        name === "style" &&
-        /(?:javascript\s*:|vbscript\s*:|expression\s*\(|url\s*\(\s*['"]?\s*(?!#))/i.test(
-          attr.value,
-        )
-      ) {
+      if (name === "style") {
+        if (
+          /(?:javascript\s*:|vbscript\s*:|expression\s*\()/i.test(
+            normalizeCss(attr.value),
+          ) ||
+          hasUnsafeCssFetch(attr.value)
+        ) {
+          el.removeAttribute(attr.name);
+        }
+        continue;
+      }
+      // SVG presentation attributes (fill, filter, clip-path, mask, marker-*)
+      // also accept functional url(...) references; only internal #ids stay.
+      if (name !== "aria-label" && hasUnsafeCssFetch(attr.value)) {
         el.removeAttribute(attr.name);
       }
     }
@@ -526,7 +591,7 @@ export function sanitizeMermaidSvg(
   // url() fetch beyond local fragments.
   for (const style of Array.from(svg.querySelectorAll("style"))) {
     const css = style.textContent ?? "";
-    if (/@import|url\s*\(\s*['"]?\s*(?!#)/i.test(css)) style.remove();
+    if (hasUnsafeCssFetch(css)) style.remove();
   }
 
   // Scale down to the pane rather than overflow it, but not below three
@@ -625,6 +690,200 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
+function decodeYamlDoubleQuoted(raw: string): string {
+  return raw.replace(
+    /\\(?:(\r?\n[ \t]*)|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|(.))/g,
+    (_, nl?: string, x?: string, u?: string, U?: string, ch?: string) => {
+      if (nl !== undefined) return "";
+      const hex = x ?? u ?? U;
+      if (hex !== undefined) {
+        const cp = parseInt(hex, 16);
+        return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+      }
+      return ch ?? "";
+    },
+  );
+}
+
+function extractShapeBlocks(src: string): string[] {
+  const blocks: string[] = [];
+  for (let i = 0; i < src.length - 1; i++) {
+    if (src[i] !== "@" || src[i + 1] !== "{") continue;
+    let j = i + 2;
+    let depth = 1;
+    while (j < src.length && depth > 0) {
+      const ch = src[j];
+      if (ch === '"') {
+        j++;
+        while (j < src.length) {
+          if (src[j] === "\\") {
+            j += 2;
+            continue;
+          }
+          if (src[j] === '"') {
+            j++;
+            break;
+          }
+          j++;
+        }
+        continue;
+      }
+      if (ch === "'") {
+        j++;
+        while (j < src.length) {
+          if (src[j] === "'" && src[j + 1] === "'") {
+            j += 2;
+            continue;
+          }
+          if (src[j] === "'") {
+            j++;
+            break;
+          }
+          j++;
+        }
+        continue;
+      }
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      j++;
+    }
+    blocks.push(src.slice(i + 2, depth === 0 ? j - 1 : j));
+    i = j - 1;
+  }
+  return blocks;
+}
+
+function blockHasImgKey(block: string): boolean {
+  let k = 0;
+  const n = block.length;
+  while (k < n) {
+    while (k < n && /[\s,{}[\]]/.test(block[k])) k++;
+    if (k >= n) break;
+    if (block[k] === "#") {
+      while (k < n && block[k] !== "\n") k++;
+      continue;
+    }
+    let explicitKey = false;
+    if (block[k] === "?" && /\s/.test(block[k + 1] ?? "")) {
+      explicitKey = true;
+      k++;
+      while (k < n && /\s/.test(block[k])) k++;
+      if (k >= n) break;
+    }
+    if (block[k] === ":") {
+      k++;
+      continue;
+    }
+    let key = "";
+    if (block[k] === '"') {
+      const start = ++k;
+      while (k < n) {
+        if (block[k] === "\\") {
+          k += 2;
+          continue;
+        }
+        if (block[k] === '"') break;
+        k++;
+      }
+      key = decodeYamlDoubleQuoted(block.slice(start, k)).trim().toLowerCase();
+      if (k < n && block[k] === '"') k++;
+    } else if (block[k] === "'") {
+      const start = ++k;
+      while (k < n) {
+        if (block[k] === "'" && block[k + 1] === "'") {
+          k += 2;
+          continue;
+        }
+        if (block[k] === "'") break;
+        k++;
+      }
+      key = block.slice(start, k).replace(/''/g, "'").trim().toLowerCase();
+      if (k < n && block[k] === "'") k++;
+    } else {
+      const start = k;
+      while (k < n && !/[:,{}[\]\r\n]/.test(block[k])) {
+        if (block[k] === "#" && k > start && /\s/.test(block[k - 1])) break;
+        k++;
+      }
+      key = block.slice(start, k).trim().toLowerCase();
+    }
+    while (
+      k < n &&
+      (explicitKey
+        ? /\s/.test(block[k])
+        : block[k] === " " || block[k] === "\t")
+    ) {
+      k++;
+    }
+    if (k < n && block[k] === ":") {
+      if (key === "img") return true;
+      k++;
+    }
+  }
+  return false;
+}
+
+function decodeBasicEntities(s: string): string {
+  return s
+    .replace(/&quot;|&#34;|&#x22;/gi, '"')
+    .replace(/&apos;|&#39;|&#x27;/gi, "'")
+    .replace(/&equals;|&#61;|&#x3d;/gi, "=")
+    .replace(/&amp;|&#38;|&#x26;/gi, "&");
+}
+
+function hasSequenceRemoteIcon(src: string): boolean {
+  const re = /(?:^|[;\n])[ \t]*properties[ \t]+[^:\n;]+:[ \t]*([^\n]+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const raw = m[1].trim().replace(/;+\s*$/, "");
+    for (const candidate of [raw, decodeBasicEntities(raw)]) {
+      try {
+        const parsed = JSON.parse(candidate) as unknown;
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          typeof (parsed as Record<string, unknown>)["icon"] === "string"
+        ) {
+          const icon = (
+            (parsed as Record<string, unknown>)["icon"] as string
+          ).trim();
+          if (icon && !icon.startsWith("@")) return true;
+        }
+      } catch {
+        // Malformed JSON is ignored by Mermaid's addProperties as well.
+      }
+    }
+  }
+  return false;
+}
+
+// hasImageShape reports a diagram written with Mermaid's YAML/JSON image
+// shape (`A@{ img: "https://...", ... }`, including quoted keys, YAML escapes
+// and braces inside earlier strings) or a sequenceDiagram actor `icon`
+// property, whose URL Mermaid loads in the live document before
+// sanitizeMermaidSvg runs.
+export function hasImageShape(src: string): boolean {
+  return (
+    extractShapeBlocks(src).some(blockHasImgKey) || hasSequenceRemoteIcon(src)
+  );
+}
+
+// hasExternalStyleUrl reports a `classDef`, `style`, `linkStyle` or C4 style
+// directive carrying `@import` or a non-`#` `url(...)` / `image-set(...)`,
+// which Mermaid would attach to `document.body` while measuring the diagram.
+export function hasExternalStyleUrl(src: string): boolean {
+  const stmtRe = /(?:^|[;\n])[ \t]*(?:classDef|style|linkStyle)\b([^\n;]*)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = stmtRe.exec(src)) !== null) {
+    if (hasUnsafeCssFetch(m[1])) return true;
+  }
+  const c4Re = /Update(?:Element|Boundary|Rel)Style\s*\(([^)]*)\)/gi;
+  while ((m = c4Re.exec(src)) !== null) {
+    if (hasUnsafeCssFetch(m[1])) return true;
+  }
+  return false;
+}
+
 // renderMermaidSvg renders one source to sanitized SVG. Renders run one
 // at a time (mermaid.initialize is global) and a failure never stalls the
 // diagrams behind it.
@@ -635,6 +894,17 @@ export function renderMermaidSvg(
 ): Promise<string> {
   const trimmed = source.trim();
   if (!trimmed) return Promise.reject(new Error("Empty Mermaid diagram"));
+  // Mermaid fetches an image shape's img: URL (and mounts actor icons / user
+  // style sheets in document.body) while laying the diagram out, before
+  // sanitizeMermaidSvg sees anything, so such diagrams are refused upfront.
+  if (hasImageShape(trimmed)) {
+    return Promise.reject(new Error("Diagrams with images are not drawn"));
+  }
+  if (hasExternalStyleUrl(trimmed)) {
+    return Promise.reject(
+      new Error("Diagrams with external style URLs are not drawn"),
+    );
+  }
   const cached = cachedMermaidSvg(mode, trimmed);
   if (cached) return Promise.resolve(cached);
 

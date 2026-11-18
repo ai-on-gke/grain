@@ -26,6 +26,7 @@ import { Router } from "@angular/router";
 import type { DiffPreviewHunk, DiffPreviewLine } from "../api/models";
 import { ThemeService } from "../services/theme.service";
 import { renderMarkdown, safeHref } from "../sessions/session-view";
+import { MediaViewerService, withFreshSvgIds } from "./media-viewer.service";
 import { handleMermaidClick, hydrateMermaid } from "./mermaid";
 
 const KEYWORDS = new Set([
@@ -555,6 +556,7 @@ const ALLOWED_MD_ATTRS = new Set([
   "data-mermaid-view",
   "data-mermaid-pane",
   "data-mermaid-canvas",
+  "data-mermaid-expand",
 ]);
 
 const SAFE_DATA_IMAGE_RE =
@@ -624,6 +626,7 @@ export class MarkdownDirective {
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
   private readonly theme = inject(ThemeService);
+  private readonly viewer = inject(MediaViewerService);
   private shown: string | null = null;
 
   readonly gMarkdown = input<string>("");
@@ -664,6 +667,11 @@ export class MarkdownDirective {
   @HostListener("click", ["$event"])
   onClick(ev: MouseEvent): void {
     const target = ev.target as HTMLElement | null;
+    if (this.expandDiagram(target)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
     if (handleMermaidClick(target)) {
       ev.preventDefault();
       ev.stopPropagation();
@@ -705,6 +713,31 @@ export class MarkdownDirective {
         void this.router.navigateByUrl(href.slice("/next".length) || "/inbox");
       }
     }
+  }
+
+  // Expand opens every drawn diagram under this element in the full-screen
+  // viewer, starting at the clicked block's first pane, so the arrow keys
+  // page across a Before / After pair and the rest of the message.
+  private expandDiagram(target: HTMLElement | null): boolean {
+    const block = target
+      ?.closest("[data-mermaid-expand]")
+      ?.closest<HTMLElement>("[data-mermaid]");
+    if (!block) return false;
+    const host = this.el.nativeElement as HTMLElement;
+    const canvases = Array.from(
+      host.querySelectorAll<HTMLElement>("[data-mermaid-canvas]"),
+    ).filter((c) => c.querySelector("svg"));
+    const start = canvases.findIndex((c) => block.contains(c));
+    if (start < 0) return true;
+    this.viewer.open(
+      canvases.map((c) => ({
+        kind: "svg" as const,
+        name: c.getAttribute("aria-label") || "Diagram",
+        svg: withFreshSvgIds(c.querySelector("svg")!.outerHTML),
+      })),
+      start,
+    );
+    return true;
   }
 
   private async copyText(text: string): Promise<boolean> {

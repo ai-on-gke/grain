@@ -27,6 +27,7 @@ import {
 import { routePath } from "../api/grain-api.service";
 import type { AttachmentMeta, AttachmentUpload } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { MediaViewerService, type ViewerItem } from "./media-viewer.service";
 
 export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_REQUEST = 10;
@@ -154,6 +155,10 @@ export function filesFromTransfer(dt: DataTransfer | null | undefined): File[] {
               rel="noopener noreferrer"
               [attr.download]="isImage(a.contentType) ? null : a.filename"
               [attr.data-testid]="'attachment-' + a.id"
+              [attr.aria-label]="
+                isImage(a.contentType) ? 'View ' + a.filename : null
+              "
+              (click)="onCardClick($event, a)"
             >
               @if (isImage(a.contentType)) {
                 <img
@@ -187,6 +192,7 @@ export function filesFromTransfer(dt: DataTransfer | null | undefined): File[] {
 })
 export class AttachmentListComponent {
   private readonly access = inject(AccessService);
+  private readonly viewer = inject(MediaViewerService);
 
   readonly taskId = input.required<string>();
   readonly repo = input<string | undefined>(undefined);
@@ -204,6 +210,28 @@ export class AttachmentListComponent {
 
   protected href(id: string | number): string {
     return attachmentHref(this.taskId(), id);
+  }
+
+  // An image opens in the full-screen viewer, paged with the task's other
+  // images; a modified click still opens the file in a new tab.
+  protected onCardClick(ev: MouseEvent, a: AttachmentMeta): void {
+    if (!this.isImage(a.contentType)) return;
+    if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey)
+      return;
+    const images = (this.attachments() ?? []).filter((x) =>
+      this.isImage(x.contentType),
+    );
+    const index = images.findIndex((x) => x.id === a.id);
+    if (index < 0) return;
+    ev.preventDefault();
+    this.viewer.open(
+      images.map<ViewerItem>((x) => ({
+        kind: "image",
+        name: x.filename,
+        src: this.href(x.id),
+      })),
+      index,
+    );
   }
 }
 

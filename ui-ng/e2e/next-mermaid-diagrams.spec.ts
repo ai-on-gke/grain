@@ -209,3 +209,85 @@ test("a theme switch redraws a diagram in the other palette in place", async ({
     }).catch(() => {});
   }
 });
+
+test("hostile Mermaid image shapes, actor icons and style URLs never fetch remote URLs", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  test.setTimeout(90_000);
+  const leaked: string[] = [];
+  await page.route("**/*evil.example*", (route) => {
+    leaked.push(route.request().url());
+    return route.abort();
+  });
+
+  const body = [
+    "```mermaid Unquoted image",
+    "flowchart LR",
+    '  A@{ img: "https://evil.example/unquoted.png", label: "x" }',
+    "```",
+    "",
+    "```mermaid Quoted image",
+    "flowchart LR",
+    '  A@{ "img": "https://evil.example/quoted.png", "label": "x" }',
+    "```",
+    "",
+    "```mermaid Actor icon",
+    "sequenceDiagram",
+    "  participant A",
+    '  properties A: {"icon": "https://evil.example/actor.png"}',
+    "  A->>A: ping",
+    "```",
+    "",
+    "```mermaid Style URL",
+    "flowchart LR",
+    "  A[hi]:::x",
+    "  classDef x fill:url(https://evil.example/style.png)",
+    "```",
+    "",
+    "```mermaid Theme CSS",
+    '%%{init: {"themeCSS": "@import url(https://evil.example/theme.css);"}}%%',
+    "flowchart LR",
+    "  Ok --> Safe",
+    "```",
+  ].join("\n");
+
+  const task = await api(demoServer, accessCode, "POST", "/api/tasks", {
+    title: `Mermaid remote fetch guard ${Date.now()}`,
+  });
+  try {
+    await api(
+      demoServer,
+      accessCode,
+      "POST",
+      `/api/tasks/${task.id}/comments`,
+      { body },
+    );
+    await page.goto(`task/${task.id}`);
+
+    for (const name of [
+      "Unquoted image",
+      "Quoted image",
+      "Actor icon",
+      "Style URL",
+    ]) {
+      const region = page.getByRole("region", { name, exact: true });
+      await expect(region.getByRole("status")).toContainText(
+        "Diagram could not be rendered",
+        { timeout: 20_000 },
+      );
+    }
+
+    const safe = page.getByRole("region", { name: "Theme CSS" });
+    await expect(safe.locator("svg")).toBeVisible({ timeout: 20_000 });
+    await expect(safe.locator("svg")).toContainText("Safe");
+
+    expect(leaked).toEqual([]);
+  } finally {
+    await fetch(`${demoServer}/api/tasks/${task.id}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessCode}` },
+    }).catch(() => {});
+  }
+});

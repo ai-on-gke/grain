@@ -506,6 +506,7 @@ it rather than copy it.
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
 | Prompt and attributes panes | `shared/detail-panes.css` (`.g-panes`, `.g-pane`, `.g-attrs`) | what an agent is told beside the facts about it: task detail, Processes schedule and template inspectors |
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
+| Media viewer | `shared/media-viewer.component.ts` (`MediaViewerService.open`) | full-screen attached images and diagrams: paging, zoom, Download |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Info popover | `shared/info-popover.component.ts` | an `(i)` beside a field or name whose explanation is too long for a tooltip: opens on click, Enter or Space, closes on Escape (focus back on the button), an outside click or a second press, and shifts to stay inside the viewport |
@@ -569,6 +570,15 @@ Rules:
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
 - **Every control has a name.** Icon buttons get `aria-label` and a `gTip`.
+- **Pictures open full screen in one viewer.** An attached image or a
+  Mermaid diagram opens in `g-media-viewer` (deferred in the shell), never
+  a new tab: X, a backdrop click or Escape closes it and focus goes back;
+  arrows page with an `i / N` counter; `+` / `-` / `0` zoom from fit;
+  Download saves it. A modified click on an attachment still opens the
+  file. A drawn Mermaid diagram's toolbar carries Expand beside its view
+  buttons (hidden while it shows source or failed to draw); the viewer
+  pages across every drawn diagram in the message
+  (`ui-ng/e2e/next-task-media-viewer.spec.js`).
 - **A deployment finding that blocks nothing is a warning, not an error.**
   Something an operator should fix while the deployment keeps working (a
   base branch publishing nothing, `baseBranchPublishing`) is a
@@ -583,7 +593,9 @@ Rules:
   matching headings) into one block with Side by side / Before / After /
   Stacked / Source (Before alone on a phone). `mermaid` is imported only
   when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
-  before it reaches the DOM. A diagram never shrinks below 75% of its
+  before it reaches the DOM; a diagram may never fetch a remote URL (image
+  shapes, remote actor icons, external style URLs and non-link `href`s are
+  refused before layout or stripped). A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
   the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render

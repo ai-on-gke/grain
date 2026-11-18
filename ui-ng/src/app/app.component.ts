@@ -63,6 +63,8 @@ import {
   summarizeDispatchStatus,
   type UsagePauseInput,
 } from "./shared/dispatch-status";
+import { MediaViewerComponent } from "./shared/media-viewer.component";
+import { MediaViewerService } from "./shared/media-viewer.service";
 import { TipDirective, dismissActiveTooltip } from "./shared/tip.directive";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.component";
@@ -176,6 +178,7 @@ export class DeferErrorDirective implements OnInit {
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
     DirectorDrawerComponent,
+    MediaViewerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
@@ -987,6 +990,10 @@ export class DeferErrorDirective implements OnInit {
         }
       }
 
+      @defer (when mediaViewer.isOpen()) {
+        <g-media-viewer />
+      }
+
       <g-snackbar />
     </div>
   `,
@@ -1021,6 +1028,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly help = inject(HelpService);
   protected readonly keyboard = inject(KeyboardService);
   protected readonly directorCtx = inject(DirectorContextService);
+  protected readonly mediaViewer = inject(MediaViewerService);
   private readonly snackbar = inject(SnackbarService);
   private readonly inboxRef = signal<InboxStore | null>(null);
   private readonly sessionsRef = signal<SessionsStore | null>(null);
