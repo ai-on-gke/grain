@@ -24,6 +24,8 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { RouteKey } from "../api/generated-routes";
 import type {
+  ClearNotificationsRequest,
+  ClearNotificationsResponse,
   DiffPreview,
   LocalScriptApproval,
   Notification,
@@ -75,6 +77,9 @@ export const DIFF_PREVIEW_HUNKS = 6;
 // DIFF_TTL_MS is how long a preview is shown before selecting its row
 // reads it again.
 const DIFF_TTL_MS = 60000;
+// READ_FAILED is the Inbox's one sentence for a task list it could not
+// read: the banner's, and an action's that refused for the same reason.
+export const READ_FAILED = "Could not read tasks; retrying.";
 
 export function wantsDiff(e: InboxEntry | null): boolean {
   if (!e?.taskId || Boolean(e.task?.prMergedAt)) return false;
@@ -125,7 +130,15 @@ export class InboxStore implements OnDestroy {
   readonly notifications = signal<Notification[]>([]);
   readonly localScripts = signal<LocalScriptApproval[]>([]);
   readonly loaded = signal(false);
-  readonly loadError = signal<string | null>(null);
+  // loadError is the Inbox's banner, and follows the shared feed's own
+  // rule (request-trouble.ts): one failed poll keeps the last good list
+  // on screen and says nothing; failure before the list was ever read,
+  // or failure that lasts, says so once -- the moment the feed decides
+  // it, not at this store's next 60s refresh.
+  readonly loadError = computed(() =>
+    this.feed.loadError() ? READ_FAILED : null,
+  );
+  private lastReadFailed = false;
   readonly actionError = signal<string | null>(null);
   readonly busy = signal<string | null>(null);
   readonly filter = signal<FilterId>("all");
@@ -284,6 +297,20 @@ export class InboxStore implements OnDestroy {
     const id = this.selected()?.taskId;
     return id ? (this.details()[id] ?? null) : null;
   });
+  // The selected alert's whole body: the open list the Inbox polls holds
+  // only each body's first line (?fields=list), and the dock renders the
+  // alert in full. Kept per raise (notificationBodyKey), since raising an
+  // alert again rewrites its body under the same id: keyed by id alone, a
+  // re-raise showed the previous raise's body until the read came back,
+  // and for good when it failed.
+  private readonly notificationBodies = signal<Record<string, string>>({});
+  private readonly notificationBodyInFlight = new Set<string>();
+  readonly selectedNotificationBody = computed<string | null>(() => {
+    const n = this.selected()?.notification;
+    return n
+      ? (this.notificationBodies()[notificationBodyKey(n)] ?? null)
+      : null;
+  });
   readonly selectedTranscript = signal<string | null>(null);
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptKey = "";
@@ -347,6 +374,7 @@ export class InboxStore implements OnDestroy {
       this.ensureDetail(),
       this.ensureQueueDetails(),
       this.ensureDiff(),
+      this.ensureNotificationBody(),
     ]);
     if (this.isInspectorActive()) {
       this.syncSelectedTranscript();
@@ -425,6 +453,12 @@ export class InboxStore implements OnDestroy {
     });
   }
 
+  // reloadSelectedDetail forces a fresh task detail fetch for the active selection.
+  async reloadSelectedDetail(): Promise<void> {
+    await this.refresh();
+    await this.ensureDetail(true);
+  }
+
   // refresh reads everything again. Concurrent calls wait on a fresh read
   // started after the active one finishes so callers never observe stale
   // pre-mutation state.
@@ -447,30 +481,33 @@ export class InboxStore implements OnDestroy {
     this.remember();
     const needWhoami =
       !this.access.whoami() && typeof this.api.whoami === "function";
-    const [config, feedOk, notifications, scripts, who] =
-      await Promise.allSettled([
-        this.api.config(),
-        this.feed.refresh(),
-        this.api.openNotifications(),
+    const configReq = this.api.config().then((cfg) => {
+      if (cfg) {
+        this.access.setConfig(cfg);
+        this.version.set(versionLabel(cfg.version));
+      }
+      return cfg;
+    });
+    const [, feedOk, notifications, scripts, who] = await Promise.allSettled([
+      configReq,
+      this.feed.refresh(),
+      this.api.openNotifications(),
+      (this.access.configLoaded()
+        ? Promise.resolve()
+        : configReq.catch(() => null)
+      ).then(() =>
         this.access.can("GET /api/local-script-approvals")
           ? this.api.localScriptApprovals()
-          : Promise.resolve([] as LocalScriptApproval[]),
-        needWhoami
-          ? this.api.whoami().catch(() => null)
-          : Promise.resolve(null),
-      ]);
-    if (config.status === "fulfilled") {
-      this.access.setConfig(config.value);
-      this.version.set(versionLabel(config.value.version));
-    }
+          : ([] as LocalScriptApproval[]),
+      ),
+      needWhoami ? this.api.whoami().catch(() => null) : Promise.resolve(null),
+    ]);
     if (who.status === "fulfilled" && who.value) {
       this.access.setWhoami(who.value);
     }
-    if (feedOk.status === "fulfilled" && feedOk.value) {
-      this.loadError.set(null);
-    } else {
-      this.loadError.set("Could not read tasks; retrying.");
-    }
+    // lastReadFailed is the strict answer the banner (loadError) is not:
+    // an action must not act on a list this very read could not refresh.
+    this.lastReadFailed = !(feedOk.status === "fulfilled" && feedOk.value);
     if (notifications.status === "fulfilled") {
       this.notifications.set(notifications.value);
     }
@@ -673,6 +710,10 @@ export class InboxStore implements OnDestroy {
       if (targets.length >= 20) break;
     }
     if (targets.length === 0) return;
+    if (typeof this.api.taskSummaries === "function") {
+      await this.readSummariesBatch(targets);
+      return;
+    }
     const concurrency = Math.min(4, targets.length);
     let cursor = 0;
     const worker = async () => {
@@ -682,6 +723,41 @@ export class InboxStore implements OnDestroy {
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
+  }
+
+  private async readSummariesBatch(
+    targets: readonly { id: string; updatedAt: string }[],
+  ): Promise<void> {
+    const allowed = targets.filter((t) => this.canReadTask(t.id));
+    if (allowed.length === 0) return;
+    for (const t of allowed) this.summaryInFlight.add(t.id);
+    const expected = new Map(allowed.map((t) => [t.id, t.updatedAt]));
+    try {
+      const batch = await this.api.taskSummaries(
+        allowed.map((t) => t.id),
+        1,
+        1,
+      );
+      const updated: Record<string, TaskDetail> = {};
+      for (const [id, d] of Object.entries(batch)) {
+        if (
+          this.fullDetailLoaded.has(id) ||
+          this.detailInFlight.has(id) ||
+          this.selected()?.taskId === id
+        ) {
+          continue;
+        }
+        this.summaryUpdatedAt.set(id, expected.get(id) || d.updatedAt || "");
+        updated[id] = d;
+      }
+      if (Object.keys(updated).length > 0) {
+        this.details.update((m) => ({ ...m, ...updated }));
+      }
+    } catch {
+      // The row still shows its summary; the inspector says less.
+    } finally {
+      for (const t of allowed) this.summaryInFlight.delete(t.id);
+    }
   }
 
   private canReadTask(id: string): boolean {
@@ -848,6 +924,39 @@ export class InboxStore implements OnDestroy {
     this.markSeen(key);
     void this.ensureDetail(true);
     void this.ensureDiff();
+    void this.ensureNotificationBody();
+  }
+
+  // ensureNotificationBody reads the selected alert's whole body, once per
+  // time it is raised again (lastRaisedAt), from its own family's list.
+  async ensureNotificationBody(): Promise<void> {
+    const n = this.selected()?.notification;
+    if (!n) return;
+    const key = notificationBodyKey(n);
+    if (this.notificationBodyInFlight.has(key)) return;
+    this.notificationBodyInFlight.add(key);
+    try {
+      const all = await this.api.openNotificationsInFamily(
+        n.family || n.subject,
+      );
+      // The family's list is read as it is now: a body raised again since
+      // the selection was drawn belongs to the next raise, not this one.
+      const hit = all.find((x) => String(x.id) === String(n.id));
+      if (hit?.body && notificationBodyKey(hit) === key) {
+        const body = hit.body;
+        const prefix = `${n.id}:`;
+        // An earlier raise's body is never shown again.
+        this.notificationBodies.update((m) => ({
+          ...Object.fromEntries(
+            Object.entries(m).filter(([k]) => !k.startsWith(prefix)),
+          ),
+          [key]: body,
+        }));
+      }
+    } catch {
+      // The first line from the list stays; the next selection tries again.
+      this.notificationBodyInFlight.delete(key);
+    }
   }
 
   // next selects the row that now stands where the selected one was (or
@@ -927,9 +1036,8 @@ export class InboxStore implements OnDestroy {
     this.actionError.set(null);
     try {
       await this.refresh();
-      const loadErr = this.loadError();
-      if (loadErr) {
-        this.actionError.set(loadErr);
+      if (this.lastReadFailed) {
+        this.actionError.set(READ_FAILED);
         return false;
       }
       const entry = this.liveEntries().find((e) => e.key === entryKey);
@@ -983,6 +1091,29 @@ export class InboxStore implements OnDestroy {
     }
   }
 
+  // clearNotifications is the Clear all / Clear these call: a dry run for
+  // the confirm dialog's count, or the clear itself, after which the
+  // cleared rows leave at once. null when it failed (actionError says why).
+  async clearNotifications(
+    req: ClearNotificationsRequest,
+  ): Promise<ClearNotificationsResponse | null> {
+    if (!req.dryRun) this.busy.set("clear-notifications");
+    this.actionError.set(null);
+    try {
+      const res = await this.api.clearNotifications(req);
+      if (!req.dryRun) {
+        await this.refresh();
+        this.applyUpdates();
+      }
+      return res;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return null;
+    } finally {
+      if (!req.dryRun) this.busy.set(null);
+    }
+  }
+
   // actAll gives every checked row (or the given keys) that offers it the
   // same answer after reading the queue fresh. Keys that moved on or
   // turned blocked are skipped, never replaced by another. Rows that
@@ -1000,9 +1131,8 @@ export class InboxStore implements OnDestroy {
     this.actionError.set(null);
     try {
       await this.refresh();
-      const loadErr = this.loadError();
-      if (loadErr) {
-        this.actionError.set(loadErr);
+      if (this.lastReadFailed) {
+        this.actionError.set(READ_FAILED);
         return { count: 0, failed: 0, undo: null };
       }
       const pool = this.scopedLiveEntries().filter((e) => wantKeys.has(e.key));
@@ -1304,4 +1434,13 @@ export function stopperOf(
   if (!d || !questionCommentId) return "";
   const c = d.comments?.find((x) => x.id === questionCommentId);
   return c?.authorLabel || c?.author || "";
+}
+
+// notificationBodyKey names one raise of an alert: raising it again keeps
+// its id but rewrites its body and lastRaisedAt.
+function notificationBodyKey(n: {
+  id: number | string;
+  lastRaisedAt?: string | null;
+}): string {
+  return `${n.id}:${n.lastRaisedAt ?? ""}`;
 }

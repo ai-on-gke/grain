@@ -123,18 +123,6 @@ g-fleet-page {
   gap: 6px;
 }
 
-.fleet-tab-btn {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font: inherit;
-}
-
-.fleet-tab-btn[aria-selected="true"] {
-  color: var(--md-sys-color-primary);
-  border-bottom-color: var(--md-sys-color-primary);
-}
-
 /* A base branch publishing nothing: a warning, like classic System -> Health. */
 .fleet-publishing-banner {
   display: flex;
@@ -155,4 +143,76 @@ g-fleet-page {
   color: inherit;
   font-weight: 600;
   text-decoration: underline;
+}
+
+/* Tasks waiting on CI. Wide, a branch or run id stays on one line, since
+   one broken over two reads as two values. Narrower than its columns
+   need, each row becomes a card of labelled lines under its task, as the
+   design book's s-table-stack does, rather than scroll sideways; the
+   label is the cell's data-label. */
+.fleet-ci-waits-wrap {
+  container: fleet-ci-waits / inline-size;
+}
+
+.fleet-ci-waits-table td {
+  white-space: nowrap;
+}
+
+@container fleet-ci-waits (max-width: 879px) {
+  .fleet-ci-waits-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .fleet-ci-waits-table,
+  .fleet-ci-waits-table tbody,
+  .fleet-ci-waits-table tr,
+  .fleet-ci-waits-table td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .fleet-ci-waits-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .fleet-ci-waits-table tr:last-child {
+    border-bottom: none;
+  }
+
+  .fleet-ci-waits-table td,
+  .fleet-ci-waits-table tr:last-child td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 4px;
+    border-bottom: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+
+  .fleet-ci-waits-table td:first-child {
+    font-weight: 500;
+    text-align: left;
+  }
+
+  .fleet-ci-waits-table td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 11.5px;
+    line-height: 16px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--md-sys-color-on-surface-variant);
+    text-align: left;
+  }
 }

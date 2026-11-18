@@ -4,7 +4,17 @@ g-processes-page {
   display: contents;
 }
 
+g-qa-flows-panel,
+.view-panel-fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: clip;
+}
+
 .proc-list {
+  position: relative;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -21,6 +31,7 @@ g-processes-page {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-sizing: border-box;
   width: 100%;
   padding: 12px 16px;
   border: 0;
@@ -43,6 +54,7 @@ g-processes-page {
 
 .proc-row.is-selected {
   background: var(--md-sys-color-secondary-container);
+  box-shadow: inset 3px 0 0 var(--md-sys-color-primary);
 }
 
 .proc-row-top {
@@ -85,6 +97,22 @@ g-processes-page {
   display: none;
 }
 
+@media (max-width: 1180px) {
+  .tab-strip[aria-label="Process sections"] {
+    gap: 0;
+  }
+  .tab-strip[aria-label="Process sections"] > .tab-link {
+    gap: 4px;
+    padding: 0 6px;
+    font-size: 12.5px;
+  }
+  .tab-strip[aria-label="Process sections"] .tab-count {
+    min-width: 18px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+}
+
 @media (max-width: 599.95px) {
   .proc-split {
     grid-template-columns: minmax(0, 1fr);
@@ -98,4 +126,65 @@ g-processes-page {
   .proc-mobile-back {
     display: inline-flex;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proc-row {
+    transition: none;
+  }
+}
+
+/* One control height across a subbar: chips, the suites/runs switch and
+   the sort sit on one baseline (36px in toolbars, the design book's rule). */
+.proc-subbar .filter-chip,
+.proc-subbar .segmented button,
+.proc-subbar g-pill-select button {
+  min-height: 36px;
+}
+
+/* The sort sits at the end of each list's subbar, after its chips. */
+.proc-subbar > .proc-sort {
+  margin-left: auto;
+}
+
+/* Custom order: explicit drag grip at the start of .proc-row-top; the row
+   itself always keeps cursor: pointer, and the drop target row is marked. */
+.proc-drag-grip {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--md-sys-color-outline);
+  cursor: grab;
+  user-select: none;
+}
+
+.proc-drag-grip:hover {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.proc-drag-grip:active {
+  cursor: grabbing;
+}
+
+.proc-li.is-drop-target {
+  box-shadow: inset 0 2px 0 var(--md-sys-color-primary);
+}
+
+/* The header New menu's note on what is declared rather than created. */
+.proc-new-menu {
+  min-width: 260px;
+}
+
+.proc-new-menu > .proc-new-menu-hint {
+  max-width: 280px;
+  padding: 8px 16px 10px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: normal;
 }

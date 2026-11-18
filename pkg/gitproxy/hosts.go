@@ -314,7 +314,7 @@ func (c *CredentialSet) SetHost(name string, h CredentialHost) error {
 		return err
 	}
 	if !c.exists(name) {
-		return fmt.Errorf("no credential named %q is configured", name)
+		return fmt.Errorf("%w %q is configured", ErrNoCredential, name)
 	}
 	h, err := NormalizeCredentialHost(h)
 	if err != nil {

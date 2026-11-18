@@ -108,7 +108,7 @@ func sessionProposal(t *testing.T, store *model.Store, ctx context.Context,
 	t.Helper()
 	task := model.Task{
 		ID: id, Intent: model.IntentImplement, Title: id,
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: bot}, Reason: model.ReasonDirect,
 		},
 		Binding:   model.BindingDirective,

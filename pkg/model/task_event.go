@@ -395,6 +395,8 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionHumanReviewReleased
 		case TaskEventGateOverridden:
 			state = TransitionGateOverridden
+		case TaskEventReviewFindingsAccepted:
+			state = TransitionReviewFindingsAccepted
 		default:
 			// A note about an action, not a step (TaskEventSubmitted, ...).
 			continue

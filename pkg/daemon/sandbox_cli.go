@@ -224,7 +224,7 @@ func (a waitCreditAdapter) CreditCLIWait(ctx context.Context, taskID string, blo
 // as. The tool's own checks -- the comment or thread must belong to that
 // pull request -- are what keep an ID from elsewhere from being acted on.
 func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string, args map[string]any) (string, bool, error) {
-	scope, err := o.reviewScope(ctx, taskID)
+	scope, err := o.reviewScope(ctx, taskID, false)
 	if err != nil {
 		return "", false, err
 	}
@@ -239,8 +239,15 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 
 // ThreadsForTask is ui.PullRequestThreadLister's listing: the review
 // threads on taskID's own pull request, for `grain pr threads`.
+//
+// A review that posts its findings on the pull request it reviews rather
+// than opening one of its own (a path trigger's pr-review) has no pull
+// request on its branch: it reads the threads of the one it was filed for
+// (model.LinkReviewsPullRequest), which is where a parallel review of the
+// same head posts what it must not repeat. Only this read-only listing
+// falls back; replying and resolving stay on the task's own pull request.
 func (o *PullRequestOpener) ThreadsForTask(ctx context.Context, taskID string, unresolvedOnly bool) (string, bool, error) {
-	scope, err := o.reviewScope(ctx, taskID)
+	scope, err := o.reviewScope(ctx, taskID, true)
 	if err != nil {
 		return "", false, err
 	}
@@ -249,7 +256,12 @@ func (o *PullRequestOpener) ThreadsForTask(ctx context.Context, taskID string, u
 }
 
 // reviewScope is the pull request scope taskID's own mcpserver would have.
-func (o *PullRequestOpener) reviewScope(ctx context.Context, taskID string) (mcp.PullRequestScope, error) {
+// When includeReviewed is true and taskID has no pull request of its own,
+// PullRequestNumber falls back to the pull request taskID was filed to
+// review (model.LinkReviewsPullRequest) in the repository scope reads pull
+// requests from -- the upstream repository when UpstreamRepo is configured,
+// and task.Target otherwise -- for `grain pr threads`' read-only listing.
+func (o *PullRequestOpener) reviewScope(ctx context.Context, taskID string, includeReviewed bool) (mcp.PullRequestScope, error) {
 	task, err := o.Store.GetTask(ctx, taskID)
 	if err != nil {
 		return mcp.PullRequestScope{}, err
@@ -258,16 +270,28 @@ func (o *PullRequestOpener) reviewScope(ctx context.Context, taskID string) (mcp
 		return mcp.PullRequestScope{}, fmt.Errorf("task %s has no repository of its own", taskID)
 	}
 	scope := mcp.PullRequestScope{Owner: task.Target.StoredOwner(), Repo: task.Target.Name, Branch: task.BranchName()}
+	prTarget := *task.Target
 	if o.Store != nil {
 		if rc, err := o.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
 			if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
 				scope.UpstreamOwner = prRepo.StoredOwner()
 				scope.UpstreamRepo = prRepo.Name
+				prTarget = prRepo
 			}
 		}
 	}
-	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
+	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo.Same(prTarget) {
 		scope.PullRequestNumber = pr.Number
+	}
+	if scope.PullRequestNumber == 0 && includeReviewed {
+		for _, l := range task.Links {
+			if l.Kind != model.LinkReviewsPullRequest {
+				continue
+			}
+			if ref, err := model.ParsePullRequestRef(l.Target); err == nil && ref.Repo.Same(prTarget) && ref.Number > scope.PullRequestNumber {
+				scope.PullRequestNumber = ref.Number
+			}
+		}
 	}
 	return scope, nil
 }

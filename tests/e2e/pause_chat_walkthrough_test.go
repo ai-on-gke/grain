@@ -94,7 +94,7 @@ func TestWalkthroughAMessagePostedWhileTheRunAnswersIsDispatchedFor(t *testing.T
 		t.Fatal(err)
 	}
 	for _, task := range tasks {
-		if task.Origin.Reason == model.ReasonConsoleSession {
+		if task.Filing.Reason == model.ReasonConsoleSession {
 			director = task
 		}
 	}

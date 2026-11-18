@@ -18,11 +18,92 @@ import type {
   DiffPreviewLine,
 } from "../api/models";
 
+function unquoteGitPath(raw: string): string {
+  const s = raw.trim();
+  if (!(s.startsWith('"') && s.endsWith('"') && s.length >= 2)) return s;
+  const inner = s.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== "\\" || i + 1 >= inner.length) {
+      const encoded = new TextEncoder().encode(ch);
+      for (const b of encoded) bytes.push(b);
+      continue;
+    }
+    const next = inner[++i];
+    if (/[0-7]/.test(next)) {
+      let oct = next;
+      for (
+        let k = 0;
+        k < 2 && i + 1 < inner.length && /[0-7]/.test(inner[i + 1]);
+        k++
+      ) {
+        oct += inner[++i];
+      }
+      bytes.push(parseInt(oct, 8));
+      continue;
+    }
+    const escMap: Record<string, number> = {
+      a: 7,
+      b: 8,
+      t: 9,
+      n: 10,
+      v: 11,
+      f: 12,
+      r: 13,
+      '"': 34,
+      "\\": 92,
+    };
+    if (next in escMap) {
+      bytes.push(escMap[next]);
+    } else {
+      const encoded = new TextEncoder().encode(next);
+      for (const b of encoded) bytes.push(b);
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
 function stripDiffPrefix(raw: string): string {
-  const clean = raw.trim().replace(/\t.*$/, "");
+  const withoutTab = raw.trim().replace(/\t.*$/, "");
+  const clean = unquoteGitPath(withoutTab);
   if (clean === "/dev/null") return "";
   if (clean.startsWith("a/") || clean.startsWith("b/")) return clean.slice(2);
   return clean;
+}
+
+function readDiffToken(s: string, start: number): [string, number] {
+  let i = start;
+  while (i < s.length && s[i] === " ") i++;
+  if (i >= s.length) return ["", i];
+  if (s[i] === '"') {
+    let j = i + 1;
+    while (j < s.length) {
+      if (s[j] === "\\") j += 2;
+      else if (s[j] === '"') {
+        j++;
+        break;
+      } else j++;
+    }
+    return [unquoteGitPath(s.slice(i, j)), j];
+  }
+  const space = s.indexOf(" ", i);
+  if (space === -1) return [s.slice(i), s.length];
+  return [s.slice(i, space), space];
+}
+
+function parseDiffGitPaths(line: string): { oldP: string; newP: string } {
+  const rest = line.slice("diff --git ".length).trim();
+  if (rest.includes('"')) {
+    const [rawA, nextIdx] = readDiffToken(rest, 0);
+    const [rawB] = readDiffToken(rest, nextIdx);
+    const oldP = rawA.startsWith("a/") ? rawA.slice(2) : rawA;
+    const newP = rawB.startsWith("b/") ? rawB.slice(2) : rawB;
+    return { oldP, newP };
+  }
+  const m = /^a\/(.+?) b\/(.+)$/.exec(rest);
+  if (m) return { oldP: m[1], newP: m[2] };
+  return { oldP: "", newP: rest };
 }
 
 // Parses a unified git diff (e.g. GET /api/repos/{owner}/{name}/compare or
@@ -54,9 +135,7 @@ export function parseUnifiedDiff(raw: string): DiffPreviewFile[] {
 
     if (line.startsWith("diff --git ")) {
       hunk = null;
-      const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-      const oldP = m ? m[1] : "";
-      const newP = m ? m[2] : line.slice("diff --git ".length).trim();
+      const { oldP, newP } = parseDiffGitPaths(line);
       cur = {
         path: newP || oldP || "file",
         ...(oldP && newP && oldP !== newP ? { oldPath: oldP } : {}),
@@ -79,13 +158,13 @@ export function parseUnifiedDiff(raw: string): DiffPreviewFile[] {
     }
     if (line.startsWith("rename from ")) {
       const f = ensureFile();
-      f.oldPath = line.slice("rename from ".length).trim();
+      f.oldPath = unquoteGitPath(line.slice("rename from ".length).trim());
       f.status = "renamed";
       continue;
     }
     if (line.startsWith("rename to ")) {
       const f = ensureFile();
-      f.path = line.slice("rename to ".length).trim();
+      f.path = unquoteGitPath(line.slice("rename to ".length).trim());
       f.status = "renamed";
       continue;
     }
