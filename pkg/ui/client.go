@@ -62,6 +62,9 @@ type Client struct {
 	allowedPrincipalsMigrateMu sync.Mutex
 	allowedPrincipalsMigrated  bool
 	deploymentOwnerSeeded      string
+	// clearNotification replaces Store.ClearNotificationByID in a bulk
+	// clear, for a test that needs one to fail partway; nil is the store.
+	clearNotification func(ctx context.Context, id int64, by string) (bool, error)
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
@@ -125,6 +128,9 @@ type Client struct {
 
 // NewClient builds a Client over a store.
 func NewClient(cfg Config, store *model.Store) *Client {
+	if cfg.GateObservationTaskIDs == nil {
+		cfg.GateObservationTaskIDs = observationEnvironment()
+	}
 	return &Client{Config: cfg, Store: store}
 }
 
@@ -1796,6 +1802,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if detail.DeploymentWide, err = c.deploymentWideGrants(ctx, *t); err != nil {
 		return TaskDetail{}, err
 	}
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *t)
 	return detail, nil
 }
 
@@ -2545,6 +2552,13 @@ type CreateTaskRequest struct {
 	// task filed approved and deferred wakes onto the queue, and one
 	// filed for a human wakes back into proposed.
 	DeferredUntil *time.Time `json:"deferredUntil,omitempty"`
+	// Tags carries explicit QA experiment allocation / benchmark tags
+	// (qa-alloc:<key>, bench-spec:<id>) supplied by an operator filing work.
+	// Refused to agents and proposed tasks; internal tags are rejected.
+	Tags []string `json:"tags,omitempty"`
+	// QAFlowRef is the operator-only QA flow reference bound to this task.
+	// Refused to agents and proposed tasks.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 
 	// GoalMode configures autonomous multi-pass Goal Mode posture on the task.
 	GoalMode *model.GoalModeConfig `json:"goalMode,omitempty"`
@@ -2574,7 +2588,7 @@ type CreateTaskRequest struct {
 	rawBody *string
 }
 
-func proposalTags(key string, held, holdRequested bool) []string {
+func proposalTags(key string, held, holdRequested bool, extra []string) []string {
 	var tags []string
 	if key != "" {
 		tags = append(tags, key)
@@ -2585,7 +2599,52 @@ func proposalTags(key string, held, holdRequested bool) []string {
 	if holdRequested {
 		tags = append(tags, model.HoldRequestedTag)
 	}
+	for _, t := range extra {
+		if !slices.Contains(tags, t) {
+			tags = append(tags, t)
+		}
+	}
 	return tags
+}
+
+func allowedClientTaskTags(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var out []string
+	for _, entry := range raw {
+		tag := strings.TrimSpace(entry)
+		if tag == "" {
+			continue
+		}
+		var rest string
+		switch {
+		case strings.HasPrefix(tag, "qa-alloc:"):
+			rest = strings.TrimPrefix(tag, "qa-alloc:")
+		case strings.HasPrefix(tag, "bench-spec:"):
+			rest = strings.TrimPrefix(tag, "bench-spec:")
+		default:
+			return nil, validationErrorf("unsupported task tag %q: only qa-alloc:<key> and bench-spec:<id> are accepted", tag)
+		}
+		if len(rest) == 0 || len(rest) > 64 || !isSafeClientTagValue(rest) {
+			return nil, validationErrorf("invalid task tag value in %q", tag)
+		}
+		if !slices.Contains(out, tag) {
+			out = append(out, tag)
+		}
+	}
+	return out, nil
+}
+
+func isSafeClientTagValue(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // defaultCapabilities is the capability ids a task filed on this
@@ -2791,6 +2850,25 @@ func (c *Client) defaultTaskHosting(ctx context.Context, target *model.RepoRef) 
 	return model.NormalizeHosting(h), nil
 }
 
+// refuseNonOperatorQAFlowRef refuses a qaFlowRef write from anyone but a
+// full-access operator: proposed tasks, agents (in-process or external), and
+// restricted access roles cannot bind or rebind a QA flow.
+func (c *Client) refuseNonOperatorQAFlowRef(ctx context.Context, proposedBy string) error {
+	if proposedBy != "" || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+		return validationErrorf("an agent or proposed task cannot set qaFlowRef")
+	}
+	if _, isAgent := agentCallFromContext(ctx); isAgent {
+		return forbiddenErrorf("an agent cannot set qaFlowRef")
+	}
+	if externalTokenFromContext(ctx) != nil {
+		return forbiddenErrorf("an external agent cannot set qaFlowRef")
+	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		return forbiddenErrorf("setting qaFlowRef requires an operator")
+	}
+	return nil
+}
+
 // No GitHub issue is created, and none is needed: Store.NewTaskID
 // allocates identity, so a task exists the moment this returns. That is
 // the whole inversion in one method -- this used to open an issue and let
@@ -2830,6 +2908,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, err
 		} else if existing != nil {
 			return c.Task(ctx, existing.ID)
+		}
+	}
+	if strings.TrimSpace(req.QAFlowRef) != "" {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, req.ProposedBy); err != nil {
+			return Task{}, err
 		}
 	}
 	req, err := c.fromTemplate(ctx, req)
@@ -3773,6 +3856,13 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: proposedBy.ID},
 		}
 	}
+	clientTags, err := allowedClientTaskTags(req.Tags)
+	if err != nil {
+		return Task{}, err
+	}
+	if proposedBy != nil && len(clientTags) > 0 {
+		return Task{}, validationErrorf("a proposed task cannot set tags")
+	}
 	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
 	if err != nil {
 		return Task{}, err
@@ -3815,6 +3905,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
 		SourceTemplateID:     strings.TrimSpace(req.TemplateID),
+		QAFlowRef:            strings.TrimSpace(req.QAFlowRef),
 		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
 		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
@@ -3824,7 +3915,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Reads:                reads,
 		Writes:               writes,
 		CustomFields:         customFields,
-		Tags:                 proposalTags(req.ProposalKey, heldNote != "", req.HoldForApproval && proposedBy != nil),
+		Tags:                 proposalTags(req.ProposalKey, heldNote != "", req.HoldForApproval && proposedBy != nil, clientTags),
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
 		FiledVia:             filedViaFromContext(ctx),

@@ -16,7 +16,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
@@ -377,6 +379,48 @@ func (a AgentKeyCheckAdapter) CheckAgentKey(ctx context.Context, framework strin
 	}
 	result.Detail = check.Detail
 	return result, err
+}
+
+// CheckBackendKey tests the same isolated credential a dispatch resolves.
+// Catalogs, local auth-file readability, and ambient host credentials are
+// deliberately not treated as proof that a provider accepted authentication.
+func (a AgentKeyCheckAdapter) CheckBackendKey(ctx context.Context, id string) (ui.AgentKeyCheckResult, error) {
+	cfg := a.Live.modelListingConfig(ctx)
+	var framework string
+	for _, b := range cfg.AgentBackends {
+		if b.ID == id {
+			framework = model.NormalizeAgentFrameworkName(b.Framework)
+			break
+		}
+	}
+	if framework == "" {
+		return ui.AgentKeyCheckResult{}, errors.New("connection no longer exists; reload Settings")
+	}
+	cfg = credentialConfigForBackend(cfg, id)
+	if cfg.AgentAuthMode == "ambient" || cfg.AgentAuthMode == model.ClaudeAuthVertex || (framework == model.AgentFrameworkClaude && os.Getenv("CLAUDE_CODE_USE_VERTEX") == "1") {
+		return ui.AgentKeyCheckResult{}, errors.New("a real connection test is unavailable for ambient or Vertex authentication; validate access on the configured agent host")
+	}
+	if framework == model.AgentFrameworkCodex && cfg.codexAuthMode == model.CodexAuthSubscription {
+		return ui.AgentKeyCheckResult{}, errors.New("a real connection test is unavailable for Codex ChatGPT subscriptions; save auth.json here, then validate authentication with a Codex run")
+	}
+	secret, ok := credcheck.SecretFor(framework)
+	if !ok {
+		return ui.AgentKeyCheckResult{}, errors.New("this provider does not support a connection test")
+	}
+	credential, err := backendCredential(ctx, cfg, a.Creds, secret, "")
+	if err != nil {
+		return ui.AgentKeyCheckResult{}, errors.New("could not read the connection credential; check the daemon secret store")
+	}
+	if credential == "" {
+		return ui.AgentKeyCheckResult{}, errors.New("no credential is saved for this connection; open Credential and save one before testing")
+	}
+	_, err = a.Checker.Check(ctx, framework, credential)
+	if err != nil {
+		// Provider bodies and transport errors can contain credentials. Keep
+		// them out of ordinary API responses, including reflected model IDs.
+		return ui.AgentKeyCheckResult{}, errors.New("provider connection test failed; check the saved credential, provider permissions, quota and daemon network access, then retry")
+	}
+	return ui.AgentKeyCheckResult{Detail: "Provider accepted the saved connection credential and answered the model request."}, nil
 }
 
 // clusterFreeReader is a Kubernetes backend's reading of its nodes' free

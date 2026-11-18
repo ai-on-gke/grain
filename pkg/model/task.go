@@ -1264,12 +1264,13 @@ func (l Lease) Expired(now time.Time, maxAge time.Duration) bool {
 type LinkKind string
 
 const (
-	LinkDependsOn  LinkKind = "depends-on"  // blocks dispatch
-	LinkChildOf    LinkKind = "child-of"    // blocks the parent
-	LinkFixes      LinkKind = "fixes"       // -> a pull request
-	LinkMergeWith  LinkKind = "merge-with"  // blocks the merge, not the run
-	LinkAddresses  LinkKind = "addresses"   // -> a review thread
-	LinkProposedBy LinkKind = "proposed-by" // provenance only
+	LinkDependsOn    LinkKind = "depends-on"  // blocks dispatch
+	LinkChildOf      LinkKind = "child-of"    // blocks the parent
+	LinkFixes        LinkKind = "fixes"       // -> a pull request
+	LinkMergeWith    LinkKind = "merge-with"  // blocks the merge, not the run
+	LinkAddresses    LinkKind = "addresses"   // -> a review thread
+	LinkProposedBy   LinkKind = "proposed-by" // provenance only
+	LinkQATriageHold LinkKind = "qa-triage-hold"
 	// LinkFixTask recorded the separate task the merge queue used to file
 	// to repair this task's own PR (-> that task's ID). Nothing writes it
 	// any more: a repair now runs as another attempt of the task itself,
@@ -1497,6 +1498,16 @@ const (
 	// LinkHumanSubmitted is consumed so the UI and merge gates know who
 	// approved which commit.
 	LinkHumanApproved LinkKind = "human-approved"
+	// LinkQAHold records that grain withdrew or withheld this task's auto-merge
+	// while a pre-PR quality verification gate (S4) is running or left unresolved
+	// findings after retry caps (-> the head SHA).
+	LinkQAHold LinkKind = "qa-hold"
+	// LinkQAS4Attempted records that the 1-round fresh-context S4 orthogonal
+	// verifier has already executed for this task (-> the staged head SHA).
+	LinkQAS4Attempted LinkKind = "qa-s4-attempted"
+	// LinkQASalvageRetried records that salvagePushedBranch already requeued
+	// one bounded repair turn for deterministic S3 findings (-> the head SHA).
+	LinkQASalvageRetried LinkKind = "qa-salvage-retried"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
@@ -1880,6 +1891,9 @@ type Task struct {
 	// Skills is the per-task repository skill discovery override (nil defers
 	// to the target repository and deployment defaults).
 	Skills *SkillsConfig `json:"skills,omitempty"`
+	// QAFlowRef is the operator-configured quality-control flow reference
+	// bound to this task (`<key>`, `<key>@v<N>`, or `sha256:<hex>`).
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a
@@ -2895,6 +2909,10 @@ type TaskSpan struct {
 
 // Run is one attempt. A live run is a Run with no FinishedAt.
 type Run struct {
+	// RequireReady rechecks ordinary dispatch eligibility inside the claim transaction.
+	// Explicit Run now callers leave it false. It is not persisted.
+	RequireReady bool `json:"-"`
+
 	ID     string
 	TaskID string
 	// Sandbox is the sandbox this run was given -- the kontur VM name, or

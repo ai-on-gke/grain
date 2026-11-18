@@ -118,6 +118,7 @@ var notSettings = []string{
 	"task_filed_template",
 	"task_source_template",
 	"task_grant",
+	"qa_flow_version",
 	"task_link",
 	"task_tag",
 	// Which comment grain keeps on a work tree's GitHub origin, and what it
@@ -215,6 +216,7 @@ var notSettings = []string{
 	// attachment is not something a pull request against the state
 	// repository proposes, and clearing the tables to reinstate them
 	// would race the daemon writing new ones.
+	"task_pr_feedback",
 	"task_comment",
 	"task_attachment",
 	// A durable task's compaction cursor, handover version and current
@@ -229,6 +231,8 @@ var notSettings = []string{
 	// GET /api/events (model.IntegrationEvent): runtime event history
 	// written by Store transactions, never settings a PR applies.
 	"integration_event",
+	"gate_observation_shadow",
+	"gate_observation_shadow_history",
 	// config_audit is the record of who changed the configuration
 	// (operator-attribution spec §4.4): grain's own history, not settings
 	// a merged pull request applies.
@@ -487,6 +491,8 @@ var notSettings = []string{
 	"task_qa_assignment",
 	"task_qa_check_run",
 	"task_qa_finding",
+	"qa_experiment",
+	"qa_enrollment",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a

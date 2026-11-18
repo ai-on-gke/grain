@@ -636,6 +636,9 @@ func httpMCPConfigJSON(url, token string, servers ...agent.CapabilityMCPServer) 
 // run how long it has left (see that function, and
 // mcp.Registry.AnnounceDeadline).
 func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]string, error) {
+	if cfg.NoTools {
+		return []string{"mcpserver", "-no-tools"}, nil
+	}
 	var args []string
 	switch {
 	case cfg.SandboxRoot != "":
@@ -848,11 +851,22 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 		"-p",
 	}
 	if !isUnconfined(f.host) {
+		allowed := ""
+		if !cfg.NoTools {
+			allowed = strings.Join(allowedTools(cfg.CapabilityMCPServers...), ",")
+		}
 		args = append(args,
 			"--tools", "",
 			"--mcp-config", configPath,
 			"--strict-mcp-config",
-			"--allowedTools", strings.Join(allowedTools(cfg.CapabilityMCPServers...), ","),
+			"--allowedTools", allowed,
+		)
+	} else if cfg.NoTools {
+		args = append(args,
+			"--tools", "",
+			"--mcp-config", configPath,
+			"--strict-mcp-config",
+			"--allowedTools", "",
 		)
 	} else {
 		args = append(args,
@@ -873,26 +887,23 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	if f.model != "" {
 		args = append(args, "--model", f.model)
 	}
-	// The stop rule's Stop hook (stophook.go, agent.DecideStop): a turn
-	// that ends promising more work, or a background run that ends before
-	// any closing move, is sent back once. Each block is appended to a
-	// file staged here and read back onto the Result below. A host that
-	// cannot stage the file still gets the hook, unrecorded.
-	// Removed, like the MCP config, unless the run was detached.
-	stopRecord, err := stageStopRecord(ctx, f.host)
-	if err != nil {
-		stopRecord = ""
-	}
-	stopPolicy, err := stageStopPolicy(ctx, f.host, cfg.Interactive)
-	if err != nil {
-		stopPolicy = ""
-	}
-	// The hook is forked by claude, on claude's machine.
-	stopSettings, err := writeStopSettingsWithPolicy(ctx, f.host, agent.HookBinary(f.host, f.grainBinaryPath), cfg.Interactive, stopRecord, stopPolicy)
-	if err != nil {
-		stopSettings = ""
-	} else {
-		args = append(args, "--settings", stopSettings)
+	var stopRecord, stopPolicy, stopSettings string
+	if !cfg.NoTools {
+		stopRecord, err = stageStopRecord(ctx, f.host)
+		if err != nil {
+			stopRecord = ""
+		}
+		stopPolicy, err = stageStopPolicyForRun(ctx, f.host, cfg.Interactive, cfg.RequireOpenPullRequest)
+		if err != nil {
+			stopPolicy = ""
+		}
+		// The hook is forked by claude, on claude's machine.
+		stopSettings, err = writeStopSettingsWithPolicy(ctx, f.host, agent.HookBinary(f.host, f.grainBinaryPath), cfg.Interactive, stopRecord, stopPolicy)
+		if err != nil {
+			stopSettings = ""
+		} else {
+			args = append(args, "--settings", stopSettings)
+		}
 	}
 	defer func() {
 		if detached {

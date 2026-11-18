@@ -18,13 +18,24 @@ import {
   TIP_DELAY_MS,
   TIP_ID,
   TIP_LEAVE_MS,
+  TIP_REGION_ID,
   TipDirective,
 } from "./tip.directive";
 
 @Component({
   imports: [TipDirective],
   template: `<button type="button" gTip="Opens the backlog.">Tasks</button>
-    <button type="button" id="b2" gTip="Opens CI.">CI</button>`,
+    <button type="button" id="b2" gTip="Opens CI.">CI</button>
+    <div id="hidden-attr-wrap" hidden>
+      <button type="button" id="b-hidden-attr" gTip="Hidden via attr.">
+        Hidden Attr
+      </button>
+    </div>
+    <div id="display-none-wrap" style="display: none">
+      <button type="button" id="b-display-none" gTip="Hidden via CSS.">
+        Hidden CSS
+      </button>
+    </div>`,
 })
 class HostComponent {}
 
@@ -35,15 +46,26 @@ function tip(): HTMLElement | null {
 describe("TipDirective", () => {
   let button: HTMLButtonElement;
   let second: HTMLButtonElement;
+  let hiddenAttrBtn: HTMLButtonElement;
+  let displayNoneBtn: HTMLButtonElement;
+  let hostRoot: HTMLElement;
   beforeEach(() => {
+    document.getElementById(TIP_REGION_ID)?.remove();
     document.getElementById(TIP_ID)?.remove();
     TestBed.configureTestingModule({ imports: [HostComponent] });
     const fixture = TestBed.createComponent(HostComponent);
+    hostRoot = fixture.nativeElement as HTMLElement;
+    document.body.appendChild(hostRoot);
     fixture.detectChanges();
-    button = (fixture.nativeElement as HTMLElement).querySelector("button")!;
-    second = (fixture.nativeElement as HTMLElement).querySelector("#b2")!;
+    button = hostRoot.querySelector("button")!;
+    second = hostRoot.querySelector("#b2")!;
+    hiddenAttrBtn = hostRoot.querySelector("#b-hidden-attr")!;
+    displayNoneBtn = hostRoot.querySelector("#b-display-none")!;
   });
   afterEach(() => {
+    hostRoot?.remove();
+    document.getElementById(TIP_REGION_ID)?.remove();
+    document.getElementById(TIP_ID)?.remove();
     vi.useRealTimers();
     TestBed.resetTestingModule();
   });
@@ -174,5 +196,31 @@ describe("TipDirective", () => {
     } finally {
       snack.remove();
     }
+  });
+
+  it("mounts #g-tip inside landmark #g-tip-region and bails out when a host ancestor is hidden or display:none", () => {
+    button.focus();
+    const t = tip()!;
+    expect(t).not.toBeNull();
+    expect(t.hidden).toBe(false);
+    expect(t.style.opacity).toBe("1");
+    const region = document.getElementById(TIP_REGION_ID);
+    expect(region).not.toBeNull();
+    expect(region?.getAttribute("role")).toBe("region");
+    expect(region?.getAttribute("aria-label")).toBe("Tooltip");
+    expect(t.parentElement).toBe(region);
+    button.blur();
+    expect(t.hidden).toBe(true);
+
+    vi.useFakeTimers();
+    hiddenAttrBtn.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_DELAY_MS);
+    expect(tip()?.hidden).toBe(true);
+    expect(hiddenAttrBtn.hasAttribute("aria-describedby")).toBe(false);
+
+    displayNoneBtn.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_DELAY_MS);
+    expect(tip()?.hidden).toBe(true);
+    expect(displayNoneBtn.hasAttribute("aria-describedby")).toBe(false);
   });
 });

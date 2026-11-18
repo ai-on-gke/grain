@@ -279,6 +279,10 @@ export interface Task {
   updatedAt?: string;
   proposedBy?: string;
   questionSummary?: string;
+  // The one line a run gave the closing note an awaiting_reply task
+  // rests on (comment_on_issue's summary); set only when the task asked
+  // nothing (pkg/ui Task.NoteSummary).
+  noteSummary?: string;
   questionCommentId?: number;
   awaitingAccess?: boolean;
   turnStopped?: boolean;
@@ -318,6 +322,7 @@ export interface Task {
   reviewTemplateName?: string;
   // The template the task was filed from, absent for one written from scratch.
   templateId?: string;
+  qaFlowRef?: string;
   sandboxCpus?: number;
   sandboxMemoryMb?: number;
   sandboxDiskGb?: number;
@@ -556,6 +561,10 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
+  // kind is admitted (ui.CapabilityMethod.Policy).
+  policy?: Record<string, string>;
   aliasOf?: string[];
 }
 
@@ -626,6 +635,7 @@ export interface Template {
   networkAccess?: string;
   nothingNeededAction?: string;
   model?: string;
+  qaFlowRef?: string;
   interactive?: boolean;
   keepRunning?: boolean;
   admission?: string;
@@ -697,7 +707,58 @@ export interface Attempt {
   agentFramework?: string;
 }
 
+export interface GateObservationResult {
+  evaluation_id: string;
+  revision: number;
+  disposition: string;
+  invalidation_reason: string | null;
+  retry_at: string | null;
+  result: {
+    type: string;
+    version: number;
+    status: string;
+    summary: string;
+    human_text: string | null;
+    agent_text?: string | null;
+    observed_at: string;
+    valid_until: string;
+    context_digest: string;
+    evidence: { kind: string; id: string; version: string }[];
+    dependencies: { key: string; version: string; complete: boolean }[];
+    waits: { event: string; owner: string; deadline: string }[];
+    error: { code: string; message: string } | null;
+  };
+}
+export interface GateObservations {
+  mode: "observation_only";
+  authority: "legacy";
+  source_revision: string;
+  compared_at: string;
+  legacy_state: string;
+  dirty: boolean;
+  bindings: {
+    id: string;
+    type: string;
+    version: number;
+    config: unknown;
+    origin: unknown;
+  }[];
+  results: GateObservationResult[];
+}
+export interface GateObservationDiagnostics {
+  started_at: string;
+  evaluations: number;
+  counts: Record<string, number>;
+  history: {
+    generation: number;
+    at: string;
+    comparison: string;
+    view: GateObservations;
+  }[];
+}
 export interface TaskDetail extends Task {
+  gate_observations?: GateObservations;
+  gate_observation_diagnostics?: GateObservationDiagnostics;
   comments?: Comment[];
   attempts?: Attempt[];
   olderComments?: number;
@@ -761,6 +822,29 @@ export interface ConsoleSessionList {
   created?: string;
   capabilities?: CapabilityOption[];
   networkAccessOptions?: string[];
+}
+
+// ClearNotificationsRequest is POST /api/notifications/clear's body
+// (pkg/ui/notifications_clear.go): every filter given narrows the open
+// notifications, none is every open alert.
+export interface ClearNotificationsRequest {
+  subject?: string;
+  severity?: string;
+  olderThan?: string;
+  ids?: number[];
+  reason?: string;
+  dryRun?: boolean;
+}
+
+export interface ClearNotificationsResponse {
+  matched: number;
+  cleared: number;
+  ids: number[];
+  // expectedBack is how many are level-triggered and will be raised
+  // again while their condition holds.
+  expectedBack: number;
+  expectedBackFamilies?: string[];
+  dryRun?: boolean;
 }
 
 export interface Notification {
@@ -958,4 +1042,98 @@ export interface MemoryDocument {
 
 export interface MemoryDocumentsResponse {
   documents: MemoryDocument[];
+}
+
+export interface QARuleSpec {
+  id: string;
+  label: string;
+  stage: string;
+  severity: string;
+  summary: string;
+  targetPaths: string[];
+  enabled: boolean;
+}
+
+export interface QAFlowSpec {
+  id: string;
+  label: string;
+  summary: string;
+  injectSkill: boolean;
+  skillBytes: number;
+  stopNudge: boolean;
+  stagingIsolation: boolean;
+  enableS4: boolean;
+  maxS4RepairRounds: number;
+  strictDecoderPaths?: string[];
+  rules: QARuleSpec[];
+}
+
+export interface QAFlowsResponse {
+  flows: QAFlowSpec[];
+}
+
+export interface QAAssignment {
+  rootOrigin: string;
+  epoch: number;
+  regimeId: number;
+  arm: string;
+  flowId: string;
+  rolloutPctAtAssign: number;
+  complexityTier: string;
+  assignedAt: string;
+}
+
+export interface QACheckRun {
+  id: number;
+  taskId: string;
+  runId: string;
+  commitSha: string;
+  stage: string;
+  checkId: string;
+  arm: string;
+  shadow: boolean;
+  verdict: string;
+  durationMs: number;
+  blastTier?: string;
+  blastScore?: number;
+  complexityTier?: string;
+  triageDecision?: string;
+  repairedInNextSha?: number;
+  tokensIn: number;
+  tokensOut: number;
+  allocBytes: number;
+  detailJson?: string;
+  createdAt: string;
+}
+
+export interface QAFinding {
+  id: number;
+  checkRunId: number;
+  taskId: string;
+  stage: string;
+  ruleId: string;
+  severity: string;
+  filePath?: string;
+  line?: number;
+  summary: string;
+  evidence?: string;
+  humanVote: number;
+  votedBy?: string;
+  votedAt?: string;
+  createdAt: string;
+}
+
+export interface TaskQAResponse {
+  taskId: string;
+  enabled: boolean;
+  assignment?: QAAssignment;
+  checkRuns: QACheckRun[];
+  findings: QAFinding[];
+}
+
+export interface VoteQAFindingResponse {
+  findingId: number;
+  taskId: string;
+  vote: number;
+  votedBy?: string;
 }

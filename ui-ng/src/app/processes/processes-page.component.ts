@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { QaFlowsPanelComponent } from "./qa-flows-panel.component";
+
 import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
@@ -33,6 +35,7 @@ import {
   viewChild,
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
+import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskFeedStore } from "../services/task-feed.service";
@@ -52,15 +55,23 @@ import {
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import { ModelPickerComponent } from "../shared/model-picker.component";
+import { type ModelBackendLike, modelGroups } from "../shared/model-catalog";
 import { CompositionViewComponent } from "./composition-view.component";
 import {
+  ADMISSION_OPTIONS,
+  HOSTING_OPTIONS,
+  sameList,
   type Composition,
   type CreateScheduleRequest,
+  type CreateSuiteRequest,
+  type CreateTemplateRequest,
+  type DeclarationAcceptanceView,
   type DeclaredTrigger,
   type DerivedRuns,
+  type PathTriggerView,
   type ProcessSort,
-  type CreateSuiteRequest,
-  type DeclarationAcceptanceView,
   type ProcessTab,
   type Recurrence,
   type RepoWorkflow,
@@ -70,25 +81,35 @@ import {
   type Template,
   type TemplateField,
   type UpdateScheduleRequest,
+  type UpdateSuiteRequest,
+  type UpdateTemplateRequest,
   PROCESS_SORTS,
   buildSuiteRunPasses,
   derivedRuns,
   describeSuiteMode,
   formatCadence,
   formatScheduleNextRun,
+  formatScheduleSuppression,
   isEventTrigger,
   movedOrder,
   parseProcessSort,
+  scheduleFiringTarget,
   scheduleKindOf,
   skipFolded,
   sortProcessRows,
-  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
 import { MarkdownDirective } from "../shared/code-highlight";
+
+const DEFAULT_QA_FLOW_REFS = [
+  "engineering-workflow-v4@1",
+  "golden-v1-minimal@1",
+  "golden-v3@1",
+  "golden-v2@1",
+] as const;
 
 const TABS: readonly { id: ProcessTab; label: string; tip: string }[] = [
   {
@@ -110,6 +131,11 @@ const TABS: readonly { id: ProcessTab; label: string; tip: string }[] = [
     id: "declarations",
     label: "Repo Workflows & Declarations",
     tip: "Repository .grain/ declarations, workflows, and capability acceptances.",
+  },
+  {
+    id: "quality",
+    label: "Software Workflow & QA",
+    tip: "Pre-PR deterministic and fresh-context quality flow packages and rules.",
   },
 ];
 
@@ -177,6 +203,224 @@ function triggerName(path: string): string {
   return path.replace(/^\.grain\/triggers\//, "");
 }
 
+function templateFileStem(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/\.ya?ml$/i, "");
+}
+
+function synthesizeTriggerYaml(
+  repo: string,
+  filePath: string,
+  detail: PathTriggerView | undefined,
+  templates: readonly Template[],
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (!detail) {
+    lines.push("# Synced path trigger declaration.");
+    return lines.join("\n");
+  }
+  if (detail.on) lines.push(`on: ${detail.on}`);
+  if (detail.branches?.length) {
+    lines.push(
+      `branches: [${detail.branches.map((b) => JSON.stringify(b)).join(", ")}]`,
+    );
+  }
+  if (detail.paths?.length) {
+    lines.push(
+      `paths: [${detail.paths.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.ignore?.length) {
+    lines.push(
+      `ignore: [${detail.ignore.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.template) {
+    const declTmpl = templates.find(
+      (t) => t.id === detail.template && t.declaredIn?.repo === repo,
+    );
+    const tmplRef = declTmpl?.declaredIn?.path
+      ? templateFileStem(declTmpl.declaredIn.path)
+      : detail.template;
+    lines.push(`template: ${tmplRef}`);
+  }
+  if (detail.per) lines.push(`per: ${detail.per}`);
+  lines.push(`gate: ${detail.gate ? "true" : "false"}`);
+  if (detail.human) lines.push(`human: ${detail.human}`);
+  if (detail.auto_approve) lines.push("auto-approve: true");
+  if (detail.sensitive) lines.push("sensitive: true");
+  if (detail.approvers?.length) {
+    lines.push(
+      `approvers: [${detail.approvers.map((a) => JSON.stringify(a)).join(", ")}]`,
+    );
+  }
+  if (detail.fixes) lines.push("fixes: true");
+  return lines.join("\n");
+}
+
+function synthesizeDeclaredTemplateYaml(
+  repo: string,
+  filePath: string,
+  t: Template,
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (t.name) lines.push(`name: ${t.name}`);
+  if (t.title) lines.push(`title: ${t.title}`);
+  if (t.fields?.length) {
+    lines.push("fields:");
+    for (const f of t.fields) {
+      lines.push(`  - name: ${f.name}`);
+      if (f.label) lines.push(`    label: ${JSON.stringify(f.label)}`);
+      if (f.required) lines.push("    required: true");
+      if (f.default) lines.push(`    default: ${JSON.stringify(f.default)}`);
+    }
+  }
+  if (t.description) {
+    lines.push("prompt: |");
+    for (const pl of t.description.split(/\r?\n/)) {
+      lines.push(`  ${pl}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+const UPPER_QA_TOKENS = new Set(["qa", "pr", "ci", "llm", "ui", "api", "id"]);
+
+function humanizeQaFlowKey(key: string): string {
+  return key
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (/^v\d+[a-z0-9]*$/i.test(word) || /^s\d+$/i.test(word)) {
+        return word.toUpperCase();
+      }
+      if (UPPER_QA_TOKENS.has(lower)) {
+        return lower.toUpperCase();
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+function formatQaFlowLabel(key: string, rawLabel?: string): string {
+  const trimmed = (rawLabel ?? "").trim();
+  if (!trimmed || trimmed === key) {
+    return humanizeQaFlowKey(key);
+  }
+  const parenIdx = trimmed.indexOf(" (");
+  const head = (parenIdx >= 0 ? trimmed.slice(0, parenIdx) : trimmed).trim();
+  if (
+    head === key ||
+    head === head.toLowerCase() ||
+    head.toLowerCase().replace(/[\s_]+/g, "-") === key.toLowerCase()
+  ) {
+    return humanizeQaFlowKey(head);
+  }
+  return trimmed;
+}
+
+function formatQaFlowHint(ref: string): string {
+  const atIdx = ref.indexOf("@");
+  if (atIdx < 0) return ref;
+  const key = ref.slice(0, atIdx);
+  const ver = ref.slice(atIdx + 1).replace(/^v/i, "") || "1";
+  return `${key}@v${ver}`;
+}
+
+function isBenchmarkQaFlow(key: string, rawLabel?: string): boolean {
+  const k = key.toLowerCase();
+  const l = (rawLabel ?? "").toLowerCase();
+  return (
+    k === "deterministic-s3-only" ||
+    k.endsWith("-skill-only") ||
+    k.endsWith("-checks-only") ||
+    k.endsWith("-seed") ||
+    k.endsWith("-benchmark") ||
+    k.includes("-ablation") ||
+    k.startsWith("bench-") ||
+    l.includes("ablation") ||
+    l.includes("benchmark")
+  );
+}
+
+interface ParsedTriggerYaml {
+  on: string;
+  paths: string[];
+  gate: string;
+  template: string;
+}
+
+function unquoteYamlScalar(raw: string): string {
+  const s = raw.replace(/\s+#.*$/, "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function parseInlineYamlList(raw: string): string[] {
+  const inner = raw.trim().slice(1, -1).trim();
+  if (!inner) return [];
+  return inner
+    .split(",")
+    .map((part) => unquoteYamlScalar(part))
+    .filter(Boolean);
+}
+
+function parseTriggerYaml(raw: string): ParsedTriggerYaml {
+  const out: ParsedTriggerYaml = { on: "", paths: [], gate: "", template: "" };
+  const lines = raw.split(/\r?\n/);
+  let listKey: "paths" | "on" | null = null;
+  for (const line of lines) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const listMatch = /^\s*-\s+(.*)$/.exec(line);
+    if (listMatch && listKey) {
+      const val = unquoteYamlScalar(listMatch[1]);
+      if (val) {
+        if (listKey === "paths") out.paths.push(val);
+        else if (listKey === "on") {
+          out.on = out.on ? `${out.on}, ${val}` : val;
+        }
+      }
+      continue;
+    }
+    listKey = null;
+    if (!/^\s/.test(line)) {
+      const kv = /^["']?([a-zA-Z0-9_-]+)["']?\s*:\s*(.*)$/.exec(line);
+      if (!kv) continue;
+      const key = kv[1].toLowerCase();
+      const rest = kv[2].trim();
+      if (key === "paths") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "paths";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.paths = parseInlineYamlList(rest);
+        } else {
+          const val = unquoteYamlScalar(rest);
+          if (val) out.paths = [val];
+        }
+      } else if (key === "on") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "on";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.on = parseInlineYamlList(rest).join(", ");
+        } else {
+          out.on = unquoteYamlScalar(rest);
+        }
+      } else if (key === "gate") {
+        out.gate = unquoteYamlScalar(rest);
+      } else if (key === "template") {
+        out.template = unquoteYamlScalar(rest);
+      }
+    }
+  }
+  return out;
+}
+
 const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
 
 @Component({
@@ -190,7 +434,10 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    GrantsPickerComponent,
+    ModelPickerComponent,
     MarkdownDirective,
+    QaFlowsPanelComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -326,7 +573,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         </div>
         <p class="view-subtitle">
           Standing schedules, event triggers, reusable templates, multi-pass
-          suites, and repository <code>.grain/</code> declarations.
+          suites, repository <code>.grain/</code> declarations, and pre-PR
+          quality checks.
         </p>
 
         <nav class="tab-strip" aria-label="Process sections">
@@ -338,6 +586,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               [attr.aria-current]="activeTab() === t.id ? 'page' : null"
               [attr.data-testid]="'proc-tab-' + t.id"
               [gTip]="t.tip"
+              (click)="onTabClick($event, t.id)"
             >
               {{ t.label }}
               <span
@@ -379,327 +628,44 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         </p>
       }
 
-      <div
-        class="inbox-split proc-split"
-        #split
-        [class.is-collapsed]="sp.collapsed()"
-        [class.is-dragging]="sp.dragging()"
-        [class.has-mobile-detail]="mobileDetailOpen()"
-        [style.--queue-w.%]="sp.ratioExact()"
-      >
-        <!-- LEFT LIST PANE -->
-        <section
-          class="queue-pane"
-          aria-label="Process items"
-          data-testid="proc-list-pane"
+      @if (activeTab() === "quality") {
+        <g-qa-flows-panel class="view-panel-fill"></g-qa-flows-panel>
+      } @else {
+        <div
+          class="inbox-split proc-split"
+          #split
+          [class.is-collapsed]="sp.collapsed()"
+          [class.is-dragging]="sp.dragging()"
+          [class.has-mobile-detail]="mobileDetailOpen()"
+          [style.--queue-w.%]="sp.ratioExact()"
         >
-          <p class="sr-only" aria-live="polite" data-testid="proc-move-note">
-            {{ moveNote() }}
-          </p>
-          @switch (activeTab()) {
-            @case ("schedules") {
-              <div
-                class="proc-subbar"
-                role="toolbar"
-                aria-label="Schedule filter"
-              >
-                @for (sf of schedFilters; track sf.id) {
-                  <button
-                    type="button"
-                    class="filter-chip"
-                    [attr.aria-pressed]="schedFilter() === sf.id"
-                    [attr.data-testid]="'sched-filter-' + sf.id"
-                    (click)="schedFilter.set(sf.id)"
-                  >
-                    {{ sf.label }}
-                  </button>
-                }
-                <g-pill-select
-                  class="proc-sort"
-                  prefix="Sort"
-                  [options]="sortOptions()"
-                  [value]="activeSort()"
-                  ariaLabel="Sort"
-                  testid="proc-sort"
-                  (valueChange)="setSort($event)"
-                />
-              </div>
-              @if (store.loaded() && scheduleRows().length === 0) {
-                <div class="empty-state" data-testid="schedules-empty">
-                  <p>No schedules or event triggers match this view.</p>
-                </div>
-              } @else {
-                <ul class="proc-list">
-                  @for (r of scheduleRows(); track r.key) {
-                    @if (r.trigger; as tr) {
-                      <li
-                        class="proc-li"
-                        [class.is-drop-target]="dropKey() === r.key"
-                        [attr.draggable]="
-                          activeSort() === 'custom' ? 'true' : null
-                        "
-                        (dragstart)="onDragStart($event, r.key)"
-                        (dragover)="onDragOver($event, r.key)"
-                        (dragleave)="onDragLeave(r.key)"
-                        (drop)="onDrop($event, 'schedules', r.key)"
-                        (dragend)="onDragEnd()"
-                      >
-                        <a
-                          class="proc-row"
-                          draggable="false"
-                          [routerLink]="repoAdvancedRoute(tr.repo)"
-                          [attr.data-testid]="'trigger-row-' + r.key"
-                          [attr.aria-keyshortcuts]="
-                            activeSort() === 'custom'
-                              ? 'Alt+ArrowUp Alt+ArrowDown'
-                              : null
-                          "
-                          [gTip]="
-                            'Open the Advanced tab of ' +
-                            tr.repo +
-                            ', where its triggers are'
-                          "
-                          (keydown)="onRowKey($event, 'schedules', r.key)"
-                        >
-                          <div class="proc-row-top">
-                            <span class="status-pill reply">
-                              <g-status-icon tone="reply" kind="reply" />
-                              Declared
-                            </span>
-                            <span class="proc-row-title">{{
-                              triggerName(tr.path)
-                            }}</span>
-                            <span class="ci-provider-tag">Trigger</span>
-                            <span class="ci-provider-tag">.grain</span>
-                          </div>
-                          <div class="proc-row-sub">
-                            <span class="tabular">{{ tr.repo }}</span>
-                            <span class="tabular">· {{ tr.path }}</span>
-                            <span>· next: on change</span>
-                          </div>
-                        </a>
-                      </li>
-                    }
-                    @if (r.schedule; as s) {
-                      @let badge = schedBadge(s);
-                      <li
-                        class="proc-li"
-                        [class.is-drop-target]="
-                          dropKey() === 'schedule:' + s.id
-                        "
-                        [attr.draggable]="
-                          activeSort() === 'custom' ? 'true' : null
-                        "
-                        (dragstart)="onDragStart($event, 'schedule:' + s.id)"
-                        (dragover)="onDragOver($event, 'schedule:' + s.id)"
-                        (dragleave)="onDragLeave('schedule:' + s.id)"
-                        (drop)="onDrop($event, 'schedules', 'schedule:' + s.id)"
-                        (dragend)="onDragEnd()"
-                      >
-                        <button
-                          type="button"
-                          class="proc-row"
-                          [class.is-selected]="selectedScheduleId() === s.id"
-                          [attr.aria-current]="
-                            selectedScheduleId() === s.id ? 'true' : null
-                          "
-                          [attr.data-testid]="'sched-row-' + s.id"
-                          [attr.aria-keyshortcuts]="
-                            activeSort() === 'custom'
-                              ? 'Alt+ArrowUp Alt+ArrowDown'
-                              : null
-                          "
-                          (click)="selectSchedule(s.id, true)"
-                          (keydown)="
-                            onRowKey($event, 'schedules', 'schedule:' + s.id)
-                          "
-                          (keydown.space)="
-                            selectSchedule(s.id, true); $event.preventDefault()
-                          "
-                        >
-                          <div class="proc-row-top">
-                            <span [class]="'status-pill ' + badge.tone">
-                              <g-status-icon
-                                [tone]="badge.tone"
-                                [kind]="badge.iconKind"
-                              />
-                              {{ badge.label }}
-                            </span>
-                            <span class="proc-row-title">{{
-                              s.title || s.templateName || s.suiteName || s.id
-                            }}</span>
-                            @if (isTrigger(s)) {
-                              <span class="ci-provider-tag">Trigger</span>
-                            }
-                            @if (s.declaredIn) {
-                              <span class="ci-provider-tag">.grain</span>
-                            }
-                          </div>
-                          <div class="proc-row-sub">
-                            <span>{{
-                              cadenceOf(s.recurrence, s.timeZone)
-                            }}</span>
-                            @if (s.repo) {
-                              <span class="tabular">· {{ s.repo }}</span>
-                            }
-                            @if (schedNextRunOf(s); as nr) {
-                              <span class="tabular"
-                                >· next: {{ stamp(nr) }}</span
-                              >
-                            }
-                            <span>· overlap: {{ s.overlap || "skip" }}</span>
-                          </div>
-                        </button>
-                      </li>
-                    }
-                  }
-                </ul>
-              }
-            }
-
-            @case ("templates") {
-              <div
-                class="proc-subbar"
-                role="toolbar"
-                aria-label="Template filter"
-              >
-                @for (tf of tmplFilters; track tf.id) {
-                  <button
-                    type="button"
-                    class="filter-chip"
-                    [attr.aria-pressed]="tmplFilter() === tf.id"
-                    [attr.data-testid]="'tmpl-filter-' + tf.id"
-                    (click)="tmplFilter.set(tf.id)"
-                  >
-                    {{ tf.label }}
-                  </button>
-                }
-                <g-pill-select
-                  class="proc-sort"
-                  prefix="Sort"
-                  [options]="sortOptions()"
-                  [value]="activeSort()"
-                  ariaLabel="Sort"
-                  testid="proc-sort"
-                  (valueChange)="setSort($event)"
-                />
-              </div>
-              @if (store.loaded() && filteredTemplates().length === 0) {
-                <div class="empty-state" data-testid="templates-empty">
-                  <p>No task templates match this filter.</p>
-                </div>
-              } @else {
-                <ul class="proc-list">
-                  @for (t of sortedTemplates(); track t.id) {
-                    @let badge = tmplBadge(t);
-                    @let runs = templateRuns().get(t.id) ?? noRuns;
-                    <li
-                      class="proc-li"
-                      [class.is-drop-target]="dropKey() === 'template:' + t.id"
-                      [attr.draggable]="
-                        activeSort() === 'custom' ? 'true' : null
-                      "
-                      (dragstart)="onDragStart($event, 'template:' + t.id)"
-                      (dragover)="onDragOver($event, 'template:' + t.id)"
-                      (dragleave)="onDragLeave('template:' + t.id)"
-                      (drop)="onDrop($event, 'templates', 'template:' + t.id)"
-                      (dragend)="onDragEnd()"
+          <!-- LEFT LIST PANE -->
+          <section
+            class="queue-pane"
+            aria-label="Process items"
+            data-testid="proc-list-pane"
+          >
+            <p class="sr-only" aria-live="polite" data-testid="proc-move-note">
+              {{ moveNote() }}
+            </p>
+            @switch (activeTab()) {
+              @case ("schedules") {
+                <div
+                  class="proc-subbar"
+                  role="toolbar"
+                  aria-label="Schedule filter"
+                >
+                  @for (sf of schedFilters; track sf.id) {
+                    <button
+                      type="button"
+                      class="filter-chip"
+                      [attr.aria-pressed]="schedFilter() === sf.id"
+                      [attr.data-testid]="'sched-filter-' + sf.id"
+                      (click)="schedFilter.set(sf.id)"
                     >
-                      <button
-                        type="button"
-                        class="proc-row"
-                        [class.is-selected]="selectedTemplateId() === t.id"
-                        [attr.aria-current]="
-                          selectedTemplateId() === t.id ? 'true' : null
-                        "
-                        [attr.data-testid]="'tmpl-row-' + t.id"
-                        [attr.aria-keyshortcuts]="
-                          activeSort() === 'custom'
-                            ? 'Alt+ArrowUp Alt+ArrowDown'
-                            : null
-                        "
-                        (click)="selectTemplate(t.id, true)"
-                        (keydown)="
-                          onRowKey($event, 'templates', 'template:' + t.id)
-                        "
-                        (keydown.space)="
-                          selectTemplate(t.id, true); $event.preventDefault()
-                        "
-                      >
-                        <div class="proc-row-top">
-                          <span [class]="'status-pill ' + badge.tone">
-                            <g-status-icon
-                              [tone]="badge.tone"
-                              [kind]="badge.iconKind"
-                            />
-                            {{ badge.label }}
-                          </span>
-                          <span class="proc-row-title">{{
-                            t.name || t.title || t.id
-                          }}</span>
-                          @if ((t.fields ?? []).length > 0) {
-                            <span class="ci-provider-tag tabular">{{
-                              countOf((t.fields ?? []).length, "param")
-                            }}</span>
-                          }
-                        </div>
-                        <div class="proc-row-sub">
-                          <span>{{ t.title }}</span>
-                          @if (t.declaredIn) {
-                            <span class="tabular"
-                              >· {{ t.declaredIn.repo }} ({{
-                                t.declaredIn.path
-                              }})</span
-                            >
-                          } @else if (t.repo) {
-                            <span class="tabular">· bound to {{ t.repo }}</span>
-                          }
-                          @if (runs.lastRunAt; as lr) {
-                            <span
-                              class="tabular"
-                              [attr.data-testid]="'tmpl-last-' + t.id"
-                              >· last: {{ stamp(lr) }}</span
-                            >
-                          }
-                          <span
-                            class="tabular"
-                            [attr.data-testid]="'tmpl-next-' + t.id"
-                            >·
-                            {{
-                              runs.nextRunAt
-                                ? "next: " + stamp(runs.nextRunAt)
-                                : "on demand"
-                            }}</span
-                          >
-                        </div>
-                      </button>
-                    </li>
+                      {{ sf.label }}
+                    </button>
                   }
-                </ul>
-              }
-            }
-
-            @case ("suites") {
-              <div class="proc-subbar" role="toolbar" aria-label="Suites view">
-                <div class="segmented" role="group" aria-label="Suites or runs">
-                  <button
-                    type="button"
-                    data-testid="suites-subview-suites"
-                    [attr.aria-pressed]="suitesView() === 'suites'"
-                    (click)="suitesView.set('suites')"
-                  >
-                    Suites ({{ filteredSuites().length }})
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="suites-subview-runs"
-                    [attr.aria-pressed]="suitesView() === 'runs'"
-                    (click)="suitesView.set('runs')"
-                  >
-                    Suite runs ({{ filteredSuiteRuns().length }})
-                  </button>
-                </div>
-                @if (suitesView() === "suites") {
                   <g-pill-select
                     class="proc-sort"
                     prefix="Sort"
@@ -709,87 +675,325 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     testid="proc-sort"
                     (valueChange)="setSort($event)"
                   />
-                }
-              </div>
-
-              @if (suitesView() === "suites") {
-                @if (store.loaded() && filteredSuites().length === 0) {
-                  <div class="empty-state" data-testid="suites-empty">
-                    <p>No suites configured yet.</p>
+                </div>
+                @if (store.loaded() && scheduleRows().length === 0) {
+                  <div class="empty-state" data-testid="schedules-empty">
+                    <p>No schedules or event triggers match this view.</p>
                   </div>
                 } @else {
                   <ul class="proc-list">
-                    @for (st of sortedSuites(); track st.id) {
-                      @let runs = suiteRunsById().get(st.id) ?? noRuns;
+                    @for (r of scheduleRows(); track r.key) {
+                      @if (r.trigger; as tr) {
+                        <li
+                          class="proc-li"
+                          [class.is-drop-target]="dropKey() === r.key"
+                          [attr.draggable]="
+                            activeSort() === 'custom' ? 'true' : null
+                          "
+                          (dragstart)="onDragStart($event, r.key)"
+                          (dragover)="onDragOver($event, r.key)"
+                          (dragleave)="onDragLeave(r.key)"
+                          (drop)="onDrop($event, 'schedules', r.key)"
+                          (dragend)="onDragEnd()"
+                        >
+                          <button
+                            type="button"
+                            class="proc-row"
+                            [class.is-selected]="selectedTriggerKey() === r.key"
+                            [attr.aria-current]="
+                              selectedTriggerKey() === r.key ? 'true' : null
+                            "
+                            [attr.data-testid]="'trigger-row-' + r.key"
+                            [attr.aria-keyshortcuts]="
+                              activeSort() === 'custom'
+                                ? 'Alt+ArrowUp Alt+ArrowDown'
+                                : null
+                            "
+                            (click)="selectTrigger(tr, true)"
+                            (keydown)="onRowKey($event, 'schedules', r.key)"
+                            (keydown.space)="
+                              selectTrigger(tr, true); $event.preventDefault()
+                            "
+                          >
+                            <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
+                              <span class="status-pill reply">
+                                <g-status-icon tone="reply" kind="reply" />
+                                Declared
+                              </span>
+                              <span class="proc-row-title">{{
+                                triggerName(tr.path)
+                              }}</span>
+                              <span class="ci-provider-tag">Trigger</span>
+                              <span class="ci-provider-tag">.grain</span>
+                            </div>
+                            <div class="proc-row-sub">
+                              <span class="tabular">{{ tr.repo }}</span>
+                              <span class="tabular">· {{ tr.path }}</span>
+                              <span>· next: on change</span>
+                            </div>
+                          </button>
+                        </li>
+                      }
+                      @if (r.schedule; as s) {
+                        @let badge = schedBadge(s);
+                        <li
+                          class="proc-li"
+                          [class.is-drop-target]="
+                            dropKey() === 'schedule:' + s.id
+                          "
+                          [attr.draggable]="
+                            activeSort() === 'custom' ? 'true' : null
+                          "
+                          (dragstart)="onDragStart($event, 'schedule:' + s.id)"
+                          (dragover)="onDragOver($event, 'schedule:' + s.id)"
+                          (dragleave)="onDragLeave('schedule:' + s.id)"
+                          (drop)="
+                            onDrop($event, 'schedules', 'schedule:' + s.id)
+                          "
+                          (dragend)="onDragEnd()"
+                        >
+                          <button
+                            type="button"
+                            class="proc-row"
+                            [class.is-selected]="selectedScheduleId() === s.id"
+                            [attr.aria-current]="
+                              selectedScheduleId() === s.id ? 'true' : null
+                            "
+                            [attr.data-testid]="'sched-row-' + s.id"
+                            [attr.aria-keyshortcuts]="
+                              activeSort() === 'custom'
+                                ? 'Alt+ArrowUp Alt+ArrowDown'
+                                : null
+                            "
+                            (click)="selectSchedule(s.id, true)"
+                            (keydown)="
+                              onRowKey($event, 'schedules', 'schedule:' + s.id)
+                            "
+                            (keydown.space)="
+                              selectSchedule(s.id, true);
+                              $event.preventDefault()
+                            "
+                          >
+                            <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
+                              <span [class]="'status-pill ' + badge.tone">
+                                <g-status-icon
+                                  [tone]="badge.tone"
+                                  [kind]="badge.iconKind"
+                                />
+                                {{ badge.label }}
+                              </span>
+                              <span class="proc-row-title">{{
+                                s.title || s.templateName || s.suiteName || s.id
+                              }}</span>
+                              @if (isTrigger(s)) {
+                                <span class="ci-provider-tag">Trigger</span>
+                              }
+                              @if (s.declaredIn) {
+                                <span class="ci-provider-tag">.grain</span>
+                              }
+                            </div>
+                            <div class="proc-row-sub">
+                              <span>{{
+                                cadenceOf(s.recurrence, s.timeZone)
+                              }}</span>
+                              @if (schedTargetOf(s).repo; as repo) {
+                                <span class="tabular">· {{ repo }}</span>
+                              }
+                              @if (schedNextRunOf(s); as nr) {
+                                <span class="tabular"
+                                  >· next: {{ stamp(nr) }}</span
+                                >
+                              }
+                              <span>· overlap: {{ s.overlap || "skip" }}</span>
+                            </div>
+                          </button>
+                        </li>
+                      }
+                    }
+                  </ul>
+                }
+              }
+
+              @case ("templates") {
+                <div
+                  class="proc-subbar"
+                  role="toolbar"
+                  aria-label="Template filter"
+                >
+                  @for (tf of tmplFilters; track tf.id) {
+                    <button
+                      type="button"
+                      class="filter-chip"
+                      [attr.aria-pressed]="tmplFilter() === tf.id"
+                      [attr.data-testid]="'tmpl-filter-' + tf.id"
+                      (click)="tmplFilter.set(tf.id)"
+                    >
+                      {{ tf.label }}
+                    </button>
+                  }
+                  <g-pill-select
+                    class="proc-sort"
+                    prefix="Sort"
+                    [options]="sortOptions()"
+                    [value]="activeSort()"
+                    ariaLabel="Sort"
+                    testid="proc-sort"
+                    (valueChange)="setSort($event)"
+                  />
+                </div>
+                @if (store.loaded() && filteredTemplates().length === 0) {
+                  <div class="empty-state" data-testid="templates-empty">
+                    <p>No task templates match this filter.</p>
+                  </div>
+                } @else {
+                  <ul class="proc-list">
+                    @for (t of sortedTemplates(); track t.id) {
+                      @let badge = tmplBadge(t);
+                      @let runs = templateRuns().get(t.id) ?? noRuns;
                       <li
                         class="proc-li"
-                        [class.is-drop-target]="dropKey() === 'suite:' + st.id"
+                        [class.is-drop-target]="
+                          dropKey() === 'template:' + t.id
+                        "
                         [attr.draggable]="
                           activeSort() === 'custom' ? 'true' : null
                         "
-                        (dragstart)="onDragStart($event, 'suite:' + st.id)"
-                        (dragover)="onDragOver($event, 'suite:' + st.id)"
-                        (dragleave)="onDragLeave('suite:' + st.id)"
-                        (drop)="onDrop($event, 'suites', 'suite:' + st.id)"
+                        (dragstart)="onDragStart($event, 'template:' + t.id)"
+                        (dragover)="onDragOver($event, 'template:' + t.id)"
+                        (dragleave)="onDragLeave('template:' + t.id)"
+                        (drop)="onDrop($event, 'templates', 'template:' + t.id)"
                         (dragend)="onDragEnd()"
                       >
                         <button
                           type="button"
                           class="proc-row"
-                          [class.is-selected]="
-                            selectedSuiteRunId() === null &&
-                            selectedSuiteId() === st.id
-                          "
+                          [class.is-selected]="selectedTemplateId() === t.id"
                           [attr.aria-current]="
-                            selectedSuiteRunId() === null &&
-                            selectedSuiteId() === st.id
-                              ? 'true'
-                              : null
+                            selectedTemplateId() === t.id ? 'true' : null
                           "
-                          [attr.data-testid]="'suite-row-' + st.id"
+                          [attr.data-testid]="'tmpl-row-' + t.id"
                           [attr.aria-keyshortcuts]="
                             activeSort() === 'custom'
                               ? 'Alt+ArrowUp Alt+ArrowDown'
                               : null
                           "
-                          (click)="selectSuite(st.id, true)"
+                          (click)="selectTemplate(t.id, true)"
                           (keydown)="
-                            onRowKey($event, 'suites', 'suite:' + st.id)
+                            onRowKey($event, 'templates', 'template:' + t.id)
                           "
                           (keydown.space)="
-                            selectSuite(st.id, true); $event.preventDefault()
+                            selectTemplate(t.id, true); $event.preventDefault()
                           "
                         >
                           <div class="proc-row-top">
-                            <span class="status-pill proposal">
-                              <g-status-icon tone="proposal" kind="proposal" />
-                              {{ suiteModeOf(st.mode, st.count, st.maxPasses) }}
+                            @if (activeSort() === "custom") {
+                              <span
+                                class="proc-drag-grip"
+                                aria-hidden="true"
+                                data-testid="proc-drag-grip"
+                                [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                              >
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 16 16"
+                                  fill="currentColor"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="5.5" cy="3.5" r="1.25" />
+                                  <circle cx="10.5" cy="3.5" r="1.25" />
+                                  <circle cx="5.5" cy="8" r="1.25" />
+                                  <circle cx="10.5" cy="8" r="1.25" />
+                                  <circle cx="5.5" cy="12.5" r="1.25" />
+                                  <circle cx="10.5" cy="12.5" r="1.25" />
+                                </svg>
+                              </span>
+                            }
+                            <span [class]="'status-pill ' + badge.tone">
+                              <g-status-icon
+                                [tone]="badge.tone"
+                                [kind]="badge.iconKind"
+                              />
+                              {{ badge.label }}
                             </span>
-                            <span class="proc-row-title">{{ st.name }}</span>
-                            @if (st.declaredIn) {
-                              <span class="ci-provider-tag">.grain</span>
+                            <span class="proc-row-title">{{
+                              t.name || t.title || t.id
+                            }}</span>
+                            @if ((t.fields ?? []).length > 0) {
+                              <span class="ci-provider-tag tabular">{{
+                                countOf((t.fields ?? []).length, "param")
+                              }}</span>
                             }
                           </div>
                           <div class="proc-row-sub">
-                            <span class="tabular">{{
-                              countOf(st.items.length, "template")
-                            }}</span>
-                            @if (st.autoMerge) {
-                              <span>· auto-merge</span>
-                            }
-                            @if (st.requireApproval) {
-                              <span>· requires approval</span>
+                            <span>{{ t.title }}</span>
+                            @if (t.declaredIn) {
+                              <span class="tabular"
+                                >· {{ t.declaredIn.repo }} ({{
+                                  t.declaredIn.path
+                                }})</span
+                              >
+                            } @else if (t.repo) {
+                              <span class="tabular"
+                                >· bound to {{ t.repo }}</span
+                              >
                             }
                             @if (runs.lastRunAt; as lr) {
                               <span
                                 class="tabular"
-                                [attr.data-testid]="'suite-last-' + st.id"
+                                [attr.data-testid]="'tmpl-last-' + t.id"
                                 >· last: {{ stamp(lr) }}</span
                               >
                             }
                             <span
                               class="tabular"
-                              [attr.data-testid]="'suite-next-' + st.id"
+                              [attr.data-testid]="'tmpl-next-' + t.id"
                               >·
                               {{
                                 runs.nextRunAt
@@ -803,62 +1007,302 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     }
                   </ul>
                 }
-              } @else {
-                @if (store.loaded() && filteredSuiteRuns().length === 0) {
-                  <div class="empty-state" data-testid="suite-runs-empty">
-                    <p>No suite runs recorded yet.</p>
+              }
+
+              @case ("suites") {
+                <div
+                  class="proc-subbar"
+                  role="toolbar"
+                  aria-label="Suites view"
+                >
+                  <div
+                    class="segmented"
+                    role="group"
+                    aria-label="Suites or runs"
+                  >
+                    <button
+                      type="button"
+                      data-testid="suites-subview-suites"
+                      [attr.aria-pressed]="suitesView() === 'suites'"
+                      (click)="suitesView.set('suites')"
+                    >
+                      Suites ({{ filteredSuites().length }})
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="suites-subview-runs"
+                      [attr.aria-pressed]="suitesView() === 'runs'"
+                      (click)="suitesView.set('runs')"
+                    >
+                      Suite runs ({{ filteredSuiteRuns().length }})
+                    </button>
+                  </div>
+                  @if (suitesView() === "suites") {
+                    <g-pill-select
+                      class="proc-sort"
+                      prefix="Sort"
+                      [options]="sortOptions()"
+                      [value]="activeSort()"
+                      ariaLabel="Sort"
+                      testid="proc-sort"
+                      (valueChange)="setSort($event)"
+                    />
+                  }
+                </div>
+
+                @if (suitesView() === "suites") {
+                  @if (store.loaded() && filteredSuites().length === 0) {
+                    <div class="empty-state" data-testid="suites-empty">
+                      <p>No suites configured yet.</p>
+                    </div>
+                  } @else {
+                    <ul class="proc-list">
+                      @for (st of sortedSuites(); track st.id) {
+                        @let runs = suiteRunsById().get(st.id) ?? noRuns;
+                        <li
+                          class="proc-li"
+                          [class.is-drop-target]="
+                            dropKey() === 'suite:' + st.id
+                          "
+                          [attr.draggable]="
+                            activeSort() === 'custom' ? 'true' : null
+                          "
+                          (dragstart)="onDragStart($event, 'suite:' + st.id)"
+                          (dragover)="onDragOver($event, 'suite:' + st.id)"
+                          (dragleave)="onDragLeave('suite:' + st.id)"
+                          (drop)="onDrop($event, 'suites', 'suite:' + st.id)"
+                          (dragend)="onDragEnd()"
+                        >
+                          <button
+                            type="button"
+                            class="proc-row"
+                            [class.is-selected]="
+                              selectedSuiteRunId() === null &&
+                              selectedSuiteId() === st.id
+                            "
+                            [attr.aria-current]="
+                              selectedSuiteRunId() === null &&
+                              selectedSuiteId() === st.id
+                                ? 'true'
+                                : null
+                            "
+                            [attr.data-testid]="'suite-row-' + st.id"
+                            [attr.aria-keyshortcuts]="
+                              activeSort() === 'custom'
+                                ? 'Alt+ArrowUp Alt+ArrowDown'
+                                : null
+                            "
+                            (click)="selectSuite(st.id, true)"
+                            (keydown)="
+                              onRowKey($event, 'suites', 'suite:' + st.id)
+                            "
+                            (keydown.space)="
+                              selectSuite(st.id, true); $event.preventDefault()
+                            "
+                          >
+                            <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
+                              <span class="status-pill proposal">
+                                <g-status-icon
+                                  tone="proposal"
+                                  kind="proposal"
+                                />
+                                {{
+                                  suiteModeOf(st.mode, st.count, st.maxPasses)
+                                }}
+                              </span>
+                              <span class="proc-row-title">{{ st.name }}</span>
+                              @if (st.declaredIn) {
+                                <span class="ci-provider-tag">.grain</span>
+                              }
+                            </div>
+                            <div class="proc-row-sub">
+                              <span class="tabular">{{
+                                countOf(st.items.length, "template")
+                              }}</span>
+                              @if (st.autoMerge) {
+                                <span>· auto-merge</span>
+                              }
+                              @if (st.requireApproval) {
+                                <span>· requires approval</span>
+                              }
+                              @if (runs.lastRunAt; as lr) {
+                                <span
+                                  class="tabular"
+                                  [attr.data-testid]="'suite-last-' + st.id"
+                                  >· last: {{ stamp(lr) }}</span
+                                >
+                              }
+                              <span
+                                class="tabular"
+                                [attr.data-testid]="'suite-next-' + st.id"
+                                >·
+                                {{
+                                  runs.nextRunAt
+                                    ? "next: " + stamp(runs.nextRunAt)
+                                    : "on demand"
+                                }}</span
+                              >
+                            </div>
+                          </button>
+                        </li>
+                      }
+                    </ul>
+                  }
+                } @else {
+                  @if (store.loaded() && filteredSuiteRuns().length === 0) {
+                    <div class="empty-state" data-testid="suite-runs-empty">
+                      <p>No suite runs recorded yet.</p>
+                    </div>
+                  } @else {
+                    <ul class="proc-list">
+                      @for (sr of filteredSuiteRuns(); track sr.id) {
+                        @let rBadge = runBadgeOf(sr.status);
+                        <li class="proc-li">
+                          <button
+                            type="button"
+                            class="proc-row"
+                            [class.is-selected]="selectedSuiteRunId() === sr.id"
+                            [attr.aria-current]="
+                              selectedSuiteRunId() === sr.id ? 'true' : null
+                            "
+                            [attr.data-testid]="'suite-run-row-' + sr.id"
+                            (click)="selectSuiteRun(sr.id, true)"
+                            (keydown.space)="
+                              selectSuiteRun(sr.id, true);
+                              $event.preventDefault()
+                            "
+                          >
+                            <div class="proc-row-top">
+                              <span [class]="'status-pill ' + rBadge.tone">
+                                <g-status-icon
+                                  [tone]="rBadge.tone"
+                                  [kind]="rBadge.iconKind"
+                                />
+                                {{ rBadge.label }}
+                              </span>
+                              <span class="proc-row-title"
+                                >{{ sr.suiteName || sr.suiteId }} #{{
+                                  sr.id
+                                }}</span
+                              >
+                              @if (sr.pass > 0) {
+                                <span class="ci-provider-tag tabular"
+                                  >Pass {{ sr.pass }}</span
+                                >
+                              }
+                            </div>
+                            <div class="proc-row-sub">
+                              <span class="tabular"
+                                >{{ sr.repo }} &#64;
+                                {{ sr.base || "default branch" }}</span
+                              >
+                              <span class="tabular"
+                                >·
+                                {{
+                                  countOf(
+                                    sr.taskCount ?? sr.tasks?.length ?? 0,
+                                    "task"
+                                  )
+                                }}</span
+                              >
+                            </div>
+                          </button>
+                        </li>
+                      }
+                    </ul>
+                  }
+                }
+              }
+
+              @case ("declarations") {
+                @if (
+                  store.knownRepos().length === 0 &&
+                  store.acceptances().length === 0
+                ) {
+                  <div class="empty-state" data-testid="declarations-empty">
+                    <p>
+                      No repositories or .grain/ declarations discovered yet.
+                    </p>
                   </div>
                 } @else {
                   <ul class="proc-list">
-                    @for (sr of filteredSuiteRuns(); track sr.id) {
-                      @let rBadge = runBadgeOf(sr.status);
+                    @for (repo of filteredDeclRepos(); track repo) {
+                      @let pendingCount = repoPendingAcceptances(repo);
                       <li class="proc-li">
                         <button
                           type="button"
                           class="proc-row"
-                          [class.is-selected]="selectedSuiteRunId() === sr.id"
+                          [class.is-selected]="selectedDeclRepo() === repo"
                           [attr.aria-current]="
-                            selectedSuiteRunId() === sr.id ? 'true' : null
+                            selectedDeclRepo() === repo ? 'true' : null
                           "
-                          [attr.data-testid]="'suite-run-row-' + sr.id"
-                          (click)="selectSuiteRun(sr.id, true)"
+                          [attr.data-testid]="'decl-repo-row-' + repo"
+                          (click)="selectDeclRepo(repo, true)"
                           (keydown.space)="
-                            selectSuiteRun(sr.id, true); $event.preventDefault()
+                            selectDeclRepo(repo, true); $event.preventDefault()
                           "
                         >
                           <div class="proc-row-top">
-                            <span [class]="'status-pill ' + rBadge.tone">
-                              <g-status-icon
-                                [tone]="rBadge.tone"
-                                [kind]="rBadge.iconKind"
-                              />
-                              {{ rBadge.label }}
-                            </span>
-                            <span class="proc-row-title"
-                              >{{ sr.suiteName || sr.suiteId }} #{{
-                                sr.id
-                              }}</span
+                            <span
+                              [class]="
+                                pendingCount > 0
+                                  ? 'status-pill blast'
+                                  : 'status-pill healthy'
+                              "
                             >
-                            @if (sr.pass > 0) {
-                              <span class="ci-provider-tag tabular"
-                                >Pass {{ sr.pass }}</span
-                              >
-                            }
+                              <g-status-icon
+                                [tone]="pendingCount > 0 ? 'blast' : 'healthy'"
+                                [kind]="pendingCount > 0 ? 'blast' : 'healthy'"
+                              />
+                              {{
+                                pendingCount > 0
+                                  ? pendingCount + " awaiting acceptance"
+                                  : "Synced"
+                              }}
+                            </span>
+                            <span class="proc-row-title tabular">{{
+                              repo
+                            }}</span>
                           </div>
                           <div class="proc-row-sub">
-                            <span class="tabular"
-                              >{{ sr.repo }} &#64;
-                              {{ sr.base || "default branch" }}</span
-                            >
-                            <span class="tabular"
-                              >·
-                              {{
-                                countOf(
-                                  sr.taskCount ?? sr.tasks?.length ?? 0,
-                                  "task"
-                                )
-                              }}</span
-                            >
+                            @if (store.repoDefaults()[repo]; as def) {
+                              <span>
+                                .grain declarations:
+                                {{ def.declarations ? "enabled" : "disabled" }}
+                              </span>
+                              @if (def.declarationsStatus?.error) {
+                                <span style="color: var(--md-sys-color-error)"
+                                  >· sync error</span
+                                >
+                              }
+                            } @else {
+                              <span
+                                >Inspect .grain/ declarations & workflows</span
+                              >
+                            }
                           </div>
                         </button>
                       </li>
@@ -867,1101 +1311,1249 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 }
               }
             }
+          </section>
 
-            @case ("declarations") {
-              @if (
-                store.knownRepos().length === 0 &&
-                store.acceptances().length === 0
-              ) {
-                <div class="empty-state" data-testid="declarations-empty">
-                  <p>No repositories or .grain/ declarations discovered yet.</p>
-                </div>
-              } @else {
-                <ul class="proc-list">
-                  @for (repo of filteredDeclRepos(); track repo) {
-                    @let pendingCount = repoPendingAcceptances(repo);
-                    <li class="proc-li">
-                      <button
-                        type="button"
-                        class="proc-row"
-                        [class.is-selected]="selectedDeclRepo() === repo"
-                        [attr.aria-current]="
-                          selectedDeclRepo() === repo ? 'true' : null
-                        "
-                        [attr.data-testid]="'decl-repo-row-' + repo"
-                        (click)="selectDeclRepo(repo, true)"
-                        (keydown.space)="
-                          selectDeclRepo(repo, true); $event.preventDefault()
-                        "
-                      >
-                        <div class="proc-row-top">
-                          <span
-                            [class]="
-                              pendingCount > 0
-                                ? 'status-pill blast'
-                                : 'status-pill healthy'
-                            "
-                          >
-                            <g-status-icon
-                              [tone]="pendingCount > 0 ? 'blast' : 'healthy'"
-                              [kind]="pendingCount > 0 ? 'blast' : 'healthy'"
-                            />
-                            {{
-                              pendingCount > 0
-                                ? pendingCount + " awaiting acceptance"
-                                : "Synced"
-                            }}
-                          </span>
-                          <span class="proc-row-title tabular">{{ repo }}</span>
-                        </div>
-                        <div class="proc-row-sub">
-                          @if (store.repoDefaults()[repo]; as def) {
-                            <span>
-                              .grain declarations:
-                              {{ def.declarations ? "enabled" : "disabled" }}
-                            </span>
-                            @if (def.declarationsStatus?.error) {
-                              <span style="color: var(--md-sys-color-error)"
-                                >· sync error</span
-                              >
-                            }
-                          } @else {
-                            <span
-                              >Inspect .grain/ declarations & workflows</span
-                            >
-                          }
-                        </div>
-                      </button>
-                    </li>
-                  }
-                </ul>
-              }
-            }
-          }
-        </section>
+          <!-- RESIZER -->
+          <div
+            class="inbox-resizer"
+            role="separator"
+            tabindex="0"
+            aria-orientation="vertical"
+            aria-label="Resize process list and inspector"
+            [attr.aria-valuenow]="sp.ratioPct()"
+            [attr.aria-valuemin]="sp.minPct()"
+            [attr.aria-valuemax]="sp.maxPct()"
+            (pointerdown)="sp.onResizeStart($event)"
+            (pointermove)="sp.onResizeMove($event)"
+            (pointerup)="sp.onResizeEnd($event)"
+            (pointercancel)="sp.onResizeCancel()"
+            (dblclick)="sp.reset()"
+            (keydown)="sp.onKey($event)"
+          >
+            <span class="inbox-resizer-pill" aria-hidden="true"></span>
+          </div>
 
-        <!-- RESIZER -->
-        <div
-          class="inbox-resizer"
-          role="separator"
-          tabindex="0"
-          aria-orientation="vertical"
-          aria-label="Resize process list and inspector"
-          [attr.aria-valuenow]="sp.ratioPct()"
-          [attr.aria-valuemin]="sp.minPct()"
-          [attr.aria-valuemax]="sp.maxPct()"
-          (pointerdown)="sp.onResizeStart($event)"
-          (pointermove)="sp.onResizeMove($event)"
-          (pointerup)="sp.onResizeEnd($event)"
-          (pointercancel)="sp.onResizeCancel()"
-          (dblclick)="sp.reset()"
-          (keydown)="sp.onKey($event)"
-        >
-          <span class="inbox-resizer-pill" aria-hidden="true"></span>
-        </div>
+          <!-- RIGHT DETAIL PANE -->
+          <section
+            class="proc-inspector"
+            aria-label="Process detail inspector"
+            data-testid="proc-inspector"
+          >
+            @switch (activeTab()) {
+              @case ("schedules") {
+                @if (selectedSchedule(); as s) {
+                  @let badge = schedBadge(s);
+                  <div class="proc-insp-head">
+                    <div class="proc-insp-top">
+                      <div class="headline-cluster">
+                        <button
+                          type="button"
+                          class="btn-text proc-mobile-back"
+                          (click)="closeMobileDetail()"
+                        >
+                          ← Back
+                        </button>
+                        <span [class]="'status-pill ' + badge.tone">
+                          <g-status-icon
+                            [tone]="badge.tone"
+                            [kind]="badge.iconKind"
+                          />
+                          {{ badge.label }}
+                        </span>
+                        <h2
+                          class="proc-insp-title"
+                          data-testid="sched-detail-title"
+                        >
+                          {{ s.title || s.templateName || s.suiteName || s.id }}
+                        </h2>
+                      </div>
 
-        <!-- RIGHT DETAIL PANE -->
-        <section
-          class="proc-inspector"
-          aria-label="Process detail inspector"
-          data-testid="proc-inspector"
-        >
-          @switch (activeTab()) {
-            @case ("schedules") {
-              @if (selectedSchedule(); as s) {
-                @let badge = schedBadge(s);
-                <div class="proc-insp-head">
-                  <div class="proc-insp-top">
-                    <div class="headline-cluster">
-                      <button
-                        type="button"
-                        class="btn-text proc-mobile-back"
-                        (click)="mobileDetailOpen.set(false)"
-                      >
-                        ← Back
-                      </button>
-                      <span [class]="'status-pill ' + badge.tone">
-                        <g-status-icon
-                          [tone]="badge.tone"
-                          [kind]="badge.iconKind"
-                        />
-                        {{ badge.label }}
-                      </span>
-                      <h2
-                        class="proc-insp-title"
-                        data-testid="sched-detail-title"
-                      >
-                        {{ s.title || s.templateName || s.suiteName || s.id }}
-                      </h2>
-                    </div>
-
-                    <div class="headline-actions">
-                      <button
-                        type="button"
-                        class="btn-primary"
-                        data-testid="sched-run-now-btn"
-                        [disabled]="
-                          !access.can('POST /api/schedules/{id}/run', s.repo)
-                        "
-                        [gTip]="
-                          access.deniedReason(
-                            'POST /api/schedules/{id}/run',
-                            s.repo
-                          ) ||
-                          (s.type === 'workflow'
-                            ? 'Starts a CI run of the declared workflow straight away, to be reviewed when it finishes.'
-                            : 'Fire this schedule immediately.')
-                        "
-                        (click)="runScheduleNow(s)"
-                      >
-                        Run now
-                      </button>
-                      <button
-                        type="button"
-                        class="btn-tonal"
-                        data-testid="sched-toggle-enabled-btn"
-                        [disabled]="
-                          !!s.declaredIn ||
-                          !access.can('PATCH /api/schedules/{id}', s.repo)
-                        "
-                        [gTip]="
-                          s.declaredIn
-                            ? 'Declared in ' +
-                              s.declaredIn.path +
-                              ' — edit in repository.'
-                            : ''
-                        "
-                        (click)="toggleScheduleEnabled(s)"
-                      >
-                        {{ s.enabled ? "Pause" : "Resume" }}
-                      </button>
-                      @if (!s.declaredIn) {
+                      <div class="headline-actions">
+                        <button
+                          type="button"
+                          class="btn-primary"
+                          data-testid="sched-run-now-btn"
+                          [disabled]="
+                            !access.can('POST /api/schedules/{id}/run', s.repo)
+                          "
+                          [gTip]="
+                            access.deniedReason(
+                              'POST /api/schedules/{id}/run',
+                              s.repo
+                            ) ||
+                            (s.type === 'workflow'
+                              ? 'Starts a CI run of the declared workflow straight away, to be reviewed when it finishes.'
+                              : 'Fire this schedule immediately.')
+                          "
+                          (click)="runScheduleNow(s)"
+                        >
+                          Run now
+                        </button>
                         <button
                           type="button"
                           class="btn-tonal"
-                          data-testid="sched-edit-btn"
+                          data-testid="sched-toggle-enabled-btn"
                           [disabled]="
+                            !!s.declaredIn ||
                             !access.can('PATCH /api/schedules/{id}', s.repo)
                           "
-                          (click)="openScheduleDialog(s)"
-                        >
-                          Edit
-                        </button>
-                      }
-                      @if (!s.declaredIn && !s.system) {
-                        <button
-                          type="button"
-                          class="btn-text danger"
-                          data-testid="sched-delete-btn"
-                          [disabled]="
-                            !access.can('DELETE /api/schedules/{id}', s.repo)
+                          [gTip]="
+                            s.declaredIn
+                              ? 'Declared in ' +
+                                s.declaredIn.path +
+                                ' — edit in repository.'
+                              : ''
                           "
-                          (click)="confirmDeleteSchedule(s)"
+                          (click)="toggleScheduleEnabled(s)"
                         >
-                          Delete
+                          {{ s.enabled ? "Pause" : "Resume" }}
                         </button>
-                      }
+                        @if (!s.declaredIn) {
+                          <button
+                            type="button"
+                            class="btn-tonal"
+                            data-testid="sched-edit-btn"
+                            [disabled]="
+                              !access.can('PATCH /api/schedules/{id}', s.repo)
+                            "
+                            (click)="openScheduleDialog(s)"
+                          >
+                            Edit
+                          </button>
+                        }
+                        @if (!s.declaredIn && !s.system) {
+                          <button
+                            type="button"
+                            class="btn-text danger"
+                            data-testid="sched-delete-btn"
+                            [disabled]="
+                              !access.can('DELETE /api/schedules/{id}', s.repo)
+                            "
+                            (click)="confirmDeleteSchedule(s)"
+                          >
+                            Delete
+                          </button>
+                        }
+                      </div>
                     </div>
-                  </div>
 
-                  @if (s.declaredIn) {
-                    <p class="banner banner-info" style="margin: 6px 0 0">
-                      Declared in <code>{{ s.declaredIn.repo }}</code> at
-                      <code>{{ s.declaredIn.path }}</code
-                      >. Update that file in git to modify this schedule.
-                    </p>
-                  }
-                  @if (s.suppressed; as sup) {
-                    <div
-                      class="banner banner-error"
-                      style="margin: 6px 0 0"
-                      data-testid="sched-suppressed-banner"
-                    >
-                      <!-- The server's Detail sentence follows the reason
-                           when it sent one; without one the reason stands
-                           alone rather than borrowing another reason's. -->
-                      Suppressed — {{ suppressionLabel(sup.reason)
-                      }}{{ sup.detail ? ": " + sup.detail : "." }}
-                      @if (sup.taskId) {
-                        —
-                        <a [routerLink]="['/task', sup.taskId]"
-                          >Open task #{{ sup.taskId }}</a
+                    @if (s.qaFlowRef) {
+                      <div class="proc-meta-row">
+                        <span
+                          class="ci-provider-tag"
+                          data-testid="process-qa-flow-badge"
+                          >Workflow: {{ s.qaFlowRef }}</span
                         >
-                      }
-                    </div>
-                  }
-                </div>
-
-                <div class="g-panes">
-                  <section
-                    class="g-pane"
-                    aria-labelledby="sched-prompt-h"
-                    data-testid="sched-prompt-pane"
-                  >
-                    <h3 id="sched-prompt-h" class="g-pane-title">Prompt</h3>
-                    @if (s.description) {
-                      <div
-                        class="msg-body g-pane-prompt"
-                        data-testid="sched-prompt"
-                        [gMarkdown]="s.description"
-                      ></div>
-                    } @else {
-                      <p class="g-pane-empty">
-                        No prompt of its own{{
-                          s.templateName || s.suiteName
-                            ? " — it files from " +
-                              (s.templateName || s.suiteName)
-                            : ""
-                        }}.
+                      </div>
+                    }
+                    @if (s.declaredIn) {
+                      <p class="banner banner-info" style="margin: 6px 0 0">
+                        Declared in <code>{{ s.declaredIn.repo }}</code> at
+                        <code>{{ s.declaredIn.path }}</code
+                        >. Update that file in git to modify this schedule.
                       </p>
                     }
-                  </section>
-                  <section
-                    class="g-pane"
-                    aria-labelledby="sched-config-h"
-                    data-testid="sched-config-pane"
-                  >
-                    <h3 id="sched-config-h" class="g-pane-title">
-                      Configuration
-                    </h3>
-                    <dl class="g-attrs">
-                      <dt>Source</dt>
-                      <dd>
-                        <g-actor-chip
-                          [label]="
-                            s.type === 'workflow'
-                              ? 'workflow'
-                              : s.source || 'deployment'
-                          "
-                          [kind]="
-                            s.system && s.type !== 'workflow'
-                              ? 'grain'
-                              : 'service'
-                          "
-                        />
-                      </dd>
-                      <dt>Cadence</dt>
-                      <dd>{{ cadenceOf(s.recurrence, s.timeZone) }}</dd>
-                      @if (s.templateName || s.templateId) {
-                        <dt>Template</dt>
-                        <dd>{{ s.templateName || s.templateId }}</dd>
-                      }
-                      @if (s.suiteName || s.suiteId) {
-                        <dt>Suite</dt>
-                        <dd>{{ s.suiteName || s.suiteId }}</dd>
-                      }
-                      <dt>Repository</dt>
-                      <dd class="tabular">{{ s.repo || "None" }}</dd>
-                      @if (s.base) {
-                        <dt>Base</dt>
-                        <dd class="tabular">{{ s.base }}</dd>
-                      }
-                      @if (s.model) {
-                        <dt>Model</dt>
-                        <dd>{{ s.model }}</dd>
-                      }
-                      <dt>Overlap</dt>
-                      <dd>{{ s.overlap || "skip" }}</dd>
-                      @if (s.overlapGroup) {
-                        <dt>Overlap group</dt>
-                        <dd data-testid="sched-overlap-group">
-                          {{ s.overlapGroup }}
-                        </dd>
-                      }
-                      <dt>Auto-merge</dt>
-                      <dd>{{ s.autoMerge ? "on" : "off" }}</dd>
-                      <!-- An event trigger's nextRunAt is a placeholder a year
-                           out (model.Schedule); schedNextRunOf labels it. -->
-                      @if (schedNextRunOf(s); as nr) {
-                        <dt>Next run</dt>
-                        <dd class="tabular" data-testid="sched-next-run">
-                          {{ stamp(nr) }}
-                        </dd>
-                      }
-                      @if (s.lastRunAt) {
-                        <dt>Last run</dt>
-                        <dd class="tabular" data-testid="sched-last-run">
-                          {{ stamp(s.lastRunAt) }}
-                        </dd>
-                      }
-                    </dl>
-                  </section>
-                </div>
-
-                <g-composition-view [composition]="scheduleComposition()" />
-
-                <div class="proc-card">
-                  <h3 class="section-title">Recent fired tasks & skips</h3>
-                  @if (s.lastWorkflowRun; as lwr) {
-                    <div class="proc-kv-item">
-                      <span>
-                        Workflow run
-                        @if (lwr.runId) {
-                          <a [routerLink]="['/ci', 'runs', lwr.runId]">{{
-                            lwr.runId
-                          }}</a>
-                        }
-                        ({{ lwr.conclusion || "running" }})
-                      </span>
-                      @if (lwr.reviewTaskId) {
-                        <a [routerLink]="['/task', lwr.reviewTaskId]"
-                          >Review #{{ lwr.reviewTaskId }}</a
-                        >
-                      }
-                    </div>
-                  }
-                  @if (scheduledTasksFor(s).length > 0) {
-                    <ul class="proc-kv-list">
-                      @for (t of scheduledTasksFor(s); track t.id) {
-                        <li class="proc-kv-item">
-                          <a [routerLink]="['/task', t.id]"
-                            >#{{ t.id }} · {{ t.title }}</a
+                    @if (s.suppressed; as sup) {
+                      <div
+                        class="banner banner-error"
+                        style="margin: 6px 0 0"
+                        data-testid="sched-suppressed-banner"
+                      >
+                        <!-- The server's Detail sentence follows the reason
+                             when it sent one (without repeating "skipped: " or
+                             a reason already leading Detail); without one the
+                             reason stands alone. -->
+                        {{ formatSuppression(sup) }}
+                        @if (sup.taskId) {
+                          —
+                          <a [routerLink]="['/task', sup.taskId]"
+                            >Open task #{{ sup.taskId }}</a
                           >
-                          <span class="ci-provider-tag">{{ t.state }}</span>
-                        </li>
-                      }
-                    </ul>
-                  } @else if (
-                    (s.skips ?? []).length === 0 && !s.lastWorkflowRun
-                  ) {
-                    <p class="muted" style="margin: 0">
-                      No recent fired tasks in the active feed.
-                    </p>
-                  }
-                  @for (sk of (s.skips ?? []).slice(0, 5); track sk.at) {
-                    <div
-                      class="proc-kv-item proc-skip-row"
-                      data-testid="sched-skip"
+                        }
+                      </div>
+                    }
+                  </div>
+
+                  <div class="g-panes">
+                    <section
+                      class="g-pane"
+                      aria-labelledby="sched-prompt-h"
+                      data-testid="sched-prompt-pane"
                     >
-                      <span class="muted">{{ sk.summary }}</span>
-                      <span class="proc-skip-refs">
-                        @if (sk.taskId) {
-                          <a [routerLink]="['/task', sk.taskId]"
-                            >#{{ sk.taskId }}</a
+                      <h3 id="sched-prompt-h" class="g-pane-title">Prompt</h3>
+                      @if (s.description) {
+                        <div
+                          class="msg-body g-pane-prompt"
+                          data-testid="sched-prompt"
+                          [gMarkdown]="s.description"
+                        ></div>
+                      } @else {
+                        <p class="g-pane-empty">
+                          No prompt of its own{{
+                            s.templateName || s.suiteName
+                              ? " — it files from " +
+                                (s.templateName || s.suiteName)
+                              : ""
+                          }}.
+                        </p>
+                      }
+                    </section>
+                    <section
+                      class="g-pane"
+                      aria-labelledby="sched-config-h"
+                      data-testid="sched-config-pane"
+                    >
+                      <h3 id="sched-config-h" class="g-pane-title">
+                        Configuration
+                      </h3>
+                      <dl class="g-attrs">
+                        <dt>Source</dt>
+                        <dd>
+                          <g-actor-chip
+                            [label]="
+                              s.type === 'workflow'
+                                ? 'workflow'
+                                : s.source || 'deployment'
+                            "
+                            [kind]="
+                              s.system && s.type !== 'workflow'
+                                ? 'grain'
+                                : 'service'
+                            "
+                          />
+                        </dd>
+                        <dt>Cadence</dt>
+                        <dd>{{ cadenceOf(s.recurrence, s.timeZone) }}</dd>
+                        @if (s.templateName || s.templateId) {
+                          <dt>Template</dt>
+                          <dd>{{ s.templateName || s.templateId }}</dd>
+                        }
+                        @if (s.suiteName || s.suiteId) {
+                          <dt>Suite</dt>
+                          <dd>{{ s.suiteName || s.suiteId }}</dd>
+                        }
+                        @let target = schedTargetOf(s);
+                        <dt>Repository</dt>
+                        <dd class="tabular" data-testid="sched-repo">
+                          {{ target.repo || "None" }}
+                        </dd>
+                        @if (target.base) {
+                          <dt>Base</dt>
+                          <dd class="tabular" data-testid="sched-base">
+                            {{ target.base }}
+                          </dd>
+                        }
+                        @if (s.model) {
+                          <dt>Model</dt>
+                          <dd>{{ s.model }}</dd>
+                        }
+                        <dt>Overlap</dt>
+                        <dd>{{ s.overlap || "skip" }}</dd>
+                        @if (s.overlapGroup) {
+                          <dt>Overlap group</dt>
+                          <dd data-testid="sched-overlap-group">
+                            {{ s.overlapGroup }}
+                          </dd>
+                        }
+                        <dt>Auto-merge</dt>
+                        <dd>{{ s.autoMerge ? "on" : "off" }}</dd>
+                        <!-- An event trigger's nextRunAt is a placeholder a year
+                           out (model.Schedule); schedNextRunOf labels it. -->
+                        @if (schedNextRunOf(s); as nr) {
+                          <dt>Next run</dt>
+                          <dd class="tabular" data-testid="sched-next-run">
+                            {{ stamp(nr) }}
+                          </dd>
+                        }
+                        @if (s.lastRunAt) {
+                          <dt>Last run</dt>
+                          <dd class="tabular" data-testid="sched-last-run">
+                            {{ stamp(s.lastRunAt) }}
+                          </dd>
+                        }
+                      </dl>
+                    </section>
+                  </div>
+
+                  <g-composition-view [composition]="scheduleComposition()" />
+
+                  <div class="proc-card">
+                    <h3 class="section-title">Recent fired tasks & skips</h3>
+                    @if (s.lastWorkflowRun; as lwr) {
+                      <div class="proc-kv-item">
+                        <span>
+                          Workflow run
+                          @if (lwr.runId) {
+                            <a [routerLink]="['/ci', 'runs', lwr.runId]">{{
+                              lwr.runId
+                            }}</a>
+                          }
+                          ({{ lwr.conclusion || "running" }})
+                        </span>
+                        @if (lwr.reviewTaskId) {
+                          <a [routerLink]="['/task', lwr.reviewTaskId]"
+                            >Review #{{ lwr.reviewTaskId }}</a
                           >
                         }
-                        @if (sk.outcome === "fired") {
-                          <span data-testid="sched-skip-outcome">
-                            → fired
-                            @if (sk.firedTaskId) {
-                              <a [routerLink]="['/task', sk.firedTaskId]"
-                                >#{{ sk.firedTaskId }}</a
-                              >
-                            }
-                            @if (skipFolded(sk); as folded) {
-                              · {{ folded }}
-                            }
-                          </span>
-                        } @else if (sk.outcome === "dropped") {
-                          <span data-testid="sched-skip-outcome"
-                            >→ dropped</span
-                          >
+                      </div>
+                    }
+                    @if (scheduledTasksFor(s).length > 0) {
+                      <ul class="proc-kv-list">
+                        @for (t of scheduledTasksFor(s); track t.id) {
+                          <li class="proc-kv-item">
+                            <a [routerLink]="['/task', t.id]"
+                              >#{{ t.id }} · {{ t.title }}</a
+                            >
+                            <span class="ci-provider-tag">{{ t.state }}</span>
+                          </li>
                         }
-                      </span>
+                      </ul>
+                    } @else if (
+                      (s.skips ?? []).length === 0 && !s.lastWorkflowRun
+                    ) {
+                      <p class="muted" style="margin: 0">
+                        No recent fired tasks in the active feed.
+                      </p>
+                    }
+                    @for (sk of (s.skips ?? []).slice(0, 5); track sk.at) {
+                      <div
+                        class="proc-kv-item proc-skip-row"
+                        data-testid="sched-skip"
+                      >
+                        <span class="muted">{{ sk.summary }}</span>
+                        <span class="proc-skip-refs">
+                          @if (sk.taskId) {
+                            <a [routerLink]="['/task', sk.taskId]"
+                              >#{{ sk.taskId }}</a
+                            >
+                          }
+                          @if (sk.outcome === "fired") {
+                            <span data-testid="sched-skip-outcome">
+                              → fired
+                              @if (sk.firedTaskId) {
+                                <a [routerLink]="['/task', sk.firedTaskId]"
+                                  >#{{ sk.firedTaskId }}</a
+                                >
+                              }
+                              @if (skipFolded(sk); as folded) {
+                                · {{ folded }}
+                              }
+                            </span>
+                          } @else if (sk.outcome === "dropped") {
+                            <span data-testid="sched-skip-outcome"
+                              >→ dropped</span
+                            >
+                          } @else if (!sk.outcome || sk.outcome === "held") {
+                            <span data-testid="sched-skip-outcome">→ held</span>
+                          } @else {
+                            <span data-testid="sched-skip-outcome"
+                              >→ {{ sk.outcome }}</span
+                            >
+                          }
+                        </span>
+                      </div>
+                    }
+                  </div>
+                } @else {
+                  @if (selectedTrigger(); as tr) {
+                    @let parsed = parsedSelectedTrigger();
+                    <div
+                      class="trigger-inspector"
+                      data-testid="trigger-inspector"
+                    >
+                      <div class="proc-insp-head">
+                        <div class="proc-insp-top">
+                          <div class="headline-cluster">
+                            <button
+                              type="button"
+                              class="btn-text proc-mobile-back"
+                              (click)="closeMobileDetail()"
+                            >
+                              ← Back
+                            </button>
+                            <span class="status-pill reply">
+                              <g-status-icon tone="reply" kind="reply" />
+                              Declared
+                            </span>
+                            <h2
+                              class="proc-insp-title"
+                              data-testid="trigger-detail-title"
+                            >
+                              {{ triggerName(tr.path) }}
+                            </h2>
+                          </div>
+
+                          <div class="headline-actions">
+                            <a
+                              class="btn-tonal"
+                              [routerLink]="repoAdvancedRoute(tr.repo)"
+                              data-testid="trigger-open-repo-link"
+                              >Open repository settings</a
+                            >
+                          </div>
+                        </div>
+
+                        <p
+                          class="banner banner-info"
+                          style="margin: 6px 0 0"
+                          data-testid="trigger-declared-banner"
+                        >
+                          Declared in <code>{{ tr.repo }}</code> at
+                          <code>{{ tr.path }}</code
+                          >.
+                        </p>
+                      </div>
+
+                      <div class="g-panes">
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-config-h"
+                          data-testid="trigger-config-pane"
+                        >
+                          <h3 id="trigger-config-h" class="g-pane-title">
+                            Configuration
+                          </h3>
+                          <dl class="g-attrs">
+                            <dt>Repository</dt>
+                            <dd class="tabular">{{ tr.repo }}</dd>
+                            <dt>File path</dt>
+                            <dd class="tabular">
+                              <code>{{ tr.path }}</code>
+                            </dd>
+                            <dt>On</dt>
+                            <dd class="tabular">{{ parsed.on || "—" }}</dd>
+                            <dt>Paths</dt>
+                            <dd class="tabular">
+                              {{
+                                parsed.paths.length
+                                  ? parsed.paths.join(", ")
+                                  : "—"
+                              }}
+                            </dd>
+                            <dt>Gate</dt>
+                            <dd class="tabular">{{ parsed.gate || "—" }}</dd>
+                            <dt>Template</dt>
+                            <dd>
+                              @if (matchedTriggerTemplate(); as mt) {
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
+                                  data-testid="trigger-template-link"
+                                  (click)="openTriggerTemplate(mt.id)"
+                                >
+                                  {{ mt.name || mt.title || parsed.template }}
+                                </button>
+                              } @else {
+                                <span class="tabular">{{
+                                  parsed.template || "—"
+                                }}</span>
+                              }
+                            </dd>
+                          </dl>
+                        </section>
+
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-yaml-h"
+                          data-testid="trigger-yaml-pane"
+                        >
+                          <h3 id="trigger-yaml-h" class="g-pane-title">
+                            Declared trigger YAML
+                          </h3>
+                          <pre
+                            class="comp-body-well s-mono"
+                            data-testid="trigger-yaml-preview"
+                            [textContent]="triggerYamlDisplay()"
+                          ></pre>
+                        </section>
+                      </div>
+                    </div>
+                  } @else {
+                    <div class="empty-state">
+                      <p>
+                        Select a schedule or event trigger to inspect its
+                        cadence and composition.
+                      </p>
                     </div>
                   }
-                </div>
-              } @else {
-                <div class="empty-state">
-                  <p>
-                    Select a schedule or event trigger to inspect its cadence
-                    and composition.
-                  </p>
-                </div>
+                }
               }
-            }
 
-            @case ("templates") {
-              @if (selectedTemplate(); as t) {
-                @let badge = tmplBadge(t);
-                <div class="proc-insp-head">
-                  <div class="proc-insp-top">
-                    <div class="headline-cluster">
-                      <button
-                        type="button"
-                        class="btn-text proc-mobile-back"
-                        (click)="mobileDetailOpen.set(false)"
-                      >
-                        ← Back
-                      </button>
-                      <span [class]="'status-pill ' + badge.tone">
-                        <g-status-icon
-                          [tone]="badge.tone"
-                          [kind]="badge.iconKind"
-                        />
-                        {{ badge.label }}
-                      </span>
-                      <h2
-                        class="proc-insp-title"
-                        data-testid="tmpl-detail-title"
-                      >
-                        {{ t.name || t.title }}
-                      </h2>
+              @case ("templates") {
+                @if (selectedTemplate(); as t) {
+                  @let badge = tmplBadge(t);
+                  <div class="proc-insp-head">
+                    <div class="proc-insp-top">
+                      <div class="headline-cluster">
+                        <button
+                          type="button"
+                          class="btn-text proc-mobile-back"
+                          (click)="closeMobileDetail()"
+                        >
+                          ← Back
+                        </button>
+                        <span [class]="'status-pill ' + badge.tone">
+                          <g-status-icon
+                            [tone]="badge.tone"
+                            [kind]="badge.iconKind"
+                          />
+                          {{ badge.label }}
+                        </span>
+                        <h2
+                          class="proc-insp-title"
+                          data-testid="tmpl-detail-title"
+                        >
+                          {{ t.name || t.title }}
+                        </h2>
+                      </div>
+
+                      <div class="headline-actions">
+                        <button
+                          type="button"
+                          class="btn-primary"
+                          data-testid="tmpl-launch-btn"
+                          [disabled]="!store.canLaunchTemplate(t)"
+                          (click)="openLaunchTemplateDialog(t)"
+                        >
+                          Launch task
+                        </button>
+                        @if (!t.declaredIn && !t.system) {
+                          <button
+                            type="button"
+                            class="btn-tonal"
+                            data-testid="tmpl-edit-btn"
+                            [disabled]="
+                              !access.can('PATCH /api/templates/{id}')
+                            "
+                            (click)="openTemplateDialog(t)"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-text danger"
+                            data-testid="tmpl-delete-btn"
+                            [disabled]="
+                              !access.can('DELETE /api/templates/{id}')
+                            "
+                            (click)="confirmDeleteTemplate(t)"
+                          >
+                            Delete
+                          </button>
+                        }
+                      </div>
                     </div>
 
-                    <div class="headline-actions">
-                      <button
-                        type="button"
-                        class="btn-primary"
-                        data-testid="tmpl-launch-btn"
-                        [disabled]="!store.canLaunchTemplate(t)"
-                        (click)="openLaunchTemplateDialog(t)"
+                    @if (t.qaFlowRef) {
+                      <div class="proc-meta-row">
+                        <span
+                          class="ci-provider-tag"
+                          data-testid="process-qa-flow-badge"
+                          >Workflow: {{ t.qaFlowRef }}</span
+                        >
+                      </div>
+                    }
+                    @if (t.declaredIn) {
+                      <p
+                        class="banner banner-info"
+                        style="margin: 6px 0 0"
+                        data-testid="tmpl-declared-banner"
                       >
-                        Launch task
-                      </button>
-                      @if (!t.declaredIn && !t.system) {
+                        Repo-declared read-only template from
+                        <code>{{ t.declaredIn.repo }}</code> (<code>{{
+                          t.declaredIn.path
+                        }}</code
+                        >). Launching uses
+                        <code>POST /api/tasks/from-template</code>.
+                      </p>
+                    }
+                  </div>
+
+                  <div class="g-panes">
+                    <section
+                      class="g-pane"
+                      aria-labelledby="tmpl-prompt-h"
+                      data-testid="tmpl-prompt-pane"
+                    >
+                      <h3 id="tmpl-prompt-h" class="g-pane-title">Prompt</h3>
+                      @if (t.description) {
+                        <div
+                          class="msg-body g-pane-prompt"
+                          data-testid="tmpl-prompt-preview"
+                          [gMarkdown]="t.description"
+                        ></div>
+                      } @else {
+                        <p
+                          class="g-pane-empty"
+                          data-testid="tmpl-prompt-preview"
+                        >
+                          Empty prompt body.
+                        </p>
+                      }
+                    </section>
+                    <section
+                      class="g-pane"
+                      aria-labelledby="tmpl-config-h"
+                      data-testid="tmpl-config-pane"
+                    >
+                      <h3 id="tmpl-config-h" class="g-pane-title">
+                        Configuration
+                      </h3>
+                      <dl class="g-attrs">
+                        <dt>Source</dt>
+                        <dd>
+                          <g-actor-chip
+                            [label]="
+                              t.declaredIn?.repo ||
+                              (t.system ? 'grain' : 'deployment')
+                            "
+                            [kind]="t.system ? 'grain' : 'service'"
+                          />
+                        </dd>
+                        <dt>Task title</dt>
+                        <dd>{{ t.title }}</dd>
+                        <dt>Repository</dt>
+                        <dd class="tabular">
+                          {{ t.repo || "Chosen at launch" }}
+                        </dd>
+                        @if (t.base) {
+                          <dt>Base</dt>
+                          <dd class="tabular">{{ t.base }}</dd>
+                        }
+                        @if (t.model) {
+                          <dt>Model</dt>
+                          <dd>{{ t.model }}</dd>
+                        }
+                        @if (t.priority) {
+                          <dt>Priority</dt>
+                          <dd class="tabular">{{ t.priority }}</dd>
+                        }
+                        <dt>Auto-merge</dt>
+                        <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
+                      </dl>
+                    </section>
+                  </div>
+
+                  @if ((t.fields ?? []).length > 0) {
+                    <div class="proc-card" data-testid="tmpl-fields-schema">
+                      <h3 class="section-title">
+                        Parameter schema ({{ (t.fields ?? []).length }})
+                      </h3>
+                      <ul class="proc-kv-list">
+                        @for (f of t.fields ?? []; track f.name) {
+                          <li class="proc-kv-item">
+                            <div>
+                              <code class="tabular"
+                                >{{ "{{" + f.name }}{{ "}}" }}</code
+                              >
+                              @if (f.label) {
+                                <span> · {{ f.label }}</span>
+                              }
+                              @if (f.required) {
+                                <span class="ci-provider-tag">required</span>
+                              }
+                            </div>
+                            <span class="muted">
+                              @if ((f.options ?? []).length > 0) {
+                                options: {{ (f.options ?? []).join(", ") }}
+                              } @else if (f.default) {
+                                default: "{{ f.default }}"
+                              } @else {
+                                string
+                              }
+                            </span>
+                          </li>
+                        }
+                      </ul>
+                    </div>
+                  }
+
+                  <g-composition-view [composition]="templateComposition()" />
+                } @else {
+                  <div class="empty-state">
+                    <p>
+                      Select a template to inspect its parameter schema and
+                      prompt.
+                    </p>
+                  </div>
+                }
+              }
+
+              @case ("suites") {
+                @if (selectedSuiteRun(); as sr) {
+                  @let rBadge = runBadgeOf(sr.status);
+                  <div class="proc-insp-head" data-testid="suite-run-inspector">
+                    <div class="proc-insp-top">
+                      <div class="headline-cluster">
+                        <button
+                          type="button"
+                          class="btn-text proc-mobile-back"
+                          (click)="closeMobileDetail()"
+                        >
+                          ← Back
+                        </button>
+                        <span [class]="'status-pill ' + rBadge.tone">
+                          <g-status-icon
+                            [tone]="rBadge.tone"
+                            [kind]="rBadge.iconKind"
+                          />
+                          {{ rBadge.label }}
+                        </span>
+                        <h2 class="proc-insp-title">
+                          {{ sr.suiteName || sr.suiteId }} · Run #{{ sr.id }}
+                        </h2>
+                      </div>
+
+                      <div class="headline-actions">
                         <button
                           type="button"
                           class="btn-tonal"
-                          data-testid="tmpl-edit-btn"
-                          [disabled]="!access.can('PATCH /api/templates/{id}')"
-                          (click)="openTemplateDialog(t)"
+                          (click)="selectSuite(sr.suiteId, true)"
                         >
-                          Edit
+                          Inspect suite definition
                         </button>
-                        <button
-                          type="button"
-                          class="btn-text danger"
-                          data-testid="tmpl-delete-btn"
-                          [disabled]="!access.can('DELETE /api/templates/{id}')"
-                          (click)="confirmDeleteTemplate(t)"
-                        >
-                          Delete
-                        </button>
+                        @if (sr.status === "active" && hasOpenSuiteTasks(sr)) {
+                          <button
+                            type="button"
+                            class="btn-tonal danger"
+                            data-testid="suite-run-cancel-btn"
+                            [disabled]="
+                              !access.can('POST /api/tasks/{id}/close', sr.repo)
+                            "
+                            (click)="confirmCancelSuiteRun(sr)"
+                          >
+                            Cancel suite run
+                          </button>
+                        }
+                      </div>
+                    </div>
+
+                    <div class="proc-meta-row">
+                      <span class="tabular"
+                        >Target: <strong>{{ sr.repo }}</strong> &#64;
+                        {{ sr.base || "default branch" }}</span
+                      >
+                      <span
+                        >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
+                        @if (sr.pass > 0) {
+                          ·
+                          {{
+                            sr.status === "active" ? "currently on" : "ended on"
+                          }}
+                          pass {{ sr.pass }}
+                        } @else {
+                          ·
+                          {{
+                            sr.status === "active"
+                              ? "no pass filed yet"
+                              : "ended without filing a pass"
+                          }}
+                        }
+                      </span>
+                      @if (sr.scheduleId) {
+                        <span>Started by schedule {{ sr.scheduleId }}</span>
                       }
                     </div>
-                  </div>
-
-                  @if (t.declaredIn) {
-                    <p
-                      class="banner banner-info"
-                      style="margin: 6px 0 0"
-                      data-testid="tmpl-declared-banner"
-                    >
-                      Repo-declared read-only template from
-                      <code>{{ t.declaredIn.repo }}</code> (<code>{{
-                        t.declaredIn.path
-                      }}</code
-                      >). Launching uses
-                      <code>POST /api/tasks/from-template</code>.
-                    </p>
-                  }
-                </div>
-
-                <div class="g-panes">
-                  <section
-                    class="g-pane"
-                    aria-labelledby="tmpl-prompt-h"
-                    data-testid="tmpl-prompt-pane"
-                  >
-                    <h3 id="tmpl-prompt-h" class="g-pane-title">Prompt</h3>
-                    @if (t.description) {
-                      <div
-                        class="msg-body g-pane-prompt"
-                        data-testid="tmpl-prompt-preview"
-                        [gMarkdown]="t.description"
-                      ></div>
-                    } @else {
-                      <p class="g-pane-empty" data-testid="tmpl-prompt-preview">
-                        Empty prompt body.
+                    @if (sr.error) {
+                      <p class="banner banner-error" style="margin: 6px 0 0">
+                        {{ sr.error }}
                       </p>
                     }
-                  </section>
-                  <section
-                    class="g-pane"
-                    aria-labelledby="tmpl-config-h"
-                    data-testid="tmpl-config-pane"
-                  >
-                    <h3 id="tmpl-config-h" class="g-pane-title">
-                      Configuration
-                    </h3>
-                    <dl class="g-attrs">
-                      <dt>Source</dt>
-                      <dd>
-                        <g-actor-chip
-                          [label]="
-                            t.declaredIn?.repo ||
-                            (t.system ? 'grain' : 'deployment')
-                          "
-                          [kind]="t.system ? 'grain' : 'service'"
-                        />
-                      </dd>
-                      <dt>Task title</dt>
-                      <dd>{{ t.title }}</dd>
-                      <dt>Repository</dt>
-                      <dd class="tabular">
-                        {{ t.repo || "Chosen at launch" }}
-                      </dd>
-                      @if (t.base) {
-                        <dt>Base</dt>
-                        <dd class="tabular">{{ t.base }}</dd>
-                      }
-                      @if (t.model) {
-                        <dt>Model</dt>
-                        <dd>{{ t.model }}</dd>
-                      }
-                      @if (t.priority) {
-                        <dt>Priority</dt>
-                        <dd class="tabular">{{ t.priority }}</dd>
-                      }
-                      <dt>Auto-merge</dt>
-                      <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
-                    </dl>
-                  </section>
-                </div>
+                  </div>
 
-                @if ((t.fields ?? []).length > 0) {
-                  <div class="proc-card" data-testid="tmpl-fields-schema">
+                  @for (p of passesForRun(sr); track p.pass) {
+                    <div
+                      class="proc-card"
+                      [attr.data-testid]="'suite-pass-' + p.pass"
+                    >
+                      <h3 class="section-title">
+                        Pass {{ p.pass }}
+                        <span class="muted tabular"
+                          >({{ countOf(p.items.length, "task") }})</span
+                        >
+                      </h3>
+                      <ul class="proc-kv-list">
+                        @for (item of p.items; track item.entry.taskId) {
+                          <li class="proc-kv-item">
+                            <div>
+                              <a
+                                [routerLink]="['/task', item.entry.taskId]"
+                                [attr.data-testid]="
+                                  'suite-task-link-' + item.entry.taskId
+                                "
+                                >#{{ item.entry.taskId }} · {{ item.title }}</a
+                              >
+                              @if (item.entry.openedPullRequest) {
+                                <span class="ci-provider-tag">PR opened</span>
+                              }
+                              @for (ch of item.spawned; track ch.id) {
+                                <div class="muted" style="margin-top: 4px">
+                                  ↳ Spawned
+                                  <a [routerLink]="['/task', ch.id]"
+                                    >#{{ ch.id }} {{ ch.title }}</a
+                                  >
+                                  ({{ ch.state }})
+                                </div>
+                              }
+                            </div>
+                            <span class="ci-provider-tag">{{
+                              item.liveState
+                            }}</span>
+                          </li>
+                        }
+                      </ul>
+                    </div>
+                  }
+                } @else if (selectedSuite()) {
+                  @let st = selectedSuite()!;
+                  <div class="proc-insp-head" data-testid="suite-inspector">
+                    <div class="proc-insp-top">
+                      <div class="headline-cluster">
+                        <button
+                          type="button"
+                          class="btn-text proc-mobile-back"
+                          (click)="closeMobileDetail()"
+                        >
+                          ← Back
+                        </button>
+                        <span class="status-pill proposal">
+                          <g-status-icon tone="proposal" kind="proposal" />
+                          {{ suiteModeOf(st.mode, st.count, st.maxPasses) }}
+                        </span>
+                        <h2
+                          class="proc-insp-title"
+                          data-testid="suite-detail-title"
+                        >
+                          {{ st.name }}
+                        </h2>
+                      </div>
+
+                      <div class="headline-actions">
+                        <button
+                          type="button"
+                          class="btn-primary"
+                          data-testid="suite-open-run-dialog-btn"
+                          [disabled]="!access.can('POST /api/suite-runs')"
+                          (click)="openRunSuiteDialog(st)"
+                        >
+                          Run suite
+                        </button>
+                        @if (!st.declaredIn) {
+                          <button
+                            type="button"
+                            class="btn-tonal"
+                            data-testid="suite-edit-btn"
+                            [disabled]="!access.can('PATCH /api/suites/{id}')"
+                            (click)="openSuiteDialog(st)"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-text danger"
+                            data-testid="suite-delete-btn"
+                            [disabled]="!access.can('DELETE /api/suites/{id}')"
+                            (click)="confirmDeleteSuite(st)"
+                          >
+                            Delete
+                          </button>
+                        }
+                      </div>
+                    </div>
+
+                    <div class="proc-meta-row">
+                      <g-actor-chip
+                        [label]="st.declaredIn?.repo || 'deployment'"
+                        kind="service"
+                      />
+                      <span
+                        >Auto-merge:
+                        <strong>{{ st.autoMerge ? "on" : "off" }}</strong></span
+                      >
+                      <span
+                        >Approval:
+                        <strong>{{
+                          st.requireApproval
+                            ? "each pass waits for approval"
+                            : "auto-approved"
+                        }}</strong></span
+                      >
+                      @if (st.qaFlowRef) {
+                        <span
+                          class="ci-provider-tag"
+                          data-testid="process-qa-flow-badge"
+                          >Workflow: {{ st.qaFlowRef }}</span
+                        >
+                      }
+                    </div>
+                    @if (st.declaredIn) {
+                      <p class="banner banner-info" style="margin: 6px 0 0">
+                        Declared in
+                        <code>{{ st.declaredIn.repo }}</code> (<code>{{
+                          st.declaredIn.path
+                        }}</code
+                        >).
+                      </p>
+                    }
+                  </div>
+
+                  <div class="proc-card">
                     <h3 class="section-title">
-                      Parameter schema ({{ (t.fields ?? []).length }})
+                      Member templates ({{ st.items.length }})
                     </h3>
                     <ul class="proc-kv-list">
-                      @for (f of t.fields ?? []; track f.name) {
+                      @for (it of st.items; track $index) {
                         <li class="proc-kv-item">
-                          <div>
-                            <code class="tabular"
-                              >{{ "{{" + f.name + "}}" }}</code
-                            >
-                            @if (f.label) {
-                              <span> · {{ f.label }}</span>
-                            }
-                            @if (f.required) {
-                              <span class="ci-provider-tag">required</span>
-                            }
-                          </div>
-                          <span class="muted">
-                            @if ((f.options ?? []).length > 0) {
-                              options: {{ (f.options ?? []).join(", ") }}
-                            } @else if (f.default) {
-                              default: "{{ f.default }}"
-                            } @else {
-                              string
-                            }
-                          </span>
+                          <span
+                            ><strong>{{ $index + 1 }}.</strong>
+                            {{ it.templateName || it.templateId }}</span
+                          >
+                          <code class="tabular muted">{{ it.templateId }}</code>
                         </li>
                       }
                     </ul>
                   </div>
-                }
 
-                <g-composition-view [composition]="templateComposition()" />
-              } @else {
-                <div class="empty-state">
-                  <p>
-                    Select a template to inspect its parameter schema and
-                    prompt.
-                  </p>
-                </div>
-              }
-            }
+                  <g-composition-view [composition]="suiteComposition()" />
 
-            @case ("suites") {
-              @if (selectedSuiteRun(); as sr) {
-                @let rBadge = runBadgeOf(sr.status);
-                <div class="proc-insp-head" data-testid="suite-run-inspector">
-                  <div class="proc-insp-top">
-                    <div class="headline-cluster">
-                      <button
-                        type="button"
-                        class="btn-text proc-mobile-back"
-                        (click)="mobileDetailOpen.set(false)"
-                      >
-                        ← Back
-                      </button>
-                      <span [class]="'status-pill ' + rBadge.tone">
-                        <g-status-icon
-                          [tone]="rBadge.tone"
-                          [kind]="rBadge.iconKind"
-                        />
-                        {{ rBadge.label }}
-                      </span>
-                      <h2 class="proc-insp-title">
-                        {{ sr.suiteName || sr.suiteId }} · Run #{{ sr.id }}
-                      </h2>
+                  @if (runsOfSuite(st.id).length > 0) {
+                    <div class="proc-card">
+                      <h3 class="section-title">Recent runs of this suite</h3>
+                      <ul class="proc-kv-list">
+                        @for (r of runsOfSuite(st.id); track r.id) {
+                          <li class="proc-kv-item">
+                            <button
+                              type="button"
+                              class="btn-text"
+                              (click)="selectSuiteRun(r.id, true)"
+                            >
+                              Run #{{ r.id }} · {{ r.repo }} &#64;
+                              {{ r.base || "default branch"
+                              }}{{ r.pass > 0 ? " (pass " + r.pass + ")" : "" }}
+                            </button>
+                            <span class="ci-provider-tag">{{ r.status }}</span>
+                          </li>
+                        }
+                      </ul>
                     </div>
+                  }
+                } @else {
+                  <div class="empty-state">
+                    <p>Select a suite or suite run on the left.</p>
+                  </div>
+                }
+              }
 
-                    <div class="headline-actions">
-                      <button
-                        type="button"
-                        class="btn-tonal"
-                        (click)="selectSuite(sr.suiteId, false)"
-                      >
-                        Inspect suite definition
-                      </button>
-                      @if (sr.status === "active" && hasOpenSuiteTasks(sr)) {
+              @case ("declarations") {
+                @if (selectedDeclRepo(); as repo) {
+                  @let def = store.repoDefaults()[repo];
+                  @let status = def?.declarationsStatus;
+                  @let wfResp = store.repoWorkflows()[repo];
+                  <div
+                    class="proc-insp-head decl-inspector"
+                    data-testid="decl-inspector"
+                  >
+                    <div class="proc-insp-top">
+                      <div class="headline-cluster">
                         <button
                           type="button"
-                          class="btn-tonal danger"
-                          data-testid="suite-run-cancel-btn"
-                          [disabled]="
-                            !access.can('POST /api/tasks/{id}/close', sr.repo)
-                          "
-                          (click)="confirmCancelSuiteRun(sr)"
+                          class="btn-text proc-mobile-back"
+                          (click)="closeMobileDetail()"
                         >
-                          Cancel suite run
+                          ← Back
                         </button>
+                        <h2 class="proc-insp-title tabular">{{ repo }}</h2>
+                      </div>
+
+                      <div class="headline-actions">
+                        @if (def) {
+                          <div class="switch-row">
+                            <button
+                              type="button"
+                              role="switch"
+                              class="g-switch"
+                              attr.aria-label="Read {{
+                                repo
+                              }}'s own declarations"
+                              data-testid="decl-toggle-switch"
+                              [disabled]="
+                                !access.can(
+                                  'PUT /api/repos/{owner}/{name}/declarations',
+                                  repo
+                                )
+                              "
+                              [attr.aria-checked]="def.declarations"
+                              (click)="
+                                toggleRepoDeclarations(repo, !def.declarations)
+                              "
+                            ></button>
+                            <span
+                              >Read its own
+                              <code>.grain/</code> declarations</span
+                            >
+                          </div>
+                        }
+                        <a
+                          class="btn-tonal"
+                          [routerLink]="repoAdvancedRoute(repo)"
+                          data-testid="decl-open-repo-link"
+                          >Open repository settings</a
+                        >
+                      </div>
+                    </div>
+
+                    <div class="proc-meta-row">
+                      @if (status?.commit) {
+                        <span class="tabular"
+                          >Synced commit:
+                          <strong>{{
+                            status!.commit!.slice(0, 12)
+                          }}</strong></span
+                        >
+                      }
+                      @if (status?.checkedAt) {
+                        <span class="tabular"
+                          >Checked: {{ stamp(status!.checkedAt!) }}</span
+                        >
                       }
                     </div>
-                  </div>
 
-                  <div class="proc-meta-row">
-                    <span class="tabular"
-                      >Target: <strong>{{ sr.repo }}</strong> &#64;
-                      {{ sr.base || "default branch" }}</span
-                    >
-                    <span
-                      >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
-                      @if (sr.pass > 0) {
-                        ·
-                        {{
-                          sr.status === "active" ? "currently on" : "ended on"
-                        }}
-                        pass {{ sr.pass }}
-                      } @else {
-                        ·
-                        {{
-                          sr.status === "active"
-                            ? "no pass filed yet"
-                            : "ended without filing a pass"
-                        }}
-                      }
-                    </span>
-                    @if (sr.scheduleId) {
-                      <span>Started by schedule {{ sr.scheduleId }}</span>
+                    @if (status?.error) {
+                      <p
+                        class="banner banner-error"
+                        style="margin: 6px 0 0; white-space: pre-line"
+                        data-testid="decl-sync-error"
+                      >
+                        Sync / validation error: {{ status!.error }}
+                      </p>
+                    }
+                    @for (w of status?.warnings ?? []; track w) {
+                      <p class="banner banner-info" style="margin: 6px 0 0">
+                        Warning: {{ w }}
+                      </p>
                     }
                   </div>
-                  @if (sr.error) {
-                    <p class="banner banner-error" style="margin: 6px 0 0">
-                      {{ sr.error }}
-                    </p>
-                  }
-                </div>
 
-                @for (p of passesForRun(sr); track p.pass) {
-                  <div
-                    class="proc-card"
-                    [attr.data-testid]="'suite-pass-' + p.pass"
-                  >
-                    <h3 class="section-title">
-                      Pass {{ p.pass }}
-                      <span class="muted tabular"
-                        >({{ countOf(p.items.length, "task") }})</span
-                      >
-                    </h3>
-                    <ul class="proc-kv-list">
-                      @for (item of p.items; track item.entry.taskId) {
-                        <li class="proc-kv-item">
+                  @if (acceptancesForRepo(repo).length > 0) {
+                    <div class="proc-card" data-testid="decl-acceptances-card">
+                      <h3 class="section-title">
+                        Declaration capability acceptances
+                      </h3>
+                      @for (acc of acceptancesForRepo(repo); track acc.id) {
+                        <div class="proc-kv-item" style="flex-wrap: wrap">
                           <div>
-                            <a
-                              [routerLink]="['/task', item.entry.taskId]"
-                              [attr.data-testid]="
-                                'suite-task-link-' + item.entry.taskId
-                              "
-                              >#{{ item.entry.taskId }} · {{ item.title }}</a
-                            >
-                            @if (item.entry.openedPullRequest) {
-                              <span class="ci-provider-tag">PR opened</span>
-                            }
-                            @for (ch of item.spawned; track ch.id) {
-                              <div class="muted" style="margin-top: 4px">
-                                ↳ Spawned
-                                <a [routerLink]="['/task', ch.id]"
-                                  >#{{ ch.id }} {{ ch.title }}</a
-                                >
-                                ({{ ch.state }})
+                            <strong>{{ acc.id }}</strong>
+                            <span class="muted"> ({{ acc.kind }})</span>
+                            <div class="muted" style="font-size: 12px">
+                              Requested:
+                              <code>{{ acc.requested.join(", ") }}</code>
+                              @if (acc.needsScopes.length > 0) {
+                                · Requires scopes:
+                                {{ acc.needsScopes.join(", ") }}
+                              }
+                            </div>
+                            @if (acc.acceptedBy) {
+                              <div style="margin-top: 4px">
+                                Accepted by
+                                <g-actor-chip
+                                  [label]="acc.acceptedBy"
+                                  kind="human"
+                                />
                               </div>
                             }
                           </div>
-                          <span class="ci-provider-tag">{{
-                            item.liveState
-                          }}</span>
+                          @if (acc.awaiting) {
+                            <button
+                              type="button"
+                              class="btn-primary"
+                              [attr.data-testid]="'decl-accept-btn-' + acc.id"
+                              [disabled]="!canAcceptDeclaration(acc)"
+                              [gTip]="acceptDeniedReason(acc)"
+                              (click)="acceptRepoDeclaration(acc)"
+                            >
+                              Accept declaration
+                            </button>
+                          } @else {
+                            <span class="status-pill healthy">
+                              <g-status-icon tone="healthy" kind="healthy" />
+                              Accepted
+                            </span>
+                          }
+                        </div>
+                      }
+                    </div>
+                  }
+
+                  <div class="proc-card" data-testid="decl-discovered-files">
+                    <h3 class="section-title">
+                      Discovered <code>.grain/</code> files
+                    </h3>
+                    <ul class="proc-kv-list">
+                      @for (item of discoveredFiles(status); track item.path) {
+                        <li
+                          class="proc-kv-item"
+                          style="flex-direction: column; align-items: stretch"
+                        >
+                          <div class="proc-insp-top">
+                            <div class="headline-cluster">
+                              @if (item.kind === "trigger") {
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
+                                  [attr.data-testid]="
+                                    'decl-trigger-link-' + item.path
+                                  "
+                                  (click)="toggleInlineYaml(repo, item.path)"
+                                >
+                                  <code>{{ item.path }}</code>
+                                </button>
+                              } @else {
+                                <code class="tabular">{{ item.path }}</code>
+                              }
+                              <span class="ci-provider-tag">{{
+                                item.kind
+                              }}</span>
+                            </div>
+                            <button
+                              type="button"
+                              class="btn-text"
+                              data-testid="decl-inline-yaml-toggle"
+                              [attr.data-file-path]="item.path"
+                              [attr.aria-expanded]="
+                                isInlineYamlOpen(repo, item.path)
+                              "
+                              (click)="toggleInlineYaml(repo, item.path)"
+                            >
+                              {{
+                                isInlineYamlOpen(repo, item.path)
+                                  ? "Hide YAML"
+                                  : "View YAML"
+                              }}
+                            </button>
+                          </div>
+                          @if (isInlineYamlOpen(repo, item.path)) {
+                            <pre
+                              class="comp-body-well s-mono"
+                              data-testid="decl-inline-yaml"
+                              [textContent]="inlineYamlDisplay()"
+                            ></pre>
+                          }
+                        </li>
+                      }
+                      @if (discoveredFiles(status).length === 0) {
+                        <li class="muted">
+                          No <code>.grain/</code> declaration files synced on
+                          the default branch yet.
                         </li>
                       }
                     </ul>
                   </div>
-                }
-              } @else if (selectedSuite()) {
-                @let st = selectedSuite()!;
-                <div class="proc-insp-head" data-testid="suite-inspector">
-                  <div class="proc-insp-top">
-                    <div class="headline-cluster">
-                      <button
-                        type="button"
-                        class="btn-text proc-mobile-back"
-                        (click)="mobileDetailOpen.set(false)"
-                      >
-                        ← Back
-                      </button>
-                      <span class="status-pill proposal">
-                        <g-status-icon tone="proposal" kind="proposal" />
-                        {{ suiteModeOf(st.mode, st.count, st.maxPasses) }}
-                      </span>
-                      <h2
-                        class="proc-insp-title"
-                        data-testid="suite-detail-title"
-                      >
-                        {{ st.name }}
-                      </h2>
-                    </div>
 
-                    <div class="headline-actions">
-                      <button
-                        type="button"
-                        class="btn-primary"
-                        data-testid="suite-open-run-dialog-btn"
-                        [disabled]="!access.can('POST /api/suite-runs')"
-                        (click)="openRunSuiteDialog(st)"
-                      >
-                        Run suite
-                      </button>
-                      @if (!st.declaredIn) {
+                  <div class="proc-card" data-testid="decl-workflows-card">
+                    <div class="proc-insp-top">
+                      <h3 class="section-title" style="margin: 0">
+                        Deployment-declared workflows ({{
+                          (wfResp?.workflows ?? []).length
+                        }})
+                      </h3>
+                      @if (
+                        access.can(
+                          "PUT /api/repos/{owner}/{name}/workflows",
+                          repo
+                        )
+                      ) {
                         <button
                           type="button"
                           class="btn-tonal"
-                          data-testid="suite-edit-btn"
-                          [disabled]="!access.can('PATCH /api/suites/{id}')"
-                          (click)="openSuiteDialog(st)"
+                          data-testid="decl-add-workflow-btn"
+                          (click)="openWorkflowEditor(repo, null)"
                         >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          class="btn-text danger"
-                          data-testid="suite-delete-btn"
-                          [disabled]="!access.can('DELETE /api/suites/{id}')"
-                          (click)="confirmDeleteSuite(st)"
-                        >
-                          Delete
+                          Add workflow YAML
                         </button>
                       }
                     </div>
-                  </div>
-
-                  <div class="proc-meta-row">
-                    <g-actor-chip
-                      [label]="st.declaredIn?.repo || 'deployment'"
-                      kind="service"
-                    />
-                    <span
-                      >Auto-merge:
-                      <strong>{{ st.autoMerge ? "on" : "off" }}</strong></span
-                    >
-                    <span
-                      >Approval:
-                      <strong>{{
-                        st.requireApproval
-                          ? "each pass waits for approval"
-                          : "auto-approved"
-                      }}</strong></span
-                    >
-                  </div>
-                  @if (st.declaredIn) {
-                    <p class="banner banner-info" style="margin: 6px 0 0">
-                      Declared in
-                      <code>{{ st.declaredIn.repo }}</code> (<code>{{
-                        st.declaredIn.path
-                      }}</code
-                      >).
-                    </p>
-                  }
-                </div>
-
-                <div class="proc-card">
-                  <h3 class="section-title">
-                    Member templates ({{ st.items.length }})
-                  </h3>
-                  <ul class="proc-kv-list">
-                    @for (it of st.items; track $index) {
-                      <li class="proc-kv-item">
-                        <span
-                          ><strong>{{ $index + 1 }}.</strong>
-                          {{ it.templateName || it.templateId }}</span
-                        >
-                        <code class="tabular muted">{{ it.templateId }}</code>
-                      </li>
-                    }
-                  </ul>
-                </div>
-
-                <g-composition-view [composition]="suiteComposition()" />
-
-                @if (runsOfSuite(st.id).length > 0) {
-                  <div class="proc-card">
-                    <h3 class="section-title">Recent runs of this suite</h3>
-                    <ul class="proc-kv-list">
-                      @for (r of runsOfSuite(st.id); track r.id) {
-                        <li class="proc-kv-item">
-                          <button
-                            type="button"
-                            class="btn-text"
-                            (click)="selectSuiteRun(r.id, true)"
+                    @if ((wfResp?.workflows ?? []).length === 0) {
+                      <p class="muted" style="margin: 0">
+                        No controller-side workflow overrides stored for
+                        {{ repo }}.
+                      </p>
+                    } @else {
+                      <ul class="proc-kv-list">
+                        @for (wf of wfResp!.workflows; track wf.path) {
+                          <li
+                            class="proc-kv-item"
+                            style="flex-direction: column; align-items: stretch"
                           >
-                            Run #{{ r.id }} · {{ r.repo }} &#64;
-                            {{ r.base || "default branch"
-                            }}{{ r.pass > 0 ? " (pass " + r.pass + ")" : "" }}
-                          </button>
-                          <span class="ci-provider-tag">{{ r.status }}</span>
-                        </li>
-                      }
-                    </ul>
-                  </div>
-                }
-              } @else {
-                <div class="empty-state">
-                  <p>Select a suite or suite run on the left.</p>
-                </div>
-              }
-            }
-
-            @case ("declarations") {
-              @if (selectedDeclRepo(); as repo) {
-                @let def = store.repoDefaults()[repo];
-                @let status = def?.declarationsStatus;
-                @let wfResp = store.repoWorkflows()[repo];
-                <div class="proc-insp-head" data-testid="decl-inspector">
-                  <div class="proc-insp-top">
-                    <div class="headline-cluster">
-                      <button
-                        type="button"
-                        class="btn-text proc-mobile-back"
-                        (click)="mobileDetailOpen.set(false)"
-                      >
-                        ← Back
-                      </button>
-                      <h2 class="proc-insp-title tabular">{{ repo }}</h2>
-                    </div>
-
-                    @if (def) {
-                      <div class="switch-row">
-                        <button
-                          type="button"
-                          role="switch"
-                          class="g-switch"
-                          attr.aria-label="Read {{ repo }}'s own declarations"
-                          data-testid="decl-toggle-switch"
-                          [disabled]="
-                            !access.can(
-                              'PUT /api/repos/{owner}/{name}/declarations',
-                              repo
-                            )
-                          "
-                          [attr.aria-checked]="def.declarations"
-                          (click)="
-                            toggleRepoDeclarations(repo, !def.declarations)
-                          "
-                        ></button>
-                        <span
-                          >Read its own <code>.grain/</code> declarations</span
-                        >
-                      </div>
-                    }
-                  </div>
-
-                  <div class="proc-meta-row">
-                    @if (status?.commit) {
-                      <span class="tabular"
-                        >Synced commit:
-                        <strong>{{
-                          status!.commit!.slice(0, 12)
-                        }}</strong></span
-                      >
-                    }
-                    @if (status?.checkedAt) {
-                      <span class="tabular"
-                        >Checked: {{ stamp(status!.checkedAt!) }}</span
-                      >
-                    }
-                  </div>
-
-                  @if (status?.error) {
-                    <p
-                      class="banner banner-error"
-                      style="margin: 6px 0 0; white-space: pre-line"
-                      data-testid="decl-sync-error"
-                    >
-                      Sync / validation error: {{ status!.error }}
-                    </p>
-                  }
-                  @for (w of status?.warnings ?? []; track w) {
-                    <p class="banner banner-info" style="margin: 6px 0 0">
-                      Warning: {{ w }}
-                    </p>
-                  }
-                </div>
-
-                @if (acceptancesForRepo(repo).length > 0) {
-                  <div class="proc-card" data-testid="decl-acceptances-card">
-                    <h3 class="section-title">
-                      Declaration capability acceptances
-                    </h3>
-                    @for (acc of acceptancesForRepo(repo); track acc.id) {
-                      <div class="proc-kv-item" style="flex-wrap: wrap">
-                        <div>
-                          <strong>{{ acc.id }}</strong>
-                          <span class="muted"> ({{ acc.kind }})</span>
-                          <div class="muted" style="font-size: 12px">
-                            Requested:
-                            <code>{{ acc.requested.join(", ") }}</code>
-                            @if (acc.needsScopes.length > 0) {
-                              · Requires scopes:
-                              {{ acc.needsScopes.join(", ") }}
-                            }
-                          </div>
-                          @if (acc.acceptedBy) {
-                            <div style="margin-top: 4px">
-                              Accepted by
-                              <g-actor-chip
-                                [label]="acc.acceptedBy"
-                                kind="human"
-                              />
+                            <div class="proc-insp-top">
+                              <div>
+                                <strong>{{ wf.name || wf.path }}</strong>
+                                <span class="muted tabular">
+                                  · {{ wf.path }}</span
+                                >
+                              </div>
+                              <div class="headline-cluster">
+                                <button
+                                  type="button"
+                                  class="btn-text"
+                                  data-testid="decl-inline-yaml-toggle"
+                                  [attr.data-file-path]="wf.path"
+                                  [attr.aria-expanded]="
+                                    isInlineYamlOpen(repo, wf.path)
+                                  "
+                                  (click)="
+                                    toggleInlineYaml(repo, wf.path, wf.text)
+                                  "
+                                >
+                                  {{
+                                    isInlineYamlOpen(repo, wf.path)
+                                      ? "Hide YAML"
+                                      : "View YAML"
+                                  }}
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn-text"
+                                  [attr.data-testid]="
+                                    'decl-inspect-wf-' + wf.path
+                                  "
+                                  (click)="openWorkflowEditor(repo, wf)"
+                                >
+                                  {{
+                                    access.can(
+                                      "PUT /api/repos/{owner}/{name}/workflows",
+                                      repo
+                                    )
+                                      ? "Inspect / Edit"
+                                      : "Inspect"
+                                  }}
+                                </button>
+                              </div>
                             </div>
-                          }
-                        </div>
-                        @if (acc.awaiting) {
-                          <button
-                            type="button"
-                            class="btn-primary"
-                            [attr.data-testid]="'decl-accept-btn-' + acc.id"
-                            [disabled]="!canAcceptDeclaration(acc)"
-                            [gTip]="acceptDeniedReason(acc)"
-                            (click)="acceptRepoDeclaration(acc)"
-                          >
-                            Accept declaration
-                          </button>
-                        } @else {
-                          <span class="status-pill healthy">
-                            <g-status-icon tone="healthy" kind="healthy" />
-                            Accepted
-                          </span>
+                            @if (isInlineYamlOpen(repo, wf.path)) {
+                              <pre
+                                class="comp-body-well s-mono"
+                                data-testid="decl-inline-yaml"
+                                [textContent]="inlineYamlDisplay()"
+                              ></pre>
+                            }
+                          </li>
                         }
-                      </div>
+                      </ul>
                     }
+                  </div>
+                } @else {
+                  <div class="empty-state">
+                    <p>
+                      Select a repository to inspect its <code>.grain/</code>
+                      declarations, sync errors, and workflow overrides.
+                    </p>
                   </div>
                 }
-
-                <div class="proc-card" data-testid="decl-discovered-files">
-                  <h3 class="section-title">
-                    Discovered <code>.grain/</code> files
-                  </h3>
-                  <ul class="proc-kv-list">
-                    @for (p of status?.templates ?? []; track p) {
-                      <li class="proc-kv-item">
-                        <code class="tabular">{{ p }}</code>
-                        <span class="ci-provider-tag">template</span>
-                      </li>
-                    }
-                    @for (p of status?.suites ?? []; track p) {
-                      <li class="proc-kv-item">
-                        <code class="tabular">{{ p }}</code>
-                        <span class="ci-provider-tag">suite</span>
-                      </li>
-                    }
-                    @for (p of status?.schedules ?? []; track p) {
-                      <li class="proc-kv-item">
-                        <code class="tabular">{{ p }}</code>
-                        <span class="ci-provider-tag">schedule</span>
-                      </li>
-                    }
-                    @for (p of status?.triggers ?? []; track p) {
-                      <li class="proc-kv-item">
-                        <a
-                          class="tabular"
-                          [routerLink]="repoAdvancedRoute(repo)"
-                          [attr.data-testid]="'decl-trigger-link-' + p"
-                          ><code>{{ p }}</code></a
-                        >
-                        <span class="ci-provider-tag">trigger</span>
-                      </li>
-                    }
-                    @if (status?.mergeRules) {
-                      <li class="proc-kv-item">
-                        <code class="tabular">{{ status!.mergeRules }}</code>
-                        <span class="ci-provider-tag">merge-rules</span>
-                      </li>
-                    }
-                    @if (
-                      !status?.templates?.length &&
-                      !status?.suites?.length &&
-                      !status?.schedules?.length &&
-                      !status?.triggers?.length &&
-                      !status?.mergeRules
-                    ) {
-                      <li class="muted">
-                        No <code>.grain/</code> declaration files synced on the
-                        default branch yet.
-                      </li>
-                    }
-                  </ul>
-                </div>
-
-                <div class="proc-card" data-testid="decl-workflows-card">
-                  <div class="proc-insp-top">
-                    <h3 class="section-title" style="margin: 0">
-                      Deployment-declared workflows ({{
-                        (wfResp?.workflows ?? []).length
-                      }})
-                    </h3>
-                    @if (
-                      access.can(
-                        "PUT /api/repos/{owner}/{name}/workflows",
-                        repo
-                      )
-                    ) {
-                      <button
-                        type="button"
-                        class="btn-tonal"
-                        data-testid="decl-add-workflow-btn"
-                        (click)="openWorkflowEditor(repo, null)"
-                      >
-                        Add workflow YAML
-                      </button>
-                    }
-                  </div>
-                  @if ((wfResp?.workflows ?? []).length === 0) {
-                    <p class="muted" style="margin: 0">
-                      No controller-side workflow overrides stored for
-                      {{ repo }}.
-                    </p>
-                  } @else {
-                    <ul class="proc-kv-list">
-                      @for (wf of wfResp!.workflows; track wf.path) {
-                        <li class="proc-kv-item">
-                          <div>
-                            <strong>{{ wf.name || wf.path }}</strong>
-                            <span class="muted tabular"> · {{ wf.path }}</span>
-                          </div>
-                          <button
-                            type="button"
-                            class="btn-text"
-                            [attr.data-testid]="'decl-inspect-wf-' + wf.path"
-                            (click)="openWorkflowEditor(repo, wf)"
-                          >
-                            {{
-                              access.can(
-                                "PUT /api/repos/{owner}/{name}/workflows",
-                                repo
-                              )
-                                ? "Inspect / Edit"
-                                : "Inspect"
-                            }}
-                          </button>
-                        </li>
-                      }
-                    </ul>
-                  }
-                </div>
-              } @else {
-                <div class="empty-state">
-                  <p>
-                    Select a repository to inspect its <code>.grain/</code>
-                    declarations, sync errors, and workflow overrides.
-                  </p>
-                </div>
               }
             }
-          }
-        </section>
-      </div>
+          </section>
+        </div>
+      }
     </section>
 
     <!-- NEW / EDIT SCHEDULE DIALOG -->
@@ -1969,7 +2561,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="closeScheduleDialog()"
+        (click)="dismissScheduleDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -1978,7 +2570,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="sched-dialog-title"
         data-testid="schedule-dialog"
         gDialogTrap
-        (gDialogClose)="closeScheduleDialog()"
+        (gDialogClose)="dismissScheduleDialog()"
       >
         <h2 id="sched-dialog-title">
           {{ editingSchedule() ? "Edit schedule" : "New schedule or trigger" }}
@@ -1991,7 +2583,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             data-testid="sched-system-banner"
           >
             Built-in Grain schedule — target and prompt are managed by Grain;
-            cadence and overlap policy can be customized.
+            model, cadence and overlap policy can be customized.
           </p>
         } @else {
           <div class="field">
@@ -2121,7 +2713,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             <label class="field">
               <span>Task prompt</span>
               <textarea
-                rows="3"
+                rows="8"
                 data-testid="sched-desc-input"
                 placeholder="Check outdated packages and open a PR if needed."
                 [value]="sDraftDesc()"
@@ -2166,6 +2758,110 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 (input)="sDraftBase.set($any($event.target).value)"
               />
             </label>
+          </div>
+
+          @if (schedTargetKind() === "prompt") {
+            <div class="switch-row" style="margin-top: 14px">
+              <button
+                type="button"
+                role="switch"
+                class="g-switch"
+                aria-label="Keep running"
+                data-testid="sched-keep-running"
+                [attr.aria-checked]="sDraftKeepRunning()"
+                (click)="sDraftKeepRunning.set(!sDraftKeepRunning())"
+              ></button>
+              <span
+                >Keep running
+                <span class="muted"
+                  >— restart every task this schedule files when its run exits,
+                  instead of completing or parking it</span
+                ></span
+              >
+            </div>
+            <div class="proc-field-grid">
+              <div class="field">
+                <span>Admission</span>
+                <g-pill-select
+                  [options]="admissionOptions"
+                  [value]="sDraftAdmission()"
+                  ariaLabel="Admission"
+                  align="left"
+                  testid="sched-admission"
+                  (valueChange)="sDraftAdmission.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-admission-help"
+                >
+                  {{ admissionHelp(sDraftAdmission()) }} Applies to every task
+                  this schedule files.
+                </p>
+              </div>
+              <div class="field">
+                <span>Hosting</span>
+                <g-pill-select
+                  [options]="hostingOptions"
+                  [value]="sDraftHosting()"
+                  ariaLabel="Hosting"
+                  align="left"
+                  testid="sched-hosting"
+                  (valueChange)="sDraftHosting.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-hosting-help"
+                >
+                  {{ hostingHelp(sDraftHosting()) }} Applies to every task this
+                  schedule files.
+                </p>
+              </div>
+            </div>
+            <div class="field">
+              <span>Grants</span>
+              <g-grants-picker
+                testid="sched-grants"
+                [offered]="offeredCapabilities()"
+                [held]="sDraftCaps()"
+                [repo]="sDraftRepo().trim() || undefined"
+                [policyVerdicts]="true"
+                (heldChange)="sDraftCaps.set($event)"
+              />
+            </div>
+          } @else if (schedTargetKind() === "template") {
+            <p class="muted proc-field-help" data-testid="sched-template-note">
+              Admission, hosting, grants and keep running come from the selected
+              template, and stay in sync with it.
+            </p>
+          }
+        }
+
+        @if (schedTargetKind() !== "suite") {
+          <div class="field">
+            <span>Model</span>
+            <div class="proc-model-row">
+              <g-model-picker
+                [groups]="modelGroups()"
+                [value]="sDraftModel()"
+                [placeholder]="schedModelPlaceholder()"
+                ariaLabel="Model"
+                testid="sched-model"
+                (valueChange)="sDraftModel.set($event)"
+              />
+              @if (sDraftModel()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="sched-model-clear"
+                  (click)="sDraftModel.set('')"
+                >
+                  Use default
+                </button>
+              }
+            </div>
+            <p class="muted proc-field-help">
+              The model every task this schedule files asks for.
+            </p>
           </div>
         }
 
@@ -2354,7 +3050,18 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </div>
         </div>
 
-        @if (!editingSchedule()?.system) {
+        @if (!editingSchedule()?.system && !editingSchedule()?.declaredIn) {
+          <div class="field">
+            <span>Software workflow</span>
+            <g-pill-select
+              [options]="qaFlowOptions()"
+              [value]="sDraftQaFlowRef()"
+              ariaLabel="Software workflow"
+              align="left"
+              testid="process-qa-flow-select"
+              (valueChange)="sDraftQaFlowRef.set($event)"
+            />
+          </div>
           <div style="margin-top: 12px">
             <button
               type="button"
@@ -2390,7 +3097,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="closeScheduleDialog()"
+            (click)="dismissScheduleDialog()"
           >
             Cancel
           </button>
@@ -2563,7 +3270,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="tmplDialogOpen.set(false)"
+        (click)="dismissTemplateDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2572,7 +3279,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="tmpl-dialog-title"
         data-testid="template-dialog"
         gDialogTrap
-        (gDialogClose)="tmplDialogOpen.set(false)"
+        (gDialogClose)="dismissTemplateDialog()"
       >
         <h2 id="tmpl-dialog-title">
           {{ editingTemplate() ? "Edit template" : "New task template" }}
@@ -2602,7 +3309,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         <label class="field">
           <span>Prompt body</span>
           <textarea
-            rows="4"
+            rows="8"
             data-testid="tmpl-desc-input"
             placeholder="Upgrade {{ '{{pkg}}' }} and run tests."
             [value]="tDraftDesc()"
@@ -2685,6 +3392,20 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </div>
         }
 
+        @if (!editingTemplate()?.declaredIn && !editingTemplate()?.system) {
+          <div class="field">
+            <span>Software workflow</span>
+            <g-pill-select
+              [options]="qaFlowOptions()"
+              [value]="tDraftQaFlowRef()"
+              ariaLabel="Software workflow"
+              align="left"
+              testid="process-qa-flow-select"
+              (valueChange)="tDraftQaFlowRef.set($event)"
+            />
+          </div>
+        }
+
         <div class="switch-row" style="margin-top: 14px">
           <button
             type="button"
@@ -2695,6 +3416,93 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             (click)="tDraftAutoMerge.set(!tDraftAutoMerge())"
           ></button>
           <span>Auto-merge passing pull requests</span>
+        </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Keep running"
+            data-testid="tmpl-keep-running"
+            [attr.aria-checked]="tDraftKeepRunning()"
+            (click)="tDraftKeepRunning.set(!tDraftKeepRunning())"
+          ></button>
+          <span
+            >Keep running
+            <span class="muted"
+              >— restart every task this template files when its run exits,
+              instead of completing or parking it</span
+            ></span
+          >
+        </div>
+        <div class="proc-field-grid">
+          <div class="field">
+            <span>Admission</span>
+            <g-pill-select
+              [options]="admissionOptions"
+              [value]="tDraftAdmission()"
+              ariaLabel="Admission"
+              align="left"
+              testid="tmpl-admission"
+              (valueChange)="tDraftAdmission.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-admission-help">
+              {{ admissionHelp(tDraftAdmission()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+          <div class="field">
+            <span>Hosting</span>
+            <g-pill-select
+              [options]="hostingOptions"
+              [value]="tDraftHosting()"
+              ariaLabel="Hosting"
+              align="left"
+              testid="tmpl-hosting"
+              (valueChange)="tDraftHosting.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-hosting-help">
+              {{ hostingHelp(tDraftHosting()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+        </div>
+        <div class="field">
+          <span>Grants</span>
+          <g-grants-picker
+            testid="tmpl-grants"
+            [offered]="offeredCapabilities()"
+            [held]="tDraftCaps()"
+            [repo]="tDraftRepo().trim() || undefined"
+            [policyVerdicts]="true"
+            (heldChange)="tDraftCaps.set($event)"
+          />
+        </div>
+        <div class="field">
+          <span>Model</span>
+          <div class="proc-model-row">
+            <g-model-picker
+              [groups]="modelGroups()"
+              [value]="tDraftModel()"
+              [placeholder]="'Deployment default model'"
+              ariaLabel="Model"
+              testid="tmpl-model"
+              (valueChange)="tDraftModel.set($event)"
+            />
+            @if (tDraftModel()) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="tmpl-model-clear"
+                (click)="tDraftModel.set('')"
+              >
+                Use default
+              </button>
+            }
+          </div>
+          <p class="muted proc-field-help">
+            The model every task this template files asks for.
+          </p>
         </div>
         <!-- Beside the actions, so a refused save is in view where the
              Save was pressed, on a phone as on a desktop. -->
@@ -2711,7 +3519,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="tmplDialogOpen.set(false)"
+            (click)="dismissTemplateDialog()"
           >
             Cancel
           </button>
@@ -2733,7 +3541,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="suiteDialogOpen.set(false)"
+        (click)="dismissSuiteDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2742,7 +3550,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="suite-dialog-title"
         data-testid="suite-dialog"
         gDialogTrap
-        (gDialogClose)="suiteDialogOpen.set(false)"
+        (gDialogClose)="dismissSuiteDialog()"
       >
         <h2 id="suite-dialog-title">
           {{ editingSuite() ? "Edit suite" : "New suite" }}
@@ -2825,6 +3633,20 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </div>
         </div>
 
+        @if (!editingSuite()?.declaredIn) {
+          <div class="field">
+            <span>Software workflow</span>
+            <g-pill-select
+              [options]="qaFlowOptions()"
+              [value]="stDraftQaFlowRef()"
+              ariaLabel="Software workflow"
+              align="left"
+              testid="process-qa-flow-select"
+              (valueChange)="stDraftQaFlowRef.set($event)"
+            />
+          </div>
+        }
+
         <div class="proc-field-grid" style="margin-top: 14px">
           <div class="switch-row">
             <button
@@ -2883,11 +3705,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </p>
         }
         <div class="dialog-actions">
-          <button
-            type="button"
-            class="btn-text"
-            (click)="suiteDialogOpen.set(false)"
-          >
+          <button type="button" class="btn-text" (click)="dismissSuiteDialog()">
             Cancel
           </button>
           <button
@@ -3097,6 +3915,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
 })
 export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
+  readonly flow = input<string | undefined>(undefined);
   readonly itemId = input<string | undefined>(undefined);
   readonly runId = input<string | undefined>(undefined);
   readonly kind = input<string | undefined>(undefined);
@@ -3114,12 +3933,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(ProcessesStore);
   protected readonly access = inject(AccessService);
   protected readonly filter = inject(ViewFilter);
+  private readonly api = inject(GrainApi);
   private readonly taskFeed = inject(TaskFeedStore);
   private readonly router = inject(Router);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  private readonly hostEl = inject<ElementRef<HTMLElement>>(ElementRef);
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.openPicker()) {
@@ -3153,10 +3974,92 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly suitesView = signal<SuitesPaneView>("suites");
 
   protected readonly selectedScheduleId = signal<string | null>(null);
+  protected readonly selectedTrigger = signal<DeclaredTrigger | null>(null);
+  protected readonly liveSelectedTrigger = computed<DeclaredTrigger | null>(
+    () => {
+      const sel = this.selectedTrigger();
+      if (!sel) return null;
+      return (
+        this.store
+          .triggers()
+          .find((t) => t.repo === sel.repo && t.path === sel.path) ?? sel
+      );
+    },
+  );
+  protected readonly selectedTriggerKey = computed(() => {
+    const tr = this.selectedTrigger();
+    return tr ? `trigger:${tr.repo}:${tr.path}` : null;
+  });
+  protected readonly triggerYamlText = signal("");
+  protected readonly triggerYamlLoading = signal(false);
+  protected readonly triggerYamlDisplay = computed(() => {
+    const tr = this.liveSelectedTrigger();
+    if (!tr) return "No YAML content available.";
+    if (tr.detail) {
+      return synthesizeTriggerYaml(
+        tr.repo,
+        tr.path,
+        tr.detail,
+        this.store.templates(),
+      );
+    }
+    if (this.triggerYamlLoading() || this.store.repoLoading() === tr.repo) {
+      return "Loading YAML…";
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return raw;
+    return synthesizeTriggerYaml(
+      tr.repo,
+      tr.path,
+      undefined,
+      this.store.templates(),
+    );
+  });
+  protected readonly parsedSelectedTrigger = computed<ParsedTriggerYaml>(() => {
+    const tr = this.liveSelectedTrigger();
+    if (tr?.detail) {
+      return {
+        on: tr.detail.on || "",
+        paths: tr.detail.paths ?? [],
+        gate: tr.detail.gate ? "true" : "false",
+        template: tr.detail.template || "",
+      };
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return parseTriggerYaml(raw);
+    return { on: "", paths: [], gate: "", template: "" };
+  });
+  protected readonly matchedTriggerTemplate = computed<Template | null>(() => {
+    const tr = this.liveSelectedTrigger();
+    const ref = this.parsedSelectedTrigger().template.trim();
+    if (!tr || !ref) return null;
+    const list = this.store.templates();
+    return (
+      list.find((t) => t.id === ref) ??
+      list.find((t) => t.id === `repo:${tr.repo}:${ref}`) ??
+      list.find(
+        (t) =>
+          t.declaredIn?.repo === tr.repo &&
+          templateFileStem(t.declaredIn.path) === ref,
+      ) ??
+      list.find(
+        (t) =>
+          (!t.declaredIn || t.declaredIn.repo === tr.repo) && t.name === ref,
+      ) ??
+      null
+    );
+  });
   protected readonly selectedTemplateId = signal<string | null>(null);
   protected readonly selectedSuiteId = signal<string | null>(null);
   protected readonly selectedSuiteRunId = signal<number | null>(null);
   protected readonly selectedDeclRepo = signal<string | null>(null);
+  protected readonly inlineYamlKey = signal<string | null>(null);
+  private inlineYamlSeq = 0;
+  protected readonly inlineYamlText = signal<string>("");
+  protected readonly inlineYamlLoading = signal(false);
+  protected readonly inlineYamlDisplay = computed(() =>
+    this.inlineYamlLoading() ? "Loading YAML…" : this.inlineYamlText(),
+  );
   protected readonly mobileDetailOpen = signal(false);
   private handledRepoLinkKey = "";
 
@@ -3198,6 +4101,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftGitRefRepo = signal("");
   protected readonly sDraftGitRef = signal("refs/heads/main");
   protected readonly sDraftOverlap = signal("skip");
+  // What every firing of an inline-prompt schedule carries beside its
+  // prompt (model.Schedule): a template-backed schedule takes these from
+  // its template, so only the model is the schedule's own there.
+  protected readonly sDraftModel = signal("");
+  protected readonly sDraftKeepRunning = signal(false);
+  protected readonly sDraftAdmission = signal("standard");
+  protected readonly sDraftHosting = signal("unattended");
+  protected readonly sDraftCaps = signal<string[]>([]);
+  protected readonly sDraftQaFlowRef = signal("");
   protected readonly draftSchedComposition = signal<Composition | null>(null);
 
   // Launch template dialog state
@@ -3218,6 +4130,41 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftParamsCsv = signal("");
   protected readonly tDraftFields = signal<TemplateField[]>([]);
   protected readonly tDraftAutoMerge = signal(false);
+  protected readonly tDraftModel = signal("");
+  protected readonly tDraftKeepRunning = signal(false);
+  protected readonly tDraftAdmission = signal("standard");
+  protected readonly tDraftHosting = signal("unattended");
+  protected readonly tDraftCaps = signal<string[]>([]);
+
+  // The vocabularies the schedule and template forms share: the
+  // deployment's model catalog (one group per connection), the
+  // capabilities it offers, and the admission and hosting settings.
+  protected readonly modelGroups = computed(() =>
+    modelGroups(
+      (this.access.rawConfig()?.agentBackends ?? []) as ModelBackendLike[],
+    ),
+  );
+  protected readonly offeredCapabilities = computed(
+    () => this.access.rawConfig()?.capabilities ?? [],
+  );
+  protected readonly admissionOptions: PillOption[] = ADMISSION_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly hostingOptions: PillOption[] = HOSTING_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly schedModelPlaceholder = computed(() =>
+    this.schedTargetKind() === "template" && !this.editingSchedule()?.system
+      ? "The template's model"
+      : "Deployment default model",
+  );
+  protected admissionHelp(v: string): string {
+    return ADMISSION_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
+  protected hostingHelp(v: string): string {
+    return HOSTING_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
+  protected readonly tDraftQaFlowRef = signal("");
 
   // Create/Edit suite dialog state
   protected readonly suiteDialogOpen = signal(false);
@@ -3231,7 +4178,51 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly stDraftTemplateIds = signal<string[]>([]);
   protected readonly stDraftRequireApproval = signal(false);
   protected readonly stDraftAutoMerge = signal(true);
+  protected readonly stDraftQaFlowRef = signal("");
   protected readonly draftSuiteComposition = signal<Composition | null>(null);
+
+  private requestedQaFlowVersions = false;
+  protected readonly qaFlowVersionsLoaded = signal(false);
+  protected readonly loadedQaFlowVersions = signal<
+    {
+      ref: string;
+      key: string;
+      version: number;
+      label: string;
+      hint?: string;
+      benchmark: boolean;
+    }[]
+  >([]);
+  protected readonly qaFlowOptions = computed<PillOption[]>(() => {
+    const opts: PillOption[] = [{ value: "", label: "Deployment default" }];
+    const seen = new Set<string>([""]);
+    const addOption = (
+      raw: string | undefined,
+      explicitLabel?: string,
+      explicitHint?: string,
+    ): void => {
+      const ref = (raw ?? "").trim();
+      if (!ref || seen.has(ref)) return;
+      seen.add(ref);
+      const atIdx = ref.indexOf("@");
+      const key = atIdx >= 0 ? ref.slice(0, atIdx) : ref;
+      opts.push({
+        value: ref,
+        label: formatQaFlowLabel(key, explicitLabel),
+        hint: explicitHint ?? formatQaFlowHint(ref),
+      });
+    };
+    for (const v of this.loadedQaFlowVersions()) {
+      addOption(v.ref, v.label, v.hint);
+    }
+    if (!this.qaFlowVersionsLoaded()) {
+      for (const ref of DEFAULT_QA_FLOW_REFS) addOption(ref);
+    }
+    addOption(this.sDraftQaFlowRef());
+    addOption(this.tDraftQaFlowRef());
+    addOption(this.stDraftQaFlowRef());
+    return opts;
+  });
 
   // Run suite dialog state
   protected readonly runSuiteDialogOpen = signal(false);
@@ -3262,6 +4253,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       raw === "templates" ||
       raw === "suites" ||
       raw === "declarations" ||
+      raw === "quality" ||
       raw === "schedules"
     ) {
       return raw;
@@ -3293,10 +4285,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (f === "triggers" && !isEventTrigger(s)) return false;
       if (f === "suppressed" && !s.suppressed) return false;
       if (q) {
+        const target = this.schedTargetOf(s);
         const hay = [
           s.id,
           s.title,
-          s.repo,
+          target.repo,
+          target.base,
           s.templateName ?? "",
           s.suiteName ?? "",
           formatCadence(s.recurrence, s.timeZone),
@@ -3523,11 +4517,38 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return t ? t.name || t.title || t.id : "Select template";
   });
 
+  private writingQ = 0;
   private handledDeepLinkKey = "";
   private handledItemLinkKey = "";
+  private handledItemTab: ProcessTab | null = null;
+  private missingItemError: string | null = null;
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+
+    const nav =
+      this.router.getCurrentNavigation() ??
+      this.router.lastSuccessfulNavigation;
+    const navState = nav?.extras.state;
+    const handoffTmplId =
+      typeof navState?.["selectTemplateId"] === "string"
+        ? navState["selectTemplateId"].trim()
+        : "";
+    if (handoffTmplId) {
+      this.tmplFilter.set("all");
+      this.selectedTemplateId.set(handoffTmplId);
+      this.mobileDetailOpen.set(true);
+    }
+    let handledHandoffTmpl = !handoffTmplId;
+    effect(() => {
+      const loaded = this.store.loaded();
+      untracked(() => {
+        if (!handledHandoffTmpl && loaded) {
+          handledHandoffTmpl = true;
+          this.selectTemplate(handoffTmplId, true);
+        }
+      });
+    });
 
     // ?q= (a shared link, a reload, Back and Forward) fills the "Filter
     // this view" box, and what is typed there goes back into ?q=, the way
@@ -3535,11 +4556,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     // in flight, the ?q= it passes through is an echo of what was typed,
     // possibly already overtaken by the next keystroke, so it must not
     // refill the box.
-    let writingQ = 0;
     effect(() => {
       const q = this.q() ?? "";
       untracked(() => {
-        if (writingQ === 0 && q !== this.filter.query()) {
+        if (this.writingQ === 0 && q !== this.filter.query()) {
           this.filter.query.set(q);
         }
       });
@@ -3548,14 +4568,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const typed = this.filter.query();
       untracked(() => {
         if (typed === (this.q() ?? "")) return;
-        writingQ++;
+        this.writingQ++;
         void this.router
           .navigate([], {
             queryParams: { q: typed || null },
             queryParamsHandling: "merge",
             replaceUrl: true,
           })
-          .finally(() => writingQ--);
+          .finally(() => this.writingQ--);
       });
     });
 
@@ -3565,15 +4585,34 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const tab = this.activeTab();
       const item = this.itemId();
       const run = this.runId();
-      const key = `${loaded}:${tab}:${item ?? ""}:${run ?? ""}`;
+      const key = this.itemLinkKey(tab, item, run);
       untracked(() => {
         if (!loaded) return;
         if (!item && !run) {
+          const prevTab = this.handledItemTab;
           this.handledItemLinkKey = "";
+          this.handledItemTab = null;
+          if (prevTab) {
+            this.mobileDetailOpen.set(false);
+            this.clearMissingItemError();
+            if (prevTab === "schedules") {
+              this.selectedScheduleId.set(null);
+              this.selectedTrigger.set(null);
+              this.scheduleComposition.set(null);
+            } else if (prevTab === "templates") {
+              this.selectedTemplateId.set(null);
+              this.templateComposition.set(null);
+            } else if (prevTab === "suites") {
+              this.selectedSuiteRunId.set(null);
+              this.selectedSuiteId.set(null);
+              this.suiteComposition.set(null);
+            }
+          }
           return;
         }
         if (key === this.handledItemLinkKey) return;
         this.handledItemLinkKey = key;
+        this.handledItemTab = tab;
         if (run) {
           this.suitesView.set("runs");
           const parsed = Number(run);
@@ -3582,50 +4621,62 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
             parsed > 0 &&
             this.store.suiteRuns().some((r) => r.id === parsed)
           ) {
-            this.selectSuiteRun(parsed, true);
+            this.selectSuiteRun(parsed, true, false);
           } else {
-            this.store.actionError.set(`No suite run "${run}".`);
+            this.setMissingItemError(`No suite run "${run}".`);
           }
           return;
         }
         if (!item) return;
         if (tab === "schedules") {
           if (this.store.schedules().some((s) => s.id === item)) {
-            this.selectSchedule(item, true);
+            this.selectSchedule(item, true, false);
           } else {
-            this.store.actionError.set(`No schedule "${item}".`);
+            this.setMissingItemError(`No schedule "${item}".`);
           }
         } else if (tab === "templates") {
           if (this.store.templates().some((t) => t.id === item)) {
-            this.selectTemplate(item, true);
+            this.selectTemplate(item, true, false);
           } else {
-            this.store.actionError.set(`No template "${item}".`);
+            this.setMissingItemError(`No template "${item}".`);
           }
         } else if (tab === "suites") {
           this.suitesView.set("suites");
           if (this.store.suites().some((s) => s.id === item)) {
-            this.selectSuite(item, true);
+            this.selectSuite(item, true, false);
           } else {
-            this.store.actionError.set(`No suite "${item}".`);
+            this.setMissingItemError(`No suite "${item}".`);
           }
         }
       });
     });
 
-    // Auto-select top item per tab on desktop when data loads.
+    // Auto-select top item per tab on desktop when data loads or returns to a
+    // bare tab route.
     effect(() => {
       const tab = this.activeTab();
       const loaded = this.store.loaded();
+      const item = this.itemId();
+      const run = this.runId();
       const scheds = this.sortedSchedules();
+      const trigs = this.filteredTriggers();
       const tmpls = this.sortedTemplates();
       const suites = this.sortedSuites();
       const repos = this.filteredDeclRepos();
       untracked(() => {
-        if (!loaded || this.itemId() || this.runId()) return;
+        if (!loaded || item || run) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
-        if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
-          this.selectSchedule(scheds[0].id, false);
+        if (
+          tab === "schedules" &&
+          !this.selectedScheduleId() &&
+          !this.selectedTrigger()
+        ) {
+          if (scheds[0]) {
+            this.selectSchedule(scheds[0].id, false);
+          } else if (trigs[0]) {
+            this.selectTrigger(trigs[0], false);
+          }
         } else if (
           tab === "templates" &&
           !this.selectedTemplateId() &&
@@ -3723,6 +4774,37 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         });
       });
     });
+
+    // Load active QA flow versions once the store is loaded and the caller
+    // holds global qa:read (GET /api/qa/flow-versions).
+    effect(() => {
+      const loaded = this.store.loaded();
+      const canReadFlows =
+        this.access.can("GET /api/qa/flow-versions") &&
+        this.access.canGlobalScope("qa:read");
+      untracked(() => {
+        if (!loaded || !canReadFlows || this.requestedQaFlowVersions) return;
+        this.requestedQaFlowVersions = true;
+        void this.loadQaFlowOptions();
+      });
+    });
+
+    // Keep the active section tab visible inside horizontal .tab-strip scroll
+    // containers on phone viewports (e.g. /processes/quality at 390x844).
+    effect(() => {
+      this.activeTab();
+      afterNextRender(
+        () => {
+          const active = this.hostEl.nativeElement.querySelector<HTMLElement>(
+            '.tab-strip .tab-link[aria-current="page"]',
+          );
+          if (active && typeof active.scrollIntoView === "function") {
+            active.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
+        },
+        { injector: this.injector },
+      );
+    });
   }
 
   ngOnInit(): void {
@@ -3730,6 +4812,70 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
     });
     this.store.start();
+  }
+
+  private async loadQaFlowOptions(): Promise<void> {
+    try {
+      const res = (await this.api.get<{
+        versions?: {
+          hash?: string;
+          key?: string;
+          version?: number;
+          label?: string;
+          builtIn?: boolean;
+          retiredAt?: string | null;
+          retired?: boolean;
+        }[];
+      }>("GET /api/qa/flow-versions", undefined, "limit=500")) as {
+        versions?: {
+          hash?: string;
+          key?: string;
+          version?: number;
+          label?: string;
+          builtIn?: boolean;
+          retiredAt?: string | null;
+          retired?: boolean;
+        }[];
+      } | null;
+      const versions = res?.versions ?? [];
+      const builtInKeys = new Set<string>();
+      for (const v of versions) {
+        if (v.builtIn === true && v.key) {
+          builtInKeys.add(v.key);
+        }
+      }
+      const items: {
+        ref: string;
+        key: string;
+        version: number;
+        label: string;
+        hint?: string;
+        benchmark: boolean;
+      }[] = [];
+      for (const v of versions) {
+        if (v.retiredAt || v.retired || !v.key) continue;
+        const ver = v.version ?? 1;
+        const hash = (v.hash ?? "").trim();
+        const isBuiltInV1Override =
+          !v.builtIn && ver === 1 && builtInKeys.has(v.key) && hash !== "";
+        const ref = isBuiltInV1Override ? hash : `${v.key}@${ver}`;
+        const hint = isBuiltInV1Override ? `${v.key}@v1 (override)` : undefined;
+        items.push({
+          ref,
+          key: v.key,
+          version: ver,
+          label: formatQaFlowLabel(v.key, v.label),
+          hint,
+          benchmark: isBenchmarkQaFlow(v.key, v.label),
+        });
+      }
+      this.loadedQaFlowVersions.set(items);
+      if (items.length > 0) {
+        this.qaFlowVersionsLoaded.set(true);
+      }
+    } catch {
+      // Built-in fallback options remain available.
+    }
   }
 
   ngOnDestroy(): void {
@@ -3868,6 +5014,24 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           this.store.awaitingAcceptancesCount() ||
           this.store.knownRepos().length
         );
+      case "quality": {
+        if (this.qaFlowVersionsLoaded()) {
+          const primaryKeys = new Set(
+            this.loadedQaFlowVersions()
+              .filter((v) => !v.benchmark)
+              .map((v) => v.key),
+          );
+          for (const f of this.store.qaFlows()) {
+            if (f.id && !isBenchmarkQaFlow(f.id, f.label)) {
+              primaryKeys.add(f.id);
+            }
+          }
+          if (primaryKeys.size > 0) return primaryKeys.size;
+        }
+        return this.store
+          .qaFlows()
+          .filter((f) => f.id && !isBenchmarkQaFlow(f.id, f.label)).length;
+      }
     }
   }
 
@@ -3877,10 +5041,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
-  protected suppressionLabel = suppressionReasonLabel;
+  protected formatSuppression = formatScheduleSuppression;
   protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
+
+  protected schedTargetOf(s: Schedule): { repo: string; base: string } {
+    return scheduleFiringTarget(
+      s,
+      this.store.templates(),
+      this.selectedScheduleId() === s.id ? this.scheduleComposition() : null,
+    );
+  }
 
   protected repoAdvancedRoute(repo: string): string[] {
     const parts = repo.split("/").filter(Boolean);
@@ -3896,9 +5068,102 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.store.suites().find((x) => x.id === id)?.name ?? "";
   }
 
-  protected selectSchedule(id: string, fromClick: boolean): void {
+  private itemLinkKey(
+    tab: ProcessTab,
+    itemId?: string,
+    runId?: string,
+  ): string {
+    return `${this.store.loaded()}:${tab}:${itemId ?? ""}:${runId ?? ""}`;
+  }
+
+  private preserveQueryExtras() {
+    return this.writingQ > 0
+      ? {
+          queryParams: { q: this.filter.query() || null },
+          queryParamsHandling: "merge" as const,
+        }
+      : { queryParamsHandling: "preserve" as const };
+  }
+
+  private setMissingItemError(msg: string): void {
+    this.missingItemError = msg;
+    this.store.actionError.set(msg);
+  }
+
+  private clearMissingItemError(): void {
+    if (
+      this.missingItemError &&
+      this.store.actionError() === this.missingItemError
+    ) {
+      this.store.actionError.set(null);
+    }
+    this.missingItemError = null;
+  }
+
+  // Push a history entry for an explicit row or item selection so reload,
+  // copy/paste, and Back/Forward land on that item while keeping ?q=, ?sort=,
+  // and ?kind=. Auto-selection on arrival passes fromClick: false and leaves
+  // the URL alone so Back out of Processes or across ?sort= stays predictable.
+  private syncItemUrl(
+    tab: "schedules" | "templates" | "suites",
+    itemId?: string,
+    runId?: number,
+  ): void {
+    if (runId !== undefined) {
+      const runStr = String(runId);
+      const targetKey = this.itemLinkKey("suites", undefined, runStr);
+      if (this.runId() === runStr && this.handledItemLinkKey === targetKey) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = "suites";
+      void this.router.navigate(
+        ["/processes", "suites", "runs", runStr],
+        this.preserveQueryExtras(),
+      );
+      return;
+    }
+    if (itemId !== undefined) {
+      const targetKey = this.itemLinkKey(tab, itemId);
+      if (
+        this.tab() === tab &&
+        this.itemId() === itemId &&
+        !this.runId() &&
+        this.handledItemLinkKey === targetKey
+      ) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = tab;
+      void this.router.navigate(
+        ["/processes", tab, itemId],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected closeMobileDetail(): void {
+    this.mobileDetailOpen.set(false);
+    if (this.itemId() || this.runId()) {
+      void this.router.navigate(
+        ["/processes", this.activeTab()],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected selectSchedule(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
+    this.selectedTrigger.set(null);
     this.selectedScheduleId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("schedules", id);
     this.scheduleComposition.set(null);
     if (this.access.can("GET /api/schedules/{id}/composition")) {
       void this.store
@@ -3910,9 +5175,50 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectTemplate(id: string, fromClick: boolean): void {
+  protected selectTrigger(tr: DeclaredTrigger, fromClick: boolean): void {
+    this.selectedScheduleId.set(null);
+    this.scheduleComposition.set(null);
+    this.triggerYamlText.set("");
+    this.triggerYamlLoading.set(false);
+    this.selectedTrigger.set(tr);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+      if (this.itemId()) {
+        this.handledItemLinkKey = "";
+        this.handledItemTab = null;
+        void this.router.navigate(
+          ["/processes", "schedules"],
+          this.preserveQueryExtras(),
+        );
+      }
+    }
+    if (!tr.detail && !this.store.repoDefaults()[tr.repo]?.declarationsStatus) {
+      void this.store.loadRepoInspect(tr.repo);
+    }
+  }
+
+  protected openTriggerTemplate(id: string): void {
+    this.tmplFilter.set("all");
+    this.selectTemplate(id, true, false);
+    this.handledItemLinkKey = this.itemLinkKey("templates", id);
+    this.handledItemTab = "templates";
+    void this.router.navigate(["/processes", "templates", id], {
+      state: { selectTemplateId: id },
+    });
+  }
+
+  protected selectTemplate(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedTemplateId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("templates", id);
     this.templateComposition.set(null);
     const tmpl = this.store.templates().find((t) => t.id === id);
     if (tmpl && this.access.can("GET /api/templates/{id}/composition")) {
@@ -3942,10 +5248,19 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuite(id: string, fromClick: boolean): void {
+  protected selectSuite(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(null);
     this.selectedSuiteId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("suites");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", id);
     this.suiteComposition.set(null);
     if (this.access.can("GET /api/suites/{id}/composition")) {
       void this.store
@@ -3957,9 +5272,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuiteRun(id: number, fromClick: boolean): void {
+  protected selectSuiteRun(
+    id: number,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("runs");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", undefined, id);
     if (this.access.can("GET /api/suite-runs/{id}")) {
       void this.store.fetchSuiteRunDetail(id).catch(() => undefined);
     }
@@ -3967,8 +5291,147 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected selectDeclRepo(repo: string, fromClick: boolean): void {
     this.selectedDeclRepo.set(repo);
+    this.inlineYamlSeq++;
+    this.inlineYamlKey.set(null);
+    this.inlineYamlText.set("");
+    this.inlineYamlLoading.set(false);
     if (fromClick) this.mobileDetailOpen.set(true);
     void this.store.loadRepoInspect(repo);
+  }
+
+  protected discoveredFiles(
+    status:
+      | {
+          templates?: string[];
+          suites?: string[];
+          schedules?: string[];
+          triggers?: string[];
+          mergeRules?: string;
+        }
+      | null
+      | undefined,
+  ): { path: string; kind: string }[] {
+    if (!status) return [];
+    const out: { path: string; kind: string }[] = [];
+    for (const p of status.templates ?? []) {
+      out.push({ path: p, kind: "template" });
+    }
+    for (const p of status.suites ?? []) {
+      out.push({ path: p, kind: "suite" });
+    }
+    for (const p of status.schedules ?? []) {
+      out.push({ path: p, kind: "schedule" });
+    }
+    for (const p of status.triggers ?? []) {
+      out.push({ path: p, kind: "trigger" });
+    }
+    if (status.mergeRules) {
+      out.push({ path: status.mergeRules, kind: "merge-rules" });
+    }
+    return out;
+  }
+
+  protected isInlineYamlOpen(repo: string, path: string): boolean {
+    return this.inlineYamlKey() === `${repo}:${path}`;
+  }
+
+  protected async toggleInlineYaml(
+    repo: string,
+    filePath: string,
+    rawText?: string,
+  ): Promise<void> {
+    const key = `${repo}:${filePath}`;
+    const seq = ++this.inlineYamlSeq;
+    if (this.inlineYamlKey() === key) {
+      this.inlineYamlKey.set(null);
+      this.inlineYamlText.set("");
+      this.inlineYamlLoading.set(false);
+      return;
+    }
+    this.inlineYamlKey.set(key);
+    if (rawText !== undefined && rawText.length > 0) {
+      this.inlineYamlText.set(rawText);
+      this.inlineYamlLoading.set(false);
+      return;
+    }
+    const hasDecl = Boolean(
+      this.store.repoDefaults()[repo]?.declarationsStatus,
+    );
+    const hasWfs = Boolean(this.store.repoWorkflows()[repo]);
+    if (!hasDecl || !hasWfs) {
+      this.inlineYamlText.set("");
+      this.inlineYamlLoading.set(true);
+      await this.store.loadRepoInspect(repo);
+      if (this.inlineYamlSeq !== seq || this.inlineYamlKey() !== key) {
+        return;
+      }
+    }
+    this.inlineYamlText.set(this.resolveDeclaredFileYaml(repo, filePath));
+    this.inlineYamlLoading.set(false);
+  }
+
+  private resolveDeclaredFileYaml(repo: string, filePath: string): string {
+    const wfs = this.store.repoWorkflows();
+    const wf = wfs[repo]?.workflows.find((w) => w.path === filePath);
+    if (wf?.text) return wf.text;
+
+    const status = this.store.repoDefaults()[repo]?.declarationsStatus;
+    const trig = status?.triggerDetails?.find((d) => d.path === filePath);
+    if (trig || (status?.triggers ?? []).includes(filePath)) {
+      return synthesizeTriggerYaml(
+        repo,
+        filePath,
+        trig,
+        this.store.templates(),
+      );
+    }
+
+    const tmpl = this.store
+      .templates()
+      .find(
+        (t) => t.declaredIn?.repo === repo && t.declaredIn.path === filePath,
+      );
+    if (tmpl) {
+      return synthesizeDeclaredTemplateYaml(repo, filePath, tmpl);
+    }
+
+    const suite = this.store
+      .suites()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (suite) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `name: ${suite.name}`,
+        `mode: ${suite.mode}`,
+      ];
+      if (suite.maxPasses) lines.push(`maxPasses: ${suite.maxPasses}`);
+      if (suite.items.length) {
+        lines.push("items:");
+        for (const it of suite.items) {
+          lines.push(`  - template: ${it.templateName || it.templateId}`);
+        }
+      }
+      return lines.join("\n");
+    }
+
+    const sched = this.store
+      .schedules()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (sched) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `title: ${sched.title}`,
+        `cadence: ${formatCadence(sched.recurrence, sched.timeZone)}`,
+      ];
+      if (sched.overlap) lines.push(`overlap: ${sched.overlap}`);
+      return lines.join("\n");
+    }
+
+    return `# ${repo}:${filePath}\n# Synced repository declaration.`;
   }
 
   protected scheduledTasksFor(s: Schedule) {
@@ -4069,6 +5532,125 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.schedDialogOpen.set(false);
   }
 
+  // The dialogs' unsaved-edit guard, as the classic panes have it
+  // (useUnsavedEdits): each dialog's draft is snapshotted when it opens,
+  // and Cancel, Escape, the scrim, Back and the rail ask before a draft
+  // that differs is dropped -- once, however many of them fire for one
+  // gesture. Save closes through close*Dialog / .set(false) and does not ask.
+  private schedBaseline = "";
+  private tmplBaseline = "";
+  private suiteBaseline = "";
+
+  private schedDraftSnapshot(): string {
+    return JSON.stringify([
+      this.schedTargetKind(),
+      this.sDraftTitle(),
+      this.sDraftDesc(),
+      this.sDraftKeepRunning(),
+      this.sDraftAdmission(),
+      this.sDraftHosting(),
+      this.sDraftCaps(),
+      this.buildScheduleCreatePayload(),
+    ]);
+  }
+
+  private tmplDraftSnapshot(): string {
+    return JSON.stringify([
+      this.tDraftName(),
+      this.tDraftTitle(),
+      this.tDraftDesc(),
+      this.tDraftRepo(),
+      this.tDraftFields(),
+      this.tDraftParamsCsv(),
+      this.tDraftAutoMerge(),
+      this.tDraftModel(),
+      this.tDraftKeepRunning(),
+      this.tDraftAdmission(),
+      this.tDraftHosting(),
+      this.tDraftCaps(),
+      this.tDraftQaFlowRef(),
+    ]);
+  }
+
+  private suiteDraftSnapshot(): string {
+    return JSON.stringify([
+      this.stDraftMode(),
+      this.stDraftCount(),
+      this.stDraftMaxPasses(),
+      this.buildSuiteCreatePayload(),
+      this.stDraftQaFlowRef(),
+    ]);
+  }
+
+  // unsavedDialogs names the open dialogs whose draft differs from what
+  // they opened with, topmost last.
+  private unsavedDialogs(): string[] {
+    const out: string[] = [];
+    if (
+      this.schedDialogOpen() &&
+      this.schedDraftSnapshot() !== this.schedBaseline
+    ) {
+      out.push("schedule");
+    }
+    if (
+      this.suiteDialogOpen() &&
+      this.suiteDraftSnapshot() !== this.suiteBaseline
+    ) {
+      out.push("suite");
+    }
+    if (
+      this.tmplDialogOpen() &&
+      this.tmplDraftSnapshot() !== this.tmplBaseline
+    ) {
+      out.push("template");
+    }
+    return out;
+  }
+
+  private askDiscard(what: string): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved changes to this ${what}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected async dismissScheduleDialog(): Promise<void> {
+    if (
+      this.schedDraftSnapshot() !== this.schedBaseline &&
+      !(await this.askDiscard("schedule"))
+    ) {
+      return;
+    }
+    this.closeScheduleDialog();
+  }
+
+  protected async dismissTemplateDialog(): Promise<void> {
+    if (
+      this.tmplDraftSnapshot() !== this.tmplBaseline &&
+      !(await this.askDiscard("template"))
+    ) {
+      return;
+    }
+    this.tmplDialogOpen.set(false);
+  }
+
+  protected async dismissSuiteDialog(): Promise<void> {
+    if (
+      this.suiteDraftSnapshot() !== this.suiteBaseline &&
+      !(await this.askDiscard("suite"))
+    ) {
+      return;
+    }
+    this.suiteDialogOpen.set(false);
+  }
+
   protected closeLaunchDialog(): void {
     this.openPicker.set(null);
     this.dialogError.set(null);
@@ -4145,6 +5727,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteSchedule(s.id);
         if (this.selectedScheduleId() === s.id) {
           this.selectedScheduleId.set(null);
+          this.scheduleComposition.set(null);
+        }
+        if (this.activeTab() === "schedules" && this.itemId() === s.id) {
+          void this.router.navigate(["/processes", "schedules"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Schedule deleted.");
       },
@@ -4209,6 +5798,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         existing.recurrence?.gitRef?.ref ?? "refs/heads/main",
       );
       this.sDraftOverlap.set(existing.overlap || "skip");
+      this.sDraftModel.set(existing.model || "");
+      this.sDraftKeepRunning.set(!!existing.keepRunning);
+      this.sDraftAdmission.set(existing.admission || "standard");
+      this.sDraftHosting.set(existing.hosting || "unattended");
+      this.sDraftCaps.set([...(existing.capabilities ?? [])]);
+      this.sDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.schedTargetKind.set("prompt");
       this.sDraftTitle.set("");
@@ -4230,8 +5825,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftGitRefRepo.set("");
       this.sDraftGitRef.set("refs/heads/main");
       this.sDraftOverlap.set("skip");
+      this.sDraftModel.set("");
+      this.sDraftKeepRunning.set(false);
+      this.sDraftAdmission.set("standard");
+      this.sDraftHosting.set("unattended");
+      this.sDraftCaps.set([]);
+      this.sDraftQaFlowRef.set("");
     }
     this.schedDialogOpen.set(true);
+    this.schedBaseline = this.schedDraftSnapshot();
   }
 
   protected canSaveSchedule(): boolean {
@@ -4325,6 +5927,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       timeZone: this.sDraftTz().trim() || undefined,
       overlap: this.sDraftOverlap(),
     };
+    // A suite decides the model of everything it runs; the API refuses
+    // one beside a suiteId. "" is the default, the same as saying nothing.
+    if (tk !== "suite" && this.sDraftModel()) {
+      baseReq.model = this.sDraftModel();
+    }
     if (tk === "template") {
       baseReq.templateId = this.sDraftTemplateId();
     } else if (tk === "suite") {
@@ -4332,19 +5939,69 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     } else {
       baseReq.title = this.sDraftTitle().trim();
       baseReq.description = this.sDraftDesc().trim();
-      baseReq.capabilities = [];
+      baseReq.keepRunning = this.sDraftKeepRunning();
+      // Only when it differs from the default: raising admission is
+      // gated for a limited role, so a form that says nothing must not ask.
+      if (this.sDraftAdmission() !== "standard") {
+        baseReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== "unattended") {
+        baseReq.hosting = this.sDraftHosting();
+      }
+      baseReq.capabilities = [...this.sDraftCaps()];
       baseReq.reads = [];
       baseReq.writes = [];
+    }
+    const qaFlowRef = this.sDraftQaFlowRef().trim();
+    if (qaFlowRef) {
+      baseReq.qaFlowRef = qaFlowRef;
     }
     return baseReq;
   }
 
+  /**
+   * buildSchedulePreviewPayload is the create body as the draft
+   * composition endpoint must see it. That endpoint has no saved row to
+   * fall back on, so the model, admission and hosting in force are always
+   * sent -- for a template-backed schedule, the saved schedule's own
+   * (a declared schedule may raise its template's admission), and its own
+   * capabilities, which its firings grant beside the template's
+   * (ScheduleOverlay.jsx previewRequest).
+   */
+  private buildSchedulePreviewPayload(): CreateScheduleRequest {
+    const req = this.buildScheduleCreatePayload();
+    const tk = this.schedTargetKind();
+    if (tk === "suite") return req;
+    const editing = this.editingSchedule();
+    const sameTemplate =
+      tk === "template" &&
+      !!editing?.templateId &&
+      editing.templateId === this.sDraftTemplateId();
+    req.model = this.sDraftModel();
+    if (tk === "prompt") {
+      req.admission = this.sDraftAdmission();
+      req.hosting = this.sDraftHosting();
+    } else {
+      req.admission = sameTemplate ? editing?.admission || "" : "";
+      req.hosting = sameTemplate ? editing?.hosting || "" : "";
+      if (sameTemplate && (editing?.capabilities ?? []).length > 0) {
+        req.capabilities = [...(editing?.capabilities ?? [])];
+      }
+    }
+    return req;
+  }
+
   private buildScheduleUpdatePayload(editing: Schedule): UpdateScheduleRequest {
     if (editing.system) {
+      // One of grain's own schedules: its model is the deployment's to
+      // choose, like its cadence (ui.UpdateScheduleRequest.Model).
       return {
         recurrence: this.buildRecurrenceDraft(),
         timeZone: this.sDraftTz().trim() || undefined,
         overlap: this.sDraftOverlap(),
+        ...(this.sDraftModel() !== (editing.model || "")
+          ? { model: this.sDraftModel() }
+          : {}),
         revision: editing.revision,
       };
     }
@@ -4357,6 +6014,17 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       overlap: this.sDraftOverlap(),
       revision: editing.revision,
     };
+    const qaFlowRef = this.sDraftQaFlowRef().trim();
+    if (qaFlowRef || editing.qaFlowRef) {
+      patchReq.qaFlowRef = qaFlowRef;
+    }
+    // Each setting below only when it changed, as the classic form sends
+    // them: absent leaves the saved value alone (ui.UpdateScheduleRequest),
+    // and resending an unchanged admission would ask a limited role's
+    // grant gate for a raise nobody made.
+    if (tk !== "suite" && this.sDraftModel() !== (editing.model || "")) {
+      patchReq.model = this.sDraftModel();
+    }
     if (tk === "template") {
       patchReq.templateId = this.sDraftTemplateId();
     } else if (tk === "suite") {
@@ -4367,6 +6035,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (editing.templateId) {
         patchReq.templateId = "";
       }
+      if (this.sDraftKeepRunning() !== !!editing.keepRunning) {
+        patchReq.keepRunning = this.sDraftKeepRunning();
+      }
+      if (this.sDraftAdmission() !== (editing.admission || "standard")) {
+        patchReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== (editing.hosting || "unattended")) {
+        patchReq.hosting = this.sDraftHosting();
+      }
+      if (!sameList(this.sDraftCaps(), editing.capabilities)) {
+        patchReq.capabilities = [...this.sDraftCaps()];
+      }
     }
     return patchReq;
   }
@@ -4375,7 +6055,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.dialogError.set(null);
     try {
       const comp = await this.store.previewDraftSchedule(
-        this.buildScheduleCreatePayload(),
+        this.buildSchedulePreviewPayload(),
       );
       this.draftSchedComposition.set(comp);
     } catch (err) {
@@ -4400,7 +6080,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         const created = await this.store.createSchedule(
           this.buildScheduleCreatePayload(),
         );
-        this.selectSchedule(created.id, false);
+        this.selectSchedule(created.id, true);
         this.snackbar.show("Schedule created.");
       }
       this.closeScheduleDialog();
@@ -4482,6 +6162,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set(clonedFields);
       this.tDraftParamsCsv.set(clonedFields.map((f) => f.name).join(", "));
       this.tDraftAutoMerge.set(existing.autoMerge);
+      this.tDraftModel.set(existing.model || "");
+      this.tDraftKeepRunning.set(!!existing.keepRunning);
+      this.tDraftAdmission.set(existing.admission || "standard");
+      this.tDraftHosting.set(existing.hosting || "unattended");
+      this.tDraftCaps.set([...(existing.capabilities ?? [])]);
+      this.tDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.tDraftName.set("");
       this.tDraftTitle.set("");
@@ -4490,8 +6176,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set([]);
       this.tDraftParamsCsv.set("");
       this.tDraftAutoMerge.set(false);
+      this.tDraftModel.set("");
+      this.tDraftKeepRunning.set(false);
+      this.tDraftAdmission.set("standard");
+      this.tDraftHosting.set("unattended");
+      this.tDraftCaps.set([]);
+      this.tDraftQaFlowRef.set("");
     }
     this.tmplDialogOpen.set(true);
+    this.tmplBaseline = this.tmplDraftSnapshot();
   }
 
   protected onTemplateParamsCsvInput(csv: string): void {
@@ -4543,6 +6236,42 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.access.can(route, targetRepo);
   }
 
+  /**
+   * buildTemplateUpdatePayload is the PATCH for an edited template: its
+   * text, binding and fields as before, and each setting below only when
+   * it changed (TemplateOverlay.jsx): absent leaves the saved value alone.
+   */
+  private buildTemplateUpdatePayload(
+    editing: Template,
+    fields: TemplateField[],
+  ): UpdateTemplateRequest {
+    const req: UpdateTemplateRequest = {
+      name: this.tDraftName().trim(),
+      title: this.tDraftTitle().trim(),
+      description: this.tDraftDesc(),
+      repo: this.tDraftRepo().trim(),
+      fields,
+      autoMerge: this.tDraftAutoMerge(),
+      revision: editing.revision,
+    };
+    if (this.tDraftModel() !== (editing.model || "")) {
+      req.model = this.tDraftModel();
+    }
+    if (this.tDraftKeepRunning() !== !!editing.keepRunning) {
+      req.keepRunning = this.tDraftKeepRunning();
+    }
+    if (this.tDraftAdmission() !== (editing.admission || "standard")) {
+      req.admission = this.tDraftAdmission();
+    }
+    if (this.tDraftHosting() !== (editing.hosting || "unattended")) {
+      req.hosting = this.tDraftHosting();
+    }
+    if (!sameList(this.tDraftCaps(), editing.capabilities)) {
+      req.capabilities = [...this.tDraftCaps()];
+    }
+    return req;
+  }
+
   protected async saveTemplateDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveTemplate()) return;
     this.dialogError.set(null);
@@ -4550,16 +6279,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const fields = structuredClone(this.tDraftFields());
     try {
       const editing = this.editingTemplate();
+      const qaFlowRef = this.tDraftQaFlowRef().trim();
       if (editing) {
-        const updated = await this.store.updateTemplate(editing.id, {
-          name: this.tDraftName().trim(),
-          title: this.tDraftTitle().trim(),
-          description: this.tDraftDesc(),
-          repo: this.tDraftRepo().trim(),
-          fields,
-          autoMerge: this.tDraftAutoMerge(),
-          revision: editing.revision,
-        });
+        const patchReq = this.buildTemplateUpdatePayload(editing, fields);
+        if (qaFlowRef || editing.qaFlowRef) {
+          patchReq.qaFlowRef = qaFlowRef;
+        }
+        const updated = await this.store.updateTemplate(editing.id, patchReq);
         this.selectTemplate(updated.id, false);
         const selSuite = this.selectedSuiteId();
         if (selSuite) this.selectSuite(selSuite, false);
@@ -4567,19 +6293,31 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Template updated.");
       } else {
-        const created = await this.store.createTemplate({
+        const createReq: CreateTemplateRequest = {
           name: this.tDraftName().trim(),
           title: this.tDraftTitle().trim(),
           description: this.tDraftDesc(),
           repo: this.tDraftRepo().trim(),
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
-          capabilities: [],
+          keepRunning: this.tDraftKeepRunning(),
+          ...(this.tDraftModel() ? { model: this.tDraftModel() } : {}),
+          ...(this.tDraftAdmission() !== "standard"
+            ? { admission: this.tDraftAdmission() }
+            : {}),
+          ...(this.tDraftHosting() !== "unattended"
+            ? { hosting: this.tDraftHosting() }
+            : {}),
+          capabilities: [...this.tDraftCaps()],
           reads: [],
           writes: [],
           customFields: {},
-        });
-        this.selectTemplate(created.id, false);
+        };
+        if (qaFlowRef) {
+          createReq.qaFlowRef = qaFlowRef;
+        }
+        const created = await this.store.createTemplate(createReq);
+        this.selectTemplate(created.id, true);
         this.snackbar.show("Template created.");
       }
       this.tmplDialogOpen.set(false);
@@ -4600,6 +6338,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteTemplate(t.id);
         if (this.selectedTemplateId() === t.id) {
           this.selectedTemplateId.set(null);
+          this.templateComposition.set(null);
+        }
+        if (this.activeTab() === "templates" && this.itemId() === t.id) {
+          void this.router.navigate(["/processes", "templates"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Template deleted.");
       },
@@ -4622,6 +6367,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       );
       this.stDraftRequireApproval.set(!!existing.requireApproval);
       this.stDraftAutoMerge.set(!!existing.autoMerge);
+      this.stDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.stDraftName.set("");
       this.stDraftMode.set("count");
@@ -4631,8 +6377,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.stDraftTemplateIds.set(firstId ? [firstId] : []);
       this.stDraftRequireApproval.set(false);
       this.stDraftAutoMerge.set(true);
+      this.stDraftQaFlowRef.set("");
     }
     this.suiteDialogOpen.set(true);
+    this.suiteBaseline = this.suiteDraftSnapshot();
   }
 
   protected toggleSuiteTemplateId(id: string): void {
@@ -4679,7 +6427,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const untilClean = this.stDraftMode() === "until_clean";
     const whole = (n: number, dflt: number) =>
       Number.isInteger(n) && n >= 1 ? n : dflt;
-    return {
+    const req: CreateSuiteRequest = {
       name: this.stDraftName().trim(),
       templateIds: this.stDraftTemplateIds(),
       mode: this.stDraftMode(),
@@ -4690,6 +6438,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       requireApproval: this.stDraftRequireApproval(),
       autoMerge: this.stDraftAutoMerge(),
     };
+    const qaFlowRef = this.stDraftQaFlowRef().trim();
+    if (qaFlowRef) {
+      req.qaFlowRef = qaFlowRef;
+    }
+    return req;
   }
 
   protected async previewSuiteDraft(): Promise<void> {
@@ -4713,18 +6466,23 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     try {
       const editing = this.editingSuite();
       const payload = this.buildSuiteCreatePayload();
+      const qaFlowRef = this.stDraftQaFlowRef().trim();
       if (editing) {
-        const updated = await this.store.updateSuite(editing.id, {
+        const patchReq: UpdateSuiteRequest = {
           ...payload,
           revision: editing.revision,
-        });
+        };
+        if (qaFlowRef || editing.qaFlowRef) {
+          patchReq.qaFlowRef = qaFlowRef;
+        }
+        const updated = await this.store.updateSuite(editing.id, patchReq);
         this.selectSuite(updated.id, false);
         const selSched = this.selectedScheduleId();
         if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Suite updated.");
       } else {
         const created = await this.store.createSuite(payload);
-        this.selectSuite(created.id, false);
+        this.selectSuite(created.id, true);
         this.snackbar.show("Suite created.");
       }
       this.suiteDialogOpen.set(false);
@@ -4743,7 +6501,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         await this.store.deleteSuite(st.id);
-        if (this.selectedSuiteId() === st.id) this.selectedSuiteId.set(null);
+        if (this.selectedSuiteId() === st.id) {
+          this.selectedSuiteId.set(null);
+          this.suiteComposition.set(null);
+        }
+        if (this.activeTab() === "suites" && this.itemId() === st.id) {
+          void this.router.navigate(["/processes", "suites"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
+        }
         this.snackbar.show("Suite deleted.");
       },
     });
@@ -4891,9 +6658,83 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private discardDraftResolve: ((ok: boolean) => void) | null = null;
+  private bypassUnsavedDraftGuard = false;
+
+  private hasUnsavedQaDraft(): boolean {
+    return Boolean(this.doc.querySelector('[data-qa-unsaved-draft="true"]'));
+  }
+
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedDialogs().length > 0) ev.preventDefault();
+  }
+
+  canDeactivate(): boolean | Promise<boolean> {
+    if (this.bypassUnsavedDraftGuard) return true;
+    const dialogs = this.unsavedDialogs();
+    if (dialogs.length > 0) {
+      return this.askDiscard(dialogs[dialogs.length - 1]).then((ok) => {
+        if (ok) {
+          this.closeScheduleDialog();
+          this.tmplDialogOpen.set(false);
+          this.suiteDialogOpen.set(false);
+        }
+        return ok;
+      });
+    }
+    if (!this.hasUnsavedQaDraft()) return true;
+    return this.promptDiscardQaDraft();
+  }
+
+  private promptDiscardQaDraft(): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unpublished workflow draft?",
+        message:
+          "You have an unpublished workflow draft in Software Workflow & QA. Discard your unsaved changes?",
+        accept: "Discard draft",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected onTabClick(ev: MouseEvent, tabId: ProcessTab): void {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    if (tabId === this.activeTab() || !this.hasUnsavedQaDraft()) {
+      return;
+    }
+    ev.preventDefault();
+    void this.promptDiscardQaDraft().then((ok) => {
+      if (!ok) return;
+      this.bypassUnsavedDraftGuard = true;
+      void this.router
+        .navigate(["/processes", tabId], { queryParamsHandling: "merge" })
+        .finally(() => {
+          this.bypassUnsavedDraftGuard = false;
+        });
+    });
+  }
+
   protected async onConfirmDone(accepted: boolean): Promise<void> {
     const req = this.confirming();
+    const resolveDraft = this.discardDraftResolve;
+    this.discardDraftResolve = null;
     this.confirming.set(null);
+    if (resolveDraft) {
+      resolveDraft(accepted);
+    }
     if (!accepted || !req) return;
     try {
       await req.run();

@@ -35,6 +35,39 @@ function workstreamMultiSegmentMatcher(
   };
 }
 
+// processesRouteMatcher keeps every /processes path on a single route config
+// so Angular reuses ProcessesPageComponent across tab and item selection
+// instead of tearing the page down and dropping filters, scroll position, and
+// keyboard focus.
+export function processesRouteMatcher(
+  segments: UrlSegment[],
+): UrlMatchResult | null {
+  if (segments[0]?.path !== "processes") return null;
+  if (segments.length === 1) {
+    return { consumed: segments };
+  }
+  if (segments.length === 2) {
+    return { consumed: segments, posParams: { tab: segments[1] } };
+  }
+  if (segments.length === 3) {
+    return {
+      consumed: segments,
+      posParams: { tab: segments[1], itemId: segments[2] },
+    };
+  }
+  if (
+    segments.length === 4 &&
+    segments[1]?.path === "suites" &&
+    segments[2]?.path === "runs"
+  ) {
+    return {
+      consumed: segments,
+      posParams: { tab: segments[1], runId: segments[3] },
+    };
+  }
+  return null;
+}
+
 // Where the classic UI's System tabs (/system/<tab>) and its older
 // addresses live in this app: a bookmark or a link pasted out of the
 // classic UI lands on the page that has the same content rather than
@@ -220,6 +253,10 @@ export const repoRouteChanged = (
 ): boolean =>
   ["host", "owner", "name", "tab"].some((k) => from.params[k] !== to.params[k]);
 
+const processesLeaveGuard = (
+  page: { canDeactivate?: () => boolean | Promise<boolean> } | null,
+) => (page?.canDeactivate ? page.canDeactivate() : true);
+
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
 // have yet goes to the Inbox; the shell's links take the reader to the
@@ -311,14 +348,6 @@ export const routes: Routes = [
       import("./ci/ci-page.component").then((m) => m.CIPageComponent),
   },
   {
-    path: "processes/suites/runs/:runId",
-    title: "Suite run · grain",
-    loadComponent: () =>
-      import("./processes/processes-page.component").then(
-        (m) => m.ProcessesPageComponent,
-      ),
-  },
-  {
     path: "processes/schedule/:itemId",
     redirectTo: "processes/schedules/:itemId",
     pathMatch: "full",
@@ -334,24 +363,10 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    path: "processes",
-    title: "Processes · grain",
-    loadComponent: () =>
-      import("./processes/processes-page.component").then(
-        (m) => m.ProcessesPageComponent,
-      ),
-  },
-  {
-    path: "processes/:tab",
-    title: "Processes · grain",
-    loadComponent: () =>
-      import("./processes/processes-page.component").then(
-        (m) => m.ProcessesPageComponent,
-      ),
-  },
-  {
-    path: "processes/:tab/:itemId",
-    title: "Processes · grain",
+    matcher: processesRouteMatcher,
+    title: (route) =>
+      route.params["runId"] ? "Suite run · grain" : "Processes · grain",
+    canDeactivate: [processesLeaveGuard],
     loadComponent: () =>
       import("./processes/processes-page.component").then(
         (m) => m.ProcessesPageComponent,
@@ -452,6 +467,17 @@ export const routes: Routes = [
   {
     path: "settings/:section",
     title: "Settings · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+  },
+  // One capability server's page, /settings/capabilities/<encoded id>
+  // as the classic serverPath gives it: the id is a URL, so it is one
+  // %2F-escaped segment.
+  {
+    path: "settings/:section/:item",
+    title: "Capability server · Settings · grain",
     loadComponent: () =>
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,

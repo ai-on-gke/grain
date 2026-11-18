@@ -321,10 +321,18 @@ describe("NewTaskSheetComponent", () => {
     const file = new File(["repro log"], "repro.txt", { type: "text/plain" });
     Object.defineProperty(fileInput, "files", { value: [file] });
     fileInput.dispatchEvent(new Event("change"));
-    await settle(f);
-    expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
-      "repro.txt",
+    // Staging reads the file (File.arrayBuffer), real I/O that can outlast
+    // settle()'s fixed pause on a busy runner, so wait for the chip itself.
+    await vi.waitFor(
+      () => {
+        f.detectChanges();
+        expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
+          "repro.txt",
+        );
+      },
+      { timeout: 5_000, interval: 20 },
     );
+    await settle(f);
 
     // Expand Capabilities & repo context section and toggle capability + read repo.
     q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();
@@ -737,6 +745,53 @@ describe("NewTaskSheetComponent", () => {
         '[data-testid="nt-template-opt-declared:template:sidthe:grain:bugfix"]',
       ),
     ).toBeTruthy();
+  });
+
+  it("filters title and body out of inline template composition preview pills", async () => {
+    const api = new FakeApi();
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/templates/{id}/composition") {
+        api.calls.push({ route, params, query });
+        return Promise.resolve({
+          kind: "task",
+          repo: "sidthe/grain",
+          tasks: [
+            {
+              title: "Fix auth",
+              fields: [
+                { name: "title", values: ["Fix auth"], source: "template" },
+                {
+                  name: "body",
+                  values: ["Long multi-paragraph prompt body text here"],
+                  source: "template",
+                },
+                { name: "repo", values: ["sidthe/grain"], source: "template" },
+                { name: "model", values: ["smart"], source: "deployment" },
+              ],
+            },
+          ],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+
+    const preview = q('[data-testid="nt-composition-preview"]');
+    expect(preview).toBeTruthy();
+    expect(preview!.textContent).toContain("Preview: Fix auth");
+    expect(preview!.textContent).toContain("repo: sidthe/grain");
+    expect(preview!.textContent).toContain("model: smart");
+    expect(preview!.textContent).not.toContain("title: Fix auth");
+    expect(preview!.textContent).not.toContain(
+      "Long multi-paragraph prompt body text here",
+    );
   });
 
   it("switches to Autonomous goal posture, configures bounded passes/wall-clock/mock-secrets, and files goalMode", async () => {
