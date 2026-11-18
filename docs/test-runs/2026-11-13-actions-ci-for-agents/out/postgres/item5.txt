@@ -1,0 +1,49 @@
+package cache: http://10.240.0.1:36145
+== a task sandbox before any trusted write: reads nothing, writes are refused
+--- run_command isError=false
+sandbox-1 GET action: action not found 404
+--- run_command isError=false
+sandbox-1 GOCACHEPROG: /tmp/grain-gocacheprog http://10.240.0.1:36145
+sandbox-1 PUT output: 403
+sandbox-1 PUT action: 403 grain's Go build cache only takes writes from authenticated CI jobs: this sandbox reads the trusted build cache and keeps what it compiles to itself.
+sandbox-1 PUT action, forged token: 403
+sandbox-1 PUT trusted/action: 403
+--- run_command isError=false
+sandbox-1-after-own-put GET action: action not found 404
+--- run_command isError=false
+sandbox go build: ok (uploads are best effort)
+== a push to main runs base-branch Grain CI, a trusted writer
+main is now ed96b1ec7666
+repo acme/widgets: 5 of 5 remembered runs match
+ad403e82cbf549e3 skipped   acme/widgets             main                     release        0s  no jobs
+a54719431045522c success   acme/widgets             main                     push          29s  1 jobs, all green
+310e9534e3c38081 failure   acme/widgets             main                     release         -  no jobs
+b2a8182e1367c81d failure   acme/widgets             main                     push            -  no jobs
+run: a54719431045522c
+run a54719431045522c  success  29s
+repo:      acme/widgets
+ref:       main (ed96b1ec7666)
+event:     push
+ci GOCACHEPROG: /tmp/grain-gocacheprog http://job:<token>@10.240.0.1:36145
+ci PUT output: 200
+ci PUT action: 200 
+ci PUT action, forged token: 403
+ci PUT trusted/action: 200
+ci GET action: {"OutputID":"544863298700cc6138f1c818337ab0f3c63faabe1eacec378352ba7c5a831765","Size":38,"Time":"2026-11-16T07:33:07.565133565Z"} 200
+ci GET output: trusted output from the CI job on main
+grain daemon: package cache: refused PUT /gocache/output/d9d9b6d2ebe4f93d11930038bd2cda1bf2951445de3d87a02075b7a66c25de80: grain's Go build cache only takes writes from authenticated CI jobs: this sandbox reads the trusted build cache and keeps what it compiles to itself.
+grain ci: ca54719-0: acme/widgets's main is a reviewed branch, so this job writes the shared Go build cache
+== a later task sandbox reads the CI job's entry, and still cannot overwrite it
+--- run_command isError=false
+sandbox-2 GET action: {"OutputID":"544863298700cc6138f1c818337ab0f3c63faabe1eacec378352ba7c5a831765","Size":38,"Time":"2026-11-16T07:33:07.565133565Z"} 200
+sandbox-2 GET output: trusted output from the CI job on main
+--- run_command isError=false
+sandbox-2 GOCACHEPROG: /tmp/grain-gocacheprog http://10.240.0.1:36145
+sandbox-2 PUT output: 403
+sandbox-2 PUT action: 403 grain's Go build cache only takes writes from authenticated CI jobs: this sandbox reads the trusted build cache and keeps what it compiles to itself.
+sandbox-2 PUT action, forged token: 403
+sandbox-2 PUT trusted/action: 403
+--- run_command isError=false
+sandbox-2-after-own-put GET action: {"OutputID":"544863298700cc6138f1c818337ab0f3c63faabe1eacec378352ba7c5a831765","Size":38,"Time":"2026-11-16T07:33:07.565133565Z"} 200
+sandbox-2-after-own-put GET output: trusted output from the CI job on main
+expected: CI OutputID=544863298700cc6138f1c818337ab0f3c63faabe1eacec378352ba7c5a831765; a sandbox's OutputID=d9d9b6d2ebe4f93d11930038bd2cda1bf2951445de3d87a02075b7a66c25de80

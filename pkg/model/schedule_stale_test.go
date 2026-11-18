@@ -316,3 +316,67 @@ func TestStaleSchedulesFlagsNonCronWorkflowSchedulesMissingGrainCI(t *testing.T)
 		t.Fatalf("StaleSchedules IDs = %q, want %q (workflow cron skipped, non-cron schedules flagged)", got, want)
 	}
 }
+
+// A schedule held by `skip-when: publishing-held` whose LastRunAt is past
+// 2*cadence is marked deliberately held and names baseBranchPublishing[].triageTaskID
+// rather than appearing silently stale.
+func TestStaleSchedulesMarksPublishingHeldScheduleAsHeldAndNamesTriageTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	now := time.Date(2026, 11, 15, 22, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	since := now.Add(-6 * time.Hour)
+	finished := now.Add(-time.Hour)
+	if err := store.PutBaseBranchRelease(ctx, model.BaseBranchRelease{
+		Repo: repo, Branch: "main", Commit: "7746d62", RunID: "rel-12",
+		StartedAt: now.Add(-2 * time.Hour), FinishedAt: &finished, Conclusion: "failure",
+		Failures: 4, FailingSince: &since,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID: "4256", Title: "Triage main's failing releases", Target: &repo, Base: "main",
+		Tags: []string{model.BaseReleaseTriageBranchTag(repo, "main")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	lastRun := now.Add(-3 * time.Hour)
+	for _, tc := range []struct {
+		id      string
+		nextRun time.Time
+	}{
+		{"train-due", now.Add(-2 * time.Hour)},
+		{"train-future-next", now.Add(10 * time.Minute)},
+	} {
+		if err := store.PutSchedule(ctx, model.Schedule{
+			ID: tc.id, Title: "Release train", Target: repo, Base: "main",
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 20},
+			Overlap:    model.OverlapSkip, SkipWhen: model.SkipWhenPublishingHeld,
+			Enabled: true, LastRunAt: &lastRun, CreatedAt: now.Add(-48 * time.Hour), NextRunAt: tc.nextRun,
+		}); err != nil {
+			t.Fatalf("PutSchedule(%s): %v", tc.id, err)
+		}
+	}
+
+	stale, err := store.StaleSchedules(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 2 {
+		t.Fatalf("StaleSchedules = %+v, want 2 held schedules", stale)
+	}
+	for _, s := range stale {
+		if !s.Held {
+			t.Errorf("%s: Held = false, want true", s.ID)
+		}
+		if s.HeldByTaskID != "4256" {
+			t.Errorf("%s: HeldByTaskID = %q, want 4256", s.ID, s.HeldByTaskID)
+		}
+		if !strings.Contains(s.Reason, "publishing held by task 4256") {
+			t.Errorf("%s: Reason = %q, want it to name triage task 4256", s.ID, s.Reason)
+		}
+	}
+}

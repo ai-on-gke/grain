@@ -210,6 +210,100 @@ test("a theme switch redraws a diagram in the other palette in place", async ({
   }
 });
 
+test("a diagram's %%{init}%% cannot pin its own palette or run its click handlers", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    localStorage.setItem("grain.themeMode", "light");
+    (window as unknown as { __pwned: number }).__pwned = 0;
+    window.alert = () => {
+      (window as unknown as { __pwned: number }).__pwned++;
+    };
+  });
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => {
+    dialogs.push(d.message());
+    void d.dismiss();
+  });
+  const task = await api(demoServer, accessCode, "POST", "/api/tasks", {
+    title: `Mermaid init ${Date.now()}`,
+  });
+  try {
+    await api(
+      demoServer,
+      accessCode,
+      "POST",
+      `/api/tasks/${task.id}/comments`,
+      {
+        body: [
+          "```mermaid Plain",
+          "flowchart LR",
+          "  A --> B",
+          "```",
+          "",
+          "```mermaid Pinned",
+          "%%{init: {'theme': 'dark', 'securityLevel': 'loose', 'themeVariables': {'primaryColor': '#ff0000', 'mainBkg': '#ff0000'}, 'themeCSS': 'rect { fill: #ff0000 !important; }'}}%%",
+          "flowchart LR",
+          '  A["<img src=x onerror=alert(1)>"] --> B',
+          "  click B call alert(2)",
+          '  click A "javascript:alert(3)"',
+          "```",
+        ].join("\n"),
+      },
+    );
+    await page.goto(`task/${task.id}`);
+    const fill = (name: string) =>
+      page
+        .getByRole("region", { name })
+        .locator("svg .node rect")
+        .first()
+        .evaluate((el) => getComputedStyle(el).fill);
+    const pinned = page.getByRole("region", { name: "Pinned" }).locator("svg");
+    await expect(pinned).toBeVisible({ timeout: 20_000 });
+    await expect(
+      page.getByRole("region", { name: "Plain" }).locator("svg"),
+    ).toBeVisible();
+    // The directive's colours and CSS are dropped: both diagrams wear the
+    // palette ThemeService picked, and follow it through a switch.
+    expect(await fill("Pinned")).not.toBe("rgb(255, 0, 0)");
+    expect(await fill("Pinned")).toBe(await fill("Plain"));
+    const light = await fill("Pinned");
+    await page.locator("body").press("t");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect.poll(() => fill("Pinned")).not.toBe(light);
+    expect(await fill("Pinned")).toBe(await fill("Plain"));
+
+    // Clicking the nodes runs nothing, and nothing unsafe is in the SVG.
+    for (const node of await pinned.locator(".node").all()) {
+      await node.click({ force: true });
+    }
+    expect(dialogs).toEqual([]);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __pwned: number }).__pwned,
+      ),
+    ).toBe(0);
+    expect(
+      await pinned
+        .locator("script, foreignObject, image, [onclick], [onerror]")
+        .count(),
+    ).toBe(0);
+    expect(
+      await pinned
+        .locator('a[href^="javascript"], a[*|href^="javascript"]')
+        .count(),
+    ).toBe(0);
+  } finally {
+    await fetch(`${demoServer}/api/tasks/${task.id}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessCode}` },
+    }).catch(() => {});
+  }
+});
+
 test("hostile Mermaid image shapes, actor icons and style URLs never fetch remote URLs", async ({
   page,
   demoServer,
@@ -282,6 +376,109 @@ test("hostile Mermaid image shapes, actor icons and style URLs never fetch remot
     const safe = page.getByRole("region", { name: "Theme CSS" });
     await expect(safe.locator("svg")).toBeVisible({ timeout: 20_000 });
     await expect(safe.locator("svg")).toContainText("Safe");
+
+    expect(leaked).toEqual([]);
+  } finally {
+    await fetch(`${demoServer}/api/tasks/${task.id}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessCode}` },
+    }).catch(() => {});
+  }
+});
+
+test("YAML-anchored and tagged Mermaid @{...} image keys never fetch remote URLs", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  test.setTimeout(90_000);
+  const leaked: string[] = [];
+  await page.route("**/*evil.example*", (route) => {
+    leaked.push(route.request().url());
+    return route.abort();
+  });
+
+  const body = [
+    "```mermaid Anchored key",
+    "flowchart TD",
+    '  A@{ &a img: "https://evil.example/anchor.png", label: "x" }',
+    "```",
+    "",
+    "```mermaid Tagged key",
+    "flowchart TD",
+    '  A@{ !!str img: "https://evil.example/tag.png" }',
+    "```",
+    "",
+    "```mermaid Verbatim tagged key",
+    "flowchart TD",
+    '  A@{ !<tag:yaml.org,2002:str> img: "https://evil.example/verbatim-tag.png" }',
+    "```",
+    "",
+    "```mermaid Anchored quoted and combined key",
+    "flowchart TD",
+    '  A@{ &a "img": "https://evil.example/anchor-quoted.png" } --> B@{ &b !!str img: "https://evil.example/combined.png" }',
+    "```",
+    "",
+    "```mermaid Block anchored key",
+    "flowchart TD",
+    "  A@{",
+    "    label: x",
+    '    &k img: "https://evil.example/block-anchor.png"',
+    "  }",
+    "```",
+    "",
+    "```mermaid Quoted label @{ desync",
+    "flowchart TD",
+    '  X["@{ k: "]',
+    '  B@{ x: " #", img: "https://evil.example/string-desync.png", label: "x" }',
+    '  C["}"]',
+    "```",
+    "",
+    "```mermaid Sequence icon comment",
+    "sequenceDiagram",
+    "  participant A",
+    '  properties A: {"ic<!--x-->on": "https://evil.example/seq-comment.png"} # note',
+    "  A->>A: ping",
+    "```",
+    "",
+    "```mermaid Safe anchored shape",
+    "flowchart LR",
+    "  A@{ &s shape: rect, label: 'ok' } --> B[Done]",
+    "```",
+  ].join("\n");
+
+  const task = await api(demoServer, accessCode, "POST", "/api/tasks", {
+    title: `Mermaid YAML anchor/tag guard ${Date.now()}`,
+  });
+  try {
+    await api(
+      demoServer,
+      accessCode,
+      "POST",
+      `/api/tasks/${task.id}/comments`,
+      { body },
+    );
+    await page.goto(`task/${task.id}`);
+
+    for (const name of [
+      "Anchored key",
+      "Tagged key",
+      "Verbatim tagged key",
+      "Anchored quoted and combined key",
+      "Block anchored key",
+      "Quoted label @{ desync",
+      "Sequence icon comment",
+    ]) {
+      const region = page.getByRole("region", { name, exact: true });
+      await expect(region.getByRole("status")).toContainText(
+        "Diagram could not be rendered",
+        { timeout: 20_000 },
+      );
+    }
+
+    const safe = page.getByRole("region", { name: "Safe anchored shape" });
+    await expect(safe.locator("svg")).toBeVisible({ timeout: 20_000 });
+    await expect(safe.locator("svg")).toContainText("Done");
 
     expect(leaked).toEqual([]);
   } finally {

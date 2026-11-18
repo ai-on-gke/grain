@@ -467,6 +467,7 @@ const FOCUS_HEADING = "focusHeading";
                     testid="session-grants"
                     [offered]="store.offered()"
                     [held]="row.session.capabilities ?? []"
+                    [policyVerdicts]="true"
                     [disabled]="store.isBusy('grants')"
                     (heldChange)="onSessionGrantsChange($event)"
                   />
@@ -722,7 +723,9 @@ const FOCUS_HEADING = "focusHeading";
                 </div>
               </form>
             }
-          } @else if (store.loaded()) {
+          } @else if (store.loaded() && !store.loadError()) {
+            <!-- As with "No sessions yet": while the list could not be read,
+              a session missing from it is unknown, not deleted. -->
             <p class="empty-state">
               That session does not exist.
               <a routerLink="/sessions">Back to sessions</a>

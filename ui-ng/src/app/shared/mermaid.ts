@@ -31,6 +31,7 @@
 // just above each fence (### Before / ### After) -- become one comparison
 // block that shows them side by side, one at a time, or stacked.
 
+import { JSON_SCHEMA, load as loadYaml } from "js-yaml";
 import type { Token, Tokens } from "marked";
 import { safeHref } from "../sessions/session-view";
 
@@ -430,8 +431,11 @@ export function mermaidConfigForMode(mode: MermaidMode) {
     // SVG <text> labels rather than <foreignObject> HTML, so a node label
     // cannot load a remote image or hang Mermaid's image wait.
     htmlLabels: false,
-    // Diagram sources are untrusted: %%{init}%% may not loosen these or inject
-    // themeCSS rules that fetch external resources during layout.
+    // Diagram sources are untrusted: %%{init}%% may not loosen these, inject
+    // themeCSS rules that fetch external resources during layout, or restyle
+    // a diagram out of the palette ThemeService picked (a themeCSS or
+    // themeVariables directive otherwise pins its colours and fonts through
+    // every theme switch).
     secure: [
       "secure",
       "securityLevel",
@@ -440,9 +444,11 @@ export function mermaidConfigForMode(mode: MermaidMode) {
       "maxEdges",
       "htmlLabels",
       "flowchart",
+      "suppressErrorRendering",
       "theme",
       "themeVariables",
       "themeCSS",
+      "darkMode",
       "fontFamily",
     ],
     suppressErrorRendering: true,
@@ -500,7 +506,8 @@ const FORBIDDEN_FETCH_ATTRS = new Set([
 // `@import`, `url(...)` or `image-set(...)` tokens cannot slip past regexes.
 function normalizeCss(css: string): string {
   return css
-    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "")
+    .replace(/\\(?:\r\n|[\n\r\f])/g, "")
     .replace(
       /\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|([^\r\n\f]))/g,
       (_, hex: string | undefined, lit: string | undefined) => {
@@ -690,198 +697,424 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-function decodeYamlDoubleQuoted(raw: string): string {
-  return raw.replace(
-    /\\(?:(\r?\n[ \t]*)|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|(.))/g,
-    (_, nl?: string, x?: string, u?: string, U?: string, ch?: string) => {
-      if (nl !== undefined) return "";
-      const hex = x ?? u ?? U;
-      if (hex !== undefined) {
-        const cp = parseInt(hex, 16);
-        return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
-      }
-      return ch ?? "";
-    },
-  );
+const MERMAID_DIRECTIVE_RE =
+  /%{2}\{\s*(?:(\w+)\s*:|(\w+))\s*(?:(\w+)|((?:(?!\}%{2}).|\r?\n)*))?\s*(?:\}%{2})?/gi;
+
+const UNTERMINATED_SHAPE_BLOCK = "\0unterminated";
+
+// Strip leading YAML front-matter (`---\n...\n---\n`) the same way Mermaid's
+// `matchFrontMatter` does before handing diagram text to the lexer.
+function stripMermaidFrontMatter(text: string): string {
+  let cursor = 0;
+  while (cursor < text.length && /[ \t]/.test(text[cursor])) cursor++;
+  const indent = text.slice(0, cursor);
+  if (!text.startsWith("---", cursor)) return text;
+
+  const openingEnds: number[] = [];
+  for (let i = cursor + 3; i < text.length && /\s/.test(text[i]); i++) {
+    if (text[i] === "\n") openingEnds.push(i);
+  }
+  if (openingEnds.length === 0) return text;
+
+  const closingFence = `${indent}---`;
+  const closingEnd = (i: number): number => {
+    if (text[i] !== "\n" || !text.startsWith(closingFence, i + 1)) return -1;
+    let last = -1;
+    for (
+      let k = i + 1 + closingFence.length;
+      k < text.length && /\s/.test(text[k]);
+      k++
+    ) {
+      if (text[k] === "\n") last = k;
+    }
+    return last;
+  };
+
+  let lastClosingFence = -1;
+  for (let i = openingEnds[0] + 1; i < text.length; i++) {
+    if (closingEnd(i) !== -1) lastClosingFence = i;
+  }
+  if (lastClosingFence === -1) return text;
+
+  let openingEnd = openingEnds[0];
+  for (const candidate of openingEnds) {
+    if (candidate < lastClosingFence) openingEnd = candidate;
+  }
+  for (let i = openingEnd + 1; i <= lastClosingFence; i++) {
+    const matchEnd = closingEnd(i);
+    if (matchEnd !== -1) return text.slice(matchEnd + 1);
+  }
+  return text;
 }
 
-function extractShapeBlocks(src: string): string[] {
-  const blocks: string[] = [];
-  for (let i = 0; i < src.length - 1; i++) {
-    if (src[i] !== "@" || src[i + 1] !== "{") continue;
-    let j = i + 2;
-    let depth = 1;
-    while (j < src.length && depth > 0) {
-      const ch = src[j];
+function encodeMermaidEntities(text: string): string {
+  const encoded = text
+    .replace(/style.*:\S*#.*;/g, (s) => s.slice(0, -1))
+    .replace(/classDef.*:\S*#.*;/g, (s) => s.slice(0, -1))
+    .replace(/#\w+;/g, (s) => {
+      const inner = s.slice(1, -1);
+      return /^\+?\d+$/.test(inner)
+        ? `\ufb02°°${inner}¶ß`
+        : `\ufb02°${inner}¶ß`;
+    });
+  return `${encoded}\n`;
+}
+
+// Mirror Mermaid 12.2.0's `preprocessDiagram` + `encodeEntities` pipeline across
+// both comment-stripped (`code.cleaned`) and comment-preserving
+// (`code.withComments`, used when `db.preserveCommentsWhenParsing` is set)
+// inputs so directives, `%%` comment lines, CR line endings and `#word;`
+// placeholders cannot split or comment-hide a shape token.
+function preprocessMermaidVariants(src: string): {
+  cleaned: string;
+  withComments: string;
+} {
+  const normalized = src
+    .replace(/\r\n?/g, "\n")
+    .replace(
+      /<(\w+)([^>]*)>/g,
+      (_, tag: string, attrs: string) =>
+        "<" + tag + attrs.replace(/="([^"]*)"/g, "='$1'") + ">",
+    );
+  const withoutFrontMatter = stripMermaidFrontMatter(normalized);
+  const withoutDirectives = withoutFrontMatter.replace(
+    MERMAID_DIRECTIVE_RE,
+    "",
+  );
+  const cleanedRaw = withoutDirectives
+    .replace(/^\s*%%(?!\{)[^\n]+\n?/gm, "")
+    .trimStart();
+  const cleaned = encodeMermaidEntities(cleanedRaw);
+  const withComments =
+    withoutDirectives.trimStart() === cleanedRaw
+      ? cleaned
+      : encodeMermaidEntities(withoutDirectives);
+  return { cleaned, withComments };
+}
+
+// Read one `@{...}` shape block starting right after `@{` using Mermaid's Jison
+// `shapeData` / `shapeDataStr` rules: `"` toggles string mode (collapsing
+// `\n\s*` to `<br/>` without backslash escapes) and the first unquoted `}`
+// closes the block.
+function readShapeBlockAt(
+  src: string,
+  startAfterBrace: number,
+): { block: string; endIndex: number } {
+  let j = startAfterBrace;
+  let buf = "";
+  let inStr = false;
+  let closed = false;
+  while (j < src.length) {
+    const ch = src[j];
+    if (!inStr) {
       if (ch === '"') {
+        inStr = true;
+        buf += '"';
         j++;
-        while (j < src.length) {
-          if (src[j] === "\\") {
-            j += 2;
-            continue;
-          }
-          if (src[j] === '"') {
-            j++;
-            break;
-          }
-          j++;
-        }
         continue;
       }
-      if (ch === "'") {
+      if (ch === "}") {
+        closed = true;
         j++;
-        while (j < src.length) {
-          if (src[j] === "'" && src[j + 1] === "'") {
-            j += 2;
-            continue;
-          }
-          if (src[j] === "'") {
-            j++;
-            break;
-          }
-          j++;
-        }
+        break;
+      }
+      buf += ch;
+      j++;
+    } else {
+      if (ch === '"') {
+        inStr = false;
+        buf += '"';
+        j++;
         continue;
       }
-      if (ch === "{") depth++;
-      else if (ch === "}") depth--;
+      if (ch === "\n") {
+        j++;
+        while (j < src.length && /\s/.test(src[j])) j++;
+        buf += "<br/>";
+        continue;
+      }
+      buf += ch;
       j++;
     }
-    blocks.push(src.slice(i + 2, depth === 0 ? j - 1 : j));
-    i = j - 1;
+  }
+  return {
+    block: closed && !inStr ? buf : UNTERMINATED_SHAPE_BLOCK,
+    endIndex: j,
+  };
+}
+
+// Extract top-level `@{...}` shape blocks while skipping outer `"..."` and
+// `` "`...`" `` label strings so literal `@{` inside a quoted node label does
+// not look like an unterminated or malformed shape block.
+function extractTopLevelShapeBlocks(src: string): string[] {
+  const blocks: string[] = [];
+  let outerStr: "none" | "str" | "md" = "none";
+  for (let i = 0; i < src.length - 1; i++) {
+    if (outerStr === "md") {
+      if (src[i] === "`" && src[i + 1] === '"') {
+        outerStr = "none";
+        i++;
+      }
+      continue;
+    }
+    if (outerStr === "str") {
+      if (src[i] === '"') outerStr = "none";
+      continue;
+    }
+    if (src[i] === '"' && src[i + 1] === "`") {
+      outerStr = "md";
+      i++;
+      continue;
+    }
+    if (src[i] === '"') {
+      outerStr = "str";
+      continue;
+    }
+    if (src[i] === "@" && src[i + 1] === "{") {
+      const { block, endIndex } = readShapeBlockAt(src, i + 2);
+      blocks.push(block);
+      i = endIndex - 1;
+    }
   }
   return blocks;
 }
 
+// Mirror AgentFlowDB's `stripLineTrailingCommas` fallback so multi-line shape
+// blocks with trailing commas are parsed identically when `js-yaml` rejects the
+// unstripped text.
+function stripLineTrailingCommas(body: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  let flowDepth = 0;
+  let blockScalarIndent: number | undefined;
+  const out: string[] = [];
+  for (const line of body.split("\n")) {
+    if (blockScalarIndent !== undefined) {
+      const indent = line.length - line.trimStart().length;
+      if (line.trim() === "" || indent > blockScalarIndent) {
+        out.push(line);
+        continue;
+      }
+      blockScalarIndent = undefined;
+    }
+    let commentStart = -1;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inDouble) {
+        if (ch === "\\") i++;
+        else if (ch === '"') inDouble = false;
+      } else if (inSingle) {
+        if (ch === "'") inSingle = false;
+      } else if (ch === '"') {
+        inDouble = true;
+      } else if (ch === "'") {
+        inSingle = true;
+      } else if (
+        ch === "#" &&
+        (i === 0 || line[i - 1] === " " || line[i - 1] === "\t")
+      ) {
+        commentStart = i;
+        break;
+      } else if (ch === "[" || ch === "{") {
+        flowDepth++;
+      } else if (ch === "]" || ch === "}") {
+        flowDepth = Math.max(0, flowDepth - 1);
+      }
+    }
+    if (inSingle || inDouble || flowDepth > 0) {
+      out.push(line);
+      continue;
+    }
+    const code = commentStart >= 0 ? line.slice(0, commentStart) : line;
+    const comment = commentStart >= 0 ? line.slice(commentStart) : "";
+    if (/:\s*[>|][\d+-]*\s*$/.test(code)) {
+      blockScalarIndent = line.length - line.trimStart().length;
+      out.push(line);
+      continue;
+    }
+    out.push(code.replace(/,([\t ]*)$/, "$1") + comment);
+  }
+  return out.join("\n");
+}
+
+function docHasImgKey(value: unknown, seen: Set<unknown>): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((item) => docHasImgKey(item, seen));
+  }
+  const obj = value as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(obj)) {
+    if (key.trim().toLowerCase() === "img") return true;
+    if (docHasImgKey(obj[key], seen)) return true;
+  }
+  return false;
+}
+
+// Run a `@{...}` block through the same `js-yaml` `JSON_SCHEMA` load that
+// Mermaid's `FlowDB.addVertex` uses (`{\n...\n}` for single-line blocks, raw
+// text + `\n` when it contains a newline). Refuse if `img` appears at any
+// object level or if `load` throws.
 function blockHasImgKey(block: string): boolean {
-  let k = 0;
-  const n = block.length;
-  while (k < n) {
-    while (k < n && /[\s,{}[\]]/.test(block[k])) k++;
-    if (k >= n) break;
-    if (block[k] === "#") {
-      while (k < n && block[k] !== "\n") k++;
-      continue;
-    }
-    let explicitKey = false;
-    if (block[k] === "?" && /\s/.test(block[k + 1] ?? "")) {
-      explicitKey = true;
-      k++;
-      while (k < n && /\s/.test(block[k])) k++;
-      if (k >= n) break;
-    }
-    if (block[k] === ":") {
-      k++;
-      continue;
-    }
-    let key = "";
-    if (block[k] === '"') {
-      const start = ++k;
-      while (k < n) {
-        if (block[k] === "\\") {
-          k += 2;
-          continue;
+  if (block === UNTERMINATED_SHAPE_BLOCK) return true;
+  const yamlData = block.includes("\n") ? `${block}\n` : `{\n${block}\n}`;
+  try {
+    const doc = loadYaml(yamlData, { schema: JSON_SCHEMA });
+    return docHasImgKey(doc, new Set());
+  } catch {
+    return true;
+  }
+}
+
+// Belt-and-suspenders check independent of outer quote/lexer state: test every
+// raw `@{` offset in `src` without skipping ahead, so no earlier token in any
+// diagram grammar can mask a subsequent `@{...}` block that parses with `img`.
+function anyRawShapeOffsetHasImgKey(src: string): boolean {
+  for (let i = 0; i < src.length - 1; i++) {
+    if (src[i] !== "@" || src[i + 1] !== "{") continue;
+    const { block } = readShapeBlockAt(src, i + 2);
+    if (block === UNTERMINATED_SHAPE_BLOCK) continue;
+    const yamlData = block.includes("\n") ? `${block}\n` : `{\n${block}\n}`;
+    try {
+      const doc = loadYaml(yamlData, { schema: JSON_SCHEMA });
+      if (docHasImgKey(doc, new Set())) return true;
+    } catch {
+      if (block.includes("\n")) {
+        const stripped = stripLineTrailingCommas(block);
+        if (stripped !== block) {
+          try {
+            const doc = loadYaml(`${stripped}\n`, { schema: JSON_SCHEMA });
+            if (docHasImgKey(doc, new Set())) return true;
+          } catch {
+            // Non-shape or invalid block; top-level malformed blocks fail in
+            // extractTopLevelShapeBlocks.
+          }
         }
-        if (block[k] === '"') break;
-        k++;
       }
-      key = decodeYamlDoubleQuoted(block.slice(start, k)).trim().toLowerCase();
-      if (k < n && block[k] === '"') k++;
-    } else if (block[k] === "'") {
-      const start = ++k;
-      while (k < n) {
-        if (block[k] === "'" && block[k + 1] === "'") {
-          k += 2;
-          continue;
-        }
-        if (block[k] === "'") break;
-        k++;
-      }
-      key = block.slice(start, k).replace(/''/g, "'").trim().toLowerCase();
-      if (k < n && block[k] === "'") k++;
-    } else {
-      const start = k;
-      while (k < n && !/[:,{}[\]\r\n]/.test(block[k])) {
-        if (block[k] === "#" && k > start && /\s/.test(block[k - 1])) break;
-        k++;
-      }
-      key = block.slice(start, k).trim().toLowerCase();
-    }
-    while (
-      k < n &&
-      (explicitKey
-        ? /\s/.test(block[k])
-        : block[k] === " " || block[k] === "\t")
-    ) {
-      k++;
-    }
-    if (k < n && block[k] === ":") {
-      if (key === "img") return true;
-      k++;
     }
   }
   return false;
 }
 
-function decodeBasicEntities(s: string): string {
+function decodeHtmlEntities(s: string): string {
   return s
-    .replace(/&quot;|&#34;|&#x22;/gi, '"')
-    .replace(/&apos;|&#39;|&#x27;/gi, "'")
-    .replace(/&equals;|&#61;|&#x3d;/gi, "=")
-    .replace(/&amp;|&#38;|&#x26;/gi, "&");
+    .replace(/&#(\d{1,7});/g, (_, dec: string) => {
+      const cp = parseInt(dec, 10);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/&#x([0-9a-fA-F]{1,6});/g, (_, hex: string) => {
+      const cp = parseInt(hex, 16);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&equals;/gi, "=")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&tab;/gi, "\t")
+    .replace(/&newline;/gi, "\n")
+    .replace(/&amp;/gi, "&");
 }
 
-function hasSequenceRemoteIcon(src: string): boolean {
-  const re = /(?:^|[;\n])[ \t]*properties[ \t]+[^:\n;]+:[ \t]*([^\n]+)/gi;
+function hasSequenceRemoteIcon(
+  src: string,
+  isSequenceDiagram: boolean,
+): boolean {
+  if (
+    isSequenceDiagram &&
+    /(?:^|[;\n])[ \t]*details(?=[ \t]+[^/\\+()<>:\n,;\s-])[ \t]+[^:\n;#]+:/i.test(
+      src,
+    )
+  ) {
+    return true;
+  }
+  const re =
+    /(?:^|[;\n])[ \t]*properties[ \t]+[^:\n;#]+:[ \t]*(?:[:]?(?:no)?wrap\b[ \t]*)?([^\n]*)/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) {
-    const raw = m[1].trim().replace(/;+\s*$/, "");
-    for (const candidate of [raw, decodeBasicEntities(raw)]) {
+    const full = m[1].trim().replace(/;+\s*$/, "");
+    const lexed = m[1].split(/[#;]/, 1)[0].trim();
+    const candidates = new Set<string>();
+    for (const piece of [lexed, full]) {
+      if (!piece) continue;
+      const withoutHtml = piece
+        .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+        .replace(/<(?:style|script)\b[^>]*>[\s\S]*?<\/(?:style|script)>/gi, "")
+        .replace(/<\/?[A-Za-z!][^>]*>/g, "");
+      candidates.add(piece);
+      candidates.add(decodeHtmlEntities(piece));
+      candidates.add(withoutHtml);
+      candidates.add(decodeHtmlEntities(withoutHtml));
+    }
+    let parsedAnyObject = false;
+    for (const candidate of candidates) {
       try {
         const parsed = JSON.parse(candidate) as unknown;
-        if (
-          parsed &&
-          typeof parsed === "object" &&
-          typeof (parsed as Record<string, unknown>)["icon"] === "string"
-        ) {
-          const icon = (
-            (parsed as Record<string, unknown>)["icon"] as string
-          ).trim();
-          if (icon && !icon.startsWith("@")) return true;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          parsedAnyObject = true;
+          const icon = (parsed as Record<string, unknown>)["icon"];
+          if (typeof icon === "string") {
+            const trimmed = icon.trim();
+            if (trimmed && !trimmed.startsWith("@")) return true;
+          }
         }
       } catch {
-        // Malformed JSON is ignored by Mermaid's addProperties as well.
+        // Try next candidate; sequenceDiagram fails closed below.
       }
+    }
+    if (isSequenceDiagram && (!parsedAnyObject || lexed.includes("<"))) {
+      return true;
     }
   }
   return false;
 }
 
 // hasImageShape reports a diagram written with Mermaid's YAML/JSON image
-// shape (`A@{ img: "https://...", ... }`, including quoted keys, YAML escapes
-// and braces inside earlier strings) or a sequenceDiagram actor `icon`
-// property, whose URL Mermaid loads in the live document before
-// sanitizeMermaidSvg runs.
+// shape (`A@{ img: "https://...", ... }`, parsed with js-yaml's JSON_SCHEMA to
+// match FlowDB.addVertex across anchors, tags, aliases, escapes and block
+// mappings) or a sequenceDiagram actor `icon` property, whose URL Mermaid
+// loads in the live document before sanitizeMermaidSvg runs.
 export function hasImageShape(src: string): boolean {
+  const { cleaned, withComments } = preprocessMermaidVariants(src);
+  const variants =
+    cleaned === withComments ? [cleaned] : [cleaned, withComments];
+  for (const variant of variants) {
+    if (!variant.includes("@{")) continue;
+    if (extractTopLevelShapeBlocks(variant).some(blockHasImgKey)) return true;
+    if (anyRawShapeOffsetHasImgKey(variant)) return true;
+  }
+  const isSequence = /^\s*sequenceDiagram\b/i.test(cleaned);
   return (
-    extractShapeBlocks(src).some(blockHasImgKey) || hasSequenceRemoteIcon(src)
+    hasSequenceRemoteIcon(src, isSequence) ||
+    hasSequenceRemoteIcon(cleaned, isSequence)
   );
+}
+
+function sourceHasExternalStyleUrl(src: string): boolean {
+  const stmtRe = /(?:^|[;\n])[ \t]*(?:classDef|style|linkStyle)\b([^\n;]*)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = stmtRe.exec(src)) !== null) {
+    if (hasUnsafeCssFetch(m[1])) return true;
+  }
+  const c4Re =
+    /Update(?:Element|Boundary|Rel)Style\s*\(((?:[^)"']|"[^"]*"|'[^']*')*)\)/gi;
+  while ((m = c4Re.exec(src)) !== null) {
+    if (hasUnsafeCssFetch(m[1])) return true;
+  }
+  return false;
 }
 
 // hasExternalStyleUrl reports a `classDef`, `style`, `linkStyle` or C4 style
 // directive carrying `@import` or a non-`#` `url(...)` / `image-set(...)`,
 // which Mermaid would attach to `document.body` while measuring the diagram.
 export function hasExternalStyleUrl(src: string): boolean {
-  const stmtRe = /(?:^|[;\n])[ \t]*(?:classDef|style|linkStyle)\b([^\n;]*)/gi;
-  let m: RegExpExecArray | null;
-  while ((m = stmtRe.exec(src)) !== null) {
-    if (hasUnsafeCssFetch(m[1])) return true;
-  }
-  const c4Re = /Update(?:Element|Boundary|Rel)Style\s*\(([^)]*)\)/gi;
-  while ((m = c4Re.exec(src)) !== null) {
-    if (hasUnsafeCssFetch(m[1])) return true;
-  }
-  return false;
+  const { cleaned, withComments } = preprocessMermaidVariants(src);
+  return (
+    sourceHasExternalStyleUrl(src) ||
+    sourceHasExternalStyleUrl(cleaned) ||
+    (withComments !== cleaned && sourceHasExternalStyleUrl(withComments))
+  );
 }
 
 // renderMermaidSvg renders one source to sanitized SVG. Renders run one

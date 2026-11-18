@@ -52,8 +52,11 @@ import (
 // call now. That is the visible half of the change: this used to be a
 // GitHub client, and a task's identity used to be an issue number.
 type Client struct {
-	Config Config
-	Store  *model.Store
+	gateDefinitionMu     sync.Mutex
+	gateDefinitionPermit chan struct{}
+	gateDefinitions      map[string]gateDefinitionCache
+	Config               Config
+	Store                *model.Store
 	// localScripts is the local-script approvals of this daemon's live
 	// runs (localScriptApprovals): Config.LocalScriptApprovals, or one of
 	// its own.
@@ -62,6 +65,9 @@ type Client struct {
 	allowedPrincipalsMigrateMu sync.Mutex
 	allowedPrincipalsMigrated  bool
 	deploymentOwnerSeeded      string
+	// clearNotification replaces Store.ClearNotificationByID in a bulk
+	// clear, for a test that needs one to fail partway; nil is the store.
+	clearNotification func(ctx context.Context, id int64, by string) (bool, error)
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
@@ -125,6 +131,12 @@ type Client struct {
 
 // NewClient builds a Client over a store.
 func NewClient(cfg Config, store *model.Store) *Client {
+	if cfg.GateObservationTaskIDs == nil {
+		cfg.GateObservationTaskIDs = observationEnvironment()
+	}
+	if cfg.GateObservationChildren == nil {
+		cfg.GateObservationChildren = observationChildrenEnvironment()
+	}
 	return &Client{Config: cfg, Store: store}
 }
 
@@ -1796,6 +1808,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if detail.DeploymentWide, err = c.deploymentWideGrants(ctx, *t); err != nil {
 		return TaskDetail{}, err
 	}
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *t)
 	return detail, nil
 }
 

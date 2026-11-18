@@ -186,9 +186,7 @@ func (s *Server) handleStagingProxy(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Set("X-Forwarded-Prefix", prefix)
 			// The UI's own credentials are for the UI: the service behind
 			// it is somebody's staging build, not something to hand them to.
-			pr.Out.Header.Del("Authorization")
-			pr.Out.Header.Del(AccessCodeHeader)
-			stripGrainCookies(pr.Out)
+			stripStagingCredentials(pr.Out)
 		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -257,18 +255,68 @@ func requestLocalPort(r *http.Request) int {
 // cannot set its own under those names.
 const grainCookiePrefix = "grain_"
 
-// isGrainCookie reports whether name is one of grain's own cookies:
-// grain_*, or grain_* behind a __Host- or __Secure- prefix (the verifier
-// session cookie, VerifierSessionCookieName). Browsers match those
-// prefixes case-insensitively, so this does too.
+// isGrainCookie reports whether name is one of grain's own or upstream edge
+// cookies that a staging environment must neither read nor shadow:
+//   - any __Host- cookie (browsers require Path=/ for __Host-, so a staging
+//     app confined to /staging/<name> can never set one, and any __Host-
+//     cookie on a request belongs to the root origin or its edge proxy),
+//   - grain_* (with or without a __Secure- prefix), and
+//   - Google Cloud IAP's browser session cookies (GCP_IAP*, GCP_IAAP*, with or
+//     without __Secure-), which IAP forwards in Cookie to the backend.
+//
+// Browsers match __Host- and __Secure- prefixes case-insensitively, so this
+// does too.
 func isGrainCookie(name string) bool {
-	for _, p := range []string{"__Host-", "__Secure-"} {
-		if len(name) >= len(p) && strings.EqualFold(name[:len(p)], p) {
-			name = name[len(p):]
-			break
+	name = strings.TrimSpace(name)
+	if len(name) >= len("__Host-") && strings.EqualFold(name[:len("__Host-")], "__Host-") {
+		return true
+	}
+	if len(name) >= len("__Secure-") && strings.EqualFold(name[:len("__Secure-")], "__Secure-") {
+		name = name[len("__Secure-"):]
+	}
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, grainCookiePrefix) ||
+		strings.HasPrefix(lower, "gcp_iap") ||
+		strings.HasPrefix(lower, "gcp_iaap")
+}
+
+// stripStagingCredentials drops grain's own request credentials, signed
+// proxy identity assertions, and controller/edge cookies before forwarding a
+// request to a staging environment, so an untrusted staging build never
+// receives tokens, session cookies, or replayable assertions valid against
+// grain itself.
+func stripStagingCredentials(r *http.Request) {
+	r.Header.Del("Authorization")
+	r.Header.Del("Proxy-Authorization")
+	r.Header.Del("X-Grain-Tunnel-Token")
+	r.Header.Del("X-Grain-Hub-Token")
+	r.Header.Del("X-Grain-Registry-Token")
+	r.Header.Del("X-Grain-Subject-Token")
+	r.Header.Del("X-Grain-On-Behalf-Of")
+	r.Header.Del(AccessCodeHeader)
+	r.Header.Del(AccessNameHeader)
+	r.Header.Del(ActingTaskHeader)
+	r.Header.Del(ActingRunHeader)
+	r.Header.Del(ActingReasonHeader)
+	r.Header.Del(ChannelHeader)
+	for _, h := range proxyIdentityHeaders {
+		r.Header.Del(h)
+	}
+	for _, h := range PlaintextIdentityHeaders {
+		r.Header.Del(h)
+	}
+	for _, v := range registeredVerifiersSnapshot() {
+		for _, h := range v.Headers() {
+			r.Header.Del(h)
 		}
 	}
-	return strings.HasPrefix(name, grainCookiePrefix)
+	for k := range r.Header {
+		lower := strings.ToLower(k)
+		if strings.HasPrefix(lower, "x-goog-iap-") || strings.HasPrefix(lower, "x-goog-authenticated-user-") {
+			delete(r.Header, k)
+		}
+	}
+	stripGrainCookies(r)
 }
 
 // stripGrainCookies drops grain's own cookies (isGrainCookie) from a

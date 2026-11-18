@@ -855,13 +855,25 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(tConfig.querySelector("dt")!.textContent).toContain("Source");
   });
 
-  it("says a publishing-held suppression in words, shows the overlap group and each skip's outcome, and no Next for an event trigger", async () => {
+  it("says a publishing-held suppression in words without repeating itself, shows the bound template's base, overlap group and each skip's outcome (held included), and no Next for an event trigger", async () => {
+    api.templates.push({
+      id: "tmpl-bound-train",
+      name: "Release train",
+      title: "Run the release train",
+      description: "Cut an rc.",
+      repo: "acme/widgets",
+      base: "release/v3.6",
+      autoMerge: false,
+      capabilities: [],
+    });
     api.schedules.push({
       id: "sched-train",
       title: "Release train",
       description: "Cut an rc.",
       repo: "acme/widgets",
-      base: "main",
+      base: "stale-schedule-base",
+      templateId: "tmpl-bound-train",
+      templateName: "Release train",
       autoMerge: false,
       capabilities: [],
       recurrence: { kind: "every_n_minutes", everyNMinutes: 20 },
@@ -875,14 +887,25 @@ describe("ProcessesPageComponent (D-9)", () => {
       suppressed: {
         reason: "publishingHeld",
         taskId: "2",
-        detail: "skipped: publishing held by task 2",
+        detail:
+          "skipped: publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
       },
       skips: [
+        {
+          occurrence: "2026-11-15T09:00:00Z",
+          at: "2026-11-15T09:00:00Z",
+          reason: "publishingHeld",
+          summary:
+            "skipped at 2026-11-15 09:00 UTC: publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
+          taskId: "2",
+          outcome: "",
+        },
         {
           occurrence: "2026-11-15T08:00:00Z",
           at: "2026-11-15T08:00:00Z",
           reason: "publishingHeld",
-          summary: "skipped at 2026-11-15 08:00 UTC: publishing held by task 2",
+          summary:
+            "skipped at 2026-11-15 08:00 UTC: publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
           taskId: "2",
           outcome: "fired",
           firedTaskId: "5",
@@ -910,13 +933,15 @@ describe("ProcessesPageComponent (D-9)", () => {
 
     const text = root.textContent ?? "";
     expect(text).toContain(
-      "Suppressed — publishing held: skipped: publishing held by task 2",
+      "Suppressed — publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
     );
+    expect(text).not.toContain("publishing held: skipped:");
     expect(text).not.toContain("publishingHeld");
     expect(
       root.querySelector('[data-testid="sched-overlap-group"]')?.textContent,
     ).toContain("release-train");
-    // The Configuration pane's keys, each with its value.
+    // The Configuration pane's keys, each with its value -- Base shows the
+    // bound template's release/v3.6 rather than the schedule's stale base.
     const config = () =>
       Object.fromEntries(
         Array.from(
@@ -926,6 +951,9 @@ describe("ProcessesPageComponent (D-9)", () => {
           dt.nextElementSibling?.textContent?.trim(),
         ]),
       );
+    expect(config()["Repository"]).toBe("acme/widgets");
+    expect(config()["Base"]).toBe("release/v3.6");
+    expect(text).not.toContain("stale-schedule-base");
     expect(config()["Overlap group"]).toBe("release-train");
     expect(config()["Next run"]).toBe(formatStamp("2026-11-15T09:20:00Z"));
 
@@ -933,6 +961,7 @@ describe("ProcessesPageComponent (D-9)", () => {
       root.querySelectorAll('[data-testid="sched-skip-outcome"]'),
     ).map((el) => el.textContent?.replace(/\s+/g, " ").trim());
     expect(outcomes).toEqual([
+      "→ held",
       "→ fired #5 · 3 later occurrences folded in",
       "→ dropped",
     ]);
@@ -1782,6 +1811,13 @@ describe("ProcessesPageComponent (D-9)", () => {
     Array.from(dlg.querySelectorAll("button"))
       .find((b) => b.textContent?.trim() === "Cancel")!
       .click();
+    await flush(harness);
+    // The draft was filled in, so Cancel asks before dropping it, once.
+    const discards = Array.from(root.querySelectorAll("button")).filter(
+      (b) => b.textContent?.trim() === "Discard",
+    );
+    expect(discards.length).toBe(1);
+    discards[0].click();
     await flush(harness);
     expect(root.querySelector('[data-testid="schedule-dialog"]')).toBeNull();
 

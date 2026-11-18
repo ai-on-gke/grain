@@ -66,7 +66,7 @@ func restOnResumeLaterCI(t *testing.T, ctx context.Context, store *model.Store, 
 // SyncReviewThreads passed over every task not completed or awaiting a
 // Submit, so sendRunForReviewThreads -- which already takes the task off its
 // resume_later -- was never reached for one. A person's Defer still holds.
-func TestANewReviewThreadTakesATaskOffItsResumeLater(t *testing.T) {
+func TestANewReviewThreadDispatchesDespiteItsResumeLater(t *testing.T) {
 	t.Parallel()
 	for _, how := range []string{"resume_later", "a person"} {
 		how := how
@@ -96,9 +96,12 @@ func TestANewReviewThreadTakesATaskOffItsResumeLater(t *testing.T) {
 			if err := orchestrator.SyncReviewThreads(ctx, store, client, at.Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
-			want := model.StateQueued
-			if how == "a person" {
-				want = model.StateDeferred
+			// Retain the CI evidence, while making its feedback dispatchable.
+			// A person's deferral is still theirs to lift.
+			want := model.StateDeferred
+			ready, err := store.IsReady(ctx, task.ID)
+			if err != nil || ready != (how == "resume_later") {
+				t.Fatalf("feedback readiness = %v, %v for %s", ready, err, how)
 			}
 			if s := stateOf(t, ctx, store, task.ID); s != want {
 				t.Fatalf("after a new review thread the task is %q, want %q", s, want)

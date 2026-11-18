@@ -175,7 +175,8 @@ g-inbox-page {
 }
 
 .group-select,
-.group-approve {
+.group-approve,
+.group-clear {
   flex-shrink: 0;
   min-height: 32px;
   font-size: 12px;
