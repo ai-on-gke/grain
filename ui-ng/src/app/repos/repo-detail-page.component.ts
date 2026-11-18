@@ -363,23 +363,25 @@ interface PendingReleaseRow {
               data-testid="back-to-repos-link"
               >← Repos</a
             >
-            <a
-              class="btn-tonal s-btn-sm"
-              style="text-decoration: none"
-              [routerLink]="['/tasks']"
-              [queryParams]="{ repo: repoSlug() }"
-              >View tasks in {{ repoSlug() }}</a
-            >
-            @if (can("POST /api/tasks")) {
-              <button
-                type="button"
+            <span class="repo-top-actions">
+              <a
                 class="btn-tonal s-btn-sm"
-                data-testid="repo-new-task-btn"
-                (click)="newTaskHere($event)"
+                style="text-decoration: none"
+                [routerLink]="['/tasks']"
+                [queryParams]="{ repo: repoSlug() }"
+                >View tasks in {{ repoSlug() }}</a
               >
-                New task
-              </button>
-            }
+              @if (can("POST /api/tasks")) {
+                <button
+                  type="button"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="repo-new-task-btn"
+                  (click)="newTaskHere($event)"
+                >
+                  New task
+                </button>
+              }
+            </span>
           </div>
 
           <div>

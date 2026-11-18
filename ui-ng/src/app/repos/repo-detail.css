@@ -42,6 +42,13 @@ g-repo-detail-page {
   flex-wrap: wrap;
 }
 
+.repo-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .repo-tabs {
   display: flex;
   align-items: center;
