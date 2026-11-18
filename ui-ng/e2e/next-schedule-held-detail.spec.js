@@ -107,8 +107,13 @@ for (const size of SIZES) {
       ).toBeVisible();
       await expect(page.getByText("(publishingHeld)")).toHaveCount(0);
       await expect(page.getByTestId("sched-overlap-group")).toHaveText(
-        "Overlap group: release-train",
+        "release-train",
       );
+      await expect(
+        page.getByTestId("sched-config-pane").locator("dt", {
+          hasText: "Overlap group",
+        }),
+      ).toBeVisible();
 
       const skips = page.getByTestId("sched-skip");
       await expect(skips).toHaveCount(2);
@@ -156,7 +161,7 @@ for (const size of SIZES) {
   }
 }
 
-test("an event trigger shows no Next: its nextRunAt is a placeholder", async ({
+test("an event trigger says when it runs, not its placeholder nextRunAt", async ({
   page,
 }) => {
   const trigger = {
@@ -183,5 +188,13 @@ test("an event trigger shows no Next: its nextRunAt is a placeholder", async ({
   await page.getByTestId(`sched-row-${trigger.id}`).click();
   await expect(page.getByTestId("sched-skip")).toHaveCount(0);
   await expect(page.getByText(trigger.description)).toBeVisible();
-  await expect(page.getByText("Next: 2027-11-15T09:00:00Z")).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("sched-config-pane")
+      .locator("dt", { hasText: "Next run" }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByTestId("sched-config-pane").getByText("on workflow run"),
+  ).toBeVisible();
+  await expect(page.getByText("2027-11-15T09:00:00Z")).toHaveCount(0);
 });

@@ -106,7 +106,7 @@ func TestWalkthroughAUsageLimitPausesOnlyTheConnectionWhoseKeyMetIt(t *testing.T
 		human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
 		task := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "Connection pause " + id,
-			Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: human, Reason: model.ReasonDirect},
 			Approval: &human, AgentFramework: model.AgentFrameworkCodex, AgentBackendID: backend,
 		}
 		if err := store.PutTask(ctx, task); err != nil {

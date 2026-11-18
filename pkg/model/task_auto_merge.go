@@ -131,7 +131,7 @@ const LinkAutoMergeAwaitsPerson LinkKind = "auto-merge-awaits-person"
 // merging itself when they take its auto-merge away. The last of them
 // going is that change's hold clearing (restoreAfterHolds).
 var autoMergeHolds = []LinkKind{LinkSecurityHold, LinkBrokenRulesHold, LinkPathTriggerHold, LinkHumanOnlyHold,
-	LinkHumanReviewHold, LinkReviewFindings, LinkReviewQuestions}
+	LinkHumanReviewHold, LinkReviewFindings, LinkReviewQuestions, LinkQAHold}
 
 // AutoMergeAwaitsPerson reports whether a hold on t ended in a person's
 // decision (LinkAutoMergeAwaitsPerson).

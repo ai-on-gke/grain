@@ -33,20 +33,20 @@ this document can answer about itself.
 
 ``````console
 $ codex --version
-codex-cli 0.167.0
+codex-cli 0.169.0
 ``````
 
 ``````console
 path   /opt/codex/codex-x86_64-unknown-linux-musl
-size   320575976 bytes
-sha256 cdcb45aaa01d0f14e298985e09465aebccd47f64ecd298aea44814af7b62bbda
+size   294277432 bytes
+sha256 b452ca20f838a8855a88a41050ee4a694033fff4ea3ecdad5633e6e0e8d13f2b
 ``````
 
 The release this capture is of, against the release the image carries:
 
 ``````console
-pinned by the Dockerfile   rust-v0.167.0
-captured here              codex-cli 0.167.0
+pinned by the Dockerfile   rust-v0.169.0
+captured here              codex-cli 0.169.0
 ``````
 
 And one line codex prints ahead of almost everything, which every capture below has had removed from it and which is worth reading once. Every probe in this document runs with a `CODEX_HOME` under `/tmp`, because that is what `writeConfig` gives a real run -- `os.MkdirTemp("")` -- so this is what a grain run gets too:
@@ -288,6 +288,10 @@ Options:
 
       --skip-git-repo-check
           Allow running Codex outside a Git repository
+
+      --trust
+          Save trust for this project and future chats, including MCP commands outside the sandbox.
+          Persists even with --ephemeral. Does not override an explicitly untrusted project
 
       --ephemeral
           Run without persisting session files to disk
@@ -1303,8 +1307,17 @@ Options:
       --use-agent-identity-auth
           Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration
 
+      --registration-bearer-stdin
+          Read one registration bearer from stdin
+
       --executor-credential-stdin
           Read rotating executor credentials from stdin; exit when the pipe closes
+
+      --chatgpt-token-stdin
+          Read a ChatGPT access token from stdin for HTTPS registration
+
+      --chatgpt-account-id <ID>
+          ChatGPT account ID. Must match the token's account claim when present
 
       --aws-sigv4
           Sign Direct registration and WebSocket handshake requests with AWS SigV4
@@ -1387,6 +1400,9 @@ Options:
 
       --use-agent-identity-auth
           Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration
+
+      --registration-bearer-stdin
+          Read one registration bearer from stdin
 
       --executor-credential-stdin
           Read rotating executor credentials from stdin; exit when the pipe closes
@@ -2571,14 +2587,18 @@ Options:
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
 
+      --trust
+          Save trust for this project and future chats, including MCP commands outside the sandbox.
+          Persists even with --ephemeral. Does not override an explicitly untrusted project
+
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
       --uncommitted
           Review staged, unstaged, and untracked changes
 
       --base <BRANCH>
           Review changes against the given base branch
-
-      --disable <FEATURE>
-          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
 
       --commit <SHA>
           Review the changes introduced by a commit
@@ -2795,6 +2815,7 @@ exec only      --output-last-message
 exec only      --output-schema
 exec only      --skip-git-repo-check
 exec only      --thread-source
+exec only      --trust
 top-level only --ask-for-approval
 top-level only --no-alt-screen
 top-level only --no-daemon
@@ -2866,6 +2887,7 @@ Error: this CLI has no complete local package
 OpenAI Codex
 To work without the background server, rerun the same command with --no-daemon (including
 codex
+for shortcuts
 helper binaries under temporary dir
 home: AbsolutePathBuf(
 install a packaged Codex CLI or use the standalone installer

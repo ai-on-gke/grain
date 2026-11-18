@@ -550,7 +550,7 @@ export class GrainApi implements OnDestroy {
   ): Promise<Record<string, TaskDetail>> {
     const chunks = chunkTaskIds(ids);
     if (chunks.length === 0) return {};
-    const responses = await Promise.all(
+    const settled = await Promise.allSettled(
       chunks.map((chunk) =>
         this.getIfChanged<TaskSummariesResponse>(
           "GET /api/tasks/summaries",
@@ -560,8 +560,18 @@ export class GrainApi implements OnDestroy {
       ),
     );
     const out: Record<string, TaskDetail> = {};
-    for (const r of responses) {
-      if (r.body?.tasks) Object.assign(out, r.body.tasks);
+    let succeeded = 0;
+    let firstError: unknown;
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        succeeded++;
+        if (r.value.body?.tasks) Object.assign(out, r.value.body.tasks);
+      } else if (firstError === undefined) {
+        firstError = r.reason;
+      }
+    }
+    if (succeeded === 0 && firstError !== undefined) {
+      throw firstError;
     }
     return out;
   }

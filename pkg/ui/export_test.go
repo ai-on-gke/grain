@@ -101,6 +101,25 @@ func WithExternalTokenForTest(ctx context.Context, tok *model.ExternalAgentToken
 	return withExternalToken(ctx, tok)
 }
 
+// SetVerifierSessionClockForTest sets the clock verifier sessions are
+// issued and checked on, until the test ends.
+func SetVerifierSessionClockForTest(t interface{ Cleanup(func()) }, now func() time.Time) {
+	prev := verifierSessionNow
+	verifierSessionNow = now
+	t.Cleanup(func() { verifierSessionNow = prev })
+}
+
+// SignVerifierSessionForTest signs a verifier session cookie value with
+// key, or with the daemon's own key when key is nil.
+func SignVerifierSessionForTest(key []byte, verifier, email, kind, host string, expires time.Time) string {
+	if key == nil {
+		key = verifierSessionKey()
+	}
+	return signVerifierSession(key, verifierSessionPayload{
+		Verifier: verifier, Email: email, Kind: kind, Host: host, Expires: expires.Unix(),
+	})
+}
+
 // SetFrontendFSForTest replaces s's embedded legacy (static) and Angular
 // (staticNext) filesystems so external tests in package ui_test can exercise
 // Server.ServeHTTP against controlled content-hashed bundles whether or not

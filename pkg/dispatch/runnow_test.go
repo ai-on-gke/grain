@@ -256,7 +256,7 @@ func TestRunNowIsStillHeldByAPauseItMayNotPass(t *testing.T) {
 func TestRunNowPassesAnOperatorPauseAndNothingElseDoes(t *testing.T) {
 	store, ctx := open(t)
 	fix := task("fix", true)
-	fix.Origin.Reason = model.ReasonFix
+	fix.Filing.Reason = model.ReasonFix
 	putTasks(t, store, ctx, task("backlog", true), fix, task("wanted", true), task("second", true))
 	requestRunNow(t, ctx, store, "wanted", now)
 	requestRunNow(t, ctx, store, "second", now.Add(time.Second))
