@@ -3898,7 +3898,8 @@
             "person",
             "breaking_change",
             "signing_version",
-            "publication_readiness"
+            "publication_readiness",
+            "promotion_policy"
           ]
         },
         "expected_commit": {

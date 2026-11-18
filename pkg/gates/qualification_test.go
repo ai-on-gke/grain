@@ -128,6 +128,18 @@ func TestReleaseQualificationTypedPredicates(t *testing.T) {
 		name, predicate, want string
 		change                func(*ReleaseFacts)
 	}{
+		{"policy-veto", "promotion_policy", "unmet", func(f *ReleaseFacts) {
+			f.PromotionPolicy = &ReleasePromotionPolicy{Veto: true, Complete: true, Version: Digest("policy")}
+		}},
+		{"policy-incomplete-veto", "promotion_policy", "unknown", func(f *ReleaseFacts) {
+			f.PromotionPolicy = &ReleasePromotionPolicy{Veto: true, Version: Digest("policy")}
+		}},
+		{"occupied-version", "promotion_policy", "unmet", func(f *ReleaseFacts) { f.PromotionPolicy = &ReleasePromotionPolicy{VersionOccupied: true} }},
+		{"policy-complete", "promotion_policy", "met", func(f *ReleaseFacts) {
+			f.PromotionPolicy = &ReleasePromotionPolicy{Complete: true, Version: Digest("policy")}
+		}},
+		{"policy-unversioned", "promotion_policy", "unknown", func(f *ReleaseFacts) { f.PromotionPolicy = &ReleasePromotionPolicy{Complete: true} }},
+		{"soak-expired", "soak", "unknown", func(f *ReleaseFacts) { f.ValidUntil = now }},
 		{"suite", "suite", "met", func(f *ReleaseFacts) {}},
 		{"wrong-RC", "suite", "unknown", func(f *ReleaseFacts) { f.Head = strings.Repeat("b", 40) }},
 		{"foreign-issuer", "suite", "unknown", func(f *ReleaseFacts) { f.Suite.App = "foreign" }},
@@ -217,5 +229,23 @@ func TestQualificationClosedConfigAndHistoryPayloadBound(t *testing.T) {
 	BoundQualificationView(&v, now)
 	if v.Results[2].Result.Status != "unknown" || len(v.Results[2].Result.Evidence) != 0 || v.Results[2].Result.Blockers[0].Code != "resource_limit" {
 		t.Fatal("unbounded qualification envelope")
+	}
+}
+
+func TestQualificationSubjectsCannotBorrowForeignEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	qa := stageFixture(now)
+	c := QualificationCollection{QA: &qa}
+	b := c.Bindings("1")[2]
+	b.Subject.TaskID = "foreign"
+	if EvaluateStage(b, qa, now, 1).Status != "unknown" {
+		t.Fatal("foreign QA evidence was accepted")
+	}
+	release := releaseFixture(now)
+	c = QualificationCollection{Release: &release}
+	b = c.Bindings("1")[2]
+	b.Subject.Repository = "private/foreign"
+	if EvaluateRelease(b, release, now, 1).Status != "unknown" {
+		t.Fatal("foreign release evidence was accepted")
 	}
 }

@@ -3,7 +3,7 @@
 Task #69 extends the observation-only slice reviewed in Task #64. Verified merged
 ancestors before implementation: canonical spec PR #1719 (2e45dca71), framework
 PR #1739 (6bd221161), and review PR #1803 (07e43408c, including de688e249).
-The implementation pin is builtin-qualification-observer-v3.
+The implementation pin is builtin-qualification-observer-v4.
 
 The existing disabled-by-default allowlist still selects at most 32 tasks.
 Authorized ordinary task reads add QA observations for eligible QA tasks, and
@@ -32,7 +32,7 @@ release_qualification v1 is a separate repository monitor, with closed required
 configuration: predicate, expected_commit (full lowercase SHA), release_version
 (vM.m.p), and policy_revision (nonempty exact reader/policy revision).
 predicate is suite, provenance, soak, person, breaking_change, signing_version,
-or publication_readiness. It does not subsume QA stages or repository health.
+publication_readiness, or promotion_policy. It does not subsume QA stages or repository health.
 Its enforcement/effect activation is deferred. The canonical contracts and API
 descriptor schemas include this addition.
 
@@ -65,7 +65,7 @@ booleans from an agent.
 | release-notes.sh check-breaking, RELEASE_MAJOR and explicit allow_breaking | breaking_change reads exact-candidate release.conf and the complete previous-release commit range using the existing pure parsing/breaking predicates. A no-breaking range can pass only below the compare reader's 250-commit truncation boundary. Observed breaking changes display the declared-major/person requirement; unretained workflow/environment overrides remain unknown. No exception is invented from prose or missing data. |
 | verify-release-approval.sh and release image/asset signing, artifact/version/ref guards | signing_version has a typed exact-head/version/digest/signature predicate. The current approved read sources expose neither verified artifact signatures nor transient signed workflow inputs: this projection honestly stays unknown. Tag prose and a dispatch row are insufficient. Wrong/unsigned artifacts are negative in the typed adapter tests. |
 | Required build/image/asset target set and publication readiness | publication_readiness is separately typed. No complete registry/asset-set receipt is available from these scoped qualification-task reads, so it stays unknown. A build or signature never stands for publication. Existing publishing-health work retains publication receipt ownership. |
-| Release version ordering/floor/reuse, operator veto, auto-promotion eligibility, daily cap/interval and release workflow concurrency | Existing release selection/scheduling/action policy remains authoritative. These are not claimed as a complete qualification receipt by this port. Config/environment and executor conditions not retained in the readable verdict are explicit limits; they cannot be bypassed by a QA/suite met result. No cut/promotion/publication effect is activated. |
+| Release version ordering/floor/reuse, operator veto, auto-promotion eligibility, daily cap/interval and release workflow concurrency | promotion_policy reads exact current-main RELEASE_NEVER_PROMOTE and detects an already-occupied version from complete scoped tags. Declared vetoes are displayed; missing effective environment/override/scheduling policy stays unknown. Existing release selection/scheduling/action policy remains authoritative. These are not claimed as a complete qualification receipt by this port. Config/environment and executor conditions not retained in the readable verdict are explicit limits; they cannot be bypassed by a QA/suite met result. No cut/promotion/publication effect is activated. |
 
 ## Collection, persistence and display
 
@@ -78,7 +78,7 @@ QA reads at most 512 exact-task/head check rows and 512 findings, with 8192-byte
 details and 768-character finding summaries. Overflow is incomplete. Complete tags
 are capped at 2048 and release checks at 512. The ordinary forge APIs perform their
 existing pagination; a failed collection is never interpreted as empty success.
-Network reads occur outside the diagnostic transaction, using the configured
+Network reads have a separate three-second collection context outside the diagnostic transaction, using the configured
 ordinary forge read adapter and its transport timeout. Context expiry prevents
 acceptance, but these legacy forge interfaces themselves do not accept a context;
 a blocked underlying call is bounded by that transport's existing timeout rather
@@ -95,8 +95,8 @@ unsupported and error states remain explicit. An older completed collection or
 failure cannot replace a newer accepted sample. Existing retry/backoff and cache
 restart semantics are retained. Clock-only heartbeats do not create source events.
 
-The existing age/per-task/global/current-cache history bounds remain. Each persisted
-qualification view is additionally bounded to 64 KiB, 128 evidence references and
+The existing age/per-task/global/current-cache history bounds remain. The QA/release contribution to each persisted
+view is additionally bounded to 64 KiB, 128 evidence references and
 64 blockers per result; exceeding bounds produces an explained resource-limit
 unknown instead of truncating to met. Reads return at most 20 retained samples.
 Those samples have no independent legacy parity oracle and are labeled accordingly.
@@ -121,3 +121,10 @@ audit now exists. There is no migration, cutover, operational comparison window,
 automatic follow-up filing or authority handoff. Future enforcement still requires
 the original exact-version policy/authorization receipts and admitted custom
 effect adapters.
+
+Current main's review/approval port is retained, including linked-resource
+authorization and the omission of retained history for scoped API callers. The
+shared projection keeps its 64-binding limit: QA/release monitors reserve a bounded
+portion of that budget, and an overflowing review collection stays explicitly
+incomplete. Existing review payload bounds remain separate from the 64 KiB
+QA/release contribution limit.

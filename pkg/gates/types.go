@@ -30,7 +30,7 @@ type Subject struct {
 	Authority  string `json:"authority,omitempty"`
 	Repository string `json:"repository,omitempty"`
 	ChangeKind string `json:"change_kind,omitempty"`
-	ChangeID   string `json:"id,omitempty"`
+	ID         string `json:"id,omitempty"`
 	Ref        string `json:"ref,omitempty"`
 }
 type Origin struct {

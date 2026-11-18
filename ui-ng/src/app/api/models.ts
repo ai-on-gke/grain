@@ -719,6 +719,7 @@ export interface GateObservationResult {
     status: string;
     summary: string;
     human_text: string | null;
+    agent_text?: string | null;
     observed_at: string;
     valid_until: string;
     context_digest: string;

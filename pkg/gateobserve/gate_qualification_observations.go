@@ -52,6 +52,13 @@ func CollectQualificationObservations(ctx context.Context, store *model.Store, s
 	if task == nil {
 		return out, model.ErrNotFound
 	}
+	repoScope := ""
+	if task.Target != nil {
+		repoScope = task.Target.String()
+	}
+	if model.HasExternalRefReadable(ctx) && !model.ExternalRefReadable(ctx, repoScope) {
+		return out, model.ErrGateObservationScopeDenied
+	}
 	if task.Target == nil {
 		return out, nil
 	}
@@ -445,6 +452,7 @@ func collectReleaseObservation(ctx context.Context, store *model.Store, source a
 		"breaking_change":       "Complete commit range and exact release policy are unavailable.",
 		"signing_version":       "Verified artifact/approval signature, digest and exact version evidence are unavailable; tag prose is not a signature.",
 		"publication_readiness": "Complete required asset/registry target evidence is unavailable; publication health is owned by the health family.",
+		"promotion_policy":      "Exact effective release veto/version/scheduling policy is unavailable.",
 	}
 	readReleaseReadiness(ctx, source, repo, tagList, f)
 	var list []github.CheckRun

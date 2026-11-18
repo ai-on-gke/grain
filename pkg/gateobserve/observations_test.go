@@ -323,6 +323,25 @@ func TestQualificationObservationReleaseUsesExistingAuthenticatedVerdict(t *test
 	}
 	src.moveTagOnRead = 0
 	src.tags[0].SHA = head
+	src.conf = []byte("RELEASE_MAJOR=3\nRELEASE_NEVER_PROMOTE=\"v3.1.0\"\n")
+	c = read()
+	for _, b := range c.Bindings(id)[2:] {
+		if b.ID == "release-promotion_policy" {
+			r := c.Evaluate(b, now, 1)
+			if r.Status != "unknown" || len(r.Blockers) < 2 || !strings.Contains(r.Blockers[0].Summary, "vetoes") {
+				t.Fatal("committed operator veto was hidden")
+			}
+		}
+	}
+	src.tags = append(src.tags, github.Tag{Name: "v3.1.0", SHA: head})
+	c = read()
+	for _, b := range c.Bindings(id)[2:] {
+		if b.ID == "release-promotion_policy" && c.Evaluate(b, now, 1).Status != "unmet" {
+			t.Fatal("occupied release version was ignored")
+		}
+	}
+	src.tags = src.tags[:1]
+	src.conf = []byte("RELEASE_MAJOR=3\n")
 	neutral := "neutral"
 	src.checks[1].Conclusion = &neutral
 	c = read()

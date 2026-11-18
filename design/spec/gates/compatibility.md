@@ -19,18 +19,18 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 | [taskgoals.go](../../../pkg/orchestrator/taskgoals.go) `openPipelineNotifications`; [pipelinesteward.go](../../../pkg/orchestrator/pipelinesteward.go) `pipelineStewardQuiet` | `pipeline_health` | Legacy filters notifications by repos but scans base/stalled tasks/queue **deployment-wide**, excludes own/paused tasks, permits empty/success base conclusion. New scoped mode requires complete expected base set and scoped health. Do not silently authorize deployment-wide reads from a repo-only attachment. |
 | [task.go](../../../pkg/model/task.go), [wait_target.go](../../../pkg/model/wait_target.go), [wait_for_task_tool.go](../../../pkg/mcp/wait_for_task_tool.go), SQL task_blocked/task_ready | `children` only when explicitly required; dispatch waits stay controller policy | Legacy depends_on/child-of waits release on closure, failed/open does not release, unknown link remains blocking; merge wait may settle negatively. Preserve until=closed versus merged and one-shot park-owned link cleanup. New required children default to trustworthy success, failure/cancel doesn't satisfy them, and advisory/spawned links don't add requirements. Parent can do independent work. |
 | [cycle.go](../../../pkg/orchestrator/cycle.go), [dispatch](../../../pkg/dispatch), [capability_pass.go](../../../pkg/orchestrator/capability_pass.go), [standingwork.go](../../../pkg/orchestrator/standingwork.go), [wake.go](../../../pkg/orchestrator/wake.go) | Admission/capacity/pause/budget/standing policies, not completion gates | Model/team/base setup, grants/CI capabilities, fit/repair reserve, usage/capacity/interruption/environment/OOM retries, Run now semantics and manual/standing exceptions remain. Run now cannot override hard authorization/guard holds. A gate outage is not an agent failure; event wake first evaluates useful work. |
-| [releasequalification.go](../../../pkg/orchestrator/releasequalification.go), [releasestage1.go](../../../pkg/orchestrator/releasestage1.go), [release_approval.go](../../../pkg/ui/release_approval.go), [candidate-gate.sh](../../../scripts/candidate-gate.sh) | release_qualification monitors plus existing qualification/publication policy; separate effect adapter admission | Preserve RC SHA/provenance, suite/person/soak/breaking/signing/version checks. Gate observation of publication is not authority to promote/publish. Workflow-to-executor exclusion, exact artifact/version conditions and reconciliation are not implemented by this design; do not migrate these effects under generic dispatch. |
+| [releasequalification.go](../../../pkg/orchestrator/releasequalification.go), [releasestage1.go](../../../pkg/orchestrator/releasestage1.go), [release_approval.go](../../../pkg/ui/release_approval.go), [candidate-gate.sh](../../../scripts/candidate-gate.sh) | Existing qualification/publication policy and receipts; separate adapter admission | Preserve RC SHA/provenance, suite/person/soak/breaking/signing/version checks. Gate observation of publication is not authority to promote/publish. Workflow-to-executor exclusion, exact artifact/version conditions and reconciliation are not implemented by this design; do not migrate these effects under generic dispatch. |
 
 ## Implemented observation-only subset
 
 The [runtime observation guide](../../../docs/gate-observations.md) describes the
-shipped slice: delivery/report/current_v1, acknowledgment/explicit_receipt,
-qa_stage s3/s4/s5, and release_qualification, all v1 nonrequired monitors.
-The [QA/release coverage audit](../../../docs/gate-qa-release-observations.md)
-records exact source mappings, conditional/custom adapter limits and inaccessible
-signed/policy/asset evidence. Task subjects for qa_stage are admitted only as
-nonrequired monitors before a PR exists; release qualification has repository
-subjects. No enforcement/effect admission is activated. Ordinary authorized
+shipped slices: `delivery/report/current_v1`,
+`acknowledgment/explicit_receipt`, and canonical `review`/`approval` predicates,
+all v1 nonrequired monitors. The [review/approval adapter](../../../docs/gate-review-observations.md)
+imports ordinary/security/path/targeted/takeover legacy comparisons and named,
+Submit and human-hold approval scopes. Its missing current provider and rendered
+policy/role receipt pins remain unknown; closed tasks and missing assignments
+never pass current mode. Ordinary authorized
 task reads and the Angular task detail carry the optional closed observation_view
 and bounded sibling diagnostic history. There is no contract/decision authority,
 `?view=gates` implementation, discovery/mutation/action/waiver API or migration.
@@ -40,7 +40,8 @@ The [independent framework review](../../../docs/gate-observation-review.md) rec
 repair coverage and stable extension rules, including conservative receipt ordering,
 failure/acceptance races and bounded retention on both engines.
 All current legacy writers listed below retain authority in this implementation.
-The imports and handoff requirements remain future specifications.
+Legacy comparisons are imported only as inert monitors; enforced imports and
+handoff requirements remain future specifications.
 
 ## Explicit concrete goal imports
 
@@ -65,3 +66,10 @@ Defaults for max_resumes/max_stall/on_limit are materialized from the exact exis
 - [Go StateOf](../../../pkg/model/state.go), [SQLite schema](../../../pkg/model/schema.go) and [Postgres schema](../../../pkg/model/postgres/schema.go) project the same authority/precedence. Compatibility fields never override the new owner.
 
 Collector reuse does not prove implementation readiness: generation capture, conditional writes, immutable approval/outcome records and complete-set fences must be added where absent. See [acceptance scenarios](acceptance.md) for qualification obligations and the spec for the one-epoch handoff/rollback.
+
+
+Task #69 adds qa_stage task monitors (only nonrequired, action=null) before PR
+creation and release_qualification repository monitors. The [QA/release audit](../../../docs/gate-qa-release-observations.md)
+records full source mapping and inaccessible evidence. The review port's repository
+authorization, transitive-evidence checks and scoped-history omission are retained.
+No legacy authority or effect admission changes.

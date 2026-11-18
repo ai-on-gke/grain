@@ -20,7 +20,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 //go:embed delivery.schema.json
@@ -29,13 +32,19 @@ var deliverySchema []byte
 //go:embed acknowledgment.schema.json
 var acknowledgmentSchema []byte
 
+//go:embed review.schema.json
+var reviewSchema []byte
+
+//go:embed approval.schema.json
+var approvalSchema []byte
+
 //go:embed qa_stage.schema.json
 var qaStageSchema []byte
 
 //go:embed release_qualification.schema.json
 var releaseQualificationSchema []byte
 
-const Implementation = "builtin-qualification-observer-v3"
+const Implementation = "builtin-qualification-observer-v4"
 
 type Descriptor struct {
 	Type           string
@@ -47,10 +56,12 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"qa_stage", 1, Digest(json.RawMessage(qaStageSchema)), append([]byte(nil), qaStageSchema...), Implementation}, {"release_qualification", 1, Digest(json.RawMessage(releaseQualificationSchema)), append([]byte(nil), releaseQualificationSchema...), Implementation}}
+	items := []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}, {"qa_stage", 1, Digest(json.RawMessage(qaStageSchema)), append([]byte(nil), qaStageSchema...), Implementation}, {"release_qualification", 1, Digest(json.RawMessage(releaseQualificationSchema)), append([]byte(nil), releaseQualificationSchema...), Implementation}}
+	slices.SortFunc(items, func(a, b Descriptor) int { return strings.Compare(a.Type, b.Type) })
+	return items
 }
 
-// Validate admits only implemented, closed typed observation profiles.
+// Validate admits closed canonical profiles supported by these pure observers.
 func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	if len(raw) > 64*1024 {
 		return nil, fmt.Errorf("config exceeds 64 KiB")
@@ -66,6 +77,10 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		allowedKeys = map[string]bool{"stage": true, "flow_revision": true, "assignment": true}
 	case "release_qualification":
 		allowedKeys = map[string]bool{"predicate": true, "expected_commit": true, "release_version": true, "policy_revision": true}
+	case "review":
+		allowedKeys = map[string]bool{"category": true, "requirement_id": true, "semantics": true}
+	case "approval":
+		allowedKeys = map[string]bool{"requirement_ids": true, "semantics": true}
 	case "acknowledgment":
 		allowedKeys = map[string]bool{"mode": true}
 	default:
@@ -109,9 +124,37 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		dec.DisallowUnknownFields()
 		return dec.Decode(v)
 	}
+	validID := func(s string) bool { return strings.TrimSpace(s) != "" && utf8.RuneCountInString(s) <= 256 }
 	switch typ {
 	case "qa_stage", "release_qualification":
 		return validateQualification(typ, raw)
+	case "review":
+		c := ReviewConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if !slices.Contains([]string{"ordinary", "security", "path", "takeover"}, c.Category) || !validID(c.RequirementID) || !slices.Contains([]string{"current_head_v1", "legacy_completion_v1"}, c.Semantics) {
+			return nil, fmt.Errorf("unsupported review profile")
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
+	case "approval":
+		c := ApprovalConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if c.Semantics != "exact_head_v1" || len(c.RequirementIDs) == 0 || len(c.RequirementIDs) > 64 {
+			return nil, fmt.Errorf("unsupported approval profile")
+		}
+		seen := map[string]bool{}
+		for _, id := range c.RequirementIDs {
+			if !validID(id) || seen[id] {
+				return nil, fmt.Errorf("invalid or duplicate requirement ID")
+			}
+			seen[id] = true
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
 	case "delivery":
 		c := DeliveryConfig{}
 		if err := decode(&c); err != nil {
@@ -140,6 +183,7 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 // Facts contains only the scoped reader's immutable evidence, never private
 // evaluator state. CompleteEmpty is meaningful: no report is not success.
 type Facts struct {
+	Change             *ChangeFacts
 	IncompleteReason   string
 	TaskID             string
 	Applicable         bool
@@ -167,6 +211,9 @@ func Bindings(taskID string) []Binding {
 // Evaluate is pure. Predictions are text and inert wait descriptors; work and
 // actions are always empty. The controller alone accepts diagnostic versions.
 func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
+	if b.Type == "review" || b.Type == "approval" {
+		return evaluateChange(b, f, now, generation)
+	}
 	contextDigest := Digest(struct {
 		Binding       Binding
 		Source, Build string
@@ -234,7 +281,13 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 // evidence, waits or accepted metadata from a prior successful collection.
 // SourceRevision is an unavailable build sentinel, not a captured fact version.
 func UnavailableObservation(taskID string, now time.Time) ObservationView {
-	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: Bindings(taskID), Results: []EvaluationState{}, Dirty: true}
+	return UnavailableObservationForBindings(taskID, now, Bindings(taskID))
+}
+
+// UnavailableObservationForBindings preserves only validated scope descriptions.
+// It never reuses evidence or accepted predictions.
+func UnavailableObservationForBindings(taskID string, now time.Time, bindings []Binding) ObservationView {
+	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: bindings, Results: []EvaluationState{}, Dirty: true}
 	for _, b := range v.Bindings {
 		r := Evaluate(b, Facts{TaskID: taskID, ObservedAt: now, ValidUntil: now, SourceVersion: Implementation}, now, 0)
 		r.Status = "error"

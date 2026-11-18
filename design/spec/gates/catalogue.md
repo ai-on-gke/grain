@@ -19,26 +19,41 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 | `pipeline_health` / repository / completion | `repos`: unique nonempty allowed repositories; `semantics`: `scoped_v1` (default), `legacy_quiet_v1` | Current mode uses each repository's configured managed base-ref set (capturing the settings revision); an absent expected base set is unknown unless explicitly excluded by authorized policy. It requires complete current base verdicts and no scoped open pipeline-family notifications, stalled task or blocked/stalled merge queue in configured repos; exclude person-paused tasks and this steward's own active task. Missing expected base or incomplete scans unknown; observed problems unmet; active recovery pending. Legacy mode preserves repository-filtered notifications plus **deployment-wide** pipelineStewardQuiet scan, including empty/success base conclusion and paused/self exclusions; it needs explicitly approved deployment read scope and cannot be inferred repo-local. Subject repository must be in repos. | Existing notifications/task/queue/health views and concrete repairs; pipeline collector, state/base/notification/queue changes and scan. Clearing an alert without resolving a required positive health fact cannot pass current mode. |
 | `qa_stage` / change / guard, completion; task / nonrequired monitor only | `stage`: `s3`, `s4`, `s5`; `flow_revision`: approved flow ID/revision; `assignment`: `treatment`, `shadow` | Treatment requires authentic stage result for exact staged/main head, pinned flow/arm/engine and required stage disposition. Unmet stage/findings require bounded repair or eligible human triage; missing pin/result unknown, active stage pending. Shadow/control can monitor only and cannot satisfy an enforced treatment prerequisite. Existing trust/review/human floors remain. Custom stage/promotion effects cannot be enforced until typed adapter and exact-version proof are admitted. | Existing pre-PR QA checks, bounded QA repair and person triage; QA stage/head/assignment changes. No shell evaluator or credentials in config. Unsupported custom flow holds migration rather than pretending parity. |
 
-| `release_qualification` / repository / monitor | `predicate`: `suite`, `provenance`, `soak`, `person`, `breaking_change`, `signing_version`, `publication_readiness`; `expected_commit`: full lowercase SHA; `release_version`: `vM.m.p`; `policy_revision`: exact nonempty policy/reader version | Separate typed qualification facts for the exact RC/head/version. Reuse authenticated existing suite verdicts; canceled/infra/skipped never become success. Soak needs its effective minimum or recorded qualification exemption. Person needs verified identity, exact signed decision and validity; dispatch is not authorization. Artifact/signing/version and complete readiness targets are separate predicates. Missing policy/receipt/source is unknown. All are observation-only; enforcement/effects remain deferred. | Existing qualification/release evidence and eligible person decisions, described inertly. No shell evaluator, reexecution, signing key creation, CI request or release action. See the [complete source audit](../../../docs/gate-qa-release-observations.md). |
+| `release_qualification` / repository / monitor | `predicate`: `suite`, `provenance`, `soak`, `person`, `breaking_change`, `signing_version`, `publication_readiness`, `promotion_policy`; `expected_commit`: full lowercase SHA; `release_version`: `vM.m.p`; `policy_revision`: exact nonempty policy/reader version | Separate typed qualification facts for the exact RC/head/version. Reuse authenticated existing suite verdicts; canceled/infra/skipped never become success. Soak needs its effective minimum or recorded qualification exemption. Person needs verified identity, exact signed decision and validity; dispatch is not authorization. Artifact/signing/version and complete readiness targets are separate predicates. Missing policy/receipt/source is unknown. All are observation-only; enforcement/effects remain deferred. | Existing qualification/release evidence and eligible person decisions, described inertly. No shell evaluator, reexecution, signing key creation, CI request or release action. See the [complete source audit](../../../docs/gate-qa-release-observations.md). |
 
 `legacy_*` profiles preserve predicate interpretation, not permission to bypass the new message/child/authority closure fences or credential admission. Complete-set limitations must be displayed. A result used by enforced action admission must meet current-head/current-policy/complete-collection rules even if an older cohort's monitoring uses a legacy reading. No passing check gate can waive a different failing review/approval or outcome.
 
 ## Runtime coverage after the initial framework review
 
 The catalogue above remains the full v1 contract, not an implementation claim.
-Task #61, Task #64 and the Task #69 QA/release port implement:
+Task #61, Task #64, Task #67 and Task #69 implement:
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
 | `delivery` v1, `product=report, semantics=current_v1` | Nonrequired task monitor; finite analysis tasks, correlated settled body reports up to 8192 characters. Attachments and unsupported shapes are explained unknown. |
 | `acknowledgment` v1, `mode=explicit_receipt` | Nonrequired task monitor; nonempty verified human close strictly later than the current report and settlement. Ambiguous timestamps and missing receipt provenance are unknown. |
-| `qa_stage` v1, stages s3/s4/s5 | Nonrequired task monitors with authentic complete exact-head/flow/engine/arm records; custom applicability/grouped checks, bounded repair descriptions and human floors. Missing pins and unsupported overlays remain unknown. |
-| `release_qualification` v1 | Repository monitors on actual qualification-suite tasks; authenticated recorded suite verdict, scoped tag/ancestry and readable readiness facts. Missing signed decisions, effective workflow policy or complete asset evidence remains unknown; this is not full release authority coverage. |
 
-All other profiles and the other nine types remain unsupported by this registry.
+| `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
+| `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
+
+| `qa_stage` v1, s3/s4/s5 | Authentic exact-head/flow/engine/arm task monitors, complete conditional/grouped checks, repair descriptions and human floors. Missing pins/unsupported overlays stay unknown. |
+| `release_qualification` v1 | Actual qualification-suite task's repository monitors, authenticated recorded suite verdict, RC/readiness facts and committed veto/version policy. Missing signed/effective-policy/asset receipts stay unknown. |
+
+Other profiles of delivery/acknowledgment and the other seven types remain unsupported by this registry.
+The [review/approval guide](../../../docs/gate-review-observations.md) records
+runtime scope, bounded readers, tests and the explicit positive-proof/CL/multiple-change
+limitations; registration does not claim provider-backed positive qualification.
 These observations never add obligations, dispatch work, process messages or
 admit actions. See the [compatibility boundary](compatibility.md#implemented-observation-only-subset),
 [operator guide](../../../docs/gate-observations.md) and
 [review/extension guidance](../../../docs/gate-observation-review.md) for the
 implemented reads, regression coverage and source-specific blockers. No rollout,
 cutover or migration is implied by this coverage table.
+
+
+Task #69 additionally implements qa_stage s3/s4/s5 task monitors and
+release_qualification repository monitors on actual qualification-suite tasks.
+The [complete audit](../../../docs/gate-qa-release-observations.md) records the
+source/policy/version requirements, custom adapter limits and unavailable signed
+or complete asset evidence. These are nonrequired and inert; seven other catalogue
+types remain unsupported by this registry.

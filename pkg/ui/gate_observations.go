@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -58,25 +59,79 @@ func observationEnvironment() []string {
 func (c *Client) observesGates(id string) bool {
 	return slices.Contains(c.Config.GateObservationTaskIDs, id) && len(c.Config.GateObservationTaskIDs) <= 32
 }
-func (c *Client) gateObservations(ctx context.Context, id string) (*gates.ObservationView, *model.GateObservationDiagnostics) {
+func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.ObservationView, *model.GateObservationDiagnostics) {
+	id := task.ID
+	// History can retain linked evidence after the current change link is
+	// removed. Authorize the whole optional sidecar, not just today's bindings,
+	// before reading or replaying any shared diagnostic cache.
+	readable := taskReadableForContext(ctx)
+	if !readable(taskRepo(&task)) {
+		return nil, nil
+	}
 	if !c.observesGates(id) {
 		return nil, nil
 	}
 	// A failed diagnostic never becomes a failed ordinary task read.
-	readCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	authorizedCtx := model.WithExternalRefReadable(ctx, readable)
+	readCtx, cancel := context.WithTimeout(authorizedCtx, 250*time.Millisecond)
 	defer cancel()
-	now := c.now()
-	if v, d, err := c.Store.GateObservationBackoff(readCtx, id, now); err == nil && v != nil {
-		return v, d
+	allowed := func(view *gates.ObservationView) bool {
+		subject := func(s gates.Subject) bool {
+			if s.Kind == "task" {
+				return s.TaskID == id
+			}
+			return readable(s.Repository)
+		}
+		for _, b := range view.Bindings {
+			if !subject(b.Subject) {
+				return false
+			}
+		}
+		for _, r := range view.Results {
+			for _, e := range r.Result.Evidence {
+				if !subject(e.Subject) {
+					return false
+				}
+			}
+			for _, dep := range r.Result.Dependencies {
+				if !subject(dep.Subject) {
+					return false
+				}
+			}
+		}
+		return true
 	}
-	qualifications, err := gateobserve.CollectQualificationObservations(readCtx, c.Store, c.Config.GitHubPullRequests, id, now)
+	now := c.now()
+	history := !taskReadScopedForContext(ctx)
+	if cached, diagnostics, cacheErr := c.Store.GateObservationBackoff(readCtx, id, now, history); cacheErr == nil && cached != nil {
+		if allowed(cached) {
+			return cached, diagnostics
+		}
+		return nil, nil
+	}
+	cancel()
+	sourceCtx, sourceStop := context.WithTimeout(authorizedCtx, 3*time.Second)
+	qualifications, err := gateobserve.CollectQualificationObservations(sourceCtx, c.Store, c.Config.GitHubPullRequests, id, now)
+	sourceStop()
+	persistCtx, persistStop := context.WithTimeout(authorizedCtx, 250*time.Millisecond)
+	defer persistStop()
 	var v *gates.ObservationView
 	var d *model.GateObservationDiagnostics
 	if err == nil {
-		v, d, err = c.Store.ObserveTaskGatesWithQualifications(readCtx, id, now, qualifications)
+		if history {
+			v, d, err = c.Store.ObserveTaskGatesWithQualifications(persistCtx, id, now, qualifications)
+		} else {
+			v, err = c.Store.ObserveTaskGatePredictionsWithQualifications(persistCtx, id, now, qualifications)
+		}
 	}
 	if err == nil {
+		if !allowed(v) {
+			return nil, nil
+		}
 		return v, d
+	}
+	if errors.Is(err, model.ErrGateObservationScopeDenied) {
+		return nil, nil
 	}
 	// No raw database errors, comment bodies, principals or credentials escape.
 	unavailable := gates.UnavailableQualifications(id, now, qualifications)
@@ -87,6 +142,9 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 		failureCtx, stop := context.WithTimeout(ctx, 50*time.Millisecond)
 		_ = c.Store.RecordGateQualificationFailure(failureCtx, id, now, v, qualifications)
 		stop()
+	}
+	if !allowed(v) {
+		return nil, nil
 	}
 	return v, nil
 }

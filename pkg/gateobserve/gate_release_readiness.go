@@ -34,6 +34,10 @@ type observationComparisons interface {
 // In particular it never executes candidate-gate/release-from-trunk or any shell.
 func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, tags []github.Tag, f *gates.ReleaseFacts) {
 	versions := []any{f.SourceVersion}
+	readReleasePromotionPolicy(ctx, source, repo, tags, f)
+	if f.PromotionPolicy != nil {
+		versions = append(versions, f.PromotionPolicy)
+	}
 	defer func() { f.SourceVersion = gates.Digest(versions) }()
 	if reader, ok := source.(github.ReleaseTagReader); ok && ctx.Err() == nil {
 		refs, err := reader.ListMatchingTags(repo.StoredOwner(), repo.Name, f.Version+"-pending")
@@ -158,4 +162,39 @@ func (c observationConf) ReadFile(_, _, _, path string) ([]byte, bool, error) {
 		return c.raw, true, nil
 	}
 	return nil, false, nil
+}
+
+// The committed operator veto and version reuse guard are qualification facts,
+// distinct from nightly/publication health. Missing effective workflow overrides
+// never turn the rest of the release policy into a passing prediction.
+func readReleasePromotionPolicy(ctx context.Context, source any, repo model.RepoRef, tags []github.Tag, f *gates.ReleaseFacts) {
+	p := &gates.ReleasePromotionPolicy{}
+	for _, tag := range tags {
+		if tag.Name == f.Version {
+			p.VersionOccupied = true
+			p.OccupiedHead = tag.SHA
+		}
+	}
+	f.PromotionPolicy = p
+	heads, ok := source.(qaObservationHeads)
+	if !ok || ctx.Err() != nil {
+		return
+	}
+	files, ok := source.(github.FileReader)
+	if !ok {
+		return
+	}
+	head, err := heads.GetBranchHead(repo.StoredOwner(), repo.Name, "main")
+	if err != nil || head == nil || head.SHA == "" {
+		return
+	}
+	raw, found, err := files.ReadFile(repo.StoredOwner(), repo.Name, head.SHA, "scripts/release.conf")
+	if err != nil || !found || len(raw) > 8192 {
+		return
+	}
+	_, _, never := readReleaseConf(observationConf{raw}, repo, head.SHA)
+	p.PolicyHead = head.SHA
+	p.Veto = never[f.Candidate] || never[f.Version]
+	p.Version = gates.Digest(struct{ Head, Conf string }{head.SHA, gates.Digest(raw)})
+	f.PolicyVersion = gates.Digest([]string{f.PolicyVersion, p.Version})
 }

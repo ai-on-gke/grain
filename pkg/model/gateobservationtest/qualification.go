@@ -199,6 +199,29 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 	if rebuilt.Results[2].Result.Status != "unknown" || !strings.Contains(rebuilt.Results[2].Result.Summary, "regenerated") {
 		t.Fatal("mismatched cache profile was reused")
 	}
+	must(s.UpdateTask(ctx, id, func(task *model.Task) error {
+		task.Links = []model.Link{{Kind: model.LinkFixes, Target: repo.String() + "#77"}}
+		for i := 0; i < 40; i++ {
+			task.Links = append(task.Links, model.Link{Kind: model.LinkReviewTask, Target: fmt.Sprintf("review-scope-%d", i)})
+		}
+		return nil
+	}))
+	c.StoreFence, _ = s.QualificationObservationFence(ctx, id)
+	combined := read(s, now.Add(23*time.Second), c)
+	qaCount, releaseCount, reviewCount := 0, 0, 0
+	for _, b := range combined.Bindings {
+		switch b.Type {
+		case "qa_stage":
+			qaCount++
+		case "release_qualification":
+			releaseCount++
+		case "review":
+			reviewCount++
+		}
+	}
+	if len(combined.Bindings) > 64 || qaCount != 3 || releaseCount != 8 || reviewCount == 0 {
+		t.Fatal("combined projection lost monitor families or exceeded its bound")
+	}
 	for i := 0; i < 513; i++ {
 		_, err := s.RecordQACheckRun(ctx, model.QACheckRun{TaskID: id, CommitSHA: f.Head, Stage: "S3", CheckID: "check", Verdict: "pass"}, nil)
 		must(err)
@@ -219,8 +242,8 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 	for rows.Next() {
 		var raw string
 		must(rows.Scan(&raw))
-		if len(raw) > 64*1024 {
-			t.Fatal("unbounded persisted view")
+		if len(raw) > 512*1024 {
+			t.Fatal("unexpectedly unbounded combined persisted view")
 		}
 		var view gates.ObservationView
 		must(json.Unmarshal([]byte(raw), &view))

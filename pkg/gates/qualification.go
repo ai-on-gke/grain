@@ -38,7 +38,7 @@ type ReleaseQualificationConfig struct {
 	PolicyRevision string `json:"policy_revision"`
 }
 
-var releasePredicates = []string{"suite", "provenance", "soak", "person", "breaking_change", "signing_version", "publication_readiness"}
+var releasePredicates = []string{"suite", "provenance", "soak", "person", "breaking_change", "signing_version", "publication_readiness", "promotion_policy"}
 var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 var exactDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var exactSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -85,7 +85,13 @@ type ReleaseArtifact struct {
 	Commit, Version, Digest string
 	SignatureVerified       *bool
 }
+type ReleasePromotionPolicy struct {
+	Veto, VersionOccupied, Complete bool
+	PolicyHead, OccupiedHead        string
+	Version                         string
+}
 type ReleaseFacts struct {
+	PromotionPolicy                                                            *ReleasePromotionPolicy
 	TaskID, Repository, Candidate, Head, Version, PolicyVersion, SourceVersion string
 	PredicateReasons                                                           map[string]string
 	Complete                                                                   bool
@@ -213,6 +219,11 @@ func EvaluateStage(b Binding, f StageFacts, now time.Time, generation uint64) Re
 	var cfg QAStageConfig
 	if _, err := Validate(b.Type, b.Version, b.Config); err != nil || json.Unmarshal(b.Config, &cfg) != nil {
 		block(&r, "unsupported", "Unsupported or malformed QA configuration.")
+		return r
+	}
+	if b.Type != "qa_stage" || b.Subject.Kind != "task" || b.Subject.TaskID != f.TaskID {
+		block(&r, "permission", "QA evidence does not match this task subject.")
+		r.Summary = r.Blockers[0].Summary
 		return r
 	}
 	if !qualificationReady(&r, b, f.Complete, f.Reason, f.ObservedAt, f.ValidUntil, now) {
@@ -384,6 +395,11 @@ func EvaluateRelease(b Binding, f ReleaseFacts, now time.Time, generation uint64
 		block(&r, "unsupported", "Unsupported or malformed release configuration.")
 		return r
 	}
+	if b.Type != "release_qualification" || b.Subject.Kind != "repository" || b.Subject.Repository != f.Repository || b.Subject.Ref != f.Candidate {
+		block(&r, "permission", "Release evidence does not match this repository/candidate subject.")
+		r.Summary = r.Blockers[0].Summary
+		return r
+	}
 	if !qualificationReady(&r, b, f.Complete, f.Reason, f.ObservedAt, f.ValidUntil, now) {
 		return r
 	}
@@ -469,6 +485,35 @@ func EvaluateRelease(b Binding, f ReleaseFacts, now time.Time, generation uint64
 				state, reason = "unmet", "Artifact is unsigned, invalid, or belongs to another commit/version."
 			} else {
 				state, reason = "met", "Verified artifact signature, digest, version and RC head match."
+			}
+		}
+	case "promotion_policy":
+		if p := f.PromotionPolicy; p != nil {
+			if p.PolicyHead != "" && p.Version != "" {
+				subject := b.Subject
+				subject.Ref = "main"
+				r.Evidence = append(r.Evidence, Evidence{Kind: "policy", ID: "scripts/release.conf", Version: p.Version, Subject: subject, Head: &p.PolicyHead, Digest: p.Version})
+			}
+			if p.VersionOccupied && p.OccupiedHead != "" {
+				subject := b.Subject
+				subject.Ref = f.Version
+				proof := Digest([]string{f.Version, p.OccupiedHead})
+				r.Evidence = append(r.Evidence, Evidence{Kind: "integration", ID: f.Version, Version: proof, Subject: subject, Head: &p.OccupiedHead, Digest: proof})
+			}
+			if p.VersionOccupied {
+				state, reason = "unmet", "This release version is already tagged and cannot be reused."
+			}
+			if p.Veto {
+				block(&r, "unsatisfied", "The exact current-main RELEASE_NEVER_PROMOTE declaration vetoes this candidate/version.")
+			}
+			if !p.VersionOccupied {
+				if !p.Complete || p.Version == "" {
+					reason = "Effective release policy/overrides are not retained; inspect the exact committed policy and existing train state."
+				} else if p.Veto {
+					state, reason = "unmet", "The effective release policy vetoes this candidate/version."
+				} else {
+					state, reason = "met", "The complete pinned release promotion policy is satisfied."
+				}
 			}
 		}
 	case "publication_readiness":
@@ -582,7 +627,14 @@ func UnavailableQualifications(taskID string, now time.Time, c QualificationColl
 // BoundQualificationView prevents a custom flow/collection from multiplying the
 // existing bounded history into unbounded payloads. It drops no legacy result.
 func BoundQualificationView(v *ObservationView, now time.Time) {
-	data, _ := json.Marshal(v)
+	projection := ObservationView{Bindings: []Binding{}, Results: []EvaluationState{}}
+	for i, b := range v.Bindings {
+		if b.Type == "qa_stage" || b.Type == "release_qualification" {
+			projection.Bindings = append(projection.Bindings, b)
+			projection.Results = append(projection.Results, v.Results[i])
+		}
+	}
+	data, _ := json.Marshal(projection)
 	oversized := len(data) > 64*1024
 	for i, b := range v.Bindings {
 		if b.Type != "qa_stage" && b.Type != "release_qualification" {
