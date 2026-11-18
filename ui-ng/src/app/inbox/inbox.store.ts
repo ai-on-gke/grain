@@ -554,7 +554,10 @@ export class InboxStore implements OnDestroy {
       const hasExplicitRef = Boolean(
         branch || e?.task?.pullRequest || e?.task?.changelists?.length,
       );
-      if (isProposal && !hasExplicitRef) {
+      // A task with no repository (a changelist's) has no branch the
+      // server can preview: it answers 404, which only adds a console
+      // error.
+      if ((isProposal && !hasExplicitRef) || (e && !e.repo)) {
         this.diffs.update((m) => ({ ...m, [id]: null }));
         return;
       }

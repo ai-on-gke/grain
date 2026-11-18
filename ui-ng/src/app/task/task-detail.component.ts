@@ -288,6 +288,8 @@ export function duration(from?: string, to?: string): string {
               </span>
             }
           </div>
+          <!-- In a pane the page around it owns the h1 (one per page),
+               so the title steps down to h2 and its sections to h3. -->
           @if (pane()) {
             <h2
               class="view-headline task-title"
@@ -803,6 +805,7 @@ export function duration(from?: string, to?: string): string {
           @if (editOpen()) {
             <g-task-edit-panel
               [task]="t"
+              [pane]="pane()"
               (acted)="acted.emit()"
               (closed)="editOpen.set(false)"
             />
@@ -812,7 +815,9 @@ export function duration(from?: string, to?: string): string {
         <!-- Inline Compact Context Box -->
         @if (compactOpen()) {
           <section class="compact-card" data-testid="compact-card">
-            <h2 class="section-title">Compact context for #{{ t.id }}</h2>
+            <h2 [attr.aria-level]="sectionLevel()" class="section-title">
+              Compact context for #{{ t.id }}
+            </h2>
             <p class="muted" style="margin: 0; font-size: 12px">
               Provide a handover note to compact immediately, or leave empty to
               ask the next run to compact first.
@@ -894,8 +899,11 @@ export function duration(from?: string, to?: string): string {
             >
               @switch (current()) {
                 @case ("docs") {
-                  <h2 class="sr-only">Documents</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Documents
+                  </h2>
                   <g-task-docs-tab
+                    [pane]="pane()"
                     [documents]="docs()"
                     [loading]="docDiffLoading()"
                     [(selectedId)]="selectedDocId"
@@ -903,8 +911,11 @@ export function duration(from?: string, to?: string): string {
                   />
                 }
                 @case ("conversation") {
-                  <h2 class="sr-only">Conversation</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Conversation
+                  </h2>
                   <g-task-goal-card
+                    [pane]="pane()"
                     [task]="t"
                     [attemptsCount]="attempts().length"
                     (acted)="acted.emit()"
@@ -939,7 +950,10 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled: store.isBusy('send', t.id),
+                      disabled:
+                        store.isBusy('send', t.id) ||
+                        !can('POST /api/tasks/{id}/comments'),
+                      deniedReason: commentDenied(),
                       hidden:
                         t.state === 'closed' ||
                         (this.parked() && !this.allowWordsOnParked()) ||
@@ -949,7 +963,9 @@ export function duration(from?: string, to?: string): string {
                   />
                 }
                 @case ("runs") {
-                  <h2 class="sr-only">Runs</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Runs
+                  </h2>
                   @if (attempts().length === 0) {
                     <p class="empty-state">No runs yet.</p>
                   } @else {
@@ -1065,7 +1081,10 @@ export function duration(from?: string, to?: string): string {
                         data-testid="capability-audit"
                         aria-label="Capability audit log"
                       >
-                        <h3 class="section-title">
+                        <h3
+                          [attr.aria-level]="subsectionLevel()"
+                          class="section-title"
+                        >
                           Run {{ auditNum }} capability audit
                         </h3>
                         @if (store.auditError(); as err) {
@@ -1105,7 +1124,11 @@ export function duration(from?: string, to?: string): string {
                         aria-labelledby="transcript-h"
                         data-testid="transcript"
                       >
-                        <h2 id="transcript-h" class="section-title">
+                        <h2
+                          [attr.aria-level]="sectionLevel()"
+                          id="transcript-h"
+                          class="section-title"
+                        >
                           Run {{ n }} transcript
                           @if (isLive(n)) {
                             <span class="status-pill setup"
@@ -1134,8 +1157,11 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("changes") {
-                  <h2 class="sr-only">Changes and CI</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Changes and CI
+                  </h2>
                   <g-task-changes-tab
+                    [pane]="pane()"
                     (forceMerge)="forceMergeReq.set($event)"
                     (acceptFindings)="acceptFindingsReq.set($event)"
                     [task]="t"
@@ -1146,7 +1172,9 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("tree") {
-                  <h2 class="sr-only">Work tree</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Work tree
+                  </h2>
                   @let tree = store.tree();
                   @if (store.treeError(); as err) {
                     <p class="banner banner-error" role="alert">{{ err }}</p>
@@ -1184,7 +1212,9 @@ export function duration(from?: string, to?: string): string {
                     <p class="muted">Loading…</p>
                   }
 
-                  <h2 class="section-title">Waits on</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="section-title">
+                    Waits on
+                  </h2>
                   @if (t.dependsOn?.length) {
                     <ul class="plain-list" data-testid="depends-on-list">
                       @for (d of t.dependsOn; track d) {
@@ -1270,7 +1300,9 @@ export function duration(from?: string, to?: string): string {
             <div class="g-panes">
               <section class="g-pane" data-testid="task-prompt-pane">
                 <div class="g-pane-head">
-                  <h2 class="g-pane-title">Prompt</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="g-pane-title">
+                    Prompt
+                  </h2>
                   @if (t.description || docs().length > 0) {
                     <div class="g-pane-tools">
                       <button
@@ -1315,7 +1347,9 @@ export function duration(from?: string, to?: string): string {
                 }
               </section>
               <section class="g-pane" data-testid="task-attributes-pane">
-                <h2 class="g-pane-title">Attributes</h2>
+                <h2 [attr.aria-level]="sectionLevel()" class="g-pane-title">
+                  Attributes
+                </h2>
                 <dl class="g-attrs">
                   <dt>Priority</dt>
                   <dd>
@@ -1386,7 +1420,12 @@ export function duration(from?: string, to?: string): string {
 
             <!-- Capabilities & Grants Editor -->
             @if (can("POST /api/tasks/{id}/capabilities")) {
-              <h3 class="section-subtitle">Manage capabilities &amp; grants</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                Manage capabilities &amp; grants
+              </h3>
               <g-grants-picker
                 testid="task-grants"
                 [policyVerdicts]="true"
@@ -1401,7 +1440,12 @@ export function duration(from?: string, to?: string): string {
 
             <!-- Dependencies Quick Editor in Details -->
             @if (can("POST /api/tasks/{id}/depends-on")) {
-              <h3 class="section-subtitle">Dependencies</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                Dependencies
+              </h3>
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
@@ -1454,7 +1498,12 @@ export function duration(from?: string, to?: string): string {
             }
 
             @if (transitions().length) {
-              <h3 class="section-subtitle">History</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                History
+              </h3>
               <ol class="history">
                 @for (h of transitions(); track $index) {
                   <li>
@@ -1639,6 +1688,11 @@ export class TaskDetailComponent implements OnDestroy {
   // narrower, Details as a tab, its tab kept in ?pane=, links to other
   // tasks select them in the pane.
   readonly pane = input(false);
+  // sectionLevel sits the section headings one below the title: h3 in
+  // a pane (title h2), their own h2 on the full page (title h1).
+  readonly sectionLevel = computed(() => (this.pane() ? 3 : null));
+  // subsectionLevel keeps the h3s under those sections one further down.
+  readonly subsectionLevel = computed(() => (this.pane() ? 4 : null));
 
   private readonly taskPage = viewChild<ElementRef<HTMLElement>>("taskPage");
   private readonly tabBody = viewChild<ElementRef<HTMLElement>>("tabBody");
@@ -1826,6 +1880,15 @@ export class TaskDetailComponent implements OnDestroy {
     if (t.pendingConfigChange) return "a configuration change";
     return "";
   });
+  // commentDenied explains a composer this role may not post from, as
+  // the Inbox's reply box does: a viewer reads the conversation but has
+  // nothing to type into.
+  protected readonly commentDenied = computed(() =>
+    this.access.deniedReasonForTask(
+      "POST /api/tasks/{id}/comments",
+      this.t()?.repo ?? null,
+    ),
+  );
   protected readonly isStopped = computed(() => {
     const t = this.t();
     return (
@@ -2904,7 +2967,13 @@ export class TaskDetailComponent implements OnDestroy {
 
   private async submitComment(): Promise<void> {
     const t = this.t();
-    if (!t || t.id !== this.id() || this.isStopped() || this.replyBlocked())
+    if (
+      !t ||
+      t.id !== this.id() ||
+      this.isStopped() ||
+      this.replyBlocked() ||
+      !this.can("POST /api/tasks/{id}/comments")
+    )
       return;
     const tgt = this.replyTarget() ?? {
       taskId: t.id,

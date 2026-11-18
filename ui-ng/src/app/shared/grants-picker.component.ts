@@ -235,22 +235,22 @@ export interface GrantAttachEvent {
               [class.is-denied]="n.verdict.kind !== 'may_be_refused'"
             >
               <code>{{ shortGrant(n.grant) }}</code
-              >: {{ n.verdict.note }}
-              @if (n.held && n.verdict.kind === "denied") {
-                Remove this grant, or change the capability policy.
-              } @else if (!n.held && n.verdict.kind !== "may_be_refused") {
-                It cannot be granted here.
-              }
+              >: {{ policyNoteText(n) }}
               @if (n.verdict.kind === "ci_only") {
-                (<a [href]="repoAccessDoc" target="_blank" rel="noreferrer"
-                  >Repository access docs</a
-                >)
+                <span
+                  >(<a [href]="repoAccessDoc" target="_blank" rel="noreferrer"
+                    >Repository access docs</a
+                  >)</span
+                >
               } @else {
-                (<a
-                  [routerLink]="['/settings', 'capabilities']"
-                  fragment="capability-policy"
-                  >Settings → Capabilities</a
-                >)
+                <span
+                  >(<a
+                    routerLink="/settings/capabilities"
+                    fragment="capability-policy"
+                    [attr.data-testid]="(testid() || 'gp') + '-policy-link'"
+                    >Settings → Capabilities</a
+                  >){{ n.verdict.kind === "denied" ? "." : "" }}</span
+                >
               }
             </li>
           }
@@ -653,6 +653,27 @@ export class GrantsPickerComponent {
       this.access.can("GET /api/api-scope-sets", repo) ||
       this.access.can("POST /api/capability-grants/check", repo)
     );
+  }
+
+  /**
+   * policyNoteText is a policy note's sentence, ahead of its link: the
+   * verdict, then what to do about it -- "Remove this grant" only for a
+   * held one, and no word of the policy for a CI-only method.
+   */
+  protected policyNoteText(n: {
+    verdict: GrantPolicyVerdict;
+    held: boolean;
+  }): string {
+    const v = n.verdict;
+    if (v.kind === "ci_only") {
+      return n.held ? v.note : `${v.note} It cannot be granted here.`;
+    }
+    if (v.kind === "denied") {
+      return n.held
+        ? `${v.note} Remove this grant, or change the capability policy`
+        : `${v.note} It cannot be granted here`;
+    }
+    return v.note;
   }
 
   protected shortGrant(g: string): string {

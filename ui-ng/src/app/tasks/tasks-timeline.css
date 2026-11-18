@@ -204,11 +204,20 @@
 .boards-menu.pop-menu .boards-menu-row .board-apply-btn {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
   border-radius: 6px;
   padding: 7px 10px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The name gives way first, so a long one ellipsizes and leaves its
+   folder and the classic-page hint on screen. */
+.boards-menu.pop-menu .boards-menu-row .board-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* A board's folder, after its name: what tells two same-named boards
@@ -216,6 +225,7 @@
 .boards-menu.pop-menu .boards-menu-row .board-folder {
   margin-left: 6px;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .boards-menu.pop-menu .boards-menu-row .board-del-btn {
