@@ -76,11 +76,21 @@ type ImageConfig struct {
 	// in something that needs no docker daemon.
 	PullCmd []string
 	// RunCmd runs an image, with the ref and then HealthCheckArgs
-	// appended; {"docker", "run", "--rm", "--pull=never"} when left nil. The image's
+	// appended; {"docker", "run", "--rm", "--pull=never",
+	// "--label=grain.upgrade-check=<hash>"} when left nil, where <hash>
+	// names this deployment's RefFile (checkContainerLabel). The image's
 	// own ENTRYPOINT is `grain` (Dockerfile), so appending
 	// HealthCheckArgs -- {"schema-version"} on a real deployment -- runs
 	// exactly the same subcommand the binary path's health check runs,
 	// against the image about to be cut over to.
+	//
+	// Setting RunCmd also turns off a cancel's check-container cleanup:
+	// removeCheckContainers finds containers only by that label, which a
+	// custom command does not add, so it does nothing. Killing the command
+	// on a cancel stops the client, not necessarily what it started, so a
+	// custom runner that starts a container must remove it itself, or a
+	// cancelled health check's container -- and the pulled image it holds
+	// -- is left behind.
 	RunCmd []string
 	// ListCmd lists images for a repository, appended as its last argument,
 	// one per line: the `repo:tag` cleanup would remove, optionally followed
