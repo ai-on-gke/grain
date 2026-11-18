@@ -39,29 +39,30 @@ type StateRepoPullRequestClient struct {
 }
 
 var (
-	_ github.Client                   = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeQueuer              = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeRulesReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.DiffReader               = (*StateRepoPullRequestClient)(nil)
-	_ github.FileReader               = (*StateRepoPullRequestClient)(nil)
-	_ github.ReviewSubmitter          = (*StateRepoPullRequestClient)(nil)
-	_ github.TagLister                = (*StateRepoPullRequestClient)(nil)
-	_ github.ReleaseTagReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowDispatcher       = (*StateRepoPullRequestClient)(nil)
-	_ github.CollaboratorReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.ReactionPoster           = (*StateRepoPullRequestClient)(nil)
-	_ github.CheckRunWriter           = (*StateRepoPullRequestClient)(nil)
-	_ github.CallerLabeler            = (*StateRepoPullRequestClient)(nil)
-	_ github.JobLogTailer             = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowRunsReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.BranchWorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsReader            = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsRerunner          = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsJobAttemptsReader = (*StateRepoPullRequestClient)(nil)
-	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
-	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
-	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
-	_ github.GitBranchSource          = (*StateRepoPullRequestClient)(nil)
+	_ github.Client                       = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeQueuer                  = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeRulesReader             = (*StateRepoPullRequestClient)(nil)
+	_ github.DiffReader                   = (*StateRepoPullRequestClient)(nil)
+	_ github.FileReader                   = (*StateRepoPullRequestClient)(nil)
+	_ github.ReviewSubmitter              = (*StateRepoPullRequestClient)(nil)
+	_ github.TagLister                    = (*StateRepoPullRequestClient)(nil)
+	_ github.ReleaseTagReader             = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowDispatcher           = (*StateRepoPullRequestClient)(nil)
+	_ github.CollaboratorReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.ReactionPoster               = (*StateRepoPullRequestClient)(nil)
+	_ github.CheckRunWriter               = (*StateRepoPullRequestClient)(nil)
+	_ github.CallerLabeler                = (*StateRepoPullRequestClient)(nil)
+	_ github.JobLogTailer                 = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunsReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunAttemptJobsReader = (*StateRepoPullRequestClient)(nil)
+	_ github.BranchWorkflowRunsReader     = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsReader                = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsRerunner              = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsJobAttemptsReader     = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusReader           = (*StateRepoPullRequestClient)(nil)
+	_ github.PathCommitLister             = (*StateRepoPullRequestClient)(nil)
+	_ github.GitOnlySource                = (*StateRepoPullRequestClient)(nil)
+	_ github.GitBranchSource              = (*StateRepoPullRequestClient)(nil)
 
 	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
@@ -1152,6 +1153,19 @@ func (c *StateRepoPullRequestClient) ListWorkflowRunJobs(owner, name string, run
 		return nil, nil
 	}
 	return reader.ListWorkflowRunJobs(owner, name, runID)
+}
+
+// ListWorkflowRunAttemptJobs preserves the exact-attempt read through the
+// daemon's ordinary scoped forge wrapper, including caller-label copies.
+func (c *StateRepoPullRequestClient) ListWorkflowRunAttemptJobs(owner, name string, runID int64, attempt int) ([]github.WorkflowRunJob, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunAttemptJobsReader)
+	if !ok {
+		return nil, fmt.Errorf("exact workflow-attempt job reader unavailable")
+	}
+	return reader.ListWorkflowRunAttemptJobs(owner, name, runID, attempt)
 }
 
 func (c *StateRepoPullRequestClient) ActionsState(owner, name, headSHA string) (github.ActionsState, error) {

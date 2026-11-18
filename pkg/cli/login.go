@@ -181,7 +181,7 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	name := fs.String("name", "", "the context's name (default: from the server's host name)")
 	issue := fs.Bool("issue-token", false, "mint a scoped gma_ token for this workstation and keep it "+
-		"(the default when IAP -- $GRAIN_ID_TOKEN, ADC or gcloud -- or a credential source signs in a person; --issue-token=false declines)")
+		"(the default when IAP -- GRAIN_ID_TOKEN, ADC or gcloud -- or a credential source signs in a person; --issue-token=false declines)")
 	scopeSet := fs.String("scope-set", defaultLoginScopeSet, "the scope set --issue-token mints")
 	repos := fs.String("repos", "", "comma-separated repositories --issue-token limits the token to")
 	expires := fs.String("expires", "30d", "how long --issue-token's token lasts (30d, 12h, ...)")
@@ -336,6 +336,9 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 			return &cliError{exit: exitUsage, code: "external_agent_api_off",
 				err: fmt.Errorf("%s does not accept gma_ tokens (externalAgentApi is off in its Settings); an operator turns it on", server)}
 		}
+		if explicit == "$"+ui.IDTokenEnv && *auth == "" && !human {
+			return idTokenLoginRefused(server)
+		}
 		if !who.Authenticated {
 			return loginRefused(server, nil)
 		}
@@ -363,6 +366,11 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 			return loginRefused(server, nil)
 		}
 		entry.Auth = *auth
+	case explicit == "$"+ui.IDTokenEnv && *auth == "":
+		// $GRAIN_ID_TOKEN is a Google ID token for IAP, never an access code
+		// to store: if it signed in a person on a non-loopback server,
+		// explicit was cleared above.
+		return idTokenLoginRefused(server)
 	case explicit != "":
 		// An access code (or some other secret) given with -token or the
 		// environment.
@@ -509,6 +517,10 @@ func loginRefused(server string, err error) error {
 		msg += ": " + err.Error()
 	}
 	return &cliError{exit: exitAuth, code: "unauthenticated", err: errors.New(msg)}
+}
+
+func idTokenLoginRefused(server string) error {
+	return loginRefused(server, fmt.Errorf("the Google ID token in $%s did not sign in a person", ui.IDTokenEnv))
 }
 
 func warnAccessCode(gmaEnabled bool) {

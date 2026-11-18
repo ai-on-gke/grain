@@ -24,6 +24,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -3817,14 +3818,69 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 
 // writeBodyError answers a request whose body failed to decode: 413 when
-// it ran past its http.MaxBytesReader bound, 400 for anything else.
+// it ran past its http.MaxBytesReader bound, 400 for anything else. A
+// field of the wrong JSON type is named in the request's own words
+// ("packageCacheSizeGb must be a whole number, not 1.5") rather than in
+// Go's ("cannot unmarshal number 1.5 into Go struct field
+// plain.packageCacheSizeGb of type int"), which is what Settings showed
+// for a fractional GiB (docs/test-runs/2026-11-17-connections-
+// infrastructure-settings.md F1).
 func writeBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", tooLarge.Limit))
 		return
 	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field != "" && typeErr.Type != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%s must be %s, not %s", typeErr.Field, jsonTypeName(typeErr.Type), jsonValueName(typeErr.Value)))
+		return
+	}
 	writeError(w, http.StatusBadRequest, err)
+}
+
+// jsonTypeName says what JSON a Go type decodes from, for writeBodyError.
+func jsonTypeName(t reflect.Type) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "a whole number"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.String:
+		return "a string"
+	case reflect.Bool:
+		return "true or false"
+	case reflect.Slice, reflect.Array:
+		return "a list"
+	case reflect.Map, reflect.Struct:
+		return "an object"
+	}
+	return t.String()
+}
+
+// jsonValueName is json.UnmarshalTypeError's Value ("number 1.5",
+// "string", "array", ...) as the value that was sent.
+func jsonValueName(v string) string {
+	if n, ok := strings.CutPrefix(v, "number "); ok {
+		return n
+	}
+	switch v {
+	case "number":
+		return "a number"
+	case "string":
+		return "a string"
+	case "bool":
+		return "true or false"
+	case "array":
+		return "a list"
+	case "object":
+		return "an object"
+	}
+	return v
 }
 
 // readOptionalJSON is readJSON for a route whose body is optional: no

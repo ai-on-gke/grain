@@ -124,6 +124,44 @@ describe("observation-only task display", () => {
       "pending evidence collection",
     );
   });
+  it("labels selected outcomes and preserves every CL evidence row on refresh", async () => {
+    await TestBed.configureTestingModule({
+      imports: [TaskObservationsComponent],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(TaskObservationsComponent);
+    const data = view();
+    data.bindings[0].type = "integration";
+    data.bindings[0].config = {
+      kind: "cl_submitted",
+      semantics: "positive_v1",
+    };
+    data.results[0].result.type = "integration";
+    data.results[0].result.evidence = [
+      {
+        kind: "integration",
+        id: "cl/11=>cl/111 (external)",
+        version: "r11",
+        head: "snapshot/3",
+      },
+      { kind: "integration", id: "cl/12", version: "r12", head: "snapshot/4" },
+    ];
+    fixture.componentRef.setInput("observations", data);
+    fixture.detectChanges();
+    const text = () => fixture.nativeElement.textContent as string;
+    expect(text()).toContain("shadow cl_submitted");
+    expect(text()).toContain("cl/11=>cl/111 (external)");
+    expect(text()).toContain("cl/12");
+    expect(text()).toContain("head snapshot/4");
+    data.results[0].result.evidence[1].version = "r12-new";
+    data.results[0].result.evidence[1].head = "snapshot/5";
+    fixture.componentRef.setInput("observations", structuredClone(data));
+    fixture.detectChanges();
+    expect(text()).toContain("head snapshot/5");
+    expect(
+      fixture.nativeElement.querySelectorAll("button,a,input").length,
+    ).toBe(0);
+    fixture.destroy();
+  });
   it("does not show an unavailable projection as a passing gate", async () => {
     await TestBed.configureTestingModule({
       imports: [TaskObservationsComponent],
@@ -132,6 +170,63 @@ describe("observation-only task display", () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector("section")).toBeNull();
   });
+});
+
+it("labels current and legacy CI predictions with their resource and keeps remediation inert", async () => {
+  const fixture = TestBed.createComponent(TaskObservationsComponent);
+  const v = view();
+  v.bindings = [
+    {
+      id: "checks",
+      type: "checks",
+      version: 1,
+      config: {},
+      origin: { imported: false },
+      subject: {
+        kind: "change",
+        repository: "acme/widgets",
+        change_kind: "pr",
+        id: "7",
+      },
+    },
+    {
+      id: "checks-legacy",
+      type: "checks",
+      version: 1,
+      config: {},
+      origin: { imported: true },
+      subject: {
+        kind: "change",
+        repository: "acme/widgets",
+        change_kind: "pr",
+        id: "7",
+      },
+    },
+  ];
+  const current = v.results[0];
+  current.result.type = "checks";
+  current.result.binding_id = "task/66/checks";
+  current.result.agent_text =
+    "Prediction only: retry checks under existing authorization.";
+  current.result.human_text =
+    "Merge conflicts remain an executor precondition.";
+  const legacy = structuredClone(current);
+  legacy.evaluation_id = "shadow-legacy";
+  legacy.result.binding_id = "task/66/checks-legacy";
+  legacy.result.status = "pending";
+  v.results = [current, legacy];
+  fixture.componentRef.setInput("observations", v);
+  fixture.detectChanges();
+  const el: HTMLElement = fixture.nativeElement;
+  expect(el.textContent).toContain(
+    "Shadow CI prediction · Current CI policy · acme/widgets · pr 7",
+  );
+  expect(el.textContent).toContain("Shadow CI prediction · Legacy CI import");
+  expect(el.textContent).toContain("Prediction only: retry checks");
+  expect(el.textContent).toContain(
+    "Merge conflicts remain an executor precondition.",
+  );
+  expect(el.querySelectorAll("button,a,input").length).toBe(0);
 });
 
 describe("review and approval shadow scopes", () => {
@@ -180,10 +275,46 @@ describe("review and approval shadow scopes", () => {
       "Imported legacy comparison · Shadow only",
     );
     expect(el.textContent).toContain("Current-scope prediction · Shadow only");
+    expect(el.textContent).toContain("shadow ordinary");
+    expect(el.textContent).toContain("shadow named approval");
     expect(el.textContent).toContain("integrate linked fixes");
     expect(el.textContent).toContain("passed [alice]; pending [bob]");
     expect(el.textContent).toContain("Submit is separate");
     expect(el.querySelectorAll("button,a,input,form").length).toBe(0);
     fixture.destroy();
+  });
+});
+
+describe("health shadow profiles", () => {
+  it("compares labeled legacy and current profiles without remediation controls", async () => {
+    await TestBed.configureTestingModule({
+      imports: [TaskObservationsComponent],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(TaskObservationsComponent);
+    const data = view();
+    data.bindings[0].type = "base_health";
+    data.bindings[0].config = {
+      semantics: "legacy_recorded_v1",
+      allow_nonreproduction: true,
+    };
+    data.results[0].result.type = "base_health";
+    data.results[0].result.summary =
+      "Legacy observation profile legacy_recorded_v1: the base verdict is successful.";
+    const current = structuredClone(data.results[0]);
+    current.evaluation_id = "shadow-current";
+    current.result.status = "unknown";
+    current.result.summary =
+      "Current profile current_tip_v1: the recorded verdict is for an older base tip.";
+    data.results.push(current);
+    fixture.componentRef.setInput("observations", data);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain("Shadow predictions");
+    expect(el.textContent).toContain(
+      "Legacy observation profile legacy_recorded_v1",
+    );
+    expect(el.textContent).toContain("older base tip");
+    expect(el.textContent).toContain("no operational effects");
+    expect(el.querySelectorAll("button,a,input,form").length).toBe(0);
   });
 });

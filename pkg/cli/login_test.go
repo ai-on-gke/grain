@@ -556,6 +556,53 @@ func TestGrainLoginWithGrainIDTokenThroughIAPIsAnIdentity(t *testing.T) {
 		t.Errorf("the $GRAIN_ID_TOKEN revoke reached the daemon with Authorization %q; want the context's gma_ token", *reached)
 	}
 
+	// When IAP lets $GRAIN_ID_TOKEN through but the daemon does not sign
+	// that person in (not on the allowlist, or whoami otherwise answers
+	// unauthenticated or non-human), login refuses the sign-in with exitAuth
+	// naming $GRAIN_ID_TOKEN -- never framing the ID token as an access code
+	// or offering --issue-token / --auth access-code.
+	t.Setenv(ui.IDTokenEnv, "idtoken.stranger@example.com")
+	for _, extra := range [][]string{nil, {"--issue-token=false"}, {"--issue-token"}} {
+		args := append([]string{"login", server, "--name", "refused"}, extra...)
+		err := runCLI(args)
+		_, code, _ := classifyError(err)
+		msg := fmt.Sprint(err)
+		if exitOf(err) != exitAuth || code != "unauthenticated" ||
+			!strings.Contains(msg, "$"+ui.IDTokenEnv) ||
+			strings.Contains(msg, "access code") || strings.Contains(msg, "access-code") || strings.Contains(msg, "--issue-token") {
+			t.Errorf("grain %s with unallowed $GRAIN_ID_TOKEN = %v (exit %d, code %q); want exit %d unauthenticated naming $%s with no access-code framing",
+				strings.Join(args, " "), err, exitOf(err), code, exitAuth, ui.IDTokenEnv)
+		}
+	}
+	for _, whoResp := range []ui.AuthWhoamiResponse{
+		{AcceptedAuth: []string{"iap", "external-token"}, ExternalAgentAPI: true, Authenticated: false},
+		{AcceptedAuth: []string{"access-code"}, ExternalAgentAPI: false, Authenticated: true, Principal: "operator"},
+	} {
+		resp := whoResp
+		fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/auth/whoami" {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		err := runCLI([]string{"login", fake.URL, "--name", "refused"})
+		fake.Close()
+		_, code, _ := classifyError(err)
+		msg := fmt.Sprint(err)
+		if exitOf(err) != exitAuth || code != "unauthenticated" ||
+			!strings.Contains(msg, "$"+ui.IDTokenEnv) ||
+			strings.Contains(msg, "access code") || strings.Contains(msg, "access-code") || strings.Contains(msg, "--issue-token") {
+			t.Errorf("login against fake whoami %+v with $GRAIN_ID_TOKEN = %v (exit %d, code %q); want exit %d unauthenticated naming $%s",
+				resp, err, exitOf(err), code, exitAuth, ui.IDTokenEnv)
+		}
+	}
+	cfg, _ = loadContexts()
+	if cfg.Contexts["refused"] != nil {
+		t.Errorf("refused $GRAIN_ID_TOKEN login wrote context %+v; want none", cfg.Contexts["refused"])
+	}
+
 	// A secret in $GRAIN_TOKEN is still an explicit token, and the
 	// refusal names where it came from (IAP would refuse it before the
 	// daemon saw it, so this one goes to a daemon with no IAP in front).
