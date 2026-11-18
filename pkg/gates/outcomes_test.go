@@ -146,6 +146,7 @@ func TestIntegrationRequiresEveryFreshExactResource(t *testing.T) {
 		{"second-submitting", func(f *Facts) { f.Resources["selected"][1].State = "submitting" }, "pending"},
 		{"second-missing", func(f *Facts) { f.Resources["selected"][1].Complete = false }, "unknown"},
 		{"unversioned", func(f *Facts) { f.Resources["selected"][1].Evidence.Head = nil }, "unknown"},
+		{"empty-head", func(f *Facts) { empty := ""; f.Resources["selected"][1].Evidence.Head = &empty }, "unknown"},
 		{"expired", func(f *Facts) { f.Resources["selected"][1].ValidUntil = now }, "unknown"},
 		{"empty", func(f *Facts) { f.Resources["selected"] = nil }, "unknown"},
 		{"report-incomplete-independent", func(f *Facts) { f.Complete = false }, "met"},

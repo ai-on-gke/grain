@@ -135,7 +135,7 @@ func evaluateIntegration(b Binding, f Facts, r Result) Result {
 		dependency.ValidUntil = resource.ValidUntil
 		dependency.Complete = resource.Complete
 		r.Dependencies = append(r.Dependencies, dependency)
-		if resource.ObservedAt.After(r.ObservedAt) || !resource.Complete || resource.Evidence.Head == nil || resource.Evidence.Version == "" || !r.ObservedAt.Before(resource.ValidUntil) {
+		if resource.ObservedAt.After(r.ObservedAt) || !resource.Complete || resource.Evidence.Head == nil || *resource.Evidence.Head == "" || resource.Evidence.Version == "" || !r.ObservedAt.Before(resource.ValidUntil) {
 			r.Dependencies[0].Complete = false
 			r.Summary = "Change identity, exact head/policy or complete fresh observation is unavailable."
 			return r

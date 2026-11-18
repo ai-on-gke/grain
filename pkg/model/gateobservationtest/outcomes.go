@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +150,18 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		v := observe(task)
 		if status(v, "pr_merged") != "unknown" || status(v, "delivery-change") != "unknown" {
 			t.Fatal("bare change link proved integration or lost authenticated delivery")
+		}
+		for _, result := range v.Results {
+			for _, dependency := range result.Result.Dependencies {
+				if dependency.Head != nil && *dependency.Head == "" {
+					t.Fatal("missing head violated the nullable v1 wire contract")
+				}
+			}
+		}
+		if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+			raw, err := json.MarshalIndent(v, "", "  ")
+			must(err)
+			must(os.WriteFile(path, raw, 0600))
 		}
 		source(task, "acme/outcomes#7", "head-1", "open", "")
 		v = observe(task)
@@ -396,6 +409,11 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		source(owner, "acme/outcomes#88", "new-head", "open", "")
 		if status(observe(review), "delivery-change") == "met" {
 			t.Fatal("owning head change did not invalidate in-place acceptance")
+		}
+		owner.Target = &model.RepoRef{Owner: "acme", Name: "private"}
+		must(s.PutTask(ctx, owner))
+		if status(observe(review), "delivery-change") != "unknown" {
+			t.Fatal("private owning-change data was treated as a known negative")
 		}
 		// Failure reconstruction preserves every selected monitor and removes all evidence/predictions.
 		view := observe(parent, selection)

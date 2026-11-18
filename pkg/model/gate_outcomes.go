@@ -105,6 +105,9 @@ func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now tim
 	if err != nil {
 		return err
 	}
+	if reason, unknown := acceptanceRevision.(string); unknown && reason == "owner unavailable" {
+		f.ProductUnknown = "Owning-change acceptance is unavailable in this read scope."
+	}
 	if inPlace != nil && f.Settled && !f.Blocked {
 		f.Product = "change"
 		f.ProductEvidence = inPlace
@@ -364,12 +367,16 @@ func gateIntegrationResources(t Task, sources map[string]GateOutcomeSource, comp
 			Links  []Link
 			Policy string
 		}{s, t.Links, GateOutcomePolicy(t)})
-		head := s.Head
+		var head *string
+		if s.Head != "" {
+			value := s.Head
+			head = &value
+		}
 		resourceSubject := changeSubject
 		if kind == "cl_submitted" {
 			resourceSubject.ID = canonical
 		}
-		evidence := gates.Evidence{Kind: "integration", ID: target + "=>" + canonical + " (" + s.Attribution + ")", Version: version, Subject: resourceSubject, Head: &head, Digest: version}
+		evidence := gates.Evidence{Kind: "integration", ID: target + "=>" + canonical + " (" + s.Attribution + ")", Version: version, Subject: resourceSubject, Head: head, Digest: version}
 		until := s.At.Add(time.Minute)
 		if s.State == "merged" || s.State == "submitted" || s.State == "equivalent" {
 			until = s.At.Add(72 * time.Hour)
