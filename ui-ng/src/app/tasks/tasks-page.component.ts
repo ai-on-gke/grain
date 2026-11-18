@@ -57,13 +57,21 @@ import {
   PriorityChipComponent,
   priorityTone,
 } from "../shared/priority-chip.component";
-import { summarizeDispatchStatus } from "../shared/dispatch-status";
+import {
+  effectiveDisplayTimeZone,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
 import { boardLabels, classicBoardHint, nextBoardParams } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import {
+  earliestWakeDay,
+  formatWakeTime,
+  zonedDayStart,
+} from "../shared/zoned-day";
 import { TaskDetailComponent } from "../task/task-detail.component";
 import {
   BatchEditDialogComponent,
@@ -1135,10 +1143,61 @@ function needsApproval(t: Task): boolean {
               <button
                 type="button"
                 class="btn-text"
+                data-testid="batch-defer"
                 (click)="defer(selected())"
               >
                 Defer
               </button>
+              @if (deferUntilOpen()) {
+                <span
+                  class="batch-defer-until"
+                  role="group"
+                  aria-label="Defer until a date"
+                  data-testid="batch-defer-until"
+                >
+                  <label>
+                    <span>Wake on</span>
+                    <input
+                      #batchDeferDate
+                      type="date"
+                      data-testid="batch-defer-date"
+                      [min]="earliestWake()"
+                      [value]="wakeDate()"
+                      [attr.aria-describedby]="'batch-defer-zone'"
+                      (input)="wakeDate.set(batchDeferDate.value)"
+                    />
+                  </label>
+                  <span id="batch-defer-zone" class="sr-only"
+                    >Each picks itself back up at the start of that day,
+                    {{ displayZone() }}</span
+                  >
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="batch-defer-until-yes"
+                    [disabled]="!wakeAt()"
+                    (click)="defer(selected(), wakeAt())"
+                  >
+                    Defer until then
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-text"
+                    (click)="closeDeferUntil()"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              } @else {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="batch-defer-until-open"
+                  (click)="deferUntilOpen.set(true)"
+                >
+                  Defer until…
+                </button>
+              }
             }
             @if (current() === "deferred" && canUndeferSelected()) {
               <button
@@ -2072,6 +2131,22 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   });
   protected readonly backlogChecks = computed(() => this.rows().length > 0);
   protected readonly confirmClose = signal(false);
+  // The batch bar's Defer until…: a day every selected task wakes on,
+  // cleared with the selection.
+  protected readonly deferUntilOpen = signal(false);
+  protected readonly wakeDate = signal("");
+  protected readonly displayZone = computed(() =>
+    effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+  );
+  protected readonly earliestWake = computed(() =>
+    earliestWakeDay(this.displayZone()),
+  );
+  // The RFC 3339 start of the picked day, or "" while it is empty or
+  // not after now (the server refuses a past wake time).
+  protected readonly wakeAt = computed(() => {
+    const at = zonedDayStart(this.wakeDate(), this.displayZone());
+    return at === null || at <= Date.now() ? "" : new Date(at).toISOString();
+  });
   protected readonly priorityEditable = computed(
     () =>
       this.canEdit() &&
@@ -2459,6 +2534,12 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected clearChecked(): void {
     this.checked.set(new Set());
     this.confirmClose.set(false);
+    this.closeDeferUntil();
+  }
+
+  protected closeDeferUntil(): void {
+    this.deferUntilOpen.set(false);
+    this.wakeDate.set("");
   }
 
   private uncheck(ids: readonly string[]): void {
@@ -2831,12 +2912,16 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async defer(ids: readonly string[]): Promise<void> {
+  protected async defer(ids: readonly string[], until = ""): Promise<void> {
     this.closeMenu(true);
-    const { landed } = await this.store.defer(ids);
+    const { landed } = await this.store.defer(ids, until);
     if (landed.length) {
       this.uncheck(landed);
-      this.snack(`Deferred ${this.ids(landed)}`, {
+      this.closeDeferUntil();
+      const when = until
+        ? ` until ${formatWakeTime(until, this.displayZone())}`
+        : "";
+      this.snack(`Deferred ${this.ids(landed)}${when}`, {
         label: "Undo",
         run: async () => {
           await this.store.undefer(landed);

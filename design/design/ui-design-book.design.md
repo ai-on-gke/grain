@@ -95,6 +95,10 @@ Rules that came from real defects:
   contrast to about 2:1. To de-emphasise, switch to the `outline` or
   `on-surface-variant` token, which keep at least 4.5:1. Never dim anything
   that needs a person.
+- **Native inputs on `inverse-surface` take `--inverse-color-scheme`.**
+  `inverse-surface` flips with the theme (`#282c35` in light, `#e4e6eb` in
+  dark); hard-coding `color-scheme: dark` leaves a date input's picker glyph
+  light on dark mode's light grey bar.
 
 ### Type
 
