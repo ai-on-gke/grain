@@ -278,6 +278,58 @@ func TestHealthStallThresholdsMatchExistingLegacyClassifier(t *testing.T) {
 	}
 }
 
+func TestPipelineHealthLegacyMatchesGlobalNotificationChecks(t *testing.T) {
+	ctx := context.Background()
+	store := openInternalStore(t)
+	now := time.Date(2026, 11, 18, 6, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(store.PutTask(ctx, model.Task{ID: "pipeline-notification-health", Intent: model.IntentImplement, Target: &repo, Title: "steward"}))
+	must(store.SetTaskGoal(ctx, "pipeline-notification-health", model.GoalDecl{Kind: model.GoalPipelineHealthy, Spec: model.GoalSpec{Repos: []string{repo.String()}}}, "automation:test", now))
+	goal, err := store.TaskGoal(ctx, "pipeline-notification-health")
+	must(err)
+	access := model.GateHealthAccess{Repository: func(string) bool { return true }, PipelineRepository: func(string) bool { return true }, DeploymentWide: true}
+	for _, tc := range []struct {
+		name, subject, notificationRepo string
+		wantMet                         bool
+	}{
+		{"quiet", "", "", true},
+		{"other repository", "pipeline.test:other", "acme/other", false},
+		{"global", "pipeline.test:global", "", false},
+		{"other repository steward regression", model.SubjectStewardRegression, "acme/other", true},
+		{"scoped steward regression", model.SubjectStewardRegression, repo.String(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.subject != "" {
+				_, err := store.RaiseNotification(ctx, model.Notification{Subject: tc.subject, Family: "pipeline.test", Severity: model.NotificationWarning, Title: "problem", Repo: tc.notificationRepo, RaisedBy: "automation:test", RaisedAt: now, LastRaisedAt: now})
+				must(err)
+				t.Cleanup(func() {
+					_, err := store.ClearNotification(ctx, tc.subject, "automation:test")
+					must(err)
+				})
+			}
+			legacy, err := checkGoal(ctx, Deps{Store: store}, *goal, now)
+			must(err)
+			changed := store.Changed()
+			view, _, err := store.ObserveTaskGates(model.WithGateHealthAccess(ctx, access), goal.TaskID, now)
+			must(err)
+			if legacy.met != tc.wantMet || (view.Results[0].Result.Status == "met") != tc.wantMet {
+				t.Fatalf("legacy met=%t (%s), shadow=%s; want met=%t", legacy.met, legacy.evidence, view.Results[0].Result.Status, tc.wantMet)
+			}
+			select {
+			case <-changed:
+				t.Fatal("shadow woke legacy dispatch")
+			default:
+			}
+		})
+	}
+}
+
 func TestReportObservationSelectionDoesNotReadHealthSources(t *testing.T) {
 	t.Setenv("GRAIN_GATE_OBSERVATION_TASKS", "report-only")
 	store := openInternalStore(t)

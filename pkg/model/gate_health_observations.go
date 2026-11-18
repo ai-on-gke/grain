@@ -504,7 +504,7 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 		}
 	}
 	// Preserve old newest-200 ordering before filtering, and detect truncation.
-	query := "SELECT `id`,`family`,COALESCE(`repo`,'') FROM `notification` WHERE `cleared_at` IS NULL"
+	query := "SELECT `id`,`subject`,`family`,COALESCE(`repo`,'') FROM `notification` WHERE `cleared_at` IS NULL"
 	var notificationArgs []any
 	if !legacy {
 		query += " AND `family` LIKE 'pipeline.%' AND `repo` IN (" + strings.TrimSuffix(strings.Repeat("?,", len(repos)), ",") + ")"
@@ -516,14 +516,14 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 	count := 0
 	err = each(ctx, q, query, notificationArgs, func(rows *sql.Rows) error {
 		var id int64
-		var family, repo string
-		if e := rows.Scan(&id, &family, &repo); e != nil {
+		var subject, family, repo string
+		if e := rows.Scan(&id, &subject, &family, &repo); e != nil {
 			return e
 		}
 		versions = append(versions, gates.Digest(struct {
-			ID           int64
-			Family, Repo string
-		}{id, family, repo}))
+			ID                    int64
+			Subject, Family, Repo string
+		}{id, subject, family, repo}))
 		count++
 		if legacy && count > 200 {
 			return nil
@@ -535,10 +535,14 @@ func capturePipelineHealth(ctx context.Context, q querier, repos, legacyFilter [
 		if legacy {
 			filter = legacyFilter
 		}
-		if len(filter) > 0 && repo != "" && !slices.Contains(filter, repo) {
-			return nil
+		scoped := len(filter) == 0 || repo == "" || slices.Contains(filter, repo)
+		// checkGoal first checks repo-filtered notifications, then calls
+		// pipelineStewardQuiet, which checks them deployment-wide except
+		// for the steward's own regression notification. Preserve both reads.
+		steward := legacy && subject != SubjectStewardRegression
+		if scoped || steward {
+			p.OpenNotifications++
 		}
-		p.OpenNotifications++
 		return nil
 	})
 	if err != nil {
