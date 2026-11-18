@@ -102,6 +102,9 @@ tables have no lifecycle/outbox references: at most 256 base proofs, and 128
 workflow attempts per repository / 1024 globally within seven days. Workflow
 proofs are limited to 512 jobs / 256 KiB and exact-job pagination to six pages.
 Source pruning runs on diagnostic writes, not as a new background service.
+Workflow proof updates atomically replace their selection/pruning timestamp too:
+resolving an incomplete run's time cannot keep an older green run ahead of a
+newer failure, and losing time provenance installs a newest unknown marker.
 Pipeline collection caps base rows at 256, refs at 64 per repository,
 notifications/tasks at 1000 and configured repositories at 64. Exceeding a
 collection bound yields unknown/incomplete rather than an empty healthy set.

@@ -100,11 +100,13 @@ func (s *Store) RecordGateWorkflowSource(ctx context.Context, r gates.WorkflowHe
 		return err
 	}
 	defer func() { _ = tx.Rollback(); release() }()
+	// Keep the selection/pruning key in the same version as the proof. A replay
+	// can resolve a missing completion time or invalidate a previously known one.
 	sortAt := r.CompletedAt
 	if sortAt.IsZero() {
 		sortAt = now
 	} // retain an incomplete newest source marker
-	_, err = tx.ExecContext(ctx, "INSERT INTO `gate_health_workflow_source` (`repo`,`run_id`,`attempt`,`completed_at`,`at`,`proof`) VALUES (?,?,?,?,?,?) ON CONFLICT (`repo`,`run_id`,`attempt`) DO UPDATE SET `at`=excluded.`at`,`proof`=excluded.`proof` WHERE `gate_health_workflow_source`.`at` <= excluded.`at`", r.Repository, r.ID, r.Attempt, sortAt, now, string(raw))
+	_, err = tx.ExecContext(ctx, "INSERT INTO `gate_health_workflow_source` (`repo`,`run_id`,`attempt`,`completed_at`,`at`,`proof`) VALUES (?,?,?,?,?,?) ON CONFLICT (`repo`,`run_id`,`attempt`) DO UPDATE SET `completed_at`=excluded.`completed_at`,`at`=excluded.`at`,`proof`=excluded.`proof` WHERE `gate_health_workflow_source`.`at` <= excluded.`at`", r.Repository, r.ID, r.Attempt, sortAt, now, string(raw))
 	if err != nil {
 		return err
 	}

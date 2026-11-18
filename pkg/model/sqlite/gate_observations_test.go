@@ -34,6 +34,11 @@ func TestHealthGateObservations(t *testing.T) {
 	gateobservationtest.RunHealth(t, s, db)
 }
 
+func TestHealthGateSourceOrdering(t *testing.T) {
+	s, _, _ := openStore(t)
+	gateobservationtest.RunHealthSourceOrdering(t, s)
+}
+
 func TestHealthGateSourceBounds(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.RunHealthSourceBounds(t, s, db)
