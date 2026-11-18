@@ -272,7 +272,8 @@ func EnsureQAResolutionAtDispatchWithConfig(
 		if qaCfg.RolloutPct <= 0 {
 			return &Resolution{Source: "none", ArmID: "baseline"}, qaCfg, nil
 		}
-		tier := qa.ClassifyTaskComplexity(task.Title, task.Body)
+		att, _ := store.TaskSpecAttachments(ctx, task.ID, model.DefaultTaskSpecAttachmentMaxBytes)
+		tier := qa.ClassifyTaskComplexityWithAttachments(task.Title, task.Body, att.Text, att.MarkdownCount)
 		created, err := qa.AssignOrLoadArm(ctx, store, root, tier, qaCfg, now)
 		if err != nil {
 			return nil, qaCfg, err

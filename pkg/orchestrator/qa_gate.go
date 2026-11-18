@@ -681,11 +681,15 @@ func persistS3ReportToStore(
 	if store == nil {
 		return
 	}
+	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: len(task.Writes),
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             len(task.Writes),
+		PathHints:               extractCandidatePathsWithSpec(task, nil, "", specAtt.Text),
 	}, nil)
 
 	detailMap := map[string]any{
@@ -820,11 +824,15 @@ func executeCustomStages(
 	flow := *assign.Spec
 	rt := LiveQARuntime()
 
+	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: len(task.Writes),
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             len(task.Writes),
+		PathHints:               extractCandidatePathsWithSpec(task, &flow, "", specAtt.Text),
 	}, nil)
 
 	armCol := model.QAArmTreatment
@@ -2103,11 +2111,15 @@ func EvaluateAndApplyQATriage(
 		risk.Reasons = []string{fmt.Sprintf("blast tier %s", risk.Tier)}
 	}
 
+	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: max(len(task.Writes), len(prFiles)),
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             max(len(task.Writes), len(prFiles)),
+		PathHints:               extractCandidatePathsWithSpec(task, assign.Spec, "", specAtt.Text),
 	}, nil)
 
 	var autoTiers, humTiers []qa.BlastTier
