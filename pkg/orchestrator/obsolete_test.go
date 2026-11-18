@@ -238,7 +238,7 @@ func fileStrayReview(t *testing.T, ctx context.Context, store *model.Store, id s
 	if err := store.PutTask(ctx, model.Task{
 		ID: id, Title: "Security review: stray", Target: reviewed.Target, Base: model.BranchName(reviewed.ID),
 		Intent:   model.IntentImplement,
-		Origin:   model.Origin{Attribution: bot, Reason: model.ReasonReview},
+		Filing:   model.Filing{Attribution: bot, Reason: model.ReasonReview},
 		Approval: &bot, Binding: model.BindingDirective,
 		Links: []model.Link{{Kind: model.LinkProposedBy, Target: reviewed.ID}},
 	}); err != nil {

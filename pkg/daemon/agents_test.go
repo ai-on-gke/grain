@@ -45,7 +45,7 @@ func TestConsoleSessionBypassesConnectionConcurrencyAndTakesNoSlot(t *testing.T)
 	sessionTask := model.Task{
 		ID:          "director-1",
 		Title:       "Director",
-		Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+		Filing:      model.Filing{Reason: model.ReasonConsoleSession},
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Grants:      model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID}),

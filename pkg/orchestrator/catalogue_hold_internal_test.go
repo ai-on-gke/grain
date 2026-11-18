@@ -93,7 +93,7 @@ func TestCatalogueHoldAppliesTheDirectorFloor(t *testing.T) {
 			}
 			deps := Deps{Store: store}
 			director := model.Task{ID: "director-task", Title: "Director", Interactive: true,
-				Origin: model.Origin{Reason: model.ReasonConsoleSession},
+				Filing: model.Filing{Reason: model.ReasonConsoleSession},
 				Tags:   []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 				Grants: []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}, {Capability: "api:merge:force", Via: model.GrantByGrain}}}
 			plain := model.Task{ID: "plain", Title: "t", Target: &widgets,

@@ -618,7 +618,7 @@ func TestADivergedStateRepositoryDoesNotStopTheDaemonFromStarting(t *testing.T) 
 	}
 	stranded := model.Task{
 		ID: "stranded", Intent: model.IntentImplement, Title: "Filed while the push was failing",
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "tester"}},
 			Reason:      model.ReasonDirect,
 		},

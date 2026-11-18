@@ -192,8 +192,8 @@ func TestCreateQualificationRunInstantiatesEveryItemWithDependencyLinks(t *testi
 		if task.Target == nil || *task.Target != widgets {
 			t.Errorf("task %s: got target %v, want %s", ts.TaskID, task.Target, widgets)
 		}
-		if task.Origin.Reason != model.ReasonQualification {
-			t.Errorf("task %s: got origin reason %q, want qualification", ts.TaskID, task.Origin.Reason)
+		if task.Filing.Reason != model.ReasonQualification {
+			t.Errorf("task %s: got filing reason %q, want qualification", ts.TaskID, task.Filing.Reason)
 		}
 		var deps []string
 		for _, l := range task.Links {

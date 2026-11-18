@@ -1,0 +1,1 @@
+{"error":"this install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it to container mode plus the host agent (keeps the data directory and unit name). This release expects container mode, so it is not upgraded in place: run sudo ./scripts/setup.sh instead, which also upgrades it"}

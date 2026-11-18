@@ -16,7 +16,12 @@ package cli
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
@@ -24,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -337,8 +343,21 @@ func iapLoginServer(t *testing.T, externalAgentAPI bool) (string, *model.Store, 
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		email := ""
 		for _, h := range []string{"Proxy-Authorization", "Authorization"} {
-			if v, ok := strings.CutPrefix(r.Header.Get(h), "Bearer idtoken."); ok {
+			raw := strings.TrimPrefix(r.Header.Get(h), "Bearer ")
+			if v, ok := strings.CutPrefix(raw, "idtoken."); ok {
 				email = v
+			} else if parts := strings.Split(raw, "."); len(parts) == 3 {
+				if payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "=")); err == nil {
+					var c struct {
+						Iss   string `json:"iss"`
+						Email string `json:"email"`
+					}
+					if json.Unmarshal(payload, &c) == nil && c.Iss == "iap-test" {
+						email = c.Email
+					}
+				}
+			}
+			if email != "" {
 				r.Header.Del(h)
 				if h == "Authorization" {
 					r.Header.Del("X-Grain-Tunnel-Token")
@@ -359,6 +378,70 @@ func iapLoginServer(t *testing.T, externalAgentAPI bool) (string, *model.Store, 
 	ts.Start()
 	t.Cleanup(ts.Close)
 	return ts.URL, store, &reached
+}
+
+// stubADCIDToken points GOOGLE_APPLICATION_CREDENTIALS at a service-account
+// key whose token_uri is an in-process server returning a test ID token for
+// email, and reports the target_audience the client asked ADC to mint for.
+func stubADCIDToken(t *testing.T, email string) func() string {
+	t.Helper()
+	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	claimsBytes, err := json.Marshal(map[string]any{
+		"iss":   "iap-test",
+		"email": email,
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idToken := hdr + "." + base64.RawURLEncoding.EncodeToString(claimsBytes) + ".sig"
+
+	var gotAudience atomic.Value
+	gotAudience.Store("")
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if parts := strings.Split(r.FormValue("assertion"), "."); len(parts) == 3 {
+			if payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "=")); err == nil {
+				var claims struct {
+					TargetAudience string `json:"target_audience"`
+				}
+				if json.Unmarshal(payload, &claims) == nil {
+					gotAudience.Store(claims.TargetAudience)
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id_token": idToken})
+	}))
+	t.Cleanup(tokenSrv.Close)
+
+	key, err := rsa.GenerateKey(cryptorand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemKey := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	adcJSON, err := json.Marshal(map[string]any{
+		"type":           "service_account",
+		"project_id":     "example-proj",
+		"private_key_id": "kid",
+		"private_key":    pemKey,
+		"client_email":   "cli@example-proj.iam.gserviceaccount.com",
+		"client_id":      "123",
+		"token_uri":      tokenSrv.URL + "/token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adcPath := filepath.Join(t.TempDir(), "adc.json")
+	if err := os.WriteFile(adcPath, adcJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", adcPath)
+	return func() string { return gotAudience.Load().(string) }
 }
 
 // $GRAIN_ID_TOKEN is a person's identity for IAP, not an explicit
@@ -420,19 +503,57 @@ func TestGrainLoginWithGrainIDTokenThroughIAPIsAnIdentity(t *testing.T) {
 		t.Fatalf("login --issue-token=false with $GRAIN_ID_TOKEN: context = %+v; want a google-id-token one holding nothing", p)
 	}
 
-	// grain logout revokes the personal token through IAP as the token
-	// itself, the ID token beside it rather than in its place.
+	// With $GRAIN_ID_TOKEN unset, grain logout mints the Proxy-Authorization
+	// ID token from ADC for the context's recorded audience and revokes the
+	// personal token through IAP as the gma_ token itself.
+	t.Setenv(ui.IDTokenEnv, "")
+	gotAudience := stubADCIDToken(t, "jane@example.com")
 	*reached = nil
+	errOut = captureStderr(t, func() {
+		_ = captureStdout(t, func() {
+			if err := runCLI([]string{"logout", "team"}); err != nil {
+				t.Error(err)
+			}
+		})
+	})
+	if errOut != "" {
+		t.Errorf("grain logout team through IAP with ADC wrote stderr %q; want clean revocation", errOut)
+	}
+	if tok, err := store.GetExternalAgentToken(context.Background(), team.TokenID); err != nil || tok.RevokedAt == nil {
+		t.Errorf("after grain logout through IAP with ADC, token = %+v (%v); want it revoked", tok, err)
+	}
+	if len(*reached) == 0 || !strings.HasPrefix((*reached)[0], "Bearer gma_") {
+		t.Errorf("the ADC-backed revoke reached the daemon with Authorization %q; want the context's gma_ token", *reached)
+	}
+	if got := gotAudience(); got != server {
+		t.Errorf("ADC minted an ID token for audience %q; want %q", got, server)
+	}
+
+	// And when $GRAIN_ID_TOKEN is set, grain logout still revokes as the
+	// gma_ token itself, with $GRAIN_ID_TOKEN in Proxy-Authorization rather
+	// than replacing the bearer.
+	t.Setenv(ui.IDTokenEnv, "idtoken.jane@example.com")
 	_ = captureStdout(t, func() {
-		if err := runCLI([]string{"logout", "team"}); err != nil {
+		if err := runCLI([]string{"login", "-audience", "iap-client-id", server, "--name", "team-env"}); err != nil {
 			t.Error(err)
 		}
 	})
-	if tok, err := store.GetExternalAgentToken(context.Background(), team.TokenID); err != nil || tok.RevokedAt == nil {
-		t.Errorf("after grain logout through IAP, token = %+v (%v); want it revoked", tok, err)
+	cfg, _ = loadContexts()
+	teamEnv := cfg.Contexts["team-env"]
+	if teamEnv == nil || teamEnv.TokenID == "" || teamEnv.Audience != "iap-client-id" {
+		t.Fatalf("login -audience iap-client-id: context = %+v; want audience iap-client-id", teamEnv)
+	}
+	*reached = nil
+	_ = captureStdout(t, func() {
+		if err := runCLI([]string{"logout", "team-env"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if tok, err := store.GetExternalAgentToken(context.Background(), teamEnv.TokenID); err != nil || tok.RevokedAt == nil {
+		t.Errorf("after grain logout with $GRAIN_ID_TOKEN set, token = %+v (%v); want it revoked", tok, err)
 	}
 	if len(*reached) == 0 || !strings.HasPrefix((*reached)[0], "Bearer gma_") {
-		t.Errorf("the revoke reached the daemon with Authorization %q; want the context's gma_ token", *reached)
+		t.Errorf("the $GRAIN_ID_TOKEN revoke reached the daemon with Authorization %q; want the context's gma_ token", *reached)
 	}
 
 	// A secret in $GRAIN_TOKEN is still an explicit token, and the
@@ -465,5 +586,51 @@ func TestGrainLoginWithGrainIDTokenAndNoExternalAgentAPI(t *testing.T) {
 	}
 	if strings.Contains(errOut, "access code") || !strings.Contains(errOut, "does not accept gma_ tokens") {
 		t.Errorf("login warned %q; want it to say there is no personal token, and nothing about an access code", errOut)
+	}
+}
+
+// grain logout of one context never sends the -token or --as given for
+// another server to the context's own (#XC-4): the revoke goes with the
+// context's own credential.
+func TestGrainLogoutKeepsAnotherServersTokenToItself(t *testing.T) {
+	useConfigHome(t)
+	t.Setenv("GRAIN_CLI_ENV", "")
+	for _, env := range ui.TokenEnvVars {
+		t.Setenv(env, "")
+	}
+	var gotAuth, gotUser atomic.Value
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/external-agents/tokens/9/revoke" {
+			gotAuth.Store(r.Header.Get("Authorization"))
+			gotUser.Store(r.Header.Get("X-Forwarded-User"))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(remote.Close)
+	secret := "gma_" + strings.Repeat("b", 64)
+	loc, err := (credentialStore{}).store("remote", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveContexts(&contextConfig{
+		Current: "remote",
+		Contexts: map[string]*cliContext{
+			"remote": {Server: remote.URL, Auth: "external-token", Credential: loc, TokenID: "9"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = captureStdout(t, func() {
+		if err := runCLI([]string{"--server", "https://other.example.test", "--token", "secret-for-other", "--as", "someone", "logout", "remote"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if a, _ := gotAuth.Load().(string); a != "Bearer "+secret {
+		t.Errorf("revoke reached %s with Authorization %q; want the context's own token, never --token's", remote.URL, a)
+	}
+	if u, _ := gotUser.Load().(string); u != "" {
+		t.Errorf("revoke reached %s with X-Forwarded-User %q; want none", remote.URL, u)
 	}
 }

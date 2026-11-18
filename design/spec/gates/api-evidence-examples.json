@@ -1,0 +1,746 @@
+[
+  {
+    "reference": {
+      "kind": "report",
+      "id": "report/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "head": null,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "task",
+          "task_id": "57"
+        },
+        "head": null,
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "product": "report",
+      "settled": true,
+      "producer": {
+        "id": "agent/task57",
+        "kind": "agent",
+        "delegated_by": null
+      },
+      "content_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "delivery_ref": "comment/57/10",
+      "delivered_at": "2026-11-17T00:15:00Z"
+    }
+  },
+  {
+    "reference": {
+      "kind": "acknowledgment",
+      "id": "acknowledgment/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "head": null,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "task",
+          "task_id": "57"
+        },
+        "head": null,
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "report_id": "report-1",
+      "report_version": "delivery-2",
+      "recipient": {
+        "id": "person/owner",
+        "kind": "human",
+        "delegated_by": null
+      },
+      "received_at": "2026-11-17T00:15:00Z",
+      "revoked_at": null
+    }
+  },
+  {
+    "reference": {
+      "kind": "check",
+      "id": "check/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "job_id": "go",
+      "suite_id": "required",
+      "app_id": "github-actions",
+      "provider": "github",
+      "run_id": "run-7",
+      "attempt": 1,
+      "required": true,
+      "applicable": true,
+      "status": "completed",
+      "conclusion": "success",
+      "issuer": {
+        "id": "github/app/actions",
+        "kind": "automation",
+        "delegated_by": null
+      },
+      "completed_at": "2026-11-17T00:15:00Z"
+    }
+  },
+  {
+    "reference": {
+      "kind": "review",
+      "id": "review/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "review_task": "58",
+      "requirement_id": "ordinary-review",
+      "category": "ordinary",
+      "reviewer": {
+        "id": "agent/task57",
+        "kind": "agent",
+        "delegated_by": null
+      },
+      "assignment_version": "assignment-v2",
+      "disposition": "clean",
+      "findings": [],
+      "complete_diff": true,
+      "carry_forward": null
+    }
+  },
+  {
+    "reference": {
+      "kind": "approval",
+      "id": "approval/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "requirement_id": "owner",
+      "approver": {
+        "id": "person/owner",
+        "kind": "human",
+        "delegated_by": null
+      },
+      "eligible": true,
+      "rendered_head": "H1",
+      "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "approved_at": "2026-11-17T00:15:00Z",
+      "revoked_at": null
+    }
+  },
+  {
+    "reference": {
+      "kind": "integration",
+      "id": "integration/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "source": "grain",
+      "operation_id": "merge-1",
+      "integrated_version": "M1",
+      "canonical_target": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "integrated_at": "2026-11-17T00:15:00Z"
+    }
+  },
+  {
+    "reference": {
+      "kind": "child_outcome",
+      "id": "child_outcome/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "task",
+        "task_id": "57"
+      },
+      "head": null,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "task",
+          "task_id": "57"
+        },
+        "head": null,
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "task_id": "58",
+      "outcome": "failed",
+      "outcome_version": "child-outcome-v3",
+      "integrated": false,
+      "authority_epoch": 1
+    }
+  },
+  {
+    "reference": {
+      "kind": "base",
+      "id": "base/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "head": null,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "repository",
+          "repository": "ai-on-gke/grain",
+          "ref": "main"
+        },
+        "head": null,
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "ref": "main",
+      "commit": "B1",
+      "run_id": "base-1",
+      "conclusion": "success",
+      "nonreproduction_disposition": null
+    }
+  },
+  {
+    "reference": {
+      "kind": "nightly",
+      "id": "nightly/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "head": null,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "repository",
+          "repository": "ai-on-gke/grain",
+          "ref": "main"
+        },
+        "head": null,
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "workflow": "nightly",
+      "run_id": "nightly-1",
+      "event": "schedule",
+      "verified_default_push": false,
+      "eligible": true,
+      "jobs": [
+        {
+          "job_id": "go",
+          "suite_id": "required",
+          "app_id": "github-actions",
+          "provider": "github",
+          "run_id": "run-7",
+          "attempt": 1,
+          "required": true,
+          "applicable": true,
+          "status": "completed",
+          "conclusion": "success",
+          "issuer": {
+            "id": "github/app/actions",
+            "kind": "automation",
+            "delegated_by": null
+          },
+          "completed_at": "2026-11-17T00:15:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "reference": {
+      "kind": "publication",
+      "id": "publication/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "head": null,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "repository",
+          "repository": "ai-on-gke/grain",
+          "ref": "main"
+        },
+        "head": null,
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "commit": "B1",
+      "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "release_version": "v1.2.3",
+      "target": "release-registry",
+      "receipt_id": "publish-1",
+      "published_at": "2026-11-17T00:15:00Z"
+    }
+  },
+  {
+    "reference": {
+      "kind": "pipeline",
+      "id": "pipeline/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "repository",
+        "repository": "ai-on-gke/grain",
+        "ref": "main"
+      },
+      "head": null,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "repository",
+          "repository": "ai-on-gke/grain",
+          "ref": "main"
+        },
+        "head": null,
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": false,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "repositories": [
+        "ai-on-gke/grain"
+      ],
+      "expected_bases": [
+        {
+          "kind": "repository",
+          "repository": "ai-on-gke/grain",
+          "ref": "main"
+        }
+      ],
+      "base_evidence": [],
+      "notifications": [],
+      "stalled_tasks": [],
+      "blocked_queue_entries": [],
+      "complete": false
+    }
+  },
+  {
+    "reference": {
+      "kind": "qa",
+      "id": "qa/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "stage": "s3",
+      "flow_revision": "flow-v1",
+      "assignment": "treatment",
+      "engine": "grain/qa-v1",
+      "passed": true,
+      "triage_disposition": null
+    }
+  },
+  {
+    "reference": {
+      "kind": "operation",
+      "id": "operation/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "operation_id": "merge-1",
+      "state": "completed",
+      "receipt": {
+        "operation_id": "merge-1",
+        "request": {
+          "request_id": "merge-1",
+          "idempotency_key": "merge/pr1710/H1",
+          "action": "change.merge",
+          "target": {
+            "kind": "change",
+            "authority": "github.com",
+            "repository": "ai-on-gke/grain",
+            "change_kind": "pr",
+            "id": "1710"
+          },
+          "expected_head": "H1",
+          "expected_resource_version": "pr-v3",
+          "expected_contract_revision": 1,
+          "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "expected_authority_epoch": 1,
+          "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "actor": "automation/merge-queue",
+        "disposition": "succeeded",
+        "result_version": "merge-commit-M1",
+        "recorded_at": "2026-11-17T00:20:00Z",
+        "evidence": [
+          {
+            "kind": "integration",
+            "id": "merge/M1",
+            "version": "attempt-1",
+            "subject": {
+              "kind": "change",
+              "authority": "github.com",
+              "repository": "ai-on-gke/grain",
+              "change_kind": "pr",
+              "id": "1710"
+            },
+            "head": "H1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "exception_ids": [],
+        "intent": "execute"
+      }
+    }
+  },
+  {
+    "reference": {
+      "kind": "policy",
+      "id": "policy/record-1",
+      "version": "attempt-1",
+      "subject": {
+        "kind": "change",
+        "authority": "github.com",
+        "repository": "ai-on-gke/grain",
+        "change_kind": "pr",
+        "id": "1710"
+      },
+      "head": "H1",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "dependencies": [
+      {
+        "key": "checks/pr1710",
+        "subject": {
+          "kind": "change",
+          "authority": "github.com",
+          "repository": "ai-on-gke/grain",
+          "change_kind": "pr",
+          "id": "1710"
+        },
+        "head": "H1",
+        "version": "obs-4",
+        "collection_generation": "checks-set-7",
+        "scope_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "observed_at": "2026-11-17T00:15:00Z",
+        "valid_until": "2026-11-17T00:20:00Z",
+        "authorization_revision": 4,
+        "dirty_generation": 3,
+        "covered_generation": 3
+      }
+    ],
+    "collected_at": "2026-11-17T00:15:00Z",
+    "valid_until": "2026-11-17T00:20:00Z",
+    "facts": {
+      "source_revisions": [
+        {
+          "source": "repository/ai-on-gke/grain",
+          "revision": "1"
+        }
+      ],
+      "required_binding_ids": [
+        "repository/ai-on-gke/grain/checks"
+      ],
+      "coverage_complete": true,
+      "explicit_unguarded": false
+    }
+  }
+]
