@@ -1286,25 +1286,28 @@ func TestScaleJudgeCatchesUnansweredEndpoints(t *testing.T) {
 	}
 
 	// cutOff path: an endpoint that answers once and then stalls past
-	// apiP95 before runCtx cancels fails via stats.fail. Driven by events,
-	// not a fixed run length: the run is cancelled only once the handler
-	// has seen the stalled request and that request has waited well past
-	// the budget, however slowly the first round trip went (-race on a
-	// loaded runner).
-	const stallBudget = 50 * time.Millisecond
+	// apiP95 before runCtx cancels fails via stats.fail. Driven by a
+	// channel signal rather than a fixed run window: the run is cancelled
+	// only after the handler has closed secondArrived on the stalled second
+	// request and that request has waited well past stallBudget, however
+	// slowly the first round trip went (-race on a loaded runner). Closing
+	// secondArrived rather than non-blocking sending on an unbuffered
+	// channel also ensures the signal cannot be lost if the second request
+	// arrives before the test goroutine enters its select.
+	const stallBudget = 40 * time.Millisecond
 	var calls atomic.Int64
-	stalled := make(chan struct{})
+	secondArrived := make(chan struct{})
 	stallRelease := make(chan struct{})
 	defer close(stallRelease)
 	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) == 1 {
+		n := calls.Add(1)
+		if n == 1 {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("{}"))
 			return
 		}
-		select {
-		case stalled <- struct{}{}:
-		default:
+		if n == 2 {
+			close(secondArrived)
 		}
 		select {
 		case <-r.Context().Done():
@@ -1320,20 +1323,24 @@ func TestScaleJudgeCatchesUnansweredEndpoints(t *testing.T) {
 		}
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
 		scaleAPIWorker(runCtx, srv, "metrics", time.Minute, stallBudget, false,
 			&scaleSeed{historyIDs: []string{"s000001"}}, rand.New(rand.NewPCG(1, 2)), stalledStats)
 	}()
+	defer func() {
+		cancel()
+		<-workerDone
+	}()
 	select {
-	case <-stalled:
+	case <-secondArrived:
 	case <-time.After(time.Minute):
 		t.Fatal("the stalled second metrics request never reached the server")
 	}
 	// The client's clock for that request started before the handler saw
-	// it, so this is at least 4x the budget by cutOff's own measure.
+	// it, so waiting 4x stallBudget after secondArrived guarantees cutOff
+	// observes waited > stallBudget on the monotonic clock.
 	time.Sleep(4 * stallBudget)
 	cancel()
 	<-workerDone
@@ -1342,16 +1349,17 @@ func TestScaleJudgeCatchesUnansweredEndpoints(t *testing.T) {
 	}
 	rep = &recordedScaleReport{}
 	judgeScale(rep, cutOffCfg, stalledStats)
-	// The answered first request may itself have been slower than the
-	// budget on a loaded runner, which is a second, legitimate p95 error;
-	// what this case is about is the cutOff one.
+	// The answered first request may itself have been slower than
+	// stallBudget on a loaded runner, producing a legitimate p95 budget
+	// error alongside the cutOff error.
 	var cutOffErr bool
 	for _, e := range rep.errors {
-		if !strings.Contains(e, "api/metrics") {
-			t.Errorf("unexpected error unrelated to api/metrics: %s", e)
-		}
-		if strings.Contains(e, "still unanswered") {
+		switch {
+		case strings.Contains(e, "api/metrics:") && strings.Contains(e, "still unanswered"):
 			cutOffErr = true
+		case strings.Contains(e, "api/metrics: p95 ") && strings.Contains(e, "over its"):
+		default:
+			t.Errorf("unexpected judgeScale error: %s", e)
 		}
 	}
 	if !cutOffErr {
