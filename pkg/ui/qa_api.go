@@ -77,12 +77,14 @@ func (s *Server) handleGetQAFlows(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, QAFlowsResponse{Flows: qa.BuiltInFlows()})
 }
 
-func assessTaskComplexityTier(t model.Task) string {
+func assessTaskComplexityTier(t model.Task, specAtt model.TaskSpecAttachments) string {
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       t.Title,
-		Body:        t.Body,
-		ReadsCount:  len(t.Reads),
-		WritesCount: len(t.Writes),
+		Title:                   t.Title,
+		Body:                    t.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(t.Reads),
+		WritesCount:             len(t.Writes),
 	}, nil)
 	return string(comp.Tier)
 }

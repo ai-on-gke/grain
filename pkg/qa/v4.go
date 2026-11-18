@@ -227,7 +227,7 @@ stages:
   s0-intent:
     enabled: true
     complexities: [medium, high]
-    max-seconds: 30
+    max-seconds: 45
     max-tokens: 15000
     on-clarification: warn
   s1-risk:
@@ -481,7 +481,7 @@ stages:
   s0-intent:
     enabled: true
     complexities: [medium, high]
-    max-seconds: 30
+    max-seconds: 45
     max-tokens: 15000
     on-clarification: warn
   s2-plan-critic:

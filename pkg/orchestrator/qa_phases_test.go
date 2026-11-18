@@ -716,3 +716,167 @@ func TestPostCloneDecomposeProposeDAGCoordinatorAndStepDown(t *testing.T) {
 		t.Fatalf("expected low root task to skip S0b decomposition, got:\n%s", outLowRoot)
 	}
 }
+
+func TestAttachmentHydratedComplexitySkipsRedundantS0InjectsProposeDAGAndCleansPathTokens(t *testing.T) {
+	store, ctx := openTestStore(t)
+
+	prev := orchestrator.LiveQARuntime()
+	t.Cleanup(func() { orchestrator.SetLiveQARuntime(prev) })
+
+	s0Calls, s2Calls := 0, 0
+	var lastS2Prompt string
+	orchestrator.SetLiveQARuntime(&orchestrator.QARuntime{
+		RunIsolatedPrompt: func(_ context.Context, _ model.Task, runPrefix, prompt string, _ int) (string, int64, int64, error) {
+			if strings.HasSuffix(runPrefix, "-qa-s0") {
+				s0Calls++
+				return "- WHEN clicked SHALL close", 30, 15, nil
+			}
+			if strings.HasSuffix(runPrefix, "-qa-s2") {
+				s2Calls++
+				lastS2Prompt = prompt
+				return "- Keep Wave 1 backend store changes isolated from Wave 2 UI edits", 80, 32, nil
+			}
+			return "", 0, 0, nil
+		},
+	})
+
+	stdBundle, ok := qa.LookupBuiltInOrRegisteredVersion("standard-workflow@1")
+	if !ok {
+		t.Fatalf("standard-workflow@1 not found")
+	}
+	spec := stdBundle.Resolved
+
+	worktreeDir := t.TempDir()
+	for _, rel := range []string{
+		"ui-ng/src/app/components/card-inspector/card-inspector.component.ts",
+		"internal/store/sqlite.go",
+		"internal/server/server.go",
+		"internal/playbook/playbook.go",
+		".github/workflows/ci.yml",
+	} {
+		full := filepath.Join(worktreeDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte("package stub\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	task := model.Task{
+		ID:    "task-att-dag-14",
+		Title: "[ACME-13] UX polish",
+		Body: "Dispatched from **Issue Tracker** (`ACME-13` in project **Widgets**, owner `alice@example.com`).\n\n" +
+			"## Capability Summary\nLet's stress test this! Compare pkg.go.dev/context and ui/ux notes.\n\n" +
+			"> **Gate Override Note:** Fast track\n\n" +
+			"## Pinned Deliverables (Materialized in `./attachments/`)\n" +
+			"- **CONCEPT** (`doc1@v2`, file `./attachments/1-concept-spec.md`): https://specs.example.good/doc1\n" +
+			"- **HTML_MOCK** (`doc2@v1`, file `./attachments/2-html_mock-mzpe9mjpv9.html`): https://specs.example.good/doc2\n",
+	}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatalf("PutTask: %v", err)
+	}
+	specMarkdown := []byte("---\ntitle: \"ACME-13 Inspector & Action Bar UX\"\nstatus: Approved\n---\n\n" +
+		"# ACME-13: Card Inspector, Pinned Action Bar & Shaping UX\n\n" +
+		"## 1. Problem Statement\n" +
+		"- Inspector tab switches reset scroll position and hide primary actions.\n" +
+		"- Modal backdrops allow accidental dismissal during in-flight saves (see `2-html_mock-mzpe9mjpv9.html`).\n\n" +
+		"## 2. Frontend Architecture\n" +
+		"- Update `./ui-ng/src/app/components/card-inspector/card-inspector.component.ts`.\n" +
+		"- Keep component CSS within the 8 kB budget in `.github/workflows/ci.yml`.\n\n" +
+		"## 3. Backend Store & HTTP Handlers\n" +
+		"- Update `./internal/store/sqlite.go` and `internal/server/server.go:1820`.\n" +
+		"- Enforce stage validation in `internal/playbook/playbook.go`.\n\n" +
+		"## 4. Phased Implementation & Verification Plan\n" +
+		"- Phase 1: Store & server endpoints with race-detector unit tests.\n" +
+		"- Phase 2: Angular inspector pinned bar and focus restoration.\n" +
+		"- Phase 3: End-to-end verification across desktop and mobile viewports.\n" +
+		"Detailed acceptance criteria covering optimistic concurrency version checks, keyboard Escape propagation across nested listboxes, accessible ARIA live regions, and dark/light theme contrast tokens so this attached specification exceeds fifteen hundred bytes.\n" +
+		"Additional subsystem boundary contracts ensuring Wave 1 backend pull requests and Wave 2 Angular frontend pull requests touch disjoint file trees without merge conflicts.\n")
+	if _, err := store.AddAttachment(ctx, model.Attachment{
+		TaskID:      task.ID,
+		Filename:    "1-concept-spec.md",
+		ContentType: "text/markdown",
+		Size:        int64(len(specMarkdown)),
+		Content:     specMarkdown,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AddAttachment md: %v", err)
+	}
+	htmlBytes := []byte("<html><body>Mock preview</body></html>")
+	if _, err := store.AddAttachment(ctx, model.Attachment{
+		TaskID:      task.ID,
+		Filename:    "2-html_mock-mzpe9mjpv9.html",
+		ContentType: "text/html",
+		Size:        int64(len(htmlBytes)),
+		Content:     htmlBytes,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AddAttachment html: %v", err)
+	}
+
+	if _, err := store.EnsureQAAssignment(ctx, model.QAAssignment{
+		RootOrigin:         "task:" + task.ID,
+		Epoch:              1,
+		RegimeID:           1,
+		Arm:                model.QAArmTreatment,
+		FlowID:             model.QAFlowStandard,
+		RolloutPctAtAssign: 100,
+		ComplexityTier:     model.QAComplexityMedium,
+		AssignedAt:         time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("EnsureQAAssignment: %v", err)
+	}
+
+	pre := orchestrator.ExecutePreCloneQAPhase(ctx, store, task, &spec, "", model.QAArmTreatment, stdBundle.Hash, "base-prompt")
+	if s0Calls != 0 {
+		t.Fatalf("expected authored markdown spec attachment (HasDesignItem=true) to skip redundant S0 LLM call, got s0Calls=%d", s0Calls)
+	}
+
+	post := orchestrator.ExecutePostCloneWorkflowPhases(ctx, store, task, worktreeDir, &spec, "", model.QAArmTreatment, stdBundle.Hash, pre.Prompt)
+	if !strings.Contains(post, "(S0b — propose_dag)") {
+		t.Fatalf("expected attachment-hydrated high-complexity root task to inject propose_dag, got:\n%s", post)
+	}
+	if s2Calls != 1 || !strings.Contains(lastS2Prompt, "Attached specification:") || !strings.Contains(lastS2Prompt, "ACME-13: Card Inspector") {
+		t.Fatalf("expected S2 plan critic to run with hydrated Attached specification, s2Calls=%d prompt=%q", s2Calls, lastS2Prompt)
+	}
+
+	runs, err := store.ListQACheckRunsForTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListQACheckRunsForTask: %v", err)
+	}
+	foundS1 := false
+	foundS0b := false
+	for _, r := range runs {
+		if r.Stage == "S1" {
+			foundS1 = true
+			if strings.Contains(r.DetailJSON, "specs.example.go") || strings.Contains(r.DetailJSON, "pkg.go") || strings.Contains(r.DetailJSON, "2-html_mock") || strings.Contains(r.DetailJSON, "attachments/") || strings.Contains(r.DetailJSON, `"ui/ux"`) {
+				t.Fatalf("S1 candidatePaths leaked bogus URL/domain/HTML/attachments/prose token: %s", r.DetailJSON)
+			}
+			for _, wantPath := range []string{
+				"internal/server/server.go",
+				"internal/store/sqlite.go",
+				"ui-ng/src/app/components/card-inspector/card-inspector.component.ts",
+				".github/workflows/ci.yml",
+			} {
+				if !strings.Contains(r.DetailJSON, wantPath) {
+					t.Fatalf("S1 candidatePaths missed %q from attached markdown spec: %s", wantPath, r.DetailJSON)
+				}
+			}
+		}
+		if r.Stage == "S0b" {
+			foundS0b = true
+			if r.ComplexityTier != model.QAComplexityHigh || !strings.Contains(r.DetailJSON, `"effectiveMode":"propose_dag"`) {
+				t.Fatalf("expected S0b ComplexityTier=high and effectiveMode=propose_dag, got tier=%q detail=%s", r.ComplexityTier, r.DetailJSON)
+			}
+		}
+	}
+	if !foundS1 || !foundS0b {
+		t.Fatalf("expected both S1 and S0b check runs, foundS1=%v foundS0b=%v", foundS1, foundS0b)
+	}
+
+	assign, err := store.QAAssignment(ctx, "task:"+task.ID, 1)
+	if err != nil || assign == nil || assign.ComplexityTier != model.QAComplexityHigh {
+		t.Fatalf("expected ExecutePostCloneWorkflowPhases to reconcile sticky QAAssignment complexity=high, got %+v (err=%v)", assign, err)
+	}
+}
