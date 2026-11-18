@@ -115,7 +115,9 @@ jitter; backed-off reads do not repeat source collection.
 
 The existing diagnostic tables, current-cache/age/per-task/global row bounds and
 20-sample history projection are reused. A serialized observation is additionally
-bounded to 128 KiB. Histories are samples, not continuous observation windows.
+bounded to 256 KiB across all observers. The canonical 64-binding limit is
+shared with the merged review/approval observers; overflow leaves displayed
+review scopes explicitly incomplete and never turns omitted scopes into success. Histories are samples, not continuous observation windows.
 Comparison labels distinguish current status, current/legacy differences and
 source gaps. They correlate shared evidence, not an independent replay of the
 real merge decision or a readiness oracle. Expired cards remain visibly stale.

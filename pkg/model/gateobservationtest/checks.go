@@ -52,7 +52,7 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 		wake, commits := s.Changed(), s.CommitCount()
 		v, d, err := s.ObserveTaskGatesWithChecks(ctx, task.ID, now, fence, []gates.ChecksFacts{f})
 		must(err)
-		if len(v.Results) != 4 || v.Results[2].Result.Status != want {
+		if len(v.Results) < 4 || v.Results[2].Result.Status != want {
 			t.Fatalf("checks want %s: %+v", want, v.Results)
 		}
 		if v.Authority != "legacy" || v.Mode != "observation_only" || v.LifecycleEffects || v.ActionEffects || v.DispatchEffects || v.AutomaticCutover {
@@ -186,7 +186,7 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 	fail := gates.UnavailableObservation(task.ID, now)
 	now = now.Add(time.Second)
 	must(s.RecordGateObservationFailure(ctx, task.ID, now, &fail))
-	if len(fail.Results) != 4 || fail.Results[2].Result.Status != "error" || len(fail.Results[2].Result.Evidence) > 0 {
+	if len(fail.Results) < 4 || fail.Results[2].Result.Status != "error" || len(fail.Results[2].Result.Evidence) > 0 {
 		t.Fatal("failure lost scoped CI or retained accepted evidence")
 	}
 	if before != legacyChecksSnapshot(t, ctx, db) {
@@ -208,6 +208,28 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 	foreign.Subject.ID = "999"
 	if _, _, err = s.ObserveTaskGatesWithChecks(ctx, task.ID, now.Add(time.Minute), fence(), []gates.ChecksFacts{foreign}); err == nil {
 		t.Fatal("foreign check subject accepted")
+	}
+	// CI and the already merged review observers share the canonical wire
+	// bound. An incomplete review subset must not suppress or acquire CI proof.
+	must(s.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		for i := range 45 {
+			t.Links = append(t.Links, model.Link{Kind: model.LinkReviewTask, Target: fmt.Sprintf("missing-review-%d", i)})
+		}
+		return nil
+	}))
+	now = now.Add(2 * time.Minute)
+	f.ObservedAt, f.ValidUntil = now, now.Add(time.Minute)
+	combined, diagnostics := read(fence(), "met")
+	if len(combined.Bindings) != 64 {
+		t.Fatal("combined observer did not honor the canonical 64-binding bound")
+	}
+	for i, b := range combined.Bindings {
+		if b.Type == "review" && !b.Origin.Imported && combined.Results[i].Result.Status != "unknown" {
+			t.Fatal("truncated review collection passed")
+		}
+	}
+	if diagnostics.Counts["checks_met;review_approval_incomplete"] != 1 {
+		t.Fatal("combined diagnostic lost incomplete review context")
 	}
 	for i := int64(1); i <= 512; i++ {
 		must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 1000 + i, Commit: "bounded", Conclusion: "success"}))

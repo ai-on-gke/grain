@@ -24,10 +24,14 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 ## Implemented observation-only subset
 
 The [runtime observation guide](../../../docs/gate-observations.md) describes the
-report/receipt slice plus [Task #66's checks port](../../../docs/gate-check-observations.md):
-`delivery/report/current_v1`, `acknowledgment/explicit_receipt`, and current/explicit
-legacy `checks` v1, all nonrequired monitors. Typed CI modes, base-owned definitions,
-complete collection evidence and inert merge context are now projected. Ordinary authorized
+shipped nonrequired v1 monitors: `delivery/report/current_v1`,
+`acknowledgment/explicit_receipt`, current/explicit legacy `checks`, and canonical
+`review`/`approval` predicates. The [checks adapter](../../../docs/gate-check-observations.md)
+projects typed modes, base-owned definitions, complete exact-head collections
+and inert merge context. The [review/approval adapter](../../../docs/gate-review-observations.md)
+imports ordinary/security/path/targeted/takeover legacy comparisons and named,
+Submit and human-hold scopes. Missing provider and rendered policy/role receipt
+pins remain unknown. Ordinary authorized
 task reads and the Angular task detail carry the optional closed observation_view
 and bounded sibling diagnostic history. There is no contract/decision authority,
 `?view=gates` implementation, discovery/mutation/action/waiver API or migration.
@@ -37,7 +41,8 @@ The [independent framework review](../../../docs/gate-observation-review.md) rec
 repair coverage and stable extension rules, including conservative receipt ordering,
 failure/acceptance races and bounded retention on both engines.
 All current legacy writers listed below retain authority in this implementation.
-The imports and handoff requirements remain future specifications.
+Legacy comparisons are imported only as inert monitors; enforced imports and
+handoff requirements remain future specifications.
 
 ## Explicit concrete goal imports
 

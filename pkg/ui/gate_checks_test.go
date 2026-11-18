@@ -118,7 +118,7 @@ func TestGateChecksOrdinaryAPIEventsAndNoninterference(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &d); err != nil {
 			t.Fatal(err)
 		}
-		if d.GateObservations == nil || len(d.GateObservations.Results) != 4 || d.GateObservations.Results[2].Result.Status != want {
+		if d.GateObservations == nil || len(d.GateObservations.Results) < 4 || d.GateObservations.Results[2].Result.Status != want {
 			t.Fatalf("want %s: %+v", want, d.GateObservations)
 		}
 		after, _ := c.Store.GetObservation(ctx, task.ID)
@@ -575,7 +575,7 @@ func TestGateChecksRecordedEventsAndLaggingReplica(t *testing.T) {
 			if err = json.Unmarshal([]byte(body), &d); err != nil {
 				t.Fatal(err)
 			}
-			if d.GateObservations == nil || len(d.GateObservations.Results) != 4 || d.GateObservations.Results[2].Result.Status != "unknown" {
+			if d.GateObservations == nil || len(d.GateObservations.Results) < 4 || d.GateObservations.Results[2].Result.Status != "unknown" {
 				t.Fatalf("lagging or concurrent CI evidence passed: %+v", d.GateObservations)
 			}
 			// Catch up the remote complete set; a later ordinary read recovers without

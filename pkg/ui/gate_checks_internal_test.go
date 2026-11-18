@@ -36,6 +36,7 @@ func TestGateChecksDisplayRequiresCurrentResourceScope(t *testing.T) {
 	// links change; current task authorization is not authority over old repos.
 	history := v
 	history.Bindings = gates.Bindings("66")
+	history.Results = history.Results[:2]
 	if !observationVisible(denied, &history) || observationVisible(denied, &v) {
 		t.Fatal("resource-aware projection changed")
 	}

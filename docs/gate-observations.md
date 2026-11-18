@@ -2,11 +2,12 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and limits for later ports. Its first slice shipped two v1
-types: `delivery` with
-`{"product":"report","semantics":"current_v1"}`, and `acknowledgment` with
-`{"mode":"explicit_receipt"}`. Task #66 also ships the checks profiles and explanatory merge context described in
-[CI checks in shadow](gate-check-observations.md). Other catalogue profiles/types remain unsupported.
+records repairs, coverage and limits for later ports. It ships five v1 types:
+`delivery` with `{"product":"report","semantics":"current_v1"}`,
+`acknowledgment` with `{"mode":"explicit_receipt"}`, `checks`, and the canonical
+`review` and `approval` profiles. See [CI checks in shadow](gate-check-observations.md)
+and the [review/approval coverage guide](gate-review-observations.md) for source
+coverage and explicit provenance gaps. Other catalogue profiles/types remain unsupported.
 Their closed schemas are pinned to the canonical catalogue and evaluated by pure
 local Go functions. There are no remote evaluator calls or private evaluator state.
 
@@ -23,7 +24,11 @@ The existing permission-filtered `GET /api/tasks/{id}` adds optional
 `gate_observations` (the closed canonical observation_view) and sibling
 `gate_observation_diagnostics`. Ordinary whole, paged, comments-since and task
 summary reads reuse the same projection; pagination never supplies gate evidence.
-The ordinary `api_get_task` read carries the additive fields. Angular task detail
+The ordinary `api_get_task` read carries the additive fields. Scoped callers
+receive only the authorized current projection; retained diagnostic history
+requires unrestricted task-read access because samples can predate repository
+moves. Authorization is checked before collection/cache replay, and cached
+resource subjects are reauthorized before display. Angular task detail
 at `/next/tasks/<id>` shows status/explanation, source/config/build provenance,
 evaluation/evidence versions, completeness/freshness, errors, inert predictions,
 retained comparison counts and newest 20 samples. The classic UI remains compatible.
@@ -34,12 +39,12 @@ mutation/reevaluation/action/waiver endpoint or MCP evaluator.
 
 Collection/display is disabled by default. A deployment-local explicit allowlist
 selects at most 32 task IDs. There is no automatic cohort expansion or lifecycle
-hook. Choose a small representative set of current finite analysis/report tasks or
-CI changes; see the checks guide for source coverage and limitations. For reports, include a report awaiting receipt and a report acknowledged by a verified person.
+hook. Choose a small representative set of current finite analysis/report or PR tasks,
+including a report awaiting receipt and a report acknowledged by a verified person.
 Optionally include a code/standing task to inspect the explained unknown state;
 never interpret that acknowledgment observation as a code completion requirement.
 
-The report/receipt monitors apply only to noninteractive `analyze` tasks without changes, goals, standing/keep-running
+For report/receipt, only noninteractive `analyze` tasks without changes, goals, standing/keep-running
 behavior, console hosting, or report-only child auto-closure are applicable. A
 successful recorded no-work invocation is excluded. Unsupported shapes return
 unknown with a not-applicable explanation for both monitors.
@@ -62,9 +67,12 @@ fallback or
 automation closes are unknown, not synthetic receipts. A new report/run, question,
 message, attachment, relevant task shape, or registry/config build changes the
 source fence; old receipt observations cannot silently cover a changed report.
-For report/receipt these local immutable body/comment and close-event records are
-the supported evidence; no receipt permission revisions are claimed. CI uses its
-separate scoped, versioned collector described in the checks guide.
+These local immutable body/comment and close-event records support the original
+two task monitors. Review/approval adds scoped local assignment, hold, finding,
+fix and base-policy evidence as described in the [source adapter guide](gate-review-observations.md).
+No complete remote evidence or rendered-context/role receipt is fabricated.
+CI uses its separate scoped, versioned collector described in the
+[checks guide](gate-check-observations.md).
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -127,7 +135,9 @@ unsampled minute refreshes after that point cannot be recovered. Aggregate retai
 comparison counts remain exact. Current/history data is local to the
 database and deliberately excluded from state-repository exports.
 
-The comparison labels are:
+For PR tasks the comparison labels are `review_approval_provenance_gap` and
+`review_approval_incomplete`; individual results explain current versus imported
+legacy outcomes. The report/receipt comparison labels are:
 
 - `equivalent_milestones`: report delivery and receipt agree with corresponding
   local legacy facts; pending receipt is not a delivery discrepancy.
@@ -219,3 +229,9 @@ acceptance scenarios are not claimed by these read-only checks.
 
 CI-specific runtime profiles, source bounds, version fences, comparison differences
 and validation are documented in [CI checks in shadow](gate-check-observations.md).
+
+Review/approval validation and its material source limitations are recorded in
+[Review and approval observations](gate-review-observations.md). Current results
+remain unknown when exact provider/authorization evidence is absent; legacy
+Submit/accept-findings services remain authoritative. No production configuration
+or grant change accompanies the extension.

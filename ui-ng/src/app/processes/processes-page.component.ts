@@ -2549,7 +2549,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="closeScheduleDialog()"
+        (click)="dismissScheduleDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2558,7 +2558,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="sched-dialog-title"
         data-testid="schedule-dialog"
         gDialogTrap
-        (gDialogClose)="closeScheduleDialog()"
+        (gDialogClose)="dismissScheduleDialog()"
       >
         <h2 id="sched-dialog-title">
           {{ editingSchedule() ? "Edit schedule" : "New schedule or trigger" }}
@@ -3085,7 +3085,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="closeScheduleDialog()"
+            (click)="dismissScheduleDialog()"
           >
             Cancel
           </button>
@@ -3258,7 +3258,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="tmplDialogOpen.set(false)"
+        (click)="dismissTemplateDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -3267,7 +3267,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="tmpl-dialog-title"
         data-testid="template-dialog"
         gDialogTrap
-        (gDialogClose)="tmplDialogOpen.set(false)"
+        (gDialogClose)="dismissTemplateDialog()"
       >
         <h2 id="tmpl-dialog-title">
           {{ editingTemplate() ? "Edit template" : "New task template" }}
@@ -3507,7 +3507,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="tmplDialogOpen.set(false)"
+            (click)="dismissTemplateDialog()"
           >
             Cancel
           </button>
@@ -3529,7 +3529,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="suiteDialogOpen.set(false)"
+        (click)="dismissSuiteDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -3538,7 +3538,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="suite-dialog-title"
         data-testid="suite-dialog"
         gDialogTrap
-        (gDialogClose)="suiteDialogOpen.set(false)"
+        (gDialogClose)="dismissSuiteDialog()"
       >
         <h2 id="suite-dialog-title">
           {{ editingSuite() ? "Edit suite" : "New suite" }}
@@ -3693,11 +3693,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </p>
         }
         <div class="dialog-actions">
-          <button
-            type="button"
-            class="btn-text"
-            (click)="suiteDialogOpen.set(false)"
-          >
+          <button type="button" class="btn-text" (click)="dismissSuiteDialog()">
             Cancel
           </button>
           <button
@@ -5514,6 +5510,125 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.schedDialogOpen.set(false);
   }
 
+  // The dialogs' unsaved-edit guard, as the classic panes have it
+  // (useUnsavedEdits): each dialog's draft is snapshotted when it opens,
+  // and Cancel, Escape, the scrim, Back and the rail ask before a draft
+  // that differs is dropped -- once, however many of them fire for one
+  // gesture. Save closes through close*Dialog / .set(false) and does not ask.
+  private schedBaseline = "";
+  private tmplBaseline = "";
+  private suiteBaseline = "";
+
+  private schedDraftSnapshot(): string {
+    return JSON.stringify([
+      this.schedTargetKind(),
+      this.sDraftTitle(),
+      this.sDraftDesc(),
+      this.sDraftKeepRunning(),
+      this.sDraftAdmission(),
+      this.sDraftHosting(),
+      this.sDraftCaps(),
+      this.buildScheduleCreatePayload(),
+    ]);
+  }
+
+  private tmplDraftSnapshot(): string {
+    return JSON.stringify([
+      this.tDraftName(),
+      this.tDraftTitle(),
+      this.tDraftDesc(),
+      this.tDraftRepo(),
+      this.tDraftFields(),
+      this.tDraftParamsCsv(),
+      this.tDraftAutoMerge(),
+      this.tDraftModel(),
+      this.tDraftKeepRunning(),
+      this.tDraftAdmission(),
+      this.tDraftHosting(),
+      this.tDraftCaps(),
+      this.tDraftQaFlowRef(),
+    ]);
+  }
+
+  private suiteDraftSnapshot(): string {
+    return JSON.stringify([
+      this.stDraftMode(),
+      this.stDraftCount(),
+      this.stDraftMaxPasses(),
+      this.buildSuiteCreatePayload(),
+      this.stDraftQaFlowRef(),
+    ]);
+  }
+
+  // unsavedDialogs names the open dialogs whose draft differs from what
+  // they opened with, topmost last.
+  private unsavedDialogs(): string[] {
+    const out: string[] = [];
+    if (
+      this.schedDialogOpen() &&
+      this.schedDraftSnapshot() !== this.schedBaseline
+    ) {
+      out.push("schedule");
+    }
+    if (
+      this.suiteDialogOpen() &&
+      this.suiteDraftSnapshot() !== this.suiteBaseline
+    ) {
+      out.push("suite");
+    }
+    if (
+      this.tmplDialogOpen() &&
+      this.tmplDraftSnapshot() !== this.tmplBaseline
+    ) {
+      out.push("template");
+    }
+    return out;
+  }
+
+  private askDiscard(what: string): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved changes to this ${what}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected async dismissScheduleDialog(): Promise<void> {
+    if (
+      this.schedDraftSnapshot() !== this.schedBaseline &&
+      !(await this.askDiscard("schedule"))
+    ) {
+      return;
+    }
+    this.closeScheduleDialog();
+  }
+
+  protected async dismissTemplateDialog(): Promise<void> {
+    if (
+      this.tmplDraftSnapshot() !== this.tmplBaseline &&
+      !(await this.askDiscard("template"))
+    ) {
+      return;
+    }
+    this.tmplDialogOpen.set(false);
+  }
+
+  protected async dismissSuiteDialog(): Promise<void> {
+    if (
+      this.suiteDraftSnapshot() !== this.suiteBaseline &&
+      !(await this.askDiscard("suite"))
+    ) {
+      return;
+    }
+    this.suiteDialogOpen.set(false);
+  }
+
   protected closeLaunchDialog(): void {
     this.openPicker.set(null);
     this.dialogError.set(null);
@@ -5696,6 +5811,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftQaFlowRef.set("");
     }
     this.schedDialogOpen.set(true);
+    this.schedBaseline = this.schedDraftSnapshot();
   }
 
   protected canSaveSchedule(): boolean {
@@ -6046,6 +6162,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftQaFlowRef.set("");
     }
     this.tmplDialogOpen.set(true);
+    this.tmplBaseline = this.tmplDraftSnapshot();
   }
 
   protected onTemplateParamsCsvInput(csv: string): void {
@@ -6241,6 +6358,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.stDraftQaFlowRef.set("");
     }
     this.suiteDialogOpen.set(true);
+    this.suiteBaseline = this.suiteDraftSnapshot();
   }
 
   protected toggleSuiteTemplateId(id: string): void {
@@ -6525,10 +6643,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return Boolean(this.doc.querySelector('[data-qa-unsaved-draft="true"]'));
   }
 
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedDialogs().length > 0) ev.preventDefault();
+  }
+
   canDeactivate(): boolean | Promise<boolean> {
-    if (this.bypassUnsavedDraftGuard || !this.hasUnsavedQaDraft()) {
-      return true;
+    if (this.bypassUnsavedDraftGuard) return true;
+    const dialogs = this.unsavedDialogs();
+    if (dialogs.length > 0) {
+      return this.askDiscard(dialogs[dialogs.length - 1]).then((ok) => {
+        if (ok) {
+          this.closeScheduleDialog();
+          this.tmplDialogOpen.set(false);
+          this.suiteDialogOpen.set(false);
+        }
+        return ok;
+      });
     }
+    if (!this.hasUnsavedQaDraft()) return true;
     return this.promptDiscardQaDraft();
   }
 

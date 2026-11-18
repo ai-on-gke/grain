@@ -130,6 +130,9 @@ import type {
                 {{ checksLabel(entry.result.binding_id) }}
               </p>
             }
+            @if (entry.result.type !== "checks") {
+              <p class="muted">{{ profileLabel($index) }}</p>
+            }
             <p>{{ entry.result.summary }}</p>
             @if (entry.result.error; as error) {
               <p>Observation error: {{ error.code }} · {{ error.message }}</p>
@@ -141,6 +144,9 @@ import type {
             }
             @if (entry.invalidation_reason) {
               <p>Invalidated: {{ entry.invalidation_reason }}</p>
+            }
+            @if (entry.result.agent_text) {
+              <p>{{ entry.result.agent_text }}</p>
             }
             @if (entry.result.human_text) {
               <p>{{ entry.result.human_text }}</p>
@@ -181,7 +187,7 @@ import type {
               }
               @for (
                 evidence of entry.result.evidence;
-                track evidence.kind + "/" + evidence.id
+                track evidence.kind + ":" + evidence.id
               ) {
                 <p>
                   {{ evidence.kind }} #{{ evidence.id }} ·
@@ -271,6 +277,20 @@ export class TaskObservationsComponent {
           " " +
           subject.id
       : profile;
+  }
+  profileLabel(index: number): string {
+    const binding = this.observations()?.bindings[index];
+    const config = binding?.config;
+    if (
+      binding?.type === "review" &&
+      config &&
+      typeof config === "object" &&
+      "semantics" in config &&
+      config.semantics === "legacy_completion_v1"
+    ) {
+      return "Imported legacy comparison · Shadow only";
+    }
+    return "Current-scope prediction · Shadow only";
   }
   stale(until: string): boolean {
     return Date.parse(until) <= this.now();
