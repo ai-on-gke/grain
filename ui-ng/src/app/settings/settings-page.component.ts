@@ -578,13 +578,14 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   private anchorTimer: ReturnType<typeof setInterval> | null = null;
 
-  // anchorElement finds the card a #fragment names: an element with that
-  // id, else the card an older fragment meant (CARD_ANCHORS), else
-  // data-testid="card-<fragment>".
+  // anchorElement finds the field or card a #fragment names: an element
+  // with that id, else [data-setting-id="<fragment>"], else the card an
+  // older fragment meant (CARD_ANCHORS), else data-testid="card-<fragment>".
   private anchorElement(id: string): HTMLElement | null {
     const testid = CARD_ANCHORS[id] ?? `card-${id}`;
     return (
       document.getElementById(id) ??
+      document.querySelector<HTMLElement>(`[data-setting-id="${id}"]`) ??
       document.querySelector<HTMLElement>(`[data-testid="${testid}"]`)
     );
   }

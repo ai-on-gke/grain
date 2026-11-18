@@ -180,15 +180,15 @@ do not pull in an icon font.
   `Details (N)` breakdown, paired with status on the topbar live pill and
   contextual queue/settings notices formatted in the configured or local
   timezone with relative countdowns. A page that changes the pause itself
-  (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
-  so the banner follows the click rather than the next poll.
+  (Fleet → Health or Fleet → Pauses & Controls) re-reads `/api/config` into
+  `AccessService` so the banner follows the click rather than the next poll.
 - **Install notice:** `/api/config`'s `installNotice` (an unmigrated
   host-mode install) is the other standing banner above the shell
   (`.install-banner`, error colours, `role="status"`, no close button). It
   says what is wrong, the CLIs that cannot run until then and links the
   migration docs. It sits in flow above the rail like the disconnected banner,
-  and Settings → Upgrade shows the same notice in full with the command to
-  run.
+  and Fleet → Health and Settings → Upgrade show the same notice in full with
+  the command to run.
 - **Disconnected banner:** the standing banner for a daemon that is not
   answering (`services/connection.service.ts`). It is raised when requests fail to
   connect, when a gateway answers 502/503/504, or when a polled read goes
@@ -603,6 +603,18 @@ Rules:
   server's `detail` sentence rather than rewording it, and link the task
   that holds the finding where there is one
   (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **Fleet → Health and host power.** `/fleet?tab=health` (`/system/health`)
+  carries the full standing alerts list with their links and actions, GitHub's
+  hourly API budget and idle-poll backoff (`GET /api/metrics?section=github`,
+  callers stacked below 640px), registered daemon health counters
+  (`GET /api/sandboxes?section=counters`), host readiness notes
+  (`GET /api/settings/cli-run`), and `pendingRestart` / `unrunnable` setting
+  links scrolling to `#<field-id>` in `/settings/<section>`. Beside `Restart
+  daemon` on `/fleet?tab=controls`, `Reboot host` and `Shut down host` stay
+  disabled unless `/api/config`'s `rebootEnabled` / `shutdownEnabled` and
+  `deployment:reboot` allow them, ask through `<g-confirm-dialog>`, and treat a
+  dropped connection as accepted while reporting HTTP refusals
+  (`ui-ng/e2e/next-fleet-health-power.spec.ts`).
 - **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
   ```` ```mermaid ```` fences in the active theme with a Diagram / Source
   toggle, and pairs Before / After fences (named in the info string or by

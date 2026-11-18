@@ -1239,7 +1239,7 @@ export function listedSecrets(
             [class.s-dimmed]="!canWriteCredentials()"
           >
             <div class="s-grid">
-              <div class="s-field">
+              <div class="s-field s-anchor" id="githubHost">
                 <label class="s-label" for="cred-github-host"
                   >GitHub host</label
                 >
@@ -1262,7 +1262,7 @@ export function listedSecrets(
                   not a URL.</span
                 >
               </div>
-              <div class="s-field">
+              <div class="s-field s-anchor" id="gcpProject">
                 <label class="s-label" for="cred-gcp-project"
                   >GCP project</label
                 >
@@ -1285,7 +1285,7 @@ export function listedSecrets(
                   <code>gcp-key</code> / <code>gemini-key</code> settings.</span
                 >
               </div>
-              <div class="s-field">
+              <div class="s-field s-anchor" id="gcpServiceAccountEmail">
                 <label class="s-label" for="cred-gcp-sa"
                   >GCP service account email</label
                 >
@@ -1316,7 +1316,7 @@ export function listedSecrets(
                   below.</span
                 >
               </div>
-              <div class="s-field">
+              <div class="s-field s-anchor" id="gcpServiceAccountCount">
                 <label class="s-label" for="cred-gcp-count"
                   >GCP service account count</label
                 >
@@ -1343,7 +1343,7 @@ export function listedSecrets(
                 >
               </div>
             </div>
-            <div class="s-toggle-row">
+            <div class="s-toggle-row s-anchor" id="githubInsecureHttp">
               <div class="s-toggle-copy">
                 <span class="s-toggle-name"
                   >Speak plain HTTP to GitHub host</span

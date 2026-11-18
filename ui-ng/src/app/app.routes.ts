@@ -74,7 +74,7 @@ export function processesRouteMatcher(
 // falling through to the Inbox. Each entry is the path and, for Fleet,
 // the ?tab= that shows it.
 const SYSTEM_TABS: Record<string, readonly [string, string?, string?]> = {
-  health: ["/fleet"],
+  health: ["/fleet", "health"],
   sandboxes: ["/fleet"],
   top: ["/fleet"],
   logs: ["/fleet", "logs"],

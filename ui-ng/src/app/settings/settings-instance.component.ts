@@ -528,7 +528,7 @@ function formatBytes(bytes: number): string {
             Dispatch engine concurrency &amp; cadence
           </h3>
           <div class="s-grid">
-            <div class="s-field">
+            <div class="s-field s-anchor" id="pollInterval">
               <label class="s-label" for="e-poll">Poll interval</label>
               <input
                 id="e-poll"
@@ -549,7 +549,7 @@ function formatBytes(bytes: number): string {
                 }}).</span
               >
             </div>
-            <div class="s-field">
+            <div class="s-field s-anchor" id="maxWorkers">
               <label class="s-label" for="e-workers">Max worker agents</label>
               <input
                 id="e-workers"

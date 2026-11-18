@@ -1464,7 +1464,7 @@ function mib(mb: number): string {
             </div>
           }
           <div class="s-grid">
-            <div class="s-field">
+            <div class="s-field s-anchor" id="sandboxBackend">
               <span class="s-label">Sandbox backend</span>
               <g-pill-select
                 testid="select-sandbox-backend"
@@ -1481,7 +1481,7 @@ function mib(mb: number): string {
                 }}</span>
               }
             </div>
-            <div class="s-field">
+            <div class="s-field s-anchor" id="networkAccess">
               <span class="s-label">Network access</span>
               <g-pill-select
                 testid="select-sandbox-network"
@@ -1493,7 +1493,7 @@ function mib(mb: number): string {
                 (valueChange)="state.setField('networkAccess', $event)"
               />
             </div>
-            <div class="s-field">
+            <div class="s-field s-anchor" id="sandboxCpus">
               <label class="s-label" for="sb-cpus">vCPUs per sandbox</label>
               <input
                 id="sb-cpus"
@@ -1838,7 +1838,7 @@ function mib(mb: number): string {
           }
           <div class="s-grid">
             @for (f of k8sFields(); track f.key) {
-              <div class="s-field">
+              <div class="s-field s-anchor" [id]="f.key">
                 <label class="s-label" [attr.for]="'k8s-' + f.key">{{
                   f.label
                 }}</label>
@@ -1864,7 +1864,7 @@ function mib(mb: number): string {
                 }
               </div>
             }
-            <div class="s-field">
+            <div class="s-field s-anchor" id="k8sNodeSelector">
               <label class="s-label" for="k8s-node-selector"
                 >Node selector</label
               >
@@ -1906,7 +1906,7 @@ function mib(mb: number): string {
             >
             <div class="s-grid">
               @for (f of k8sPriorityFields(); track f.key) {
-                <div class="s-field">
+                <div class="s-field s-anchor" [id]="f.key">
                   <label class="s-label" [attr.for]="'k8s-' + f.key">{{
                     f.label
                   }}</label>
@@ -1930,7 +1930,7 @@ function mib(mb: number): string {
             </div>
           </div>
 
-          <div class="s-toggle-row">
+          <div class="s-toggle-row s-anchor" id="k8sPrivileged">
             <div class="s-toggle-copy">
               <span class="s-toggle-name"
                 >Run Kubernetes sandbox containers privileged</span
@@ -1956,7 +1956,7 @@ function mib(mb: number): string {
               "
             ></button>
           </div>
-          <div class="s-toggle-row">
+          <div class="s-toggle-row s-anchor" id="k8sNetworkPolicy">
             <div class="s-toggle-copy">
               <span class="s-toggle-name"
                 >Cluster CNI enforces NetworkPolicy</span

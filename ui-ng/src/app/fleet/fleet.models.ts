@@ -15,7 +15,7 @@
 import type { DispatchCondition } from "../api/models";
 export type { DispatchCondition };
 
-export type FleetTab = "sandboxes" | "hostds" | "controls" | "logs";
+export type FleetTab = "sandboxes" | "hostds" | "health" | "controls" | "logs";
 
 export interface SandboxSnapshot {
   sandbox: string;
@@ -182,11 +182,41 @@ export interface CIWaitHealth {
   recovered?: boolean;
 }
 
+export interface HostdMissingEntry {
+  name: string;
+  command?: string;
+  entry?: string;
+}
+
+export interface HostdExecutorInfo {
+  reachable: boolean;
+  error?: string;
+  updating?: boolean;
+  mismatch?: string;
+  running?: string;
+  current?: string;
+  currentBuild?: string;
+  suggest?: string[];
+  missing?: HostdMissingEntry[];
+}
+
+export interface HostExecutorStatus {
+  kind?: string;
+  hostAvailable?: boolean;
+  hostd?: HostdExecutorInfo;
+}
+
+export interface HealthCounterSection {
+  name: string;
+  counters: Record<string, number>;
+}
+
 export interface SandboxHealthResponse {
   enabled: boolean;
   checkedAt?: string;
   sandboxes?: SandboxSnapshot[];
   host?: HostPressure;
+  hostExecutor?: HostExecutorStatus;
   budget?: SandboxBudgetReport;
   daemon?: DaemonHealth;
   dispatchBlocked?: DispatchCondition[];
@@ -195,6 +225,7 @@ export interface SandboxHealthResponse {
   standingSandboxes?: StandingSandboxStatus[];
   persistentSandboxes?: PersistentSandboxStatus[];
   packageCache?: PackageCacheStats[];
+  counters?: HealthCounterSection[];
   hostError?: string;
 }
 

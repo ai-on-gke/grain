@@ -459,7 +459,7 @@ interface StateRepoEntryDto {
                 "
               />
             </div>
-            <div class="s-field">
+            <div class="s-field s-anchor" id="githubHost">
               <label class="s-label" for="git-host">Default GitHub host</label>
               <input
                 id="git-host"
@@ -486,7 +486,7 @@ interface StateRepoEntryDto {
               </span>
             </div>
           </div>
-          <div class="s-toggle-row">
+          <div class="s-toggle-row s-anchor" id="githubInsecureHttp">
             <div class="s-toggle-copy">
               <span class="s-toggle-name">Speak plain HTTP to GitHub host</span>
               <span class="s-hint"
