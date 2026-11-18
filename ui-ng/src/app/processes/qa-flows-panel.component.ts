@@ -322,6 +322,7 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
                         type="button"
                         class="btn-primary"
                         data-testid="qa-new-version-btn"
+                        [disabled]="publishing()"
                         [gTip]="
                           'Start an editable draft for v' +
                           nextVersionNum() +
@@ -418,6 +419,7 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
                       type="button"
                       class="qa-more-btn"
                       data-testid="qa-more-actions-btn"
+                      [disabled]="publishing()"
                       aria-label="More workflow actions"
                       aria-haspopup="menu"
                       [attr.aria-expanded]="moreMenuOpen()"
@@ -714,6 +716,13 @@ export class QaFlowsPanelComponent {
 
   readonly isEditing = signal(false);
   readonly isFork = signal(false);
+  /**
+   * True from a publish being accepted until the published version has been
+   * reloaded and selected. Customize and the More menu stay disabled for that
+   * window: doSelectVersion closes menus and leaves edit mode when it lands,
+   * so a draft or menu opened in between would be thrown away under the user.
+   */
+  readonly publishing = signal(false);
   readonly showParentDiff = signal(false);
   readonly testMenuOpen = signal(false);
   readonly moreMenuOpen = signal(false);
@@ -2340,6 +2349,7 @@ export class QaFlowsPanelComponent {
       accept: `Publish v${targetVer}`,
       destructive: false,
       run: async () => {
+        this.publishing.set(true);
         try {
           const pubRes = (await this.api.post<
             QAFlowPublishResponse & { hash?: string }
@@ -2356,6 +2366,8 @@ export class QaFlowsPanelComponent {
           }
         } catch {
           this.snackbar.show("Publish failed");
+        } finally {
+          this.publishing.set(false);
         }
       },
     });
