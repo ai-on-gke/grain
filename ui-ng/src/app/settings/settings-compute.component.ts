@@ -20,9 +20,11 @@ import {
   type SimpleChanges,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
@@ -466,30 +468,27 @@ function formatRefreshedAt(iso?: string): string {
                 [exclude]="modelChain()"
                 [value]="newModelSettingName()"
                 [disabled]="!canWriteDeployment()"
-                (valueChange)="newModelSettingName.set($event)"
+                (valueChange)="pickModelSettingName($event)"
               />
               <g-pill-select
                 testid="select-model-setting-effort"
                 ariaLabel="Reasoning effort"
+                placeholder="Reasoning effort"
                 align="left"
-                [options]="
-                  newModelSettingName()
-                    ? effortOptionsFor(newModelSettingName())
-                    : effortOptions
-                "
+                [options]="adderEffortOptions()"
                 [value]="newModelSettingEffort()"
-                [disabled]="!canWriteDeployment()"
+                [disabled]="
+                  !canWriteDeployment() ||
+                  !newModelSettingName().trim() ||
+                  !effortFor(newModelSettingName()).separate
+                "
                 (valueChange)="newModelSettingEffort.set($event)"
               />
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="add-model-setting-btn"
-                [disabled]="
-                  !newModelSettingName().trim() ||
-                  !effortFor(newModelSettingName()).separate ||
-                  !canWriteDeployment()
-                "
+                [disabled]="!canAddModelSetting()"
                 (click)="addModelSetting()"
               >
                 Set model effort
@@ -2016,12 +2015,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "claude", label: "Claude" },
     { value: "codex", label: "Codex" },
   ];
-  protected readonly effortOptions: readonly PillOption[] = [
-    { value: "", label: "Framework default" },
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-  ];
   protected readonly authModeOptions: readonly PillOption[] = [
     { value: "", label: "Provider default" },
     { value: "api_key", label: "API key / OAuth secret" },
@@ -2352,10 +2345,76 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     return Array.isArray(v) ? (v as ModelSettingRow[]) : [];
   }
 
+  // adderEffortOptions lists only real effort levels from the chosen
+  // model's framework vocabulary -- never an empty "Model default" entry,
+  // since removing a per-model effort is the table row's Remove action.
+  protected adderEffortOptions(): PillOption[] {
+    const name = this.newModelSettingName().trim();
+    if (!name) return [];
+    const es = this.effortFor(name);
+    if (!es.separate) return [];
+    return es.choices.map((e) => ({ value: e, label: e }));
+  }
+
+  protected pickModelSettingName(m: string): void {
+    this.newModelSettingName.set(m);
+    const name = m.trim();
+    if (!name) return;
+    const es = this.effortFor(name);
+    const choices = es.separate ? es.choices : [];
+    const stored = this.modelEffort(name);
+    const cur = this.newModelSettingEffort().trim();
+    const next =
+      stored && choices.includes(stored)
+        ? stored
+        : cur && choices.includes(cur)
+          ? cur
+          : choices.includes("high")
+            ? "high"
+            : (choices[0] ?? "");
+    this.newModelSettingEffort.set(next);
+  }
+
+  private readonly adderEffortReconcile = effect(() => {
+    const name = this.newModelSettingName().trim();
+    if (!name) return;
+    const es = this.effortFor(name);
+    const choices = es.separate ? es.choices : [];
+    const cur = untracked(() => this.newModelSettingEffort().trim());
+    if (choices.length === 0) {
+      if (cur !== "") this.newModelSettingEffort.set("");
+      return;
+    }
+    if (!cur || !choices.includes(cur)) {
+      const stored = untracked(() => this.modelEffort(name));
+      const next =
+        stored && choices.includes(stored)
+          ? stored
+          : choices.includes("high")
+            ? "high"
+            : (choices[0] ?? "");
+      this.newModelSettingEffort.set(next);
+    }
+  });
+
+  protected canAddModelSetting(): boolean {
+    if (!this.canWriteDeployment()) return false;
+    const model = this.newModelSettingName().trim();
+    if (!model) return false;
+    const es = this.effortFor(model);
+    if (!es.separate) return false;
+    const effort = this.newModelSettingEffort().trim();
+    return Boolean(effort) && es.choices.includes(effort);
+  }
+
   protected addModelSetting(): void {
     const model = this.newModelSettingName().trim();
     if (!model) return;
-    this.setModelEffort(model, this.newModelSettingEffort());
+    const es = this.effortFor(model);
+    if (!es.separate) return;
+    const effort = this.newModelSettingEffort().trim();
+    if (!effort || !es.choices.includes(effort)) return;
+    this.setModelEffort(model, effort);
     this.newModelSettingName.set("");
   }
 

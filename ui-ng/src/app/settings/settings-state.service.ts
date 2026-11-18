@@ -191,8 +191,15 @@ export class SettingsStateService {
     });
   }
 
+  // GET and PUT /api/deployment serialise Team's slice fields
+  // (modelSettings, defaultModels, ...) with omitempty, so an empty list
+  // comes back absent rather than []. Treat undefined/null as [] when
+  // staging an array so reverting to empty clears deployDraft instead of
+  // comparing "not set" with "none".
   setDeployField(key: string, value: unknown): void {
-    const stored = this.deployment()[key];
+    const raw = this.deployment()[key];
+    const stored =
+      Array.isArray(value) && (raw === undefined || raw === null) ? [] : raw;
     this.deployDraft.update((prev) => {
       const next = { ...prev };
       if (formatSettingValue(stored) === formatSettingValue(value)) {
