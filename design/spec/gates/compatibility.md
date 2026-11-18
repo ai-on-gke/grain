@@ -23,8 +23,8 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 
 ## Implemented observation-only subset
 
-The [runtime observation guide](../../../docs/gate-observations.md) covers eleven
-implemented v1 types: delivery variants, acknowledgment compatibility profiles,
+The [runtime observation guide](../../../docs/gate-observations.md) covers thirteen
+registered v1 types, including QA stages and release qualification: delivery variants, acknowledgment compatibility profiles,
 positive integration, explicit child outcome predicates, checks, review, approval
 and base/nightly/publishing/pipeline health. Ordinary authorized
 reads and Angular task detail carry optional observation-only projections and
@@ -82,4 +82,9 @@ Task #69 adds qa_stage task monitors (only nonrequired, action=null) before PR
 creation and release_qualification repository monitors. The [QA/release audit](../../../docs/gate-qa-release-observations.md)
 records full source mapping and inaccessible evidence. The review port's repository
 authorization, transitive-evidence checks and scoped-history omission are retained.
-No legacy authority or effect admission changes.
+No legacy authority or effect admission changes. The [combined audit](../../../docs/gate-coverage-audit.md)
+accounts for every original Task #51 row, all thirteen types and configuration
+modes, concrete source/authorization blockers, unchanged controller policies and
+the planned discrepancy inspection workflow. Standing policy does not suppress
+independently selected integration/child outcomes; none of those observations
+predicts lifecycle or scheduling readiness.

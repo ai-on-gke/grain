@@ -428,6 +428,101 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 	})
 
+	t.Run("no-work-acknowledges-the-finish-product-without-a-report", func(t *testing.T) {
+		for _, body := range []string{"", strings.Repeat("x", 8193)} {
+			task := seed(fmt.Sprintf("outcome-no-work-ack-%d", len(body)))
+			task.NothingNeededAction = model.NothingNeededAck
+			must(s.PutTask(ctx, task))
+			settle(task, model.NothingNeededOutcome, "nothing_needed", body)
+			v := observe(task)
+			if status(v, "legacy_nothing_needed_ack") != "pending" {
+				t.Fatal("typed no-work finish was coupled to report completeness")
+			}
+			// A close simultaneous with settlement cannot attest receipt.
+			must(s.ObserveClose(ctx, task.ID, now, human, "same clock", func(o *model.Observation) { o.ClosedAt = &now }))
+			if status(observe(task), "legacy_nothing_needed_ack") != "unknown" {
+				t.Fatal("ambiguous same-clock no-work receipt passed")
+			}
+			now = now.Add(time.Second)
+			must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+			must(s.ObserveClose(ctx, task.ID, now, model.GrainPrincipal, "automated close", func(o *model.Observation) { o.ClosedAt = &now }))
+			if status(observe(task), "legacy_nothing_needed_ack") != "unknown" {
+				t.Fatal("automation became a person's acknowledgment")
+			}
+			now = now.Add(time.Second)
+			must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+			must(s.ObserveClose(ctx, task.ID, now, human, "read the no-work result", func(o *model.Observation) { o.ClosedAt = &now }))
+			v = observe(task)
+			if status(v, "legacy_nothing_needed_ack") != "met" {
+				t.Fatalf("verified no-work receipt omitted: body=%d status=%s", len(body), status(v, "legacy_nothing_needed_ack"))
+			}
+			if v.Results[1].Result.Status == "met" {
+				t.Fatal("no-work receipt was reused as explicit report acknowledgment")
+			}
+			replayed, _, err := model.New(db).ObserveTaskGates(ctx, task.ID, now)
+			must(err)
+			if gates.Digest(v) != gates.Digest(replayed) {
+				t.Fatal("no-work receipt failed durable replay")
+			}
+			// A reply/reopen clears completion even though the finish remains.
+			now = now.Add(time.Second)
+			must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.CompletedAt = nil; o.ClosedAt = nil }))
+			if status(observe(task), "legacy_nothing_needed_ack") == "met" {
+				t.Fatal("cleared no-work settlement reused its receipt")
+			}
+		}
+	})
+
+	t.Run("standing-policy-does-not-hide-selected-resource-outcomes", func(t *testing.T) {
+		parent := seed("outcome-standing-parent")
+		parent.KeepRunning = true
+		parent.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/outcomes#70"}}
+		must(s.PutTask(ctx, parent))
+		source(parent, "acme/outcomes#70", "standing-head", "merged", "")
+		child := seed("outcome-standing-child")
+		must(s.ObserveClose(ctx, child.ID, now, human, "stop", func(o *model.Observation) { o.ClosedAt = &now }))
+		selected := gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "closed"}
+		v := observe(parent, selected)
+		if status(v, "pr_merged") != "met" {
+			t.Fatal("standing lifecycle policy hid authenticated integration")
+		}
+		for i, b := range v.Bindings {
+			if b.Type == "children" && v.Results[i].Result.Status != "met" {
+				t.Fatal("standing lifecycle policy hid selected child closure")
+			}
+			if b.Required || b.Purpose != "monitor" || b.Action != nil {
+				t.Fatal("observation migrated a standing task requirement")
+			}
+		}
+		replayed, diagnostics, err := model.New(db).ObserveTaskGates(ctx, parent.ID, now, selected)
+		must(err)
+		if diagnostics.Counts["outcome_discrepancy"] == 0 || diagnostics.Counts["not_applicable"] != 0 {
+			t.Fatal("standing resource comparisons were suppressed by disposition policy")
+		}
+		if gates.Digest(v) != gates.Digest(replayed) {
+			t.Fatal("standing resource observation failed restart replay")
+		}
+		now = now.Add(time.Second)
+		must(s.ObserveField(ctx, child.ID, now, func(o *model.Observation) { o.ClosedAt = nil }))
+		for _, r := range observe(parent, selected).Results {
+			if r.Result.Type == "children" && r.Result.Status != "pending" {
+				t.Fatal("reopen did not invalidate standing child prediction")
+			}
+		}
+		private := seed("outcome-standing-private")
+		private.Target = &model.RepoRef{Owner: "acme", Name: "private"}
+		must(s.PutTask(ctx, private))
+		for _, r := range observe(parent, gates.ChildrenConfig{Tasks: []string{private.ID}, Predicate: "closed"}).Results {
+			if r.Result.Type == "children" && (r.Result.Status != "unknown" || len(r.Result.Evidence) > 0) {
+				t.Fatal("standing selection widened child read scope")
+			}
+		}
+		now = now.Add(73 * time.Hour)
+		if status(observe(parent), "pr_merged") != "unknown" {
+			t.Fatal("standing integration reused expired source")
+		}
+	})
+
 	t.Run("no-action-is-not-success-and-goal-contracts-are-inert", func(t *testing.T) {
 		task := seed("outcome-no-action")
 		settle(task, "no_action", "report", "a tool ran")

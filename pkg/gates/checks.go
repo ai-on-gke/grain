@@ -194,7 +194,7 @@ func EvaluateChecks(b Binding, f ChecksFacts, now time.Time, generation uint64) 
 		}
 	}
 
-	if f.Head == "" || !f.PolicyComplete || f.PolicyVersion == "" || !now.Before(f.ValidUntil) {
+	if f.Head == "" || !f.PolicyComplete || f.PolicyVersion == "" || f.ObservedAt.After(now) || !now.Before(f.ValidUntil) {
 		r.Summary = "Current head, current policy or fresh evidence is unavailable."
 		return r
 	}
@@ -392,7 +392,7 @@ func EvaluateChecks(b Binding, f ChecksFacts, now time.Time, generation uint64) 
 			r.Waits = append(r.Waits, Wait{Event: "checks", Key: kind + "/" + Digest(f.Subject)[7:], Version: f.Head, Deadline: f.ValidUntil, Owner: "ci", OnTimeout: "escalate"})
 		}
 	} else {
-		action := "Prediction only: automatic merge may proceed only if legacy review, approval, queue, overlap/recheck and executor preconditions permit it."
+		action := "Prediction only: CI is satisfied. No merge attempt is predicted because complete review, approval, queue, overlap/recheck and executor admission evidence is unavailable."
 		if f.Subject.ChangeKind == "cl" {
 			action = "Prediction only: use the existing person-authorized Submit flow after expected-snapshot, review and other submit preconditions pass."
 		}

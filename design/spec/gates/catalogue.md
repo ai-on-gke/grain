@@ -67,5 +67,7 @@ Task #69 additionally implements qa_stage s3/s4/s5 task monitors and
 release_qualification repository monitors on actual qualification-suite tasks.
 The [complete audit](../../../docs/gate-qa-release-observations.md) records the
 source/policy/version requirements, custom adapter limits and unavailable signed
-or complete asset evidence. These are nonrequired and inert; seven other catalogue
-types remain unsupported by this registry.
+or complete asset evidence. All thirteen types are registered as nonrequired,
+inert monitors. The [combined source-backed audit](../../../docs/gate-coverage-audit.md)
+distinguishes supported observations from unknown source/adapter profiles and
+deferred authority contracts; registration alone never establishes full parity.

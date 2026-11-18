@@ -66,7 +66,7 @@ var qaStageSchema []byte
 //go:embed release_qualification.schema.json
 var releaseQualificationSchema []byte
 
-const Implementation = "builtin-gate-observer-v8"
+const Implementation = "builtin-gate-observer-v9"
 
 type Descriptor struct {
 	Type           string
@@ -297,6 +297,7 @@ type Facts struct {
 	Settled            bool
 	Report             *Evidence
 	Receipt            *Evidence
+	NoWorkReceipt      *Evidence
 	ReceiptUnversioned bool
 	SourceVersion      string
 	ObservedAt         time.Time
@@ -346,16 +347,32 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		r.Summary = "Unsupported or malformed gate configuration."
 		return r
 	}
-	if !f.Applicable {
-		r.Summary = "Not applicable: " + f.UnsupportedReason
+	if f.ObservedAt.After(now) {
+		r.Summary = "Evidence was observed after the evaluation clock; refresh required."
 		return r
 	}
+	// Standing/session policy controls lifecycle disposition, not whether an
+	// independently selected resource or child outcome can be observed.
 	if now.Before(f.ValidUntil) {
 		if b.Type == "integration" {
 			return evaluateIntegration(b, f, r)
 		}
 		if b.Type == "children" {
 			return evaluateChildren(b, f, r)
+		}
+	}
+	if !f.Applicable {
+		r.Summary = "Not applicable: " + f.UnsupportedReason
+		return r
+	}
+	// A typed no-work product and its receipt do not depend on report-body
+	// completeness. Explicit report receipt remains a separate obligation.
+	if now.Before(f.ValidUntil) && b.Type == "acknowledgment" && f.Product == "nothing_needed" && f.ProductEvidence != nil && f.ProductUnknown == "" {
+		var config AcknowledgmentConfig
+		_ = json.Unmarshal(b.Config, &config)
+		if config.Mode == "legacy_nothing_needed_ack" {
+			r.Dependencies[0].Complete = true
+			return evaluateLegacyAck(config, f, r)
 		}
 	}
 	if now.Before(f.ValidUntil) && b.Type == "delivery" && (f.Product == "change" || f.Product == "nothing_needed") && f.ProductEvidence != nil && f.ProductUnknown == "" {

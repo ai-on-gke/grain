@@ -127,6 +127,10 @@ func TestDeliveryVariantsAndCompatibilityAreInert(t *testing.T) {
 		t.Fatal("no-work acknowledgment policy lost")
 	}
 	f.Receipt = e
+	if Evaluate(ack, f, now, 1).Status != "pending" {
+		t.Fatal("report receipt was reused for the no-work product")
+	}
+	f.NoWorkReceipt = e
 	if Evaluate(ack, f, now, 1).Status != "met" {
 		t.Fatal("eligible no-work receipt missing")
 	}
@@ -150,6 +154,8 @@ func TestIntegrationRequiresEveryFreshExactResource(t *testing.T) {
 		{"expired", func(f *Facts) { f.Resources["selected"][1].ValidUntil = now }, "unknown"},
 		{"empty", func(f *Facts) { f.Resources["selected"] = nil }, "unknown"},
 		{"report-incomplete-independent", func(f *Facts) { f.Complete = false }, "met"},
+		{"standing-independent", func(f *Facts) { f.Applicable = false }, "met"},
+		{"future", func(f *Facts) { f.ObservedAt = now.Add(time.Second) }, "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := outcomeFacts(now)

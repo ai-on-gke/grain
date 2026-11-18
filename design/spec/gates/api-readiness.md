@@ -44,7 +44,7 @@ not to the proposed gate-aware profile.
 
 | Interface | Source today | Specification/assets | Runtime readiness |
 | --- | --- | --- | --- |
-| Registry/evaluator/reads/acceptance | Existing domain readers, no general built-in registry | Exact types/signatures, bounds, no private state, local schema catalogue, errors/cancellation/fences | Specified; registry/read capture/acceptance not implemented |
+| Registry/evaluator/reads/acceptance | Thirteen-type observation registry, scoped domain reads and bounded diagnostic acceptance/history; see [combined audit](../../../docs/gate-coverage-audit.md) | Exact types/signatures, bounds, no private state, local schema catalogue, errors/cancellation/fences | Observation subset implemented; future enforcement context/acceptance and authority handoff remain unqualified |
 | Discovery/config schemas | Hub registry is unrelated | Two proposed built-in discovery routes, concrete config schema examples | Specified; proposed routes absent |
 | Task contract/current evidence/history/edit | Shared task detail/update and legacy state | Changed task profiles; proposed history; closed schemas and CAS/source authority | Specified; persistence/central writer and source projections required |
 | Repo/template materialization | Shared settings/template/composition/filing | Changed gate profiles plus read-only preview; pinned provenance and inheritance | Specified; gate fields/admission/handoff absent |

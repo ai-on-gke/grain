@@ -58,9 +58,32 @@ func TestRegistryClosedProfilesAndSchemaPins(t *testing.T) {
 	if err = json.Unmarshal(data, &canonical); err != nil {
 		t.Fatal(err)
 	}
+	var attachment struct {
+		OneOf []struct {
+			Properties struct {
+				Type struct{ Const string } `json:"type"`
+			} `json:"properties"`
+		} `json:"oneOf"`
+	}
+	if err := json.Unmarshal(canonical.Defs["attachment"], &attachment); err != nil {
+		t.Fatal(err)
+	}
+	registered := map[string]bool{}
 	for _, d := range Discover() {
+		if registered[d.Type] {
+			t.Fatalf("duplicate gate type %s", d.Type)
+		}
+		registered[d.Type] = true
 		if d.SchemaDigest != Digest(canonical.Defs[d.Type+"_config"]) {
 			t.Errorf("schema drift: %s", d.Type)
+		}
+	}
+	if len(registered) != len(attachment.OneOf) {
+		t.Fatalf("registry/catalogue count mismatch: %d/%d", len(registered), len(attachment.OneOf))
+	}
+	for _, branch := range attachment.OneOf {
+		if !registered[branch.Properties.Type.Const] {
+			t.Fatalf("missing canonical gate %s", branch.Properties.Type.Const)
 		}
 	}
 	descriptors := Discover()

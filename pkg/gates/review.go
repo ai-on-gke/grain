@@ -184,7 +184,7 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 			r.Dependencies = append(r.Dependencies, dep)
 		}
 	}
-	if !now.Before(f.ValidUntil) {
+	if f.ObservedAt.After(now) || !now.Before(f.ValidUntil) {
 		r.Summary = "Evidence is stale; refresh required."
 		return r
 	}

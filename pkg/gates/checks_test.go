@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +47,7 @@ func TestChecksPredicatesAndSourceSemantics(t *testing.T) {
 		{"head-changed", func(f *ChecksFacts) { f.Head = "H2" }, "unknown"},
 		{"mixed-head", func(f *ChecksFacts) { f.Sources[0].Attempts[0].Head = "H0" }, "unknown"},
 		{"stale", func(f *ChecksFacts) { f.ValidUntil = now }, "unknown"},
+		{"future", func(f *ChecksFacts) { f.ObservedAt = now.Add(time.Second) }, "unknown"},
 		{"missing-required", func(f *ChecksFacts) { f.Sources[0].Required = []string{"test"} }, "pending"},
 		{"wrong-app", func(f *ChecksFacts) { f.Sources[0].Required = []string{"other/go"} }, "pending"},
 		{"active", func(f *ChecksFacts) { f.Sources[0].Attempts[0].State = "running" }, "pending"},
@@ -103,6 +105,9 @@ func TestChecksPredicatesAndSourceSemantics(t *testing.T) {
 			r := EvaluateChecks(ChecksBinding(f, false), f, now, 1)
 			if r.Status != tc.want {
 				t.Fatalf("got %s: %s; want %s", r.Status, r.Summary, tc.want)
+			}
+			if r.Status == "met" && f.Subject.ChangeKind == "pr" && r.AgentText != nil && !strings.Contains(*r.AgentText, "No merge attempt is predicted") {
+				t.Fatal("CI success implied an automatic merge proposal without complete guard evidence")
 			}
 			if len(r.Actions) != 0 || len(r.Work) != 0 {
 				t.Fatal("effectful output")

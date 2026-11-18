@@ -92,10 +92,12 @@ func evaluateLegacyAck(c AcknowledgmentConfig, f Facts, r Result) Result {
 		}
 	case "legacy_nothing_needed_ack":
 		if f.NothingAck && f.Product == "nothing_needed" {
-			if f.Receipt != nil {
+			if f.NoWorkReceipt != nil {
 				r.Status = "met"
-				r.Evidence = append(r.Evidence, *f.Receipt)
+				r.Evidence = append(r.Evidence, *f.NoWorkReceipt)
 				r.Summary = "Configured legacy no-work acknowledgment recorded."
+			} else if f.ReceiptUnversioned {
+				r.Summary = "No-work closure lacks current eligible receipt provenance."
 			} else {
 				r.Status = "pending"
 				r.Summary = "Configured no-work policy awaits a person's acknowledgment."
