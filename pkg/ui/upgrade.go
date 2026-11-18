@@ -421,6 +421,10 @@ type targetSchemaChecker interface {
 	CheckTargetSchema(ctx context.Context, branch, imageRef string) error
 }
 
+type imageValidator interface {
+	ValidateImageWith(branch, image string, opts upgrade.ImageOptions) (string, string, error)
+}
+
 // inFlightRuns is how many runs this deployment has going, for the
 // warning the pane shows above the Upgrade button.
 //
@@ -863,42 +867,6 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 		s.startRollback(w, r, req)
 		return
 	}
-	if s.tasks.Store != nil {
-		if runningExp, rErr := s.tasks.Store.GetRunningQAExperiment(r.Context()); rErr == nil && runningExp != nil {
-			if !req.StopExperiment {
-				writeError(w, http.StatusConflict, fmt.Errorf("cannot upgrade while QA experiment %s is running (pass stopExperiment: true or stop the experiment first)", runningExp.ID))
-				return
-			}
-			now := s.tasks.now()
-			actor := s.tasks.requestActor(r.Context())
-			if _, sErr := s.tasks.Store.UpdateQAExperiment(r.Context(), runningExp.ID, 0, func(e *model.QAExperiment) error {
-				if e.State == model.QAExpStateRunning {
-					e.State = model.QAExpStateStopped
-					e.StoppedAt = &now
-					e.Decision = &model.QAExperimentDecision{
-						Outcome:   "invalid",
-						Reason:    "stopped for deployment upgrade",
-						DecidedBy: actor.Actor.ID,
-						DecidedAt: now.Format(time.RFC3339),
-					}
-				}
-				return nil
-			}); sErr != nil {
-				writeError(w, http.StatusInternalServerError, sErr)
-				return
-			}
-			_, _ = s.tasks.Store.RecordConfigAudit(r.Context(), model.ConfigAuditEntry{
-				At:         now,
-				By:         actor.Actor,
-				OnBehalfOf: actor.OnBehalfOf,
-				Surface:    "qa-experiment:" + runningExp.ID,
-				Summary:    fmt.Sprintf("stopped QA experiment %s before deployment upgrade", runningExp.ID),
-			})
-			if hooks := resolve.GetRuntimeHooks(); hooks != nil && hooks.PromoteExperimentStages != nil {
-				hooks.PromoteExperimentStages(r.Context(), runningExp.ID, "experiment stopped for deployment upgrade")
-			}
-		}
-	}
 	if strings.TrimSpace(req.Branch) == "" {
 		// No branch means "a newer build of what this deployment already
 		// follows": the Upgrade button, a scheduled upgrade and an
@@ -926,13 +894,34 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 	case req.SwitchEdition && req.AfterTasksFinish:
 		writeError(w, http.StatusBadRequest, errors.New("an edition switch cannot be scheduled for after tasks finish: start it now"))
 		return
+	}
+
+	var runningExp *model.QAExperiment
+	if s.tasks.Store != nil {
+		if exp, rErr := s.tasks.Store.GetRunningQAExperiment(r.Context()); rErr == nil {
+			runningExp = exp
+		}
+	}
+
+	// Validate the target branch/image, schema-downgrade refusal, and agent
+	// requester before checking or stopping a running QA experiment, so a
+	// refused upgrade request never stops an active experiment or promotes
+	// QA-gated staging branches fail-open.
+	var (
+		schedCtx    context.Context
+		schedBranch string
+		imageOpts   upgrade.ImageOptions
+	)
+	switch {
 	case req.AfterTasksFinish:
-		if err := s.scheduleUpgrade(r, req); err != nil {
+		var err error
+		schedCtx, schedBranch, err = s.validateScheduledUpgrade(r, req)
+		if err != nil {
 			writeClientError(w, err)
 			return
 		}
 	case req.Image != "":
-		opts := upgrade.ImageOptions{SwitchEdition: req.SwitchEdition}
+		imageOpts = upgrade.ImageOptions{SwitchEdition: req.SwitchEdition}
 		if req.SwitchEdition {
 			// Who switched is part of the record: the agent a
 			// capability names, or this deployment's own actor for the
@@ -943,9 +932,79 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			by := s.tasks.requestActor(ctx).Actor
-			opts.RequestedBy = strings.TrimSpace(string(by.Kind) + " " + by.ID)
+			imageOpts.RequestedBy = strings.TrimSpace(string(by.Kind) + " " + by.ID)
 		}
-		if err := iu.StartImageWith(req.Branch, req.Image, opts); err != nil {
+		if runningExp != nil {
+			if iv, ok := s.tasks.Config.Upgrader.(imageValidator); ok {
+				if _, _, err := iv.ValidateImageWith(req.Branch, req.Image, imageOpts); err != nil {
+					writeError(w, http.StatusBadRequest, err)
+					return
+				}
+			}
+		}
+	default:
+		if runningExp != nil {
+			branch, err := s.tasks.Config.Upgrader.ValidateBranch(req.Branch)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if sc, ok := s.tasks.Config.Upgrader.(targetSchemaChecker); ok {
+				if err := sc.CheckTargetSchema(r.Context(), branch, ""); err != nil {
+					writeError(w, http.StatusBadRequest, err)
+					return
+				}
+			}
+		}
+	}
+
+	if runningExp != nil {
+		if !req.StopExperiment {
+			writeError(w, http.StatusConflict, fmt.Errorf("cannot upgrade while QA experiment %s is running (pass stopExperiment: true or stop the experiment first)", runningExp.ID))
+			return
+		}
+		now := s.tasks.now()
+		actor := s.tasks.requestActor(r.Context())
+		if _, sErr := s.tasks.Store.UpdateQAExperiment(r.Context(), runningExp.ID, 0, func(e *model.QAExperiment) error {
+			if e.State == model.QAExpStateRunning {
+				e.State = model.QAExpStateStopped
+				e.StoppedAt = &now
+				e.Decision = &model.QAExperimentDecision{
+					Outcome:   "invalid",
+					Reason:    "stopped for deployment upgrade",
+					DecidedBy: actor.Actor.ID,
+					DecidedAt: now.Format(time.RFC3339),
+				}
+			}
+			return nil
+		}); sErr != nil {
+			writeError(w, http.StatusInternalServerError, sErr)
+			return
+		}
+		_, _ = s.tasks.Store.RecordConfigAudit(r.Context(), model.ConfigAuditEntry{
+			At:         now,
+			By:         actor.Actor,
+			OnBehalfOf: actor.OnBehalfOf,
+			Surface:    "qa-experiment:" + runningExp.ID,
+			Summary:    fmt.Sprintf("stopped QA experiment %s before deployment upgrade", runningExp.ID),
+		})
+		if hooks := resolve.GetRuntimeHooks(); hooks != nil && hooks.PromoteExperimentStages != nil {
+			hooks.PromoteExperimentStages(r.Context(), runningExp.ID, "experiment stopped for deployment upgrade")
+		}
+	}
+
+	switch {
+	case req.AfterTasksFinish:
+		if err := s.tasks.Store.SetScheduledUpgrade(schedCtx, model.ScheduledUpgrade{
+			Branch:      schedBranch,
+			RequestedAt: time.Now().UTC(),
+			By:          s.tasks.requestActor(schedCtx).Actor,
+		}); err != nil {
+			writeClientError(w, err)
+			return
+		}
+	case req.Image != "":
+		if err := iu.StartImageWith(req.Branch, req.Image, imageOpts); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -993,12 +1052,13 @@ func (s *Server) startRollback(w http.ResponseWriter, r *http.Request, req start
 	writeJSON(w, http.StatusAccepted, s.upgradeStatusResponse(r, status))
 }
 
-// scheduleUpgrade writes the schedule down, having first made the branch
-// survive the same check Start would have made of it
-// (Upgrader.ValidateBranch). Validating here is the point of doing it at
-// all: a branch name the upgrader would refuse must be refused while the
-// person who typed it is still looking at the form, not silently hours
-// later when the deployment finally goes idle.
+// validateScheduledUpgrade validates the branch, target schema, and requester
+// for a scheduled upgrade before handleStartUpgrade touches any running QA
+// experiment or records the schedule (Upgrader.ValidateBranch,
+// CheckTargetSchema). Validating here is the point of doing it at
+// all: a branch name or target schema the upgrader would refuse must be
+// refused while the person who typed it is still looking at the form, not
+// silently hours later when the deployment finally goes idle.
 //
 // Nothing here pauses anything. The hold is the reconciler's
 // (orchestrator's reconcileScheduledUpgrade), which takes it on the next
@@ -1013,26 +1073,22 @@ func (s *Server) startRollback(w http.ResponseWriter, r *http.Request, req start
 // more: "why is this deployment about to restart" is answered by the
 // task that asked, and before grain/task-353 the only record of that was
 // a line in the daemon journal.
-func (s *Server) scheduleUpgrade(r *http.Request, req startUpgradeRequest) error {
+func (s *Server) validateScheduledUpgrade(r *http.Request, req startUpgradeRequest) (context.Context, string, error) {
 	branch, err := s.tasks.Config.Upgrader.ValidateBranch(req.Branch)
 	if err != nil {
-		return validationErrorf("%v", err)
+		return nil, "", validationErrorf("%v", err)
 	}
 	if sc, ok := s.tasks.Config.Upgrader.(targetSchemaChecker); ok {
 		if err := sc.CheckTargetSchema(r.Context(), branch, ""); err != nil {
-			return validationErrorf("%v", err)
+			return nil, "", validationErrorf("%v", err)
 		}
 	}
 	ctx, err := withAgentRequester(
 		r.Context(), "a scheduled upgrade's requester", req.RequestedBy, req.RequestedByKind)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-	return s.tasks.Store.SetScheduledUpgrade(ctx, model.ScheduledUpgrade{
-		Branch:      branch,
-		RequestedAt: time.Now().UTC(),
-		By:          s.tasks.requestActor(ctx).Actor,
-	})
+	return ctx, branch, nil
 }
 
 // handleCancelScheduledUpgrade answers DELETE /api/upgrade/scheduled:

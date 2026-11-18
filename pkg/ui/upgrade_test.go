@@ -51,6 +51,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
@@ -1259,5 +1260,141 @@ func TestNonUpgradeValidateBranchCallersAllowLowerSchemaTargets(t *testing.T) {
 	}
 	if targetProbes.Load() == 0 {
 		t.Error("scheduling an upgrade did not probe TargetBuild")
+	}
+}
+
+// TestRefusedUpgradeDoesNotStopRunningQAExperimentOrPromoteStages verifies that
+// a refused upgrade request (such as a schema downgrade on immediate, scheduled,
+// or explicit-image paths) returns 400 before checking or stopping an active QA
+// experiment, never stopping the experiment or promoting QA-gated staging
+// branches fail-open.
+func TestRefusedUpgradeDoesNotStopRunningQAExperimentOrPromoteStages(t *testing.T) {
+	prevHooks := resolve.GetRuntimeHooks()
+	t.Cleanup(func() { resolve.SetRuntimeHooks(prevHooks) })
+
+	const expID = "exp-upgrade-downgrade"
+	var promoted atomic.Int32
+	resolve.SetRuntimeHooks(&resolve.RuntimeHooks{
+		PromoteExperimentStages: func(_ context.Context, experimentID, _ string) {
+			if experimentID == expID {
+				promoted.Add(1)
+			}
+		},
+	})
+
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	const runningRef = "GRAIN_IMAGE=docker.io/grainai/grain:main@sha256:1111111111111111111111111111111111111111111111111111111111111111\n"
+	if err := os.WriteFile(refFile, []byte(runningRef), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	up := upgrade.New(upgrade.Config{
+		Image: &upgrade.ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+			PullCmd:    []string{"true"},
+			RunCmd:     []string{"true"},
+		},
+		StatusFile: filepath.Join(dir, "upgrade-status.json"),
+		Schema: &upgrade.SchemaConfig{
+			Version:     152,
+			VersionArgs: []string{"schema-version"},
+			RunningBuild: func() upgrade.BuildStamp {
+				return upgrade.BuildStamp{Release: "v3.14.0-dev", Commit: "c16581f"}
+			},
+			TargetBuild: func(_ context.Context, target string) (upgrade.TargetBuildInfo, bool) {
+				switch target {
+				case "latest", "v3.8.0", "docker.io/grainai/grain:v3.8.0":
+					return upgrade.TargetBuildInfo{
+						Schema: 146,
+						Build:  upgrade.BuildStamp{Release: "v3.8.0", Commit: "2c9fff5"},
+						Ref:    "docker.io/grainai/grain:v3.8.0",
+					}, true
+				case "main":
+					return upgrade.TargetBuildInfo{
+						Schema: 152,
+						Build:  upgrade.BuildStamp{Release: "v3.14.0-dev", Commit: "c16581f"},
+						Ref:    "docker.io/grainai/grain:main",
+					}, true
+				}
+				return upgrade.TargetBuildInfo{}, false
+			},
+		},
+	})
+
+	c, store, ctx := testClient(t)
+	c.Config.Upgrader = up
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatalf("initializing settings: %v", err)
+	}
+	srv := ui.NewServerWithClient(c)
+
+	if err := store.CreateQAExperiment(ctx, model.QAExperiment{
+		ID:              expID,
+		Name:            "Upgrade Downgrade Guard",
+		Hypothesis:      "refused upgrades preserve active experiments",
+		State:           model.QAExpStateDraft,
+		Arms:            []model.QAExperimentArm{{ID: "control", Label: "Control", FlowHash: "control", Weight: 50}, {ID: "treatment", Label: "Treatment", FlowHash: "golden-v2@1", Weight: 50}},
+		Scope:           model.QAExperimentScope{Repos: []string{"acme/widgets"}},
+		Allocation:      model.QAExperimentAllocation{Mode: "hash"},
+		Salt:            "0123456789abcdef0123456789abcdef",
+		PrimaryMetric:   "review.findings_sev.per_pr",
+		PrimaryContrast: "treatment:control",
+		Plan:            model.QAExperimentPlan{PlannedOriginsPerArm: 30, MaxDays: 14, Alpha: 0.05},
+		Options:         model.QAExperimentOptions{ShadowOnControl: true, Memory: "frozen"},
+		Engine:          model.QAExperimentEngine{QAEngineRev: 1},
+		CreatedBy:       "operator@example.com",
+	}); err != nil {
+		t.Fatalf("CreateQAExperiment: %v", err)
+	}
+	startedAt := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	if _, err := store.UpdateQAExperiment(ctx, expID, 1, func(e *model.QAExperiment) error {
+		e.State = model.QAExpStateRunning
+		e.StartedAt = &startedAt
+		return nil
+	}); err != nil {
+		t.Fatalf("starting experiment: %v", err)
+	}
+
+	for _, body := range []string{
+		`{"branch":"latest"}`,
+		`{"branch":"latest","stopExperiment":true}`,
+		`{"branch":"latest","afterTasksFinish":true,"stopExperiment":true}`,
+		`{"image":"docker.io/grainai/grain:v3.8.0","stopExperiment":true}`,
+	} {
+		rec := do(t, srv, http.MethodPost, "/api/upgrade", body)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "schema 146") {
+			t.Fatalf("POST /api/upgrade %s = %d %s, want 400 naming schema 146", body, rec.Code, rec.Body)
+		}
+		running, err := store.GetRunningQAExperiment(ctx)
+		if err != nil || running == nil || running.ID != expID {
+			t.Fatalf("after refused upgrade %s, GetRunningQAExperiment = (%+v, %v), want %s still running", body, running, err, expID)
+		}
+		if got := promoted.Load(); got != 0 {
+			t.Fatalf("after refused upgrade %s, PromoteExperimentStages called %d time(s), want 0", body, got)
+		}
+	}
+
+	// A valid same-schema upgrade still gates on 409 without stopExperiment,
+	// and stops the experiment + promotes stages once when stopExperiment is true.
+	conflictRec := do(t, srv, http.MethodPost, "/api/upgrade", `{"branch":"main","afterTasksFinish":true}`)
+	if conflictRec.Code != http.StatusConflict {
+		t.Fatalf("POST /api/upgrade valid target without stopExperiment = %d %s, want 409", conflictRec.Code, conflictRec.Body)
+	}
+	if got := promoted.Load(); got != 0 {
+		t.Fatalf("after 409 conflict, PromoteExperimentStages called %d time(s), want 0", got)
+	}
+
+	okRec := do(t, srv, http.MethodPost, "/api/upgrade", `{"branch":"main","afterTasksFinish":true,"stopExperiment":true}`)
+	if okRec.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/upgrade valid target with stopExperiment = %d %s, want 202", okRec.Code, okRec.Body)
+	}
+	if got := promoted.Load(); got != 1 {
+		t.Errorf("after accepted upgrade with stopExperiment, PromoteExperimentStages called %d time(s), want 1", got)
+	}
+	stopped, err := store.GetQAExperiment(ctx, expID)
+	if err != nil || stopped.State != model.QAExpStateStopped {
+		t.Errorf("experiment after stopExperiment = (%+v, %v), want stopped", stopped, err)
 	}
 }
