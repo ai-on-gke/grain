@@ -772,6 +772,12 @@ WCAG 2.1 AA is the floor.
   Only its standalone page gives it the `h1`.
 - Live regions announce counts that change.
 - Dialogs trap focus and restore it on close.
+- A control that is swapped for what it opens -- an inline builder, a row of
+  confirm choices -- hands focus into what replaced it, and back to the
+  control when that closes, never leaving it on `<body>`. Escape inside an
+  inner piece closes only that piece (and marks the event handled), not the
+  panel, sheet or dialog around it
+  (`ui-ng/e2e/next-session-settings-focus.spec.js`).
 
 ## 9. Performance budgets
 
