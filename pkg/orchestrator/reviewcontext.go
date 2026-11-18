@@ -39,7 +39,8 @@ const (
 	parallelReviewsHeader = "\n\n## Parallel reviews of this head\n\n"
 
 	// earlierReviewQuestionsCap caps the total bytes spent listing earlier
-	// reviews' add_review_comment questions across the section (~2 KB).
+	// reviews' add_review_comment questions across the section (~2 KB),
+	// open questions and newer reviews first (allocateEarlierReviewQuestions).
 	earlierReviewQuestionsCap = 2048
 
 	// maxPerQuestionBodyBytes bounds a single question's inline text before
@@ -543,21 +544,30 @@ func earlierReviewsSection(ctx context.Context, store *model.Store, client githu
 	}
 
 	var answers prQuestionAnswerState
-	totalQuestions := 0
 	for _, e := range entries {
-		totalQuestions += len(e.findings)
+		if len(e.findings) > 0 {
+			answers.ensureLoaded(ctx, store, client, reviewed, ref)
+			break
+		}
 	}
-	if totalQuestions > 0 {
-		answers.ensureLoaded(ctx, store, client, reviewed, ref)
+
+	// Every question's line is formatted up front so the cap can be spent
+	// in priority order while the entries still render chronologically.
+	lines := make([][]reviewQuestionLine, len(entries))
+	for i, e := range entries {
+		for _, f := range e.findings {
+			answered := answers.isAnswered(ctx, store, e.review, f)
+			lines[i] = append(lines[i], reviewQuestionLine{
+				text:     formatReviewQuestionLine(f, answered),
+				answered: answered,
+			})
+		}
 	}
+	allocateEarlierReviewQuestions(lines)
 
 	var b strings.Builder
 	b.WriteString(earlierReviewsHeader)
-	questionBytes := 0
-	renderedQuestions := 0
-	cappedOut := false
-
-	for _, e := range entries {
+	for i, e := range entries {
 		kind := reviewKindLabel(e.review)
 		if e.head != "" {
 			fmt.Fprintf(&b, "- Task %s (`%s` at `%s`): verdict `%s`; commits pushed: %s",
@@ -566,47 +576,131 @@ func earlierReviewsSection(ctx context.Context, store *model.Store, client githu
 			fmt.Fprintf(&b, "- Task %s (`%s`): verdict `%s`; commits pushed: %s",
 				e.review.ID, kind, e.verdict, formatReviewCommits(e.commits))
 		}
-		if len(e.findings) == 0 {
+		if len(lines[i]) == 0 {
 			b.WriteString(".\n")
 			continue
 		}
-		if cappedOut {
+		shown, open, answered := tallyQuestionLines(lines[i])
+		if shown == 0 {
 			fmt.Fprintf(&b, "; %s omitted (cap reached; read full threads with `grain pr threads`).\n",
-				countOf(len(e.findings), "question"))
+				omittedQuestions(open, answered))
 			continue
 		}
 		b.WriteString("; questions:\n")
-		for _, f := range e.findings {
-			remaining := totalQuestions - renderedQuestions
-			omittedFooter := fmt.Sprintf("  - ... (%s omitted; read full threads with `grain pr threads`)\n",
-				countOf(remaining, "more question"))
-			reserve := 0
-			if remaining > 1 {
-				reserve = len(omittedFooter)
+		for _, l := range lines[i] {
+			if l.shown != "" {
+				b.WriteString(l.shown)
 			}
-			line := formatReviewQuestionLine(f, answers.isAnswered(ctx, store, e.review, f))
-			budget := earlierReviewQuestionsCap - questionBytes - reserve
-			if len(line) > budget {
-				if budget >= 64 {
-					line = truncateUTF8Line(line, budget)
-					b.WriteString(line)
-					questionBytes += len(line)
-					renderedQuestions++
-				}
-				left := totalQuestions - renderedQuestions
-				if left > 0 {
-					fmt.Fprintf(&b, "  - ... (%s omitted; read full threads with `grain pr threads`)\n",
-						countOf(left, "more question"))
-				}
-				cappedOut = true
-				break
-			}
-			b.WriteString(line)
-			questionBytes += len(line)
-			renderedQuestions++
+		}
+		if open+answered > 0 {
+			b.WriteString(omittedQuestionsFooter(open, answered))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n") + "\n"
+}
+
+// reviewQuestionLine is one earlier review's question as the earlier-reviews
+// section would list it: text is the whole line, shown what the cap let
+// through of it ("" when the question is omitted).
+type reviewQuestionLine struct {
+	text     string
+	answered bool
+	shown    string
+}
+
+// allocateEarlierReviewQuestions spends earlierReviewQuestionsCap across
+// lines -- one slice per earlier review, oldest first -- setting each line's
+// shown text. The reviewer most needs what is still open in the latest
+// reviews, so the budget goes to open questions before answered ones and,
+// within each, to newer reviews before older ones, each review's questions in
+// the order it asked them. What is dropped first, then, is the oldest
+// review's answered questions; an open question is dropped only once every
+// answered one is. A line that no longer fits is cut short while at least 64
+// bytes remain, and nothing after it is listed.
+//
+// The "N omitted" footers under partly listed reviews count against the cap
+// too, so the budget left for lines is narrowed until lines and footers fit.
+func allocateEarlierReviewQuestions(lines [][]reviewQuestionLine) {
+	budget := earlierReviewQuestionsCap
+	for range 2 + len(lines) {
+		used := spendQuestionBudget(lines, budget)
+		for _, ls := range lines {
+			if shown, open, answered := tallyQuestionLines(ls); shown > 0 && open+answered > 0 {
+				used += len(omittedQuestionsFooter(open, answered))
+			}
+		}
+		if used <= earlierReviewQuestionsCap {
+			return
+		}
+		budget -= used - earlierReviewQuestionsCap
+	}
+}
+
+// spendQuestionBudget sets every line's shown text within budget bytes, in
+// allocateEarlierReviewQuestions' priority order, and returns the bytes spent.
+func spendQuestionBudget(lines [][]reviewQuestionLine, budget int) int {
+	used := 0
+	full := false
+	for _, wantAnswered := range []bool{false, true} {
+		for i := len(lines) - 1; i >= 0; i-- {
+			for j := range lines[i] {
+				l := &lines[i][j]
+				if l.answered != wantAnswered {
+					continue
+				}
+				l.shown = ""
+				if full {
+					continue
+				}
+				left := budget - used
+				switch {
+				case len(l.text) <= left:
+					l.shown = l.text
+				case left >= 64:
+					l.shown = truncateUTF8Line(l.text, left)
+					full = true
+				default:
+					full = true
+					continue
+				}
+				used += len(l.shown)
+			}
+		}
+	}
+	return used
+}
+
+// tallyQuestionLines counts one review's listed questions and its omitted
+// open and answered ones.
+func tallyQuestionLines(ls []reviewQuestionLine) (shown, omittedOpen, omittedAnswered int) {
+	for _, l := range ls {
+		switch {
+		case l.shown != "":
+			shown++
+		case l.answered:
+			omittedAnswered++
+		default:
+			omittedOpen++
+		}
+	}
+	return shown, omittedOpen, omittedAnswered
+}
+
+// omittedQuestions names what the cap left out of one review: "2 open
+// questions and 1 answered question", or one kind alone.
+func omittedQuestions(open, answered int) string {
+	switch {
+	case open == 0:
+		return countOf(answered, "answered question")
+	case answered == 0:
+		return countOf(open, "open question")
+	}
+	return countOf(open, "open question") + " and " + countOf(answered, "answered question")
+}
+
+func omittedQuestionsFooter(open, answered int) string {
+	return fmt.Sprintf("  - ... (%s omitted; read full threads with `grain pr threads`)\n",
+		omittedQuestions(open, answered))
 }
 
 func earlierReviewVerdict(r model.Task, obs *model.Observation, state model.State,

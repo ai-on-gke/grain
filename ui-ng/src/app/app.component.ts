@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, Location, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -70,6 +70,7 @@ import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
 import { NavProgressComponent } from "./shell/nav-progress.component";
+import { resolveReloadHref, saveDataEnabled } from "./shell/route-preload";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -946,7 +947,7 @@ export class DeferErrorDirective implements OnInit {
       </ng-template>
 
       <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-      @defer (when createTask.isOpen(); prefetch on idle) {
+      @defer (when createTask.isOpen(); prefetch when idlePrefetch()) {
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
@@ -1028,9 +1029,12 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly router = inject(Router);
+  private readonly location = inject(Location);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  protected readonly idlePrefetch = signal(false);
+  private cancelIdlePrefetch: (() => void) | null = null;
 
   protected readonly icons = ICONS;
   protected readonly rosettePath = CHLADNI_ROSETTE_PATH;
@@ -1379,6 +1383,27 @@ export class AppComponent implements OnInit, OnDestroy {
     });
 
     this.zone.runOutsideAngular(() => {
+      if (!saveDataEnabled()) {
+        const w = this.doc.defaultView as
+          | (Window & {
+              requestIdleCallback?: (cb: () => void) => number;
+              cancelIdleCallback?: (id: number) => void;
+            })
+          | null;
+        const fire = () => {
+          this.cancelIdlePrefetch = null;
+          if (!this.destroyed) {
+            this.zone.run(() => this.idlePrefetch.set(true));
+          }
+        };
+        if (w && typeof w.requestIdleCallback === "function") {
+          const id = w.requestIdleCallback(fire);
+          this.cancelIdlePrefetch = () => w.cancelIdleCallback?.(id);
+        } else {
+          const t = setTimeout(fire, 1);
+          this.cancelIdlePrefetch = () => clearTimeout(t);
+        }
+      }
       this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
       this.dispatchPollTimer = setInterval(() => {
         if (this.doc.visibilityState !== "hidden") {
@@ -1432,6 +1457,8 @@ export class AppComponent implements OnInit, OnDestroy {
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
     this.dispatchEventSub?.unsubscribe();
+    this.cancelIdlePrefetch?.();
+    this.cancelIdlePrefetch = null;
     if (this.dispatchPollTimer) clearInterval(this.dispatchPollTimer);
     if (this.dispatchTickTimer) clearInterval(this.dispatchTickTimer);
     this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
@@ -1518,13 +1545,29 @@ export class AppComponent implements OnInit, OnDestroy {
     this.directorCtx.toggle(this.activeOpener());
   }
 
+  // Exposed as a method so specs can spy on full-page navigation in jsdom.
+  navigateTo(url?: string): void {
+    const loc = this.doc.defaultView?.location;
+    if (!loc) return;
+    if (url) loc.assign(url);
+    else loc.reload();
+  }
+
+  reloadApp(dest?: string): void {
+    const href = resolveReloadHref(this.location, dest);
+    if (href) this.navigateTo(href);
+    else this.navigateTo();
+  }
+
   protected onDeferError(
     which: "create" | "help" | "account" | "customize" | "director",
   ): void {
+    const action = { label: "Reload", run: () => this.reloadApp() };
     if (which === "director") {
       this.directorCtx.close(false);
       this.snackbar.show(
         "The Director drawer could not load. Reload the page and try again.",
+        action,
       );
       return;
     }
@@ -1532,19 +1575,25 @@ export class AppComponent implements OnInit, OnDestroy {
       this.createTask.close();
       this.snackbar.show(
         "The New task form could not load. Reload the page and try again.",
+        action,
       );
     } else if (which === "help") {
       this.help.close();
-      this.snackbar.show("Help could not load. Reload the page and try again.");
+      this.snackbar.show(
+        "Help could not load. Reload the page and try again.",
+        action,
+      );
     } else if (which === "account") {
       this.onAccountClosed(true);
       this.snackbar.show(
         "Account menu could not load. Reload the page and try again.",
+        action,
       );
     } else {
       this.onCustomizeNavClosed();
       this.snackbar.show(
         "Navigation settings could not load. Reload the page and try again.",
+        action,
       );
     }
   }
@@ -1576,7 +1625,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   open(d: Destination): void {
-    if (d.route) void this.router.navigateByUrl(d.route);
+    if (d.route) void this.router.navigateByUrl(d.route).catch(() => undefined);
     else if (d.classic) this.doc.defaultView?.location.assign(d.classic);
   }
 

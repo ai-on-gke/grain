@@ -112,3 +112,55 @@ func TestReviewSectionRefreshIgnoresHeadersQuotedEarlierInBody(t *testing.T) {
 		t.Fatalf("neutralizeReviewSectionHeaders left a header in place:\n%s", n)
 	}
 }
+
+// The question cap is spent on open questions newest review first, then on
+// answered ones newest first; what no longer fits is cut once and the rest
+// omitted.
+func TestAllocateEarlierReviewQuestionsOpenAndNewestFirst(t *testing.T) {
+	line := func(tag string, answered bool) reviewQuestionLine {
+		return reviewQuestionLine{text: "  - " + tag + " " + strings.Repeat("x", 495) + "\n", answered: answered}
+	}
+	// Three reviews, oldest first, each line 500 bytes: four fit in 2048
+	// with room for a cut fifth and the footers.
+	lines := [][]reviewQuestionLine{
+		{line("old-open", false), line("old-answered", true)},
+		{line("mid-open-1", false), line("mid-open-2", false)},
+		{line("new-answered", true), line("new-open", false)},
+	}
+	allocateEarlierReviewQuestions(lines)
+
+	shown := func(i, j int) string {
+		switch l := lines[i][j]; {
+		case l.shown == "":
+			return "omitted"
+		case l.shown == l.text:
+			return "full"
+		}
+		return "cut"
+	}
+	want := map[[2]int]string{
+		{2, 1}: "full", // newest review's open question
+		{1, 0}: "full", // then the next newest's open ones
+		{1, 1}: "full",
+		{0, 0}: "cut",     // the oldest open question takes what is left
+		{2, 0}: "omitted", // answered questions go first
+		{0, 1}: "omitted",
+	}
+	total := 0
+	for pos, w := range want {
+		if got := shown(pos[0], pos[1]); got != w {
+			t.Errorf("review %d question %d: %s, want %s", pos[0], pos[1], got, w)
+		}
+	}
+	for _, ls := range lines {
+		for _, l := range ls {
+			total += len(l.shown)
+		}
+		if n, open, answered := tallyQuestionLines(ls); n > 0 && open+answered > 0 {
+			total += len(omittedQuestionsFooter(open, answered))
+		}
+	}
+	if total > earlierReviewQuestionsCap {
+		t.Errorf("lines and footers = %d bytes, want at most %d", total, earlierReviewQuestionsCap)
+	}
+}
