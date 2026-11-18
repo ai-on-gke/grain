@@ -34,6 +34,9 @@ func TestChecksPredicatesAndSourceSemantics(t *testing.T) {
 		want string
 	}{
 		{"success", func(*ChecksFacts) {}, "met"},
+		{"authorized-none", func(f *ChecksFacts) { f.Mode = "none"; f.Sources = nil; f.ExplicitNone = true }, "met"},
+		{"unauthorized-none", func(f *ChecksFacts) { f.Mode = "none"; f.Sources = nil }, "unknown"},
+		{"empty-jobs-positive-workflow", func(f *ChecksFacts) { f.Sources[0].Attempts[0].Workflow = true }, "unknown"},
 		{"empty-complete", func(f *ChecksFacts) { f.Sources[0].Attempts = nil }, "unknown"},
 		{"missing-source", func(f *ChecksFacts) { f.Sources = nil }, "unknown"},
 		{"partial", func(f *ChecksFacts) { f.Sources[0].Complete = false }, "unknown"},

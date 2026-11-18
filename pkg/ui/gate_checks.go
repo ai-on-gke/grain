@@ -173,22 +173,19 @@ func (c *Client) collectPRChecks(ctx context.Context, task model.Task, obs *mode
 		f.Gap = "Effective repository CI policy is unavailable."
 		return
 	}
-	mode := cfg.CIMode
-	if mode == "" {
-		mode = model.CIModeGitHub
-		for _, grant := range cfg.DefaultCapabilities {
-			if model.IsGrainCIGrant(grant) {
-				mode = model.CIModeGrain
-			}
-		}
-	}
+	// Match the authoritative queue's repository mode. Default capabilities seed
+	// new task grants; changing defaults is not a retroactive provider switch.
+	mode := model.CIModeGitHub
 	// Explicit repository source selection takes precedence over historical task grants.
 	repoCfg, err := c.Store.GetRepoConfig(ctx, repo)
 	if err != nil {
 		return
 	}
+	if repoCfg != nil {
+		mode = repoCfg.EffectiveCIMode()
+	}
 	explicitOff := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
-	if !explicitOff && grainci.GrantedExplicitly(task.Grants) {
+	if !explicitOff && mode == model.CIModeGitHub && grainci.GrantedExplicitly(task.Grants) {
 		mode = model.CIModeGrain
 	}
 	policy := model.EffectiveMergePolicy{Head: f.Head, Mode: model.CIGateMode(mode), GrainFullSuite: true, GitHubAllChecks: true}
@@ -522,15 +519,85 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 	} else if collection.Gap != "" {
 		f.Gap = collection.Gap
 	}
+	type suiteLineage struct {
+		key          string
+		run, attempt int64
+	}
+	lineages := map[int64]suiteLineage{}
+	for _, run := range collection.Workflows {
+		if run.CheckSuiteID > 0 && run.Path != "" && run.Event != "" && run.HeadBranch != "" {
+			lineage := suiteLineage{run.Path + "/" + run.Event + "/" + run.HeadBranch, run.ID, int64(run.RunAttempt)}
+			if prior, ok := lineages[run.CheckSuiteID]; ok && prior != lineage {
+				s.Complete = false
+				f.Gap = "Workflow suite lineage is ambiguous."
+			}
+			lineages[run.CheckSuiteID] = lineage
+		}
+	}
+	type suiteCoverage struct {
+		ids        map[int64]bool
+		unresolved bool
+	}
+	suites := map[string]*suiteCoverage{}
+	type generationOrder struct{ leaf, leafRun, run int64 }
+	generationOrders := map[string]*generationOrder{}
 	for _, a := range collection.Checks {
 		conclusion := ""
 		if a.Conclusion != nil {
 			conclusion = *a.Conclusion
 		}
-		attempt := gates.CheckAttempt{Identity: a.App + "/" + a.Name, Names: []string{a.Name}, Head: a.HeadSHA, Version: gates.Digest(a), Order: a.ID, State: a.Status, Conclusion: conclusion, LegacyBudget: forge.IsActionsBudgetFailure(a)}
+		legacyAttempt := gates.CheckAttempt{Identity: a.App + "/" + a.Name, Names: []string{a.Name, a.App + "/" + a.Name}, Head: a.HeadSHA, Version: gates.Digest(a), Order: a.ID, State: a.Status, Conclusion: conclusion, LegacyBudget: forge.IsActionsBudgetFailure(a)}
+		legacy.Attempts = append(legacy.Attempts, legacyAttempt)
+		attempt := legacyAttempt
+		key := a.App + "/" + a.Name
+		coverage := suites[key]
+		if coverage == nil {
+			coverage = &suiteCoverage{ids: map[int64]bool{}}
+			suites[key] = coverage
+		}
+		coverage.ids[a.CheckSuiteID] = true
+		lineage, known := lineages[a.CheckSuiteID]
+		if a.App == "github-actions" && known {
+			attempt.Identity = a.App + "/" + lineage.key + "/" + a.Name
+			attempt.Order = lineage.run
+			attempt.Attempt = lineage.attempt
+			attempt.LeafOrder = a.ID
+			order := generationOrders[lineage.key]
+			if order == nil {
+				order = &generationOrder{}
+				generationOrders[lineage.key] = order
+			}
+			if lineage.run > order.run {
+				order.run = lineage.run
+			}
+			if a.ID > order.leaf {
+				order.leaf = a.ID
+				order.leafRun = lineage.run
+			}
+		} else {
+			coverage.unresolved = true
+		}
+
+		if a.CheckSuiteID <= 0 {
+			s.Complete = false
+			f.Gap = "Check suite identity is missing."
+		}
 		s.Attempts = append(s.Attempts, attempt)
-		legacy.Attempts = append(legacy.Attempts, attempt)
 	}
+
+	for _, order := range generationOrders {
+		if order.leafRun < order.run {
+			s.Complete = false
+			f.Gap = "Check and workflow attempt ordering disagree; the current suite generation is unknown."
+		}
+	}
+	for _, coverage := range suites {
+		if len(coverage.ids) > 1 && coverage.unresolved {
+			s.Complete = false
+			f.Gap = "Same-named checks span suites without a proved replacement lineage."
+		}
+	}
+
 	if !collection.ChecksComplete && collection.ActionsComplete && github.IsPermissionDenied(err) {
 		legacy.Complete = true
 		for _, a := range collection.Workflows {
@@ -538,7 +605,7 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 		}
 	}
 	for _, a := range collection.Workflows {
-		s.Attempts = append(s.Attempts, gates.CheckAttempt{Identity: "workflow/" + a.Path + "/" + a.Event, Head: a.HeadSHA, Version: gates.Digest(a), Order: a.ID*1024 + int64(a.RunAttempt), State: a.Status, Conclusion: a.Conclusion})
+		s.Attempts = append(s.Attempts, gates.CheckAttempt{Identity: "workflow/" + a.Path + "/" + a.Event + "/" + a.HeadBranch, Workflow: true, Head: a.HeadSHA, Version: gates.Digest(a), Order: a.ID, Attempt: int64(a.RunAttempt), State: a.Status, Conclusion: a.Conclusion})
 	}
 	known, settled, deadline := forge.InspectEmptyChecks(forge.Ref{Owner: repo.StoredOwner(), Repo: repo.Name, Number: number}, f.Head, f.ObservedAt)
 	f.LegacyEmptyKnown = known
@@ -674,6 +741,18 @@ func sortShadowAttempts(attempts []gates.CheckAttempt) {
 			return -1
 		}
 		if a.Order > b.Order {
+			return 1
+		}
+		if a.Attempt < b.Attempt {
+			return -1
+		}
+		if a.Attempt > b.Attempt {
+			return 1
+		}
+		if a.LeafOrder < b.LeafOrder {
+			return -1
+		}
+		if a.LeafOrder > b.LeafOrder {
 			return 1
 		}
 		return strings.Compare(a.Version, b.Version)

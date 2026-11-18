@@ -27,6 +27,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gates"
@@ -78,7 +79,7 @@ func (f *shadowForge) ReadCheckCollection(_ context.Context, _, _, head string, 
 func newShadowForge() *shadowForge {
 	yes := true
 	success := "success"
-	return &shadowForge{detail: github.PullRequestDetail{Number: 7, HeadSHA: "H1", HeadRef: "feature", BaseRef: "main", State: "open", Mergeable: &yes}, base: "B1", complete: true, checks: []github.CheckRun{{ID: 1, Name: "go", App: "trusted", HeadSHA: "H1", Status: "completed", Conclusion: &success}}}
+	return &shadowForge{detail: github.PullRequestDetail{Number: 7, HeadSHA: "H1", HeadRef: "feature", BaseRef: "main", State: "open", Mergeable: &yes}, base: "B1", complete: true, checks: []github.CheckRun{{ID: 1, CheckSuiteID: 1, Name: "go", App: "trusted", HeadSHA: "H1", Status: "completed", Conclusion: &success}}}
 }
 
 func TestGateChecksOrdinaryAPIEventsAndNoninterference(t *testing.T) {
@@ -164,7 +165,7 @@ func TestGateChecksOrdinaryAPIEventsAndNoninterference(t *testing.T) {
 	now = now.Add(time.Second)
 	read("met")
 	// Complete collection includes workflow startup failures with no check jobs.
-	forge.workflows = []github.WorkflowRun{{ID: 3, Path: ".github/workflows/broken.yml", HeadSHA: "H1", RunAttempt: 1, Status: "completed", Conclusion: "startup_failure"}}
+	forge.workflows = []github.WorkflowRun{{ID: 3, Path: ".github/workflows/broken.yml", Event: "push", HeadBranch: "feature", HeadSHA: "H1", RunAttempt: 1, Status: "completed", Conclusion: "startup_failure"}}
 	now = now.Add(time.Second)
 	read("unmet")
 	forge.workflows = nil
@@ -425,5 +426,95 @@ func acceptShadowRules(t *testing.T, c *ui.Client, f *shadowForge) {
 	_, err = c.Store.SyncRepoDeclarations(ctx, repo, f.base, model.RepoDeclarations{MergeRules: rules}, c.Now(), time.UTC)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGateChecksWorkflowSuitesDoNotMaskFailures(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	now := baseTime.Add(time.Minute)
+	c.Now = func() time.Time { return now }
+	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Check suite identities"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#7"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.Config.GateObservationTaskIDs = []string{task.ID}
+	forge := newShadowForge()
+	c.Config.GitHubPullRequests = forge
+	success, failure := "success", "failure"
+	forge.checks = []github.CheckRun{
+		{ID: 1, CheckSuiteID: 11, Name: "go", App: "github-actions", HeadSHA: "H1", Status: "completed", Conclusion: &failure},
+		{ID: 2, CheckSuiteID: 12, Name: "go", App: "github-actions", HeadSHA: "H1", Status: "completed", Conclusion: &success},
+	}
+	forge.workflows = []github.WorkflowRun{
+		{ID: 101, CheckSuiteID: 11, Path: "unit.yml", Event: "push", HeadBranch: "feature", HeadSHA: "H1", Status: "completed", Conclusion: "failure", RunAttempt: 4096},
+		{ID: 102, CheckSuiteID: 12, Path: "lint.yml", Event: "push", HeadBranch: "feature", HeadSHA: "H1", Status: "completed", Conclusion: "success", RunAttempt: 1},
+	}
+	read := func(want string) {
+		t.Helper()
+		code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "")
+		if code != 200 {
+			t.Fatal(code, body)
+		}
+		var d ui.TaskDetail
+		_ = json.Unmarshal([]byte(body), &d)
+		if d.GateObservations == nil || d.GateObservations.Results[2].Result.Status != want {
+			t.Fatalf("want %s: %+v", want, d.GateObservations)
+		}
+	}
+	read("unmet") // A successful same-named job in another workflow cannot hide red.
+	forge.workflows[1].Path = "unit.yml"
+	now = now.Add(time.Second)
+	read("met") // A newer run in the same lineage replaces older attempts, even with a larger old attempt number.
+	forge.checks[0].ID = 5000
+	now = now.Add(time.Second)
+	read("unknown") // Conflicting job/run chronology must not invent a positive generation.
+	forge.checks[0].ID = 1
+	forge.workflows[1].HeadBranch = "other-branch"
+	now = now.Add(time.Second)
+	read("unmet") // A run for a different ref cannot replace the failed lineage.
+	forge.workflows[1].HeadBranch = "feature"
+	forge.workflows[0].CheckSuiteID = 0
+	forge.workflows[1].CheckSuiteID = 0
+	now = now.Add(time.Second)
+	read("unknown") // The source cannot prove which suite replaced which.
+	forge.checks = nil
+	forge.workflows = forge.workflows[1:]
+	now = now.Add(time.Second)
+	read("unknown") // A positive workflow with an empty job-check set is not no-CI authorization.
+}
+
+func TestGateChecksDefaultGrantsDoNotSwitchAnExistingTasksProvider(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "Existing GitHub task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#7"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Store.UpdateConfig(ctx, func(cfg *model.Config) error { cfg.DefaultCapabilities = []string{grainci.Grant}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	c.Config.GateObservationTaskIDs = []string{task.ID}
+	c.Config.GitHubPullRequests = newShadowForge()
+	code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+task.ID, "")
+	if code != 200 {
+		t.Fatal(code, body)
+	}
+	var d ui.TaskDetail
+	_ = json.Unmarshal([]byte(body), &d)
+	if d.GateObservations == nil || d.GateObservations.Results[2].Result.Status != "met" {
+		t.Fatal("defaults retroactively selected a different CI source", d.GateObservations)
 	}
 }

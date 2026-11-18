@@ -28,14 +28,20 @@ test("shows scoped current and legacy shadow CI without action controls @phone @
   const tasks = await (await page.request.get("/api/tasks")).json();
   const task =
     tasks.find((t: { state: string }) => t.state !== "closed") ?? tasks[0];
-  await page.route(`**/api/tasks/${task.id}*`, async (route) => {
+  const overlay = async (route: import("@playwright/test").Route) => {
     const response = await route.fetch();
+    if (response.status() === 304) {
+      await route.fulfill({ response });
+      return;
+    }
     const body = await response.json();
     await route.fulfill({
       response,
       json: { ...body, gate_observations: observation },
     });
-  });
+  };
+  await page.route(`**/api/tasks/${task.id}`, overlay);
+  await page.route(`**/api/tasks/${task.id}?*`, overlay);
   await page.goto(`/next/tasks/${task.id}`);
   const card = page.getByTestId("gate-observations");
   await expect(card).toContainText(

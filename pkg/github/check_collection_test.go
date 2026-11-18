@@ -24,11 +24,11 @@ func TestReadCheckCollectionCompleteAttemptsAndStartupFailure(t *testing.T) {
 	transport := &FakeTransport{Responses: []ApiResponse{
 		{Status: 200, Headers: map[string]string{"Link": `<https://api.github.com/repos/o/r/commits/H1/check-runs?page=2&filter=all>; rel="next"`}, Body: []byte(`{"total_count":2,"check_runs":[{"id":1,"name":"go","head_sha":"H1","status":"completed","conclusion":"success","app":{"slug":"trusted"},"check_suite":{"id":1}}]}`)},
 		{Status: 200, Body: []byte(`{"total_count":2,"check_runs":[{"id":2,"name":"go","head_sha":"H1","status":"completed","conclusion":"cancelled","app":{"slug":"trusted"},"check_suite":{"id":2}}]}`)},
-		{Status: 200, Body: []byte(`{"total_count":1,"workflow_runs":[{"id":3,"name":"Tests","path":".github/workflows/tests.yml","head_sha":"H1","status":"completed","conclusion":"startup_failure","run_attempt":2}]}`)},
+		{Status: 200, Body: []byte(`{"total_count":1,"workflow_runs":[{"id":3,"name":"Tests","path":".github/workflows/tests.yml","event":"push","head_branch":"feature","check_suite_id":3,"head_sha":"H1","status":"completed","conclusion":"startup_failure","run_attempt":2}]}`)},
 	}}
 	client := NewClient(transport, StaticToken{strPtr("t")})
 	collection, err := client.ReadCheckCollection(context.Background(), "o", "r", "H1", 512)
-	if err != nil || !collection.Complete || !collection.ChecksComplete || len(collection.Checks) != 2 || len(collection.Workflows) != 1 || collection.Workflows[0].Conclusion != "startup_failure" {
+	if err != nil || !collection.Complete || !collection.ChecksComplete || len(collection.Checks) != 2 || len(collection.Workflows) != 1 || collection.Workflows[0].Conclusion != "startup_failure" || collection.Workflows[0].CheckSuiteID != 3 {
 		t.Fatalf("%+v %v", collection, err)
 	}
 	if !strings.Contains(transport.Calls[0].Path, "filter=all") || !strings.Contains(transport.Calls[2].Path, "head_sha=H1") {

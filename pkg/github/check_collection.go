@@ -157,7 +157,7 @@ func (c *RESTClient) ReadCheckCollection(ctx context.Context, owner, repo, head 
 		total = *data.Total
 		for _, raw := range data.Runs {
 			r := raw.run()
-			if len(out.Workflows) >= limit || r.ID <= 0 || seen[r.ID] || r.HeadSHA != head || r.Path == "" || r.RunAttempt <= 0 {
+			if len(out.Workflows) >= limit || r.ID <= 0 || seen[r.ID] || r.HeadSHA != head || r.Path == "" || raw.RunAttempt <= 0 || r.Event == "" || r.HeadBranch == "" {
 				out.Gap = "Actions identities or head coverage are incomplete."
 				return out, nil
 			}

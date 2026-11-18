@@ -34,6 +34,9 @@ type ChecksConfig struct {
 // CheckAttempt is immutable source evidence. Identity includes the provider app
 // and job identity; suite/attempt IDs belong in Version, never in a display name.
 type CheckAttempt struct {
+	LeafOrder    int64
+	Attempt      int64
+	Workflow     bool
 	Identity     string
 	Names        []string
 	Head         string
@@ -206,6 +209,7 @@ func EvaluateChecks(b Binding, f ChecksFacts, now time.Time, generation uint64) 
 		r.Summary = "Configured source cannot replace or reduce effective CI policy."
 		return r
 	}
+	r.Evidence = append(r.Evidence, Evidence{Kind: "policy", ID: "ci-policy", Version: f.PolicyVersion, Subject: f.Subject, Head: &head, Digest: f.PolicyVersion})
 	if mode == "none" {
 		if f.ExplicitNone && len(c.ExtraJobs) == 0 && len(f.Sources) == 0 {
 			r.Status = "met"
@@ -267,15 +271,30 @@ func EvaluateChecks(b Binding, f ChecksFacts, now time.Time, generation uint64) 
 				continue
 			}
 			old, ok := latest[a.Identity]
-			if !ok || a.Order > old.Order {
+			if !ok || a.Order > old.Order || (a.Order == old.Order && (a.Attempt > old.Attempt || (a.Attempt == old.Attempt && a.LeafOrder > old.LeafOrder))) {
 				latest[a.Identity] = a
-			} else if a.Order == old.Order && Digest(a) != Digest(old) {
+			} else if a.Order == old.Order && a.Attempt == old.Attempt && a.LeafOrder == old.LeafOrder && Digest(a) != Digest(old) {
 				ambiguous = true
 			}
 		}
 		if ambiguous {
 			statuses = append(statuses, "unknown")
 			continue
+		}
+		if kind == "github" && c.Semantics == "current_v1" && len(latest) > 0 {
+			checkRows, onlyPositiveWorkflows := 0, true
+			for _, a := range latest {
+				if !a.Workflow {
+					checkRows++
+				}
+				if checkState(kind, a.State, a.Conclusion) != "met" {
+					onlyPositiveWorkflows = false
+				}
+			}
+			if checkRows == 0 && onlyPositiveWorkflows {
+				statuses = append(statuses, "unknown")
+				notes = append(notes, "GitHub workflow verdicts contain no job checks; explicit no-CI policy is required instead of inferring success")
+			}
 		}
 		required := slices.Clone(s.Required)
 		for _, n := range c.ExtraJobs {
@@ -366,10 +385,10 @@ func EvaluateChecks(b Binding, f ChecksFacts, now time.Time, generation uint64) 
 			action = "Prediction only: fix the failing current-head jobs and push, or use the existing authorized recheck flow."
 		}
 		r.AgentText = &action
-		r.Waits = append(r.Waits, Wait{Event: "change", Key: "change/" + f.Subject.ID, Version: f.PolicyVersion, Deadline: f.ValidUntil, Owner: "forge_sync", OnTimeout: "escalate"})
+		r.Waits = append(r.Waits, Wait{Event: "change", Key: "change/" + Digest(f.Subject)[7:], Version: f.PolicyVersion, Deadline: f.ValidUntil, Owner: "forge_sync", OnTimeout: "escalate"})
 		r.Waits = append(r.Waits, Wait{Event: "timer", Key: "checks/" + b.ID, Version: version, Deadline: f.ValidUntil, Owner: "ci", OnTimeout: "escalate"})
 		for _, kind := range kinds {
-			r.Waits = append(r.Waits, Wait{Event: "checks", Key: kind + "/" + f.Subject.ID, Version: f.Head, Deadline: f.ValidUntil, Owner: "ci", OnTimeout: "escalate"})
+			r.Waits = append(r.Waits, Wait{Event: "checks", Key: kind + "/" + Digest(f.Subject)[7:], Version: f.Head, Deadline: f.ValidUntil, Owner: "ci", OnTimeout: "escalate"})
 		}
 	} else {
 		action := "Prediction only: automatic merge may proceed only if legacy review, approval, queue, overlap/recheck and executor preconditions permit it."
