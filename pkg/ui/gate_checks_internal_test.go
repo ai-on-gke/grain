@@ -41,3 +41,19 @@ func TestGateChecksDisplayRequiresCurrentResourceScope(t *testing.T) {
 		t.Fatal("resource-aware projection changed")
 	}
 }
+
+func TestGateObservationRejectsForeignNestedTaskSubjects(t *testing.T) {
+	ctx := withAccessRole(context.Background(), &accessRole{Who: "operator", Full: true})
+	for _, evidence := range []bool{true, false} {
+		v := gates.UnavailableObservation("66", time.Now())
+		subject := gates.Subject{Kind: "task", TaskID: "another-task"}
+		if evidence {
+			v.Results[0].Result.Evidence = append(v.Results[0].Result.Evidence, gates.Evidence{Kind: "report", ID: "foreign", Subject: subject})
+		} else {
+			v.Results[0].Result.Dependencies = append(v.Results[0].Result.Dependencies, gates.Dependency{Key: "foreign", Subject: subject})
+		}
+		if observationVisible(ctx, &v) {
+			t.Fatal("foreign nested task evidence escaped its owning task projection")
+		}
+	}
+}

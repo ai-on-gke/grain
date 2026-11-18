@@ -167,7 +167,7 @@ func observationVisible(ctx context.Context, v *gates.ObservationView) bool {
 	readable := taskReadableForContext(ctx)
 	subject := func(s gates.Subject) bool {
 		if s.Kind == "task" {
-			return true
+			return len(v.Bindings) > 0 && s.TaskID == v.Bindings[0].Subject.TaskID
 		}
 		return readable(s.Repository)
 	}
