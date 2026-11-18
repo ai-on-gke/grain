@@ -449,3 +449,56 @@ func TestAScheduledUpgradeProceedsAfterDrainWindowElapses(t *testing.T) {
 		t.Fatalf("started %v, want upgrade to proceed after drain window elapsed", up.started)
 	}
 }
+
+// TestImmediateUpgradeCompletingAcrossRestartDoesNotTriggerSecondScheduledUpgrade
+// reproduces the live symptom where afterTasksFinish: true wrote scheduled_upgrade,
+// an immediate upgrade took over pipeline_pause via UpgradeHold and restarted,
+// and post-upgrade idle cycles must not see a leftover scheduled_upgrade row or
+// trigger a second unrequested upgrade.
+func TestImmediateUpgradeCompletingAcrossRestartDoesNotTriggerSecondScheduledUpgrade(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	now := time.Now().UTC()
+
+	liveRun(t, store, "t1", false, now)
+	schedule(t, store, "latest", now)
+
+	up := &upgrades{}
+	runWithScheduledUpgrade(t, store, up, now.Add(time.Second))
+	if len(up.started) != 0 {
+		t.Fatalf("started %v while busy run t1 was active", up.started)
+	}
+	if pause := pauseNow(t, store); pause == nil || pause.By != model.ScheduledUpgradePrincipal {
+		t.Fatalf("pause = %+v, want ScheduledUpgradePrincipal", pause)
+	}
+
+	// An immediate upgrade starts while the schedule is still pending, taking
+	// over the queue hold and restarting onto the new build.
+	release, err := orchestrator.UpgradeHold(store)("latest")
+	if err != nil || release == nil {
+		t.Fatalf("UpgradeHold = (%v, %v), want non-nil release", release != nil, err)
+	}
+	if err := store.FinishRun(ctx, "t1-1", now.Add(30*time.Second), "interrupted", ""); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	if err := orchestrator.ReleaseUpgradeHold(ctx, store); err != nil {
+		t.Fatalf("ReleaseUpgradeHold: %v", err)
+	}
+
+	if scheduled := scheduledUpgrade(t, store); scheduled != nil {
+		t.Fatalf("scheduled_upgrade still pending after immediate upgrade restart: %+v", scheduled)
+	}
+	if pause := pauseNow(t, store); pause != nil {
+		t.Fatalf("pipeline_pause still held after ReleaseUpgradeHold: %+v", pause)
+	}
+
+	// Post-restart cycles on an idle deployment must neither re-close the queue
+	// nor trigger a second upgrade.
+	runWithScheduledUpgrade(t, store, up, now.Add(time.Minute))
+	if len(up.started) != 0 {
+		t.Fatalf("reconcileScheduledUpgrade triggered unrequested post-restart upgrade: %v", up.started)
+	}
+	if pause := pauseNow(t, store); pause != nil {
+		t.Fatalf("post-restart cycle re-held the queue: %+v", pause)
+	}
+}
