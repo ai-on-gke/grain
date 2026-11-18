@@ -3060,13 +3060,13 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		return runErr
 	}
 
-	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, now)
+	finishNow := cfg.now()
+	if cfg.Now == nil && finishNow.Before(now) {
+		finishNow = now
+	}
+	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, finishNow)
 	cleanupCtx := context.WithoutCancel(ctx)
 	if afterErr == nil && runErr == nil && deps.Store != nil && (task.Interactive || taskKeepRunning(cleanupCtx, deps.Store, *task)) {
-		finishNow := now
-		if deps.Config.Now != nil {
-			finishNow = deps.Config.Now()
-		}
 		if ttl := sessionSandboxIdleTTL(cleanupCtx, deps); ttl > 0 && !taskPaused(cleanupCtx, deps.Store, task.ID) {
 			if st, serr := deps.Store.State(cleanupCtx, task.ID); serr == nil && st != "" &&
 				st != model.StateClosed && st != model.StateFailed &&
