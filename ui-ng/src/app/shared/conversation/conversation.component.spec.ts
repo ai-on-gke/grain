@@ -285,4 +285,46 @@ describe("ConversationComponent", () => {
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).not.toBeNull();
   });
+
+  it("keeps a single vertical scroller in split-pane task lists and conversations without clipping the Send button", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const appDir = path.resolve(process.cwd(), "src/app");
+    const convoCss = fs.readFileSync(
+      path.join(appDir, "shared/conversation/conversation.css"),
+      "utf8",
+    );
+    const queueCss = fs.readFileSync(
+      path.join(appDir, "inbox/inbox-queue.css"),
+      "utf8",
+    );
+    const workCss = fs.readFileSync(
+      path.join(appDir, "shared/work-surface.css"),
+      "utf8",
+    );
+    const taskDetailCss = fs.readFileSync(
+      path.join(appDir, "task/task-detail.component.css"),
+      "utf8",
+    );
+
+    // Inline conversation fills remaining pane height when last-child instead of
+    // forcing a fixed 28dvh height that overflows .inspector-body / .task-tab-body,
+    // and yields to the outer scroller when followed by a diff preview card.
+    expect(convoCss).not.toContain("clamp(160px, 28dvh, 400px)");
+    expect(convoCss).toContain(".g-conversation:where(:last-child)");
+    expect(convoCss).toContain(
+      ":where(.g-conversation:not(:last-child):not(.is-expanded))",
+    );
+
+    // .queue-pane clips rather than setting overflow-x: hidden (which computes
+    // overflow-y: auto and creates a second vertical scrollbar on list panes).
+    expect(queueCss).toMatch(/\.queue-pane\s*\{[^}]*overflow:\s*clip;/);
+
+    // .tasks-detail-pane .task-page does not add a redundant outer scrollbar
+    // around .task-tab-body during normal inspection, and .task-log is removed.
+    expect(workCss).toMatch(
+      /\.tasks-detail-pane\s+\.task-page\s*\{[^}]*overflow:\s*hidden;/,
+    );
+    expect(taskDetailCss).not.toContain(".task-log");
+  });
 });
