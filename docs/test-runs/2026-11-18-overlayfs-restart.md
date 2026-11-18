@@ -129,6 +129,12 @@ local fixtures.
 
 ## Read-only host evidence still needed
 
+The follow-up adds a bounded collector and an approval-gated host-script
+registration bundle; see [the invocation and registration guide](../overlayfs-evidence.md).
+Local hostd/CLI invocation is tested. Live collection still requires the
+separate grain/config change and a task grant; the bundle does not apply
+those settings or claim that host privileges are already available.
+
 Collect from the actual deployment host, not an agent sandbox. Do not
 restart anything, remove mounts or containers, or prune images. Redact
 credentials in command arguments or local unit overrides before sharing.
