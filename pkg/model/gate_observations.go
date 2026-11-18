@@ -245,8 +245,23 @@ func (s *Store) beginGateObservation(ctx context.Context) (*sql.Tx, func(), erro
 // ObserveTaskGates is display-driven shadow maintenance. It intentionally does
 // NOT use Store.write: diagnostic commits must not signal Changed(), wake a
 // dispatcher, append integration events or contribute task-failure accounting.
-// The caller must already have authorized this task read and bounded selection.
+// The caller must already have authorized this task and its repository task-read
+// scope (including transitive history), and bounded selection.
 func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) (*gates.ObservationView, *GateObservationDiagnostics, error) {
+	return s.observeTaskGates(ctx, id, now, true)
+}
+
+// ObserveTaskGatePredictions omits history reads for scoped API callers: retained
+// samples may predate a task's repository move and contain other resource scopes.
+func (s *Store) ObserveTaskGatePredictions(ctx context.Context, id string, now time.Time) (*gates.ObservationView, error) {
+	v, _, err := s.observeTaskGates(ctx, id, now, false)
+	return v, err
+}
+
+// ErrGateObservationScopeDenied is a scoped read denial, not a diagnostic outage.
+var ErrGateObservationScopeDenied = errors.New("gate observation task repository is outside the authorized read scope")
+
+func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, history bool) (*gates.ObservationView, *GateObservationDiagnostics, error) {
 	var view gates.ObservationView
 	var diag GateObservationDiagnostics
 	var last error
@@ -256,6 +271,21 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 			return nil, nil, err
 		}
 		err = func() error {
+			// Authorize the current repository inside the collection transaction,
+			// before any cache/backoff replay or transitive evidence read.
+			if HasExternalRefReadable(ctx) {
+				var owner, name string
+				if err := tx.QueryRowContext(ctx, "SELECT COALESCE(`target_owner`,''),COALESCE(`target_name`,'') FROM `task` WHERE `id` = ?", id).Scan(&owner, &name); err != nil {
+					return err
+				}
+				repo := ""
+				if owner != "" || name != "" {
+					repo = RepoFromStored(owner, name).String()
+				}
+				if !ExternalRefReadable(ctx, repo) {
+					return ErrGateObservationScopeDenied
+				}
+			}
 			// Persisted error backoff survives restarts and coalesces failed
 			// refreshes. It expires only into another diagnostic collection.
 			var cached string
@@ -264,8 +294,11 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 				var failure gates.ObservationView
 				if json.Unmarshal([]byte(cached), &failure) == nil && failure.Dirty && currentShadowBindings(failure, id) && len(failure.Results) > 0 && failure.Results[0].RetryAt != nil && now.Before(*failure.Results[0].RetryAt) {
 					view = failure
-					diag, cacheErr = readGateDiagnostics(ctx, tx, id)
-					return cacheErr
+					if history {
+						diag, cacheErr = readGateDiagnostics(ctx, tx, id)
+						return cacheErr
+					}
+					return nil
 				}
 			} else if !errors.Is(cacheErr, sql.ErrNoRows) {
 				return cacheErr
@@ -345,8 +378,11 @@ func (s *Store) ObserveTaskGates(ctx context.Context, id string, now time.Time) 
 					return err
 				}
 			}
-			diag, err = readGateDiagnostics(ctx, tx, id)
-			return err
+			if history {
+				diag, err = readGateDiagnostics(ctx, tx, id)
+				return err
+			}
+			return nil
 		}()
 		if err == nil {
 			err = tx.Commit()

@@ -307,6 +307,13 @@ func RunChangeGates(t *testing.T, s *model.Store, db *sql.DB) {
 	}
 	now = failedAt.Add(2 * time.Second)
 	_, _ = read(reopened)
+	// Scoped current-only projections do not load retained payloads. An invalid
+	// older diagnostic record must not break today's independently valid result.
+	_, err = db.ExecContext(ctx, "UPDATE `gate_observation_shadow_history` SET `view_json` = ? WHERE `task_id` = ? AND `generation` = (SELECT MIN(`generation`) FROM `gate_observation_shadow_history` WHERE `task_id` = ?)", "not-json", parent, parent)
+	must(err)
+	if current, err := reopened.ObserveTaskGatePredictions(ctx, parent, now); err != nil || current == nil {
+		t.Fatalf("current-only projection depended on retained payloads: %v", err)
+	}
 }
 
 func RunChangeScopeOverflow(t *testing.T, s *model.Store, db *sql.DB) {

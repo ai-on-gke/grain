@@ -24,7 +24,11 @@ The existing permission-filtered `GET /api/tasks/{id}` adds optional
 `gate_observations` (the closed canonical observation_view) and sibling
 `gate_observation_diagnostics`. Ordinary whole, paged, comments-since and task
 summary reads reuse the same projection; pagination never supplies gate evidence.
-The ordinary `api_get_task` read carries the additive fields. Angular task detail
+The ordinary `api_get_task` read carries the additive fields. Scoped callers
+receive only the authorized current projection; retained diagnostic history
+requires unrestricted task-read access because samples can predate repository
+moves. Authorization is checked before collection/cache replay, and cached
+resource subjects are reauthorized before display. Angular task detail
 at `/next/tasks/<id>` shows status/explanation, source/config/build provenance,
 evaluation/evidence versions, completeness/freshness, errors, inert predictions,
 retained comparison counts and newest 20 samples. The classic UI remains compatible.

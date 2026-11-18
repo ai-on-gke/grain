@@ -355,7 +355,10 @@ func TestReviewApprovalObservationsPreserveAuthorizationAndSubmit(t *testing.T) 
 	}
 	before := read()
 	if path := os.Getenv("GRAIN_TEST_REVIEW_GATE_FIXTURE"); path != "" {
-		b, _ := json.MarshalIndent(map[string]any{"gate_observations": before.GateObservations, "gate_observation_diagnostics": before.GateObservationDiagnostics}, "", "  ")
+		_, wire := serve(t, srv, http.MethodGet, "/api/tasks/review-owner", "")
+		var unrestricted ui.TaskDetail
+		must(json.Unmarshal([]byte(wire), &unrestricted))
+		b, _ := json.MarshalIndent(map[string]any{"gate_observations": unrestricted.GateObservations, "gate_observation_diagnostics": unrestricted.GateObservationDiagnostics}, "", "  ")
 		must(os.WriteFile(path, b, 0600))
 	}
 	code, body := asAgent(t, srv, "review-observer", http.MethodGet, "/api/tasks/review-hidden", "", "")
@@ -380,5 +383,88 @@ func TestReviewApprovalObservationsPreserveAuthorizationAndSubmit(t *testing.T) 
 	after := read()
 	if after.GateObservations.SourceRevision == before.GateObservations.SourceRevision {
 		t.Fatal("Submit did not invalidate the diagnostic source")
+	}
+}
+
+func TestGateObservationHistoryRequiresRepositoryTaskRead(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, c, "self-only-observe", "acme/widgets", "")
+	seedAPITask(t, c, "same-repo-review", "acme/widgets", "")
+	if err := c.Store.UpdateTask(ctx, "self-only-observe", func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#43"}, model.Link{Kind: model.LinkReviewTask, Target: "same-repo-review"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.Config.GateObservationTaskIDs = []string{"self-only-observe"}
+	code, body := serve(t, srv, http.MethodGet, "/api/tasks/self-only-observe", "")
+	if code != http.StatusOK || !strings.Contains(body, "gate_observations") {
+		t.Fatalf("privileged collection failed: %d %s", code, body)
+	}
+	checkSelf := func() {
+		t.Helper()
+		code, body := asAgent(t, srv, "self-only-observe", http.MethodGet, "/api/tasks/self-only-observe", "", "")
+		if code != http.StatusForbidden {
+			t.Fatalf("caller without tasks:read was not refused: %d %s", code, body)
+		}
+		if strings.Contains(body, "gate_observations") || strings.Contains(body, "gate_observation_diagnostics") {
+			t.Fatal("implicit self-read disclosed repository-wide linked observations/history")
+		}
+	}
+	checkSelf()
+	// Dropping today's change/review links cannot make older linked history safe
+	// for a caller whose only permission is its implicit self-task read.
+	if err := c.Store.UpdateTask(ctx, "self-only-observe", func(tk *model.Task) error { tk.Links = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	checkSelf()
+}
+
+func TestScopedGateObservationsDoNotReadFormerRepositoryHistory(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, c, "scope-mover", "acme/old", "")
+	seedAPITask(t, c, "old-review", "acme/old", "")
+	seedAPITask(t, c, "new-repo-observer", "acme/new", "api:tasks:read@acme/new")
+	if err := c.Store.UpdateTask(ctx, "scope-mover", func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkFixes, Target: "acme/old#1"}, model.Link{Kind: model.LinkReviewTask, Target: "old-review"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.Config.GateObservationTaskIDs = []string{"scope-mover"}
+	code, body := serve(t, srv, http.MethodGet, "/api/tasks/scope-mover", "")
+	if code != http.StatusOK || !strings.Contains(body, "gate_observation_diagnostics") {
+		t.Fatalf("initial unrestricted history: %d %s", code, body)
+	}
+	if err := c.Store.UpdateTask(ctx, "scope-mover", func(tk *model.Task) error {
+		tk.Target = &model.RepoRef{Owner: "acme", Name: "new"}
+		tk.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/new#2"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body = asAgent(t, srv, "new-repo-observer", http.MethodGet, "/api/tasks/scope-mover", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("new repository read: %d %s", code, body)
+	}
+	var scoped ui.TaskDetail
+	if err := json.Unmarshal([]byte(body), &scoped); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.GateObservations == nil || scoped.GateObservationDiagnostics != nil {
+		t.Fatal("scoped reader lost current prediction or received transitive history")
+	}
+	for _, b := range scoped.GateObservations.Bindings {
+		if b.Subject.Kind == "change" && b.Subject.Repository != "acme/new" {
+			t.Fatal("former resource scope replayed to a restricted reader")
+		}
+	}
+	// The current-only store path must not depend on history reads even when
+	// diagnostic history is unreadable. (Writes/retention retain ordinary budgets.)
+	denied := model.WithExternalRefReadable(ctx, func(string) bool { return false })
+	if _, err := c.Store.ObserveTaskGatePredictions(denied, "scope-mover", baseTime); err != model.ErrGateObservationScopeDenied {
+		t.Fatalf("collection did not enforce repository scope: %v", err)
 	}
 }

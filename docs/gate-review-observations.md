@@ -53,7 +53,13 @@ Cross-repository assignments remain inaccessible even for an unrestricted reader
 persisted history therefore cannot expose their bodies, links, head or progress
 to a later restricted reader. No deployment-wide States/PathTriggers scan or
 external provider call is introduced. Task-read authorization still precedes the
-optional projection, including paged/comments-since/summary reads.
+optional projection, including paged/comments-since/summary reads. The complete
+sidecar/history additionally requires repository-wide task-read permission;
+callers without that permission are refused before projection. Scoped callers
+receive current predictions only; full history requires unrestricted task-read
+access because older samples can predate a task's repository move. Current cached
+resource subjects are reauthorized, and repository authorization is checked in
+the collection transaction before cache replay or transitive reads.
 
 Normal assignment/scope changes evaluate immediately; only unsupported persisted
 profiles use the explained unknown regeneration path. Imported comparisons declare
