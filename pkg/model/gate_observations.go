@@ -388,6 +388,11 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 					return err
 				}
 				unsupportedCache = !currentShadowBindings(cachedView, id)
+				// Postgres timestamp columns truncate to microseconds. The JSON
+				// record preserves the original request time on both engines.
+				if !unsupportedCache && cachedView.ComparedAt.After(evaluated) {
+					evaluated = cachedView.ComparedAt
+				}
 				rejectedCache = cachedView.Dirty
 				bindingsChanged = gates.Digest(cachedView.Bindings) != gates.Digest(bindings)
 				// Remote reads start outside this transaction. A late older
@@ -566,6 +571,9 @@ func (s *Store) RecordGateObservationFailure(ctx context.Context, id string, now
 	if raw != "" {
 		var old gates.ObservationView
 		if json.Unmarshal([]byte(raw), &old) == nil && currentShadowBindings(old, id) {
+			if old.ComparedAt.After(evaluated) {
+				evaluated = old.ComparedAt
+			}
 			// now is the collection's start, not its failure completion.
 			// A slower failed request cannot replace a newer accepted read;
 			// bursts of failures share one generation until its retry is due.

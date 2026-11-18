@@ -120,7 +120,8 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 
 	// A late remote collection from an older request must not rewind an accepted
 	// same-head pending attempt to the old passing result (including after restart).
-	now = now.Add(time.Second)
+	// Both starts are within a single Postgres timestamp microsecond.
+	now = now.Add(time.Second + 900*time.Nanosecond)
 	f.Sources[0].Attempts[0].Conclusion = "cancelled"
 	newest, nd := read(fence(), "pending")
 	stale := f
@@ -129,10 +130,15 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 	stale.Sources[0].Attempts[0].Conclusion = "success"
 	beforeLate := legacyChecksSnapshot(t, ctx, db)
 	lateWake, lateCommits := s.Changed(), s.CommitCount()
-	late, ld, e := model.New(db).ObserveTaskGatesWithChecks(ctx, task.ID, now.Add(-time.Second), fence(), []gates.ChecksFacts{stale})
+	late, ld, e := model.New(db).ObserveTaskGatesWithChecks(ctx, task.ID, now.Add(-100*time.Nanosecond), fence(), []gates.ChecksFacts{stale})
 	must(e)
 	if late.Results[2].Result.Status != "pending" || late.Results[2].Revision != newest.Results[2].Revision || ld.Evaluations != nd.Evaluations {
 		t.Fatal("older remote CI collection rewound newer accepted evidence")
+	}
+	lateFailure := gates.UnavailableObservation(task.ID, now.Add(-100*time.Nanosecond))
+	must(model.New(db).RecordGateObservationFailure(ctx, task.ID, now.Add(-100*time.Nanosecond), &lateFailure))
+	if lateFailure.Results[2].Result.Status != "pending" || lateFailure.Results[2].Revision != newest.Results[2].Revision {
+		t.Fatal("older failed collection rewound newer evidence within one timestamp microsecond")
 	}
 	if beforeLate != legacyChecksSnapshot(t, ctx, db) || lateCommits != s.CommitCount() {
 		t.Fatal("late collection changed legacy state")

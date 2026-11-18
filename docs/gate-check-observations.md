@@ -64,7 +64,9 @@ Collection happens outside the diagnostic writer transaction. Acceptance recheck
 the task/observation, grants, repository settings, accepted merge rules, declared
 workflow versions, scoped base-CI/recheck records, and recorded GitHub CI facts
 for the exact repository/head. Late older accepted collections cannot rewind a
-newer accepted result, including after restart. A concurrent local source change
+newer accepted result, including after restart and within one database timestamp
+microsecond. Acceptance and failure ordering retain the original request timestamp
+from the persisted JSON record rather than relying on rounded SQL timestamps. A concurrent local source change
 still invalidates a cached success. Remote complete sets must include and agree
 with already recorded check identities/conclusions and known Actions attempts;
 replica disagreement stays unknown until the sources agree. Log enrichment and
