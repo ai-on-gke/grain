@@ -20,7 +20,9 @@ import {
   ElementRef,
   NgZone,
   type OnDestroy,
+  Injector,
   ViewEncapsulation,
+  afterNextRender,
   afterRenderEffect,
   computed,
   effect,
@@ -2076,12 +2078,21 @@ export class TaskDetailComponent implements OnDestroy {
     });
     // #comment=<id> arrives with the route (a link followed into the app),
     // or as a hash change on a page already open.
+    // The router reports a new fragment before a pane's [id] input moves
+    // to the task the same navigation selected (?task=21#comment=14 from
+    // task 20), so wait for that render: the id effect then sees the new
+    // task first, and this call is the dedupe's duplicate of its own.
+    const injector = inject(Injector);
     const fragSub = route.fragment.subscribe((frag) => {
-      if (frag) this.queueCommentFragment(frag);
+      if (!frag) return;
+      afterNextRender(() => this.queueCommentFragment(frag), { injector });
     });
     const win = this.doc.defaultView;
     const onHash = (): void =>
-      this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
+      this.zone.run(() => {
+        const hash = win?.location.hash ?? "";
+        afterNextRender(() => this.queueCommentFragment(hash), { injector });
+      });
     win?.addEventListener("hashchange", onHash);
     inject(DestroyRef).onDestroy(() => {
       paneSub.unsubscribe();

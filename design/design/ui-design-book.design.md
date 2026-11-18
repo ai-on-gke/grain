@@ -343,7 +343,9 @@ inspector and Task Detail. Sessions shares its message styles.
   failed shows its error instead and never claims the comment is missing. A
   fragment belongs to the task it arrived with: a Tasks or Workstreams pane
   that moves to another task keeps the address's `#comment=` but does not
-  follow it there. Phones have no pane, so the pane form
+  follow it there, while a link that names both (`?task=21#comment=14`
+  followed from task 20, or Back/Forward between two such links) is
+  followed on the task it names. Phones have no pane, so the pane form
   (`/next/tasks?task=<id>#comment=<n>`) opens the task's own page. A bare
   `[x](#comment=<n>)` in a note stays on the page rather than resolving
   against `<base href="/next/">`.

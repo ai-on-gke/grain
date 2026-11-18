@@ -704,8 +704,14 @@ export class MarkdownDirective {
       // browser would resolve it against /next/ and leave the page.
       if (href.startsWith("#") && href.length > 1) {
         ev.preventDefault();
+        let fragment = href.slice(1);
+        try {
+          fragment = decodeURIComponent(fragment);
+        } catch {
+          // A stray % (#50%off) is not an escape; keep it as written.
+        }
         void this.router.navigate([], {
-          fragment: decodeURIComponent(href.slice(1)),
+          fragment,
           queryParamsHandling: "preserve",
         });
         return;

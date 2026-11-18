@@ -307,3 +307,42 @@ test("a #comment= is not followed again on the next task a workstream pane shows
   await page.waitForTimeout(800);
   await expect(missing).toHaveCount(0);
 });
+
+test("a pane link to another task's comment lands on it, with Back and Forward", async ({
+  page,
+}) => {
+  await page.goto("/next/");
+  const b = await longestThread(page);
+  const a = await rolledOver(page);
+  expect(a.id).not.toBe(b.id);
+  const target = b.comments![0].id;
+  // Read-only, as above: the link is laid over A's newest comment.
+  await page.route(new RegExp(`/api/tasks/${a.id}\\?`), async (route) => {
+    const res = await route.fetch({
+      headers: { ...route.request().headers(), "if-none-match": "" },
+    });
+    const body = (await res.json()) as Detail & {
+      comments: Array<Comment & { body?: string }>;
+    };
+    body.comments[body.comments.length - 1].body =
+      `See [the other task](/next/tasks?task=${b.id}#comment=${target}).`;
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto(`/next/tasks?task=${a.id}&pane=conversation`);
+  await page.getByRole("link", { name: "the other task" }).click();
+  await expect(page).toHaveURL(
+    new RegExp(`/next/tasks\\?task=${b.id}#comment=${target}$`),
+  );
+  await expectInView(page, msg(page, target));
+
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`task=${a.id}`));
+  await expect(
+    page.getByRole("link", { name: "the other task" }),
+  ).toBeVisible();
+  await page.goForward();
+  await expectInView(page, msg(page, target));
+  await expect(
+    page.getByText(/is not in this task's conversation/),
+  ).toHaveCount(0);
+});
