@@ -120,13 +120,19 @@ func (d DaemonPullRequests) OpenChangeWithNotes(ctx context.Context, summary, bo
 					Attempt:     attempt,
 					CallerNotes: callerNotes,
 				}, nil); s3Err == nil {
-					persistSandboxS3ViaAPI(ctx, d.Client, d.TaskID, callerNotes, rep)
+					baseSHA, _ := ws.BaseSHA(ctx)
+					persistSandboxS3ViaAPI(ctx, d.Client, d.TaskID, callerNotes, baseSHA, rep)
 					if !rep.Passed {
 						if attempt <= 2 {
 							return mcp.PullRequestReport{}, errors.New(rep.FormatAgentFailure())
 						}
 						req.AllowHoldAfterS3Cap = true
 					}
+				} else if errors.Is(s3Err, checks.ErrBaseResolutionFailed) {
+					if attempt <= 2 {
+						return mcp.PullRequestReport{}, s3Err
+					}
+					req.AllowHoldAfterS3Cap = true
 				}
 			}
 		}
@@ -174,7 +180,7 @@ func sandboxQACommandRunner(tools []mcp.Tool) checks.CommandRunner {
 	return nil
 }
 
-func persistSandboxS3ViaAPI(ctx context.Context, client *ui.HTTPClient, taskID, callerNotes string, rep checks.Report) {
+func persistSandboxS3ViaAPI(ctx context.Context, client *ui.HTTPClient, taskID, callerNotes, baseSHA string, rep checks.Report) {
 	detailMap := map[string]any{
 		"blastTier": rep.BlastTier,
 	}
@@ -202,6 +208,7 @@ func persistSandboxS3ViaAPI(ctx context.Context, client *ui.HTTPClient, taskID, 
 			Run: model.QACheckRun{
 				TaskID:     taskID,
 				CommitSHA:  rep.HeadSHA,
+				BaseSHA:    baseSHA,
 				Stage:      "S3",
 				CheckID:    cr.CheckID,
 				Arm:        model.QAArmTreatment,

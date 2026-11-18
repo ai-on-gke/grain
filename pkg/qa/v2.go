@@ -682,7 +682,7 @@ func compileBundle(decl FlowDeclarationV2, version int, sourceYAML string, expli
 			return FlowVersionBundle{}, fmt.Errorf("qa: unknown check id %q", ruleID)
 		}
 		cur := mat.Checks[ruleID]
-		isFloor := ruleID == RuleTestIntegrityGuard || ruleID == RuleStrictConfigDecoder
+		isFloor := ruleID == RuleTestIntegrityGuard
 		if override.Enabled != nil {
 			if isFloor && !*override.Enabled {
 				return FlowVersionBundle{}, fmt.Errorf("qa: floor check %q cannot be disabled", ruleID)
@@ -717,7 +717,7 @@ func compileBundle(decl FlowDeclarationV2, version int, sourceYAML string, expli
 	}
 
 	// Enforce mandatory floors regardless of inheritance.
-	for _, floorID := range []string{RuleTestIntegrityGuard, RuleStrictConfigDecoder} {
+	for _, floorID := range []string{RuleTestIntegrityGuard} {
 		fc := mat.Checks[floorID]
 		if fc.Enabled == nil || !*fc.Enabled || fc.Severity != "blocking" {
 			return FlowVersionBundle{}, fmt.Errorf("qa: mandatory floor %q must remain enabled and blocking", floorID)

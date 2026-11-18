@@ -16,6 +16,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,6 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/qa"
+	"github.com/ai-on-gke/grain/pkg/qa/checks"
 	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 )
 
@@ -296,8 +298,8 @@ func TestQASalvageS3FailureRequeuesOnceThenHoldsWithGateQA(t *testing.T) {
 	t.Cleanup(func() { orchestrator.SetLiveQARuntime(nil) })
 
 	stageBranch := model.QAStageBranchName(task.ID)
-	badDecoder := "package config\nimport (\n\t\"bytes\"\n\t\"gopkg.in/yaml.v3\"\n)\ntype Config struct{ Name string }\nfunc Parse(b []byte) error {\n\tvar v Config\n\treturn yaml.NewDecoder(bytes.NewReader(b)).Decode(&v)\n}\n"
-	commitAndPushFile(t, sim.BareRepo, stageBranch, "pkg/config/parse.go", badDecoder, "Add config parser\n\nBody.")
+	badTest := "package config\nimport \"testing\"\nfunc TestParseNoAssertions(t *testing.T) {}\n"
+	commitAndPushFile(t, sim.BareRepo, stageBranch, "pkg/config/parse_test.go", badTest, "Add assertion-free test\n\nBody.")
 
 	now := time.Date(2026, 11, 12, 21, 10, 0, 0, time.UTC)
 	// First exit without open_pull_request: requeues 1 repair without opening a GitHub PR.
@@ -309,7 +311,7 @@ func TestQASalvageS3FailureRequeuesOnceThenHoldsWithGateQA(t *testing.T) {
 	}
 
 	// Second exit still failing S3: retry cap reached -> opens PR held by GateQA with AutoMerge=false!
-	commitAndPushFile(t, sim.BareRepo, stageBranch, "pkg/config/parse.go", badDecoder+"\n// still missing KnownFields\n", "Second attempt\n\nBody.")
+	commitAndPushFile(t, sim.BareRepo, stageBranch, "pkg/config/parse_test.go", badTest+"\n// still no assertions\n", "Second attempt\n\nBody.")
 	if _, err := orchestrator.SalvagePushedBranch(ctx, store, client, task, now.Add(time.Minute)); err != nil {
 		t.Fatalf("SalvagePushedBranch 2: %v", err)
 	}
@@ -448,8 +450,8 @@ func TestQATreatmentS3RetryCapHoldsPRAndPreservesOwnerRepoWorkOrigin(t *testing.
 	t.Cleanup(func() { orchestrator.SetLiveQARuntime(nil) })
 
 	stageBranch := model.QAStageBranchName(task.ID)
-	badDecoder := "package config\nimport \"gopkg.in/yaml.v3\"\ntype Config struct{ Name string }\nfunc Parse(b []byte) error {\n\tvar v Config\n\treturn yaml.Unmarshal(b, &v)\n}\n"
-	commitAndPushFile(t, sim.BareRepo, stageBranch, "pkg/config/parse.go", badDecoder, "Add config parser\n\nBody.")
+	badTest := "package config\nimport \"testing\"\nfunc TestParseNoAssertions(t *testing.T) {}\n"
+	commitAndPushFile(t, sim.BareRepo, stageBranch, "pkg/config/parse_test.go", badTest, "Add assertion-free test\n\nBody.")
 
 	// Attempt < 3 (AllowHoldAfterS3Cap=false) must refuse PR creation and leave stage unpromoted.
 	if _, err := orchestrator.OpenPullRequestForTaskWithQA(ctx, store, client, task, orchestrator.QAOpenPROptions{
@@ -1249,5 +1251,236 @@ func TestEvaluateAndApplyQATriageSafetyFloors(t *testing.T) {
 	gotCI, _ := store.GetTask(ctx, tCIRed.ID)
 	if gotCI.AutoMerge {
 		t.Fatalf("expected CIRedOrPending floor to withdraw AutoMerge when CI conclusion is failure")
+	}
+}
+
+type failingDefaultBranchClient struct {
+	github.Client
+	failDefaultBranch bool
+}
+
+func (f failingDefaultBranchClient) DefaultBranch(owner, repo string) (string, error) {
+	if f.failDefaultBranch {
+		return "", errors.New("forge api repos/" + owner + "/" + repo + ": context deadline exceeded")
+	}
+	return f.Client.DefaultBranch(owner, repo)
+}
+
+func TestQABaseResolutionMergeBaseWithoutRESTAndOperatorS3Bypass(t *testing.T) {
+	store, ctx := openStore(t)
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "safe.bareRepository")
+	t.Setenv("GIT_CONFIG_VALUE_0", "all")
+
+	// Enable QA with default standard-workflow (safe for generic repos).
+	if err := store.PutConfig(ctx, model.Config{
+		QA: model.QAConfig{
+			Enabled:         true,
+			FlowID:          model.QAFlowStandard,
+			RolloutPct:      100,
+			ShadowOnControl: model.BoolPtr(true),
+			Epoch:           1,
+			RegimeID:        1,
+		},
+	}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+
+	sim, baseClient := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	// Advance main past its initial commit so rootSHA != mainHeadSHA.
+	rootOut, err := exec.Command("git", "--git-dir="+sim.BareRepo, "rev-list", "--max-parents=0", "refs/heads/main").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-list root: %v (%s)", err, rootOut)
+	}
+	rootSHA := strings.TrimSpace(string(rootOut))
+	mainHeadSHA := commitAndPushFile(t, sim.BareRepo, "main", "pkg/existing/legacy.go",
+		"package existing\nfunc Legacy() string { return \"old\" }\n",
+		"Baseline repo commit on main")
+	if mainHeadSHA == rootSHA {
+		t.Fatalf("expected mainHeadSHA (%s) != rootSHA (%s)", mainHeadSHA, rootSHA)
+	}
+
+	dataDir := t.TempDir()
+	orchestrator.SetLiveQARuntime(&orchestrator.QARuntime{
+		DataDir:  dataDir,
+		Profiler: qa.NewProfiler(filepath.Join(dataDir, "perf", "qa.jsonl")),
+		ResolveRemote: func(_ context.Context, _ model.RepoRef) (string, string, error) {
+			return sim.BareRepo, "", nil
+		},
+	})
+	t.Cleanup(func() { orchestrator.SetLiveQARuntime(nil) })
+
+	// 1. Task with empty Base (""): even when REST DefaultBranch fails/times out during S3,
+	// S3 resolves baseSha = merge-base(origin/main, HEAD) via git (NEVER rootSHA).
+	task1 := filedTask(t, ctx, store, "s3-mb", repo)
+	if _, err := store.EnsureQAAssignment(ctx, model.QAAssignment{
+		RootOrigin:         model.ResolveQARootOrigin(task1.WorkOrigin, task1.ID),
+		Epoch:              1,
+		RegimeID:           1,
+		Arm:                model.QAArmTreatment,
+		FlowID:             model.QAFlowStandard,
+		RolloutPctAtAssign: 100,
+	}); err != nil {
+		t.Fatalf("EnsureQAAssignment task1: %v", err)
+	}
+	stage1 := model.QAStageBranchName(task1.ID)
+	commitAndPushFile(t, sim.BareRepo, stage1, "pkg/feature/new.go",
+		"package feature\nfunc New() int { return 42 }\n",
+		"Add New helper\n\nImplements New().")
+
+	// Wrap client so DefaultBranch fails while S3 runs (proving S3 does not depend on REST DefaultBranch).
+	flakyClient := failingDefaultBranchClient{Client: baseClient, failDefaultBranch: true}
+	// Note: OpenPullRequestForTask itself needs DefaultBranch when task.Base is empty, so set Base=""
+	// and verify S3's recorded BaseSHA after running with a client whose DefaultBranch only succeeds if called after S3,
+	// OR first verify S3 mirror resolution runs cleanly with failDefaultBranch=true.
+	_, _ = orchestrator.OpenPullRequestForTaskWithQA(ctx, store, flakyClient, task1, orchestrator.QAOpenPROptions{})
+
+	runs1, err := store.ListQACheckRunsForTask(ctx, task1.ID)
+	if err != nil || len(runs1) == 0 {
+		t.Fatalf("expected recorded S3 check runs for task1, got runs=%d err=%v", len(runs1), err)
+	}
+	for _, r := range runs1 {
+		if r.Stage == "S3" {
+			if r.BaseSHA == rootSHA {
+				t.Fatalf("S3 check %s fell back to initial/root commit %s; want merge-base %s", r.CheckID, rootSHA, mainHeadSHA)
+			}
+			if r.BaseSHA != mainHeadSHA {
+				t.Fatalf("S3 check %s recorded BaseSHA = %s, want merge-base %s", r.CheckID, r.BaseSHA, mainHeadSHA)
+			}
+		}
+	}
+
+	// 2. When target base branch cannot be resolved at all, S3 MUST return ErrBaseResolutionFailed,
+	// record an explicit qa:base-resolution error run with empty BaseSHA (never rootSHA), and NOT
+	// silently diff the whole repo.
+	task2 := filedTask(t, ctx, store, "s3-badbase", repo)
+	if err := store.UpdateTask(ctx, task2.ID, func(tk *model.Task) error {
+		tk.Base = "does-not-exist"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	task2Fresh, _ := store.GetTask(ctx, task2.ID)
+	task2 = *task2Fresh
+	if _, err := store.EnsureQAAssignment(ctx, model.QAAssignment{
+		RootOrigin:         model.ResolveQARootOrigin(task2.WorkOrigin, task2.ID),
+		Epoch:              1,
+		RegimeID:           1,
+		Arm:                model.QAArmTreatment,
+		FlowID:             model.QAFlowStandard,
+		RolloutPctAtAssign: 100,
+	}); err != nil {
+		t.Fatalf("EnsureQAAssignment task2: %v", err)
+	}
+	stage2 := model.QAStageBranchName(task2.ID)
+	commitAndPushFile(t, sim.BareRepo, stage2, "pkg/feature/two.go",
+		"package feature\nfunc Two() int { return 2 }\n",
+		"Add Two helper\n\nBody.")
+
+	_, err = orchestrator.OpenPullRequestForTaskWithQA(ctx, store, baseClient, task2, orchestrator.QAOpenPROptions{})
+	if !errors.Is(err, checks.ErrBaseResolutionFailed) {
+		t.Fatalf("expected ErrBaseResolutionFailed on missing base branch, got %v", err)
+	}
+	runs2, err := store.ListQACheckRunsForTask(ctx, task2.ID)
+	if err != nil || len(runs2) != 1 {
+		t.Fatalf("expected 1 diagnostic qa:base-resolution check run, got %+v (err=%v)", runs2, err)
+	}
+	if runs2[0].CheckID != model.QACheckIDBaseResolution || runs2[0].Verdict != "error" || runs2[0].BaseSHA != "" {
+		t.Fatalf("unexpected diagnostic check run: %+v", runs2[0])
+	}
+
+	// 3. Operator override ("Bypass S3 gate & open PR") on a task blocked at S3 promotes
+	// grain-qa-stage/<id> to task.BranchName(), opens the PR, disables AutoMerge pending
+	// human review, enforces commit pinning, and records qa:s3-operator-bypass.
+	task3 := filedTask(t, ctx, store, "s3-bypass", repo)
+	if err := store.UpdateTask(ctx, task3.ID, func(tk *model.Task) error {
+		tk.AutoMerge = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fresh3, _ := store.GetTask(ctx, task3.ID); fresh3 != nil {
+		task3 = *fresh3
+	}
+	if _, err := store.EnsureQAAssignment(ctx, model.QAAssignment{
+		RootOrigin:         model.ResolveQARootOrigin(task3.WorkOrigin, task3.ID),
+		Epoch:              1,
+		RegimeID:           1,
+		Arm:                model.QAArmTreatment,
+		FlowID:             model.QAFlowStandard,
+		RolloutPctAtAssign: 100,
+	}); err != nil {
+		t.Fatalf("EnsureQAAssignment task3: %v", err)
+	}
+	stage3 := model.QAStageBranchName(task3.ID)
+	// Commit a blocking test-integrity violation (assertion-free Go test) so S3 blocks PR creation.
+	sha3 := commitAndPushFile(t, sim.BareRepo, stage3, "pkg/feature/bad_test.go",
+		"package feature\nimport \"testing\"\nfunc TestNothing(t *testing.T) {}\n",
+		"Add empty test\n\nBody.")
+	// Before S3 has blocked sha3, BypassS3 must be refused.
+	if _, err := orchestrator.BypassS3AndOpenPullRequestForTask(ctx, store, baseClient, task3, "alice@example.com", "premature", sha3); err == nil {
+		t.Fatal("expected BypassS3AndOpenPullRequestForTask to reject task before S3 has failed on sha3")
+	}
+	if _, err := orchestrator.OpenPullRequestForTaskWithQA(ctx, store, baseClient, task3, orchestrator.QAOpenPROptions{}); err == nil {
+		t.Fatal("expected S3 test-integrity-guard to block OpenPullRequestForTaskWithQA before bypass")
+	}
+	if exists, _ := baseClient.BranchExists(repo.Owner, repo.Name, task3.BranchName()); exists {
+		t.Fatalf("PR branch %s must not exist while blocked at S3", task3.BranchName())
+	}
+
+	// TOCTOU protection: stale expectedHead must be refused without promoting stage3.
+	if _, err := orchestrator.BypassS3AndOpenPullRequestForTask(ctx, store, baseClient, task3, "alice@example.com", "stale commit", "0000000000000000000000000000000000000000"); err == nil {
+		t.Fatal("expected BypassS3AndOpenPullRequestForTask to reject stale expectedHead")
+	}
+	if exists, _ := baseClient.BranchExists(repo.Owner, repo.Name, task3.BranchName()); exists {
+		t.Fatalf("PR branch %s must not be promoted when expectedHead mismatches", task3.BranchName())
+	}
+
+	bypassStatus, err := orchestrator.BypassS3AndOpenPullRequestForTask(ctx, store, baseClient, task3, "alice@example.com", "False positive; verified manually", sha3)
+	if err != nil {
+		t.Fatalf("BypassS3AndOpenPullRequestForTask: %v", err)
+	}
+	if bypassStatus.PullRequest.Number == 0 {
+		t.Fatalf("expected opened PR after S3 bypass, got %+v", bypassStatus)
+	}
+	afterBypass, err := store.GetTask(ctx, task3.ID)
+	if err != nil || afterBypass == nil {
+		t.Fatalf("GetTask after bypass: %v", err)
+	}
+	if afterBypass.AutoMerge || !model.AutoMergeAwaitsPerson(*afterBypass) {
+		t.Fatalf("BypassS3 must disable AutoMerge and await person review; AutoMerge=%v awaitsPerson=%v", afterBypass.AutoMerge, model.AutoMergeAwaitsPerson(*afterBypass))
+	}
+	prHead, err := baseClient.GetBranchHead(repo.Owner, repo.Name, task3.BranchName())
+	if err != nil || prHead == nil || prHead.SHA != sha3 {
+		t.Fatalf("promoted branch head = %+v (err=%v), want %s", prHead, err, sha3)
+	}
+	if stageStillThere, _ := baseClient.BranchExists(repo.Owner, repo.Name, stage3); stageStillThere {
+		t.Fatalf("staging branch %s should be deleted after operator bypass promotion", stage3)
+	}
+	// Once PR is open and stage3 is deleted, BypassS3 must refuse to run again even if a new S3 failure were recorded.
+	if _, err := store.RecordQACheckRun(ctx, model.QACheckRun{
+		TaskID:    task3.ID,
+		CommitSHA: sha3,
+		Stage:     "S3",
+		CheckID:   "golden:test-integrity-guard",
+		Arm:       model.QAArmTreatment,
+		Verdict:   "fail",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orchestrator.BypassS3AndOpenPullRequestForTask(ctx, store, baseClient, *afterBypass, "alice@example.com", "try clearing open PR gate", sha3); err == nil {
+		t.Fatal("expected BypassS3AndOpenPullRequestForTask to refuse bypassing on an already-open PR with no staging branch")
+	}
+	runs3, _ := store.ListQACheckRunsForTask(ctx, task3.ID)
+	foundBypass := false
+	for _, r := range runs3 {
+		if r.CheckID == model.QACheckIDS3OperatorBypass && r.Verdict == "bypassed" && r.CommitSHA == sha3 {
+			foundBypass = true
+		}
+	}
+	if !foundBypass {
+		t.Fatalf("expected recorded %s check run on %s, got %+v", model.QACheckIDS3OperatorBypass, sha3, runs3)
 	}
 }

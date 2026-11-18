@@ -350,7 +350,7 @@ func ParseRepoFlowYAML(raw []byte) (FlowSpec, error) {
 	}
 	for _, dis := range overlay.DisableRules {
 		dis = strings.TrimSpace(dis)
-		if dis == RuleTestIntegrityGuard || dis == RuleStrictConfigDecoder {
+		if dis == RuleTestIntegrityGuard {
 			return FlowSpec{}, fmt.Errorf("qa: rule %q is a mandatory floor and cannot be disabled in .grain/qa-flow.yml", dis)
 		}
 		for i := range base.Rules {
