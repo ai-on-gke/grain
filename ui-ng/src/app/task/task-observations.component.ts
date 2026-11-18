@@ -156,9 +156,6 @@ import type {
             @if (entry.result.human_text) {
               <p>{{ entry.result.human_text }}</p>
             }
-            @if (entry.result.agent_text) {
-              <p>{{ entry.result.agent_text }}</p>
-            }
             @for (wait of entry.result.waits; track wait.key ?? $index) {
               <p>
                 Predicted wait only: {{ wait.event }} · owned by

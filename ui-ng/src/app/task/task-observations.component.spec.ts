@@ -227,6 +227,18 @@ it("labels current and legacy CI predictions with their resource and keeps remed
     "Merge conflicts remain an executor precondition.",
   );
   expect(el.querySelectorAll("button,a,input").length).toBe(0);
+  // Every CI result carries agent text; each article shows it once.
+  for (const article of Array.from(el.querySelectorAll("article"))) {
+    const texts = Array.from(article.querySelectorAll(":scope > p")).map((p) =>
+      p.textContent?.trim(),
+    );
+    expect(
+      texts.filter(
+        (t) =>
+          t === "Prediction only: retry checks under existing authorization.",
+      ),
+    ).toHaveLength(1);
+  }
 });
 
 describe("review and approval shadow scopes", () => {
