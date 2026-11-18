@@ -31,7 +31,8 @@ export type AnyTask = Task & Partial<TaskDetail>;
 
 export interface ActionViewer {
   can(route: RouteKey, repo?: string): boolean;
-  // An unlimited role (grain/operator), which force-merging needs.
+  // An unlimited role (grain/operator), which accepting review findings and
+  // force-merging need.
   fullAccess: boolean;
 }
 
@@ -184,9 +185,21 @@ export function autoMergeSentence(t: AnyTask): string {
   return `Auto-merge was turned off because ${because}. Submit again after ${after}.`;
 }
 
+// canAcceptFindings reports whether viewer may call POST accept-findings on t:
+// POST /api/tasks/{id}/accept-findings carries tasks:write scope, and
+// Client.AcceptReviewFindings refuses any role that is not unlimited
+// (pkg/ui/accept_findings.go). When viewer is omitted, full access is assumed.
+function canAcceptFindings(t: AnyTask, viewer?: ActionViewer): boolean {
+  if (!viewer) return true;
+  return (
+    viewer.fullAccess &&
+    viewer.can("POST /api/tasks/{id}/accept-findings", t.repo || undefined)
+  );
+}
+
 // whatsNeeded is the one sentence at the top of the action area: who
 // has to act, and what the action is.
-export function whatsNeeded(t: AnyTask): string {
+export function whatsNeeded(t: AnyTask, viewer?: ActionViewer): string {
   const state = t.state;
   if (state === "closed") {
     return t.prMergedAt || t.merged
@@ -230,7 +243,7 @@ export function whatsNeeded(t: AnyTask): string {
     }
     return "The agent is waiting on you. Reply to continue, or close the task.";
   }
-  if (state === "awaiting_submit") return submitSentence(t);
+  if (state === "awaiting_submit") return submitSentence(t, viewer);
   // completed (and anything else grain adds later).
   if (t.mergeQueueBlockedAt || control(t) === "Retry merge") {
     return "The merge queue gave up on this pull request. Sort it out, then Retry merge.";
@@ -247,18 +260,19 @@ export function whatsNeeded(t: AnyTask): string {
   return "Nothing is needed from you.";
 }
 
-function submitSentence(t: AnyTask): string {
+function submitSentence(t: AnyTask, viewer?: ActionViewer): string {
   const gates = (t.mergeGates ?? []).filter((g) => g.id !== APPROVAL_GATE);
   const parts: string[] = [];
   const findings = gates.filter((g) => g.state === "findings");
   const failing = gates.filter((g) => g.state === "failing");
   const needed = gates.filter((g) => g.state === "needed");
   const running = gates.filter((g) => g.state === "running");
+  const mayAccept = canAcceptFindings(t, viewer);
   for (const g of findings) {
     const n = findingsCount(t, g.id);
     const it = n > 1 ? "them" : "it";
     parts.push(
-      `${label(g)} ${findingsPhrase(t, g)}. Fix ${it} (send ${it} back to the agent)${g.acceptable ? ` or accept ${it}` : ""} to continue.`,
+      `${label(g)} ${findingsPhrase(t, g)}. Fix ${it} (send ${it} back to the agent)${mayAccept && g.acceptable ? ` or accept ${it}` : ""} to continue.`,
     );
   }
   if (failing.length) {
@@ -300,7 +314,11 @@ function submitSentence(t: AnyTask): string {
 // nextStep is the short line a list row shows for a task waiting on a
 // person: the concrete next step, not just the state's name. "" when
 // nothing is needed from a person.
-export function nextStep(t: AnyTask, listOnly = false): string {
+export function nextStep(
+  t: AnyTask,
+  listOnly = false,
+  viewer?: ActionViewer,
+): string {
   if (t.paused && t.state !== "closed") return "Paused: Resume to continue";
   switch (t.state) {
     case "proposed":
@@ -334,7 +352,8 @@ export function nextStep(t: AnyTask, listOnly = false): string {
     const what = findings.every((g) => g.id === "security-review")
       ? "security finding"
       : "review finding";
-    const canAccept = findings.some((g) => g.acceptable);
+    const canAccept =
+      canAcceptFindings(t, viewer) && findings.some((g) => g.acceptable);
     return `${canAccept ? "Fix or accept" : "Fix"} ${plural(n, what)}`;
   }
   const failing = gates.filter((g) => g.state === "failing");
@@ -594,10 +613,13 @@ function submitActions(t: AnyTask, viewer: ActionViewer): TaskAction[] {
     });
   }
   // Accept: a review's findings on one gate, taken as they are, with a
-  // reason (POST accept-findings). Offered where the server says the
-  // findings are a review's to accept (MergeGate.acceptable); CI, the
-  // other gates and approvals still apply afterwards.
-  if (viewer.can("POST /api/tasks/{id}/accept-findings", repo)) {
+  // reason (POST accept-findings). Offered to an unlimited role where the
+  // server says the findings are a review's to accept (MergeGate.acceptable);
+  // CI, the other gates and approvals still apply afterwards.
+  if (
+    viewer.fullAccess &&
+    viewer.can("POST /api/tasks/{id}/accept-findings", repo)
+  ) {
     const acceptable = gates.filter(
       (g) => g.state === "findings" && !!g.acceptable,
     );

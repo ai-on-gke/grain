@@ -160,21 +160,35 @@ describe("availableActions", () => {
     expect(nextStep(t)).toBe("Fix or accept 1 review finding");
   });
 
-  it("offers accept, but never force merge, to a limited role", () => {
+  it("never offers accept or force merge to a limited role", () => {
     const t = task({
       state: "awaiting_submit",
       mergeGates: [CI_PASSED, REVIEW_FINDINGS],
+      reviewFindings: [
+        { gate: "review", summary: "nil deref", reviewTask: "5882" },
+      ],
     });
     const got = ids(t, limited);
     expect(got).toContain("send-back");
-    expect(got).toContain("accept-findings");
+    expect(got).not.toContain("accept-findings");
     expect(got).not.toContain("force-merge");
-    // Findings no review stands behind are not the owner's to accept.
+    expect(whatsNeeded(t, limited)).toBe(
+      "Code review left 1 finding. Fix it (send it back to the agent) to continue.",
+    );
+    expect(nextStep(t, false, limited)).toBe("Fix 1 review finding");
+    // Findings no review stands behind are not even an operator's to accept.
     const held = task({
       state: "awaiting_submit",
       mergeGates: [CI_PASSED, { ...REVIEW_FINDINGS, acceptable: false }],
+      reviewFindings: [
+        { gate: "review", summary: "nil deref", reviewTask: "5882" },
+      ],
     });
-    expect(ids(held, limited)).not.toContain("accept-findings");
+    expect(ids(held, operator)).not.toContain("accept-findings");
+    expect(whatsNeeded(held, operator)).toBe(
+      "Code review left 1 finding. Fix it (send it back to the agent) to continue.",
+    );
+    expect(nextStep(held, false, operator)).toBe("Fix 1 review finding");
   });
 
   it("CI failed: send back to fix, no Submit", () => {

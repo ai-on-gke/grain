@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { nextStep } from "../shared/task-actions";
+import { nextStep, type ActionViewer } from "../shared/task-actions";
 import type { RouteKey } from "../api/generated-routes";
 import type { RouteParams } from "../api/grain-api.service";
 import type { LocalScriptApproval, Notification, Task } from "../api/models";
@@ -587,7 +587,11 @@ function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
 
 // classifyTask puts one waiting task in the first group that claims it,
 // so no task is listed twice (InboxPage.jsx's groupTasks).
-export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
+export function classifyTask(
+  t: Task,
+  listOnly = false,
+  viewer?: ActionViewer,
+): InboxEntry | null {
   if (!waitsOnUser(t)) return null;
   if (waitingBaseRepair(t)) {
     const e = taskEntry(t, "base-repair", "base-repair");
@@ -685,7 +689,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       : cl
         ? blocked ||
           "Submit this CL now: its review, presubmit and grain's reviews have all cleared."
-        : `${nextStep(t, listOnly)}.`;
+        : `${nextStep(t, listOnly, viewer)}.`;
     e.rationale = review
       ? "A fresh review clears the gate once your decision is carried out."
       : cl
@@ -940,11 +944,12 @@ export function buildEntries(
   notifications: Notification[],
   localScripts: LocalScriptApproval[],
   details?: Record<string, TaskDetail>,
+  viewer?: ActionViewer,
 ): InboxEntry[] {
   const out: InboxEntry[] = [];
   for (const raw of tasks) {
     const { task: t, hasDetail } = withDetailGates(raw, details?.[raw.id]);
-    const e = classifyTask(t, !!details && !hasDetail);
+    const e = classifyTask(t, !!details && !hasDetail, viewer);
     if (e) out.push(e);
   }
   for (const n of notifications) out.push(classifyNotification(n));

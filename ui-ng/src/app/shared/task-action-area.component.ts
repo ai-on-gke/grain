@@ -27,6 +27,7 @@ import {
   autoMergeSentence,
   availableActions,
   whatsNeeded,
+  type ActionViewer,
   type AnyTask,
   type TaskAction,
 } from "./task-actions";
@@ -177,15 +178,23 @@ export class TaskActionAreaComponent {
   readonly testidPrefix = input("act-");
   readonly run = output<TaskAction>();
 
-  readonly actions = computed(() => {
-    const t = this.task();
-    const omit = new Set(this.omit());
-    return availableActions(t, {
-      can: (route) => this.access.canAccessTask(route, t.repo ?? null),
-      fullAccess: this.access.isFullAccess(),
-    }).filter((a) => !omit.has(a.id));
+  private readonly viewer = computed<ActionViewer>(() => {
+    const fullAccess = this.access.isFullAccess();
+    this.access.rawConfig();
+    return {
+      can: (route, repo) => this.access.canAccessTask(route, repo ?? null),
+      fullAccess,
+    };
   });
-  protected readonly sentence = computed(() => whatsNeeded(this.task()));
+  readonly actions = computed(() => {
+    const omit = new Set(this.omit());
+    return availableActions(this.task(), this.viewer()).filter(
+      (a) => !omit.has(a.id),
+    );
+  });
+  protected readonly sentence = computed(() =>
+    whatsNeeded(this.task(), this.viewer()),
+  );
   protected readonly autoMergeNote = computed(() =>
     autoMergeSentence(this.task()),
   );

@@ -369,4 +369,26 @@ describe("inbox classifier", () => {
       ),
     ).toBe(false);
   });
+
+  it("drops 'or accept' from a submit row's summary for a limited role", () => {
+    const t = task({
+      state: "awaiting_submit",
+      mergeGates: [
+        {
+          id: "review",
+          label: "Code review",
+          state: "findings",
+          reviewTask: "5882",
+          acceptable: true,
+        },
+        { id: "approval", label: "Approval", state: "needed" },
+      ],
+    });
+    expect(
+      classifyTask(t, false, { can: () => true, fullAccess: true })?.summary,
+    ).toBe("Fix or accept 1 review finding.");
+    expect(
+      classifyTask(t, false, { can: () => true, fullAccess: false })?.summary,
+    ).toBe("Fix 1 review finding.");
+  });
 });
