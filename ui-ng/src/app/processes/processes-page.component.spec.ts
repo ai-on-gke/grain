@@ -1783,6 +1783,13 @@ describe("ProcessesPageComponent (D-9)", () => {
       .find((b) => b.textContent?.trim() === "Cancel")!
       .click();
     await flush(harness);
+    // The draft was filled in, so Cancel asks before dropping it, once.
+    const discards = Array.from(root.querySelectorAll("button")).filter(
+      (b) => b.textContent?.trim() === "Discard",
+    );
+    expect(discards.length).toBe(1);
+    discards[0].click();
+    await flush(harness);
     expect(root.querySelector('[data-testid="schedule-dialog"]')).toBeNull();
 
     await harness.navigateByUrl("/processes/schedules?new=1");
