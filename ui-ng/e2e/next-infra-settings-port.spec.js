@@ -139,6 +139,22 @@ test("Sandboxes says a fixed overcommit of 0 leaves the dimension unbounded", as
   // Nothing was saved: the draft is dropped with the page.
 });
 
+test("Sandboxes says what a blank or negative session sandbox idle TTL means", async ({
+  page,
+}) => {
+  // The server takes a negative TTL as "release at once" (pkg/ui
+  // settings.go), which the field never said: -1m saved silently.
+  await page.goto("/next/settings/sandboxes");
+  const ttl = page.locator("#sb-ttl");
+  await expect(ttl).toHaveAttribute("aria-describedby", "sb-ttl-hint");
+  await expect(page.getByTestId("sb-ttl-hint")).toContainText(
+    "Blank uses grain's default (30m0s)",
+  );
+  await expect(page.getByTestId("sb-ttl-hint")).toContainText(
+    "a negative duration such as -1s releases it as each turn ends",
+  );
+});
+
 test("CI: Flush CI job cache asks first", async ({ page }) => {
   let flushed = 0;
   await page.route("**/api/ci/cache", (route) => {

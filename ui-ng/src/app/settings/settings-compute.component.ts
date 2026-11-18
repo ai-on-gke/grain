@@ -1553,6 +1553,7 @@ function mib(mb: number): string {
                   state.defaultHint('sessionSandboxIdleTtl', '30m')
                 "
                 [value]="state.val('sessionSandboxIdleTtl', '')"
+                aria-describedby="sb-ttl-hint"
                 [disabled]="!canWriteSettings()"
                 (input)="
                   state.setField(
@@ -1561,6 +1562,13 @@ function mib(mb: number): string {
                   )
                 "
               />
+              <span class="s-hint" id="sb-ttl-hint" data-testid="sb-ttl-hint">
+                How long a chat or session task's sandbox stays warm for a
+                reply. Blank uses grain's default ({{
+                  state.defaultHint("sessionSandboxIdleTtl", "30m")
+                }}); a negative duration such as -1s releases it as each turn
+                ends.
+              </span>
             </div>
           </div>
         </div>

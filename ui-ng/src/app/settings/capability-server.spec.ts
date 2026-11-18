@@ -14,6 +14,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  hostScriptLimits,
+  hostScripts,
+  isHostScriptServer,
   type CapabilityServerDetail,
   type JsonSchema,
   configFromForm,
@@ -215,5 +218,53 @@ describe("remove and rename confirms", () => {
     expect(removeMessage("x", [])).toMatch(/Nothing grants it now/);
     expect(removeMessage("x", [h])).toMatch(/these grants/);
     expect(renameMessage("x", "y", [h])).toMatch(/leaves these grants/);
+  });
+});
+
+describe("host scripts", () => {
+  const srv = (config: unknown, tools: string[] = ["test_script"]) =>
+    ({
+      id: "https://grain.dev/capabilities/host-script",
+      config: { config },
+      status: { tools },
+    }) as unknown as Parameters<typeof hostScripts>[0];
+
+  it("is a host-script server only when it advertises test_script", () => {
+    expect(isHostScriptServer(srv({}))).toBe(true);
+    expect(isHostScriptServer(srv({}, ["test_account"]))).toBe(false);
+  });
+
+  it("lists only named scripts, and none when scripts is not a list", () => {
+    expect(
+      hostScripts(srv({ scripts: [{ name: "ops" }, { script: "x" }] })),
+    ).toEqual([{ name: "ops" }]);
+    expect(hostScripts(srv({ scripts: "ops" }))).toEqual([]);
+    expect(hostScripts(srv(undefined))).toEqual([]);
+  });
+
+  it("says each limit the script sets, and env names but never values", () => {
+    expect(hostScriptLimits({ name: "ops" })).toEqual([]);
+    expect(
+      hostScriptLimits({
+        name: "ops",
+        timeout: 60,
+        max_output: 4096,
+        max_calls: 3,
+        max_args: 0,
+        max_arg_len: 128,
+        cwd: "/srv",
+        approve: true,
+        env: { TOKEN: "$env:DEPLOY_TOKEN", REGION: "eu" },
+      }),
+    ).toEqual([
+      "timeout 60s",
+      "output ≤ 4096 B",
+      "3 calls",
+      "≤ 0 args",
+      "arg ≤ 128 B",
+      "cwd /srv",
+      "approval each call",
+      "env TOKEN, REGION",
+    ]);
   });
 });

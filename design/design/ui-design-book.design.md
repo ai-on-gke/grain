@@ -419,7 +419,12 @@ missing / not set chip whose typed value goes as `configSecrets`, a refusal
 keyed by field shows under that field, and a field that does not apply given
 its siblings (gcp's `pool_max` in keyless token mode) is hidden unless it holds
 a value. Removing a server asks first and lists what holds it, linked, in the
-confirm (`ConfirmRequest.items`).
+confirm (`ConfirmRequest.items`). A server with control-plane actions of its
+own shows them beside the form, one bordered row per item: figma's accounts
+(Test, Connect Figma) and the host-script server's saved scripts (description,
+usage, limit chips, and a Test that runs the saved script once with one text
+box per argument, so an argument is passed exactly as typed, never through a
+shell, and shows the exit, duration, stdout and stderr, or why it was not run).
 
 A setting kept in the secret store rather than in grain/config (the Hub's
 `grc_…` registration token) stays editable while a config-repo lock

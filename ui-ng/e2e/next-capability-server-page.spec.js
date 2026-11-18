@@ -478,3 +478,118 @@ test("a usage read that fails says so rather than that nothing grants the server
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+test("the host-script server lists its saved scripts and Test runs one with exactly the typed arguments @dark @phone", async ({
+  page,
+}) => {
+  await page.goto(pagePath("https://grain.dev/capabilities/host-script"));
+  const list = page.getByTestId("host-script-list");
+  const row = list.locator('[data-host-script="ops"]');
+  // The demo's one script, with its description and limits.
+  await expect(row).toContainText(
+    "Demo operations script; echoes its arguments",
+  );
+  await expect(row.getByTestId("host-script-limits")).toHaveText("timeout 60s");
+
+  // Test opens a run panel; each argument is its own field, so one
+  // holding a space or $(…) reaches the script as exactly that.
+  const toggle = page.getByTestId("host-script-test-ops");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await page.getByTestId("host-script-add-arg").click();
+  await page.getByTestId("host-script-add-arg").click();
+  await page.locator('[data-host-script-arg="0"]').fill("hello world");
+  await page.locator('[data-host-script-arg="1"]').fill("$(id)");
+  await page.getByRole("button", { name: "Run ops" }).click();
+  await expect(page.getByTestId("host-script-exit")).toHaveText("exit 0");
+  await expect(page.getByTestId("host-script-stdout")).toHaveText(
+    "hello world $(id)",
+  );
+  await expect(page.getByTestId("host-script-stderr")).toHaveText("(empty)");
+
+  // A removed argument is not passed.
+  await page.getByRole("button", { name: "Remove argument 2" }).click();
+  await page.getByRole("button", { name: "Run ops" }).click();
+  await expect(page.getByTestId("host-script-stdout")).toHaveText(
+    "hello world",
+  );
+
+  // Nothing on the page scrolls sideways, phone included, and the Test
+  // button stays inside its row.
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth + 1,
+  );
+  expect(overflow).toBeFalsy();
+  const rowBox = await row.boundingBox();
+  const btnBox = await toggle.boundingBox();
+  expect(btnBox.x).toBeGreaterThanOrEqual(rowBox.x);
+  expect(btnBox.x + btnBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
+  await shoot(page, "host-script");
+
+  // Enter on the focused Test closes the panel and drops its run.
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("host-script-test")).toHaveCount(0);
+});
+
+test("a host script the server refuses to run says why rather than showing an exit", async ({
+  page,
+}) => {
+  // The server refuses a NUL byte in an argument before running
+  // anything (pkg/capability/intree/hostscript.go).
+  await page.goto(pagePath("https://grain.dev/capabilities/host-script"));
+  await page.getByTestId("host-script-test-ops").click();
+  await page.getByTestId("host-script-add-arg").click();
+  await page.locator('[data-host-script-arg="0"]').fill("a\u0000b");
+  await page.getByRole("button", { name: "Run ops" }).click();
+  await expect(page.getByTestId("host-script-result")).toContainText(
+    /Not run: .*NUL/,
+  );
+  await expect(page.getByTestId("host-script-exit")).toHaveCount(0);
+});
+
+test("a host script's longest name wraps inside its row at phone width @phone", async ({
+  page,
+  request,
+}) => {
+  const ID = "https://grain.dev/capabilities/host-script";
+  const before = await serverEntry(request, ID);
+  // The longest name the server takes (^[a-z0-9][a-z0-9_-]{0,62}$), with
+  // no hyphen to break at.
+  const name = "a".repeat(63);
+  const put = (config) =>
+    request.put("/api/capability-servers", {
+      data: { id: ID, config: { ...before.config, config } },
+    });
+  const scripts = [
+    ...before.config.config.scripts,
+    {
+      name,
+      description: "Long-named walk script",
+      script: "true\n",
+      timeout: 5,
+    },
+  ];
+  const r = await put({ ...before.config.config, scripts });
+  expect(r.ok(), await r.text()).toBeTruthy();
+  try {
+    await page.goto(pagePath(ID));
+    const row = page.locator(`[data-host-script="${name}"]`);
+    await expect(row).toBeVisible();
+    const vw = page.viewportSize().width;
+    const box = await row.boundingBox();
+    expect(box.x + box.width).toBeLessThanOrEqual(vw);
+    const btn = await page
+      .getByTestId(`host-script-test-${name}`)
+      .boundingBox();
+    expect(btn.x + btn.width).toBeLessThanOrEqual(box.x + box.width);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth + 1,
+    );
+    expect(overflow).toBeFalsy();
+  } finally {
+    expect((await put(before.config.config)).ok()).toBeTruthy();
+  }
+});
