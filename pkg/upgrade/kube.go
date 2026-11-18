@@ -185,18 +185,17 @@ const kubeHealthCheckPod = "grain-upgrade-check"
 // disk, not the work.
 var kubeHealthCheckShape = k8s.PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10}
 
-// kubeUpgradeComponent is the component label every throwaway pod an
+// kubeUpgradePurpose is the k8s.PurposeLabel value every throwaway pod an
 // upgrade creates carries -- the check pod, the ask pod, a release notes
-// preview's -- in place of k8s.SandboxValue. It is not cosmetic: a daemon
-// running with -k8s-sandboxes sweeps every SandboxValue pod in its
-// namespace that it is not holding as a run's sandbox, on every
-// reconcile tick, and these share that namespace. Labelled as sandboxes
-// they were deleted mid-upgrade: a check pod killed while it ran ("the
-// check pod is Failed"), an ask pod gone between finishing and having
-// its logs read (pods "grain-upgrade-ask" not found). deploy/kubernetes'
-// grain-sandbox-egress selects this value too, so they keep the egress
-// fence they had as sandboxes.
-const kubeUpgradeComponent = k8s.UpgradeComponent
+// preview's -- alongside k8s.SandboxLabel=k8s.SandboxValue. Keeping
+// SandboxValue means every cluster's stored grain-sandbox-egress policy
+// still fences these pods off the metadata server and the cluster without
+// an operator re-applying manifests; adding PurposeLabel keeps them out of
+// ListSandboxes (!grain.dev/purpose) and the daemon's reconcile-tick
+// sandbox sweep, which otherwise deleted them mid-upgrade: a check pod
+// killed while it ran ("the check pod is Failed"), an ask pod gone between
+// finishing and having its logs read (pods "grain-upgrade-ask" not found).
+const kubeUpgradePurpose = k8s.UpgradePurpose
 
 // stepRollout is the Kubernetes path's own last step, in place of the
 // image path's "record image": the Deployment is repointed and the
@@ -656,9 +655,9 @@ func (u *Upgrader) healthCheckInCluster(ctx context.Context, p *progress, client
 		// The image's own ENTRYPOINT is `grain` (Dockerfile), so this is
 		// the same subcommand the other two paths run -- "schema-version"
 		// on a real deployment.
-		Command:   command,
-		Security:  security,
-		Component: kubeUpgradeComponent,
+		Command:  command,
+		Security: security,
+		Purpose:  kubeUpgradePurpose,
 	}); err != nil {
 		return "", err
 	}
@@ -795,10 +794,10 @@ func (r kubeRunner) ask(ctx context.Context, p *progress, args []string) (string
 		return "", fmt.Errorf("%w: %w", errCouldNotAsk, err)
 	}
 	if err := client.Create(ctx, pod, kubeHealthCheckShape, k8s.PodOptions{
-		Image:     r.ref,
-		Command:   append([]string{"grain"}, args...),
-		Security:  r.security,
-		Component: kubeUpgradeComponent,
+		Image:    r.ref,
+		Command:  append([]string{"grain"}, args...),
+		Security: r.security,
+		Purpose:  kubeUpgradePurpose,
 	}); err != nil {
 		return "", fmt.Errorf("%w: %w", errCouldNotAsk, err)
 	}

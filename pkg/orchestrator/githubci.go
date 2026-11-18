@@ -72,9 +72,20 @@ const (
 	gitHubCIPruneEvery = time.Hour
 )
 
-// gitHubCIBudgetLow is github.BudgetLow, a variable so a test can say the
-// budget is low without spending one.
-var gitHubCIBudgetLow = github.BudgetLow
+// gitHubCIBudgetLow is github.BudgetLow behind a hook a test can swap
+// (SetGitHubCIBudgetLow) to say the budget is low without spending one.
+// The hook is guarded so a swap never races a reconciler reading it.
+var (
+	gitHubCIBudgetLowMu sync.RWMutex
+	gitHubCIBudgetLowFn = github.BudgetLow
+)
+
+func gitHubCIBudgetLow(now time.Time) bool {
+	gitHubCIBudgetLowMu.RLock()
+	fn := gitHubCIBudgetLowFn
+	gitHubCIBudgetLowMu.RUnlock()
+	return fn(now)
+}
 
 // isGrainOwnCheck reports whether a check run is one grain itself posts
 // to GitHub -- its review check, or grain CI's own verdict mirrored as a

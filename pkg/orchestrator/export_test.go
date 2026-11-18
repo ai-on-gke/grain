@@ -381,9 +381,15 @@ func SetAutoUpgradeProbeTimeout(d time.Duration) func() {
 // hour's budget as low (or not), and returns the function that puts it
 // back. Not for a parallel test.
 func SetGitHubCIBudgetLow(low bool) func() {
-	old := gitHubCIBudgetLow
-	gitHubCIBudgetLow = func(time.Time) bool { return low }
-	return func() { gitHubCIBudgetLow = old }
+	gitHubCIBudgetLowMu.Lock()
+	old := gitHubCIBudgetLowFn
+	gitHubCIBudgetLowFn = func(time.Time) bool { return low }
+	gitHubCIBudgetLowMu.Unlock()
+	return func() {
+		gitHubCIBudgetLowMu.Lock()
+		gitHubCIBudgetLowFn = old
+		gitHubCIBudgetLowMu.Unlock()
+	}
 }
 
 // RecordPolledChecks is recordPolledChecks, for a test of the poll path.
