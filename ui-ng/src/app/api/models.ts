@@ -285,6 +285,19 @@ export interface GoalScorecard {
   updatedAt?: string;
 }
 
+export interface TaskQASummary {
+  readonly flowId: string;
+  readonly flowLabel?: string;
+  readonly arm: string;
+  readonly complexityTier?: string;
+  readonly blastTier?: string;
+  readonly blastScore?: number;
+  readonly triageDecision?: string;
+  readonly verdict?: string;
+  readonly stageCount?: number;
+  readonly pending?: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -445,6 +458,7 @@ export interface Task {
   // is on the queue; its control (Retry merge on merge_failed) stands in
   // when the task's own sub-case names none.
   mergeQueueReason?: { reason: string; class?: string; control?: string };
+  readonly qaSummary?: TaskQASummary | null;
 }
 
 export type MergeGateState =

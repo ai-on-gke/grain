@@ -23,10 +23,14 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Built-in quality control flow package identifiers.
 const (
+	QAFlowStandard              = "standard-workflow"
+	QAFlowFast                  = "fast-baseline"
+	QAFlowGatesOnly             = "gates-only"
 	QAFlowGoldenV1Minimal       = "golden-v1-minimal"
 	QAFlowEngineeringWorkflowV4 = "engineering-workflow-v4"
 	QAFlowGoldenV3Enforced      = "golden-v3-enforced"
@@ -37,7 +41,7 @@ const (
 	QAFlowDeterministicS3Only   = "deterministic-s3-only"
 	QAFlowRepoCustom            = "repo-custom"
 
-	DefaultQAFlowID = QAFlowGoldenV1Minimal
+	DefaultQAFlowID = QAFlowStandard
 )
 
 // Experiment arm values assigned at dispatch per work-tree root origin.
@@ -129,12 +133,60 @@ func (s *Store) ActiveQAAssignmentForTask(ctx context.Context, taskID string) (*
 // QAFlowIDs returns the supported quality control flow identifiers in UI picker order.
 func QAFlowIDs() []string {
 	return []string{
-		QAFlowGoldenV1Minimal,
-		QAFlowEngineeringWorkflowV4,
-		QAFlowGoldenV3,
-		QAFlowGoldenV2,
-		QAFlowDeterministicS3Only,
-		QAFlowRepoCustom,
+		QAFlowStandard,
+		QAFlowFast,
+		QAFlowGatesOnly,
+	}
+}
+
+// CanonicalQAFlowKey maps built-in and legacy workflow references to their canonical family key.
+func CanonicalQAFlowKey(flowID string) string {
+	s := strings.TrimSpace(flowID)
+	s = strings.TrimPrefix(s, "builtin:")
+	if idx := strings.IndexByte(s, '#'); idx >= 0 {
+		s = s[:idx]
+	}
+	if idx := strings.IndexByte(s, '@'); idx >= 0 {
+		s = s[:idx]
+	}
+	switch s {
+	case QAFlowStandard, QAFlowEngineeringWorkflowV4, "golden-v4-composable", QAFlowGoldenV3, QAFlowGoldenV3Enforced, QAFlowGoldenV2:
+		return QAFlowStandard
+	case QAFlowFast, QAFlowGoldenV1Minimal, QAFlowRepoCustom, QAFlowGoldenV2SkillOnly:
+		return QAFlowFast
+	case QAFlowGatesOnly, QAFlowDeterministicS3Only, QAFlowGoldenV2ChecksOnly:
+		return QAFlowGatesOnly
+	default:
+		return s
+	}
+}
+
+// HumanQAFlowLabel returns a concise badge label for a workflow identifier.
+func HumanQAFlowLabel(flowID string) string {
+	key := CanonicalQAFlowKey(flowID)
+	switch key {
+	case "":
+		return ""
+	case QAFlowStandard:
+		return "Standard"
+	case QAFlowFast:
+		return "Fast"
+	case QAFlowGatesOnly:
+		return "Gates only"
+	default:
+		if strings.HasPrefix(key, "sha256:") && len(key) > 14 {
+			return key[:14]
+		}
+		clean := strings.NewReplacer("-", " ", "_", " ").Replace(key)
+		clean = strings.TrimSpace(clean)
+		if clean == "" {
+			return key
+		}
+		firstRune, width := utf8.DecodeRuneInString(clean)
+		if firstRune == utf8.RuneError && width <= 1 {
+			return clean
+		}
+		return strings.ToUpper(string(firstRune)) + clean[width:]
 	}
 }
 
@@ -149,6 +201,9 @@ func ValidQAFlowID(id string) bool {
 	}
 	base := strings.TrimSuffix(trimmed, "@1")
 	return slices.Contains([]string{
+		QAFlowStandard,
+		QAFlowFast,
+		QAFlowGatesOnly,
 		QAFlowGoldenV1Minimal,
 		QAFlowEngineeringWorkflowV4,
 		QAFlowGoldenV3,
@@ -865,4 +920,344 @@ func (s *Store) ConfigQA(ctx context.Context) (QAConfig, error) {
 		return QAConfig{}, err
 	}
 	return DecodeQAConfig(rawQA.String)
+}
+
+// TaskQASummary is the compact workflow, complexity, and blast-tier summary attached to Task responses.
+type TaskQASummary struct {
+	FlowID         string `json:"flowId"`
+	FlowLabel      string `json:"flowLabel,omitempty"`
+	Arm            string `json:"arm"`
+	ComplexityTier string `json:"complexityTier,omitempty"`
+	BlastTier      string `json:"blastTier,omitempty"`
+	BlastScore     int    `json:"blastScore,omitempty"`
+	TriageDecision string `json:"triageDecision,omitempty"`
+	Verdict        string `json:"verdict,omitempty"`
+	StageCount     int    `json:"stageCount,omitempty"`
+	Pending        bool   `json:"pending,omitempty"`
+}
+
+// TaskQASummaries loads workflow assignments and aggregated check-run classifications for tasks in bounded batch queries.
+func (s *Store) TaskQASummaries(
+	ctx context.Context,
+	tasks []Task,
+	states map[string]State,
+	assessComplexity func(Task) string,
+) (map[string]*TaskQASummary, error) {
+	if s == nil || len(tasks) == 0 {
+		return nil, nil
+	}
+	qaCfg, err := s.ConfigQA(ctx)
+	if err != nil {
+		qaCfg = QAConfig{}
+	}
+
+	rootSet := make(map[string]struct{}, len(tasks))
+	var roots []string
+	taskIDs := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		if t.ID == "" {
+			continue
+		}
+		taskIDs = append(taskIDs, t.ID)
+		ro := ResolveQARootOrigin(t.WorkOrigin, t.ID)
+		if ro != "" {
+			if _, ok := rootSet[ro]; !ok {
+				rootSet[ro] = struct{}{}
+				roots = append(roots, ro)
+			}
+		}
+	}
+
+	type lightEnroll struct {
+		armID          string
+		flowHash       string
+		excludedReason string
+	}
+	assignByRoot := make(map[string]QAAssignment, len(roots))
+	enrollByRoot := make(map[string]lightEnroll, len(roots))
+	const batchChunk = 400
+	for start := 0; start < len(roots); start += batchChunk {
+		chunk := roots[start:min(start+batchChunk, len(roots))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i, v := range chunk {
+			args[i] = v
+		}
+		rows, qErr := s.db.QueryContext(ctx,
+			"SELECT `root_origin`, `epoch`, `regime_id`, `arm`, `flow_id`, `rollout_pct_at_assign`, `complexity_tier`, `assigned_at` "+
+				"FROM `task_qa_assignment` WHERE `root_origin` IN ("+placeholders+") ORDER BY `assigned_at` ASC, `epoch` ASC",
+			args...,
+		)
+		if qErr != nil {
+			return nil, fmt.Errorf("batch reading qa assignments: %w", qErr)
+		}
+		for rows.Next() {
+			var a QAAssignment
+			if sErr := rows.Scan(
+				&a.RootOrigin, &a.Epoch, &a.RegimeID, &a.Arm, &a.FlowID,
+				&a.RolloutPctAtAssign, &a.ComplexityTier, &a.AssignedAt,
+			); sErr != nil {
+				rows.Close()
+				return nil, sErr
+			}
+			if _, exists := assignByRoot[a.RootOrigin]; !exists {
+				assignByRoot[a.RootOrigin] = a
+			}
+		}
+		if rErr := rows.Err(); rErr != nil {
+			rows.Close()
+			return nil, rErr
+		}
+		rows.Close()
+
+		eRows, eErr := s.db.QueryContext(ctx,
+			"SELECT `root_origin`, `arm_id`, `flow_hash`, `excluded_reason` "+
+				"FROM `qa_enrollment` WHERE `root_origin` IN ("+placeholders+")",
+			args...,
+		)
+		if eErr != nil {
+			return nil, fmt.Errorf("batch reading qa enrollments: %w", eErr)
+		}
+		for eRows.Next() {
+			var ro string
+			var le lightEnroll
+			if sErr := eRows.Scan(&ro, &le.armID, &le.flowHash, &le.excludedReason); sErr != nil {
+				eRows.Close()
+				return nil, sErr
+			}
+			enrollByRoot[ro] = le
+		}
+		if rErr := eRows.Err(); rErr != nil {
+			eRows.Close()
+			return nil, rErr
+		}
+		eRows.Close()
+	}
+
+	type lightRun struct {
+		stage          string
+		arm            string
+		shadow         bool
+		verdict        string
+		commitSHA      string
+		flowHash       string
+		blastTier      string
+		blastScore     int
+		complexityTier string
+		triageDecision string
+	}
+	runsByTask := make(map[string][]lightRun)
+	for start := 0; start < len(taskIDs); start += batchChunk {
+		chunk := taskIDs[start:min(start+batchChunk, len(taskIDs))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i, v := range chunk {
+			args[i] = v
+		}
+		rows, qErr := s.db.QueryContext(ctx,
+			"SELECT `task_id`, `stage`, `arm`, `shadow`, `verdict`, COALESCE(`commit_sha`, ''), `flow_hash`, `blast_tier`, `blast_score`, `complexity_tier`, `triage_decision` "+
+				"FROM `task_qa_check_run` WHERE `task_id` IN ("+placeholders+") ORDER BY `id` ASC",
+			args...,
+		)
+		if qErr != nil {
+			return nil, fmt.Errorf("batch reading qa check runs: %w", qErr)
+		}
+		for rows.Next() {
+			var tid string
+			var r lightRun
+			var shadowInt int
+			if sErr := rows.Scan(
+				&tid, &r.stage, &r.arm, &shadowInt, &r.verdict, &r.commitSHA, &r.flowHash,
+				&r.blastTier, &r.blastScore, &r.complexityTier, &r.triageDecision,
+			); sErr != nil {
+				rows.Close()
+				return nil, sErr
+			}
+			r.shadow = shadowInt != 0
+			runsByTask[tid] = append(runsByTask[tid], r)
+		}
+		if rErr := rows.Err(); rErr != nil {
+			rows.Close()
+			return nil, rErr
+		}
+		rows.Close()
+	}
+
+	verdictRank := func(v string) int {
+		switch v {
+		case "fail":
+			return 4
+		case "hold":
+			return 3
+		case "warn":
+			return 2
+		case "pass":
+			return 1
+		default:
+			return 0
+		}
+	}
+	hasQAHoldLink := func(t Task) bool {
+		for _, l := range t.Links {
+			if l.Kind == LinkQAHold {
+				return true
+			}
+		}
+		return false
+	}
+
+	out := make(map[string]*TaskQASummary)
+	for _, t := range tasks {
+		ro := ResolveQARootOrigin(t.WorkOrigin, t.ID)
+		enroll, hasEnroll := enrollByRoot[ro]
+		if hasEnroll && (enroll.excludedReason != "" || enroll.armID == "" || enroll.armID == "excluded") {
+			hasEnroll = false
+		}
+		assign, hasAssign := assignByRoot[ro]
+		runs := runsByTask[t.ID]
+		if len(runs) == 0 && hasAssign && assign.Epoch != qaCfg.EpochOrDefault() {
+			hasAssign = false
+		}
+
+		if len(runs) > 0 || hasEnroll || (hasAssign && assign.Arm != "" && assign.Arm != QAArmOff) {
+			arm := QAArmTreatment
+			flowID := ""
+			comp := ""
+			if hasEnroll {
+				if enroll.armID == QAArmControl || enroll.flowHash == "control" || enroll.flowHash == "" {
+					arm = QAArmControl
+				} else {
+					arm = QAArmTreatment
+					flowID = enroll.flowHash
+				}
+			} else if hasAssign {
+				if assign.Arm != "" {
+					arm = assign.Arm
+				}
+				flowID = assign.FlowID
+				comp = assign.ComplexityTier
+			} else {
+				hasTreatmentRun := false
+				hasControlRun := false
+				for _, r := range runs {
+					if !r.shadow && r.arm == QAArmTreatment {
+						hasTreatmentRun = true
+					}
+					if r.arm == QAArmControl {
+						hasControlRun = true
+					}
+				}
+				if !hasTreatmentRun && hasControlRun {
+					arm = QAArmControl
+				}
+			}
+			stagesSeen := make(map[string]struct{}, 4)
+			blastTier := ""
+			blastScore := 0
+			triage := ""
+			verdict := ""
+			latestCommitSHA := ""
+			for _, r := range runs {
+				if r.shadow && arm != QAArmControl {
+					continue
+				}
+				if r.stage != "" {
+					stagesSeen[r.stage] = struct{}{}
+				}
+				if flowID == "" && r.flowHash != "" {
+					flowID = r.flowHash
+				}
+				if r.complexityTier != "" {
+					comp = r.complexityTier
+				}
+				if r.blastTier != "" {
+					blastTier = r.blastTier
+					blastScore = r.blastScore
+				}
+				if r.triageDecision != "" {
+					triage = r.triageDecision
+				}
+				if r.verdict != "" {
+					if r.commitSHA != "" && r.commitSHA != latestCommitSHA {
+						latestCommitSHA = r.commitSHA
+						verdict = r.verdict
+					} else if r.commitSHA == latestCommitSHA && verdictRank(r.verdict) >= verdictRank(verdict) {
+						verdict = r.verdict
+					}
+				}
+			}
+			if states[t.ID] != StateClosed && hasQAHoldLink(t) {
+				verdict = "fail"
+			}
+			if triage == "" {
+				for _, hr := range HumanReviewReasons(t) {
+					if hr.Source == "qa-triage" {
+						triage = "require_human"
+						break
+					}
+				}
+			}
+			if comp == "" && assessComplexity != nil {
+				comp = assessComplexity(t)
+			}
+			if arm == QAArmControl {
+				out[t.ID] = &TaskQASummary{
+					FlowID:         "control",
+					FlowLabel:      "Control",
+					Arm:            QAArmControl,
+					ComplexityTier: comp,
+					BlastTier:      blastTier,
+					BlastScore:     blastScore,
+					TriageDecision: triage,
+					Verdict:        verdict,
+					StageCount:     len(stagesSeen),
+				}
+				continue
+			}
+			if flowID == "" && strings.TrimSpace(t.QAFlowRef) != "" {
+				flowID = strings.TrimSpace(t.QAFlowRef)
+			}
+			if flowID == "" {
+				flowID = qaCfg.FlowIDOrDefault()
+			}
+			canon := CanonicalQAFlowKey(flowID)
+			out[t.ID] = &TaskQASummary{
+				FlowID:         canon,
+				FlowLabel:      HumanQAFlowLabel(flowID),
+				Arm:            arm,
+				ComplexityTier: comp,
+				BlastTier:      blastTier,
+				BlastScore:     blastScore,
+				TriageDecision: triage,
+				Verdict:        verdict,
+				StageCount:     len(stagesSeen),
+			}
+			continue
+		}
+
+		st := states[t.ID]
+		if st == StateClosed || !TaskEligibleForQAStaging(t) {
+			continue
+		}
+		hasExplicitFlow := strings.TrimSpace(t.QAFlowRef) != ""
+		if !hasExplicitFlow && (!qaCfg.Enabled || qaCfg.RolloutPct < 100) {
+			continue
+		}
+		effFlow := qaCfg.FlowIDOrDefault()
+		if !qaCfg.Enabled && hasExplicitFlow {
+			effFlow = strings.TrimSpace(t.QAFlowRef)
+		}
+		comp := ""
+		if assessComplexity != nil {
+			comp = assessComplexity(t)
+		}
+		out[t.ID] = &TaskQASummary{
+			FlowID:         CanonicalQAFlowKey(effFlow),
+			FlowLabel:      HumanQAFlowLabel(effFlow),
+			Arm:            QAArmTreatment,
+			ComplexityTier: comp,
+			Pending:        true,
+		}
+	}
+	return out, nil
 }

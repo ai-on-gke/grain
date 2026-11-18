@@ -635,3 +635,84 @@ func TestPreCloneS0AskHumanDoesNotReparkAfterPriorHold(t *testing.T) {
 		t.Fatalf("expected second S0 pass after prior hold not to re-park the task in an infinite loop")
 	}
 }
+
+func TestPostCloneDecomposeProposeDAGCoordinatorAndStepDown(t *testing.T) {
+	store, ctx := openTestStore(t)
+	worktreeDir := t.TempDir()
+
+	stdBundle, ok := qa.LookupBuiltInOrRegisteredVersion("standard-workflow@1")
+	if !ok {
+		t.Fatal("standard-workflow@1 not found")
+	}
+	spec := stdBundle.Resolved
+	spec.S2PlanCritic = false // isolate S0b decomposition contract
+
+	// 1. High-complexity root task gets the Coordinator-or-Execute propose_dag contract.
+	highRoot := model.Task{
+		ID:    "task-high-root",
+		Title: "End-to-end schema migration and multi-surface UI rollout",
+		Body: "Milestone 1: Add SQLite schema migration and store queries in pkg/model/qa.go.\n" +
+			"Milestone 2: Wire HTTP routes and handlers in pkg/ui/qa_api.go and pkg/orchestrator/qa_phases.go.\n" +
+			"Milestone 3: Build Angular workstream badges across ui-ng/src/app/tasks/tasks-page.component.ts and ui-ng/src/app/inbox/inbox-page.component.ts.\n" +
+			"Milestone 4: Add Playwright and Go regression suites in tests/security/rules_test.go.",
+	}
+	outHighRoot := orchestrator.ExecutePostCloneWorkflowPhases(ctx, store, highRoot, worktreeDir, &spec, "exp-dag", "standard-workflow", stdBundle.Hash, "base")
+	if !strings.Contains(outHighRoot, "(S0b — propose_dag)") || !strings.Contains(outHighRoot, "nothing_needed") {
+		t.Fatalf("expected propose_dag Coordinator-or-Execute contract on high root task, got:\n%s", outHighRoot)
+	}
+
+	// 2. High-complexity child subtask (Proposer.TaskID != "") steps down to single-PR slice_plan to prevent recursive DAG fan-out.
+	highChild := highRoot
+	highChild.ID = "task-high-child"
+	highChild.Proposer = model.TaskProposer{TaskID: "task-high-root", RunID: "run-1"}
+	outHighChild := orchestrator.ExecutePostCloneWorkflowPhases(ctx, store, highChild, worktreeDir, &spec, "exp-dag", "standard-workflow", stdBundle.Hash, "base")
+	if !strings.Contains(outHighChild, "(S0b — slice_plan)") || strings.Contains(outHighChild, "(S0b — propose_dag)") {
+		t.Fatalf("expected child subtask to step down to slice_plan, got:\n%s", outHighChild)
+	}
+
+	// 2b. High-complexity root task filed from a Console Session / Director (SourceSession) keeps propose_dag.
+	sessionRoot := highRoot
+	sessionRoot.ID = "task-session-root"
+	sessionRoot.WorkOrigin = model.TaskOrigin("session-director")
+	sessionRoot.Proposer = model.TaskProposer{
+		TaskID: "session-director",
+		Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalAgent, ID: "session-director", Source: model.SourceSession},
+		},
+	}
+	outSessionRoot := orchestrator.ExecutePostCloneWorkflowPhases(ctx, store, sessionRoot, worktreeDir, &spec, "exp-dag", "standard-workflow", stdBundle.Hash, "base")
+	if !strings.Contains(outSessionRoot, "(S0b — propose_dag)") {
+		t.Fatalf("expected Console/Director-filed root task (SourceSession) to keep propose_dag, got:\n%s", outSessionRoot)
+	}
+
+	// 2c. External follow-up task bound to an existing workstream root (WorkOrigin == task:<rootID>) steps down to slice_plan.
+	originChild := highRoot
+	originChild.ID = "task-origin-child"
+	originChild.WorkOrigin = model.TaskOrigin("task-high-root")
+	outOriginChild := orchestrator.ExecutePostCloneWorkflowPhases(ctx, store, originChild, worktreeDir, &spec, "exp-dag", "standard-workflow", stdBundle.Hash, "base")
+	if !strings.Contains(outOriginChild, "(S0b — slice_plan)") || strings.Contains(outOriginChild, "(S0b — propose_dag)") {
+		t.Fatalf("expected external workstream child task to step down to slice_plan, got:\n%s", outOriginChild)
+	}
+
+	// 3. Medium-complexity root task (score 40: Design-Item + cross-surface) steps down to single-PR slice_plan.
+	medRoot := model.Task{
+		ID:    "task-med-root",
+		Title: "Add filter parameter to backend handler and UI table",
+		Body:  "Design-Item: DI-7\nUpdate pkg/ui/qa_api.go and ui-ng/src/app/tasks/tasks-page.component.ts to pass the filter query.",
+	}
+	outMedRoot := orchestrator.ExecutePostCloneWorkflowPhases(ctx, store, medRoot, worktreeDir, &spec, "exp-dag", "standard-workflow", stdBundle.Hash, "base")
+	if !strings.Contains(outMedRoot, "(S0b — slice_plan)") || strings.Contains(outMedRoot, "(S0b — propose_dag)") {
+		t.Fatalf("expected medium root task to step down to slice_plan, got:\n%s", outMedRoot)
+	}
+
+	// 4. Low-complexity root task skips S0b decomposition altogether.
+	lowRoot := model.Task{
+		ID:    "task-low-root",
+		Title: "Fix typo in README badge label",
+		Body:  "Correct spelling in pkg/model/qa.go comment.",
+	}
+	outLowRoot := orchestrator.ExecutePostCloneWorkflowPhases(ctx, store, lowRoot, worktreeDir, &spec, "exp-dag", "standard-workflow", stdBundle.Hash, "base")
+	if strings.Contains(outLowRoot, "(S0b —") {
+		t.Fatalf("expected low root task to skip S0b decomposition, got:\n%s", outLowRoot)
+	}
+}

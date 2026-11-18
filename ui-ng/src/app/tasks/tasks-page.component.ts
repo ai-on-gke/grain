@@ -42,7 +42,12 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
-import { ciChip, repoShort } from "../shared/chips";
+import {
+  type QaWorkflowChip,
+  ciChip,
+  qaWorkflowChip,
+  repoShort,
+} from "../shared/chips";
 import { isMerged, withDetailGates } from "../shared/gates";
 import {
   PillSelectComponent,
@@ -494,6 +499,14 @@ function needsApproval(t: Task): boolean {
                               class="status-pill error repair-badge"
                               [attr.data-testid]="'repair-badge-' + t.id"
                               >Repair</span
+                            >
+                          }
+                          @if (qaChipsByTaskId().get(t.id); as qc) {
+                            <span
+                              [class]="'ci-chip ' + qc.tone"
+                              [attr.data-testid]="'qa-chip-' + t.id"
+                              [gTip]="qc.tip"
+                              >{{ qc.text }}</span
                             >
                           }
                           <g-priority-chip
@@ -1283,6 +1296,14 @@ function needsApproval(t: Task): boolean {
                 >{{ c.text }}</span
               >
             }
+            @if (qaChipsByTaskId().get(t.id); as qc) {
+              <span
+                [class]="'ci-chip ' + qc.tone"
+                [attr.data-testid]="'qa-chip-' + t.id"
+                [gTip]="qc.tip"
+                >{{ qc.text }}</span
+              >
+            }
           </span>
           @if (t.state === "running" && t.activity) {
             <span class="row-sub activity">{{ t.activity }}</span>
@@ -1434,6 +1455,14 @@ function needsApproval(t: Task): boolean {
                 class="status-pill healthy waits"
                 gTip="Admitted past worker limits: it starts ahead of ordinary work as soon as it is first among such tasks."
                 >Skips worker limits</span
+              >
+            }
+            @if (qaChipsByTaskId().get(t.id); as qc) {
+              <span
+                [class]="'ci-chip ' + qc.tone"
+                [attr.data-testid]="'qa-chip-' + t.id"
+                [gTip]="qc.tip"
+                >{{ qc.text }}</span
               >
             }
           </span>
@@ -1605,6 +1634,17 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const { task, hasDetail } = withDetailGates(t, this.store.details()[t.id]);
     return ciChip(task, !hasDetail);
   }
+
+  protected readonly qaChipsByTaskId = computed<
+    ReadonlyMap<string, QaWorkflowChip>
+  >(() => {
+    const map = new Map<string, QaWorkflowChip>();
+    for (const task of this.rows()) {
+      const chip = qaWorkflowChip(task);
+      if (chip) map.set(task.id, chip);
+    }
+    return map;
+  });
 
   protected readonly tabs = TABS;
   protected readonly sorts = SORTS;

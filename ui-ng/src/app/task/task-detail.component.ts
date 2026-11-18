@@ -69,7 +69,7 @@ import {
   filesFromTransfer,
   readFilesAsUploads,
 } from "../shared/attachments";
-import { ciChip } from "../shared/chips";
+import { ciChip, qaWorkflowChip } from "../shared/chips";
 import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
@@ -256,6 +256,19 @@ export function duration(from?: string, to?: string): string {
                 data-testid="task-ci"
                 [gTip]="c.tip"
                 >{{ c.text }}</span
+              >
+            }
+            @if (qaChip(); as qc) {
+              <a
+                [routerLink]="['/processes', 'quality']"
+                [queryParams]="
+                  qc.flowId === 'control' ? null : { flow: qc.flowId }
+                "
+                [class]="'ci-chip ' + qc.tone"
+                data-testid="task-qa-chip"
+                [gTip]="qc.tip"
+                style="text-decoration: none;"
+                >{{ qc.text }}</a
               >
             }
             @if (partOfStream(); as ps) {
@@ -1786,6 +1799,7 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly label = stateLabel;
   protected readonly stateOval = taskStateLabel;
   protected readonly needsRetryMerge = needsRetryMerge;
+  protected readonly qaChip = computed(() => qaWorkflowChip(this.t()));
 
   // depTitle is a dependency chip's hover text: the task it waits for,
   // its title where the open-task feed knows it, its state, and whether

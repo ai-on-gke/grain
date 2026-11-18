@@ -218,8 +218,19 @@ func s4Rule(enabled bool) RuleSpec {
 	}
 }
 
-// BuiltInFlows returns the canonical quality control flow packages shipped with Grain.
+// BuiltInFlows returns the 3 canonical quality control flow packages shipped with Grain.
 func BuiltInFlows() []FlowSpec {
+	versions := BuiltInFlowVersions()
+	out := make([]FlowSpec, 0, len(versions))
+	for _, v := range versions {
+		spec := v.Resolved
+		spec.ID = v.Key
+		out = append(out, spec)
+	}
+	return out
+}
+
+func legacyV1Flows() []FlowSpec {
 	skillLen := len(strings.TrimSpace(v1.SkillMarkdown))
 	goldenRules := append(defaultS3Rules(), s4Rule(true))
 	s3OnlyRules := append(defaultS3Rules(), s4Rule(false))
@@ -265,13 +276,18 @@ func BuiltInFlows() []FlowSpec {
 	}
 }
 
-// LookupFlow returns the FlowSpec for id, falling back to golden-v1-minimal when id is empty.
+// LookupFlow returns the FlowSpec for id, falling back to DefaultQAFlowID when id is empty.
 func LookupFlow(id string) (FlowSpec, bool) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		id = model.DefaultQAFlowID
 	}
 	for _, f := range BuiltInFlows() {
+		if f.ID == id {
+			return f, true
+		}
+	}
+	for _, f := range legacyV1Flows() {
 		if f.ID == id {
 			return f, true
 		}
