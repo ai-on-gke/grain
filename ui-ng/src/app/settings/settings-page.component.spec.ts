@@ -642,7 +642,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         busyRuns: 0,
         busyCiRuns: 0,
         countError:
-          "the runs in flight could not be counted, so the queue stays held and the upgrade waits until they can be (the daemon log has the error)",
+          "the runs in flight could not be counted, so the queue stays held and the upgrade waits until they can be; the daemon log has the error",
       },
     };
     const { el } = await mountSettings("/settings/upgrade", api);

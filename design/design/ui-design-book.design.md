@@ -596,6 +596,11 @@ Rules:
   server's `detail` sentence rather than rewording it, and link the task
   that holds the finding where there is one
   (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **A Settings banner's action keeps the right-hand slot.** `.s-banner`
+  wraps, so a message that can run long (the scheduled upgrade's count
+  error) goes in `.s-banner-text`, which takes the row's spare width:
+  the button stays on the right of a wide pane and wraps under the
+  message on a phone (`ui-ng/e2e/next-upgrade-status.spec.js`).
 - **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
   ```` ```mermaid ```` fences in the active theme with a Diagram / Source
   toggle, and pairs Before / After fences (named in the info string or by

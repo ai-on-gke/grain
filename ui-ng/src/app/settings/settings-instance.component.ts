@@ -1184,7 +1184,7 @@ function formatBytes(bytes: number): string {
 
           @if (scheduledUpgradeBranch()) {
             <div class="s-banner warn" data-testid="scheduled-upgrade-banner">
-              <span
+              <span class="s-banner-text"
                 >Upgrade scheduled (waiting for running tasks):
                 {{ scheduledUpgradeBranch() }}
                 @if (scheduledUpgradeCountError()) {

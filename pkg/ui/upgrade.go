@@ -665,7 +665,7 @@ func (s *Server) scheduledUpgrade(r *http.Request) *upgradeScheduledResponse {
 	}
 	if len(countErrs) > 0 {
 		resp.CountError = strings.Join(countErrs, " and ") +
-			", so the queue stays held and the upgrade waits until they can be (the daemon log has the error)"
+			", so the queue stays held and the upgrade waits until they can be; the daemon log has the error"
 	}
 	return resp
 }
