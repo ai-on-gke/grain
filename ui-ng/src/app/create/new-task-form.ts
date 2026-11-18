@@ -380,7 +380,9 @@ export interface NewTaskDraft {
   networkAccess: string;
   nothingNeededAction: string;
   reviewTemplateId: string;
+  owner: string;
   reviewers: string[];
+  keepRunning: boolean;
   promptExtension: string;
   sandboxCpus: number;
   sandboxMemoryMb: number;
@@ -437,7 +439,9 @@ export function emptyDraft(
     networkAccess: String(f.networkAccess.default ?? ""),
     nothingNeededAction: String(f.nothingNeededAction.default || "close"),
     reviewTemplateId: String(f.reviewTemplateId.default ?? ""),
+    owner: "",
     reviewers: [],
+    keepRunning: false,
     promptExtension: String(f.promptExtension.default ?? ""),
     sandboxCpus: 0,
     sandboxMemoryMb: 0,
@@ -470,18 +474,21 @@ export function buildPayload(
     ...(templateOpts
       ? { templateId: templateOpts.templateId, fields: templateOpts.fields }
       : {}),
-    ...(!Number.isNaN(parsedPriority) && (templateOpts || parsedPriority !== 5)
-      ? { priority: parsedPriority }
-      : {}),
     repo: none ? "" : d.repo,
     noRepo: none,
+    ...(d.owner.trim() ? { owner: d.owner.trim() } : {}),
     ...(creating
       ? { base: d.newBranchName.trim(), newBranch: true, newBranchFrom: d.base }
-      : { base: none ? "" : d.base }),
-    autoMerge: d.autoMerge,
-    ...(d.noPort ? { noPort: true } : {}),
+      : { base: none ? "" : d.base.trim() }),
+    autoMerge: !none && d.autoMerge,
+    ...(d.noPort && !none ? { noPort: true } : {}),
+    ...(d.keepRunning ? { keepRunning: true } : {}),
     ...(d.fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
     ...(d.foundIn.trim() ? { foundIn: d.foundIn.trim() } : {}),
+    ...(!Number.isNaN(parsedPriority) &&
+    (!!templateOpts || parsedPriority !== 5)
+      ? { priority: parsedPriority }
+      : {}),
     model: d.model,
     ...(d.agentFramework ? { agentFramework: d.agentFramework } : {}),
     ...(d.agentBackendId ? { agentBackendId: d.agentBackendId } : {}),
@@ -624,6 +631,10 @@ export function directorMessage(d: NewTaskDraft): string {
     `Repository: ${d.repo === NO_REPO ? "none" : d.repo || "the default target"}`,
   );
   if (d.repo !== NO_REPO && d.base) lines.push(`Base branch: ${d.base}`);
+  if (d.owner.trim()) lines.push(`Owner: ${d.owner.trim()}`);
+  const p = parseTaskPriority(d.priority);
+  if (!Number.isNaN(p) && p !== 5) lines.push(`Priority: ${p}`);
+  if (d.keepRunning) lines.push("Keep running: yes");
   if (d.dependsOn.length) {
     lines.push(`Depends on: ${d.dependsOn.map((id) => `#${id}`).join(", ")}`);
   }

@@ -612,10 +612,15 @@ export function duration(from?: string, to?: string): string {
                 <span
                   class="confirm-inline"
                   role="group"
-                  aria-label="Confirm closing"
+                  [attr.aria-label]="
+                    closeWarning() ? 'Confirm closing' : 'Close task'
+                  "
                   data-testid="close-confirm"
+                  (keydown.escape)="onCloseEscape($event)"
                 >
-                  <span role="alert">{{ closeWarning() }}</span>
+                  @if (closeWarning()) {
+                    <span role="alert">{{ closeWarning() }}</span>
+                  }
                   @if (prUrl()) {
                     <label class="check-row">
                       <input
@@ -627,17 +632,37 @@ export function duration(from?: string, to?: string): string {
                       <span>Close the pull request too</span>
                     </label>
                   }
+                  <input
+                    type="text"
+                    #closeReasonInput
+                    class="close-reason"
+                    data-testid="close-reason"
+                    aria-label="Reason for closing (optional)"
+                    placeholder="Reason (optional)"
+                    autocomplete="off"
+                    maxlength="500"
+                    [value]="closeReason()"
+                    (input)="closeReason.set($any($event.target).value)"
+                    (keydown.enter)="onCloseReasonEnter($event)"
+                  />
                   <button
                     type="button"
                     #closeYes
-                    class="btn-text danger"
+                    class="btn-text"
+                    [class.danger]="!closeReversible()"
                     data-testid="close-yes"
+                    [disabled]="store.isBusy('close', t.id)"
                     (click)="close(true)"
                   >
                     Close
                   </button>
-                  <button type="button" class="btn-text" (click)="keep()">
-                    Keep
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="close-keep"
+                    (click)="keep()"
+                  >
+                    {{ closeWarning() ? "Keep" : "Cancel" }}
                   </button>
                 </span>
               } @else {
@@ -1557,6 +1582,14 @@ export function duration(from?: string, to?: string): string {
                     @if (h.actorLabel || h.by) {
                       <span class="muted">· {{ h.actorLabel || h.by }}</span>
                     }
+                    @if (
+                      h.reason &&
+                      h.state !== "owner_changed" &&
+                      h.state !== "admission_changed" &&
+                      h.state !== "hosting_changed"
+                    ) {
+                      <span class="muted">— {{ h.reason }}</span>
+                    }
                   </li>
                 }
               </ol>
@@ -1860,6 +1893,9 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected readonly confirmClose = signal(false);
   protected readonly closePr = signal(false);
+  // What the person closing says about why, kept on the close's task
+  // event (POST /api/tasks/{id}/close's reason; ui.CloseOptions.Reason).
+  protected readonly closeReason = signal("");
   protected readonly confirming = signal<ConfirmRequest | null>(null);
   protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
   protected readonly acceptFindingsReq = signal<AcceptFindingsRequest | null>(
@@ -1882,6 +1918,8 @@ export class TaskDetailComponent implements OnDestroy {
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
   private readonly closeYes =
     viewChild<ElementRef<HTMLButtonElement>>("closeYes");
+  private readonly closeReasonInput =
+    viewChild<ElementRef<HTMLInputElement>>("closeReasonInput");
   private readonly closeBtn =
     viewChild<ElementRef<HTMLButtonElement>>("closeBtn");
   private readonly composer =
@@ -2074,6 +2112,7 @@ export class TaskDetailComponent implements OnDestroy {
             at?: string;
             by?: string;
             actorLabel?: string;
+            reason?: string;
           }[];
         } | null
       )?.transitions ?? []
@@ -2106,12 +2145,17 @@ export class TaskDetailComponent implements OnDestroy {
         return "neutral";
     }
   });
+  protected readonly closeReversible = computed(() =>
+    ["queued", "proposed", "deferred"].includes(this.t()?.state ?? ""),
+  );
   protected readonly closeWarning = computed(() =>
-    this.t()?.state === "running"
-      ? "Closing stops the run that is going now. This cannot be undone."
-      : this.prUrl()
-        ? "Closing leaves its pull request behind. This cannot be undone."
-        : "Close this task?",
+    this.closeReversible()
+      ? ""
+      : this.t()?.state === "running"
+        ? "Closing stops the run that is going now. This cannot be undone."
+        : this.prUrl()
+          ? "Closing leaves its pull request behind. This cannot be undone."
+          : "Close this task?",
   );
   protected readonly prUrl = computed(() => {
     const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(
@@ -2286,6 +2330,8 @@ export class TaskDetailComponent implements OnDestroy {
             ? parseCommentFragment(raw)
             : ({ kind: "none" } as const);
         this.confirmClose.set(false);
+        this.closePr.set(false);
+        this.closeReason.set("");
         this.confirming.set(null);
         this.editOpen.set(false);
         this.compactOpen.set(false);
@@ -2967,22 +3013,32 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
-    const state = t.state ?? "";
-    const reversible = ["queued", "proposed", "deferred"].includes(state);
-    if (!reversible && !confirmed) {
+    const reversible = this.closeReversible();
+    if (!confirmed) {
       this.confirmClose.set(true);
-      setTimeout(() => this.closeYes()?.nativeElement.focus());
+      setTimeout(() =>
+        (this.closeWarning()
+          ? this.closeYes()
+          : this.closeReasonInput()
+        )?.nativeElement.focus(),
+      );
       return;
     }
-    this.confirmClose.set(false);
+    if (this.store.isBusy("close", id)) return;
+    const reason = this.closeReason().trim();
+    const closePullRequest = Boolean(this.prUrl()) && this.closePr();
     const ok = await this.store.act(
       "close",
       this.post("POST /api/tasks/{id}/close", {
-        close_pull_request: this.closePr(),
+        close_pull_request: closePullRequest,
+        ...(reason ? { reason } : {}),
       }),
       id,
     );
     if (!ok) return;
+    this.confirmClose.set(false);
+    this.closeReason.set("");
+    this.closePr.set(false);
     this.done(`Closed #${id}`);
     this.snackbar.show(
       `Closed #${id}`,
@@ -3003,7 +3059,21 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected keep(): void {
     this.confirmClose.set(false);
+    this.closeReason.set("");
+    this.closePr.set(false);
     setTimeout(() => this.closeBtn()?.nativeElement.focus());
+  }
+
+  protected onCloseReasonEnter(ev: Event): void {
+    if ((ev as KeyboardEvent).isComposing) return;
+    ev.preventDefault();
+    void this.close(true);
+  }
+
+  protected onCloseEscape(ev: Event): void {
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.keep();
   }
 
   protected async setDirectPriority(p: number): Promise<void> {

@@ -1246,6 +1246,162 @@ describe("TaskPageComponent", () => {
     });
   });
 
+  it("edits owner, ref, reviewers, admission, hosting and the lifecycle toggles", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "queued",
+      owner: "alice@example.com",
+      autoMerge: false,
+      priority: 5,
+    };
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-edit"]')!.click();
+    await settle(f);
+    const type = (testid: string, value: string) => {
+      const el = q<HTMLInputElement>(f, `[data-testid="${testid}"]`)!;
+      el.value = value;
+      el.dispatchEvent(new Event("input"));
+    };
+    const tick = (testid: string) => {
+      const el = q<HTMLInputElement>(f, `[data-testid="${testid}"]`)!;
+      el.checked = !el.checked;
+      el.dispatchEvent(new Event("change"));
+    };
+    const save = q<HTMLButtonElement>(f, '[data-testid="edit-save-btn"]')!;
+
+    // Any whole number from 1 up, in the classic UI's wording; zero,
+    // negatives and fractions are refused and Save is held.
+    for (const bad of ["0", "-2", "2.5"]) {
+      type("edit-priority", bad);
+      await settle(f);
+      expect(save.disabled).toBe(true);
+      expect(
+        q(f, '[data-testid="edit-priority-help"]')!.textContent!.trim(),
+      ).toBe("a whole number, 1 or more; default 5, higher numbers run first");
+    }
+    type("edit-priority", "1e3");
+    type("edit-owner", "bob@example.com");
+    type("edit-external-ref", "CA-204");
+    type("edit-reviewers", "carol, dave ,");
+    tick("edit-keep-running");
+    tick("edit-fixes-base");
+    q<HTMLButtonElement>(f, '[data-testid="edit-admission"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="edit-admission-opt-durable"]',
+    )!.click();
+    q<HTMLButtonElement>(f, '[data-testid="edit-hosting"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="edit-hosting-opt-console"]',
+    )!.click();
+    await settle(f);
+    expect(save.disabled).toBe(false);
+    save.click();
+    await settle(f);
+    const patch = api.calls.find((c) => c.route === "PATCH /api/tasks/{id}");
+    expect(patch?.body).toMatchObject({
+      priority: 1000,
+      owner: "bob@example.com",
+      externalRef: "CA-204",
+      reviewers: ["carol", "dave"],
+      keepRunning: true,
+      fixesBaseBranch: true,
+      admission: "durable",
+      hosting: "console",
+    });
+    // An auto-merge left alone is not written back over the task's own.
+    expect(patch?.body).not.toHaveProperty("autoMerge");
+  });
+
+  it("sends a reason with a confirmed Close", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "running" };
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-close"]')!.click();
+    await settle(f);
+    const reason = q<HTMLInputElement>(f, '[data-testid="close-reason"]')!;
+    reason.value = "  superseded by #9 ";
+    reason.dispatchEvent(new Event("input"));
+    q<HTMLButtonElement>(f, '[data-testid="close-yes"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/close")?.body,
+    ).toMatchObject({ close_pull_request: false, reason: "superseded by #9" });
+  });
+
+  it("lets a queued close take a reason without a warning, offers Undo, and renders the reason in History", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "queued",
+      pullRequest: "",
+      transitions: [
+        { state: "queued", at: "2026-11-15T10:00:00Z" },
+        {
+          state: "closed",
+          at: "2026-11-15T10:05:00Z",
+          actorLabel: "Ana",
+          reason: "duplicate of #19",
+        },
+      ],
+    } as TaskDetail;
+    const f = await render(api, "details");
+    expect(q(f, ".history")!.textContent).toContain("duplicate of #19");
+
+    q<HTMLButtonElement>(f, '[data-testid="act-close"]')!.click();
+    await settle(f);
+    // Reversible closes open the reason row instead of posting immediately,
+    // without showing an irreversible warning alert.
+    expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    const confirm = q(f, '[data-testid="close-confirm"]')!;
+    expect(confirm.querySelector('[role="alert"]')).toBeNull();
+    expect(q(f, '[data-testid="close-keep"]')!.textContent?.trim()).toBe(
+      "Cancel",
+    );
+
+    const reason = q<HTMLInputElement>(f, '[data-testid="close-reason"]')!;
+    reason.value = "  duplicate of #19 ";
+    reason.dispatchEvent(new Event("input"));
+    // Escape cancels cleanly and clears the draft.
+    reason.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')).toBeNull();
+    expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+
+    q<HTMLButtonElement>(f, '[data-testid="act-close"]')!.click();
+    await settle(f);
+    const reopenedReason = q<HTMLInputElement>(
+      f,
+      '[data-testid="close-reason"]',
+    )!;
+    expect(reopenedReason.value).toBe("");
+    reopenedReason.value = "  duplicate of #19 ";
+    reopenedReason.dispatchEvent(new Event("input"));
+    reopenedReason.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await settle(f);
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/close")?.body,
+    ).toEqual({ close_pull_request: false, reason: "duplicate of #19" });
+    const undo = TestBed.inject(SnackbarService).current()?.action;
+    expect(undo?.label).toBe("Undo");
+    await undo!.run();
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/reopen"),
+    ).toMatchObject({
+      route: "POST /api/tasks/{id}/reopen",
+      params: { id: "7" },
+    });
+  });
+
   it("offers Approve for a proposal and Retry for a failed task", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, state: "proposed" };
