@@ -2193,14 +2193,14 @@ describe("#comment=<id> deep links", () => {
     store.open("7");
     await store.refresh();
     expect(store.detail()?.comments?.length).toBe(100);
-    expect(await store.loadOlderCommentsThrough(50)).toBe(true);
+    expect(await store.loadOlderCommentsThrough(50)).toBe("found");
     expect(pages).toEqual([
       "comments_limit=500&comments_before=1101&attempts_limit=1",
       "comments_limit=500&comments_before=601&attempts_limit=1",
       "comments_limit=500&comments_before=101&attempts_limit=1",
     ]);
     expect(store.detail()?.comments?.[0].id).toBe(1);
-    expect(await store.loadOlderCommentsThrough(99999)).toBe(false);
+    expect(await store.loadOlderCommentsThrough(99999)).toBe("missing");
   });
 
   it("switches the task page to Conversation for a #comment= link and names a bad one", async () => {

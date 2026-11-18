@@ -20,7 +20,9 @@ import {
   ElementRef,
   NgZone,
   type OnDestroy,
+  Injector,
   ViewEncapsulation,
+  afterNextRender,
   afterRenderEffect,
   computed,
   effect,
@@ -1893,6 +1895,8 @@ export class TaskDetailComponent implements OnDestroy {
   private commentSeq = 0;
   private lastFragmentKey = "";
   private lastFragmentAt = 0;
+  // fragmentFor is the fragment last followed and the task it was for.
+  private fragmentFor: { id: string; raw: string } | null = null;
 
   protected readonly t = computed(() => this.store.detail());
   protected readonly docs = computed<TaskDocumentItem[]>(() => {
@@ -2139,12 +2143,21 @@ export class TaskDetailComponent implements OnDestroy {
     });
     // #comment=<id> arrives with the route (a link followed into the app),
     // or as a hash change on a page already open.
+    // The router reports a new fragment before a pane's [id] input moves
+    // to the task the same navigation selected (?task=21#comment=14 from
+    // task 20), so wait for that render: the id effect then sees the new
+    // task first, and this call is the dedupe's duplicate of its own.
+    const injector = inject(Injector);
     const fragSub = route.fragment.subscribe((frag) => {
-      if (frag) this.queueCommentFragment(frag);
+      if (!frag) return;
+      afterNextRender(() => this.queueCommentFragment(frag), { injector });
     });
     const win = this.doc.defaultView;
     const onHash = (): void =>
-      this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
+      this.zone.run(() => {
+        const hash = win?.location.hash ?? "";
+        afterNextRender(() => this.queueCommentFragment(hash), { injector });
+      });
     win?.addEventListener("hashchange", onHash);
     inject(DestroyRef).onDestroy(() => {
       paneSub.unsubscribe();
@@ -2217,9 +2230,17 @@ export class TaskDetailComponent implements OnDestroy {
         this.forceConversationTab.set(false);
         const raw =
           route.snapshot.fragment || this.doc.defaultView?.location.hash || "";
-        const parsed = this.fragmentIsForTask(id)
-          ? parseCommentFragment(raw)
-          : ({ kind: "none" } as const);
+        // A fragment belongs to the task it arrived with. A pane (Tasks,
+        // Workstreams) that moves to another task keeps the address's
+        // #comment=, which names a comment of the task it came from.
+        const frag = raw.replace(/^#/, "");
+        const prev = this.fragmentFor;
+        const stale = !!frag && !!prev && prev.id !== id && prev.raw === frag;
+        this.fragmentFor = stale ? prev : frag ? { id, raw: frag } : null;
+        const parsed =
+          !stale && this.fragmentIsForTask(id)
+            ? parseCommentFragment(raw)
+            : ({ kind: "none" } as const);
         this.confirmClose.set(false);
         this.confirming.set(null);
         this.editOpen.set(false);
@@ -2237,7 +2258,7 @@ export class TaskDetailComponent implements OnDestroy {
         this.docDiffLoading.set(false);
         this.loadedDocDiffKey = "";
         this.store.open(id, parsed.kind === "comment" ? parsed.id : null);
-        if (raw) this.queueCommentFragment(raw, id);
+        if (raw && !stale) this.queueCommentFragment(raw, id);
       });
     });
     // Reveal a linked comment once the conversation holds it, paging older
@@ -2265,7 +2286,7 @@ export class TaskDetailComponent implements OnDestroy {
         }
         if (this.store.isBusy("older-comments", t.id)) return;
         const taskId = t.id;
-        void this.store.loadOlderCommentsThrough(pending.id).then((found) => {
+        void this.store.loadOlderCommentsThrough(pending.id).then((res) => {
           if (
             this.id() !== taskId ||
             this.pendingCommentLink()?.seq !== pending.seq
@@ -2273,9 +2294,11 @@ export class TaskDetailComponent implements OnDestroy {
             return;
           }
           this.pendingCommentLink.set(null);
-          if (found) {
+          if (res === "found") {
             this.commentTarget.set(pending);
-          } else {
+          } else if (res === "missing") {
+            // Only "missing" says so: a failed read is already in the
+            // page's error banner and says nothing about the comment.
             this.snackbar.show(
               `Comment ${pending.id} is not in this task's conversation.`,
             );
@@ -2367,6 +2390,7 @@ export class TaskDetailComponent implements OnDestroy {
     if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) return;
     this.lastFragmentKey = key;
     this.lastFragmentAt = now;
+    this.fragmentFor = { id, raw: raw.replace(/^#/, "") };
     if (parsed.kind === "invalid") {
       this.snackbar.show(`This link's ${parsed.raw} does not name a comment.`);
       return;

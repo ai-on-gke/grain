@@ -29,7 +29,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { RouteKey } from "../api/generated-routes";
 import type { Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
@@ -1607,6 +1607,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly filter = inject(ViewFilter);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly doc = inject(DOCUMENT);
   private readonly location = inject(LocationStrategy);
   private readonly keyboard = inject(KeyboardService);
@@ -2261,9 +2262,25 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private unregister: (() => void)[] = [];
 
   ngOnInit(): void {
+    // A phone has no pane, so a #comment= link into one
+    // (/tasks?task=<id>#comment=<n>, as a wide screen shares it) opens
+    // the task's own page on that comment instead.
+    // It follows every fragment the page is given, not only the first:
+    // a link followed while Tasks is already open lands here too.
+    const fragSub = this.route.fragment.subscribe((frag) => {
+      const linked = this.route.snapshot.queryParamMap.get("task");
+      if (linked && frag?.startsWith("comment=") && this.isPhone()) {
+        void this.router.navigate(["/task", linked], {
+          queryParams: { from: this.fromParam() },
+          fragment: frag,
+          replaceUrl: true,
+        });
+      }
+    });
     this.store.start();
     this.wsStore.ensureLoaded();
     this.unregister = [
+      () => fragSub.unsubscribe(),
       this.keyboard.register({
         key: "j",
         description: "Next task",
