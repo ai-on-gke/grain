@@ -377,7 +377,22 @@ func gateIntegrationResources(t Task, sources map[string]GateOutcomeSource, comp
 		if kind == "cl_submitted" {
 			resourceSubject.ID = canonical
 		}
-		evidence := gates.Evidence{Kind: "integration", ID: target + "=>" + canonical + " (" + s.Attribution + ")", Version: version, Subject: resourceSubject, Head: head, Digest: version}
+		identity := target
+		if canonical != target {
+			identity += "=>" + canonical
+		}
+		evidenceID := identity + " (" + s.Attribution + ")"
+		// Evidence IDs are opaque wire references. Keep normal attribution
+		// readable, reserving room for the dependency's "change/" prefix.
+		// Oversized metadata retains its exact tuple in the identity digest.
+		if len([]rune(evidenceID)) > 240 {
+			attribution := []rune(s.Attribution)
+			if len(attribution) > 100 {
+				attribution = append(attribution[:100], '…')
+			}
+			evidenceID = "resource/" + gates.Digest([]string{target, canonical, s.Attribution}) + " (" + string(attribution) + ")"
+		}
+		evidence := gates.Evidence{Kind: "integration", ID: evidenceID, Version: version, Subject: resourceSubject, Head: head, Digest: version}
 		until := s.At.Add(time.Minute)
 		if s.State == "merged" || s.State == "submitted" || s.State == "equivalent" {
 			until = s.At.Add(72 * time.Hour)

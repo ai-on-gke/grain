@@ -44,7 +44,7 @@ var reviewSchema []byte
 //go:embed approval.schema.json
 var approvalSchema []byte
 
-const Implementation = "builtin-outcome-review-observer-v1"
+const Implementation = "builtin-outcome-review-observer-v2"
 
 type Descriptor struct {
 	Type           string

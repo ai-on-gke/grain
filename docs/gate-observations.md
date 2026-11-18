@@ -97,6 +97,10 @@ Evidence uses the canonical API envelopes: scoped change observations use
 `child_outcome`, and authenticated no-work dispositions use `report`. The delivery
 profile and source-version digest preserve the precise product and provenance;
 an integration evidence envelope alone does not assert a positive merge.
+Resource IDs omit redundant self-aliases. If composite identity/attribution
+metadata exceeds the wire budget, an opaque digest pins the complete tuple and
+an explicitly shortened attribution label remains readable; subject and head
+stay exact. These IDs do not change the outcome predicate.
 
 Existing successful finish, verified PR webhook/detail reads, ordinary CL
 provider reads/polls and submission settlement emit compact typed provenance into

@@ -552,4 +552,38 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 	})
 
+	t.Run("valid-long-resource-identities-fit-the-wire-contract", func(t *testing.T) {
+		task := seed("outcome-long-resource")
+		task.Target = &model.RepoRef{Owner: strings.Repeat("a", 39), Name: strings.Repeat("b", 100)}
+		ref := task.Target.String() + "#12345"
+		task.Links = []model.Link{{Kind: model.LinkFixes, Target: ref}}
+		must(s.PutTask(ctx, task))
+		settle(task, "success", "change", "Delivered change in a long repository name")
+		source(task, ref, "long-resource-head", "merged", "")
+		view := observe(task)
+		if status(view, "delivery-change") != "met" || status(view, "pr_merged") != "met" {
+			t.Fatal("long valid resource lost its positive proof")
+		}
+		now = now.Add(time.Millisecond)
+		fresh, err := s.GetTask(ctx, task.ID)
+		must(err)
+		s.RecordGateOutcomeSource(ctx, task.ID, model.GateOutcomeSource{Resource: ref, Head: "long-resource-head", State: "merged", Policy: model.GateOutcomePolicy(*fresh), Attribution: "external:" + strings.Repeat("attributed-provider-", 50), At: now})
+		view = observe(task)
+		if status(view, "pr_merged") != "met" {
+			t.Fatal("bounded identity changed the predicate")
+		}
+		for _, entry := range view.Results {
+			for _, evidence := range entry.Result.Evidence {
+				if len([]rune(evidence.ID)) > 256 {
+					t.Fatal("long valid resource exceeded canonical evidence ID limit")
+				}
+			}
+			for _, dependency := range entry.Result.Dependencies {
+				if len([]rune(dependency.Key)) > 256 {
+					t.Fatal("long valid resource exceeded canonical dependency key limit")
+				}
+			}
+		}
+	})
+
 }
