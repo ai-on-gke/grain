@@ -28,7 +28,11 @@ import (
 // repository still publishes, and is read as "there is a release owed"
 // rather than as an error. See BaseBranchRelease.
 func (s *Store) GetBaseBranchRelease(ctx context.Context, repo RepoRef, branch string) (*BaseBranchRelease, error) {
-	row := s.db.QueryRowContext(ctx,
+	return getBaseBranchRelease(ctx, s.db, repo, branch)
+}
+
+func getBaseBranchRelease(ctx context.Context, q querier, repo RepoRef, branch string) (*BaseBranchRelease, error) {
+	row := q.QueryRowContext(ctx,
 		"SELECT `commit`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,"+
 			"`failures`,`failing_since`,`attempts` "+
 			"FROM `base_branch_release` WHERE `owner` = ? AND `name` = ? AND `branch` = ?",

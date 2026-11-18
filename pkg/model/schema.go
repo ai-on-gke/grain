@@ -2541,6 +2541,7 @@ var Tables = []string{
 	// makes; never a verdict grain reuses.
 	gitHubCIJobTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_ref`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`ref`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_commit`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`commit_sha`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`grain_schema`" + ` (
   ` + "`id`" + `      INTEGER NOT NULL,
@@ -4667,6 +4668,11 @@ var Tables = []string{
 	ciStepAttachmentTable,
 
 	// Local shadow diagnostics, separate from lifecycle and event outboxes.
+	gateHealthBaseTable,
+	gateHealthWorkflowTable,
+	"CREATE INDEX IF NOT EXISTS `gate_health_workflow_order` ON `gate_health_workflow_source` (`completed_at`,`repo`,`run_id`,`attempt`)",
+	gateOutcomeSourceTable,
+	"CREATE INDEX IF NOT EXISTS `gate_outcome_source_at` ON `gate_outcome_source` (`at`,`task_id`,`resource`)",
 	gateObservationTable,
 	gateObservationHistoryTable,
 	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_order` ON `gate_observation_shadow_history` (`at`,`task_id`,`generation`)",

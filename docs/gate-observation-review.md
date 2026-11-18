@@ -105,8 +105,10 @@ independent correctness oracle.
 
 ## Material limits for later ports
 
-- The controller, failure builder and milestone comparison intentionally project
-  a fixed report/receipt pair. Comparisons and cache validation assume that pair
+- At this review revision, the controller, failure builder and milestone comparison
+  intentionally projected a fixed report/receipt pair. Task #68 extends those paths
+  together for selected health goals; see [health port](gate-health-observations.md).
+  The original extension constraint was: Comparisons and cache validation assume that pair
   and result order. Adding a descriptor alone is not a gate port: explicitly
   extend the relevant reader, binding projection, failure/comparison logic and
   tests together. Do not invent an execution platform around this slice.
@@ -131,3 +133,27 @@ independent correctness oracle.
 
 These are explicit extension constraints, not additional tasks or authorization
 to activate enforcement. No production deployment/configuration/grants change.
+
+## Outcome extension (Task #65)
+
+The fixed-pair and unsupported-resource notes above describe the reviewed #61/#64
+baseline. The subsequent outcome port extends the same registry/read/persistence
+path with delivery/acknowledgment variants, integration and selected children;
+see the current [coverage table](../design/spec/gates/catalogue.md#runtime-observation-coverage)
+and [operator guide](gate-observations.md). Cached projections validate every
+monitor rather than assuming two results; failure reconstruction preserves the
+validated current projection while discarding accepted evidence. The original
+body/receipt ordering, retry, contention, retention and legacy-isolation repairs
+remain regression requirements. Compact bounded typed domain provenance stays within ordinary scoped internal
+reads and introduces no provider back-call. Shadow success is not an
+authority/closure decision, and all enforcement and rollout activation stays deferred.
+
+## Task #66 extension
+
+The historical fixed-pair limitation above is repaired for the checks port.
+Bindings, failure reconstruction, cache validation and comparisons now include a
+bounded current/legacy pair for each task-owned change. The report/receipt
+predicates remain unchanged. See [CI checks in shadow](gate-check-observations.md)
+for the ordinary readers, source/definition bounds, local acceptance fence,
+permission-aware history, inert merge context, tests and remaining admission gaps.
+No unrelated gate or enforcement surface was added.

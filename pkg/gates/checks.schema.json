@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "extra_jobs",
+    "empty",
+    "semantics"
+  ],
+  "properties": {
+    "mode": {
+      "enum": [
+        "effective",
+        "github",
+        "grain",
+        "both",
+        "provider",
+        "none"
+      ]
+    },
+    "extra_jobs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "minItems": 0,
+      "maxItems": 100,
+      "uniqueItems": true
+    },
+    "empty": {
+      "enum": [
+        "unknown",
+        "explicit_none",
+        "legacy_settled"
+      ]
+    },
+    "semantics": {
+      "enum": [
+        "current_v1",
+        "legacy_ci_v1"
+      ]
+    }
+  }
+}
