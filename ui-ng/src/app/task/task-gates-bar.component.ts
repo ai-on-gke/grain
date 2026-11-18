@@ -81,7 +81,11 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-secret-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-secret-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-secret-h"
+                class="gate-card-title"
+              >
                 Waiting for a secret: <code>{{ sec.name }}</code>
               </h2>
               @if (sec.set) {
@@ -143,7 +147,11 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-access-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-access-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-access-h"
+                class="gate-card-title"
+              >
                 Waiting for an access grant: {{ pa.summary }}
               </h2>
               @if (can("GET /api/tasks/{id}")) {
@@ -276,7 +284,11 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-config-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-config-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-config-h"
+                class="gate-card-title"
+              >
                 Waiting for configuration change: {{ cc.summary }}
               </h2>
               <span class="mono muted"
@@ -384,7 +396,7 @@ export function mergeRuleSource(from?: string[]): string {
             aria-label="Pending local script approval"
           >
             <div class="gate-card-head">
-              <h2 class="gate-card-title">
+              <h2 [attr.aria-level]="pane() ? 3 : null" class="gate-card-title">
                 Local script approval: <code>{{ lsa.tool || lsa.script }}</code>
               </h2>
               <span class="status-pill reply">Pending</span>
@@ -439,7 +451,11 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-hr-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-hr-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-hr-h"
+                class="gate-card-title"
+              >
                 Held for human review
               </h2>
               <div class="gate-actions">
@@ -520,7 +536,11 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-pt-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-pt-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-pt-h"
+                class="gate-card-title"
+              >
                 {{
                   task().pathTriggerHold
                     ? "Held by this repository's gating triggers"
@@ -590,7 +610,11 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-sec-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-sec-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-sec-h"
+                class="gate-card-title"
+              >
                 {{
                   task().securityHold
                     ? "Security hold: " + task().securityHold
@@ -626,7 +650,11 @@ export function mergeRuleSource(from?: string[]): string {
             aria-labelledby="gate-mp-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-mp-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-mp-h"
+                class="gate-card-title"
+              >
                 Merge rules
                 @if (task().mergePolicy?.Matched?.length) {
                   <span class="muted"
@@ -666,6 +694,9 @@ export class TaskGatesBarComponent {
   readonly task = input.required<TaskDetail>();
   // In the Inbox pane a task link swaps the pane (?task=) rather than
   // leaving for the full page, as task-detail's own links do.
+  // It is also set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
   readonly pane = input(false);
   readonly acted = output<void>();
   readonly replyInWordsChange = output<boolean>();

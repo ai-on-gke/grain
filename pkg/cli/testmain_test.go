@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
@@ -93,6 +94,10 @@ func TestMain(m *testing.M) {
 	os.Unsetenv(contextEnvVar)
 	systemKeyring = func() keyring { return nil }
 	code := m.Run()
+	// The tests here that open a PostgreSQL store start the shared embedded
+	// server (postgrestest); without this it outlived the test binary,
+	// listening on 127.0.0.1:5432 (docs/test-runs/2026-11-13-upgrade-cancel.md).
+	postgrestest.Shutdown()
 	restore()
 	os.RemoveAll(configHome)
 	os.Exit(code)

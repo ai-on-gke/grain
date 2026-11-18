@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v30"
+const Version = "trust-boundary/v31"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -84,7 +84,7 @@ type Category struct {
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
 //
-// v30 adds what the 2026-11-17 security review of main
+// v31 adds what the 2026-11-17 security review of main
 // (docs/security/audits/2026-11-17.md, task 6871, finding 1) found merged
 // unclassified between 11-13 and 11-17. To auth-routes: the accept-findings
 // path (pkg/ui/accept_findings.go, AcceptReviewFindings, and
@@ -95,11 +95,20 @@ type Category struct {
 // session (pkg/ui/verifier_session.go, #1574), the HMAC-signed cookie that
 // admits a request without IdentityVerifier.Verify, beside verifier.go. To
 // exec-sandbox: pkg/agentd/ and its command cmd/grain-agentd/, the rootless
-// host agent -- what it runs, and the self-update (update.go, #1533) that fetches a manifest and binary,
-// verifies them against the release key pinned at install
+// host agent -- what it runs, and the self-update (update.go, #1533) that
+// fetches a manifest and binary, verifies them against the release key
+// pinned at install
 // (release/release.go, VerifyManifest, resolveSigningKey) and runs the
 // result as the host agent. To release-machinery: scripts/build-agentd.sh,
 // which builds the grain-agentd binaries that self-update runs.
+//
+// v30 adds the classic ui e2e freeze lists to ci-suppressions (security
+// review of task 5099): ui/e2e/QUARANTINE and ui/e2e/NONGATING take the
+// tests they name out of the gating `ui e2e` job (playwright.config.js's
+// grepInvert), ui/e2e/frozen.js turns those lists into that filter, and
+// ui/playwright.config.js applies it (and could drop tests from the gate
+// on its own, through grepInvert, testIgnore or testMatch), so an edit to
+// any of them suppresses failures the way .grain/quarantine.yml does.
 //
 // v29 adds pkg/ui/access_code_mode.go to auth-routes beside
 // pkg/ui/accesscode.go (task 5973, found in the security review of task
@@ -581,7 +590,12 @@ var Categories = []Category{
 		prefixes:      []string{".grain/baselines/"},
 		// A job the path filter skips is not a failing one, so the
 		// filter suppresses failures the same way a baseline does.
-		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh"},
+		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh",
+			// The classic ui e2e freeze (ui/e2e/README.md): what these
+			// lists name, frozen.js removes from the gating `ui e2e` job.
+			"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js",
+			// ...and the config that applies them to the gating lane.
+			"ui/playwright.config.js"},
 	},
 	{
 		ID: "path-triggers",
