@@ -239,7 +239,7 @@ or grant change accompanies the extension.
 
 ## QA/release qualification extension
 
-Task #69 adds qa_stage and release_qualification to the four existing monitor
+Task #69 adds qa_stage and release_qualification to the five existing monitor
 types. The [source audit](gate-qa-release-observations.md) documents the exact
 versioned reads, custom stage restrictions, and honest unknowns for unavailable
 signed/effective-policy/asset evidence. The existing task/repository and linked

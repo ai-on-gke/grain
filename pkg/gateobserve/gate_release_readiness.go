@@ -32,7 +32,7 @@ type observationComparisons interface {
 // readReleaseReadiness uses ordinary, scoped read adapters. A missing signature,
 // invocation/environment policy or complete asset set remains explicitly unknown.
 // In particular it never executes candidate-gate/release-from-trunk or any shell.
-func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, tags []github.Tag, f *gates.ReleaseFacts) {
+func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, tags []github.Tag, tagsComplete bool, f *gates.ReleaseFacts) {
 	versions := []any{f.SourceVersion}
 	readReleasePromotionPolicy(ctx, source, repo, tags, f)
 	if f.PromotionPolicy != nil {
@@ -126,6 +126,12 @@ func readReleaseReadiness(ctx context.Context, source any, repo model.RepoRef, t
 				}
 			}
 		}
+	}
+	// Synced-release run identities supply a head without collecting tags.
+	// Only complete release history can prove there is no prior notes base.
+	if !tagsComplete {
+		f.PredicateReasons["breaking_change"] = "Complete release tag history is unavailable; a missing prior-release baseline is not proof of no breaking changes."
+		return
 	}
 	files, canRead := source.(github.FileReader)
 	if !canRead || !canCompare || ctx.Err() != nil {

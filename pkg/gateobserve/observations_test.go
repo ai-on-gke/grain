@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -387,6 +388,38 @@ func TestQualificationObservationReleaseUsesExistingAuthenticatedVerdict(t *test
 		}
 	}
 }
+func TestReleaseReadinessMissingTagsCannotProveNoBreakingChanges(t *testing.T) {
+	now := time.Now().UTC()
+	head := strings.Repeat("a", 40)
+	f := gates.ReleaseFacts{
+		TaskID: "synced", Repository: "acme/grain", Candidate: "v3.1.0@" + head,
+		Head: head, Version: "v3.1.0", PolicyVersion: gates.Digest("policy"),
+		Complete: true, ObservedAt: now, ValidUntil: now.Add(time.Minute),
+		PredicateReasons: map[string]string{},
+	}
+	src := &readOnlySource{head: head, conf: []byte("RELEASE_MAJOR=3\n")}
+	// Synced-release candidates have an exact head from their run identity,
+	// but no tag collection. Missing history cannot prove a first release.
+	for _, complete := range []bool{false, true} {
+		t.Run(strconv.FormatBool(complete), func(t *testing.T) {
+			f := f
+			readReleaseReadiness(context.Background(), src, model.RepoRef{Owner: "acme", Name: "grain"}, nil, complete, &f)
+			want := "unknown"
+			if complete {
+				want = "met"
+			}
+			c := gates.QualificationCollection{Release: &f}
+			for _, b := range c.Bindings(f.TaskID)[2:] {
+				if b.ID == "release-breaking_change" {
+					if r := c.Evaluate(b, now, 1); r.Status != want {
+						t.Fatalf("complete=%t: got %s, want %s: %s", complete, r.Status, want, r.Summary)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestQAGateEvidenceCompletenessAndBounds(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

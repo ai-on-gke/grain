@@ -388,6 +388,7 @@ func collectReleaseObservation(ctx context.Context, store *model.Store, source a
 		Config model.SuiteQualification
 	}{run.SuiteID, policy}), ObservedAt: now, ValidUntil: now.Add(time.Minute)}
 	var tagList []github.Tag
+	tagsComplete := false
 	tagVersion := ""
 	prefix := model.QualificationTag(stem, repo, "")
 	candidate, ok := strings.CutPrefix(run.ScheduleID, prefix)
@@ -428,6 +429,7 @@ func collectReleaseObservation(ctx context.Context, store *model.Store, source a
 			return f, nil
 		}
 		tagList = list
+		tagsComplete = true
 		tagVersion = gates.Digest(list)
 		for _, tag := range list {
 			if tag.Name == candidate {
@@ -463,7 +465,7 @@ func collectReleaseObservation(ctx context.Context, store *model.Store, source a
 		"publication_readiness": "Complete required asset/registry target evidence is unavailable; publication health is owned by the health family.",
 		"promotion_policy":      "Exact effective release veto/version/scheduling policy is unavailable.",
 	}
-	readReleaseReadiness(ctx, source, repo, tagList, f)
+	readReleaseReadiness(ctx, source, repo, tagList, tagsComplete, f)
 	var list []github.CheckRun
 	if checks, ok := source.(releaseObservationChecks); ok && ctx.Err() == nil {
 		app, err := checks.CheckRunApp(repo.StoredOwner(), repo.Name)
