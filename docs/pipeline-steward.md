@@ -96,9 +96,12 @@ This describes what is implemented, not a proposal:
 ### Quiet periods cost nothing
 
 Before the schedule reconciler fires `system:pipeline-steward`, it asks
-`pipelineStewardQuiet`. A quiet queue meets all three of these
-conditions:
+`pipelineStewardQuiet`. A quiet queue meets these conditions:
 
+- no open `pipeline.*` notification, except the steward's own report
+  regression notification (which must not wake it in a loop). This also
+  lets a safety firing create the first standing task and its subscriptions
+  when the notification arrived before any subscriber existed;
 - every base branch grain watches has a green verdict, has no verdict
   yet, or has a run in flight. A confirmed or unconfirmed failure
   (`BaseBranchCI.Broken`) is not quiet, and neither is an errored or
@@ -115,7 +118,11 @@ On a quiet queue the occurrence is dropped before any sandbox is spent.
 The cadence moves on, `LastRunAt` stays put, and the schedule's skip
 history records it as `quiet`. If the gate cannot read what it checks, it
 fires anyway: a run that finds nothing costs less than a red branch
-nobody saw.
+nobody saw. A null `LastRunAt` can therefore be normal on a deployment
+whose safety firings have all been quiet; inspect the skip history and
+open notifications before diagnosing a stalled scheduler. The
+[November 18 investigation](test-runs/2026-11-18-stale-system-schedules.md)
+separates this from daily report schedules held by open tasks.
 
 ### A confirmed red wakes it at once
 
