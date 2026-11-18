@@ -134,6 +134,9 @@ func NewClient(cfg Config, store *model.Store) *Client {
 	if cfg.GateObservationTaskIDs == nil {
 		cfg.GateObservationTaskIDs = observationEnvironment()
 	}
+	if cfg.GateObservationChildren == nil {
+		cfg.GateObservationChildren = observationChildrenEnvironment()
+	}
 	return &Client{Config: cfg, Store: store}
 }
 

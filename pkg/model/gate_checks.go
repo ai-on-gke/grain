@@ -73,6 +73,11 @@ func gateChecksInput(ctx context.Context, q querier, id string) (*Task, *Observa
 	if err != nil {
 		return nil, nil, "", err
 	}
+	return gateChecksInputFrom(ctx, q, t, o)
+}
+
+func gateChecksInputFrom(ctx context.Context, q querier, t *Task, o *Observation) (*Task, *Observation, string, error) {
+	id := t.ID
 	cfg, err := scanConfig(q.QueryRowContext(ctx, "SELECT "+configColumns+" FROM `grain_config` WHERE `id` = 1").Scan)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, "", err
