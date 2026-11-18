@@ -241,13 +241,13 @@ func findingsReviews(t model.Task, gate string) []string {
 // withdraws auto-merge for it only while auto-merge is on -- and a
 // review's findings have usually taken it already.
 func reviewGatesSettled(t model.Task) bool {
-	if p, ok := model.MergePolicyOf(t); ok && p.AutoMergeNever {
+	if model.MergePolicyWithholdsAutoMerge(t) {
 		return false
 	}
 	for _, l := range t.Links {
 		switch l.Kind {
 		case model.LinkSecurityHold, model.LinkBrokenRulesHold, model.LinkPathTriggerHold,
-			model.LinkHumanOnlyHold, model.LinkQAHold, model.LinkMergePolicyWithdrawn:
+			model.LinkHumanOnlyHold, model.LinkQAHold:
 			return false
 		}
 	}

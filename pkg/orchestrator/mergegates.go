@@ -338,7 +338,9 @@ func clearReviewFindingsOnCleanReview(ctx context.Context, store *model.Store, r
 			t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		}
 		model.ClearReviewFindingsForGate(t, gate)
-		if !hasSecurityHold(*t) && !hasPathTriggerHold(*t) && !heldForHuman(*t) &&
+		if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) && !hasPathTriggerHold(*t) &&
+			!heldForHuman(*t) && !model.HumanReviewHeld(*t) &&
+			linkTarget(*t, model.LinkQAHold) == "" && !model.MergePolicyWithholdsAutoMerge(*t) &&
 			!model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
 			t.AutoMerge = true
 		}

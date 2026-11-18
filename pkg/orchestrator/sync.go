@@ -1447,7 +1447,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// its auto-merge came to be on (model's sensitive_path.go).
 		if held, err := withdrawForPendingApprovals(ctx, store, client, task, ref, now); err != nil {
 			return err
-		} else if held {
+		} else if held || (validForce && len(model.PendingApprovals(task)) > 0) {
 			if over, err := forceOverrides(); err != nil || !over {
 				return err
 			}
@@ -1464,7 +1464,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// to press Submit (`auto_merge: never`, mergerules.go).
 		if held, err := withdrawForMergePolicy(ctx, store, client, e.task, ref, e.policy, now); err != nil {
 			return err
-		} else if held {
+		} else if held || (validForce && mergePolicyAwaitsSubmit(e.task, e.policy)) {
 			if over, err := forceOverrides(); err != nil || !over {
 				return err
 			}

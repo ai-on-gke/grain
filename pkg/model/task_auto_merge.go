@@ -280,8 +280,7 @@ func restoreAfterHolds(ctx context.Context, tx *sql.Tx, t *Task) (string, error)
 	})
 	if t.AutoMerge || AutoMergeDeclined(*t) || AutoMergeAwaitsPerson(*t) || len(heldBy(t.Links)) > 0 ||
 		len(PendingApprovals(*t)) > 0 || !hasClearanceOrSubmit ||
-		slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkMergePolicyWithdrawn }) ||
-		autoMergeNeverPolicy(*t) {
+		MergePolicyWithholdsAutoMerge(*t) {
 		return "", nil
 	}
 	args := []any{t.ID}
@@ -313,14 +312,32 @@ func restoreAfterHolds(ctx context.Context, tx *sql.Tx, t *Task) (string, error)
 		strings.Join(heldBy(cleared), ", ")), nil
 }
 
-// autoMergeNeverPolicy reports whether t's head was classified under merge
-// rules saying it never merges itself (`auto_merge: never`). grain records
-// withdrawing auto-merge for that (LinkMergePolicyWithdrawn) only when it
-// was on, so a change whose review hold had already taken it carries the
-// policy without the mark.
-func autoMergeNeverPolicy(t Task) bool {
+// MergePolicyWithholdsAutoMerge reports whether t's merge rules say its
+// current head never merges itself (`auto_merge: never`, recorded either on
+// LinkMergePolicy or as LinkMergePolicyWithdrawn) and no verified human Submit
+// (LinkHumanApproved) has approved that head yet. grain records withdrawing
+// auto-merge (LinkMergePolicyWithdrawn) only while auto-merge is on, so a
+// change whose review hold had already taken it carries the policy without the
+// withdrawal mark.
+func MergePolicyWithholdsAutoMerge(t Task) bool {
+	var withdrawn, approved string
+	for _, l := range t.Links {
+		switch l.Kind {
+		case LinkMergePolicyWithdrawn:
+			withdrawn = l.Target
+		case LinkHumanApproved:
+			approved = l.Target
+		}
+	}
 	p, ok := MergePolicyOf(t)
-	return ok && p.AutoMergeNever
+	if withdrawn == "" && (!ok || !p.AutoMergeNever) {
+		return false
+	}
+	policyHead := p.Head
+	if policyHead == "" {
+		policyHead = withdrawn
+	}
+	return policyHead == "" || !strings.EqualFold(HumanSubmittedHead(approved), policyHead)
 }
 
 // declinedWhileOff is guardAutoMerge's event for a write that leaves

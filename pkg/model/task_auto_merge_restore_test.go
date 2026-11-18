@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -43,6 +44,10 @@ func TestDroppingTheLastHoldHandsAutoMergeBack(t *testing.T) {
 	never := model.MergePolicyLink(model.EffectiveMergePolicy{Head: "abc123", AutoMergeNever: true, Matched: []string{"frozen"}})
 	allowed := model.MergePolicyLink(model.EffectiveMergePolicy{Head: "abc123"})
 	withdrawn := model.Link{Kind: model.LinkMergePolicyWithdrawn, Target: "abc123"}
+	approvedAt := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	approvedHead := model.Link{Kind: model.LinkHumanApproved, Target: model.HumanSubmittedByTarget("alice@example.com", approvedAt, "abc123")}
+	approvedOldHead := model.Link{Kind: model.LinkHumanApproved, Target: model.HumanSubmittedByTarget("alice@example.com", approvedAt, "000000")}
+	submittedUnverified := model.Link{Kind: model.LinkHumanSubmitted, Target: model.HumanSubmittedByTarget("alice@example.com", approvedAt, "abc123")}
 
 	cases := []struct {
 		name   string
@@ -81,6 +86,12 @@ func TestDroppingTheLastHoldHandsAutoMergeBack(t *testing.T) {
 			func(t *model.Task) { t.Links = []model.Link{cleared, withdrawn} }, false},
 		{"merge policy allows it", held("11", findings, cleared, allowed),
 			func(t *model.Task) { t.Links = []model.Link{cleared, allowed} }, true},
+		{"auto_merge: never already approved at head", held("12", findings, cleared, never, approvedHead),
+			func(t *model.Task) { t.Links = []model.Link{cleared, never, approvedHead} }, true},
+		{"auto_merge: never approved at older head", held("13", findings, cleared, never, approvedOldHead),
+			func(t *model.Task) { t.Links = []model.Link{cleared, never, approvedOldHead} }, false},
+		{"auto_merge: never awaits pinHumanSubmit verification", held("14", findings, cleared, never, submittedUnverified),
+			func(t *model.Task) { t.Links = []model.Link{cleared, never, submittedUnverified} }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
