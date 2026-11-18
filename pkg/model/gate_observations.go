@@ -66,19 +66,13 @@ type GateObservationDiagnostics struct {
 // captureReportFacts reads only one task, its latest run, latest own non-handover
 // comment, and exact current close event. The transaction is the complete local
 // collection scope; no remote or paged evidence is claimed complete.
-func captureReportFacts(ctx context.Context, q querier, id string, now time.Time) (gates.Facts, string, error) {
+// Share the already authorized task rows within one diagnostic transaction.
+func captureReportFacts(ctx context.Context, q querier, id string, now time.Time, t *Task, o *Observation) (gates.Facts, string, error) {
 	f := gates.Facts{TaskID: id, Complete: true, ObservedAt: now, ValidUntil: now.Add(time.Minute)}
-	t, err := getTask(ctx, q, id)
-	if err != nil {
-		return f, "", err
-	}
 	if t == nil {
 		return f, "", sql.ErrNoRows
 	}
-	o, err := getObservation(ctx, q, id)
-	if err != nil {
-		return f, "", err
-	}
+	var err error
 	if o == nil {
 		o = &Observation{TaskID: id}
 	}
@@ -199,7 +193,7 @@ func captureReportFacts(ctx context.Context, q querier, id string, now time.Time
 		Report, Receipt                                                       *gates.Evidence
 		LastComment, Event                                                    int64
 		NoWork                                                                int
-	}{id, f.Applicable, f.Complete, f.Running, f.Settled, f.UnsupportedReason, f.IncompleteReason, gates.Digest(gates.Discover()), state, runID, outcome, started, finished, o.CompletedAt, o.ClosedAt, o.PendingQuestionCommentID, f.Report, f.Receipt, lastComment, eid, noWork})
+	}{id, f.Applicable, f.Complete, f.Running, f.Settled, f.UnsupportedReason, f.IncompleteReason, gates.RegistryDigest(), state, runID, outcome, started, finished, o.CompletedAt, o.ClosedAt, o.PendingQuestionCommentID, f.Report, f.Receipt, lastComment, eid, noWork})
 
 	change, version, err := captureChangeGateFacts(ctx, q, *t, o)
 	if err != nil {
@@ -324,16 +318,24 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			} else if !errors.Is(cacheErr, sql.ErrNoRows) {
 				return cacheErr
 			}
-			f, state, err := captureReportFacts(ctx, tx, id, now)
+			task, err := getTask(ctx, tx, id)
 			if err != nil {
 				return err
 			}
-			if err = captureOutcomeFacts(ctx, tx, &f, now, selected); err != nil {
+			o, err := getObservation(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			f, state, err := captureReportFacts(ctx, tx, id, now, task, o)
+			if err != nil {
+				return err
+			}
+			if err = captureOutcomeFacts(ctx, tx, &f, now, selected, task, o); err != nil {
 				return err
 			}
 			invalidated := false
 			if len(checks) > 0 {
-				task, _, current, err := gateChecksInput(ctx, tx, id)
+				_, _, current, err := gateChecksInputFrom(ctx, tx, task, o)
 				if err != nil {
 					return err
 				}
@@ -745,12 +747,21 @@ func readGateDiagnostics(ctx context.Context, q querier, id string) (GateObserva
 		return diag, err
 	}
 	defer rows.Close()
+	readBytes := 0
 	for rows.Next() {
 		var sample GateObservationSample
 		var raw string
 		if err = rows.Scan(&sample.Generation, &sample.At, &raw, &sample.Comparison); err != nil {
 			return diag, err
 		}
+		// Keep the newest complete sample even if it alone exceeds the read
+		// budget. Older samples stay persisted and included in counts. Bound
+		// decoding as well as row count so larger observer families cannot
+		// spend the entire local collection budget on diagnostic history.
+		if len(diag.History) > 0 && readBytes+len(raw) > 64*1024 {
+			break
+		}
+		readBytes += len(raw)
 		if err = json.Unmarshal([]byte(raw), &sample.View); err != nil {
 			return diag, err
 		}

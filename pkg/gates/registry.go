@@ -22,6 +22,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -61,6 +62,12 @@ type Descriptor struct {
 func Discover() []Descriptor {
 	return []Descriptor{{"checks", 1, Digest(json.RawMessage(checksSchema)), append([]byte(nil), checksSchema...), Implementation}, {"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"integration", 1, Digest(json.RawMessage(integrationSchema)), append([]byte(nil), integrationSchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}, {"children", 1, Digest(json.RawMessage(childrenSchema)), append([]byte(nil), childrenSchema...), Implementation}}
 }
+
+var registryDigest = sync.OnceValue(func() string { return Digest(Discover()) })
+
+// RegistryDigest pins immutable built-in schemas and implementation metadata.
+// Avoid decoding and canonicalizing the same registry on each scoped read.
+func RegistryDigest() string { return registryDigest() }
 
 // Validate admits the implemented closed v1 outcome profiles.
 func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {

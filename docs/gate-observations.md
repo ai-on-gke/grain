@@ -206,7 +206,11 @@ rejected errors and an hourly sample during reads. Stable minute refreshes updat
 current results/evaluation totals without flooding history. Outcome source versions
 include collector refreshes. Each serialized observation has a 256 KiB evidence
 budget, at most 64 combined monitors, 64 resources and 64 distinct children; overflow is a
-safe diagnostic failure. Source receipts are at most 4096 rows globally, 4 KiB per
+safe diagnostic failure. History reads return at most 20 newest complete samples within
+64 KiB of stored view JSON, always retaining the newest complete sample (up to the
+256 KiB per-view limit). Older samples remain persisted and included in counts.
+This bounds history decoding within the local diagnostic budget as gate families
+compose; no individual observation is truncated. Source receipts are at most 4096 rows globally, 4 KiB per
 row, retained for at most 72 hours and pruned on source writes. Retention is at most
 72 hours and 1024 samples per task, 32 current caches and 32768 samples globally.
 Pruning runs during diagnostic writes, including failure writes. Indexed time/key

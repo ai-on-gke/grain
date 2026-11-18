@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,6 +315,29 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 		if entry.Result.Status != "error" || len(entry.Result.Evidence) != 0 || len(entry.Result.Actions) != 0 || len(entry.Result.Work) != 0 {
 			t.Fatal("combined rejection retained proof or actions")
 		}
+	}
+	// Large historical diagnostics must not consume the local collection budget.
+	// Retention/counts remain complete and the newest full view is never trimmed.
+	historyView := *cv
+	largeGuidance := strings.Repeat("h", 8192)
+	for i := 0; i < 6; i++ {
+		historyView.Results[i].Result.HumanText = &largeGuidance
+	}
+	historyRaw, err := json.Marshal(historyView)
+	must(err)
+	for generation := 100; generation < 106; generation++ {
+		_, err := db.ExecContext(ctx, "INSERT INTO `gate_observation_shadow_history` (`task_id`,`generation`,`at`,`view_json`,`comparison`) VALUES (?,?,?,?,?)", fresh.ID, generation, now, string(historyRaw), "history-byte-budget")
+		must(err)
+	}
+	_, limited, err := s.ObserveTaskGates(ctx, fresh.ID, now.Add(2*time.Millisecond))
+	must(err)
+	if limited.Counts["history-byte-budget"] != 6 || len(limited.History) != 1 || limited.History[0].Generation != 105 {
+		t.Fatal("history load bound lost counts or newest sample")
+	}
+	loaded, err := json.Marshal(limited.History[0].View)
+	must(err)
+	if string(loaded) != string(historyRaw) {
+		t.Fatal("historical evidence was truncated instead of returning a complete sample")
 	}
 	bounded, e := s.RecordedGateChecks(ctx, repo, "bounded")
 	must(e)

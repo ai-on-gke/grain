@@ -52,15 +52,7 @@ func readGateSources(ctx context.Context, q querier, id string) (map[string]Gate
 
 // captureOutcomeFacts reads one authorized local scope. Relations never widen
 // that scope, select spawned children, call a provider or install a wait.
-func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig) error {
-	t, err := getTask(ctx, q, f.TaskID)
-	if err != nil {
-		return err
-	}
-	o, err := getObservation(ctx, q, f.TaskID)
-	if err != nil {
-		return err
-	}
+func captureOutcomeFacts(ctx context.Context, q querier, f *gates.Facts, now time.Time, selected []gates.ChildrenConfig, t *Task, o *Observation) error {
 	if o == nil {
 		o = &Observation{}
 	}
@@ -536,7 +528,7 @@ func captureChildOutcome(ctx context.Context, q querier, parent Task, id string,
 			child.SuccessKnown = true
 		}
 		if outcome == "succeeded" && ClosesOnAnswer(*t) && finish.Product == "report" {
-			report, _, err := captureReportFacts(ctx, q, id, now)
+			report, _, err := captureReportFacts(ctx, q, id, now, t, o)
 			if err != nil {
 				return child, err
 			}
