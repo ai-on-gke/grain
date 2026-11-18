@@ -331,7 +331,10 @@ job. What bucket 2 needs, as one task:
 
 ### Bucket 3: freeze mechanics (missing today)
 
-There is no quarantine list. What the freeze needs:
+Built in task 5099 (H3): the lists, `ui/e2e/frozen.js`, the `ui e2e
+(quarantined)` job, `ui/e2e/FROZEN_SPECS` and
+`tests/hygiene/classic_e2e_freeze_test.go`. `ui/e2e/README.md` is the
+rule as it now stands. What the plan asked for:
 
 - **`ui/e2e/QUARANTINE`**: one `file:line` per line, read by
   `playwright.config.js` as a `grepInvert`. The same file feeds a

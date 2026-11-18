@@ -107,8 +107,10 @@ for (const size of SIZES) {
       await expect(banners).toHaveCount(2);
 
       const held = banners.nth(0);
-      await expect(held).toHaveAttribute("role", "status");
-      await expect(held).toContainText(`Publishing held · ${repo}@main`);
+      await expect(held).not.toHaveAttribute("role", "status");
+      const heldStatus = held.getByTestId("fleet-publishing-status");
+      await expect(heldStatus).toHaveAttribute("role", "status");
+      await expect(heldStatus).toHaveText(`Publishing held · ${repo}@main:`);
       await expect(held).toContainText(
         `held pending resolution of triage task ${triage}.`,
       );

@@ -247,7 +247,12 @@ const PERSISTENT_ACTIONS: readonly {
 
         <!-- Base branches publishing nothing (pkg/model/base_branch_publishing.go):
              a warning, as on classic System -> Health, since nothing is
-             stuck; held when a release triage task gates the branch. -->
+             stuck; held when a release triage task gates the branch.
+             role="status" sits on the short title rather than on the whole
+             banner so an age-unit tick inside Detail does not re-announce
+             the ~600-character paragraph, and the title keeps repo@branch so
+             stacked banners scan at a glance and the live announcement names
+             the branch. -->
         @for (
           pub of sandboxes()?.baseBranchPublishing ?? [];
           track pub.repo + " " + pub.branch
@@ -255,14 +260,15 @@ const PERSISTENT_ACTIONS: readonly {
           <div
             class="banner fleet-publishing-banner"
             style="margin: 0"
-            role="status"
             data-testid="fleet-publishing"
           >
             <g-status-icon tone="blast" kind="warning" />
             <span class="fleet-publishing-text">
-              <strong
+              <strong role="status" data-testid="fleet-publishing-status"
                 >{{ pub.gated ? "Publishing held" : "Publishing nothing" }} ·
-                <span class="tabular">{{ pub.repo }}&#64;{{ pub.branch }}</span
+                <span class="tabular">{{
+                  pub.branch ? pub.repo + "@" + pub.branch : pub.repo
+                }}</span
                 >:</strong
               >
               {{ pub.detail }}
