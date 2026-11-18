@@ -37,6 +37,7 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
+import { validatePrincipalEntry } from "./principal-entry";
 import { SettingsStateService, errText } from "./settings-state.service";
 
 interface PrincipalRow {
@@ -197,10 +198,17 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                     class="s-input s-mono"
                     type="text"
                     data-testid="input-principal-entry"
-                    placeholder="alice@example.com"
+                    placeholder="user:alice@example.com"
                     [value]="newPrincipalEntry()"
                     [disabled]="!access.can('POST /api/access/principals')"
-                    (input)="newPrincipalEntry.set($any($event.target).value)"
+                    [attr.aria-invalid]="principalError() ? 'true' : null"
+                    [attr.aria-describedby]="
+                      principalError() ? 'pr-entry-err' : null
+                    "
+                    (input)="
+                      newPrincipalEntry.set($any($event.target).value);
+                      principalError.set('')
+                    "
                   />
                 </div>
                 <div class="s-field">
@@ -231,10 +239,22 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                       !access.can('PATCH /api/access/principals/{entry}') &&
                       !access.can('DELETE /api/access/principals/{entry}')
                     "
-                    (input)="newPrincipalReason.set($any($event.target).value)"
+                    (input)="
+                      newPrincipalReason.set($any($event.target).value);
+                      principalError.set('')
+                    "
                   />
                 </div>
               </div>
+              @if (principalError(); as perr) {
+                <span
+                  class="s-field-error"
+                  id="pr-entry-err"
+                  role="alert"
+                  data-testid="principal-entry-error"
+                  >{{ perr }}</span
+                >
+              }
               <div class="s-inline">
                 <button
                   type="button"
@@ -749,6 +769,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly newPrincipalEntry = signal("");
   protected readonly newPrincipalRole = signal("grain/developer");
   protected readonly newPrincipalReason = signal("");
+  protected readonly principalError = signal("");
 
   protected readonly tokens = signal<ExternalTokenRow[]>([]);
   protected readonly newTokenName = signal("");
@@ -902,10 +923,24 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     }
   }
 
+  // addPrincipal checks the entry first and says what is wrong under the
+  // Grant access row, the server's refusal included: the page's banner is
+  // at the top of a long section, out of sight of the button pressed.
   protected async addPrincipal(): Promise<void> {
-    const entry = this.newPrincipalEntry().trim();
-    if (!entry) return;
+    if (!this.newPrincipalEntry().trim()) return;
+    const { canonical: entry, error } = validatePrincipalEntry(
+      this.newPrincipalEntry(),
+    );
+    if (error) {
+      this.principalError.set(error);
+      return;
+    }
     const reason = this.newPrincipalReason().trim();
+    if (entry.startsWith("serviceAccount:") && !reason) {
+      this.principalError.set("Give a reason to admit a service account.");
+      return;
+    }
+    this.principalError.set("");
     try {
       await this.api.post("POST /api/access/principals", undefined, {
         entry,
@@ -917,7 +952,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
       await this.loadAccessData();
       this.snackbar.show(`Granted ${this.newPrincipalRole()} to ${entry}`);
     } catch (err) {
-      this.state.recordError(err);
+      this.principalError.set(errText(err));
     }
   }
 

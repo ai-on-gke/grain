@@ -95,6 +95,11 @@ export class SettingsStateService {
   private readonly snackbar = inject(SnackbarService);
 
   readonly config = signal<GrainConfig | null>(null);
+  // memoryDirty is whether Settings → Memory holds an edit to the
+  // deployment memory document that is not saved. That document is not a
+  // setting, so it is not in the draft and does not survive leaving the
+  // section: the page asks before it is dropped (SettingsPageComponent).
+  readonly memoryDirty = signal(false);
   readonly initialized = signal(false);
   readonly settings = signal<Record<string, unknown>>({});
   readonly deployment = signal<Record<string, unknown>>({});

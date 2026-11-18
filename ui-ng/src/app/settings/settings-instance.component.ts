@@ -185,10 +185,9 @@ function formatBytes(bytes: number): string {
               <span class="s-toggle-name"
                 >Lock settings in UI (require config repo PRs)</span
               >
-              <span class="s-hint"
-                >Makes config-managed sections read-only outside StateRepo pull
-                requests.</span
-              >
+              <span class="s-hint" data-testid="settings-lock-hint">{{
+                lockHint()
+              }}</span>
             </div>
             <button
               type="button"
@@ -196,7 +195,7 @@ function formatBytes(bytes: number): string {
               role="switch"
               data-testid="switch-settings-locked"
               [attr.aria-checked]="Boolean(state.val('settingsLocked', false))"
-              [disabled]="!access.can('POST /api/settings')"
+              [disabled]="!canToggleLock()"
               aria-label="Lock settings in UI"
               (click)="
                 state.setField(
@@ -1575,6 +1574,41 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     if (changes["section"] && !changes["section"].firstChange) {
       this.loadForSection();
     }
+  }
+
+  // The settings lock makes config-managed sections read-only in favour
+  // of config-repo pull requests, so it means nothing without a config
+  // repository (`grain demo`, a fresh install): there it is offered only
+  // to turn an old lock off. Under an external config repo the lock is
+  // that repository's to set, and the server refuses it here with 409.
+  private lockExternal(): boolean {
+    const c = this.state.config() as Record<string, unknown> | null;
+    return Boolean(c?.["externalConfigRepo"]);
+  }
+
+  private lockNoConfigRepo(): boolean {
+    const c = this.state.config() as Record<string, unknown> | null;
+    return !c?.["configRepo"] && !this.lockExternal();
+  }
+
+  protected canToggleLock(): boolean {
+    if (!this.access.can("POST /api/settings") || this.lockExternal()) {
+      return false;
+    }
+    return (
+      !this.lockNoConfigRepo() ||
+      Boolean(this.state.val("settingsLocked", false))
+    );
+  }
+
+  protected lockHint(): string {
+    if (this.lockExternal()) {
+      return "Set in the external config repository that manages this deployment.";
+    }
+    if (this.lockNoConfigRepo()) {
+      return "Unavailable without a config repository: settings are always edited directly here.";
+    }
+    return "Makes config-managed sections read-only outside StateRepo pull requests.";
   }
 
   protected canWriteSettings(): boolean {
