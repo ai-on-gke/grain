@@ -52,8 +52,11 @@ import (
 // call now. That is the visible half of the change: this used to be a
 // GitHub client, and a task's identity used to be an issue number.
 type Client struct {
-	Config Config
-	Store  *model.Store
+	gateDefinitionMu     sync.Mutex
+	gateDefinitionPermit chan struct{}
+	gateDefinitions      map[string]gateDefinitionCache
+	Config               Config
+	Store                *model.Store
 	// localScripts is the local-script approvals of this daemon's live
 	// runs (localScriptApprovals): Config.LocalScriptApprovals, or one of
 	// its own.
