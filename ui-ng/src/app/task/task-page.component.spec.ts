@@ -17,12 +17,16 @@ import { Router, provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { DiffPreview, TaskDetail } from "../api/models";
+import type { DiffPreview, TaskDetail, TaskQAResponse } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskPageComponent, backFrom, duration } from "./task-page.component";
-import { TaskStore } from "./task.store";
+import {
+  DEEP_LINK_HEAD_QUERY,
+  TaskStore,
+  parseCommentFragment,
+} from "./task.store";
 
 type Call = {
   method: string;
@@ -173,6 +177,11 @@ class FakeApi {
       },
     ],
   };
+  qaResponse: TaskQAResponse = {
+    enabled: false,
+    checkRuns: [],
+    findings: [],
+  };
   calls: Call[] = [];
   transcripts: string[] = [];
   remoteBranches: string[] | null = null;
@@ -222,6 +231,9 @@ class FakeApi {
     if (route === "GET /api/tasks/{id}/context") {
       return Promise.resolve({ brief: "Original brief", summarised: 0 });
     }
+    if (route === "GET /api/tasks/{id}/qa") {
+      return Promise.resolve(structuredClone(this.qaResponse));
+    }
     if (route === "GET /api/tasks/{id}/attempts/{number}/capability-audit") {
       return Promise.resolve({
         records: [
@@ -238,15 +250,30 @@ class FakeApi {
   };
   private rec(method: string, route: string, params?: unknown, body?: unknown) {
     this.calls.push({ method, route, params, body });
+    if (
+      route === "POST /api/tasks/{id}/qa/findings/{finding}/feedback" &&
+      body &&
+      typeof body === "object"
+    ) {
+      const vote = Number((body as { vote?: number }).vote ?? 0);
+      return Promise.resolve({
+        ok: true,
+        findingId: Number((params as { finding?: string })?.finding ?? 0),
+        vote,
+        votedBy: "ana@example.com",
+      });
+    }
     return Promise.resolve({});
   }
   post = (r: string, p?: unknown, b?: unknown) => this.rec("POST", r, p, b);
   patch = (r: string, p?: unknown, b?: unknown) => this.rec("PATCH", r, p, b);
   put = (r: string, p?: unknown, b?: unknown) => this.rec("PUT", r, p, b);
   delete = (r: string, p?: unknown) => this.rec("DELETE", r, p);
+  timeZone?: string;
   config = () =>
     Promise.resolve({
       access: null,
+      timeZone: this.timeZone,
       models: ["fast", "smart"],
       defaultModel: "smart",
       capabilities: [{ id: "self-debug", name: "Self debug", ready: true }],
@@ -322,6 +349,14 @@ describe("TaskPageComponent", () => {
     expect(
       q(f, '[data-testid="task-details"] .description strong')!.textContent,
     ).toBe("merge");
+    // The prompt and the facts sit in separate panes.
+    expect(
+      q(f, '[data-testid="task-prompt-pane"] .description strong'),
+    ).toBeTruthy();
+    expect(q(f, '[data-testid="task-prompt-pane"] dl.g-attrs')).toBeNull();
+    expect(
+      q(f, '[data-testid="task-attributes-pane"] dl.g-attrs'),
+    ).toBeTruthy();
 
     // Zero Classic links & zero <select> elements
     expect(root.querySelectorAll("select")).toHaveLength(0);
@@ -748,6 +783,298 @@ describe("TaskPageComponent", () => {
     expect(q(f, '[data-testid="act-reply"]')).toBeNull();
   });
 
+  it("offers no Release hold on review findings alone, but the gate override", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        {
+          source: "security-findings",
+          category: "security",
+          reason: "the review left findings",
+        },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    const note = q(f, '[data-testid="hold-findings-note"]')!;
+    expect(note.textContent).toContain("cannot be released directly");
+    expect(note.textContent).toContain("merge:force");
+    expect(note.textContent).not.toContain("other reasons");
+
+    q<HTMLButtonElement>(f, '[data-testid="hold-force-merge-open"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeTruthy();
+    expect(q(f, '[data-testid="override-gate-security-review"]')).toBeTruthy();
+    q<HTMLButtonElement>(f, '[data-testid="force-merge-cancel"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
+  });
+
+  it("keeps Release hold for a hold of findings and other reasons", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+        { source: "requested", category: "other", reason: "intent unclear" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeTruthy();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "other reasons only",
+    );
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+  });
+
+  it("offers no override once the review gate is overridden, even while code review runs, and says so", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "overridden",
+        },
+        {
+          id: "review",
+          label: "Code review",
+          state: "running",
+        },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "has been overridden",
+    );
+  });
+
+  it("does not claim the review gate was overridden when mergeGates is absent", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pullRequest: undefined,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: undefined,
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    const note = q(f, '[data-testid="hold-findings-note"]')!.textContent!;
+    expect(note).toContain("cannot be released directly");
+    expect(note).not.toContain("has been overridden");
+  });
+
+  it("hides the gate override from a limited role even when it holds merge:force on the repo", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        full: false,
+        role: "widgets-force-merger",
+        scopes: ["tasks:read", "tasks:write", "merge:force"],
+        repoLimits: { "merge:force": ["acme/web"] },
+      },
+    } as never);
+    await settle(f);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+  });
+
+  it("shows no hold card on a closed task", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "closed",
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="human-review-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+  });
+
+  it("shows a path-trigger hold with its review task, approvals, security hold and merge rules", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      autoMerge: false,
+      pathTriggerHold: "required",
+      pathTriggerTasks: ["payments=28"],
+      approvals: [
+        {
+          rule: "trigger:payments",
+          source: "repository trigger",
+          approvers: ["ana", "ben"],
+        },
+      ],
+      repoRules: "rules@0f1e2d3c",
+      securityHold: "pkg/access",
+      securityReviewTask: "29",
+      mergePolicy: {
+        Head: "abcdef0123456789",
+        Mode: "grain",
+        GrainJobs: ["unit"],
+        Matched: ["payments-strict"],
+        Requirements: [
+          { Field: "auto_merge", Value: "never", From: ["payments-strict"] },
+          { Field: "ci.mode", Value: "grain", From: ["defaults"] },
+        ],
+      },
+    };
+    const f = await render(api);
+    const hold = q(f, '[data-testid="path-trigger-hold"]')!;
+    expect(hold.textContent).toContain(
+      "Held by this repository's gating triggers",
+    );
+    expect(hold.textContent).toContain("human: required");
+    expect(hold.textContent).toContain(".grain/triggers/payments.yml");
+    const link = q<HTMLAnchorElement>(
+      f,
+      '[data-testid="path-trigger-review-link"]',
+    )!;
+    expect(link.textContent).toContain("Review task #28");
+    expect(link.getAttribute("href")).toBe("/task/28");
+    expect(q(f, '[data-testid="approval-rule"]')!.textContent).toContain(
+      "Waiting for ana or ben",
+    );
+    expect(hold.textContent).toContain("rules@0f1e2d3c");
+
+    const sec = q(f, '[data-testid="security-hold"]')!;
+    expect(sec.textContent).toContain("Security hold: pkg/access");
+    expect(
+      q(f, '[data-testid="security-review-link"]')!.getAttribute("href"),
+    ).toBe("/task/29");
+
+    const policy = q(f, '[data-testid="merge-policy"]')!;
+    expect(policy.textContent).toContain("matched payments-strict");
+    expect(policy.textContent).toContain("abcdef012345");
+    const reqs = [
+      ...(f.nativeElement as HTMLElement).querySelectorAll(
+        '[data-testid="merge-requirement"]',
+      ),
+    ].map(
+      (el) =>
+        [...el.children].map((c) => c.textContent!.trim()).join(" | ") ||
+        el.textContent!.trim(),
+    );
+    expect(reqs).toEqual([
+      "auto_merge: never | from rule payments-strict",
+      "ci.mode: grain | from defaults",
+      "grain CI is narrowed to unit",
+    ]);
+  });
+
+  it("drops the hold callouts once the task closes or merges itself", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "closed",
+      pathTriggerHold: "required",
+      pathTriggerTasks: ["payments=28"],
+      securityReviewTask: "29",
+      mergePolicy: { Requirements: [{ Field: "port", Value: "no" }] },
+    };
+    let f = await render(api);
+    expect(q(f, '[data-testid="path-trigger-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="security-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="merge-policy"]')).toBeNull();
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+    api.detail = { ...api.detail, state: "awaiting_submit", autoMerge: true };
+    f = await render(api);
+    expect(q(f, '[data-testid="path-trigger-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="merge-policy"]')).toBeTruthy();
+  });
+
+  it("defers until a picked day, at its start in the deployment's zone, and shows the wake time", async () => {
+    const api = new FakeApi();
+    api.timeZone = "Asia/Tokyo";
+    api.detail = { ...api.detail, state: "proposed" };
+    const f = await render(api);
+    expect(q(f, '[data-testid="act-defer"]')).toBeTruthy();
+    q<HTMLButtonElement>(f, '[data-testid="act-defer-until"]')!.click();
+    await settle(f);
+    const date = q<HTMLInputElement>(f, '[data-testid="defer-until-date"]')!;
+    const submit = q<HTMLButtonElement>(
+      f,
+      '[data-testid="defer-until-submit"]',
+    )!;
+    expect(submit.disabled).toBe(true);
+    expect(date.min > "2026-01-01").toBe(true);
+
+    // A day already past is refused here, as the server would.
+    date.value = "2020-01-01";
+    date.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(submit.disabled).toBe(true);
+    expect(q(f, '[data-testid="defer-until-hint"]')!.textContent).toContain(
+      "after today",
+    );
+
+    date.value = "2030-01-15";
+    date.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(submit.disabled).toBe(false);
+    expect(q(f, '[data-testid="defer-until-hint"]')!.textContent).toContain(
+      "2030",
+    );
+    submit.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/defer"),
+    ).toMatchObject({
+      params: { id: "7" },
+      body: { deferredUntil: "2030-01-14T15:00:00.000Z" },
+    });
+    expect(q(f, '[data-testid="defer-until-form"]')).toBeNull();
+
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+    api.detail = {
+      ...api.detail,
+      state: "deferred",
+      approved: true,
+      deferredUntil: "2030-01-14T15:00:00Z",
+    };
+    const g = await render(api);
+    const wake = q(g, '[data-testid="task-deferred-until"]')!;
+    expect(wake.textContent).toContain("Picks itself back up on");
+    expect(wake.textContent).toContain("Jan 15, 2030");
+    expect(wake.textContent).toContain("onto the queue");
+    expect(q(g, '[data-testid="act-undefer"]')).toBeTruthy();
+  });
+
   it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, admission: "durable" } as TaskDetail;
@@ -1087,6 +1414,16 @@ describe("duration", () => {
         query: { task: "7" },
       });
       expect(backFrom("tasks:nonsense", "7").label).toBe("Tasks");
+      expect(backFrom("agents", "7", false)).toEqual({
+        label: "Agents",
+        commands: ["/agents"],
+        query: { task: "7" },
+      });
+      expect(backFrom("agents", "7", true)).toEqual({
+        label: "Agents",
+        commands: ["/agents"],
+        query: null,
+      });
     });
 
     it("turns Submit off while CI is failing and shows CI in the header", async () => {
@@ -1219,6 +1556,105 @@ describe("duration", () => {
     });
   });
 
+  it("offers Accept findings only on an acceptable findings gate, and posts its gate, review and reason", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        { id: "ci", label: "CI", state: "passed" },
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          detail: "security review left findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+        // Held by a record no review stands behind: nothing to accept.
+        {
+          id: "review",
+          label: "Code review",
+          state: "findings",
+          detail: "filing gating review failed",
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+
+    expect(q(f, '[data-testid="accept-findings-review"]')).toBeNull();
+    expect(q(f, '[data-testid="accept-findings-ci"]')).toBeNull();
+    const open = q<HTMLButtonElement>(
+      f,
+      '[data-testid="accept-findings-security-review"]',
+    )!;
+    expect(open).toBeTruthy();
+    open.click();
+    await settle(f);
+
+    const dialog = q(f, '[data-testid="accept-findings-dialog"]')!;
+    expect(dialog).toBeTruthy();
+    expect(dialog.closest("[inert]")).toBeNull();
+    expect(dialog.textContent).toContain("Review task 4710");
+    const confirm = q<HTMLButtonElement>(
+      f,
+      '[data-testid="accept-findings-confirm"]',
+    )!;
+    expect(confirm.disabled).toBe(true);
+    const reason = q<HTMLTextAreaElement>(
+      f,
+      '[data-testid="accept-findings-reason"]',
+    )!;
+    reason.value = "merge as-is; follow-up filed";
+    reason.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    expect(confirm.disabled).toBe(false);
+    confirm.click();
+    await settle(f);
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/accept-findings"),
+    ).toMatchObject({
+      params: { id: "7" },
+      body: {
+        gate: "security-review",
+        reviewTask: "4710",
+        reason: "merge as-is; follow-up filed",
+      },
+    });
+    expect(q(f, '[data-testid="accept-findings-dialog"]')).toBeNull();
+  });
+
+  it("points Force merge at Accept findings when a gate holds acceptable findings", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="changes-force-merge-open"]',
+    )!.click();
+    await settle(f);
+    expect(
+      q(f, '[data-testid="force-merge-accept-findings-hint"]')!.textContent,
+    ).toContain("Accept findings");
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    await settle(f);
+  });
+
   it("opens force-merge dialog outside inert section, traps focus, and closes on Escape", async () => {
     const api = new FakeApi();
     api.detail = {
@@ -1258,6 +1694,141 @@ describe("duration", () => {
     expect(document.activeElement).toBe(openBtn);
   });
 
+  it("hides Pre-PR quality checks when off and supports details + helpful feedback when active", async () => {
+    const offApi = new FakeApi();
+    const offFixture = await render(offApi, "changes");
+    expect(q(offFixture, '[data-testid="task-qa-section"]')).toBeNull();
+
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+
+    const api = new FakeApi();
+    api.qaResponse = {
+      taskId: "7",
+      enabled: true,
+      assignment: {
+        rootOrigin: "task:7",
+        epoch: 1,
+        regimeId: 1,
+        arm: "treatment",
+        flowId: "golden-v1-minimal",
+        rolloutPctAtAssign: 50,
+        complexityTier: "medium",
+        assignedAt: "2026-11-12T10:00:00Z",
+      },
+      checkRuns: [
+        {
+          id: 1,
+          taskId: "7",
+          runId: "7-1",
+          commitSha: "",
+          stage: "S1",
+          checkId: "skill-inject",
+          arm: "treatment",
+          shadow: false,
+          verdict: "pass",
+          durationMs: 0,
+          tokensIn: 270,
+          tokensOut: 0,
+          allocBytes: 0,
+          createdAt: "2026-11-12T10:00:01Z",
+        },
+        {
+          id: 2,
+          taskId: "7",
+          runId: "7-1",
+          stage: "S3",
+          checkId: "go-test-integrity",
+          arm: "treatment",
+          shadow: false,
+          commitSha: "abcdef0123456789",
+          verdict: "fail",
+          durationMs: 18,
+          tokensIn: 0,
+          tokensOut: 0,
+          allocBytes: 4096,
+          createdAt: "2026-11-12T10:01:00Z",
+        },
+      ],
+      findings: [
+        {
+          id: 11,
+          checkRunId: 2,
+          taskId: "7",
+          stage: "S3",
+          ruleId: "golden:test-integrity-guard",
+          severity: "blocking",
+          filePath: "pkg/merge/merge_test.go",
+          line: 14,
+          summary: "TestRetries contains zero assertions.",
+          evidence: "func TestRetries(t *testing.T) { _ = retries }",
+          humanVote: 0,
+          createdAt: "2026-11-12T10:01:00Z",
+        },
+      ],
+    };
+
+    const f = await render(api, "changes");
+    const qaSection = q(f, '[data-testid="task-qa-section"]')!;
+    expect(qaSection).not.toBeNull();
+    expect(q(f, '[data-testid="task-qa-arm"]')!.textContent).toContain(
+      "treatment · golden-v1-minimal",
+    );
+    // skill-inject is internal accounting and hidden; go-test-integrity is visible.
+    expect(q(f, '[data-testid="qa-check-1"]')).toBeNull();
+    expect(q(f, '[data-testid="qa-check-2"]')!.textContent).toContain(
+      "go-test-integrity",
+    );
+
+    const detailsBtn = q<HTMLButtonElement>(
+      f,
+      '[data-testid="qa-evidence-btn-11"]',
+    )!;
+    expect(detailsBtn.textContent?.trim()).toBe("Show details");
+    detailsBtn.click();
+    await settle(f);
+    expect(detailsBtn.textContent?.trim()).toBe("Hide details");
+    expect(qaSection.textContent).toContain(
+      "func TestRetries(t *testing.T) { _ = retries }",
+    );
+
+    const upBtn = q<HTMLButtonElement>(f, '[data-testid="qa-vote-up-11"]')!;
+    expect(upBtn.getAttribute("aria-pressed")).toBe("false");
+    upBtn.click();
+    await settle(f);
+
+    expect(
+      api.calls.find(
+        (c) =>
+          c.route === "POST /api/tasks/{id}/qa/findings/{finding}/feedback",
+      ),
+    ).toEqual({
+      method: "POST",
+      route: "POST /api/tasks/{id}/qa/findings/{finding}/feedback",
+      params: { id: "7", finding: "11" },
+      body: { vote: 1 },
+    });
+    expect(upBtn.getAttribute("aria-pressed")).toBe("true");
+
+    // Clicking Helpful again clears the vote (0).
+    upBtn.click();
+    await settle(f);
+    expect(upBtn.getAttribute("aria-pressed")).toBe("false");
+
+    // Read-only viewer without tasks:write does not see vote controls.
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read", "ci:read"],
+      },
+    });
+    f.detectChanges();
+    await settle(f);
+    expect(q(f, '[data-testid="qa-vote-up-11"]')).toBeNull();
+  });
+
   it("renders actionError once, ignores page Escape when modal is open, skips missing remote branches, and guards close(expectedId)", async () => {
     const api = new FakeApi();
     api.remoteBranches = ["main"]; // excludes grain/task-7
@@ -1295,5 +1866,311 @@ describe("duration", () => {
     );
     expect(navSpy).not.toHaveBeenCalled();
     fakeModal.remove();
+  });
+
+  it("keeps Details tab accessible above 1080px without redirecting to Conversation", async () => {
+    const origMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("min-width: 1080px"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    try {
+      const api = new FakeApi();
+      const f = await render(api, "details");
+      const detailsTab = q(f, '[data-testid="task-tab-details"]')!;
+      expect(detailsTab).toBeTruthy();
+      expect(detailsTab.getAttribute("aria-current")).toBe("page");
+      expect(q(f, '[data-testid="task-details"] .description')).toBeTruthy();
+      expect(q(f, ".task-aside")).toBeNull();
+    } finally {
+      window.matchMedia = origMatchMedia;
+    }
+  });
+
+  it("renders Docs tab with prompt, PR markdown diff, and report comments, and drives doc-reader-modal Prev/Next/backdrop/Escape", async () => {
+    const api = new FakeApi();
+    api.fullDiff = [
+      api.fullDiff,
+      "diff --git a/docs/plan.md b/docs/plan.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/docs/plan.md",
+      "@@ -0,0 +1,4 @@",
+      "+# Rollout Plan",
+      "+",
+      "+- Step 1: Ship Docs tab",
+      "+- Step 2: Verify E2E",
+    ].join("\n");
+    api.detail = {
+      ...api.detail,
+      comments: [
+        ...(api.detail.comments ?? []),
+        {
+          id: 9,
+          author: "agent",
+          authorKind: "agent",
+          summary: "Audit findings",
+          body: "## Audit findings\n\n- Scroll containment checked\n- Modal keyboard trap verified",
+        },
+      ],
+    };
+    const f = await render(api);
+
+    // Open Docs directly from Prompt pane button.
+    q<HTMLButtonElement>(f, '[data-testid="prompt-open-docs"]')!.click();
+    await settle(f);
+    expect(
+      q(f, '[data-testid="task-tab-docs"]')!.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(q(f, '[data-testid="task-docs-shell"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-prompt"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-pr:docs/plan.md"]')).toBeTruthy();
+    expect(q(f, '[data-testid="doc-item-comment-9"]')).toBeTruthy();
+    // Short chat comment ("Please fix it") is excluded from Docs picker.
+    expect(q(f, '[data-testid="doc-item-comment-1"]')).toBeNull();
+
+    // Switch active doc inside Docs tab.
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="doc-item-pr:docs/plan.md"]',
+    )!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="docs-reader-title"]')!.textContent).toContain(
+      "plan.md",
+    );
+    expect(q(f, '[data-testid="docs-reader-body"]')!.textContent).toContain(
+      "Rollout Plan",
+    );
+
+    // Open full-screen modal from Docs tab.
+    q<HTMLButtonElement>(f, '[data-testid="docs-fullscreen"]')!.click();
+    await settle(f);
+    const modal = q<HTMLDialogElement>(f, '[data-testid="doc-reader-modal"]')!;
+    expect(modal.getAttribute("aria-modal")).toBe("true");
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Navigate Next -> Comment report, then Prev -> PR plan.md -> Prev -> Prompt.
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "3 / 3",
+    );
+    expect(q(f, '[data-testid="doc-modal-body"]')!.textContent).toContain(
+      "Scroll containment checked",
+    );
+    expect(
+      q<HTMLButtonElement>(f, '[data-testid="doc-modal-next"]')!.disabled,
+    ).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Dragging from inside modal body out onto backdrop must NOT dismiss modal.
+    q(f, '[data-testid="doc-modal-body"]')!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+
+    q<HTMLButtonElement>(f, '[data-testid="doc-modal-prev"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "2 / 3",
+    );
+
+    // Backdrop click closes modal.
+    modal.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
+    expect(modal.getAttribute("aria-modal")).toBeNull();
+    expect(q(f, "section.task-page")!.hasAttribute("inert")).toBe(false);
+
+    // Open from Prompt full screen button and dismiss with Escape.
+    q<HTMLButtonElement>(f, '[data-testid="task-tab-details"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="prompt-fullscreen"]')!.click();
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(true);
+    expect(q(f, '[data-testid="doc-modal-pos"]')!.textContent).toContain(
+      "1 / 3",
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    await settle(f);
+    expect(modal.hasAttribute("open")).toBe(false);
+  });
+});
+
+describe("#comment=<id> deep links", () => {
+  let opened = false;
+  afterEach(() => {
+    if (opened) TestBed.inject(TaskStore).close();
+    opened = false;
+    TestBed.resetTestingModule();
+  });
+
+  // A 1,200-comment thread (ids 1..1200) served 500 at a time.
+  function threadApi(): { api: FakeApi; heads: string[]; pages: string[] } {
+    const all = Array.from({ length: 1200 }, (_, i) => ({
+      id: i + 1,
+      author: "agent",
+      authorKind: "agent" as const,
+      body: `comment ${i + 1}`,
+    }));
+    const api = new FakeApi();
+    const heads: string[] = [];
+    const pages: string[] = [];
+    api.getIfChanged = ((_r: string, _p: unknown, query?: string) => {
+      heads.push(query ?? "");
+      const limit = Number(
+        new URLSearchParams(query ?? "").get("comments_limit") ?? "100",
+      );
+      const slice = all.slice(-limit);
+      return Promise.resolve({
+        body: {
+          ...structuredClone(api.detail),
+          comments: slice,
+          olderComments: all.length - slice.length,
+        },
+        changed: true,
+      });
+    }) as unknown as FakeApi["getIfChanged"];
+    const get = api.get;
+    api.get = ((route: string, params?: { id?: string }, query?: string) => {
+      if (
+        route === "GET /api/tasks/{id}" &&
+        query?.includes("comments_before=")
+      ) {
+        pages.push(query);
+        const q = new URLSearchParams(query);
+        const before = Number(q.get("comments_before"));
+        const limit = Number(q.get("comments_limit"));
+        const idx = all.findIndex((c) => c.id === before);
+        const start = Math.max(0, idx - limit);
+        return Promise.resolve({
+          comments: all.slice(start, idx),
+          olderComments: start,
+        });
+      }
+      return get(route, params, query);
+    }) as FakeApi["get"];
+    return { api, heads, pages };
+  }
+
+  it("parses only #comment=<id> fragments", () => {
+    expect(parseCommentFragment("")).toEqual({ kind: "none" });
+    expect(parseCommentFragment("#task:7")).toEqual({ kind: "none" });
+    expect(parseCommentFragment("#comment=0")).toEqual({
+      kind: "comment",
+      id: 0,
+    });
+    expect(parseCommentFragment("comment=42")).toEqual({
+      kind: "comment",
+      id: 42,
+    });
+    expect(parseCommentFragment("#comment=bad")).toEqual({
+      kind: "invalid",
+      raw: "#comment=bad",
+    });
+  });
+
+  it("cold-loads a full page, pages back 500 at a time to the linked comment, and commits once", async () => {
+    const { api, heads, pages } = threadApi();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const store = TestBed.inject(TaskStore);
+    opened = true;
+    const commits: number[] = [];
+    store.open("7", 10);
+    // Overlapping reads (the poll, an event) join the deep-link read.
+    const again = store.refresh();
+    await vi.waitFor(() => {
+      const n = store.detail()?.comments?.length ?? 0;
+      if (n && commits.at(-1) !== n) commits.push(n);
+      expect(n).toBe(1200);
+    });
+    await again;
+    expect(heads).toEqual([DEEP_LINK_HEAD_QUERY]);
+    expect(pages).toEqual([
+      "comments_limit=500&comments_before=701&attempts_limit=1",
+      "comments_limit=500&comments_before=201&attempts_limit=1",
+    ]);
+    expect(commits).toEqual([1200]);
+
+    // The next 100-comment poll keeps every comment shown.
+    await store.refresh();
+    expect(store.detail()?.comments?.length).toBe(1200);
+  });
+
+  it("pages an already shown thread back to a comment named by a later link", async () => {
+    const { api, pages } = threadApi();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const store = TestBed.inject(TaskStore);
+    opened = true;
+    store.open("7");
+    await store.refresh();
+    expect(store.detail()?.comments?.length).toBe(100);
+    expect(await store.loadOlderCommentsThrough(50)).toBe(true);
+    expect(pages).toEqual([
+      "comments_limit=500&comments_before=1101&attempts_limit=1",
+      "comments_limit=500&comments_before=601&attempts_limit=1",
+      "comments_limit=500&comments_before=101&attempts_limit=1",
+    ]);
+    expect(store.detail()?.comments?.[0].id).toBe(1);
+    expect(await store.loadOlderCommentsThrough(99999)).toBe(false);
+  });
+
+  it("switches the task page to Conversation for a #comment= link and names a bad one", async () => {
+    window.history.replaceState(null, "", "/task/7#comment=1");
+    try {
+      const f = await render(new FakeApi(), "runs");
+      opened = true;
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-conversation"]')!.getAttribute(
+          "aria-current",
+        ),
+      ).toBe("page");
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-comment-id="1"]')!.classList.contains(
+            "comment-highlight",
+          ),
+        ).toBe(true);
+      });
+      const snacks = TestBed.inject(SnackbarService);
+      window.history.replaceState(null, "", "/task/7#comment=bad");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      expect(snacks.current()?.message).toContain("does not name a comment");
+      window.history.replaceState(null, "", "/task/7#comment=99999");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      expect(snacks.current()?.message).toContain(
+        "Comment 99999 is not in this task's conversation.",
+      );
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 });

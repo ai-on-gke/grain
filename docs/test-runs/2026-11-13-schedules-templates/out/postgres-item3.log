@@ -1,0 +1,173 @@
+
+=== 3a. first firing: template's admission, read and grant plus the schedule's own grant
+--- task 9
+ id | admission |  hosting   
+----+-----------+------------
+ 9  | durable   | unattended
+(1 row)
+
+                 capability                 |             via              
+--------------------------------------------+------------------------------
+ https://grain.dev/capabilities/api#ci-read | .grain/schedules/own.yml
+ https://grain.dev/capabilities/api#memory  | .grain/templates/nightly.yml
+(2 rows)
+
+     reads     
+---------------
+ acme/upstream
+(1 row)
+
+--- schedule row
+               id               | admission | hosting 
+--------------------------------+-----------+---------
+ repo:schedule:acme:widgets:own |           | 
+(1 row)
+
+                 capability                 |           via            
+--------------------------------------------+--------------------------
+ https://grain.dev/capabilities/api#ci-read | .grain/schedules/own.yml
+(1 row)
+
+
+=== 3b. second firing, nothing edited: the schedule's own grant survives a firing
+--- task 10
+ id | admission |  hosting   
+----+-----------+------------
+ 10 | durable   | unattended
+(1 row)
+
+                 capability                 |             via              
+--------------------------------------------+------------------------------
+ https://grain.dev/capabilities/api#ci-read | .grain/schedules/own.yml
+ https://grain.dev/capabilities/api#memory  | .grain/templates/nightly.yml
+(2 rows)
+
+     reads     
+---------------
+ acme/upstream
+(1 row)
+
+--- schedule row
+               id               | admission | hosting 
+--------------------------------+-----------+---------
+ repo:schedule:acme:widgets:own |           | 
+(1 row)
+
+                 capability                 |           via            
+--------------------------------------------+--------------------------
+ https://grain.dev/capabilities/api#ci-read | .grain/schedules/own.yml
+(1 row)
+
+
+=== 3c. edit the template: api#memory -> api#tasks:read, acme/upstream -> acme/downstream
+title: Nightly widgets sync
+body: Sync widgets from upstream.
+admission: durable
+grants:
+  - capability: https://grain.dev/capabilities/repo#read
+    with: {repo: acme/downstream}
+  - https://grain.dev/capabilities/api#tasks:read
+ last_error 
+------------
+ 
+(1 row)
+
+--- task 11
+ id | admission |  hosting   
+----+-----------+------------
+ 11 | durable   | unattended
+(1 row)
+
+                  capability                   |             via              
+-----------------------------------------------+------------------------------
+ https://grain.dev/capabilities/api#ci-read    | .grain/schedules/own.yml
+ https://grain.dev/capabilities/api#tasks:read | .grain/templates/nightly.yml
+(2 rows)
+
+      reads      
+-----------------
+ acme/downstream
+(1 row)
+
+--- schedule row
+               id               | admission | hosting 
+--------------------------------+-----------+---------
+ repo:schedule:acme:widgets:own |           | 
+(1 row)
+
+                 capability                 |           via            
+--------------------------------------------+--------------------------
+ https://grain.dev/capabilities/api#ci-read | .grain/schedules/own.yml
+(1 row)
+
+
+=== 3d. remove the schedule's own grant
+template: nightly
+every:
+  minutes: 10
+ last_error 
+------------
+ 
+(1 row)
+
+--- task 12
+ id | admission |  hosting   
+----+-----------+------------
+ 12 | durable   | unattended
+(1 row)
+
+                             capability                             |             via              
+--------------------------------------------------------------------+------------------------------
+ https://grain.dev/capabilities/api#ci-read={"repo":"acme/widgets"} | default
+ https://grain.dev/capabilities/api#tasks:read                      | .grain/templates/nightly.yml
+(2 rows)
+
+      reads      
+-----------------
+ acme/downstream
+(1 row)
+
+--- schedule row
+               id               | admission | hosting 
+--------------------------------+-----------+---------
+ repo:schedule:acme:widgets:own |           | 
+(1 row)
+
+ capability | via 
+------------+-----
+(0 rows)
+
+
+=== 3e. a schedule-own admission above the template's (bypass is not above durable; console hosting is)
+ last_error 
+------------
+ 
+(1 row)
+
+--- task 13
+ id | admission | hosting 
+----+-----------+---------
+ 13 | durable   | console
+(1 row)
+
+                             capability                             |             via              
+--------------------------------------------------------------------+------------------------------
+ https://grain.dev/capabilities/api#ci-read={"repo":"acme/widgets"} | default
+ https://grain.dev/capabilities/api#tasks:read                      | .grain/templates/nightly.yml
+(2 rows)
+
+      reads      
+-----------------
+ acme/downstream
+(1 row)
+
+--- schedule row
+               id               | admission | hosting 
+--------------------------------+-----------+---------
+ repo:schedule:acme:widgets:own |           | console
+(1 row)
+
+ capability | via 
+------------+-----
+(0 rows)
+

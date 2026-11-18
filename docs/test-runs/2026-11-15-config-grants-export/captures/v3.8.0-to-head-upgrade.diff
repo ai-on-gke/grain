@@ -1,0 +1,102 @@
+diff --git a/settings/schedules.yml b/settings/schedules.yml
+index 7f49bdd..194987c 100644
+--- a/settings/schedules.yml
++++ b/settings/schedules.yml
+@@ -32,12 +32,7 @@ schedules:
+     keep-running: false
+     target: acme/widgets
+     reads:
+-      - acme/docs
+       - ghe.example.com/acme/legacy
+-    writes:
+-      - acme/docs
+-      - repo: acme/gadgets
+-        base: main
+     grants:
+       - https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}
+       - https://grain.dev/capabilities/repo#write={"base":"","repo":"acme/docs"}
+@@ -151,8 +146,6 @@ schedules:
+     nothing-needed: ""
+     keep-running: false
+     target: ""
+-    reads:
+-      - grain/config
+     grants:
+       - capability: https://grain.dev/capabilities/api#self-debug
+         via: grain
+@@ -221,8 +214,6 @@ schedules:
+     nothing-needed: ""
+     keep-running: false
+     target: ""
+-    reads:
+-      - grain/config
+     grants:
+       - capability: https://grain.dev/capabilities/api#memory
+         via: grain
+@@ -300,8 +291,6 @@ schedules:
+     nothing-needed: ""
+     keep-running: false
+     target: ""
+-    reads:
+-      - grain/config
+     grants:
+       - capability: https://grain.dev/capabilities/api#ci-read
+         via: grain
+@@ -360,8 +349,6 @@ schedules:
+     nothing-needed: ""
+     keep-running: false
+     target: ""
+-    reads:
+-      - grain/config
+     grants:
+       - capability: https://grain.dev/capabilities/api#release-notes
+         via: grain
+@@ -428,8 +415,6 @@ schedules:
+     nothing-needed: ""
+     keep-running: false
+     target: ""
+-    reads:
+-      - grain/config
+     grants:
+       - capability: https://grain.dev/capabilities/api#ci-read
+         via: grain
+diff --git a/settings/templates.yml b/settings/templates.yml
+index ce2988c..ebd8027 100644
+--- a/settings/templates.yml
++++ b/settings/templates.yml
+@@ -27,11 +27,6 @@ templates:
+     change-target: ""
+     reviewers: ""
+     priority: 0
+-    reads:
+-      - acme/docs
+-    writes:
+-      - repo: acme/gadgets
+-        base: main
+     grants:
+       - https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}
+       - https://grain.dev/capabilities/repo#write={"base":"main","repo":"acme/gadgets"}
+@@ -57,12 +52,7 @@ templates:
+     reviewers: ""
+     priority: 0
+     reads:
+-      - acme/docs
+       - ghe.example.com/acme/legacy
+-    writes:
+-      - repo: acme/docs
+-        base: release
+-      - acme/gadgets
+     grants:
+       - https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}
+       - https://grain.dev/capabilities/repo#write={"base":"release","repo":"acme/docs"}
+@@ -88,10 +78,6 @@ templates:
+     change-target: ""
+     reviewers: ""
+     priority: 0
+-    reads:
+-      - acme/docs
+-    writes:
+-      - acme/gadgets
+     grants:
+       - https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}
+       - https://grain.dev/capabilities/repo#write={"base":"","repo":"acme/gadgets"}

@@ -229,10 +229,11 @@ no `/repos` list, compare, per-release or Advanced route, so:
 
 ## Parity gaps left for follow-up (not bugs in what `/next/` has)
 - No `/next/repos` list page or rail entry, no compare page, no per-release
-  URL, no Advanced tab, no work ownership or qualification-plan editor,
-  and no CI capabilities card.
+  URL and no Advanced tab. (Work ownership, the qualification-plan editor
+  and the CI capabilities card were ported in task 5868, covered by
+  `ui-ng/e2e/next-repo-ownership-plan-caps.spec.js`.)
 - No base-gate warnings on Overview/Releases for `github`/`none`.
 - `/next/` Settings → Repositories has no declarations or git-connection
   columns.
-- No issue-import interval field; saving leaves the stored interval
-  alone, so nothing is lost.
+- ~~No issue-import interval field~~: added in task 5868 (Overview,
+  *Every (minutes)*).

@@ -20,10 +20,14 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { TelemetryPageComponent } from "./telemetry-page.component";
+import {
+  TelemetryPageComponent,
+  parseLegacyMetricsRepoFilter,
+} from "./telemetry-page.component";
 import type {
   ClusterStats,
   MetricsReport,
+  QASummary,
   UsageResponse,
 } from "./telemetry.models";
 
@@ -366,6 +370,219 @@ class FakeTelemetryApi {
     ],
   };
 
+  qaSummaryBody: QASummary = {
+    since: "2026-11-05T00:00:00Z",
+    until: "2026-11-12T00:00:00Z",
+    windowSeconds: 604800,
+    enabled: true,
+    flowId: "golden-v1-minimal",
+    rolloutPct: 50,
+    shadowOnControl: true,
+    epoch: 1,
+    regimeId: 1,
+    treatment: {
+      arm: "treatment",
+      assignedOrigins: 18,
+      tasksTotal: 54,
+      prsOpened: 52,
+      prsMerged: 50,
+      heldByQaGate: 1,
+      blindEscapes: 4,
+      blindEscapeRate: 4 / 52,
+      blindEscapeCiLow: 0.03,
+      blindEscapeCiHigh: 0.18,
+      blindReviewEscapes: 2,
+      blindReviewEscapeRate: 2 / 52,
+      firstPushCiEvaluated: 52,
+      firstPushCiGreen: 49,
+      firstPushCiGreenRate: 49 / 52,
+      stackedFixes: 3,
+      stackedFixRate: 3 / 52,
+      postMergeChurn7d: 1,
+      postMergeChurn7dRate: 1 / 50,
+      promptsMeasured: 54,
+      threadCuts: 0,
+      threadCutShare: 0,
+      qaSkillPromptByteShare: 0.062,
+    },
+    control: {
+      arm: "control",
+      assignedOrigins: 18,
+      tasksTotal: 54,
+      prsOpened: 53,
+      prsMerged: 49,
+      heldByQaGate: 0,
+      blindEscapes: 13,
+      blindEscapeRate: 13 / 53,
+      blindEscapeCiLow: 0.15,
+      blindEscapeCiHigh: 0.38,
+      blindReviewEscapes: 8,
+      blindReviewEscapeRate: 8 / 53,
+      firstPushCiEvaluated: 53,
+      firstPushCiGreen: 43,
+      firstPushCiGreenRate: 43 / 53,
+      stackedFixes: 9,
+      stackedFixRate: 9 / 53,
+      postMergeChurn7d: 4,
+      postMergeChurn7dRate: 4 / 49,
+      promptsMeasured: 54,
+      threadCuts: 0,
+      threadCutShare: 0,
+      qaSkillPromptByteShare: 0,
+    },
+    regimeStrata: [
+      {
+        regimeId: 1,
+        rolloutPct: 50,
+        treatEvents: 4,
+        treatN: 52,
+        ctrlEvents: 13,
+        ctrlN: 53,
+      },
+    ],
+    blindEscapeCmh: {
+      strata: 1,
+      riskDiff: -0.168,
+      riskDiffCiLow: -0.305,
+      riskDiffCiHigh: -0.031,
+      oddsRatio: 0.256,
+      pValue: 0.019,
+    },
+    relativeEscapeLift: 0.686,
+    fisherExactP: 0.031,
+    barnardExactP: 0.018,
+    costCuped: {
+      treatN: 18,
+      ctrlN: 18,
+      rawTreatMean: 1.42,
+      rawCtrlMean: 1.51,
+      adjTreatMean: 1.4,
+      adjCtrlMean: 1.52,
+      adjDelta: -0.12,
+      adjRelativeDelta: -0.079,
+      ciLow: -0.28,
+      ciHigh: 0.04,
+      varianceReduction: 0.58,
+    },
+    tokensCuped: {
+      treatN: 18,
+      ctrlN: 18,
+      rawTreatMean: 94_000,
+      rawCtrlMean: 99_500,
+      adjTreatMean: 93_100,
+      adjCtrlMean: 100_200,
+      adjDelta: -7_100,
+      adjRelativeDelta: -0.071,
+      ciLow: -16_000,
+      ciHigh: 1_800,
+      varianceReduction: 0.61,
+    },
+    fastLaneTimeToPrSeconds: {
+      treatN: 12,
+      ctrlN: 12,
+      treatMedian: 145,
+      ctrlMedian: 138,
+      shift: 7,
+      shiftCiLow: -8,
+      shiftCiHigh: 21,
+      relativeShift: 7 / 138,
+      mannWhitneyP: 0.44,
+    },
+    overallTimeToPrSeconds: {
+      treatN: 52,
+      ctrlN: 53,
+      treatMedian: 210,
+      ctrlMedian: 225,
+      shift: -14,
+      shiftCiLow: -42,
+      shiftCiHigh: 15,
+      relativeShift: -14 / 225,
+      mannWhitneyP: 0.29,
+    },
+    originTimeToLandSeconds: {
+      treatN: 18,
+      ctrlN: 18,
+      treatMedian: 690,
+      ctrlMedian: 760,
+      shift: -68,
+      shiftCiLow: -180,
+      shiftCiHigh: 45,
+      relativeShift: -68 / 760,
+      mannWhitneyP: 0.21,
+    },
+    shadowRecall: {
+      controlTasksChecked: 53,
+      shadowWouldBlock: 9,
+      shadowCatchRate: 9 / 53,
+      controlBlindEscapes: 13,
+      matchedBlindEscapes: 8,
+      pairedRecall: 8 / 13,
+    },
+    checks: [
+      {
+        ruleId: "strict-config-decoder",
+        stage: "S3",
+        enforcedRuns: 52,
+        shadowRuns: 53,
+        passCount: 97,
+        failCount: 8,
+        errorCount: 0,
+        catchRate: 8 / 105,
+        findingsCount: 8,
+        filteredTheaterCount: 0,
+        p50DurationMs: 14,
+        p95DurationMs: 38,
+        meanAllocBytes: 65_536,
+        helpfulVotes: 5,
+        notHelpfulVotes: 0,
+        notHelpfulRate: 0,
+        notHelpfulWilsonLb: 0,
+      },
+      {
+        ruleId: "tier2-verification-gate",
+        stage: "S4",
+        enforcedRuns: 18,
+        shadowRuns: 0,
+        passCount: 14,
+        failCount: 4,
+        errorCount: 0,
+        catchRate: 4 / 18,
+        findingsCount: 4,
+        filteredTheaterCount: 1,
+        p50DurationMs: 4_200,
+        p95DurationMs: 12_400,
+        meanAllocBytes: 131_072,
+        helpfulVotes: 3,
+        notHelpfulVotes: 0,
+        notHelpfulRate: 0,
+        notHelpfulWilsonLb: 0,
+      },
+    ],
+    circuitBreaker: {
+      minSampleMet: true,
+      treatmentSample: 18,
+      minRequiredSample: 15,
+      shouldAutoDowngrade: false,
+      reasons: [],
+      fastLaneLatencyMsprt: {
+        n: 24,
+        meanDiff: 0.05,
+        likelihoodRatio: 0.42,
+        pSeq: 1,
+        halfWidth95: 0.18,
+        significant: false,
+      },
+      blindEscapeMsprt: {
+        n: 105,
+        meanDiff: -0.168,
+        likelihoodRatio: 14.2,
+        pSeq: 1 / 14.2,
+        halfWidth95: 0.14,
+        significant: false,
+      },
+    },
+  };
+
   config = () => Promise.resolve(this.configBody);
 
   getIfChanged = (route: string) => {
@@ -382,6 +599,9 @@ class FakeTelemetryApi {
     this.calls.push({ method: "GET", route, params, query });
     if (route === "GET /api/metrics") {
       return Promise.resolve(structuredClone(this.reportBody));
+    }
+    if (route === "GET /api/qa/summary") {
+      return Promise.resolve(structuredClone(this.qaSummaryBody));
     }
     if (route === "GET /api/usage") {
       return Promise.resolve(structuredClone(this.usageBody));
@@ -527,9 +747,7 @@ describe("TelemetryPageComponent", () => {
   it("switches 24h / 7d / 30d windows and filters by WAI-ARIA GM3 repository popover", async () => {
     const { fixture, root, api } = await setup();
 
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="telemetry-window-24h"]')!
-      .click();
+    root.querySelector('[data-testid="telemetry-window-24h"]')!.click();
     await settle(fixture);
     expect(
       api.calls.some(
@@ -537,9 +755,7 @@ describe("TelemetryPageComponent", () => {
       ),
     ).toBe(true);
 
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="telemetry-window-30d"]')!
-      .click();
+    root.querySelector('[data-testid="telemetry-window-30d"]')!.click();
     await settle(fixture);
     expect(
       api.calls.some(
@@ -548,11 +764,7 @@ describe("TelemetryPageComponent", () => {
     ).toBe(true);
 
     // Open GM3 repo popover, verify role="none" on <li> wrappers, and pick acme/api.
-    root
-      .querySelector<HTMLButtonElement>(
-        '[data-testid="telemetry-repo-trigger"]',
-      )!
-      .click();
+    root.querySelector('[data-testid="telemetry-repo-trigger"]')!.click();
     await settle(fixture);
     const repoMenu = root.querySelector('[data-testid="telemetry-repo-menu"]')!;
     expect(
@@ -561,11 +773,7 @@ describe("TelemetryPageComponent", () => {
       ),
     ).toBe(true);
 
-    root
-      .querySelector<HTMLButtonElement>(
-        '[data-testid="telemetry-repo-opt-acme/api"]',
-      )!
-      .click();
+    root.querySelector('[data-testid="telemetry-repo-opt-acme/api"]')!.click();
     await settle(fixture);
 
     expect(
@@ -605,13 +813,9 @@ describe("TelemetryPageComponent", () => {
     expect(api.calls.some((c) => c.route === "GET /api/usage")).toBe(false);
 
     // "All repositories" option in listbox is disabled for repo-limited callers.
-    root
-      .querySelector<HTMLButtonElement>(
-        '[data-testid="telemetry-repo-trigger"]',
-      )!
-      .click();
+    root.querySelector('[data-testid="telemetry-repo-trigger"]')!.click();
     await settle(fixture);
-    const firstOpt = root.querySelector<HTMLButtonElement>(
+    const firstOpt = root.querySelector(
       '[data-testid="telemetry-repo-menu"] button[role="option"]',
     )!;
     expect(firstOpt.disabled).toBe(true);
@@ -624,21 +828,15 @@ describe("TelemetryPageComponent", () => {
     expect(usageCard.textContent).toContain("Claude Main");
     expect(usageCard.textContent).toContain("1.5M");
 
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="usage-editor-toggle"]')!
-      .click();
+    root.querySelector('[data-testid="usage-editor-toggle"]')!.click();
     await settle(fixture);
 
     expect(
       root.querySelector('[data-testid="usage-budget-editor"]'),
     ).not.toBeNull();
 
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="usage-mode-auto"]')!
-      .click();
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="usage-add-budget"]')!
-      .click();
+    root.querySelector('[data-testid="usage-mode-auto"]')!.click();
+    root.querySelector('[data-testid="usage-add-budget"]')!.click();
     await settle(fixture);
 
     const connInput = root.querySelector<HTMLInputElement>(
@@ -654,9 +852,7 @@ describe("TelemetryPageComponent", () => {
     tokInput.dispatchEvent(new Event("input"));
     await settle(fixture);
 
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="usage-save"]')!
-      .click();
+    root.querySelector('[data-testid="usage-save"]')!.click();
     await settle(fixture);
 
     const putCall = api.calls.find(
@@ -687,9 +883,7 @@ describe("TelemetryPageComponent", () => {
     };
     const { root } = await setup(api);
 
-    const toggle = root.querySelector<HTMLButtonElement>(
-      '[data-testid="usage-editor-toggle"]',
-    )!;
+    const toggle = root.querySelector('[data-testid="usage-editor-toggle"]')!;
     expect(toggle.disabled).toBe(true);
   });
 
@@ -709,6 +903,358 @@ describe("TelemetryPageComponent", () => {
       (r) => r.querySelector(".actor-name")?.textContent?.trim() ?? "",
     );
     expect(names).toEqual(["Alice", "Maya", "Zane"]);
+  });
+
+  it("renders .tab-strip inside .stage-header ahead of .ops-toolbar and switches aria-selected cleanly", async () => {
+    const { fixture, root } = await setup();
+
+    const stageHeader = root.querySelector<HTMLElement>(".stage-header")!;
+    const tabStrip = root.querySelector<HTMLElement>(
+      '[data-testid="telemetry-tabs"]',
+    )!;
+    const toolbar = root.querySelector<HTMLElement>(".ops-toolbar")!;
+
+    expect(stageHeader).not.toBeNull();
+    expect(tabStrip).not.toBeNull();
+    expect(toolbar).not.toBeNull();
+    expect(stageHeader.contains(tabStrip)).toBe(true);
+    expect(stageHeader.lastElementChild).toBe(tabStrip);
+    expect(stageHeader.contains(toolbar)).toBe(false);
+    expect(
+      Boolean(
+        tabStrip.compareDocumentPosition(toolbar) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+
+    const tabs = Array.from(
+      root.querySelectorAll<HTMLButtonElement>(".tel-tab-btn"),
+    );
+    expect(tabs.length).toBe(2);
+    const [overviewTab, qualityTab] = tabs;
+
+    expect(overviewTab.getAttribute("aria-selected")).toBe("true");
+    expect(overviewTab.getAttribute("tabindex")).toBe("0");
+    expect(qualityTab.getAttribute("aria-selected")).toBe("false");
+    expect(qualityTab.getAttribute("tabindex")).toBe("-1");
+    expect(
+      toolbar.querySelector('[data-testid="telemetry-window-7d"]'),
+    ).not.toBeNull();
+
+    overviewTab.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(fixture);
+    expect(overviewTab.getAttribute("aria-selected")).toBe("false");
+    expect(overviewTab.getAttribute("tabindex")).toBe("-1");
+    expect(qualityTab.getAttribute("aria-selected")).toBe("true");
+    expect(qualityTab.getAttribute("tabindex")).toBe("0");
+    expect(
+      root.querySelector('[data-testid="telemetry-panel-quality"]'),
+    ).not.toBeNull();
+    expect(
+      toolbar.querySelector('[data-testid="telemetry-repo-readonly"]'),
+    ).not.toBeNull();
+
+    qualityTab.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Home",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(fixture);
+    expect(overviewTab.getAttribute("aria-selected")).toBe("true");
+    expect(qualityTab.getAttribute("aria-selected")).toBe("false");
+
+    overviewTab.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "End",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(fixture);
+    expect(overviewTab.getAttribute("aria-selected")).toBe("false");
+    expect(qualityTab.getAttribute("aria-selected")).toBe("true");
+
+    qualityTab.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowLeft",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(fixture);
+    expect(overviewTab.getAttribute("aria-selected")).toBe("true");
+    expect(qualityTab.getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("renders Quality Control Rollout (A/B) and Pre-PR Check Latency cards and re-queries GET /api/qa/summary on window/repo changes", async () => {
+    const { fixture, root, api } = await setup();
+
+    expect(
+      api.calls.some(
+        (c) => c.route === "GET /api/qa/summary" && c.query === "window=7d",
+      ),
+    ).toBe(true);
+
+    // Switch to the quality tab first
+    root.querySelector('[data-testid="telemetry-tab-quality"]')?.click();
+    await fixture.whenStable();
+
+    const rolloutCard = root.querySelector('[data-testid="card-qa-rollout"]');
+    expect(rolloutCard).not.toBeNull();
+    expect(rolloutCard?.textContent).toContain("50% · golden-v1-minimal");
+    expect(rolloutCard?.textContent).toContain("18 work trees");
+    expect(rolloutCard?.textContent).toContain("17 points lower");
+    expect(rolloutCard?.textContent).toContain("7% fewer tokens");
+
+    const checksCard = root.querySelector('[data-testid="card-qa-checks"]');
+    expect(checksCard).not.toBeNull();
+    expect(checksCard?.textContent).toContain("strict-config-decoder");
+    expect(checksCard?.textContent).toContain("14ms / 38ms");
+    expect(checksCard?.textContent).toContain("4.2s / 12s");
+    expect(checksCard?.textContent).toContain("61.5% of escapes");
+
+    // Switch back to overview tab before clicking the window control
+    root.querySelector('[data-testid="telemetry-tab-overview"]')?.click();
+    await fixture.whenStable();
+
+    // Switching window + repository must re-query GET /api/qa/summary with matching params.
+    root.querySelector('[data-testid="telemetry-window-30d"]')!.click();
+    await settle(fixture);
+    expect(
+      api.calls.some(
+        (c) => c.route === "GET /api/qa/summary" && c.query === "window=30d",
+      ),
+    ).toBe(true);
+
+    root.querySelector('[data-testid="telemetry-repo-trigger"]')!.click();
+    await settle(fixture);
+    root.querySelector('[data-testid="telemetry-repo-opt-acme/api"]')!.click();
+    await settle(fixture);
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/qa/summary" &&
+          c.query === "window=30d&repo=acme%2Fapi",
+      ),
+    ).toBe(true);
+  });
+
+  it("renders matched file:line recall when matchedRecall is provided, and falls back to pairedRecall PR co-occurrence when absent", async () => {
+    const api = new FakeTelemetryApi();
+    api.qaSummaryBody.shadowRecall = {
+      ...api.qaSummaryBody.shadowRecall,
+      controlTasksChecked: 100,
+      controlBlindEscapes: 10,
+      matchedBlindEscapes: 8,
+      pairedRecall: 0.88,
+    };
+    const { fixture, root } = await setup(api);
+
+    root.querySelector('[data-testid="telemetry-tab-quality"]')?.click();
+    await settle(fixture);
+
+    let summary = root.querySelector('[data-testid="qa-shadow-summary"]');
+    expect(summary?.textContent).toContain(
+      "PR co-occurrence (not matched file:line findings): 88.0% of escapes.",
+    );
+    expect(summary?.textContent).not.toContain("42");
+
+    api.qaSummaryBody.shadowRecall = {
+      ...api.qaSummaryBody.shadowRecall,
+      controlTasksChecked: 100,
+      controlBlindEscapes: 10,
+      matchedBlindEscapes: 8,
+      pairedRecall: 0.88,
+      matchedRecall: 0.42,
+      matchedEscapes: 5,
+    } as unknown as QASummary;
+
+    root.querySelector('[data-testid="telemetry-refresh"]')?.click();
+    await settle(fixture);
+
+    summary = root.querySelector('[data-testid="qa-shadow-summary"]');
+    expect(summary?.textContent).toMatch(
+      /They matched\s+5 of\s+10\s+escapes found later \(42\.0%\)\./,
+    );
+    expect(summary?.textContent).not.toContain("88.0%");
+  });
+
+  it("hides the repository filter trigger on the Quality checks tab, replacing it with a read-only chip", async () => {
+    const { fixture, root } = await setup();
+
+    expect(
+      root.querySelector('[data-testid="telemetry-repo-trigger"]'),
+    ).not.toBeNull();
+    expect(
+      root.querySelector('[data-testid="telemetry-repo-readonly"]'),
+    ).toBeNull();
+
+    root.querySelector('[data-testid="telemetry-tab-quality"]')?.click();
+    await settle(fixture);
+
+    expect(
+      root.querySelector('[data-testid="telemetry-repo-trigger"]'),
+    ).toBeNull();
+    expect(
+      root.querySelector('[data-testid="telemetry-repo-readonly"]'),
+    ).not.toBeNull();
+    expect(
+      root.querySelector('[data-testid="telemetry-repo-readonly"]')
+        ?.textContent,
+    ).toContain("All repositories");
+  });
+
+  it("shows calm off-state guidance when QA is disabled and surfaces circuit-breaker banner when tripped", async () => {
+    const api = new FakeTelemetryApi();
+    api.qaSummaryBody = {
+      ...api.qaSummaryBody,
+      enabled: false,
+      rolloutPct: 0,
+      treatment: { ...api.qaSummaryBody.treatment, assignedOrigins: 0 },
+      control: { ...api.qaSummaryBody.control, assignedOrigins: 0 },
+      checks: [],
+      shadowRecall: {
+        ...api.qaSummaryBody.shadowRecall,
+        controlTasksChecked: 0,
+      },
+    };
+    const { fixture, root } = await setup(api);
+
+    // Switch to the quality tab first
+    root.querySelector('[data-testid="telemetry-tab-quality"]')?.click();
+    await fixture.whenStable();
+
+    expect(
+      root.querySelector('[data-testid="qa-rollout-pill"]')?.textContent,
+    ).toContain("Off");
+    expect(
+      root.querySelector('[data-testid="qa-rollout-empty"]')?.textContent,
+    ).toContain("Quality control is off on this deployment");
+    expect(root.querySelector('[data-testid="qa-checks-empty"]')).toBeNull();
+
+    // Now simulate an auto-downgraded circuit breaker state on refresh.
+    api.qaSummaryBody = {
+      ...api.qaSummaryBody,
+      enabled: true,
+      rolloutPct: 0,
+      regimeId: 2,
+      circuitBreaker: {
+        ...api.qaSummaryBody.circuitBreaker,
+        shouldAutoDowngrade: true,
+        reasons: ["Fast-lane T0/T1 latency regression crossed mSPRT boundary"],
+      },
+    };
+    root.querySelector('[data-testid="telemetry-refresh"]')!.click();
+    await settle(fixture);
+
+    const pill = root.querySelector('[data-testid="qa-rollout-pill"]');
+    expect(pill?.textContent).toContain("0% shadow-only");
+    expect(pill?.classList.contains("blast")).toBe(true);
+    expect(pill?.classList.contains("warn")).toBe(false);
+    expect(
+      root.querySelector('[data-testid="qa-circuit-breaker-banner"]')
+        ?.textContent,
+    ).toContain("Fast-lane T0/T1 latency regression");
+
+    // Verify Shadow catch fallback when controlBlindEscapes === 0, and clearing qaSummary on fetch failure.
+    api.qaSummaryBody = {
+      ...api.qaSummaryBody,
+      shadowRecall: {
+        controlTasksChecked: 20,
+        shadowWouldBlock: 3,
+        shadowCatchRate: 3 / 20,
+        controlBlindEscapes: 0,
+        matchedBlindEscapes: 0,
+        pairedRecall: 0,
+      },
+    };
+    root.querySelector('[data-testid="telemetry-refresh"]')!.click();
+    await settle(fixture);
+    expect(
+      root.querySelector('[data-testid="qa-shadow-summary"]')?.textContent,
+    ).toContain("shadow checks would have blocked 3 of 20 tasks");
+
+    const origGet = api.get;
+    api.get = async (route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/qa/summary") {
+        await new Promise((r) => setTimeout(r, 1));
+        throw new Error("qa summary unavailable");
+      }
+      return origGet(route, params, query);
+    };
+    await fixture.componentInstance.refreshAll();
+    await settle(fixture);
+    expect(root.querySelector('[data-testid="card-qa-rollout"]')).toBeNull();
+  });
+
+  it("shows a spent weekly quota instead of an empty interval window", async () => {
+    const api = new FakeTelemetryApi();
+    api.usageBody = {
+      ...api.usageBody,
+      scopes: [
+        {
+          connection: "claude",
+          model: "opus",
+          runs: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          used: 0,
+          window: "5h0m0s",
+          burnPerHour: 0,
+          pausedUntil: "2026-11-18T03:00:00Z",
+          pauseHorizon: "weekly",
+          weeklyRuns: 40,
+          weeklyUsed: 9_000_000,
+          weeklyLimit: 9_000_000,
+          weeklyLimitSource: "learned",
+          weeklyPausedUntil: "2026-11-18T03:00:00Z",
+        },
+        {
+          connection: "claude",
+          model: "sonnet",
+          runs: 2,
+          inputTokens: 1000,
+          outputTokens: 500,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          used: 1500,
+          window: "5h0m0s",
+          burnPerHour: 100,
+          weeklyRuns: 3,
+          weeklyUsed: 4000,
+        },
+      ],
+    };
+    const { root } = await setup(api);
+    const weekly = root.querySelector(
+      '[data-testid="usage-weekly-claude:opus"]',
+    )!;
+    expect(weekly.textContent).toContain("7d");
+    expect(weekly.textContent).toContain("(learned)");
+    const rows = root.querySelectorAll<HTMLElement>(
+      '[data-testid="usage-scopes-table"] tbody tr',
+    );
+    expect(rows[0].textContent).toContain("Weekly limit reached");
+    expect(rows[0].textContent).toContain("Paused · weekly limit");
+    expect(rows[0].textContent).toContain("5h");
+    expect(rows[0].textContent).not.toContain("5h0m0s");
+    // A scope with no weekly limit learned still shows what its week spent.
+    expect(
+      root.querySelector('[data-testid="usage-weekly-claude:sonnet"]')
+        ?.textContent,
+    ).toContain("7d");
+    expect(rows[1].textContent).not.toContain("Weekly limit reached");
+    expect(rows[1].textContent).toContain("Active");
   });
 
   it("groups usage notices in configured TZ, progressively discloses heavy lists, filters People, caps repos, and skips full GET /api/release-notes", async () => {
@@ -933,5 +1479,15 @@ describe("TelemetryPageComponent", () => {
     expect(peopleNames).not.toContain("system:nightly-bot");
     expect(peopleNames).not.toContain("Grain");
     expect(peopleNames).toContain("Alice");
+  });
+
+  it("parses classic System → Metrics ?f=repo:any:<owner/name> filters", () => {
+    expect(parseLegacyMetricsRepoFilter(["repo:any:acme/widgets"])).toBe(
+      "acme/widgets",
+    );
+    expect(
+      parseLegacyMetricsRepoFilter(["status:is:done;repo:is:acme/web"]),
+    ).toBe("acme/web");
+    expect(parseLegacyMetricsRepoFilter(["author:any:alice"])).toBe("");
   });
 });

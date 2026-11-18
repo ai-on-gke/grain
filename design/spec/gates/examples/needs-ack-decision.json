@@ -1,0 +1,17 @@
+{
+  "task_id": "57",
+  "contract_revision": 1,
+  "authority_epoch": 1,
+  "activity": "needs_acknowledgment",
+  "outcome": null,
+  "with_waivers": false,
+  "dispatch_holds": [],
+  "required_bindings": [
+    "task/57/delivery",
+    "task/57/acknowledgment"
+  ],
+  "accepted_results": [
+    "eval-delivery"
+  ],
+  "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

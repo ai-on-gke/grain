@@ -56,6 +56,8 @@ var (
 	_ github.WorkflowRunsReader       = (*StateRepoPullRequestClient)(nil)
 	_ github.BranchWorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ActionsReader            = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsRerunner          = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsJobAttemptsReader = (*StateRepoPullRequestClient)(nil)
 	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
 	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
 	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
@@ -1580,6 +1582,55 @@ func (c *StateRepoPullRequestClient) actionsReader(owner, name string) github.Ac
 	return reader
 }
 
+// errNoActionsRerun answers a re-run asked of the native config
+// repository, which has no GitHub Actions, or of a wrapped client that
+// cannot re-run them.
+var errNoActionsRerun = &github.Error{
+	Status: http.StatusNotFound,
+	Body:   []byte("this repository has no GitHub Actions runs grain can re-run"),
+}
+
+// actionsRerunner is the wrapped client's GitHub Actions re-runs, or nil
+// for the native config repository and a client without them.
+//
+// Without these passthroughs every optional re-run capability the
+// orchestrator asks its forge for (prinfra.go's waitOutInfraFailure,
+// sharedfaultrerun.go, basebranchrelease.go) came back absent in a real
+// daemon, whose forge client is this wrapper: a runner DNS outage on a
+// queued pull request was sent back for a repair instead of having its
+// failed jobs re-run (docs/test-runs/2026-11-13-actions-ci-for-agents.md).
+func (c *StateRepoPullRequestClient) actionsRerunner(owner, name string) github.ActionsRerunner {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil
+	}
+	rerunner, _ := c.Client.(github.ActionsRerunner)
+	return rerunner
+}
+
+// RerunFailedJobs is github.WorkflowRunRerunner, passed through.
+func (c *StateRepoPullRequestClient) RerunFailedJobs(owner, name string, runID int64) error {
+	if rerunner := c.actionsRerunner(owner, name); rerunner != nil {
+		return rerunner.RerunFailedJobs(owner, name, runID)
+	}
+	return errNoActionsRerun
+}
+
+// RerunWorkflowRun is github.ActionsRerunner, passed through.
+func (c *StateRepoPullRequestClient) RerunWorkflowRun(owner, name string, runID int64) error {
+	if rerunner := c.actionsRerunner(owner, name); rerunner != nil {
+		return rerunner.RerunWorkflowRun(owner, name, runID)
+	}
+	return errNoActionsRerun
+}
+
+// RerunWorkflowJob is github.ActionsRerunner, passed through.
+func (c *StateRepoPullRequestClient) RerunWorkflowJob(owner, name string, jobID int64) error {
+	if rerunner := c.actionsRerunner(owner, name); rerunner != nil {
+		return rerunner.RerunWorkflowJob(owner, name, jobID)
+	}
+	return errNoActionsRerun
+}
+
 // ListActionsRuns is github.ActionsReader, passed through.
 func (c *StateRepoPullRequestClient) ListActionsRuns(owner, name string, q github.ActionsRunsQuery) ([]github.WorkflowRun, error) {
 	if reader := c.actionsReader(owner, name); reader != nil {
@@ -1618,4 +1669,33 @@ func (c *StateRepoPullRequestClient) ListActionsArtifacts(owner, name string, ru
 		return reader.ListActionsArtifacts(owner, name, runID)
 	}
 	return nil, nil
+}
+
+// WorkflowRunsOnCommit passes whole workflow runs on headSHA through to
+// the wrapped client (Stage 0 and Stage 1 release qualification); the
+// native config repository has no Actions.
+func (c *StateRepoPullRequestClient) WorkflowRunsOnCommit(owner, name, headSHA string) ([]github.WorkflowRun, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(interface {
+		WorkflowRunsOnCommit(owner, repo, headSHA string) ([]github.WorkflowRun, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return reader.WorkflowRunsOnCommit(owner, name, headSHA)
+}
+
+// ListActionsJobAttempts is github.ActionsJobAttemptsReader, passed
+// through for Stage 1 release qualification and ci:read.
+func (c *StateRepoPullRequestClient) ListActionsJobAttempts(owner, name string, runID int64) ([]github.ActionsRunJob, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.ActionsJobAttemptsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.ListActionsJobAttempts(owner, name, runID)
 }

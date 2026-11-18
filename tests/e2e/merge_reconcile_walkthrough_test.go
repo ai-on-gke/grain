@@ -75,7 +75,7 @@ func (r *reconcileWorld) openPullRequest(id, file string, autoMerge bool) string
 	created := r.clock
 	if err := r.w.store.PutTask(r.w.ctx, model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "task " + id,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &r.repo, Binding: model.BindingDirective, AutoMerge: autoMerge, CreatedAt: &created,
 	}); err != nil {
@@ -461,7 +461,7 @@ func (r *reconcileWorld) parkUntilMerged(id, target string) {
 	created := r.clock
 	if err := r.w.store.PutTask(r.w.ctx, model.Task{
 		ID: id, Intent: model.IntentImplement, Title: "task " + id,
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human("alice")},
 		Target:   &r.repo, Binding: model.BindingDirective, CreatedAt: &created,
 		Links: []model.Link{{Kind: model.LinkDependsOn, Target: target}},

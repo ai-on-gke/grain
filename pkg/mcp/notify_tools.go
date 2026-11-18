@@ -78,7 +78,8 @@ func notifyOperatorTool(notifier OperatorNotifier) Tool {
 			"unless the task holds https://grain.dev/capabilities/api#task-admin. severity is info, warning (the default) or critical; " +
 			"critical needs https://grain.dev/capabilities/api#task-admin. clears_when makes it clear itself: {\"kind\": \"task\", \"task\": " +
 			"\"123\", \"until\": \"closed\"|\"merged\"}, {\"kind\": \"base-green\", \"repo\": \"owner/name\", " +
-			"\"branch\": \"main\"}, or {\"kind\": \"ttl\", \"ttl\": \"6h\"}. A run may raise at most 10, and a " +
+			"\"branch\": \"main\"}, {\"kind\": \"ttl\", \"ttl\": \"6h\"}, or {\"kind\": \"suite-run\", \"suiteRun\": 42} " +
+			"(clears once that suite run is no longer active). A run may raise at most 10, and a " +
 			"task have at most 20 open. Links in body must be root-relative (/tasks/12).",
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -91,7 +92,7 @@ func notifyOperatorTool(notifier OperatorNotifier) Tool {
 				"task":     map[string]any{"type": "string", "description": "The task it is about, if not this one."},
 				"clears_when": map[string]any{
 					"type":        "object",
-					"description": "The condition that clears it: kind task, base-green or ttl (see the tool's description).",
+					"description": "The condition that clears it: kind task, base-green, ttl or suite-run (see the tool's description).",
 				},
 			},
 			"required": []string{"subject", "title"},

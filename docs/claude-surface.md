@@ -34,20 +34,20 @@ until the surface is regenerated and reviewed.
 
 ``````console
 $ claude --version
-2.1.319 (Claude Code)
+2.1.325 (Claude Code)
 ``````
 
 ``````console
-path   /opt/claude/.local/share/claude/versions/2.1.319
-size   340226576 bytes
-sha256 dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed
+path   /opt/claude/.local/share/claude/versions/2.1.325
+size   365842960 bytes
+sha256 0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf
 ``````
 
 How the image gets its claude, against the claude that answered here:
 
 ``````console
-installed by the Dockerfile   pinned: ARG CLAUDE_CLI_VERSION=2.1.319
-captured here                 2.1.319 (Claude Code)
+installed by the Dockerfile   pinned: ARG CLAUDE_CLI_VERSION=2.1.325
+captured here                 2.1.325 (Claude Code)
 ``````
 
 ## Commands and flags
@@ -351,8 +351,10 @@ Commands:
   respawn [options] [id]                Restart a background session, or all of
                                         them with --all, so it runs the current
                                         Claude Code version
-  rm <id>                               Delete a background session, and its
-                                        worktree when that is safe. Works on
+  rm <id>                               If it's safe, remove a background
+                                        session from the list and delete its
+                                        worktree. Its conversation is kept:
+                                        `claude --resume` lists it. Works on
                                         sessions that have already exited
   setup-token                           Set up a long-lived authentication token
                                         (requires Claude subscription)
@@ -618,20 +620,8 @@ Options:
   -h, --help                            Display help for command
 
 Commands:
-  add [options] <name> <commandOrUrl> [args...]  Add an MCP server to Claude Code.
-  
-  Examples:
-    # Add HTTP server:
-    claude mcp add --transport http sentry https://mcp.sentry.dev/mcp
-  
-    # Add HTTP server with headers:
-    claude mcp add --transport http corridor https://app.corridor.dev/api/mcp --header "Authorization: Bearer ..."
-  
-    # Add stdio server with environment variables:
-    claude mcp add my-server -e API_KEY=xxx -- npx my-mcp-server
-  
-    # Add stdio server with subprocess flags:
-    claude mcp add my-server -- my-command --some-flag arg1
+  add [options] <name> <commandOrUrl> [args...]
+      Add an MCP server
   add-from-claude-desktop [options]     Import MCP servers from Claude Desktop
                                         (Mac and WSL only)
   add-json [options] <name> <json>      Add an MCP server (stdio, SSE, HTTP, or
@@ -669,11 +659,10 @@ Examples:
   claude mcp add --transport http sentry https://mcp.sentry.dev/mcp
 
   # Add HTTP server with headers:
-  claude mcp add --transport http corridor https://app.corridor.dev/api/mcp
---header "Authorization: Bearer ..."
+  claude mcp add --transport http corridor https://app.corridor.dev/api/mcp --header "Authorization: Bearer ..."
 
   # Add stdio server with environment variables:
-  claude mcp add my-server -e API_KEY=xxx -- npx my-mcp-server
+  claude mcp add my-server -e API_KEY=xxx -- node ./my-server.js
 
   # Add stdio server with subprocess flags:
   claude mcp add my-server -- my-command --some-flag arg1
@@ -685,8 +674,8 @@ Options:
   --client-secret              Prompt for OAuth client secret (or set
                                MCP_CLIENT_SECRET env var)
   -e, --env <env...>           Set environment variables (e.g. -e KEY=value)
-  -H, --header <header...>     Set headers for HTTP/SSE servers (e.g. -H
-                               "X-Api-Key: abc123" -H "X-Custom: value")
+  -H, --header <header...>     Set headers for HTTP/SSE servers, repeat for more
+                               (e.g. -H "X-Api-Key: abc123")
   -h, --help                   Display help for command
   -s, --scope <scope>          Configuration scope (local, user, or project)
                                (default: "local")
@@ -811,58 +800,62 @@ Usage: claude plugin|plugins [options] [command]
 Manage Claude Code plugins
 
 Options:
-  -h, --help                           Display help for command
+  -h, --help                            Display help for command
 
 Commands:
-  configure [options] <plugin>         Show a plugin's options and which are
-                                       unset, or save values from stdin with
-                                       --values-stdin
-  details [options] <name>             Show a plugin's component inventory and
-                                       projected token cost
-  disable [options] [plugin]           Disable an enabled plugin
-  enable [options] <plugin>            Enable a disabled plugin
-  eval [options] [target]              Run eval cases (<eval dir>/**/case.yaml
-                                       or prompt.md + graders/*.md; the eval dir
-                                       is evals/ unless --eval-dir or the
-                                       manifest says otherwise) against a plugin
-                                       and report scored results. Target is a
-                                       path, a plugin name, or a
-                                       `plugin@marketplace` id — installed and
-                                       skills-dir plugins both resolve (and add
-                                       a no-plugin baseline arm). It loads the
-                                       plugin and runs its eval suite (prompts,
-                                       graders; scaffold scripts and real MCP
-                                       servers only when you opt in) on your
-                                       machine, as you: only evaluate plugins
-                                       you trust — the run's sandboxing limits
-                                       what a malicious plugin can reach but is
-                                       not a guarantee, and a bundled suite
-                                       passing is not a security vetting. The
-                                       first run in an untrusted plugin
-                                       directory asks you to confirm
-                                       (--trust-plugin answers for CI)
-  help [command]                       display help for command
-  init|new [options] <name>            Scaffold a new plugin at
-                                       ~/.claude/skills/<name>/ (auto-loads next
-                                       session as <name>@skills-dir)
-  install|i [options] <plugin>         Install a plugin from available
-                                       marketplaces (use plugin@marketplace for
-                                       specific marketplace)
-  list [options]                       List installed plugins
-  marketplace                          Manage Claude Code marketplaces
-  prune|autoremove [options]           Remove auto-installed dependencies that
-                                       are no longer needed
-  tag [options] [path]                 Create a {name}--v{version} git tag for a
-                                       plugin release, validating that
-                                       plugin.json and any enclosing marketplace
-                                       entry agree
-  test [dir]                           Run a mod's tests
-  uninstall|remove [options] <plugin>  Uninstall an installed plugin
-  update [options] <plugin>            Update a plugin to the latest version
-                                       (restart required to apply)
-  validate [options] <path>            Validate a plugin or marketplace
-                                       manifest, or the skills, agents, and
-                                       commands in a directory
+  configure [options] <plugin>          Show a plugin's options and which are
+                                        unset, or save values from stdin with
+                                        --values-stdin
+  details [options] <name>              Show a plugin's component inventory and
+                                        projected token cost
+  disable [options] [plugin]            Disable an enabled plugin
+  enable [options] <plugin>             Enable a disabled plugin
+  eval [options] [target]               Run eval cases (<eval dir>/**/case.yaml
+                                        or prompt.md + graders/*.md; the eval
+                                        dir is evals/ unless --eval-dir or the
+                                        manifest says otherwise) against a
+                                        plugin and report scored results. Target
+                                        is a path, a plugin name, or a
+                                        `plugin@marketplace` id — installed and
+                                        skills-dir plugins both resolve (and add
+                                        a no-plugin baseline arm). It loads the
+                                        plugin and runs its eval suite (prompts,
+                                        graders; scaffold scripts and real MCP
+                                        servers only when you opt in) on your
+                                        machine, as you: only evaluate plugins
+                                        you trust — the run's sandboxing limits
+                                        what a malicious plugin can reach but is
+                                        not a guarantee, and a bundled suite
+                                        passing is not a security vetting. The
+                                        first run in an untrusted plugin
+                                        directory asks you to confirm
+                                        (--trust-plugin answers for CI)
+  help [command]                        display help for command
+  init|new [options] <name>             Scaffold a new plugin at
+                                        ~/.claude/skills/<name>/ (auto-loads
+                                        next session as <name>@skills-dir)
+  install|i [options] <plugin>          Install a plugin from available
+                                        marketplaces (use plugin@marketplace for
+                                        specific marketplace)
+  list [options]                        List installed plugins
+  marketplace                           Manage Claude Code marketplaces
+  prune|autoremove [options]            Remove auto-installed dependencies that
+                                        are no longer needed
+  restore-set-aside [options] <plugin>  Give a plugin id back the options and
+                                        secrets set aside when a marketplace
+                                        your organization declares replaced
+                                        another source
+  tag [options] [path]                  Create a {name}--v{version} git tag for
+                                        a plugin release, validating that
+                                        plugin.json and any enclosing
+                                        marketplace entry agree
+  test [dir]                            Run a mod's tests
+  uninstall|remove [options] <plugin>   Uninstall an installed plugin
+  update [options] <plugin>             Update a plugin to the latest version
+                                        (restart required to apply)
+  validate [options] <path>             Validate a plugin or marketplace
+                                        manifest, or the skills, agents, and
+                                        commands in a directory
 ``````
 
 ``````console
@@ -1071,9 +1064,6 @@ Options:
                              https URL, or a path. A marketplace not added yet
                              is added first, in user settings, under the same
                              checks as 'plugin marketplace add'
-  --registry <url>           For a <package>@npm install: resolve and download
-                             from this npm registry instead of the one your npm
-                             configuration selects
   -s, --scope <scope>        Installation scope: user, project, or local
                              (default: "user")
   -y, --yes                  Accept the displayed marketplace-declared command
@@ -1128,6 +1118,18 @@ Options:
   -s, --scope <scope>  Prune at scope: user, project, or local (default: "user")
   -y, --yes            Skip the confirmation prompt (required when stdin or
                        stdout is not a TTY)
+``````
+
+``````console
+$ claude plugin restore-set-aside --help
+Usage: claude plugin restore-set-aside [options] <plugin>
+
+Give a plugin id back the options and secrets set aside when a marketplace your
+organization declares replaced another source
+
+Options:
+  --discard   Delete what is set aside instead of restoring it
+  -h, --help  Display help for command
 ``````
 
 ``````console
@@ -1270,7 +1272,7 @@ Usage: claude respawn <id>|--all
 $ claude rm --help
 Usage: claude rm <id> [--discard-unpushed <commit>@<worktree-id>] [--force-remove-worktree <worktree-id>]
 
-  Delete a background session and its worktree. Unlike `stop`, works on already-exited sessions.
+  If it's safe, remove a background session from the list and delete its worktree. Its conversation is kept: `claude --resume` lists it. Unlike `stop`, works on already-exited sessions.
   --discard-unpushed <commit>@<worktree-id>  also discard the worktree's unpushed commits (and any uncommitted changes) while it is still the same worktree at that commit — pass the value a previous 'claude rm <id>' reported
   --force-remove-worktree <worktree-id>      delete the worktree directory even though the WorktreeRemove hook or git couldn't remove it (its repository must list it as a worktree, or have dropped it in a removal that couldn't delete it; no uncommitted changes to tracked files, submodules included; the branch is kept) — pass the value a previous 'claude rm <id>' reported
 ``````

@@ -891,7 +891,7 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	}
 	// What a local-scripts declaration became on host-script stays withheld
 	// from scheduled runs, whose prompt can come from an untrusted source.
-	if task.Origin.Reason == model.ReasonSchedule {
+	if task.Filing.Reason == model.ReasonSchedule {
 		const why = "a scheduled run cannot verify the prompt it runs on"
 		kept := grants[:0]
 		for _, g := range grants {

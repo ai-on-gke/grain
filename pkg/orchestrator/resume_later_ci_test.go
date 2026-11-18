@@ -436,7 +436,7 @@ func TestResumeLaterRefusesUnsatisfiableCIWaits(t *testing.T) {
 		ID:       "no-repo",
 		Intent:   model.IntentImplement,
 		Title:    "no repo task",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Binding:  model.BindingDirective,
 	}

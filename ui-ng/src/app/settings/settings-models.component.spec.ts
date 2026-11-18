@@ -28,6 +28,7 @@ interface Call {
   key: string;
   params?: RouteParams;
   body?: unknown;
+  query?: string;
 }
 
 class FakeApi {
@@ -67,11 +68,16 @@ class FakeApi {
     },
   };
 
+  access: Record<string, unknown> = {
+    role: "grain/operator",
+    full: true,
+    scopes: [],
+  };
   config = () =>
     Promise.resolve({
       version: "v3.6.0",
       configRepoOnly: false,
-      access: { role: "grain/operator", full: true, scopes: [] },
+      access: this.access,
     });
   get = (key: string) => {
     this.calls.push({ method: "GET", key });
@@ -84,8 +90,19 @@ class FakeApi {
     return Promise.resolve({});
   };
   getText = () => Promise.resolve("");
-  post = (key: string, params?: RouteParams, body?: unknown) => {
-    this.calls.push({ method: "POST", key, params, body });
+  testAnswer = { ok: true, detail: "Provider accepted saved credential" };
+  testError = false;
+  post = (
+    key: string,
+    params?: RouteParams,
+    body?: unknown,
+    query?: string,
+  ) => {
+    this.calls.push({ method: "POST", key, params, body, query });
+    if (key === "POST /api/agent-keys/{framework}/check") {
+      if (this.testError) throw new Error("private-credential");
+      return Promise.resolve(this.testAnswer);
+    }
     if (key === "POST /api/settings") {
       this.settingsBody = {
         ...this.settingsBody,
@@ -297,6 +314,45 @@ describe("Settings → Models default and fallback models", () => {
     // A pinned connection has nothing to discover.
     expect(q('[data-testid="refresh-backend-claude"]')).toBeNull();
     expect(await offered("picker-default-model")).toContain("gemini-ultra");
+  });
+
+  it("gives no refresh time for a connection whose provider never answered", async () => {
+    const api = new FakeApi();
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: {
+          refreshedAt: "0001-01-01T00:00:00Z",
+          error: "antigravity: agy models printed no model names",
+        },
+      },
+    ];
+    const { q } = await mount(api);
+    const summary = q(".s-disc-details summary")!.textContent ?? "";
+    expect(summary).toContain("0 models");
+    expect(summary).not.toContain("Jan 1");
+    expect(summary).not.toContain("UTC");
+    expect(q('[data-testid="card-model-backends"]')!.textContent).toContain(
+      "printed no model names",
+    );
+  });
+
+  it("offers no Refresh to a person who cannot ask providers for their models", async () => {
+    const api = new FakeApi();
+    api.access = {
+      role: "grain/viewer",
+      full: false,
+      scopes: ["settings:read", "connections:read", "deployment:read"],
+    };
+    const { q, el } = await mount(api);
+    expect(q('[data-testid="refresh-backend-agy"]')).toBeNull();
+    q<HTMLButtonElement>('[data-testid="picker-default-model"]')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    const refresh = [...el.querySelectorAll("button")].filter((b) =>
+      /refresh/i.test(b.textContent ?? ""),
+    );
+    expect(refresh).toEqual([]);
   });
 
   it("refreshes every discovering connection from inside the picker", async () => {
@@ -513,4 +569,138 @@ describe("Settings → Models default and fallback models", () => {
     await choose("");
     expect(q('[data-testid="settings-save-bar"]')).toBeNull();
   });
+});
+
+describe("Settings model connection tests", () => {
+  for (const framework of ["antigravity", "claude", "codex"]) {
+    it(`tests saved ${framework} credentials without saving an edit`, async () => {
+      const api = new FakeApi();
+      api.settingsBody["agentBackends"] = [{ id: "own", framework }];
+      const { q, settle } = await mount(api);
+      q<HTMLButtonElement>('[data-testid="edit-backend-own"]')!.click();
+      await settle();
+      const name = q<HTMLInputElement>(
+        '[data-testid="input-new-backend-name"]',
+      )!;
+      name.value = "Unsaved edit";
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      api.calls = [];
+      q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+      await settle();
+      const call = api.calls.find(
+        (c) => c.key === "POST /api/agent-keys/{framework}/check",
+      )!;
+      expect(call.params).toEqual({ framework });
+      expect(call.query).toBe("backend=own");
+      expect(call.body).toBeUndefined();
+      expect(
+        api.calls.some(
+          (c) => c.method === "PUT" || c.key === "POST /api/settings",
+        ),
+      ).toBe(false);
+      expect(q('[data-testid="test-result-own"]')?.textContent).toContain(
+        "Provider accepted",
+      );
+      expect(name.value).toBe("Unsaved edit");
+      api.testAnswer = {
+        ok: false,
+        detail: "Provider refused; replace credential",
+      };
+      q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+      await settle();
+      expect(q('[data-testid="test-result-own"]')?.textContent).toContain(
+        "Provider refused",
+      );
+      api.testError = true;
+      q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+      await settle();
+      expect(q('[data-testid="test-result-own"]')?.textContent).toContain(
+        "Could not test",
+      );
+      expect(q('[data-testid="test-result-own"]')?.textContent).not.toContain(
+        "private-credential",
+      );
+      expect(
+        q<HTMLButtonElement>('[data-testid="test-backend-own"]')?.disabled,
+      ).toBe(false);
+    });
+  }
+  it("validates auth.json locally and keeps a failed upload available for retry", async () => {
+    const api = new FakeApi();
+    api.settingsBody["agentBackends"] = [
+      { id: "own", framework: "codex", authMode: "subscription" },
+    ];
+    const { q, settle } = await mount(api);
+    q<HTMLButtonElement>('[data-testid="toggle-cred-own"]')!.click();
+    await settle();
+    const input = q<HTMLTextAreaElement>(
+      '[data-testid="input-codex-auth-own"]',
+    )!;
+    const upload = async (value: string) => {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle();
+      q<HTMLButtonElement>('[data-testid="save-codex-auth-own"]')!.click();
+      await settle();
+    };
+    for (const value of ['{"secret":"private-credential",', "[]", "null"]) {
+      await upload(value);
+      expect(q('[data-testid="codex-auth-error-own"]')?.textContent).toContain(
+        "JSON object",
+      );
+    }
+    expect(
+      api.calls.some(
+        (c) => c.key === "PUT /api/agent-backends/{id}/codex-auth",
+      ),
+    ).toBe(false);
+    api.put = () => {
+      throw new Error("private-credential");
+    };
+    await upload('{"tokens":{"refresh_token":"private-credential"}}');
+    expect(q('[data-testid="codex-auth-error-own"]')?.textContent).toContain(
+      "Could not save",
+    );
+    expect(
+      q('[data-testid="codex-auth-error-own"]')?.textContent,
+    ).not.toContain("private-credential");
+    expect(input.value).toContain("private-credential");
+    expect(
+      q<HTMLButtonElement>('[data-testid="save-codex-auth-own"]')?.disabled,
+    ).toBe(false);
+  });
+});
+
+it("discards an in-flight test when the saved credential changes", async () => {
+  const api = new FakeApi();
+  api.settingsBody["agentBackends"] = [
+    { id: "own", framework: "claude", authMode: "api_key" },
+  ];
+  let finish!: (value: { ok: boolean; detail: string }) => void;
+  api.post = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const { q, settle } = await mount(api);
+  q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.click();
+  await settle();
+  expect(
+    q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.disabled,
+  ).toBe(true);
+  q<HTMLButtonElement>('[data-testid="toggle-cred-own"]')!.click();
+  await settle();
+  const input = q<HTMLInputElement>('input[aria-label="Credential for own"]')!;
+  input.value = "new-private-key";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await settle();
+  q<HTMLButtonElement>(
+    '[data-testid="backend-cred-row-own"] button[type="submit"]',
+  )!.click();
+  await settle();
+  finish({ ok: true, detail: "Accepted previous credential" });
+  await settle();
+  expect(q('[data-testid="test-result-own"]')).toBeNull();
+  expect(
+    q<HTMLButtonElement>('[data-testid="test-backend-own"]')!.disabled,
+  ).toBe(false);
 });

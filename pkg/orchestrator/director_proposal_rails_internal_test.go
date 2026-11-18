@@ -40,7 +40,7 @@ func relayDirector(t *testing.T, store *model.Store, ctx context.Context, now ti
 	}
 	director := model.Task{
 		ID: "director", Intent: model.IntentAnalyze, Title: "Director",
-		Origin:    model.Origin{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
+		Filing:    model.Filing{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
 		Binding:   model.BindingDirective,
 		Tags:      []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Writes:    []model.WriteTarget{{Repo: model.ConfigRepo()}},

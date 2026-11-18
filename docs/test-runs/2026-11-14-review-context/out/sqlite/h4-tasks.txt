@@ -1,0 +1,12 @@
+1 awaiting_reply Director
+2 awaiting_submit WALK-AUTHOR tighten the git proxy allow-list
+3 closed Security review: WALK-AUTHOR tighten the git proxy allow-list
+4 closed Review acme/widgets#9000
+5 closed Review acme/widgets#9000
+6 closed Security review: WALK-AUTHOR tighten the git proxy allow-list
+7 closed Review acme/widgets#9000
+8 closed Review acme/widgets#9000
+9 closed Security review: WALK-AUTHOR tighten the git proxy allow-list
+10 closed Review acme/widgets#9000
+11 closed Security review: WALK-AUTHOR tighten the git proxy allow-list
+12 deferred Review acme/widgets#9000
