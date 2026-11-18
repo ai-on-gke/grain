@@ -406,3 +406,49 @@ func TestStagingProxyStripsVerifierAssertionsAndProxyCredentials(t *testing.T) {
 		t.Errorf("Cookie = %q, want staging_sess=keep-cookie", got)
 	}
 }
+
+// TestStagingProxyKeepsAppCookiesVerbatim checks that grain's cookies are
+// dropped from the Cookie lines a staging app receives by name, leaving the
+// app's own pairs exactly as the browser sent them, values net/http's cookie
+// parser would discard or quote included, and that a credential header
+// spelled with underscores is stripped like its dashed name.
+func TestStagingProxyKeepsAppCookiesVerbatim(t *testing.T) {
+	var seen http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+	}))
+	t.Cleanup(upstream.Close)
+	_, store, ctx := testClient(t)
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakePersistentSandboxes{upstream: strings.TrimPrefix(upstream.URL, "http://"), strip: true}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{Actor: ui.DefaultActor("alice"), PersistentSandboxes: fake, LocalAPIToken: testAccessCode}, store))
+	t.Cleanup(srv.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/staging/web/echo", nil)
+	req.Header.Set("Authorization", "Bearer "+testAccessCode)
+	req.Header["X_Goog_IAP_JWT_Assertion"] = []string{"jwt-secret"}
+	req.Header["Proxy_Authorization"] = []string{"Bearer edge-secret"}
+	req.Header["Cookie"] = []string{
+		`prefs={"theme":"dark"}; ` + ui.AccessCookieName + `=secret`,
+		` app_q="two words" ; __HOST-x=secret; path=a\b`,
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	for _, h := range []string{"X_goog_iap_jwt_assertion", "Proxy_authorization"} {
+		if got := seen.Get(h); got != "" {
+			t.Errorf("staging upstream received %s = %q, want stripped", h, got)
+		}
+	}
+	want := `prefs={"theme":"dark"}; app_q="two words"; path=a\b`
+	if got := seen.Values("Cookie"); len(got) != 1 || got[0] != want {
+		t.Errorf("Cookie = %q, want [%q]", got, want)
+	}
+}
