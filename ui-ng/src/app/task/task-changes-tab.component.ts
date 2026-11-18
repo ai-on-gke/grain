@@ -63,6 +63,12 @@ import { TaskStore } from "./task.store";
       <dl class="facts" data-testid="changes">
         <dt>Branch</dt>
         <dd class="mono">{{ task().branch || "—" }}</dd>
+        @if (taskQa()?.stageBranch && !task().pullRequest) {
+          <dt>Staging branch</dt>
+          <dd class="mono" data-testid="changes-stage-branch">
+            {{ taskQa()?.stageBranch }}
+          </dd>
+        }
         @if (task().base) {
           <dt>Base</dt>
           <dd class="mono">{{ task().base }}</dd>
@@ -276,6 +282,36 @@ import { TaskStore } from "./task.store";
               </span>
             }
           </div>
+
+          @if (canBypassS3()) {
+            <div
+              class="tc-qa-bypass-bar"
+              role="region"
+              aria-label="S3 gate blocked"
+              data-testid="qa-s3-blocked-bar"
+            >
+              <div class="tc-qa-bypass-copy">
+                <strong>Pre-PR S3 gate is blocking PR promotion</strong>
+                <span>
+                  Review the findings below, or override the S3 gate to promote
+                  <code class="mono">{{
+                    taskQa()?.stageBranch || task().branch || "staged commits"
+                  }}</code>
+                  and open the pull request.
+                </span>
+              </div>
+              <button
+                type="button"
+                class="btn-outlined danger"
+                data-testid="qa-bypass-s3-btn"
+                gTip="Override the blocked S3 staging gate for this commit, promote the staging branch, and open the pull request with a recorded reason."
+                [disabled]="store.isBusy('bypass-s3', task().id)"
+                (click)="emitBypassS3()"
+              >
+                Bypass S3 gate &amp; open PR…
+              </button>
+            </div>
+          }
 
           @if (visibleQaCheckRuns().length === 0 && qaFindings().length === 0) {
             <p class="muted" style="margin: 0" data-testid="task-qa-empty">
@@ -809,6 +845,52 @@ export class TaskChangesTabComponent {
     output<
       import("./accept-findings-dialog.component").AcceptFindingsRequest
     >();
+  readonly bypassS3 =
+    output<import("./bypass-s3-dialog.component").BypassS3Request>();
+
+  protected readonly canBypassS3 = computed(() => {
+    const qa = this.taskQa();
+    const t = this.task();
+    return !!(
+      qa?.s3Blocked &&
+      (!t.pullRequest || qa.stageBranch) &&
+      t.state !== "closed" &&
+      this.can("POST /api/tasks/{id}/qa/bypass-s3")
+    );
+  });
+
+  protected emitBypassS3(): void {
+    const t = this.task();
+    const qa = this.taskQa();
+    const head = qa?.s3HeadSha || this.preview()?.head || t.ci?.commit;
+    this.bypassS3.emit({
+      task: t,
+      stageBranch: qa?.stageBranch,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "bypass-s3",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/qa/bypass-s3",
+                { id },
+                { reason, ...(head ? { head } : {}) },
+              ),
+            t.id,
+          )
+          .then(async (ok) => {
+            if (ok) {
+              this.snackbar.show(
+                `Bypassed S3 gate and opened pull request for #${t.id}`,
+              );
+              await this.refreshTaskQa(t.id);
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
+  }
 
   // A person's decision to merge over one review's findings on one gate
   // (accept-findings-dialog.component.ts). Offered only where the server
@@ -1033,6 +1115,9 @@ export class TaskChangesTabComponent {
 
   protected qaVerdictTone(verdict?: string): string {
     if (verdict === "pass" || verdict === "passed") return "healthy";
+    if (verdict === "bypassed" || verdict === "warn" || verdict === "shadow") {
+      return "proposal";
+    }
     if (verdict === "fail" || verdict === "failed" || verdict === "error") {
       return "error";
     }
@@ -1047,7 +1132,14 @@ export class TaskChangesTabComponent {
 
   protected qaFindingTone(f: QAFinding): "error" | "proposal" | "neutral" {
     if (f.severity === "info") return "neutral";
-    if (this.isShadowFinding(f) || f.severity === "warning") return "proposal";
+    if (
+      this.isShadowFinding(f) ||
+      f.severity === "warning" ||
+      f.severity === "warn" ||
+      f.severity === "shadow"
+    ) {
+      return "proposal";
+    }
     return "error";
   }
 
@@ -1203,7 +1295,39 @@ export class TaskChangesTabComponent {
               )
             : [];
         if (this.task().id !== id) return;
-        const runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        let runs = Array.isArray(res) ? res : (res?.runs ?? []);
+        const stageRef = this.taskQa()?.stageBranch;
+        if (
+          t.repo &&
+          stageRef &&
+          stageRef !== t.branch &&
+          (runs.length === 0 || !t.pullRequest)
+        ) {
+          try {
+            const stageRes = await this.api.get<CIRunsResponse | CIRun[]>(
+              "GET /api/ci/runs",
+              undefined,
+              `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(stageRef)}&limit=10`,
+            );
+            if (this.task().id !== id) return;
+            const stageRuns = Array.isArray(stageRes)
+              ? stageRes
+              : (stageRes?.runs ?? []);
+            if (stageRuns.length > 0) {
+              const seen = new Set(runs.map((r) => r.id));
+              runs = t.pullRequest
+                ? [...runs, ...stageRuns.filter((r) => !seen.has(r.id))]
+                : [
+                    ...stageRuns,
+                    ...runs.filter(
+                      (r) => !stageRuns.some((s) => s.id === r.id),
+                    ),
+                  ];
+            }
+          } catch {
+            /* ignore */
+          }
+        }
         this.ciRuns.set(runs);
         const autoRunId = this.task().ci?.runId || runs[0]?.id;
         if (autoRunId) {

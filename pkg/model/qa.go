@@ -60,6 +60,13 @@ const (
 	// QAStageBranchPrefix namespaces pre-PR staging branches pushed by treatment-arm sandboxes
 	// before S3/S4 quality verification promotes commits to the task's live PR branch.
 	QAStageBranchPrefix = "grain-qa-stage/"
+
+	// QACheckIDS3OperatorBypass records an explicit human operator override of a blocked S3 gate.
+	QACheckIDS3OperatorBypass = "qa:s3-operator-bypass"
+
+	// QACheckIDBaseResolution records an explicit S3 base-commit resolution failure
+	// (instead of silently falling back to the repository's initial commit).
+	QACheckIDBaseResolution = "qa:base-resolution"
 )
 
 // ActiveQAResolution is a callback to avoid import cycles when reading the current QA arm for a task.
@@ -941,7 +948,7 @@ func (s *Store) TaskQASummaries(
 	ctx context.Context,
 	tasks []Task,
 	states map[string]State,
-	assessComplexity func(Task) string,
+	assessComplexity func(Task, TaskSpecAttachments) string,
 ) (map[string]*TaskQASummary, error) {
 	if s == nil || len(tasks) == 0 {
 		return nil, nil
@@ -1105,6 +1112,69 @@ func (s *Store) TaskQASummaries(
 		}
 		return false
 	}
+	complexityRank := func(tier string) int {
+		switch strings.ToLower(strings.TrimSpace(tier)) {
+		case QAComplexityHigh:
+			return 3
+		case QAComplexityMedium:
+			return 2
+		case QAComplexityLow:
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	var specMap map[string]TaskSpecAttachments
+	if assessComplexity != nil {
+		var needSpecIDs []string
+		for _, t := range tasks {
+			if t.ID == "" {
+				continue
+			}
+			ro := ResolveQARootOrigin(t.WorkOrigin, t.ID)
+			enroll, hasEnroll := enrollByRoot[ro]
+			if hasEnroll && (enroll.excludedReason != "" || enroll.armID == "" || enroll.armID == "excluded") {
+				hasEnroll = false
+			}
+			assign, hasAssign := assignByRoot[ro]
+			runs := runsByTask[t.ID]
+			if len(runs) == 0 && hasAssign && assign.Epoch != qaCfg.EpochOrDefault() {
+				hasAssign = false
+			}
+			if len(runs) > 0 || hasEnroll || (hasAssign && assign.Arm != "" && assign.Arm != QAArmOff) {
+				hasRunTier := false
+				for _, r := range runs {
+					if r.complexityTier != "" {
+						hasRunTier = true
+						break
+					}
+				}
+				if !hasRunTier {
+					needSpecIDs = append(needSpecIDs, t.ID)
+				}
+				continue
+			}
+			st := states[t.ID]
+			if st == StateClosed || !TaskEligibleForQAStaging(t) {
+				continue
+			}
+			hasExplicitFlow := strings.TrimSpace(t.QAFlowRef) != ""
+			if !hasExplicitFlow && (!qaCfg.Enabled || qaCfg.RolloutPct < 100) {
+				continue
+			}
+			needSpecIDs = append(needSpecIDs, t.ID)
+		}
+		if len(needSpecIDs) > 0 {
+			specMap, _ = s.TaskSpecAttachmentsMap(ctx, needSpecIDs, DefaultTaskSpecAttachmentMaxBytes)
+		}
+	}
+	assessWithAttachments := func(t Task) string {
+		if assessComplexity == nil {
+			return ""
+		}
+		return assessComplexity(t, specMap[t.ID])
+	}
 
 	out := make(map[string]*TaskQASummary)
 	for _, t := range tasks {
@@ -1123,6 +1193,7 @@ func (s *Store) TaskQASummaries(
 			arm := QAArmTreatment
 			flowID := ""
 			comp := ""
+			hasRunComp := false
 			if hasEnroll {
 				if enroll.armID == QAArmControl || enroll.flowHash == "control" || enroll.flowHash == "" {
 					arm = QAArmControl
@@ -1168,7 +1239,10 @@ func (s *Store) TaskQASummaries(
 					flowID = r.flowHash
 				}
 				if r.complexityTier != "" {
-					comp = r.complexityTier
+					if comp == "" || complexityRank(r.complexityTier) > complexityRank(comp) {
+						comp = r.complexityTier
+					}
+					hasRunComp = true
 				}
 				if r.blastTier != "" {
 					blastTier = r.blastTier
@@ -1197,8 +1271,11 @@ func (s *Store) TaskQASummaries(
 					}
 				}
 			}
-			if comp == "" && assessComplexity != nil {
-				comp = assessComplexity(t)
+			if !hasRunComp && assessComplexity != nil {
+				hydrated := assessWithAttachments(t)
+				if comp == "" || complexityRank(hydrated) > complexityRank(comp) {
+					comp = hydrated
+				}
 			}
 			if arm == QAArmControl {
 				out[t.ID] = &TaskQASummary{
@@ -1247,10 +1324,7 @@ func (s *Store) TaskQASummaries(
 		if !qaCfg.Enabled && hasExplicitFlow {
 			effFlow = strings.TrimSpace(t.QAFlowRef)
 		}
-		comp := ""
-		if assessComplexity != nil {
-			comp = assessComplexity(t)
-		}
+		comp := assessWithAttachments(t)
 		out[t.ID] = &TaskQASummary{
 			FlowID:         CanonicalQAFlowKey(effFlow),
 			FlowLabel:      HumanQAFlowLabel(effFlow),
@@ -1258,6 +1332,200 @@ func (s *Store) TaskQASummaries(
 			ComplexityTier: comp,
 			Pending:        true,
 		}
+	}
+	return out, nil
+}
+
+// DefaultTaskSpecAttachmentMaxBytes bounds concatenated UTF-8 specification attachments read per task.
+const DefaultTaskSpecAttachmentMaxBytes = 128 * 1024
+
+// TaskSpecAttachments holds bounded plain-text/markdown attachment content for pre-dispatch complexity classification.
+type TaskSpecAttachments struct {
+	Text          string
+	MarkdownCount int
+}
+
+// IsSpecTextAttachment reports whether an attachment is a plain-text or Markdown specification document
+// (excluding HTML mocks, SVGs, images, PDFs, and binary archives).
+func IsSpecTextAttachment(filename, contentType string) (isSpec bool, isMarkdown bool) {
+	lowName := strings.ToLower(strings.TrimSpace(filename))
+	lowCT := strings.ToLower(strings.TrimSpace(contentType))
+	if idx := strings.IndexByte(lowCT, ';'); idx >= 0 {
+		lowCT = strings.TrimSpace(lowCT[:idx])
+	}
+	for _, ext := range []string{
+		".html", ".htm", ".svg", ".xml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz", ".tar",
+	} {
+		if strings.HasSuffix(lowName, ext) {
+			return false, false
+		}
+	}
+	if lowCT == "text/html" || strings.HasPrefix(lowCT, "image/") || strings.HasPrefix(lowCT, "audio/") ||
+		strings.HasPrefix(lowCT, "video/") || lowCT == "application/pdf" || lowCT == "application/octet-stream" {
+		return false, false
+	}
+	if strings.HasSuffix(lowName, ".md") || strings.HasSuffix(lowName, ".markdown") || lowCT == "text/markdown" || lowCT == "text/x-markdown" {
+		return true, true
+	}
+	if strings.HasSuffix(lowName, ".txt") || lowCT == "text/plain" {
+		return true, false
+	}
+	return false, false
+}
+
+// TruncateValidUTF8 truncates s to at most maxBytes without splitting multi-byte UTF-8 runes.
+func TruncateValidUTF8(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
+
+// TrimIncompleteTrailingUTF8Bytes bounds raw to at most maxBytes without leaving a split multi-byte UTF-8 rune at the end.
+func TrimIncompleteTrailingUTF8Bytes(raw []byte, maxBytes int) []byte {
+	if maxBytes <= 0 || len(raw) <= maxBytes {
+		return raw
+	}
+	b := raw[:maxBytes]
+	for i := 1; i < utf8.UTFMax && i <= len(b); i++ {
+		idx := len(b) - i
+		if utf8.RuneStart(b[idx]) {
+			if !utf8.FullRune(b[idx:]) {
+				return b[:idx]
+			}
+			break
+		}
+	}
+	return b
+}
+
+// UpdateQAAssignmentComplexityTier monotonically upgrades complexity_tier on the sticky task_qa_assignment row
+// for (rootOrigin, epoch) after pre-agent attachment and repository path hydration refines the initial tier.
+func (s *Store) UpdateQAAssignmentComplexityTier(ctx context.Context, rootOrigin string, epoch int, complexityTier string) error {
+	ro := strings.TrimSpace(rootOrigin)
+	tier := strings.TrimSpace(complexityTier)
+	if s == nil || ro == "" || epoch < 1 || tier == "" {
+		return nil
+	}
+	rank := func(v string) int {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case QAComplexityHigh:
+			return 3
+		case QAComplexityMedium:
+			return 2
+		case QAComplexityLow:
+			return 1
+		default:
+			return 0
+		}
+	}
+	newRank := rank(tier)
+	if newRank == 0 {
+		return nil
+	}
+	return s.write(ctx, "update qa assignment complexity tier", func(tx *sql.Tx) error {
+		var cur string
+		err := tx.QueryRowContext(ctx,
+			"SELECT `complexity_tier` FROM `task_qa_assignment` WHERE `root_origin` = ? AND `epoch` = ?",
+			ro, epoch,
+		).Scan(&cur)
+		if errors.Is(err, sql.ErrNoRows) || rank(cur) >= newRank {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			"UPDATE `task_qa_assignment` SET `complexity_tier` = ? WHERE `root_origin` = ? AND `epoch` = ?",
+			tier, ro, epoch,
+		)
+		return err
+	})
+}
+
+// TaskSpecAttachments loads bounded plain-text and Markdown attachments for taskID.
+func (s *Store) TaskSpecAttachments(ctx context.Context, taskID string, maxBytes int) (TaskSpecAttachments, error) {
+	tid := strings.TrimSpace(taskID)
+	if s == nil || tid == "" {
+		return TaskSpecAttachments{}, nil
+	}
+	m, err := s.TaskSpecAttachmentsMap(ctx, []string{tid}, maxBytes)
+	if err != nil {
+		return TaskSpecAttachments{}, err
+	}
+	return m[tid], nil
+}
+
+// TaskSpecAttachmentsMap batch-loads bounded plain-text and Markdown attachments for taskIDs.
+func (s *Store) TaskSpecAttachmentsMap(ctx context.Context, taskIDs []string, maxBytesPerTask int) (map[string]TaskSpecAttachments, error) {
+	if s == nil || len(taskIDs) == 0 {
+		return nil, nil
+	}
+	if maxBytesPerTask <= 0 {
+		maxBytesPerTask = DefaultTaskSpecAttachmentMaxBytes
+	}
+	substrLimit := maxBytesPerTask + utf8.UTFMax
+	out := make(map[string]TaskSpecAttachments)
+	const batchChunk = 400
+	for start := 0; start < len(taskIDs); start += batchChunk {
+		chunk := taskIDs[start:min(start+batchChunk, len(taskIDs))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, substrLimit)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		rows, err := s.db.QueryContext(ctx,
+			"SELECT `task_id`, `filename`, `content_type`, SUBSTR(`content`, 1, ?) "+
+				"FROM `task_attachment` WHERE `task_id` IN ("+placeholders+") "+
+				"AND (LOWER(`filename`) LIKE '%.md' OR LOWER(`filename`) LIKE '%.markdown' OR LOWER(`filename`) LIKE '%.txt' "+
+				"OR LOWER(`content_type`) LIKE 'text/markdown%' OR LOWER(`content_type`) LIKE 'text/x-markdown%' OR LOWER(`content_type`) LIKE 'text/plain%') "+
+				"ORDER BY `id` ASC",
+			args...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("batch reading task specification attachments: %w", err)
+		}
+		for rows.Next() {
+			var tid, fname, ct string
+			var raw []byte
+			if sErr := rows.Scan(&tid, &fname, &ct, &raw); sErr != nil {
+				rows.Close()
+				return nil, sErr
+			}
+			isSpec, isMD := IsSpecTextAttachment(fname, ct)
+			if !isSpec || len(raw) == 0 || slices.Contains(raw, 0) {
+				continue
+			}
+			raw = TrimIncompleteTrailingUTF8Bytes(raw, maxBytesPerTask)
+			if len(raw) == 0 || !utf8.Valid(raw) {
+				continue
+			}
+			trimmed := strings.TrimSpace(string(raw))
+			if trimmed == "" {
+				continue
+			}
+			cur := out[tid]
+			if isMD {
+				cur.MarkdownCount++
+			}
+			if len(cur.Text) < maxBytesPerTask {
+				joined := trimmed
+				if cur.Text != "" {
+					joined = cur.Text + "\n\n" + trimmed
+				}
+				cur.Text = TruncateValidUTF8(joined, maxBytesPerTask)
+			}
+			out[tid] = cur
+		}
+		if rErr := rows.Err(); rErr != nil {
+			rows.Close()
+			return nil, rErr
+		}
+		rows.Close()
 	}
 	return out, nil
 }

@@ -513,7 +513,12 @@ items or topbar chrome:
   recorded on that task. Each check run uses `<g-status-icon>` inside
   `.status-pill`, finding evidence expands on demand in `.ci-step-log`, and
   `Helpful` / `Not helpful` `.filter-chip` toggles (`aria-pressed`) are shown
-  only when the viewer holds `tasks:write`.
+  only when the viewer holds `tasks:write`. When pre-PR S3 checks are blocking
+  staging-ref promotion (`s3Blocked: true`) and the viewer holds `merge:write`
+  (`POST /api/tasks/{id}/qa/bypass-s3`), a `.tc-qa-bypass-bar` action bar offers
+  **`Bypass S3 gate & open PR…`** (`[data-testid="qa-bypass-s3-btn"]`), opening
+  `<g-bypass-s3-dialog>` (`[data-testid="bypass-s3-dialog"]`) to capture an
+  audit reason before promoting `grain-qa-stage/<id>` and opening the PR.
 - **Telemetry (`/telemetry`):** Two tabs (`Overview` | `Quality checks`) using the standard WAI-ARIA `.tab-strip` pattern. The `Overview` tab shows operational throughput cards and a compact Quality checks digest card. The `Quality checks` tab shows rollout results and check health (gated by `deployment:read`), with the header window control replaced by a read-only epoch chip to explain origins are grouped by enrollment time.
 
 ### Breakpoints

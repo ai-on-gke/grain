@@ -481,7 +481,7 @@ export const BUILT_IN_CHECK_CATALOG: readonly QAFlowRule[] = [
     id: "golden:strict-config-decoder",
     label: "Strict YAML/JSON configuration decoder",
     stage: "S3",
-    severity: "blocking",
+    severity: "warn",
     summary:
       "Requires KnownFields(true) or DisallowUnknownFields() on YAML/JSON config and declaration decoders.",
     targetPaths: ["pkg/**/*.go", "internal/**/*.go", "cmd/**/*.go"],
@@ -501,7 +501,7 @@ export const BUILT_IN_CHECK_CATALOG: readonly QAFlowRule[] = [
     id: "golden:ui-budget-and-spec-floor",
     label: "UI style budget & unit-spec floor",
     stage: "S3",
-    severity: "blocking",
+    severity: "warn",
     summary:
       "Enforces Angular component stylesheet budget (< 8 KiB) and requires unit specs for new components.",
     targetPaths: ["ui-ng/src/app/**"],
@@ -636,10 +636,7 @@ export function extractExplicitSkillDecl(
 }
 
 export function isLockedFloorRule(ruleId: string): boolean {
-  return (
-    ruleId === "golden:test-integrity-guard" ||
-    ruleId === "golden:strict-config-decoder"
-  );
+  return ruleId === "golden:test-integrity-guard";
 }
 
 export function buildClientWorkflowStagesView(

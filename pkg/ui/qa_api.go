@@ -26,7 +26,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/qa"
@@ -44,9 +46,20 @@ type TaskQAResponse struct {
 	Enabled      bool                `json:"enabled"`
 	ExperimentID string              `json:"experimentId,omitempty"`
 	ArmID        string              `json:"armId,omitempty"`
+	StageBranch  string              `json:"stageBranch,omitempty"`
+	S3Blocked    bool                `json:"s3Blocked,omitempty"`
+	S3HeadSHA    string              `json:"s3HeadSha,omitempty"`
 	Assignment   *model.QAAssignment `json:"assignment,omitempty"`
 	CheckRuns    []model.QACheckRun  `json:"checkRuns"`
 	Findings     []model.QAFinding   `json:"findings"`
+}
+
+// BypassS3Request is posted to POST /api/tasks/{id}/qa/bypass-s3 by a human operator.
+type BypassS3Request struct {
+	Reason string `json:"reason"`
+	// Head optionally pins the staging/task commit SHA the operator reviewed;
+	// the request is refused if the branch moved since.
+	Head string `json:"head,omitempty"`
 }
 
 // RecordQACheckRunEntry carries one in-sandbox S3 check run and its findings from `grain mcpserver`.
@@ -77,12 +90,14 @@ func (s *Server) handleGetQAFlows(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, QAFlowsResponse{Flows: qa.BuiltInFlows()})
 }
 
-func assessTaskComplexityTier(t model.Task) string {
+func assessTaskComplexityTier(t model.Task, specAtt model.TaskSpecAttachments) string {
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       t.Title,
-		Body:        t.Body,
-		ReadsCount:  len(t.Reads),
-		WritesCount: len(t.Writes),
+		Title:                   t.Title,
+		Body:                    t.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(t.Reads),
+		WritesCount:             len(t.Writes),
 	}, nil)
 	return string(comp.Tier)
 }
@@ -283,11 +298,25 @@ func (s *Server) handleGetTaskQA(w http.ResponseWriter, r *http.Request) {
 		findings = []model.QAFinding{}
 	}
 
+	var closedAt *time.Time
+	if obs, oErr := s.tasks.Store.GetObservation(ctx, taskID); oErr == nil && obs != nil {
+		closedAt = obs.ClosedAt
+	}
 	enabled := qaCfg.Enabled && model.TaskEligibleForQAStaging(*task)
-	if enabled && assign == nil && len(runs) == 0 && len(findings) == 0 {
-		if obs, oErr := s.tasks.Store.GetObservation(ctx, taskID); oErr == nil && obs != nil && obs.ClosedAt != nil {
-			enabled = false
-		}
+	if enabled && assign == nil && len(runs) == 0 && len(findings) == 0 && closedAt != nil {
+		enabled = false
+	}
+
+	var stageBranch string
+	if res != nil && res.IsEnforcedTreatment() && (res.Spec == nil || res.Spec.StagingIsolation) {
+		stageBranch = model.QAStageBranchName(taskID)
+	}
+	s3Blocked, s3HeadSHA, stageHasUnpromoted := s.resolveTaskS3BlockState(task, closedAt, runs)
+	if model.TaskPullRequest(*task) != nil && !stageHasUnpromoted {
+		stageBranch = ""
+	}
+	if stageBranch == "" && s3Blocked && model.TaskEligibleForQAStaging(*task) && (res == nil || res.Spec == nil || res.Spec.StagingIsolation) {
+		stageBranch = model.QAStageBranchName(taskID)
 	}
 
 	writeJSON(w, http.StatusOK, TaskQAResponse{
@@ -295,10 +324,111 @@ func (s *Server) handleGetTaskQA(w http.ResponseWriter, r *http.Request) {
 		Enabled:      enabled,
 		ExperimentID: expID,
 		ArmID:        armID,
+		StageBranch:  stageBranch,
+		S3Blocked:    s3Blocked,
+		S3HeadSHA:    s3HeadSHA,
 		Assignment:   assign,
 		CheckRuns:    runs,
 		Findings:     findings,
 	})
+}
+
+func isPrePRS3Stage(stage string) bool {
+	if stage == "S3" || strings.HasPrefix(stage, "S3") {
+		return true
+	}
+	switch stage {
+	case "", "S0", "S0b", "S1", "S2", "S4", "S5", "S-promote":
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *Server) resolveTaskS3BlockState(task *model.Task, closedAt *time.Time, runs []model.QACheckRun) (blocked bool, headSHA string, stageHasUnpromoted bool) {
+	blocked, headSHA = computeTaskS3Blocked(task, closedAt, runs)
+	if task == nil || task.Target == nil {
+		return blocked, headSHA, false
+	}
+	hasPR := model.TaskPullRequest(*task) != nil
+	if !blocked && !hasPR {
+		return false, headSHA, false
+	}
+	stageBranch := model.QAStageBranchName(task.ID)
+	stageSHA, stageExists, stageChecked := "", false, false
+	if s != nil && s.tasks != nil {
+		stageSHA, stageExists, stageChecked = s.tasks.remoteBranchHead(*task.Target, stageBranch)
+	}
+	if hasPR {
+		if !stageChecked || !stageExists {
+			return false, "", false
+		}
+		stageHasUnpromoted = true
+		if headSHA == "" && stageSHA != "" {
+			headSHA = stageSHA
+		}
+		return blocked, headSHA, stageHasUnpromoted
+	}
+	if stageChecked {
+		stageHasUnpromoted = stageExists
+	}
+	if headSHA == "" {
+		if stageSHA != "" {
+			headSHA = stageSHA
+		} else if stageChecked && !stageExists && s != nil && s.tasks != nil {
+			if prSHA, _, _ := s.tasks.remoteBranchHead(*task.Target, task.BranchName()); prSHA != "" {
+				headSHA = prSHA
+			}
+		}
+	}
+	return blocked, headSHA, stageHasUnpromoted
+}
+
+func computeTaskS3Blocked(task *model.Task, closedAt *time.Time, runs []model.QACheckRun) (blocked bool, headSHA string) {
+	if task == nil || task.Target == nil || closedAt != nil {
+		return false, ""
+	}
+	// Find the latest commit evaluated by any non-shadow pre-PR S3 check run.
+	for i := len(runs) - 1; i >= 0; i-- {
+		r := runs[i]
+		if r.Shadow || !isPrePRS3Stage(r.Stage) {
+			continue
+		}
+		headSHA = strings.TrimSpace(r.CommitSHA)
+		break
+	}
+	if headSHA == "" {
+		// Also handle recorded S3 runs with empty commit SHA (e.g. early infra errors).
+		for i := len(runs) - 1; i >= 0; i-- {
+			r := runs[i]
+			if r.Shadow || !isPrePRS3Stage(r.Stage) {
+				continue
+			}
+			if r.CheckID == model.QACheckIDS3OperatorBypass && r.Verdict == "bypassed" {
+				return false, ""
+			}
+			if r.Verdict == "fail" || r.Verdict == "error" {
+				return true, ""
+			}
+		}
+		return false, ""
+	}
+	latest := map[string]string{}
+	for _, r := range runs {
+		if r.Shadow || !isPrePRS3Stage(r.Stage) || strings.TrimSpace(r.CommitSHA) != headSHA {
+			continue
+		}
+		if r.CheckID == model.QACheckIDS3OperatorBypass && r.Verdict == "bypassed" {
+			return false, headSHA
+		}
+		latest[r.CheckID] = r.Verdict
+	}
+	for _, v := range latest {
+		if v == "fail" || v == "error" {
+			return true, headSHA
+		}
+	}
+	return false, headSHA
 }
 
 const (
@@ -354,6 +484,11 @@ func (s *Server) handleRecordTaskQACheckRuns(w http.ResponseWriter, r *http.Requ
 		case "S1", "S3", "S4":
 		default:
 			writeError(w, http.StatusBadRequest, fmt.Errorf("unsupported check run stage %q", entry.Run.Stage))
+			return
+		}
+		if strings.TrimSpace(entry.Run.CheckID) == model.QACheckIDS3OperatorBypass ||
+			strings.EqualFold(strings.TrimSpace(entry.Run.Verdict), "bypassed") {
+			writeError(w, http.StatusBadRequest, errors.New("operator S3 bypass records may only be recorded via POST /api/tasks/{id}/qa/bypass-s3"))
 			return
 		}
 		entry.Run.TaskID = taskID
@@ -453,4 +588,127 @@ func (s *Server) handleVoteTaskQAFinding(w http.ResponseWriter, r *http.Request)
 		Vote:      req.Vote,
 		VotedBy:   voter,
 	})
+}
+
+const maxBypassS3ReasonLength = 500
+
+func matchesPinnedCommit(actual, asked string) bool {
+	actual = strings.ToLower(strings.TrimSpace(actual))
+	asked = strings.ToLower(strings.TrimSpace(asked))
+	if actual == "" || asked == "" {
+		return false
+	}
+	return actual == asked || (len(asked) >= 7 && strings.HasPrefix(actual, asked))
+}
+
+func (s *Server) handleBypassTaskQAS3(w http.ResponseWriter, r *http.Request) {
+	if s.tasks == nil || s.tasks.Store == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("store is not available"))
+		return
+	}
+	ctx := r.Context()
+	attr := RequestActor(ctx)
+	if attr.Actor.Kind != model.PrincipalHuman || isDelegatedRequest(ctx) {
+		writeError(w, http.StatusForbidden, errors.New("only a person acting directly may bypass the S3 quality gate"))
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("id"))
+	task, err := s.tasks.Store.GetTask(ctx, taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if task == nil {
+		writeError(w, http.StatusNotFound, &NotFoundError{ID: taskID})
+		return
+	}
+	state, err := s.tasks.Store.State(ctx, taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if state == model.StateClosed {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("task %s is closed: reopen it before bypassing the S3 quality gate", taskID))
+		return
+	}
+	if task.Target == nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("task %s has no target repository", taskID))
+		return
+	}
+
+	var req BypassS3Request
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("decoding bypass S3 request: %w", err))
+			return
+		}
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			writeError(w, http.StatusBadRequest, errors.New("decoding bypass S3 request: unexpected trailing content"))
+			return
+		}
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		writeError(w, http.StatusBadRequest, errors.New("bypassing the S3 quality gate requires a reason"))
+		return
+	}
+	if utf8.RuneCountInString(reason) > maxBypassS3ReasonLength {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("reason must be at most %d characters", maxBypassS3ReasonLength))
+		return
+	}
+	head := strings.ToLower(strings.TrimSpace(req.Head))
+	if head != "" && (len(head) < 7 || !isHexCommitSHA(head)) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("head %q must be a hex commit SHA of at least 7 characters", req.Head))
+		return
+	}
+
+	runs, err := s.tasks.Store.ListQACheckRunsForTask(ctx, taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	blocked, blockedHead, _ := s.resolveTaskS3BlockState(task, nil, runs)
+	if !blocked {
+		writeError(w, http.StatusConflict, fmt.Errorf("task %s is not currently blocked by an S3 quality gate", taskID))
+		return
+	}
+	if head != "" && blockedHead != "" && !matchesPinnedCommit(blockedHead, head) {
+		writeError(w, http.StatusConflict, fmt.Errorf("task %s S3 check state is at %s, not %s: refresh and review the current commit before bypassing", taskID, shortHead(blockedHead), shortHead(head)))
+		return
+	}
+
+	bypasser, ok := s.tasks.Config.PullRequests.(PullRequestsWithS3Bypass)
+	if !ok || bypasser == nil {
+		writeError(w, http.StatusNotFound, errPullRequestsUnavailable)
+		return
+	}
+
+	bypassedBy := strings.TrimSpace(attr.Actor.ID)
+	if bypassedBy == "" {
+		bypassedBy = "operator"
+	}
+
+	status, err := bypasser.BypassS3ForTask(ctx, taskID, bypassedBy, reason, head)
+	var landed interface{ NothingToPropose() bool }
+	if err != nil && errors.As(err, &landed) && landed.NothingToPropose() {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	var conflict interface{ S3BypassConflict() bool }
+	if err != nil && errors.As(err, &conflict) && conflict.S3BypassConflict() {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	if err != nil {
+		writeClientError(w, apierror.Expose(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }

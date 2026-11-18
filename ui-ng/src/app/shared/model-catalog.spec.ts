@@ -139,5 +139,20 @@ describe("model-catalog", () => {
     // Unadvertised: the agy rule, with its fallback vocabulary.
     expect(effortSupport("mystery", groups, {}).separate).toBe(true);
     expect(effortSupport("mystery-low", groups, {}).separate).toBe(false);
+    // agy's whole suffix vocabulary counts, whatever the settings offer.
+    expect(effortSupport("opus-5.5-xhigh", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Effort is part of the model name: xhigh",
+    });
+    // Unadvertised models take the framework their name implies
+    // (model.ModelFramework): Codex's -max is a model, not an effort.
+    expect(effortSupport("gpt-5.1-codex-max", groups, vocab)).toEqual({
+      separate: true,
+      choices: ["low", "xhigh"],
+    });
+    expect(effortSupport("claude-opus-5-5", groups, vocab)).toEqual({
+      separate: false,
+      reason: "Claude takes no reasoning effort",
+    });
   });
 });

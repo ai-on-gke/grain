@@ -360,7 +360,18 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 	}
 	resp.Request = req
 	run.status = resp.StatusCode
-	resp.Body = &commandForgeBody{r: br, run: run, status: resp.StatusCode}
+	if commandForgeNoBody(req.Method, resp.StatusCode) {
+		const maxNoBodyDrain = 64 << 10
+		n, _ := io.Copy(io.Discard, io.LimitReader(br, maxNoBodyDrain+1))
+		if n > maxNoBodyDrain {
+			run.cancel()
+		}
+		run.wait()
+		resp.Body = http.NoBody
+		resp.ContentLength = 0
+	} else {
+		resp.Body = &commandForgeBody{r: br, run: run, status: resp.StatusCode}
+	}
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if login, ok := NewLoginRedirect(req.URL.Host, resp.Header.Get("Location")); ok {
@@ -523,12 +534,23 @@ func saysNotLoggedIn(said string) bool {
 	return strings.Contains(said, "not logged in") || strings.Contains(said, "auth login")
 }
 
+// commandForgeNoBody reports whether an HTTP response carries no entity body
+// by RFC 9110 (1xx, 204 No Content, 304 Not Modified, or any response to HEAD),
+// so RoundTrip can let the tool exit cleanly instead of cancelling it on Close.
+func commandForgeNoBody(method string, status int) bool {
+	return method == http.MethodHead ||
+		status == http.StatusNotModified ||
+		status == http.StatusNoContent ||
+		(status >= 100 && status < 200)
+}
+
 // commandForgeBody is the response body still being printed; reading it to the
 // end, or closing it, reaps the tool.
 type commandForgeBody struct {
 	r      io.Reader
 	run    *commandForgeRun
 	status int
+	eof    bool
 }
 
 // Read ends with io.EOF only when the tool ended well. One that printed a
@@ -540,6 +562,7 @@ type commandForgeBody struct {
 func (b *commandForgeBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
 	if errors.Is(err, io.EOF) {
+		b.eof = true
 		werr := b.run.wait()
 		if b.status < 300 && (werr != nil || b.run.ended != nil) {
 			return n, b.run.cut(werr)
@@ -598,9 +621,11 @@ func capLog(s string) string {
 }
 
 func (b *commandForgeBody) Close() error {
-	// Closed before the end: the rest is not wanted, so the tool is
-	// stopped rather than left printing into a pipe nobody reads.
-	b.run.cancel()
+	if !b.eof {
+		// Closed before the end: the rest is not wanted, so the tool is
+		// stopped rather than left printing into a pipe nobody reads.
+		b.run.cancel()
+	}
 	b.run.wait()
 	return nil
 }

@@ -17,6 +17,7 @@ package model_test
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -511,7 +512,7 @@ func TestTaskQASummariesBatchAndPendingPreview(t *testing.T) {
 		"t-interactive": model.StateQueued,
 	}
 
-	summaries, err := st.TaskQASummaries(ctx, tasks, states, func(task model.Task) string {
+	summaries, err := st.TaskQASummaries(ctx, tasks, states, func(task model.Task, _ model.TaskSpecAttachments) string {
 		if task.ID == "t-queued" {
 			return model.QAComplexityHigh
 		}
@@ -607,5 +608,171 @@ func TestTaskQASummariesBatchAndPendingPreview(t *testing.T) {
 	}
 	if ec := extraSummaries["t-exp-ctrl"]; ec == nil || ec.Arm != model.QAArmControl || ec.FlowID != "control" {
 		t.Fatalf("expected control-arm shadow run without legacy assignment to stay Control, got %+v", ec)
+	}
+}
+
+func TestTaskSpecAttachmentsAndSummariesHydration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTestStore(t)
+	if err := st.PutConfig(ctx, model.Config{
+		PollInterval: 30 * time.Second,
+		GitHubHost:   "github.com",
+		QA: model.QAConfig{
+			Enabled:    true,
+			FlowID:     model.QAFlowStandard,
+			RolloutPct: 100,
+			Epoch:      1,
+			RegimeID:   1,
+		},
+	}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+
+	repo := &model.RepoRef{Owner: "acme", Name: "widgets"}
+	taskSpec := model.Task{
+		ID:     "t-attached-spec",
+		Title:  "[ACME-13] UX polish",
+		Body:   "Dispatched from **Issue Tracker** (`ACME-13`).\n\n## Capability Summary\nQuick wrapper.\n",
+		Target: repo,
+		Writes: []model.WriteTarget{{Repo: *repo, Base: "main"}},
+	}
+	if err := st.PutTask(ctx, taskSpec); err != nil {
+		t.Fatalf("PutTask: %v", err)
+	}
+
+	mdContent := []byte("# ACME-13 Multi-Area Spec\n\n" +
+		"## 1. Overview\nCross-surface refactor across `internal/server/server.go`, `internal/store/sqlite.go`, and `ui-ng/src/app/inspector.component.ts`.\n\n" +
+		"## 2. Backend Schema\n- Add table columns and migration.\n- Validate optimistic locking.\n\n" +
+		"## 3. Frontend Inspector\n- Pin footer bar.\n- Fix tab scroll reset.\n- Restore focus on Escape.\n- Add Vitest coverage.\n\n" +
+		"## 4. Phased Implementation\n- Phase 1: Store and API.\n- Phase 2: UI components.\n")
+	if _, err := st.AddAttachment(ctx, model.Attachment{
+		TaskID:      taskSpec.ID,
+		Filename:    "1-concept-spec.md",
+		ContentType: "text/markdown; charset=utf-8",
+		Size:        int64(len(mdContent)),
+		Content:     mdContent,
+		CreatedAt:   time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("AddAttachment md: %v", err)
+	}
+	htmlMock := []byte("<!doctype html><html><body><h1>Mock pkg/orchestrator/schema.go</h1></body></html>")
+	if _, err := st.AddAttachment(ctx, model.Attachment{
+		TaskID:      taskSpec.ID,
+		Filename:    "2-html_mock.html",
+		ContentType: "text/html",
+		Size:        int64(len(htmlMock)),
+		Content:     htmlMock,
+		CreatedAt:   time.Date(2026, 11, 18, 12, 0, 1, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("AddAttachment html: %v", err)
+	}
+	pngBytes := []byte{0x89, 'P', 'N', 'G', 0x00, 0x01, 0x02}
+	if _, err := st.AddAttachment(ctx, model.Attachment{
+		TaskID:      taskSpec.ID,
+		Filename:    "3-screenshot.png",
+		ContentType: "image/png",
+		Size:        int64(len(pngBytes)),
+		Content:     pngBytes,
+		CreatedAt:   time.Date(2026, 11, 18, 12, 0, 2, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("AddAttachment png: %v", err)
+	}
+
+	gotAtt, err := st.TaskSpecAttachments(ctx, taskSpec.ID, 4096)
+	if err != nil {
+		t.Fatalf("TaskSpecAttachments: %v", err)
+	}
+	if gotAtt.MarkdownCount != 1 || !strings.Contains(gotAtt.Text, "## 4. Phased Implementation") || strings.Contains(gotAtt.Text, "<!doctype html>") {
+		t.Fatalf("unexpected TaskSpecAttachments: count=%d text=%q", gotAtt.MarkdownCount, gotAtt.Text)
+	}
+
+	// Verify SQLite BLOB SUBSTR mid-rune boundary slicing preserves valid UTF-8 attachments.
+	midRuneAtt, err := st.TaskSpecAttachments(ctx, taskSpec.ID, 20)
+	if err != nil {
+		t.Fatalf("TaskSpecAttachments(maxBytes=20): %v", err)
+	}
+	if midRuneAtt.MarkdownCount != 1 || midRuneAtt.Text == "" {
+		t.Fatalf("expected mid-rune cap to retain attachment, got %+v", midRuneAtt)
+	}
+	utf8BlobTask := model.Task{ID: "t-utf8-blob", Title: "UTF8 boundary", Target: repo}
+	if err := st.PutTask(ctx, utf8BlobTask); err != nil {
+		t.Fatalf("PutTask utf8BlobTask: %v", err)
+	}
+	utf8Payload := []byte("alpha — beta — gamma")
+	if _, err := st.AddAttachment(ctx, model.Attachment{
+		TaskID:      utf8BlobTask.ID,
+		Filename:    "1-utf8.md",
+		ContentType: "text/markdown",
+		Size:        int64(len(utf8Payload)),
+		Content:     utf8Payload,
+		CreatedAt:   time.Date(2026, 11, 18, 12, 0, 3, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("AddAttachment utf8: %v", err)
+	}
+	// Byte 8 lands inside the 3-byte em-dash ('\xe2\x80\x94'); SUBSTR + TrimIncompleteTrailingUTF8Bytes must keep "alpha".
+	splitAtt, err := st.TaskSpecAttachments(ctx, utf8BlobTask.ID, 8)
+	if err != nil {
+		t.Fatalf("TaskSpecAttachments split: %v", err)
+	}
+	if splitAtt.MarkdownCount != 1 || splitAtt.Text != "alpha" {
+		t.Fatalf("expected mid-rune BLOB slice to trim cleanly to \"alpha\", got %+v", splitAtt)
+	}
+
+	// Pending proposed task hydrates markdown attachment without mutating task.Body.
+	summaries, err := st.TaskQASummaries(ctx, []model.Task{taskSpec}, map[string]model.State{
+		taskSpec.ID: model.StateProposed,
+	}, func(_ model.Task, specAtt model.TaskSpecAttachments) string {
+		if specAtt.MarkdownCount == 1 && strings.Contains(specAtt.Text, "## 4. Phased Implementation") {
+			return model.QAComplexityHigh
+		}
+		return model.QAComplexityLow
+	})
+	if err != nil {
+		t.Fatalf("TaskQASummaries pending: %v", err)
+	}
+	if s := summaries[taskSpec.ID]; s == nil || s.ComplexityTier != model.QAComplexityHigh || !s.Pending {
+		t.Fatalf("expected pending proposed task to hydrate attachment complexity=high, got %+v", s)
+	}
+
+	// Sticky assignment is epoch-scoped and monotonic-upward only (never downgrades high -> low or mutates prior epochs).
+	if _, err := st.EnsureQAAssignment(ctx, model.QAAssignment{
+		RootOrigin:         "task:" + taskSpec.ID,
+		Epoch:              1,
+		RegimeID:           1,
+		Arm:                model.QAArmTreatment,
+		FlowID:             model.QAFlowStandard,
+		RolloutPctAtAssign: 100,
+		ComplexityTier:     model.QAComplexityLow,
+		AssignedAt:         time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("EnsureQAAssignment epoch 1: %v", err)
+	}
+	if _, err := st.EnsureQAAssignment(ctx, model.QAAssignment{
+		RootOrigin:         "task:" + taskSpec.ID,
+		Epoch:              2,
+		RegimeID:           2,
+		Arm:                model.QAArmTreatment,
+		FlowID:             model.QAFlowStandard,
+		RolloutPctAtAssign: 100,
+		ComplexityTier:     model.QAComplexityMedium,
+		AssignedAt:         time.Date(2026, 11, 18, 12, 1, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("EnsureQAAssignment epoch 2: %v", err)
+	}
+	if err := st.UpdateQAAssignmentComplexityTier(ctx, "task:"+taskSpec.ID, 2, model.QAComplexityHigh); err != nil {
+		t.Fatalf("UpdateQAAssignmentComplexityTier upward: %v", err)
+	}
+	// Attempting to downgrade high -> low (e.g. from a child subtask) must be a no-op.
+	if err := st.UpdateQAAssignmentComplexityTier(ctx, "task:"+taskSpec.ID, 2, model.QAComplexityLow); err != nil {
+		t.Fatalf("UpdateQAAssignmentComplexityTier downward: %v", err)
+	}
+	ep1, err := st.QAAssignment(ctx, "task:"+taskSpec.ID, 1)
+	if err != nil || ep1 == nil || ep1.ComplexityTier != model.QAComplexityLow {
+		t.Fatalf("expected historical epoch 1 assignment to remain untouched (low), got %+v (err=%v)", ep1, err)
+	}
+	updatedAssign, err := st.QAAssignment(ctx, "task:"+taskSpec.ID, 2)
+	if err != nil || updatedAssign == nil || updatedAssign.ComplexityTier != model.QAComplexityHigh {
+		t.Fatalf("expected epoch 2 assignment complexity=high after monotonic guard, got %+v (err=%v)", updatedAssign, err)
 	}
 }

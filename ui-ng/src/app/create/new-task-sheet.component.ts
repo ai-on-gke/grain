@@ -52,6 +52,11 @@ import {
 import { GrantsPickerComponent } from "../shared/grants-picker.component";
 import { hasExplicitTargetAllowlist } from "../shared/instance-repos";
 import {
+  PRIORITY_HELP,
+  PRIORITY_REFUSAL,
+  taskPriority,
+} from "../shared/task-priority";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
@@ -160,7 +165,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                     ? "Workstream"
                     : selectedTemplate()
                       ? "From template"
-                      : draft().approved
+                      : draft().approved && canApprove()
                         ? "Starts on create"
                         : "Proposal"
                 }}</span>
@@ -196,7 +201,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                   >.
                 </p>
               }
-              @if (!canFile()) {
+              @if (!canAccessFiling()) {
                 <p class="banner" data-testid="new-task-denied">
                   {{ deniedReason() }}
                 </p>
@@ -376,40 +381,77 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                 }
               }
 
-              @if (!draft().workstream) {
+              <!-- Owner, Task priority & Keep running -->
+              <div class="nt-field-grid" id="nt-owner-priority">
+                <label class="field">
+                  <span>Owner</span>
+                  <input
+                    type="text"
+                    data-testid="nt-owner"
+                    placeholder="Defaults to you"
+                    autocomplete="off"
+                    [disabled]="!canSetOwner()"
+                    [attr.title]="ownerDeniedReason() || null"
+                    [value]="draft().owner"
+                    (input)="set('owner', val($event))"
+                  />
+                  <small class="muted"
+                    >Optional — account responsible for this task</small
+                  >
+                </label>
+
                 <label class="field">
                   <span>Task priority</span>
                   <input
-                    #priorityInput
-                    type="text"
+                    type="number"
+                    min="1"
+                    step="1"
                     inputmode="numeric"
+                    #priorityInput
                     data-testid="nt-priority"
-                    placeholder="5"
-                    [value]="draft().priority"
-                    [attr.aria-invalid]="priorityInvalid() ? 'true' : null"
-                    [attr.aria-describedby]="
-                      priorityInvalid() ? 'nt-priority-err' : 'nt-priority-help'
+                    aria-describedby="nt-priority-help"
+                    [disabled]="!canWriteTaskFields()"
+                    [attr.title]="
+                      canWriteTaskFields()
+                        ? null
+                        : access.deniedReasonForTask(
+                            'POST /api/tasks',
+                            repoForAccess() ?? null
+                          )
                     "
-                    (input)="set('priority', val($event))"
+                    [attr.aria-invalid]="priorityInvalid() ? 'true' : null"
+                    [value]="draft().priority"
+                    (input)="onPriorityInput($event)"
                     (blur)="normalizePriority()"
                   />
-                  @if (priorityInvalid()) {
-                    <small
-                      id="nt-priority-err"
-                      class="nt-field-error"
-                      role="alert"
-                      data-testid="nt-priority-error"
-                      >Use a whole number, 1 or more.</small
-                    >
-                  } @else {
-                    <small id="nt-priority-help" class="muted">{{
-                      selectedTemplate()?.priority
-                        ? "Default " +
-                          selectedTemplate()!.priority +
-                          ", from the template; higher runs first."
-                        : "Default 5; higher runs first."
-                    }}</small>
-                  }
+                  <small
+                    id="nt-priority-help"
+                    data-testid="nt-priority-help"
+                    [class.muted]="!priorityInvalid()"
+                    [class.nt-field-error]="priorityInvalid()"
+                    [attr.role]="priorityInvalid() ? 'alert' : null"
+                    >{{ priorityHelpText() }}</small
+                  >
+                </label>
+              </div>
+
+              @if (!draft().workstream) {
+                <label
+                  class="check-row"
+                  [class.is-disabled]="!canSetKeepRunning()"
+                  [attr.title]="
+                    keepRunningDeniedReason() ||
+                    'Immediately restart the task when its run exits instead of completing or parking it.'
+                  "
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="nt-keep-running"
+                    [disabled]="!canSetKeepRunning()"
+                    [checked]="draft().keepRunning && canSetKeepRunning()"
+                    (change)="set('keepRunning', checked($event))"
+                  />
+                  <span>Keep running (restart when a run exits)</span>
                 </label>
               }
 
@@ -522,14 +564,25 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
             <div class="sheet-foot">
               <div class="sheet-switches">
                 @if (fields().approved.visibility !== "hidden") {
-                  <div class="switch-row">
+                  <div
+                    class="switch-row"
+                    [attr.title]="
+                      canApprove()
+                        ? null
+                        : access.deniedReason(
+                            'POST /api/tasks/{id}/approve',
+                            repoForAccess()
+                          )
+                    "
+                  >
                     <button
                       type="button"
                       role="switch"
                       class="g-switch"
                       data-testid="approved-switch"
                       aria-labelledby="sw-approved"
-                      [attr.aria-checked]="draft().approved"
+                      [disabled]="!canApprove()"
+                      [attr.aria-checked]="draft().approved && canApprove()"
                       (click)="set('approved', !draft().approved)"
                     >
                       <span class="sr-only">{{
@@ -744,7 +797,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
           }
         }
         @case ("repo") {
-          <div class="field">
+          <div class="field" id="nt-repo-field">
             <span>{{ f.label || "Repository" }}</span>
             <g-pill-select
               #repoSelect
@@ -847,11 +900,20 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
         }
         @case ("autoMerge") {
           @if (draft().repo !== noRepo) {
-            <label class="check-row">
+            <label
+              class="check-row"
+              [class.is-disabled]="!canSetAutoMerge()"
+              [attr.title]="
+                canSetAutoMerge()
+                  ? null
+                  : access.deniedReason('POST /api/tasks/{id}/change-review')
+              "
+            >
               <input
                 type="checkbox"
                 data-testid="nt-auto-merge"
-                [checked]="draft().autoMerge"
+                [disabled]="!canSetAutoMerge()"
+                [checked]="draft().autoMerge && canSetAutoMerge()"
                 (change)="set('autoMerge', checked($event))"
               />
               <span>{{
@@ -877,11 +939,23 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
         }
         @case ("fixesBaseBranch") {
           @if (draft().repo !== noRepo) {
-            <label class="check-row">
+            <label
+              class="check-row"
+              [class.is-disabled]="!canApprove()"
+              [attr.title]="
+                canApprove()
+                  ? null
+                  : access.deniedReason(
+                      'POST /api/tasks/{id}/approve',
+                      repoForAccess()
+                    )
+              "
+            >
               <input
                 type="checkbox"
                 data-testid="nt-fixes-base"
-                [checked]="draft().fixesBaseBranch"
+                [disabled]="!canApprove()"
+                [checked]="draft().fixesBaseBranch && canApprove()"
                 (change)="set('fixesBaseBranch', checked($event))"
               />
               <span>{{ f.label || "Fixes red base branch" }}</span>
@@ -1198,7 +1272,7 @@ export class NewTaskSheetComponent {
   private readonly api = inject(GrainApi);
   private readonly inbox = inject(InboxStore);
   private readonly wsStore = inject(WorkstreamsStore);
-  private readonly access = inject(AccessService);
+  protected readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly router = inject(Router);
 
@@ -1226,29 +1300,24 @@ export class NewTaskSheetComponent {
   protected readonly writeRepoDraft = signal("");
   protected readonly writeBaseDraft = signal("");
   protected readonly reviewerDraft = signal("");
+  protected readonly priorityBadInput = signal(false);
   protected readonly busy = signal(false);
   protected readonly shapingOpen = signal(false);
   protected readonly error = signal<Problem | null>(null);
 
   protected readonly shapeFields = computed<TaskShapeFields>(() => {
     const d = this.draft();
-    const p = parseTaskPriority(d.priority);
+    const parsed = taskPriority(d.priority);
     return {
       title: d.title,
       description: d.description,
       repo: d.repo === NO_REPO ? "" : d.repo,
       base: d.base,
-      priority: Number.isNaN(p) ? 5 : p,
+      priority: Number.isNaN(parsed) ? 5 : parsed,
       model: d.model,
       dependsOn: d.dependsOn,
     };
   });
-
-  protected readonly priorityInvalid = computed(
-    () =>
-      String(this.draft().priority ?? "").trim() !== "" &&
-      Number.isNaN(parseTaskPriority(this.draft().priority)),
-  );
 
   private readonly edited = new Set<keyof NewTaskDraft>();
   private generation = 0;
@@ -1475,8 +1544,11 @@ export class NewTaskSheetComponent {
   ]);
 
   protected readonly repoForAccess = computed(() => {
-    const r = this.selectedTemplate()?.repo || this.draft().repo;
-    return r && r !== NO_REPO ? r : undefined;
+    const tmplRepo = this.selectedTemplate()?.repo;
+    if (tmplRepo) return tmplRepo;
+    const r = this.draft().repo;
+    if (r === NO_REPO) return undefined;
+    return r || this.defaultTarget().trim() || undefined;
   });
 
   // forkHead is the Base branch read as a GitHub fork head label
@@ -1493,6 +1565,10 @@ export class NewTaskSheetComponent {
   }
 
   protected readonly canFile = computed(() => {
+    return this.canAccessFiling() && !this.priorityInvalid();
+  });
+
+  protected readonly canAccessFiling = computed(() => {
     const repo = this.repoForAccess();
     const tmpl = this.selectedTemplate();
     if (tmpl && repo && fromTemplateStem(repo, tmpl)) {
@@ -1521,12 +1597,99 @@ export class NewTaskSheetComponent {
       this.access.can("PUT /api/console-sessions/{id}"),
   );
 
+  // Only a human principal may set ownership or keep-running
+  // (pkg/ui/task_owner.go, pkg/ui/client.go).
+  protected readonly isPerson = computed(() => {
+    const kind = this.access.whoami()?.actor?.kind;
+    return !kind || kind === "human";
+  });
+
+  protected readonly canWriteTaskFields = computed(
+    () =>
+      this.access.can("POST /api/tasks", this.repoForAccess()) &&
+      this.access.canAccessTask(
+        "POST /api/tasks",
+        this.repoForAccess() ?? null,
+      ),
+  );
+
+  protected readonly canApprove = computed(() =>
+    this.access.can("POST /api/tasks/{id}/approve", this.repoForAccess()),
+  );
+
+  protected readonly canSetOwner = computed(
+    () => this.isPerson() && this.canWriteTaskFields(),
+  );
+
+  protected readonly canSetKeepRunning = computed(
+    () =>
+      this.isPerson() &&
+      this.access.isFullAccess() &&
+      this.canWriteTaskFields(),
+  );
+
+  protected readonly canSetAutoMerge = computed(
+    () => this.access.isFullAccess() && this.canWriteTaskFields(),
+  );
+
+  protected readonly ownerDeniedReason = computed(() => {
+    if (this.canSetOwner()) return "";
+    if (!this.isPerson()) return "Only people may set task ownership.";
+    return this.access.deniedReasonForTask(
+      "POST /api/tasks",
+      this.repoForAccess() ?? null,
+    );
+  });
+
+  protected readonly keepRunningDeniedReason = computed(() => {
+    if (this.canSetKeepRunning()) return "";
+    if (!this.isPerson()) return "Only people may set Keep running.";
+    if (!this.access.isFullAccess()) {
+      return this.access.deniedReason("POST /api/tasks/{id}/change-review");
+    }
+    return this.access.deniedReasonForTask(
+      "POST /api/tasks",
+      this.repoForAccess() ?? null,
+    );
+  });
+
+  protected readonly priorityRefusalReason = computed(() => {
+    if (this.priorityBadInput()) return PRIORITY_REFUSAL;
+    const raw = String(this.draft().priority ?? "").trim();
+    if (raw === "") return "";
+    const parsed = taskPriority(raw);
+    if (Number.isNaN(parsed)) return PRIORITY_REFUSAL;
+    const baseline = this.selectedTemplate()?.priority || 5;
+    if (parsed > 5 && !this.canApprove() && parsed !== baseline) {
+      return this.access.deniedReason(
+        "POST /api/tasks/{id}/approve",
+        this.repoForAccess(),
+      );
+    }
+    return "";
+  });
+
+  protected readonly priorityInvalid = computed(
+    () => this.priorityRefusalReason() !== "",
+  );
+
+  protected readonly priorityHelpText = computed(() => {
+    const refusal = this.priorityRefusalReason();
+    if (refusal) return refusal;
+    const tmplPriority = this.selectedTemplate()?.priority;
+    if (tmplPriority) {
+      return `default ${tmplPriority}, from the template; higher numbers run first`;
+    }
+    return PRIORITY_HELP;
+  });
+
   constructor() {
     effect(() => {
       if (!this.svc.isOpen()) return;
       const prefill = this.svc.prefill();
       untracked(() => {
         this.error.set(null);
+        this.priorityBadInput.set(false);
         this.capsOpen.set(false);
         this.moreOpen.set(false);
         this.selectedTemplateId.set("");
@@ -1575,9 +1738,21 @@ export class NewTaskSheetComponent {
       const cfg = await this.api.config();
       if (gen !== this.generation || !this.svc.isOpen()) return;
       this.config.set(cfg);
+      this.access.setConfig(cfg);
       this.reseed(emptyDraft(cfg, this.inbox.tasks(), prefill));
     } catch {
       // Keep builtin defaults.
+    }
+
+    if (!this.access.whoami() && typeof this.api.whoami === "function") {
+      void this.api
+        .whoami()
+        .then((w) => {
+          if (w && gen === this.generation && this.svc.isOpen()) {
+            this.access.setWhoami(w);
+          }
+        })
+        .catch(() => undefined);
     }
 
     const canGet = typeof this.api.get === "function";
@@ -1690,6 +1865,7 @@ export class NewTaskSheetComponent {
         : {}),
     }));
     if (!tmpl) {
+      this.syncTemplatePriority(undefined);
       this.templateValues.set({});
       return;
     }
@@ -1697,6 +1873,7 @@ export class NewTaskSheetComponent {
     for (const f of tmpl.fields ?? []) {
       vals[f.name] = f.default ?? "";
     }
+    this.syncTemplatePriority(tmpl);
     this.templateValues.set(vals);
     if (tmpl.repo) {
       this.pickRepo(tmpl.repo);
@@ -1757,6 +1934,16 @@ export class NewTaskSheetComponent {
       }
     } catch {
       // Optional preview.
+    }
+  }
+
+  private syncTemplatePriority(tmpl: Template | undefined): void {
+    if (!this.edited.has("priority")) {
+      this.priorityBadInput.set(false);
+      this.draft.update((d) => ({
+        ...d,
+        priority: String(tmpl?.priority || 5),
+      }));
     }
   }
 
@@ -2092,6 +2279,15 @@ export class NewTaskSheetComponent {
     this.error.set(null);
     try {
       let created: Task;
+      const effectiveApproved = d.approved && this.canApprove();
+      const effectiveDraft: NewTaskDraft = {
+        ...d,
+        approved: effectiveApproved,
+        autoMerge: d.autoMerge && this.canSetAutoMerge(),
+        fixesBaseBranch: d.fixesBaseBranch && this.canApprove(),
+        keepRunning: d.keepRunning && this.canSetKeepRunning(),
+        owner: this.canSetOwner() ? d.owner : "",
+      };
       const effectiveRepo =
         tmpl?.repo ||
         (d.repo === NO_REPO ? "" : d.repo || this.defaultTarget());
@@ -2102,6 +2298,7 @@ export class NewTaskSheetComponent {
       // differs from a fresh draft for this repo must go to POST /api/tasks.
       const fresh = emptyDraft(this.config(), this.inbox.tasks(), {
         repo: d.repo,
+        priority: String(tmpl?.priority || 5),
       });
       const differs = (a: unknown, b: unknown) =>
         JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
@@ -2118,6 +2315,7 @@ export class NewTaskSheetComponent {
         "newBranchName",
         "autoMerge",
         "noPort",
+        "keepRunning",
         "fixesBaseBranch",
         "foundIn",
         "model",
@@ -2126,7 +2324,9 @@ export class NewTaskSheetComponent {
         "networkAccess",
         "nothingNeededAction",
         "reviewTemplateId",
+        "owner",
         "reviewers",
+        "priority",
         "promptExtension",
         "sandboxCpus",
         "sandboxMemoryMb",
@@ -2141,12 +2341,12 @@ export class NewTaskSheetComponent {
       ];
       const hasExtraTaskOverrides =
         priorityOverridden ||
-        d.attachments.length > 0 ||
-        d.dependsOn.length > 0 ||
-        d.reads.length > 0 ||
-        d.writes.length > 0 ||
-        d.capabilities !== null ||
-        OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
+        effectiveDraft.attachments.length > 0 ||
+        effectiveDraft.dependsOn.length > 0 ||
+        effectiveDraft.reads.length > 0 ||
+        effectiveDraft.writes.length > 0 ||
+        effectiveDraft.capabilities !== null ||
+        OVERRIDE_KEYS.some((k) => differs(effectiveDraft[k], fresh[k]));
 
       const canOnlyPostFromTemplate =
         !this.access.canAccessTask("POST /api/tasks", effectiveRepo || null) &&
@@ -2166,7 +2366,7 @@ export class NewTaskSheetComponent {
             repo: effectiveRepo,
             template: stem,
             ...(Object.keys(tvals).length ? { fields: tvals } : {}),
-            approved: d.approved,
+            approved: effectiveApproved,
           },
         );
       } else {
@@ -2174,7 +2374,7 @@ export class NewTaskSheetComponent {
           "POST /api/tasks",
           undefined,
           buildPayload(
-            d,
+            effectiveDraft,
             this.config(),
             tmpl ? { templateId: tmpl.id, fields: tvals } : null,
           ),
@@ -2189,7 +2389,7 @@ export class NewTaskSheetComponent {
       }
       this.svc.clearSaved();
       this.svc.close();
-      this.announce(created, d.approved, !!d.workstream);
+      this.announce(created, effectiveApproved, !!d.workstream);
     } catch (err) {
       const msg = errorText(err);
       const isFoundIn = /found[- ]in|release tag/i.test(msg);
@@ -2298,7 +2498,16 @@ export class NewTaskSheetComponent {
     }
   }
 
+  protected onPriorityInput(ev: Event): void {
+    const el = ev.target as HTMLInputElement;
+    this.priorityBadInput.set(!!el.validity?.badInput);
+    this.set("priority", el.value);
+  }
+
   protected applyShapedDraft(patch: Partial<TaskShapeFields>): void {
+    if (patch.priority !== undefined) {
+      this.priorityBadInput.set(false);
+    }
     this.draft.update((d) => ({
       ...d,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -2307,6 +2516,9 @@ export class NewTaskSheetComponent {
         : {}),
       ...(patch.repo !== undefined ? { repo: patch.repo || NO_REPO } : {}),
       ...(patch.base !== undefined ? { base: patch.base } : {}),
+      ...(patch.priority !== undefined
+        ? { priority: String(patch.priority) }
+        : {}),
       ...(patch.model !== undefined ? { model: patch.model } : {}),
       ...(patch.dependsOn !== undefined ? { dependsOn: patch.dependsOn } : {}),
     }));
@@ -2314,6 +2526,7 @@ export class NewTaskSheetComponent {
     if (patch.description !== undefined) this.edited.add("description");
     if (patch.repo !== undefined) this.edited.add("repo");
     if (patch.base !== undefined) this.edited.add("base");
+    if (patch.priority !== undefined) this.edited.add("priority");
     if (patch.model !== undefined) this.edited.add("model");
     if (patch.dependsOn !== undefined) this.edited.add("dependsOn");
     this.snackbar.show("Applied Director suggestions to form");

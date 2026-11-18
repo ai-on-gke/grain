@@ -636,7 +636,20 @@ function mib(mb: number): string {
                     @for (ms of otherModelSettingsRows(); track ms.model) {
                       <tr [attr.data-testid]="'model-setting-row-' + ms.model">
                         <td class="s-mono">{{ ms.model }}</td>
-                        <td>{{ ms.effort || "default" }}</td>
+                        <td>
+                          {{ ms.effort || "default" }}
+                          @if (ms.effort && effortFor(ms.model); as es) {
+                            @if (!es.separate) {
+                              <span
+                                class="s-meta"
+                                [attr.data-testid]="
+                                  'model-setting-unused-' + ms.model
+                                "
+                                >(not applied: {{ es.reason }}.)</span
+                              >
+                            }
+                          }
+                        </td>
                         <td class="s-actions-cell">
                           <div class="s-row-actions">
                             <button

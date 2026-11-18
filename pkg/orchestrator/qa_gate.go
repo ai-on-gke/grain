@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -172,6 +173,26 @@ func OpenPullRequestForTaskWithQA(
 	if headSHA != "" && (!s3Ran || (!s3Passed && strings.TrimSpace(opts.CallerNotes) != "")) {
 		rep, ran, s3Err := runMirrorS3IfConfigured(ctx, store, task, assign, false, checkBranch, opts.CallerNotes)
 		if s3Err != nil {
+			if errors.Is(s3Err, checks.ErrBaseResolutionFailed) {
+				recordBaseResolutionErrorCheckRun(ctx, store, task, assign, headSHA, s3Err)
+				if opts.AllowHoldAfterS3Cap {
+					if stageExists {
+						if _, pErr := promoteQAStageBranch(client, *task.Target, stageBranch, task.BranchName(), headSHA); pErr != nil {
+							return PullRequestStatus{}, fmt.Errorf("orchestrator: promoting held staging branch %s to %s: %w",
+								stageBranch, task.BranchName(), pErr)
+						}
+					}
+					if hErr := holdTaskForQA(ctx, store, task.ID, headSHA, fmt.Sprintf("pre-PR S3 base resolution failed: %v", s3Err), time.Now().UTC()); hErr != nil {
+						return PullRequestStatus{}, hErr
+					}
+					status, oErr := OpenPullRequestForTask(ctx, store, client, task)
+					if oErr == nil {
+						maybeEvaluateQACircuitBreakerThrottled(ctx, store, client, time.Now().UTC())
+					}
+					return status, oErr
+				}
+				return PullRequestStatus{}, fmt.Errorf("orchestrator: pre-PR S3 base resolution failed on %s: %w", checkBranch, s3Err)
+			}
 			if rt := LiveQARuntime(); rt != nil && rt.DataDir != "" {
 				return PullRequestStatus{}, fmt.Errorf("orchestrator: running pre-PR S3 checks on %s: %w", checkBranch, s3Err)
 			}
@@ -681,11 +702,15 @@ func persistS3ReportToStore(
 	if store == nil {
 		return
 	}
+	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: len(task.Writes),
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             len(task.Writes),
+		PathHints:               extractCandidatePathsWithSpec(task, nil, "", specAtt.Text),
 	}, nil)
 
 	detailMap := map[string]any{
@@ -820,11 +845,15 @@ func executeCustomStages(
 	flow := *assign.Spec
 	rt := LiveQARuntime()
 
+	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: len(task.Writes),
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             len(task.Writes),
+		PathHints:               extractCandidatePathsWithSpec(task, &flow, "", specAtt.Text),
 	}, nil)
 
 	armCol := model.QAArmTreatment
@@ -1169,23 +1198,69 @@ func isPrePRDeterministicOrCustomStage(stage string) bool {
 	}
 }
 
+func recordBaseResolutionErrorCheckRun(ctx context.Context, store *model.Store, task model.Task, assign *resolve.Resolution, headSHA string, resErr error) {
+	if store == nil || resErr == nil {
+		return
+	}
+	var expID, armID, flowHash string
+	var engineRev int
+	if assign != nil {
+		expID = assign.ExperimentID
+		armID = assign.ArmID
+		flowHash = assign.FlowHash
+		engineRev = assign.QAEngineRev
+	}
+	detailBytes, _ := json.Marshal(map[string]string{
+		"error": resErr.Error(),
+	})
+	_, _ = store.RecordQACheckRun(ctx, model.QACheckRun{
+		TaskID:       task.ID,
+		CommitSHA:    headSHA,
+		Stage:        "S3",
+		CheckID:      model.QACheckIDBaseResolution,
+		Arm:          model.QAArmTreatment,
+		Shadow:       false,
+		Verdict:      "error",
+		DetailJSON:   string(detailBytes),
+		ExperimentID: expID,
+		ArmID:        armID,
+		FlowHash:     flowHash,
+		QAEngineRev:  engineRev,
+		Model:        task.Model,
+	}, []model.QAFinding{{
+		TaskID:   task.ID,
+		Stage:    "S3",
+		RuleID:   model.QACheckIDBaseResolution,
+		Severity: "error",
+		Summary:  "Pre-PR S3 could not resolve a verified merge-base against the target base branch.",
+		Evidence: resErr.Error(),
+	}})
+}
+
 func loadRecordedS3Outcome(ctx context.Context, store *model.Store, taskID, headSHA string) (passed, ran bool, tier qa.BlastTier, summary string) {
 	runs, err := store.ListQACheckRunsForTask(ctx, taskID)
 	if err != nil || len(runs) == 0 {
 		return false, false, qa.BlastT1, ""
 	}
-	passed = true
 	tier = qa.BlastT1
-	runIDs := map[int64]bool{}
+	latestVerdict := map[string]string{}
+	latestRunID := map[string]int64{}
+	bypassed := false
 	for _, r := range runs {
 		if r.Shadow || !isPrePRDeterministicOrCustomStage(r.Stage) || r.CommitSHA != headSHA {
 			continue
 		}
-		ran = true
-		runIDs[r.ID] = true
-		if r.Verdict == "fail" {
-			passed = false
+		if r.CheckID == model.QACheckIDS3OperatorBypass && r.Verdict == "bypassed" {
+			bypassed = true
+			continue
 		}
+		if r.CheckID == model.QACheckIDBaseResolution && r.Verdict == "error" {
+			// Do not cache transient base-resolution infrastructure errors as a completed S3 run.
+			continue
+		}
+		ran = true
+		latestVerdict[r.CheckID] = r.Verdict
+		latestRunID[r.CheckID] = r.ID
 		if r.DetailJSON != "" {
 			var meta struct {
 				BlastTier string `json:"blastTier"`
@@ -1195,14 +1270,25 @@ func loadRecordedS3Outcome(ctx context.Context, store *model.Store, taskID, head
 			}
 		}
 	}
+	if bypassed {
+		return true, true, tier, ""
+	}
 	if !ran {
 		return false, false, qa.BlastT1, ""
+	}
+	passed = true
+	failedRunIDs := map[int64]bool{}
+	for cid, v := range latestVerdict {
+		if v == "fail" || v == "error" {
+			passed = false
+			failedRunIDs[latestRunID[cid]] = true
+		}
 	}
 	if !passed {
 		findings, _ := store.ListQAFindingsForTask(ctx, taskID)
 		var lines []string
 		for _, f := range findings {
-			if runIDs[f.CheckRunID] {
+			if failedRunIDs[f.CheckRunID] {
 				loc := f.FilePath
 				if loc != "" && f.Line > 0 {
 					loc = fmt.Sprintf("%s:%d", loc, f.Line)
@@ -1214,6 +1300,247 @@ func loadRecordedS3Outcome(ctx context.Context, store *model.Store, taskID, head
 			"\nFix these issues, push to your branch, and call `open_pull_request`."
 	}
 	return passed, true, tier, summary
+}
+
+type s3BypassConflictError struct {
+	msg string
+}
+
+func (e s3BypassConflictError) Error() string          { return e.msg }
+func (e s3BypassConflictError) S3BypassConflict() bool { return true }
+
+func matchesPinnedHead(actual, expected string) bool {
+	actual = strings.ToLower(strings.TrimSpace(actual))
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	if actual == "" || expected == "" {
+		return false
+	}
+	return actual == expected || (len(expected) >= 7 && strings.HasPrefix(actual, expected))
+}
+
+func isS3BlockedForCommit(runs []model.QACheckRun, headSHA string) bool {
+	headSHA = strings.TrimSpace(headSHA)
+	if len(runs) == 0 {
+		return false
+	}
+	latest := map[string]string{}
+	sawForHead := false
+	for _, r := range runs {
+		if r.Shadow || !isPrePRDeterministicOrCustomStage(r.Stage) {
+			continue
+		}
+		if strings.TrimSpace(r.CommitSHA) != headSHA {
+			continue
+		}
+		sawForHead = true
+		if r.CheckID == model.QACheckIDS3OperatorBypass && r.Verdict == "bypassed" {
+			return false
+		}
+		latest[r.CheckID] = r.Verdict
+	}
+	if sawForHead {
+		for _, v := range latest {
+			if v == "fail" || v == "error" {
+				return true
+			}
+		}
+		return false
+	}
+	// Handle early S3 infrastructure errors recorded with an empty CommitSHA when
+	// no commit-specific S3 check run has been recorded yet.
+	for i := len(runs) - 1; i >= 0; i-- {
+		r := runs[i]
+		if r.Shadow || !isPrePRDeterministicOrCustomStage(r.Stage) {
+			continue
+		}
+		if strings.TrimSpace(r.CommitSHA) != "" {
+			return false
+		}
+		if r.CheckID == model.QACheckIDS3OperatorBypass && r.Verdict == "bypassed" {
+			return false
+		}
+		if r.Verdict == "fail" || r.Verdict == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+// BypassS3AndOpenPullRequestForTask executes an explicit human operator override of a
+// blocked S3 staging gate: it verifies the task is open and blocked at S3 on the target
+// (optionally pinned) commit, promotes grain-qa-stage/<id> (when present) to the task's
+// PR branch, strips unattended auto-merge so a person must still approve merging,
+// records an auditable qa:s3-operator-bypass check run, opens/updates the pull request,
+// runs post-PR S5 risk triage, and leaves an audit note on the task.
+func BypassS3AndOpenPullRequestForTask(
+	ctx context.Context,
+	store *model.Store,
+	client github.Client,
+	task model.Task,
+	bypassedBy, reason, expectedHead string,
+) (PullRequestStatus, error) {
+	if store == nil || client == nil || task.Target == nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: cannot bypass S3 gate without store, git client, and target repository")
+	}
+	fresh, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		return PullRequestStatus{}, err
+	}
+	if fresh == nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: task %s not found", task.ID)
+	}
+	task = *fresh
+	if task.Target == nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: task %s has no target repository", task.ID)
+	}
+	if closed, cErr := taskClosed(ctx, store, task.ID); cErr != nil {
+		return PullRequestStatus{}, cErr
+	} else if closed {
+		return PullRequestStatus{}, s3BypassConflictError{msg: fmt.Sprintf("task %s is closed and cannot bypass the S3 quality gate", task.ID)}
+	}
+
+	bypassedBy = strings.TrimSpace(bypassedBy)
+	if bypassedBy == "" {
+		bypassedBy = "operator"
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: bypassing the S3 quality gate requires a reason")
+	}
+
+	stageBranch := model.QAStageBranchName(task.ID)
+	prBranch := task.BranchName()
+	stageHead, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, stageBranch)
+	if err != nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: checking staging branch %s: %w", stageBranch, err)
+	}
+
+	var headSHA string
+	fromStage := false
+	if stageHead != nil && strings.TrimSpace(stageHead.SHA) != "" {
+		headSHA = strings.TrimSpace(stageHead.SHA)
+		fromStage = true
+	} else {
+		if model.TaskPullRequest(task) != nil {
+			return PullRequestStatus{}, s3BypassConflictError{
+				msg: fmt.Sprintf("task %s already has an open pull request and no staged commits on %s are awaiting S3 promotion; use merge gate controls to address QA findings on an open pull request", task.ID, stageBranch),
+			}
+		}
+		prHead, pErr := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, prBranch)
+		if pErr != nil {
+			return PullRequestStatus{}, fmt.Errorf("orchestrator: checking task branch %s: %w", prBranch, pErr)
+		}
+		if prHead == nil || strings.TrimSpace(prHead.SHA) == "" {
+			return PullRequestStatus{}, fmt.Errorf("orchestrator: neither staging branch %s nor task branch %s exists on %s", stageBranch, prBranch, *task.Target)
+		}
+		headSHA = strings.TrimSpace(prHead.SHA)
+	}
+
+	expectedHead = strings.ToLower(strings.TrimSpace(expectedHead))
+	if expectedHead != "" && !matchesPinnedHead(headSHA, expectedHead) {
+		return PullRequestStatus{}, s3BypassConflictError{
+			msg: fmt.Sprintf("branch head moved since you reviewed it: expected %s, actual head is %s; refresh and verify the latest commit before bypassing S3",
+				shortSHA(expectedHead), shortSHA(headSHA)),
+		}
+	}
+
+	runs, err := store.ListQACheckRunsForTask(ctx, task.ID)
+	if err != nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: reading QA check runs for task %s: %w", task.ID, err)
+	}
+	if !isS3BlockedForCommit(runs, headSHA) {
+		return PullRequestStatus{}, s3BypassConflictError{
+			msg: fmt.Sprintf("commit %s on task %s is not blocked by an S3 quality gate", shortSHA(headSHA), task.ID),
+		}
+	}
+
+	if fromStage {
+		promotedSHA, pErr := promoteQAStageBranch(client, *task.Target, stageBranch, prBranch, headSHA)
+		if pErr != nil {
+			return PullRequestStatus{}, fmt.Errorf("orchestrator: promoting staging branch %s to %s: %w", stageBranch, prBranch, pErr)
+		}
+		headSHA = promotedSHA
+	}
+
+	updateCtx := model.WithAutoMergeChange(ctx, model.Principal{Kind: model.PrincipalHuman, ID: bypassedBy}, "S3 pre-PR quality gate bypassed by operator: "+reason)
+	if uErr := store.UpdateTask(updateCtx, task.ID, func(t *model.Task) error {
+		t.Links = withoutTaskLinkKinds(t.Links, model.LinkQAHold)
+		if model.TaskPullRequest(*t) == nil {
+			model.ClearReviewFindingsForGate(t, model.GateQA)
+		}
+		model.AwaitPersonForAutoMerge(t, "S3 pre-PR quality gate bypassed by operator; human review required before merge")
+		return nil
+	}); uErr != nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: updating task QA state for S3 bypass: %w", uErr)
+	}
+	if updated, gErr := store.GetTask(ctx, task.ID); gErr == nil && updated != nil {
+		task = *updated
+	}
+
+	var expID, armID, flowHash string
+	engineRev := qa.QAEngineRev
+	assign, _, aErr := resolve.ActiveQAResolutionForTask(ctx, store, task.ID)
+	if aErr == nil && assign != nil {
+		expID = assign.ExperimentID
+		armID = assign.ArmID
+		flowHash = assign.FlowHash
+		if assign.QAEngineRev > 0 {
+			engineRev = assign.QAEngineRev
+		}
+	}
+	detailMap := map[string]string{
+		"bypassedBy": bypassedBy,
+		"reason":     reason,
+	}
+	if expectedHead != "" {
+		detailMap["expectedHead"] = expectedHead
+	}
+	detailBytes, _ := json.Marshal(detailMap)
+	if _, rErr := store.RecordQACheckRun(ctx, model.QACheckRun{
+		TaskID:       task.ID,
+		CommitSHA:    headSHA,
+		Stage:        "S3",
+		CheckID:      model.QACheckIDS3OperatorBypass,
+		Arm:          model.QAArmTreatment,
+		Shadow:       false,
+		Verdict:      "bypassed",
+		DetailJSON:   string(detailBytes),
+		ExperimentID: expID,
+		ArmID:        armID,
+		FlowHash:     flowHash,
+		QAEngineRev:  engineRev,
+		Model:        task.Model,
+	}, nil); rErr != nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: recording S3 operator bypass: %w", rErr)
+	}
+
+	status, err := OpenPullRequestForTask(ctx, store, client, task)
+	if err != nil {
+		return PullRequestStatus{}, fmt.Errorf("orchestrator: opening pull request after S3 bypass: %w", err)
+	}
+
+	if assign != nil {
+		var prFiles []string
+		if task.Target != nil && status.PullRequest.Number > 0 {
+			if f, lErr := client.ListPullRequestFiles(task.Target.StoredOwner(), task.Target.Name, status.PullRequest.Number); lErr == nil {
+				prFiles = f
+			}
+		}
+		EvaluateAndApplyQATriage(ctx, store, client, task, assign, headSHA, prFiles, false)
+	}
+	maybeEvaluateQACircuitBreakerThrottled(ctx, store, client, time.Now().UTC())
+
+	now := time.Now().UTC()
+	var note string
+	if status.PullRequest.Number > 0 {
+		note = fmt.Sprintf("Operator `%s` bypassed the S3 pre-PR quality gate on `%s` and opened PR #%d (auto-merge disabled pending human review).\n\nReason: %s",
+			bypassedBy, shortSHA(headSHA), status.PullRequest.Number, reason)
+	} else {
+		note = fmt.Sprintf("Operator `%s` bypassed the S3 pre-PR quality gate on `%s` and promoted `%s` to `%s` (auto-merge disabled pending human review).\n\nReason: %s",
+			bypassedBy, shortSHA(headSHA), stageBranch, prBranch, reason)
+	}
+	_ = noteOnTask(ctx, store, task.ID, note, now)
+	return status, nil
 }
 
 func runFreshContextS4(
@@ -2103,11 +2430,15 @@ func EvaluateAndApplyQATriage(
 		risk.Reasons = []string{fmt.Sprintf("blast tier %s", risk.Tier)}
 	}
 
+	specAtt := loadTaskSpecAttachments(ctx, store, task, "")
 	comp := qa.AssessTaskComplexity(qa.ComplexityInput{
-		Title:       task.Title,
-		Body:        task.Body,
-		ReadsCount:  len(task.Reads),
-		WritesCount: max(len(task.Writes), len(prFiles)),
+		Title:                   task.Title,
+		Body:                    task.Body,
+		AttachmentText:          specAtt.Text,
+		MarkdownAttachmentCount: specAtt.MarkdownCount,
+		ReadsCount:              len(task.Reads),
+		WritesCount:             max(len(task.Writes), len(prFiles)),
+		PathHints:               extractCandidatePathsWithSpec(task, assign.Spec, "", specAtt.Text),
 	}, nil)
 
 	var autoTiers, humTiers []qa.BlastTier

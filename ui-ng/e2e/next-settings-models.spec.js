@@ -326,7 +326,8 @@ test.describe("Settings → Models default and fallback models", () => {
         );
       }
 
-      // Choose Codex, verify no empty "Model default" option, and pick xhigh.
+      // Choose Codex, verify no empty "Model default" option, and pick
+      // minimal -- an effort Codex offers and agy (low..max) does not.
       await card.getByTestId("picker-model-setting-model").click();
       await page
         .locator(
@@ -338,10 +339,10 @@ test.describe("Settings → Models default and fallback models", () => {
       await expect(
         page.getByTestId("select-model-setting-effort-opt-"),
       ).toHaveCount(0);
-      await page.getByTestId("select-model-setting-effort-opt-xhigh").click();
-      await expect(effortBtn).toContainText("xhigh");
+      await page.getByTestId("select-model-setting-effort-opt-minimal").click();
+      await expect(effortBtn).toContainText("minimal");
 
-      // Switch to an Antigravity model: xhigh reconciles to high.
+      // Switch to an Antigravity model: minimal reconciles to high.
       await card.getByTestId("picker-model-setting-model").click();
       await page
         .locator(
@@ -349,7 +350,7 @@ test.describe("Settings → Models default and fallback models", () => {
         )
         .click();
       await expect(effortBtn).toContainText("high");
-      await expect(effortBtn).not.toContainText("xhigh");
+      await expect(effortBtn).not.toContainText("minimal");
       await addBtn.click();
       await page.getByTestId("settings-save-btn").click();
       await expect(page.getByTestId("settings-save-bar")).toBeHidden();

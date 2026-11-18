@@ -19,9 +19,11 @@ package gitproxy
 // has (docs/git-hosts.md section 12 describes the seam).
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -511,6 +513,69 @@ func TestGGHGHECheckRunsMergeBranchAndRerequestRoundTrip(t *testing.T) {
 	if got := strings.Join(argv[3], " "); !strings.Contains(got, "--method POST") ||
 		strings.Contains(got, "--input") || !strings.HasSuffix(got, " repos/o/r/check-runs/91/rerequest") {
 		t.Fatalf("RerequestCheckRun argv = %q", got)
+	}
+}
+
+// A 304 Not Modified conditional revalidation (for example GET
+// repos/<owner>/<repo> or .../branches/main with If-None-Match) has no body;
+// closing the response must not cancel the tool mid-exit and log spurious
+// `context canceled` failures.
+func TestCommandForge304NotModifiedDoesNotCancelTool(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	// Replace forgecli with one that sleeps briefly after printing 304 headers
+	// to reproduce real command-backed forge CLI teardown timing.
+	binDir := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))[0]
+	script := `#!/bin/sh
+S="` + state + `"
+if [ "$1 $2" = "auth token" ]; then
+  echo "forgecli-token-$GH_HOST"
+  exit 0
+fi
+n=$(grep -c . "$S/api-n" 2>/dev/null || echo 0)
+n=$((n+1))
+echo x >> "$S/api-n"
+if [ "$n" = "1" ]; then
+  printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nETag: "v1"\r\n\r\n{"default_branch":"main","commit":{"sha":"3890245000000000000000000000000000000000","commit":{"message":"head"}}}'
+  exit 0
+fi
+printf 'HTTP/2.0 304 Not Modified\r\nETag: "v1"\r\n\r\n'
+sleep 0.15
+echo exited-cleanly > "$S/exit-marker-$n"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "forgecli"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prevOut)
+
+	transport, err := c.ForgeTransportOn("depot", depotHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, ok := transport.(*github.RealTransport)
+	if !ok || rt.Client == nil || rt.Client.Timeout != forgeAPITimeout {
+		t.Fatalf("ForgeTransportOn ambient timeout = %v, want %v", rt.Client.Timeout, forgeAPITimeout)
+	}
+	client := github.NewClient(transport, nil)
+
+	// 1st call caches the ETag; 2nd call sends If-None-Match and receives 304.
+	if def, err := client.DefaultBranch("acme", "widgets"); err != nil || def != "main" {
+		t.Fatalf("1st DefaultBranch = (%q, %v), want (main, nil)", def, err)
+	}
+	if def, err := client.DefaultBranch("acme", "widgets"); err != nil || def != "main" {
+		t.Fatalf("2nd DefaultBranch (304) = (%q, %v), want (main, nil)", def, err)
+	}
+
+	if _, err := os.Stat(filepath.Join(state, "exit-marker-2")); err != nil {
+		t.Fatalf("tool was killed before clean exit on 304: %v\nlogs:\n%s", err, logBuf.String())
+	}
+	if strings.Contains(logBuf.String(), "context canceled") {
+		t.Fatalf("unexpected context canceled in logs on 304 revalidation:\n%s", logBuf.String())
 	}
 }
 

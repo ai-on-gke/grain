@@ -22,13 +22,13 @@ import (
 )
 
 func TestBuiltInEngineeringWorkflowV4AndPreservedV1ToV3Hashes(t *testing.T) {
-	// Verify existing built-in hashes remain resolvable with engine rev 5.
+	// Verify existing built-in hashes remain resolvable with engine rev 7.
 	wantBuiltInHashes := map[string]string{
-		"golden-v1-minimal@1":     "builtin:golden-v1-minimal@1#5",
-		"golden-v2@1":             "builtin:golden-v2@1#5",
-		"golden-v2-skill-only@1":  "builtin:golden-v2-skill-only@1#5",
-		"golden-v2-checks-only@1": "builtin:golden-v2-checks-only@1#5",
-		"golden-v3@1":             "builtin:golden-v3@1#5",
+		"golden-v1-minimal@1":     "builtin:golden-v1-minimal@1#7",
+		"golden-v2@1":             "builtin:golden-v2@1#7",
+		"golden-v2-skill-only@1":  "builtin:golden-v2-skill-only@1#7",
+		"golden-v2-checks-only@1": "builtin:golden-v2-checks-only@1#7",
+		"golden-v3@1":             "builtin:golden-v3@1#7",
 	}
 	for ref, wantHash := range wantBuiltInHashes {
 		b, ok := LookupBuiltInOrRegisteredVersion(ref)
@@ -402,6 +402,32 @@ func TestCanonicalThreeWorkflowsCatalogAndStandardDAG(t *testing.T) {
 	} {
 		if b, found := LookupBuiltInOrRegisteredVersion(legacyRef); !found || b.Key == "" {
 			t.Fatalf("legacy workflow ref %q failed resolution: (%+v, %v)", legacyRef, b, found)
+		}
+	}
+}
+
+func TestCanonicalBuiltInWorkflowsSafeForGenericRepos(t *testing.T) {
+	for _, ref := range []string{"standard-workflow@1", "fast-baseline@1", "gates-only@1"} {
+		b, ok := LookupBuiltInOrRegisteredVersion(ref)
+		if !ok {
+			t.Fatalf("%s not found", ref)
+		}
+		ti, ok := b.Resolved.Rule(RuleTestIntegrityGuard)
+		if !ok || !ti.Enabled || ti.Severity != "blocking" {
+			t.Errorf("%s %s = (%+v, %v), want enabled blocking universal floor", ref, RuleTestIntegrityGuard, ti, ok)
+		}
+		for _, opinionated := range []string{RuleStrictConfigDecoder, RuleUIBudgetAndSpecFloor, RuleSiblingExportHazard} {
+			r, found := b.Resolved.Rule(opinionated)
+			if !found {
+				t.Errorf("%s missing rule %s", ref, opinionated)
+				continue
+			}
+			if r.Severity == "blocking" {
+				t.Errorf("%s has repo-opinionated rule %s as blocking by default; want non-blocking (warn/shadow)", ref, opinionated)
+			}
+		}
+		if ref == "standard-workflow@1" && len(b.Resolved.RiskOverrides) != 0 {
+			t.Errorf("standard-workflow@1 should not hardcode Grain-specific RiskOverrides, got %+v", b.Resolved.RiskOverrides)
 		}
 	}
 }
