@@ -225,10 +225,21 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
       state: this.taskState(),
       failureSummary: this.failureSummary(),
     });
-    const ok = await this.sessions.sendTo(DIRECTOR_ID, shaped, ev.attachments);
-    if (ok) {
-      this.prompt.set("");
-      this.staged.set([]);
+    if (this.sessions.isBusy("send")) return;
+    // Clear the composer before the POST, since it stays editable while a
+    // send is in flight: whatever is typed or staged meanwhile must survive
+    // this send finishing. A failed send puts the original back, unless the
+    // composer has been filled again since.
+    const prevBody = ev.body;
+    const prevAttachments = ev.attachments;
+    this.prompt.set("");
+    this.staged.set([]);
+    const ok = await this.sessions.sendTo(DIRECTOR_ID, shaped, prevAttachments);
+    if (!ok) {
+      if (!this.prompt()) this.prompt.set(prevBody);
+      if (this.staged().length === 0 && prevAttachments.length > 0) {
+        this.staged.set(prevAttachments);
+      }
     }
   }
 }
