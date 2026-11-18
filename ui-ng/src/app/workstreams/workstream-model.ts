@@ -14,7 +14,7 @@
 
 import type { Task } from "../api/models";
 import { isMerged, submitBlock } from "../shared/gates";
-import { ago, stateLabel } from "../tasks/task-view";
+import { ago, taskStateLabel } from "../tasks/task-view";
 
 export type InitiatorKind = "user" | "system";
 export type SystemKind =
@@ -865,7 +865,7 @@ function buildWorkstream(
             ? "Done"
             : cls.category === "blocked" && t.state === "queued"
               ? "Blocked"
-              : stateLabel(t.state),
+              : taskStateLabel(t),
       activityText: nodeActivityText(t),
       createdMs,
       updatedMs,

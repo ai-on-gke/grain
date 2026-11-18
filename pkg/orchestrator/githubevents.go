@@ -228,6 +228,7 @@ func handlePullRequestEvent(ctx context.Context, deps Deps, repo model.RepoRef,
 		if err != nil || task == nil {
 			return err
 		}
+		recordGatePRSource(ctx, deps.Store, task.ID, ref, github.PullRequestDetail{Number: ev.Number, HeadSHA: ev.HeadSHA, State: "closed", Merged: ev.Merged, MergedBy: ""}, now, "verified-webhook-sender:"+ev.SenderLogin)
 		return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
 			if ev.Merged {
 				if o.PrMergedAt == nil {
