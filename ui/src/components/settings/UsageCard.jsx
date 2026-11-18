@@ -53,7 +53,9 @@ const MODES = [
 // /api/usage, docs/connections-and-models.md "Token usage and budgets"):
 // per connection and model, what the current window used, the limit
 // (configured, or learned from a provider's refusal), what is left, the
-// next reset, the burn rate and the workers the remainder sustains; the
+// next reset, the burn rate and the workers the remainder sustains --
+// and beside the interval, the last 7 days' usage against the weekly
+// limit, which a spent week shows however little the interval used; the
 // deployment rollup; the advisory estimate and default-model warnings;
 // and the concurrency mode (PUT /api/usage/settings). Budgets are set
 // with `grain usage -budget` or the API.
@@ -167,6 +169,8 @@ export default function UsageCard({ showError }) {
                 <TableCell align="right">Limit</TableCell>
                 <TableCell align="right">Left</TableCell>
                 <TableCell>Reset</TableCell>
+                <TableCell align="right">Week</TableCell>
+                <TableCell>Week reset</TableCell>
                 <TableCell align="right">Burn/h</TableCell>
                 <TableCell align="right">Sustains</TableCell>
               </TableRow>
@@ -194,13 +198,33 @@ export default function UsageCard({ showError }) {
                   </TableCell>
                   <TableCell align="right">
                     {s.pausedUntil
-                      ? "Paused"
+                      ? s.pauseHorizon === "weekly"
+                        ? "Paused (weekly limit)"
+                        : "Paused"
                       : s.limit
                         ? formatTokens(s.remaining)
                         : "—"}
                   </TableCell>
                   <TableCell>
                     {s.resetAt ? formatMoment(s.resetAt, zone) : "—"}
+                  </TableCell>
+                  <TableCell
+                    align="right"
+                    data-testid="usage-weekly"
+                    sx={
+                      s.weeklyPausedUntil
+                        ? { color: "error.main", fontWeight: 600 }
+                        : undefined
+                    }
+                  >
+                    {formatTokens(s.weeklyUsed)}
+                    {s.weeklyLimit ? ` / ${formatTokens(s.weeklyLimit)}~` : ""}
+                    {s.weeklyPausedUntil ? " · weekly limit reached" : ""}
+                  </TableCell>
+                  <TableCell>
+                    {s.weeklyResetAt
+                      ? formatMoment(s.weeklyResetAt, zone)
+                      : "—"}
                   </TableCell>
                   <TableCell align="right">
                     {formatTokens(s.burnPerHour)}

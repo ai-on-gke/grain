@@ -62,7 +62,9 @@ const CredentialSecretPrefix = "github-credential-"
 func CredentialSecretName(name string) string { return CredentialSecretPrefix + name }
 
 // MigratedSuffix is appended to a credential file once its contents are
-// in the store: the rollback copy, deleted one release after this one.
+// in the store. The copy is deleted on the daemon's next start, once the
+// store is seen to hold the value (DeleteMigratedCopies,
+// RetireMigratedCopy).
 const MigratedSuffix = ".migrated"
 
 // CredentialsInFilesEnv, set to "files", keeps every CredentialSet in this
@@ -336,7 +338,7 @@ func (c *CredentialSet) MigrateFilesToStore() ([]MigratedFile, error) {
 			continue
 		}
 		log.Printf("gitproxy: moved git credential %q from %s into the secrets store (secret %s, key %s); "+
-			"the file is kept as %s for a rollback and can be deleted once this release is settled",
+			"the file is kept as %s until the next start finds the store holding it",
 			name, path, CredentialSecretName(name), storeKeyFor(suffix), path+MigratedSuffix)
 		moved = append(moved, MigratedFile{Name: name, File: path})
 		c.forget(name)
@@ -368,6 +370,120 @@ func (c *CredentialSet) migrateOne(name, suffix, path string) error {
 		return errors.New("the store read back something other than what was written")
 	}
 	return os.Rename(path, path+MigratedSuffix)
+}
+
+// ErrNoStoreValue is RetireMigratedCopy's answer for a rollback copy whose
+// secret the store does not hold: the copy is the only one there is, so
+// it is kept.
+var ErrNoStoreValue = errors.New("the secrets store does not hold this value")
+
+// RetireMigratedCopy deletes copyPath, a <file>.migrated rollback copy a
+// move into the secrets store left behind, once the store verifiably
+// holds the value it stands for. The design kept these copies for one
+// release (secrets-key-protection §6); a rollback no longer needs them,
+// since GRAIN_GITHUB_CREDENTIALS=files writes every file back from the
+// store's own value.
+//
+// stored reads the value from the store, ok false when it holds none.
+// It must read the store itself, not a cache, since that read is the
+// verification. same compares the copy's bytes with it (bytes.Equal when
+// nil); a copy whose value the store holds but differently -- the
+// credential was changed after the move -- is superseded and deleted too,
+// since a rollback restores the store's value, never the copy's.
+//
+// A copy is kept, with an error, when the store cannot be read
+// (stored's error) or holds no value (ErrNoStoreValue). Each deletion,
+// and each copy kept, is logged here; a missing copy does nothing.
+// ref names the store value in the logs ("secret/key").
+func RetireMigratedCopy(copyPath, ref string, stored func() ([]byte, bool, error), same func(copy, stored []byte) bool) (bool, error) {
+	data, err := os.ReadFile(copyPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		log.Printf("grain: keeping the rollback copy %s: reading it: %v", copyPath, err)
+		return false, err
+	}
+	value, ok, err := stored()
+	if err != nil {
+		log.Printf("grain: keeping the rollback copy %s: could not read %s from the secrets store to check it: %v",
+			copyPath, ref, err)
+		return false, err
+	}
+	original := strings.TrimSuffix(copyPath, MigratedSuffix)
+	if !ok {
+		log.Printf("grain: WARNING: keeping the plaintext rollback copy %s: the secrets store holds no %s, so this "+
+			"file is the only copy of it. Rename it back to %s to have the next start move it into the store, "+
+			"or delete it if it is no longer wanted", copyPath, ref, original)
+		return false, ErrNoStoreValue
+	}
+	if same == nil {
+		same = bytes.Equal
+	}
+	matches := same(data, value)
+	if err := os.Remove(copyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("grain: deleting the rollback copy %s: %v", copyPath, err)
+		return false, err
+	}
+	if matches {
+		log.Printf("grain: deleted the plaintext rollback copy %s: the secrets store holds the same value as %s",
+			copyPath, ref)
+	} else {
+		log.Printf("grain: deleted the plaintext rollback copy %s: the secrets store holds a newer value as %s, "+
+			"which is what a rollback restores", copyPath, ref)
+	}
+	return true, nil
+}
+
+// DeleteMigratedCopies retires every <name>.token.migrated,
+// <name>.app.json.migrated and <name>.ssh.json.migrated copy
+// MigrateFilesToStore left in this set's directory (RetireMigratedCopy):
+// deleted once the store holds that credential, read from the store's
+// file rather than this set's snapshot, and kept, with a warning, while
+// it does not. A set with no store deletes nothing: its copies are what
+// RestoreFilesFromStore renames back.
+func (c *CredentialSet) DeleteMigratedCopies() ([]string, error) {
+	if c.creds == nil {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(c.dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var deleted []string
+	var errs []error
+	for _, e := range entries {
+		orig, ok := strings.CutSuffix(e.Name(), MigratedSuffix)
+		if !ok || e.IsDir() {
+			continue
+		}
+		name, suffix, ok := storedFileName(orig)
+		if !ok || namesOneFile(name) != nil {
+			continue
+		}
+		secret, key := CredentialSecretName(name), storeKeyFor(suffix)
+		store := c.creds.store
+		path := filepath.Join(c.dir, e.Name())
+		gone, err := RetireMigratedCopy(path, secret+"/"+key, func() ([]byte, bool, error) {
+			has, err := store.Has(secret, key)
+			if err != nil || !has {
+				return nil, false, err
+			}
+			v, err := store.Resolve(context.Background(), secret+"/"+key)
+			return []byte(v), err == nil, err
+		}, nil)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", path, err))
+			continue
+		}
+		if gone {
+			deleted = append(deleted, path)
+		}
+	}
+	return deleted, errors.Join(errs...)
 }
 
 // RestoreFilesFromStore is MigrateFilesToStore's reversal: every

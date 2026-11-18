@@ -186,9 +186,10 @@ type AddendaAcknowledger interface {
 type runAddenda struct {
 	reader AddendaReader
 
-	mu      sync.Mutex
-	after   int64
-	unacked int64
+	mu         sync.Mutex
+	after      int64
+	unacked    int64
+	ackBlocked bool // a truncated batch leaves a gap until the next dispatch
 }
 
 // AnnounceAddenda tells r to carry what a person says on this run's task
@@ -286,7 +287,12 @@ func (a *runAddenda) poll(ctx context.Context) []Addendum {
 		a.after = addendum.ID
 		fresh = append(fresh, addendum)
 	}
-	if len(fresh) > 0 && a.after > a.unacked {
+	if len(renderAddendaNotice(fresh)) > maxAddendaNoticeBytes() {
+		// Later notices cannot acknowledge across words this run never saw.
+		// Leave PR receipts pending for their full next-dispatch section.
+		a.ackBlocked = true
+	}
+	if len(fresh) > 0 && !a.ackBlocked && a.after > a.unacked {
 		a.unacked = a.after
 	}
 	a.mu.Unlock()
@@ -313,6 +319,10 @@ func (a *runAddenda) poll(ctx context.Context) []Addendum {
 // result (telemetry.go's trailingParagraphs), and it is also the cheapest
 // possible statement of where the addendum ends.
 func addendaNotice(addenda []Addendum) string {
+	return truncateAddendaNotice(renderAddendaNotice(addenda))
+}
+
+func renderAddendaNotice(addenda []Addendum) string {
 	if len(addenda) == 0 {
 		return ""
 	}
@@ -355,7 +365,7 @@ func addendaNotice(addenda []Addendum) string {
 			b.WriteString("\n")
 			b.WriteString(quoteAddendum(addendum.Body))
 		}
-		return truncateAddendaNotice(b.String())
+		return b.String()
 	}
 
 	b.WriteString(mixedAddendaNoticeMarker)
@@ -374,7 +384,7 @@ func addendaNotice(addenda []Addendum) string {
 		b.WriteString("\n")
 		b.WriteString(quoteAddendum(addendum.Body))
 	}
-	return truncateAddendaNotice(b.String())
+	return b.String()
 }
 
 func addendumAuthorKind(a Addendum) model.PrincipalKind {

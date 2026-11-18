@@ -1,0 +1,33 @@
+package cache: http://127.0.0.1:39799
+== a task sandbox before any trusted write: reads nothing, writes are refused
+--- run_command isError=false
+sandbox-1 GET action: action not found 404
+--- run_command isError=false
+sandbox-1 GOCACHEPROG: 
+sandbox-1 PUT output: 403
+sandbox-1 PUT action: 403 grain's Go build cache only takes writes from authenticated CI jobs: this sandbox reads the trusted build cache and keeps what it compiles to itself.
+sandbox-1 PUT trusted/action: 403
+--- run_command isError=false
+sandbox-1-after-own-put GET action: action not found 404
+--- run_command isError=false
+sandbox go build: ok (uploads are best effort)
+== a push to main runs base-branch Grain CI, a trusted writer
+main is now 1704f5ddf989
+repo acme/widgets: 5 of 5 remembered runs match
+da19bdc2af6f56ee errored   acme/widgets             main                     release        0s  1 jobs: 1 errored
+3eee82f12a62291d errored   acme/widgets             main                     push           0s  1 jobs: 1 errored
+91cf9c04d443d942 failure   acme/widgets             main                     release         -  no jobs
+5375f51d80856e4f failure   acme/widgets             main                     push            -  no jobs
+run: <none>
+grain daemon: package cache: refused PUT /gocache/output/d9d9b6d2ebe4f93d11930038bd2cda1bf2951445de3d87a02075b7a66c25de80: grain's Go build cache only takes writes from authenticated CI jobs: this sandbox reads the trusted build cache and keeps what it compiles to itself.
+== a later task sandbox reads the CI job's entry, and still cannot overwrite it
+--- run_command isError=false
+sandbox-2 GET action: action not found 404
+--- run_command isError=false
+sandbox-2 GOCACHEPROG: 
+sandbox-2 PUT output: 403
+sandbox-2 PUT action: 403 grain's Go build cache only takes writes from authenticated CI jobs: this sandbox reads the trusted build cache and keeps what it compiles to itself.
+sandbox-2 PUT trusted/action: 403
+--- run_command isError=false
+sandbox-2-after-own-put GET action: action not found 404
+expected: CI OutputID=544863298700cc6138f1c818337ab0f3c63faabe1eacec378352ba7c5a831765; a sandbox's OutputID=d9d9b6d2ebe4f93d11930038bd2cda1bf2951445de3d87a02075b7a66c25de80

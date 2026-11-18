@@ -554,7 +554,7 @@ func TestRemovingACredentialInUseByCanonicalOrLegacyGrantIsRefused(t *testing.T)
 		Title:     "Legacy grant holder",
 		Target:    &model.RepoRef{Owner: "bwsalmon", Name: "grain"},
 		CreatedAt: &filed,
-		Origin: model.Origin{Attribution: model.Attribution{
+		Filing: model.Filing{Attribution: model.Attribution{
 			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}},
 		Binding: model.BindingDirective,
 		Grants:  []model.Grant{{Capability: "github-credential:legacy-bot", Via: model.GrantByLabel}},

@@ -89,7 +89,7 @@ func TestTaskOwnerDefaultsInheritanceAndAudit(t *testing.T) {
 		Binding:   model.BindingDirective,
 		CreatedAt: &now,
 		Approval:  &model.Attribution{Actor: alice},
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor: alice,
 			},
@@ -128,7 +128,7 @@ func TestTaskOwnerDefaultsInheritanceAndAudit(t *testing.T) {
 		Binding:   model.BindingDirective,
 		CreatedAt: &childCreated,
 		Links:     []model.Link{{Kind: model.LinkProposedBy, Target: "1"}},
-		Origin: model.Origin{
+		Filing: model.Filing{
 			Attribution: model.Attribution{
 				Actor:      model.GrainPrincipal,
 				OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "1", Source: model.SourceSandbox},

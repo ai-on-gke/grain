@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { provideHttpClient, withFetch } from "@angular/common/http";
+import {
+  provideHttpClient,
+  withFetch,
+  withInterceptors,
+} from "@angular/common/http";
 import {
   type ApplicationConfig,
   provideZoneChangeDetection,
@@ -20,10 +24,15 @@ import {
 import {
   provideRouter,
   withComponentInputBinding,
+  withNavigationErrorHandler,
   withPreloading,
 } from "@angular/router";
 import { routes } from "./app.routes";
-import { IdleRoutePreload } from "./shell/route-preload";
+import { connectionInterceptor } from "./services/connection.service";
+import {
+  IdleRoutePreload,
+  staleChunkErrorHandler,
+} from "./shell/route-preload";
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -32,7 +41,8 @@ export const appConfig: ApplicationConfig = {
       routes,
       withComponentInputBinding(),
       withPreloading(IdleRoutePreload),
+      withNavigationErrorHandler(staleChunkErrorHandler),
     ),
-    provideHttpClient(withFetch()),
+    provideHttpClient(withFetch(), withInterceptors([connectionInterceptor])),
   ],
 };

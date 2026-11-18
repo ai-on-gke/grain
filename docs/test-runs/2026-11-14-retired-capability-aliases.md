@@ -34,7 +34,7 @@ STORE=sqlite $D/refusals.sh > $D/out/refusals-sqlite.txt
 | **F2** | 1–2 (store upgrade) | **No row silently loses a grant: v3.5.0 never stored the bare names.** On both stores, v3.5.0 rewrote every accepted bare name to its canonical grant on every API save path, before anything was written. That covers task, template and schedule grants, deployment and repo `default_capabilities`, and repo `ci_capabilities` (`out/seed-*.txt`). It refused the rest outright: `grain-ci`, `gcp-key*`/`gemini-key` (no gcp permission set configured), and `image-signing`/`registry-push` on a task. So HEAD opens a store written this way unchanged and every grant still works. **No schema migration is needed.** | No change. |
 | **F3** | 1–2 | `local-scripts:<name>` is the one bare name v3.5.0 stored as written. It is a runtime retirement: `migrateLocalScripts` rewrites it onto `host-script` when the declaration exists. Without a declaration it granted nothing on v3.5.0 either. On HEAD the task is parked with a visible "no provider" refusal (task 8). | Unchanged behaviour. Its refusal stays "unknown capability", which is correct: `RetiredGrantsBecame` has no canonical grant for it. |
 | **F4** | 5 (UI) | A bare name written straight into `repo_config.ci_capabilities` (`grain-ci,self-debug`) appears raw in `GET /api/repos/acme/widgets/settings`. `/next/repos/acme/widgets/ci` does not show it at all. Likewise `GET /api/config` drops bare `grain-ci` and `local-scripts:deploy` from `defaultCapabilities`, though the stored row keeps them. Neither grants anything, and nothing on v3.5.0's API writes such rows (F2), so the hiding is harmless. But such a row can only be seen or removed with SQL or the API. | Reported, not fixed (cosmetic; reachable only by hand-written rows). |
-| **F5** | 3 (`propose_task`) | `propose_task` with `capabilities: ["self-debug","grain-ci"]` answered "Recorded" inside the run. The filed proposal had not appeared by the time the run's task sat in `awaiting_submit`, and the daemon log has no line about it. I could not tell, in the time available, whether it is filed later or refused at relay. | **Not determined.** See "Not walked". |
+| **F5** | 3 (`propose_task`) | `propose_task` with `capabilities: ["self-debug","grain-ci"]` answered "Recorded" inside the run. The filed proposal had not appeared by the time the run's task sat in `awaiting_submit`, and the daemon log has no line about it. I could not tell, in the time available, whether it is filed later or refused at relay. | **Resolved in [the follow-up walk](#follow-up-walk-task-5896)** (F5 there): filed, holding the bare rows, and held for a person. Fixed. |
 
 ## Results by item
 
@@ -70,11 +70,11 @@ Nothing that used to grant was silently dropped. The two stores behave the same:
 | `grain-ci` anywhere on a task | `unknown capability grain-ci` | `…it became …grain#ci={}. …cannot be attached by hand … Set the CI Mode instead` |
 | `image-signing` on a task | `unknown capability image-signing` | `…it became …release#image-signing={}. … is a CI capability, not a task grant …` |
 | `request_access` (in a run) | `requests[0] (grant self-debug): unknown capability self-debug` | goes through the same `capabilityRefusal`, so it names the canonical grant |
-| `.grain/` CI job declaration | already `CI capability "grain-ci" is refused: it was retired, and is declared now as …` (`pkg/daemon/ci.go`) | unchanged; not walked live (covered by `pkg/daemon/ci_grant_spelling_test.go`) |
+| `.grain/` CI job declaration | `this job requires the capability "self-debug" and this deployment does not provide it for acme/widgets` (`pkg/workflows`) | names what it became; walked live in [the follow-up](#follow-up-walk-task-5896) (F7) |
 
 No path answered 500 and none dropped the name silently (`out/refusals-*.txt`; the SQLite and PostgreSQL files are byte-identical).
 
-### 4. Local policy, `settings/capabilities.yml` and `grain/config` import — not walked live
+### 4. Local policy, `settings/capabilities.yml` and `grain/config` import — walked in [the follow-up](#follow-up-walk-task-5896)
 
 I ran out of time before item 4. Coverage remains CI's: `pkg/policy/policy_test.go` (`deny: [self-debug]`, alias globs), the catalogue binding in `pkg/ui/capability_status.go`, and the `pkg/staterepo` import tests that upgrade through `RetiredGrantsBecame`. F2 makes the import path matter less, because v3.5.0 exports already hold canonical names.
 
@@ -89,6 +89,9 @@ I ran out of time before item 4. Coverage remains CI's: `pkg/policy/policy_test.
 
 ## Not walked
 
+The first three items below were walked by [Task #5896](/tasks/5896): see [the follow-up walk](#follow-up-walk-task-5896).
+
+
 - Item 4 live (policy deny, `settings/capabilities.yml` entry for `grain-ci`, v3.5.x export import and re-export).
 - A `.grain/` CI job declaring a bare name on a grain-CI repository.
 - Where the run's `propose_task` with bare names ends up (F5).
@@ -99,3 +102,73 @@ I ran out of time before item 4. Coverage remains CI's: `pkg/policy/policy_test.
 - `go test ./pkg/model ./pkg/ui` with `GRAIN_REQUIRE_POSTGRES=1` (PostgreSQL 15 installed).
 - The new regression tests listed under F1.
 - The existing `TestCIOnlyCapabilities*` and grain-CI refusal tests, which still pass.
+
+## Follow-up walk (task 5896)
+
+[Task #5896](/tasks/5896) walked what is listed under "Not walked" above, live, on SQLite 3.40.1 and PostgreSQL 15.20. It used the same harness: v3.5.0 seeded by `seed.sh`, then a HEAD daemon dispatching `fake-agy.sh` + `hook.py` against `ghsim`. Builds:
+
+- **HEAD:** this branch, `grain-head`.
+- **Before the fix:** `main` at `c7987fe4b`, `grain-main`.
+- **The seed:** `v3.5.0`.
+
+New scripts:
+
+- [`item4.sh`](2026-11-14-retired-capability-aliases/item4.sh) walks items 1–3 below, continuing seed.sh's data dir in place.
+- [`f5.sh`](2026-11-14-retired-capability-aliases/f5.sh) walks item 4, on a fresh world.
+
+`fake-agy.sh` now also replays `hook.py`'s `propose_task` call in its transcript. Without that, nothing a run proposes is relayed (item 4).
+
+```sh
+D=docs/test-runs/2026-11-14-retired-capability-aliases
+STORE=sqlite BIN=/home/debian/bin/grain-v350 $D/seed.sh
+STORE=sqlite BIN=/home/debian/bin/grain-head $D/item4.sh > $D/out/item4-sqlite.txt
+STORE=sqlite WORK=/var/tmp/retired-aliases/f5 PORT=4395 GHSIM_ADDR=127.0.0.1:4396 BIN=/home/debian/bin/grain-main $D/f5.sh > $D/out/f5-sqlite-before-fix.txt
+# and STORE=postgres PORT=4393 GHSIM_ADDR=127.0.0.1:4394 for item4; BIN=grain-head for f5-*.txt
+```
+
+### Findings
+
+| # | Item | Finding | Outcome |
+|---|---|---|---|
+| **F5** | 4 | **A run's `propose_task` naming bare names was filed holding them, behind a misleading note.** Here is where it went. The orchestrator relays proposals from the agent's transcript, not from the MCP server. The first walk's `fake-agy.sh` emitted no tool steps, so nothing it proposed was ever relayed: that is why no proposal turned up. Once the call is in the transcript, `main` behaves as follows on both stores (`out/f5-*-before-fix.txt`). The call answers "Recorded". At the run's end, task 3 is filed `proposed`, holding the bare rows `grain-ci` and `self-debug`, with the note "approving it grants those capabilities as well as the work". When a person approves it, dispatch parks it: `no provider is registered for capability "grain-ci" (grain-ci is a retired capability name … it became …grain#ci={})`. So the proposal was not dropped silently. But it asked a person to approve grants that grant nothing, and a dispatch failure was the first anyone heard of it. | **Fixed** (`fix(capability): refuse a retired bare name in propose_task …`). The live call now refuses in the same turn, through `model.RetiredTaskGrantRefusal` (built on `RetiredGrantRefusal`): `propose_task: self-debug is a retired capability name and grants nothing any longer: it became …api#self-debug and …grain#source={}; name that instead`. For `grain-ci` it says the grant comes from the repository's CI Mode. Nothing is filed (`out/f5-sqlite.txt`, `out/f5-postgres.txt`). A call recorded before this refusal is filed without the name, and the proposal's body and the proposer's conversation each name what it became. Tests: `TestProposeTaskRefusesARetiredBareNameNamingWhatItBecame`, `TestRelayedProposalLeavesOffARetiredBareNameNamingWhatItBecame`, `TestRetiredTaskGrantRefusalNamesWhatTheNameBecame`. `TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization` pinned the old behaviour ("kept as written, which dispatch refuses") and now pins the new one. |
+| **F6** | 2 | **Importing a v3.5.0 export upgraded bare names in templates and schedules, but not in the capability columns.** Hand-added `self-debug`, `read-issues`, `github-sandbox`, `grain-log` and `github-credential:bot` stayed bare in `grain_config.default_capabilities` and in `repo_config.default_capabilities`/`ci_capabilities`. They granted nothing and were hidden by the API (F4). Every export after wrote them back out, both into `tables/` and into the `defaults:` of the new `settings/capabilities.yml`. | **Fixed** (`fix(staterepo): upgrade retired names in capability columns on import`). Importing a dump stamped with an older schema now reads those columns through `RetiredGrantsBecame`, as `shapeGrants` already reads grant lists. A dump at this build's own schema imports byte for byte as before, so the restore-fidelity tests stand. Re-walked: no bare name is left in the re-export on either store. Test: `TestAnImportUpgradesRetiredNamesInCapabilityColumns`. |
+| **F7** | 3 | **The CI job refusal did not name the canonical grant.** The first walk read `pkg/daemon/ci.go`'s "is refused: it was retired" as covering `.grain/` declarations. Walked live, a job declaring `capabilities: [self-debug]` (or `[grain-ci]`) on `acme/widgets` (`ci_mode: grain`) erred with only `this job requires the capability "self-debug" and this deployment does not provide it for acme/widgets`. `workflows.UnmetRequirements` answers before that path is reached. | **Fixed** (`fix(ci): name the canonical grant …`). `workflows.CapabilitySyntax.Retired`, wired to `RetiredGrantRefusal` in `pkg/ci`, now ends the error with `…: self-debug is a retired capability name and grants nothing any longer: it became …api#self-debug and …grain#source={}; declare that instead`. The `grain-ci` job's error likewise ends `it became …grain#ci={}; declare that instead`. The prefix is unchanged, so the orchestrator's retry-once-granted matcher still reads it. `TestAJobDoesNotRunWithoutTheCapabilityItRequires` now asserts the suffix. |
+| **F8** | 1 | `settings/capabilities.yml` `in_process.grain-ci: {enabled: false}` was imported, kept and re-exported under its bare key, as `in_process` keys are by design (`retiredInProcessNames`). But a run on `acme/widgets` (`ci_mode: grain`) still answered `grain ci log` with "this task's branch has no grain CI run yet", not forbidden. I did not determine whether the catalogue entry is meant to withdraw the grain#ci a repository's CI Mode grants. | Reported, not changed (proposed as a follow-up). |
+
+### 1. Local policy and the catalogue at dispatch — refuse or bind the canonical capability
+
+- **`deny: [self-debug, "gcp-key*"]`** (`-policy`). The task holding `…api#self-debug` + `…grain#source={}` stays queued. Each dispatch cycle logs `candidate 12 skipped: held by local policy: local policy forbids capability "https://grain.dev/capabilities/api#self-debug"`. The task holding `…gcp#gcp-key={"permission_set":"default","primary":true}` (written by SQL: this world has no gcp permission set to file it through) is held the same way by `gcp-key*`. Neither starts a run. Both stores give the same result.
+- **`settings/capabilities.yml` `in_process.self-debug: {restrictions: {repos: [acme/lib]}}`**, imported from grain/config:
+  - Filing `api#self-debug` on `acme/widgets` is refused: `capability api:self-debug is not granted on acme/widgets by settings/capabilities.yml (repos: acme/lib) (in_process.self-debug, the capability it replaced)`.
+  - On `acme/lib` the task files and dispatches. Its run has the standard 13 MCP tools, and `grain api routes` lists the self-debug routes (`/api/fs/src/…`, `/api/tasks`, …). `grain ls src://` says `src:// is not configured on this daemon`, because the walk daemon has no source tree. `grain ci log` says `no CI run` (GitHub mode).
+  - The `acme/widgets` run without the grant gets `No agent API routes are granted`, and `grain ls src://` is forbidden, naming `grain#source`.
+- **`in_process.grain-ci: {enabled: false}`:** see F8.
+- Inside both runs, `request_access` for `self-debug` is refused naming what it became (F1's fix, live).
+
+### 2. Import a v3.5.0 `grain/config` export with bare names hand-added — upgraded; re-export canonical (after F6)
+
+Setup:
+- seed.sh's v3.5.0 data dir, with its `state-repo` at schema 136.
+- Two hand commits on top:
+  - Templates: `self-debug`, `grain-ci`, `read-issues` and `github-credential:bot`.
+  - Schedules: `bootstrap-playbooks` and `grain-log`.
+  - `grain_config.default_capabilities`: `,self-debug,read-issues`.
+  - `acme/widgets`: `ci_mode: grain`, default `github-sandbox`, CI `grain-log,self-debug,github-credential:bot`.
+  - A new `settings/capabilities.yml`.
+- HEAD opened the data dir: `migrated the store in place from schema 136 to 147`, then `applied 2 previously unapplied config commit(s) … before rewriting … at schema 147`.
+
+Result:
+- Every hand-added name is stored as what it became, on both stores. For example, template `grain-ci` became `…grain#ci={}`. `acme/widgets` holds default `…github#sandbox-repo={}` and CI `…grain#journal={}, …api#self-debug, …grain#source={}, …repo#credential={"credential":"bot"}`.
+- The rewritten dump names none of them. The only bare names left are `local-scripts:deploy` (F3) and the `in_process` keys of `settings/capabilities.yml` (by design, F8).
+- Before the F6 fix, the default and CI columns kept the bare names, and the dump wrote them back.
+
+### 3. A `.grain/workflows` job declaring a bare name on a `ci_mode: grain` repository — refused, now naming the canonical grant (F7)
+
+`walk.yml` on branch `walk-ci` has jobs `bare` (`capabilities: [self-debug]`) and `bareci` (`[grain-ci]`). `POST /api/ci/runs` started the run, which concluded `errored`. Both jobs erred, each naming what its name became (F7). Neither spent a sandbox.
+
+### 4. `propose_task` with `["self-debug","grain-ci"]` — see F5
+
+### Tests run (task 5896)
+
+- `GRAIN_REQUIRE_POSTGRES=1 go test ./pkg/model ./pkg/mcp ./pkg/orchestrator ./pkg/staterepo/... ./pkg/ci ./pkg/workflows ./pkg/daemon` passed on the final tree, with PostgreSQL 15 installed so the Postgres tests ran rather than skipping.
+- `./pkg/ui` passed after the F5 fix. It was not re-run locally after F6 and F7; GitHub Actions covers it.

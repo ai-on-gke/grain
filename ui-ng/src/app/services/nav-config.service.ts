@@ -88,11 +88,31 @@ export class NavConfigService implements OnDestroy {
   readonly hidden = this._hidden.asReadonly();
   readonly dialogOpen = signal(false);
   private opener: HTMLElement | null = null;
-  private readonly onStorage = (ev: StorageEvent): void => {
+  private readonly storageListener = (e: StorageEvent): void =>
+    this.onStorage(e);
+
+  constructor() {
+    // Customize navigation in another tab of this browser writes the same
+    // keys; the browser tells every other tab with a storage event, so
+    // their rails follow without a reload (as the classic sidebar does).
+    if (typeof window !== "undefined") {
+      window.addEventListener?.("storage", this.storageListener);
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (typeof window !== "undefined") {
+      window.removeEventListener?.("storage", this.storageListener);
+    }
+  }
+
+  // onStorage applies another tab's saved order or hidden set. A null key
+  // is localStorage.clear(), which resets both.
+  onStorage(e: Pick<StorageEvent, "key">): void {
     if (
-      !ev.key ||
-      ev.key === SIDEBAR_ORDER_KEY ||
-      ev.key === LEGACY_NAV_ORDER_KEY
+      !e.key ||
+      e.key === SIDEBAR_ORDER_KEY ||
+      e.key === LEGACY_NAV_ORDER_KEY
     ) {
       this._order.set(
         parseNavOrder(
@@ -100,22 +120,10 @@ export class NavConfigService implements OnDestroy {
         ),
       );
     }
-    if (!ev.key || ev.key === SIDEBAR_HIDDEN_KEY) {
+    if (!e.key || e.key === SIDEBAR_HIDDEN_KEY) {
       this._hidden.set(
         new Set(parseNavHidden(readStorage(SIDEBAR_HIDDEN_KEY))),
       );
-    }
-  };
-
-  constructor() {
-    if (typeof window !== "undefined") {
-      window.addEventListener?.("storage", this.onStorage);
-    }
-  }
-
-  ngOnDestroy(): void {
-    if (typeof window !== "undefined") {
-      window.removeEventListener?.("storage", this.onStorage);
     }
   }
 

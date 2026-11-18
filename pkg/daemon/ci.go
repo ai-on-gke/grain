@@ -2753,9 +2753,8 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	beforeAdopt ...func(*ci.Service)) *ci.Service {
 
 	var teamGitCredential func(context.Context, string, string, string) (string, error)
-	var teamGitCredentialOn func(context.Context, string, string, string, string) (string, error)
 	if store != nil {
-		teamGitCredential, teamGitCredentialOn = TeamGitCredentialLookups(store)
+		teamGitCredential, _ = TeamGitCredentialLookups(store)
 	}
 	// What a job is refused for lacking: the deployment's credential for
 	// the repositories it declared. A single-tenant daemon refuses none --
@@ -2817,20 +2816,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 			}
 			return activeSandboxImageFor(cfg)
 		},
-		Source: ci.Layered{
-			CiWorkflowSource{
-				ConfigRepoDir:       StateRepoDir(cfg.DataDir),
-				Credentials:         credentials,
-				GitHubHost:          cfg.GithubHost,
-				InsecureHTTP:        cfg.GithubInsecureHTTP,
-				Forbidden:           forbidden,
-				TempDir:             filepath.Join(cfg.DataDir, "state"),
-				TeamGitCredential:   teamGitCredential,
-				TeamGitCredentialOn: teamGitCredentialOn,
-			},
-			ConfigRepoCISource{},
-			ciDeclaredSource(store),
-		},
+		Source: ciWorkflowReadSource(cfg, store, credentials, forbidden),
 		Engine: &ci.Engine{
 			// A job sandbox found OOM-killed is retried once and is a
 			// decrease signal for auto overcommit, as an agent's is.
@@ -3590,4 +3576,15 @@ func BuildGritBackendRunner(ctx context.Context, cfg Config, retention func() ci
 	})
 	go runner.RunConsumer(ctx, 250*time.Millisecond)
 	return runner
+}
+
+// ciWorkflowReadSource shares the engine's ordinary scoped definition reader
+// with observation-only diagnostics. Reading definitions never starts a run.
+func ciWorkflowReadSource(cfg Config, store *model.Store, credentials *gitproxy.CredentialSet, forbidden *gitproxy.ForbiddenSet) ci.Source {
+	var teamGitCredential func(context.Context, string, string, string) (string, error)
+	var teamGitCredentialOn func(context.Context, string, string, string, string) (string, error)
+	if store != nil {
+		teamGitCredential, teamGitCredentialOn = TeamGitCredentialLookups(store)
+	}
+	return ci.Layered{CiWorkflowSource{ConfigRepoDir: StateRepoDir(cfg.DataDir), Credentials: credentials, GitHubHost: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP, Forbidden: forbidden, TempDir: filepath.Join(cfg.DataDir, "state"), TeamGitCredential: teamGitCredential, TeamGitCredentialOn: teamGitCredentialOn}, ConfigRepoCISource{}, ciDeclaredSource(store)}
 }

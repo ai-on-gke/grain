@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode"
+  ],
+  "properties": {
+    "mode": {
+      "enum": [
+        "explicit_receipt",
+        "legacy_report",
+        "legacy_child_answer",
+        "legacy_nothing_needed_ack"
+      ]
+    }
+  }
+}

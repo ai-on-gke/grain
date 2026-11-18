@@ -30,7 +30,7 @@ func TestReleaseResumeLaterReadsTheCommentWhenNoSuspensionHoldsIt(t *testing.T) 
 	store, ctx := open(t)
 	task := model.Task{
 		ID: "rl", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 	}
 	if err := store.PutTask(ctx, task); err != nil {

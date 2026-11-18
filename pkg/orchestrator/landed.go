@@ -51,8 +51,12 @@ import (
 
 // landedWork is what that check found about one branch against one base.
 type landedWork struct {
-	Base   string
-	Branch string
+	// Exact source pins are diagnostic only; they do not change legacy landed decisions.
+	ObservedHead string
+	ObservedBase string
+	Pinned       bool
+	Base         string
+	Branch       string
 	// Known is false when the check could not be made -- a compare that
 	// failed, a file list GitHub truncated, a branch with no commits
 	// over its base at all (which is noCommitsError's case, not this
@@ -201,6 +205,8 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 	if err != nil || len(ahead.Commits) == 0 || ahead.FilesTruncated {
 		return w
 	}
+	w.ObservedHead, w.ObservedBase = ahead.HeadSHA, ahead.BaseSHA
+	w.Pinned = ahead.HeadSHA != "" && ahead.BaseSHA != ""
 	mine := fileEffects(ahead.Files)
 	if len(mine) == 0 {
 		// Commits, and no diff. Either they never changed anything, or
@@ -213,6 +219,7 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 		w.Known = true
 		if behind, err := client.CompareRefs(repo.StoredOwner(), repo.Name, branch, base); err == nil {
 			w.BaseCommits = behind.Commits
+			w.Pinned = w.Pinned && behind.BaseSHA == w.ObservedHead && behind.HeadSHA == w.ObservedBase
 		}
 		for i := len(ahead.Commits) - 1; i >= 0; i-- {
 			c := ahead.Commits[i]
@@ -224,6 +231,7 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 				w.Known = false
 				return w
 			}
+			w.Pinned = w.Pinned && before.BaseSHA == w.ObservedBase && before.HeadSHA == c.Parents[0]
 			for path := range fileEffects(before.Files) {
 				w.Landed = append(w.Landed, path)
 			}
@@ -251,6 +259,7 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 	if err != nil {
 		return w
 	}
+	w.Pinned = w.Pinned && behind.BaseSHA == w.ObservedHead && behind.HeadSHA == w.ObservedBase
 	theirs := fileEffects(behind.Files)
 	for path, blob := range mine {
 		if got, ok := theirs[path]; ok && got == blob {
@@ -454,6 +463,9 @@ func landedForTaskWithStore(ctx context.Context, store *model.Store, client gith
 			if head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, branch); err == nil &&
 				head != nil && head.SHA == detail.HeadSHA {
 				w.MergedHead = true
+				w.ObservedHead = detail.HeadSHA
+				w.ObservedBase = detail.MergeCommitSHA
+				w.Pinned = detail.HeadSHA != "" && detail.MergeCommitSHA != ""
 			}
 		}
 	}
@@ -508,11 +520,15 @@ func finishAlreadyLanded(ctx context.Context, store *model.Store, task model.Tas
 		"\n\ngrain has marked this task done rather than opening a duplicate pull request.", now); err != nil {
 		return err
 	}
-	return closeTask(ctx, store, task.ID, now, "its branch already landed", func(o *model.Observation) {
+	err := closeTask(ctx, store, task.ID, now, "its branch already landed", func(o *model.Observation) {
 		o.CompletedAt = &now
 		o.ClosedAt = &now
 		o.RetryRequestedAt = nil
 	})
+	if err == nil {
+		recordGateEquivalent(ctx, store, task, "equivalent", landed.Work, now)
+	}
+	return err
 }
 
 // closeIfLanded is the merge queue's half: an open pull request whose
@@ -592,6 +608,7 @@ func closeIfLanded(ctx context.Context, store *model.Store, client github.Client
 	if err := noteOnTask(ctx, store, task.ID, body, now); err != nil {
 		return true, err
 	}
+	recordGateEquivalent(ctx, store, task, "equivalent:"+ref.String(), w, now)
 	return true, nil
 }
 
