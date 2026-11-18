@@ -51,6 +51,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -382,10 +383,14 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 	if t.Forge.LoginPage != nil && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
 		// The tool follows redirects itself, so a lapsed login can come
 		// back as the login page, 200 and all.
-		page, _ := io.ReadAll(io.LimitReader(resp.Body, commandForgeMaxLoginPage))
+		page, perr := io.ReadAll(io.LimitReader(resp.Body, commandForgeMaxLoginPage))
 		resp.Body.Close()
 		if login, ok := t.Forge.loginIn(req.URL.Host, string(page)); ok {
 			return nil, login
+		}
+		if errors.Is(perr, ErrForgeBodyCut) {
+			// Not the whole page: never handed on as if it were.
+			return nil, perr
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(page))
 		resp.ContentLength = int64(len(page))
@@ -483,7 +488,7 @@ func (r *commandForgeRun) wait() error {
 			// A success it printed and then failed on: what it said is
 			// the only account of what became of the body.
 			log.Printf("gitproxy: `%s` printed HTTP %d, then exited %v in %s: stderr: %q",
-				r.line, r.status, err, took, capLog(r.stderr.String()))
+				r.line, r.status, err, took, capLog(redactURLQueries(r.stderr.String())))
 		case err != nil:
 			// The tool exits non-zero for any status past 299, having
 			// printed the response all the same: not a failure here.
@@ -587,7 +592,7 @@ func (r *commandForgeRun) cut(werr error) error {
 		how = fmt.Sprintf("ended (%v)", werr)
 	}
 	msg := fmt.Sprintf("`%s` printed HTTP %d and its headers, then %s%s", r.line, r.status, how, bodyCutMarker)
-	if said := shortMessage(r.stderr.String()); said != "" {
+	if said := shortMessage(redactURLQueries(r.stderr.String())); said != "" {
 		msg += ": " + said
 	} else {
 		msg += ", saying nothing on stderr"
@@ -636,6 +641,18 @@ func redactQuery(endpoint string) string {
 		return endpoint[:i]
 	}
 	return endpoint
+}
+
+// urlQuery is a URL's query in free text, up to the quote or space that
+// ends the URL.
+var urlQuery = regexp.MustCompile(`(https?://[^\s"'?]+)\?[^\s"']*`)
+
+// redactURLQueries is a tool's stderr with every URL's query cut off. A
+// tool that followed a redirect itself names the URL it failed on, and a
+// redirect to a log blob is signed in its query: what the tool said
+// reaches the agent reading the log, the signature must not.
+func redactURLQueries(s string) string {
+	return urlQuery.ReplaceAllString(s, "$1?[redacted]")
 }
 
 // loginIn is the LoginRedirectError for text -- the tool's stderr, or an

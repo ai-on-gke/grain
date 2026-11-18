@@ -635,6 +635,31 @@ func TestCommandForgeBodyCutShortIsAnError(t *testing.T) {
 		t.Fatalf("Request = %v; want the cut-short body's error", err)
 	}
 
+	// A tool that followed the signed redirect itself names the URL it
+	// failed on; the signature in its query never reaches the error.
+	writeRaw(t, state, "api-stderr", `Get "https://depot.code.forge.test/_services/x/signedlogcontent/1?urlExpires=1&urlSignature=sig-secret": stream error`+"\n")
+	resp, err = client.Get("https://depot.code.forge.test/api/v3/repos/o/r/actions/jobs/1/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !errors.Is(err, ErrForgeBodyCut) || strings.Contains(err.Error(), "sig-secret") ||
+		!strings.Contains(err.Error(), "signedlogcontent/1?[redacted]") {
+		t.Errorf("err = %v; want the cut-short error with the URL's query redacted", err)
+	}
+
+	// An HTML page cut short is not handed on as the whole page.
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "text/html"}, "<html><body>half a pa"))
+	resp, err = client.Get("https://depot.code.forge.test/api/v3/repos/o/r/actions/jobs/1/logs")
+	if !errors.Is(err, ErrForgeBodyCut) {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		t.Errorf("HTML cut short: err = %v; want ErrForgeBodyCut", err)
+	}
+
 	// A 404 the tool exits 1 for, by design, still reads to the end.
 	writeRaw(t, state, "api-response", gghResponse("404 Not Found",
 		map[string]string{"Content-Type": "application/json"}, `{"message":"Not Found"}`))
