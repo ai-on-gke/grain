@@ -232,7 +232,7 @@ var knownBoundaryFiles = []string{
 	"pkg/ui/accesscode.go", "pkg/ui/access_code_mode.go", "pkg/ui/single_tenant.go",
 	"pkg/ui/allowlist.go", "pkg/ui/verifier.go", "pkg/ui/verifier_session.go",
 	"pkg/ui/accept_findings.go", "pkg/model/review_findings_accept.go",
-	"pkg/agentd/", "scripts/build-agentd.sh",
+	"pkg/agentd/", "cmd/grain-agentd/", "scripts/build-agentd.sh",
 	"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
 	"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 	"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
@@ -937,6 +937,7 @@ func TestAcceptFindingsVerifierSessionAndAgentdAreClassified(t *testing.T) {
 		"pkg/agentd/agentd.go":                             "exec-sandbox",
 		"pkg/agentd/release/cmd/grain-agentd-sign/main.go": "exec-sandbox",
 		"pkg/agentd/new_file.go":                           "exec-sandbox",
+		"cmd/grain-agentd/main.go":                         "exec-sandbox",
 		"scripts/build-agentd.sh":                          "release-machinery",
 	} {
 		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {

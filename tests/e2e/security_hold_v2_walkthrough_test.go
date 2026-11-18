@@ -157,7 +157,8 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// pkg/installtrack/ to upgrade-images, task 3926; v29 only adds
 	// pkg/ui/access_code_mode.go to auth-routes, task 5973; v30 only adds
 	// the accept-findings path and verifier session to auth-routes,
-	// pkg/agentd/ to exec-sandbox and scripts/build-agentd.sh to
+	// pkg/agentd/ and cmd/grain-agentd/ to exec-sandbox and
+	// scripts/build-agentd.sh to
 	// release-machinery, task 6913).
 	if trustboundary.Version != "trust-boundary/v30" {
 		w.t.Fatalf("this walkthrough is about trust-boundary/v30, the build has %s", trustboundary.Version)

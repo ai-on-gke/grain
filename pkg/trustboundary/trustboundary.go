@@ -94,8 +94,8 @@ type Category struct {
 // human-review hold's rule, beside human_review_hold.go; and the verifier
 // session (pkg/ui/verifier_session.go, #1574), the HMAC-signed cookie that
 // admits a request without IdentityVerifier.Verify, beside verifier.go. To
-// exec-sandbox: pkg/agentd/, the rootless host agent -- what it runs, and
-// the self-update (update.go, #1533) that fetches a manifest and binary,
+// exec-sandbox: pkg/agentd/ and its command cmd/grain-agentd/, the rootless
+// host agent -- what it runs, and the self-update (update.go, #1533) that fetches a manifest and binary,
 // verifies them against the release key pinned at install
 // (release/release.go, VerifyManifest, resolveSigningKey) and runs the
 // result as the host agent. To release-machinery: scripts/build-agentd.sh,
@@ -452,8 +452,11 @@ var Categories = []Category{
 			"pkg/k8s/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/", "pkg/sandboximage/",
 			"pkg/hostinit/",
 			// The rootless host agent: what it runs, and the self-update
-			// that verifies and replaces it.
-			"pkg/agentd/",
+			// that verifies and replaces it -- and the command that builds
+			// it, whose main is where a build registers extra transports
+			// and host-tool grants (agentd.RegisterTransport,
+			// hook.RegisterHostToolGrant) before calling agentd.Main.
+			"pkg/agentd/", "cmd/grain-agentd/",
 			"third_party/granule/",
 		},
 		// What every backend is wired with, what is forwarded into
