@@ -111,3 +111,63 @@ test("an alert's whole body follows the selection, a failed read and a re-raise"
     }
   }
 });
+
+// Review of #1756 (task 6745): with no row chosen the inspector shows the
+// first row, and narrowing the view onto an alert (a filter chip or a
+// search) moves the selection there without a click. Its whole body is
+// read then, not left at the first line until the next 60s poll.
+test("an alert reached by narrowing the view, not a click, shows its whole body", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const stamp = Date.now();
+  // A parked question sorts ahead of every alert, so it is the first row.
+  const task = await api(demoServer, accessCode, "POST", "/api/tasks", {
+    title: `Ahead of the alert ${stamp}`,
+    approved: true,
+  });
+  let alertId;
+  try {
+    await api(
+      demoServer,
+      accessCode,
+      "POST",
+      `/api/tasks/${task.id}/messages`,
+      {
+        summary: "Which tier first?",
+        body: "Which tier should I drain first?",
+      },
+    );
+    alertId = (
+      await api(demoServer, accessCode, "POST", "/api/notifications", {
+        subject: `alert-narrow-${stamp}`,
+        title: `Narrowed alert ${stamp}`,
+        severity: "warning",
+        body: body("DELTA"),
+      })
+    ).notification.id;
+
+    await page.goto("inbox");
+    await expect(page.getByTestId("resolution-dock")).toBeVisible();
+    await page
+      .getByRole("searchbox", { name: "Filter this view" })
+      .fill(`Narrowed alert ${stamp}`);
+    const question = page.getByTestId("resolution-question").first();
+    await expect(question).toContainText("DELTA first line");
+    // Well inside the 60s poll: the read follows the selection itself.
+    await expect(question).toContainText("DELTA detail 6", { timeout: 10_000 });
+  } finally {
+    await fetch(`${demoServer}/api/tasks/${task.id}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessCode}` },
+    }).catch(() => {});
+    if (alertId) {
+      await fetch(`${demoServer}/api/notifications/${alertId}/clear`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessCode}` },
+      }).catch(() => {});
+    }
+  }
+});
