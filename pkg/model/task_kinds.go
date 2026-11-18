@@ -61,7 +61,7 @@ func TaskKindTags(t Task, state State) []string {
 	if t.IsDurable() {
 		kinds = append(kinds, TaskKindDurable)
 	}
-	if t.Origin.Reason == ReasonImported {
+	if t.Filing.Reason == ReasonImported {
 		kinds = append(kinds, TaskKindImported)
 	}
 	return kinds

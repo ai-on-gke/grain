@@ -316,9 +316,9 @@ func TestRetriggerOnGitHubActionsChecksInPlaceReviewClosedCallerAndPinnedPRFork(
 	// Mismatched branch or repo on LinkPushesReviewedBranch is refused.
 	for _, bad := range []model.Task{
 		{ID: "rev-branch", Intent: model.IntentImplement, Title: "rev", Target: &repo, Branch: "grain/rev-branch",
-			Origin: model.Origin{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "theirs"}}},
+			Filing: model.Filing{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "theirs"}}},
 		{ID: "rev-repo", Intent: model.IntentImplement, Title: "rev", Target: &other, Branch: "grain/theirs",
-			Origin: model.Origin{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "theirs"}}},
+			Filing: model.Filing{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "theirs"}}},
 	} {
 		if err := client.Store.PutTask(ctx, bad); err != nil {
 			t.Fatal(err)
@@ -335,7 +335,7 @@ func TestRetriggerOnGitHubActionsChecksInPlaceReviewClosedCallerAndPinnedPRFork(
 	// A matching open in-place review re-runs mine's own 710, ignoring the
 	// stranger fork's 770 even though PR #12 pins HeadSHA bbb222.
 	rev := model.Task{ID: "rev-ok", Intent: model.IntentImplement, Title: "rev", Target: &repo, Branch: "grain/mine",
-		Origin: model.Origin{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "mine"}}}
+		Filing: model.Filing{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "mine"}}}
 	if err := client.Store.PutTask(ctx, rev); err != nil {
 		t.Fatal(err)
 	}

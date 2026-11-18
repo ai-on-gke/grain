@@ -66,7 +66,7 @@ func hasTag(task model.Task, tag string) bool { return slices.Contains(task.Tags
 // base, not a fix or review merging into another task's branch, and not a
 // task a trigger filed itself (which would otherwise judge its own work).
 func pullRequestTriggersApply(task model.Task) bool {
-	return task.Target != nil && task.Origin.Reason != model.ReasonFix && !isReviewTask(task) &&
+	return task.Target != nil && task.Filing.Reason != model.ReasonFix && !isReviewTask(task) &&
 		!hasTag(task, model.PathTriggerMarkerTag)
 }
 
@@ -669,8 +669,9 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 		return nil
 	}
 	body := fmt.Sprintf("Review task %s left findings on this change, so its path-trigger review gate did not "+
-		"pass. Address the findings so a re-review passes, or override the gate under merge:force with a reason; "+
-		"pressing Submit records your approval only and will not merge over open findings.", review.ID)
+		"pass. Address the findings so a re-review passes, or, if the change should merge as it is, "+
+		"accept them as they are with **Accept findings** on the merge-gates panel (`grain accept-findings`, a reason required), which clears this review's findings on this gate and nothing else. Pressing Submit records your approval only and will not merge over open findings; "+
+		"Force merge is for overriding every gate, not for this.", review.ID)
 	_, ref, ok, err := reviewedPullRequest(ctx, store, review)
 	if err != nil || !ok {
 		return pathTriggerNote(ctx, store, client, reviewedID, nil, body, now)

@@ -19,6 +19,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -256,7 +257,12 @@ func (g *Gateway) ForwardEvent(ctx context.Context, ev grainclient.IntegrationEv
 	var text string
 	switch ev.Type {
 	case grainclient.EventTaskQuestion:
-		text = fmt.Sprintf("Task #%s is parked on a question: %s — %s", ev.TaskID, ev.Summary, ev.Question)
+		// grain sends a question's one line (questionSummary) and not its
+		// body, which the client reads into both fields: say it once.
+		text = fmt.Sprintf("Task #%s is parked on a question: %s", ev.TaskID, ev.Summary)
+		if ev.Question != "" && ev.Question != ev.Summary {
+			text += " — " + ev.Question
+		}
 	case grainclient.EventTaskState:
 		text = fmt.Sprintf("Task #%s transitioned to state %s", ev.TaskID, ev.State)
 		if ev.PRURL != "" {
@@ -318,6 +324,41 @@ func (g *Gateway) watchSSEForever(ctx context.Context, stderr io.Writer, retry t
 	}
 }
 
+// outboundTimeout bounds each -outbound-url POST.
+var outboundTimeout = 10 * time.Second
+
+// postToChat is the HMAC adapter's Sink for -outbound-url: each message
+// is POSTed to url as JSON, signed in X-PLC-Chat-Signature when secret is
+// set. Without it the command had nowhere to deliver what it forwarded --
+// the adapter's in-memory Outbox, which only a test in this process can
+// read -- so a running gateway posted nothing anybody saw.
+func postToChat(client *http.Client, url, secret string) func(context.Context, plcseams.ChatMessage) error {
+	return func(ctx context.Context, msg plcseams.ChatMessage) error {
+		body, err := json.Marshal(msg)
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if secret != "" {
+			req.Header.Set(plcseams.HeaderChatSignature, plcseams.SignPayload(secret, body))
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("post chat message: %w", err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode/100 != 2 {
+			return fmt.Errorf("post chat message: %s answered %s", url, resp.Status)
+		}
+		return nil
+	}
+}
+
 func writeChatError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -341,14 +382,30 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	grainToken := fs.String("grain-token", os.Getenv("GRAIN_TOKEN"), "Bearer token sent to the -grain-url daemon only (an access code or an external-agent token; $GRAIN_TOKEN)")
 	webhookSecret := fs.String("webhook-secret", os.Getenv("PLC_CHAT_WEBHOOK_SECRET"), "Shared secret for HMAC chat webhook verification")
 	defaultSpace := fs.String("default-space", os.Getenv("PLC_CHAT_DEFAULT_SPACE"), "Default chat space ID for outbound events")
+	outboundURL := fs.String("outbound-url", os.Getenv("PLC_CHAT_OUTBOUND_URL"), "Chat platform endpoint each outbound message is POSTed to as JSON (signed with -webhook-secret when set); none keeps them in memory only")
 	watchSSE := fs.Bool("watch-sse", false, "Subscribe to GET /api/events SSE on startup")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *webhookSecret != "" {
-		plcseams.RegisterChatAdapter(plcseams.NewHMACChatAdapter(*webhookSecret))
+	if *webhookSecret != "" || *outboundURL != "" {
+		adapter := plcseams.NewHMACChatAdapter(*webhookSecret)
+		if *outboundURL != "" {
+			post := postToChat(&http.Client{Timeout: outboundTimeout}, *outboundURL, *webhookSecret)
+			// A chat platform that is slow or down costs the message it
+			// was sent, said on stderr, and nothing more: returning the
+			// error would end WatchSSE's stream past that event (its
+			// cursor has already moved), and a POST with no deadline
+			// would hold every later event behind it.
+			adapter.Sink = func(ctx context.Context, msg plcseams.ChatMessage) error {
+				if err := post(ctx, msg); err != nil {
+					fmt.Fprintf(stderr, "plc-chat-gateway: task %s %s not delivered: %v\n", msg.TaskID, msg.EventType, err)
+				}
+				return nil
+			}
+		}
+		plcseams.RegisterChatAdapter(adapter)
 	}
 
 	recorder := perf.Default()

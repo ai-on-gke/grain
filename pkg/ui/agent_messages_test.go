@@ -266,3 +266,57 @@ func TestAgentAPIMessagesReadIsOwnTaskOnly(t *testing.T) {
 		t.Errorf("a task-admin reading task 19's messages answered %d: %s", code, body)
 	}
 }
+
+// PR feedback is external input for a live run, never the answer to a chat
+// question. A chat cursor can pass it without acknowledging its receipt.
+func TestPRFeedbackAddendaDeliveryIsIndependentOfChatCursor(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := t.Context()
+	seedAPITask(t, client, "796", "acme/widgets")
+	running(t, client.Store, ctx, "796")
+	body := "External PR feedback by alice: > please cover this case"
+	if err := client.Store.RecordPRFeedback(ctx, model.Comment{TaskID: "796", Body: body,
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "github-webhook"}}}, "issue_comment:42", false); err != nil {
+		t.Fatal(err)
+	}
+	comments, err := client.Store.Comments(ctx, "796")
+	if err != nil || len(comments) != 1 {
+		t.Fatalf("comments = %+v, %v", comments, err)
+	}
+	feedbackID := comments[0].ID
+	question, err := client.PostAgentMessage(ctx, "796", "An unrelated question?", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messages, err := client.MessagesSince(ctx, "796", 0); err != nil || len(messages) != 0 {
+		t.Fatalf("external feedback answered chat: %+v, %v", messages, err)
+	}
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	remote := serverAccessClient(srv, ts.URL)
+	// The chat acknowledgment does not attest to intervening PR feedback.
+	if err := remote.RecordDelivered(ctx, "796", question.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := client.Store.PendingPRFeedback(ctx, "796", question.ID)
+	if err != nil || len(pending) != 1 || pending[0].ID != feedbackID {
+		t.Fatalf("chat swallowed unread feedback: %+v, %v", pending, err)
+	}
+	addenda, err := remote.TaskAddenda(ctx, "796", 0)
+	if err != nil || len(addenda) != 1 || addenda[0].Body != body || addenda[0].AuthorKind != "automation" {
+		t.Fatalf("live relay = %+v, %v", addenda, err)
+	}
+	// The fully rendered addendum can acknowledge an ID below the shared
+	// cursor without moving that cursor backwards or answering the question.
+	if err := remote.RecordPRFeedbackDelivered(ctx, "796", feedbackID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = client.Store.PendingPRFeedback(ctx, "796", question.ID)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("acknowledged feedback still pending: %+v, %v", pending, err)
+	}
+	o, err := client.Store.GetObservation(ctx, "796")
+	if err != nil || o.PendingQuestionCommentID == nil || *o.PendingQuestionCommentID != question.ID || o.DeliveredCommentID == nil || *o.DeliveredCommentID != question.ID {
+		t.Fatalf("feedback altered the question or cursor: %+v, %v", o, err)
+	}
+}

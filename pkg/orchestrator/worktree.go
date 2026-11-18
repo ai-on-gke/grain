@@ -266,7 +266,7 @@ func requestedBy(task model.Task) string {
 	if requester == "" || strings.HasSuffix(lowerReq, ".gserviceaccount.com") || strings.HasPrefix(lowerReq, "serviceaccount:") {
 		return ""
 	}
-	attr := task.Origin.Attribution
+	attr := task.Filing.Attribution
 	filer := attr.Actor
 	if filer.Kind == model.PrincipalService {
 		if attr.OnBehalfOf != nil && namesAPerson(*attr.OnBehalfOf) && strings.EqualFold(requester, strings.TrimSpace(attr.OnBehalfOf.ID)) {

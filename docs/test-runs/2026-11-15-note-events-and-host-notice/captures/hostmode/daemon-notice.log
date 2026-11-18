@@ -1,0 +1,3 @@
+2026/11/15 07:55:03 level=warning condition=host_mode_install grain daemon: this install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh to migrate it to container mode plus the host agent (keeps the data directory and unit name) -- run sudo ./scripts/setup.sh. Signals: the daemon runs on the bare machine (GRAIN_IN_CONTAINER=0); started by systemd with GRAIN_INSTALL_MODE=host
+2026/11/15 07:55:03 level=warning condition=host_mode_install grain daemon: agent CLI claude: no host binary, and no container location on a bare-machine daemon
+2026/11/15 07:55:03 level=warning condition=host_mode_install grain daemon: agent CLI codex: no host binary, and no container location on a bare-machine daemon

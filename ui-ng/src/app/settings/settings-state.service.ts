@@ -74,6 +74,16 @@ export interface ReachableReposState {
   errors: string[];
   hostMismatches: string[];
   reason: string;
+  // available is false when no Git connection could list anything;
+  // connections are the ones that were asked, by credential and host.
+  available: boolean;
+  connections: ReachConnection[];
+}
+
+export interface ReachConnection {
+  credential: string;
+  host: string;
+  ok: boolean;
 }
 
 const REACHABLE_REPOS_TTL_MS = 60_000;
@@ -336,6 +346,8 @@ export class SettingsStateService {
             errors?: string[];
             hostMismatches?: string[];
             reason?: string;
+            available?: boolean;
+            connections?: Partial<ReachConnection>[];
           }
       >("GET /api/deployment/reachable-repos")
       .then((res) => {
@@ -365,6 +377,15 @@ export class SettingsStateService {
             ? (res?.hostMismatches ?? [])
             : [],
           reason: !Array.isArray(res) ? (res?.reason ?? "") : "",
+          // A bare list is an older server's: it listed, so it was available.
+          available: Array.isArray(res) ? true : res?.available !== false,
+          connections: (!Array.isArray(res) ? (res?.connections ?? []) : [])
+            .filter((c) => c && typeof c === "object")
+            .map((c) => ({
+              credential: String(c.credential ?? ""),
+              host: String(c.host ?? ""),
+              ok: Boolean(c.ok),
+            })),
         };
         if (this.reachableEpoch() === epoch) {
           this.reachableCache = { at: Date.now(), data };
@@ -471,6 +492,27 @@ export class SettingsStateService {
     } finally {
       this.planning.set(false);
     }
+  }
+
+  // saveFields saves just these drafted settings, for a card with a Save
+  // button of its own (Memory's Save memory), leaving every other draft
+  // for the section Save bar. It throws what the server refused.
+  async saveFields(keys: readonly string[]): Promise<void> {
+    const draft = this.draft();
+    const payload: Record<string, unknown> = {};
+    for (const k of keys) if (k in draft) payload[k] = draft[k];
+    if (Object.keys(payload).length === 0) return;
+    const saved = await this.api.post<Record<string, unknown>>(
+      "POST /api/settings",
+      undefined,
+      payload,
+    );
+    if (saved && typeof saved === "object") this.settings.set(saved);
+    this.draft.update((prev) => {
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
   }
 
   async saveChanges(): Promise<void> {

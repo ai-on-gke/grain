@@ -437,3 +437,48 @@ func TestReviewFindingsArgumentTypesAndInvalidBodies(t *testing.T) {
 		t.Errorf("draft review body = %q, errored tool call should have been excluded", posted.Body)
 	}
 }
+
+// A reviewing run that writes its findings the way GitHub's HTML reads
+// (<code>, <strong>, &quot;, "* " bullets) still puts Markdown in front of
+// the change's owner: the classic UI shows a comment's raw HTML as text, so the
+// relayed question would otherwise read as markup.
+func TestReviewQuestionsAreRelayedAsMarkdownNotHTML(t *testing.T) {
+	t.Parallel()
+	store, ctx, _, client, reviewed, review := reviewedAndReviewing(t)
+
+	result := toolResult(
+		reviewFinding("* <code>pkg/sandboxcli/help.go:136</code> -- a proposal is never &quot;held&quot;.\n"+
+			"* Live filings (<code>propose_task</code> ...) <strong>refuse</strong> it, so &amp; the docs <em>lie</em>.", "", 0),
+		reviewFinding("Should `a &amp; b` stay literal? &lt;script&gt; is text.", "run.go", 7),
+	)
+	if err := orchestrator.ProcessResult(ctx, store, client, review, result, review.ID+"-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	comments, err := store.Comments(ctx, reviewed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	for _, c := range comments {
+		if strings.Contains(c.Body, "Review needs your decision.") {
+			body = c.Body
+		}
+	}
+	if body == "" {
+		t.Fatalf("no review question on %s: %+v", reviewed.ID, comments)
+	}
+	for _, bad := range []string{"<code>", "</code>", "<strong>", "<em>", "&quot;", "\n  * ", "\n* "} {
+		if strings.Contains(body, bad) {
+			t.Errorf("relayed question holds %q, want Markdown:\n%s", bad, body)
+		}
+	}
+	for _, want := range []string{
+		"- - `pkg/sandboxcli/help.go:136` -- a proposal is never \"held\".",
+		"\n  - Live filings (`propose_task` ...) **refuse** it, so & the docs *lie*.",
+		"- `run.go:7` -- Should `a &amp; b` stay literal? &lt;script&gt; is text.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("relayed question lacks %q:\n%s", want, body)
+		}
+	}
+}

@@ -93,6 +93,14 @@ export const DESTINATIONS: readonly Destination[] = [
     tip: "Grain CI and GitHub checks: what is red, whose it is, and why.",
   },
   {
+    id: "repos",
+    label: "Repos",
+    icon: "repos",
+    route: "/repos",
+    classic: "/repos",
+    tip: "Every repository this deployment works in, with its open work by state.",
+  },
+  {
     id: "telemetry",
     label: "Telemetry",
     icon: "telemetry",
