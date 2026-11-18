@@ -67,8 +67,7 @@ test("the suite dialog refuses a pass count it would otherwise replace", async (
 }) => {
   const name = `Throwaway pass-limit suite ${Date.now()}`;
   await page.goto("processes/suites");
-  await page.getByTestId("proc-new-menu-btn").click();
-  await page.getByTestId("proc-new-suite").click();
+  await page.getByTestId("proc-new-suite-btn").click();
   const dialog = page.getByTestId("suite-dialog");
   await dialog.getByLabel("Suite name").fill(name);
   await dialog.getByRole("button", { name: "Until clean" }).click();

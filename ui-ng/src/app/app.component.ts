@@ -45,6 +45,7 @@ import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
 import type { InboxStore } from "./inbox/inbox.store";
+import type { ProcessesStore } from "./processes/processes.store";
 import type { SessionsStore } from "./sessions/sessions.store";
 import { DirectorContextService } from "./director/director-context.service";
 import { DirectorDrawerComponent } from "./director/director-drawer.component";
@@ -487,6 +488,13 @@ export class DeferErrorDirective implements OnInit {
                   aria-hidden="true"
                   >{{ inboxCount() }}</span
                 >
+              } @else if (d.id === "processes" && processesCount() > 0) {
+                <span
+                  class="rail-badge is-neutral"
+                  data-testid="rail-processes-count"
+                  aria-hidden="true"
+                  >{{ processesCount() }}</span
+                >
               }
             </span>
             <span class="rail-label">{{ d.label }}</span>
@@ -494,6 +502,8 @@ export class DeferErrorDirective implements OnInit {
                  the label ("13Inbox"), so the link's name says it here. -->
             @if (d.id === "inbox" && inboxCount() > 0) {
               <span class="sr-only">({{ inboxCount() }} waiting)</span>
+            } @else if (d.id === "processes" && processesCount() > 0) {
+              <span class="sr-only">({{ processesCount() }})</span>
             }
           </a>
         } @else {
@@ -1059,6 +1069,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly directorCtx = inject(DirectorContextService);
   private readonly snackbar = inject(SnackbarService);
   private readonly inboxRef = signal<InboxStore | null>(null);
+  private readonly processesRef = signal<ProcessesStore | null>(null);
   private readonly sessionsRef = signal<SessionsStore | null>(null);
   private destroyed = false;
   private readonly api = inject(GrainApi);
@@ -1178,6 +1189,9 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
     () => this.inboxRef()?.decisions().length ?? 0,
+  );
+  protected readonly processesCount = computed(
+    () => this.processesRef()?.processCount() ?? 0,
   );
   protected readonly createOpen = signal(false);
   protected readonly createPos = signal({ top: 0, left: 0 });
@@ -1382,6 +1396,15 @@ export class AppComponent implements OnInit, OnDestroy {
       });
     });
 
+    void import("./processes/processes.store").then(({ ProcessesStore }) => {
+      if (this.destroyed) return;
+      runInInjectionContext(this.injector, () => {
+        const s = inject(ProcessesStore);
+        this.processesRef.set(s);
+        s.start(true);
+      });
+    });
+
     void import("./sessions/sessions.store").then(({ SessionsStore }) => {
       if (this.destroyed) return;
       runInInjectionContext(this.injector, () => {
@@ -1489,6 +1512,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.help.attached.set(false);
     this.feed.stop(false);
     this.inboxRef()?.stop();
+    this.processesRef()?.stop(true);
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
     this.dispatchEventSub?.unsubscribe();

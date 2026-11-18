@@ -70,6 +70,7 @@ import {
   fromTemplateStem,
   hasHistory,
   lastBaseForRepo,
+  parseTaskPriority,
   resolveFields,
   targetableRepos,
   validate,
@@ -290,7 +291,10 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
               }
 
               <!-- Optional Template Launcher & Live Composition Preview -->
-              @if (!draft().workstream && templates().length > 0) {
+              @if (
+                !draft().workstream &&
+                (templates().length > 0 || selectedTemplateId())
+              ) {
                 <div class="nt-template-box" data-testid="nt-template-section">
                   <div class="field">
                     <span>Start from template</span>
@@ -370,6 +374,43 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                     [ngTemplateOutletContext]="{ $implicit: id }"
                   />
                 }
+              }
+
+              @if (!draft().workstream) {
+                <label class="field">
+                  <span>Task priority</span>
+                  <input
+                    #priorityInput
+                    type="text"
+                    inputmode="numeric"
+                    data-testid="nt-priority"
+                    placeholder="5"
+                    [value]="draft().priority"
+                    [attr.aria-invalid]="priorityInvalid() ? 'true' : null"
+                    [attr.aria-describedby]="
+                      priorityInvalid() ? 'nt-priority-err' : 'nt-priority-help'
+                    "
+                    (input)="set('priority', val($event))"
+                    (blur)="normalizePriority()"
+                  />
+                  @if (priorityInvalid()) {
+                    <small
+                      id="nt-priority-err"
+                      class="nt-field-error"
+                      role="alert"
+                      data-testid="nt-priority-error"
+                      >Use a whole number, 1 or more.</small
+                    >
+                  } @else {
+                    <small id="nt-priority-help" class="muted">{{
+                      selectedTemplate()?.priority
+                        ? "Default " +
+                          selectedTemplate()!.priority +
+                          ", from the template; higher runs first."
+                        : "Default 5; higher runs first."
+                    }}</small>
+                  }
+                </label>
               }
 
               <!-- Collapsible Capabilities & Repo Context Section -->
@@ -576,7 +617,12 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
                   type="submit"
                   class="btn-primary"
                   data-testid="new-task-submit"
-                  [disabled]="busy() || !canFile() || !!forkHead()?.error"
+                  [disabled]="
+                    busy() ||
+                    !canFile() ||
+                    !!forkHead()?.error ||
+                    priorityInvalid()
+                  "
                 >
                   {{
                     draft().workstream
@@ -1186,16 +1232,23 @@ export class NewTaskSheetComponent {
 
   protected readonly shapeFields = computed<TaskShapeFields>(() => {
     const d = this.draft();
+    const p = parseTaskPriority(d.priority);
     return {
       title: d.title,
       description: d.description,
       repo: d.repo === NO_REPO ? "" : d.repo,
       base: d.base,
-      priority: 5,
+      priority: Number.isNaN(p) ? 5 : p,
       model: d.model,
       dependsOn: d.dependsOn,
     };
   });
+
+  protected readonly priorityInvalid = computed(
+    () =>
+      String(this.draft().priority ?? "").trim() !== "" &&
+      Number.isNaN(parseTaskPriority(this.draft().priority)),
+  );
 
   private readonly edited = new Set<keyof NewTaskDraft>();
   private generation = 0;
@@ -1203,6 +1256,8 @@ export class NewTaskSheetComponent {
   private readonly sheet = viewChild<ElementRef<HTMLElement>>("sheet");
   private readonly titleInput =
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
+  private readonly priorityInput =
+    viewChild<ElementRef<HTMLInputElement>>("priorityInput");
   private readonly repoSelect = viewChild<PillSelectComponent>("repoSelect");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
@@ -1227,15 +1282,22 @@ export class NewTaskSheetComponent {
       this.templates().find((t) => t.id === this.selectedTemplateId()) ?? null,
   );
 
-  protected readonly templateOptions = computed<PillOption[]>(() => [
-    { value: "", label: "None — write task directly" },
-    ...this.templates().map((t) => ({
-      value: t.id,
-      label: t.declaredIn?.repo
-        ? `${t.name || t.id} (${t.declaredIn.repo})`
-        : t.name || t.id,
-    })),
-  ]);
+  protected readonly templateOptions = computed<PillOption[]>(() => {
+    const opts: PillOption[] = [
+      { value: "", label: "None — write task directly" },
+      ...this.templates().map((t) => ({
+        value: t.id,
+        label: t.declaredIn?.repo
+          ? `${t.name || t.id} (${t.declaredIn.repo})`
+          : t.name || t.id,
+      })),
+    ];
+    const sel = this.selectedTemplateId();
+    if (sel && !opts.some((o) => o.value === sel)) {
+      opts.push({ value: sel, label: sel });
+    }
+    return opts;
+  });
 
   protected readonly reviewTemplateOptions = computed<PillOption[]>(() => [
     { value: "", label: "None" },
@@ -1477,17 +1539,28 @@ export class NewTaskSheetComponent {
 
         const saved = Object.keys(prefill).length ? null : this.svc.saved();
         if (saved) {
+          this.selectedTemplateId.set(saved.draft.templateId ?? "");
           this.draft.set(saved.draft);
           saved.edited.forEach((k) => this.edited.add(k));
         } else {
+          const initTmplId = prefill.templateId ?? "";
+          this.selectedTemplateId.set(initTmplId);
           this.draft.set(
             emptyDraft(this.config(), this.inbox.tasks(), prefill),
           );
-          Object.keys(prefill).forEach((k) =>
-            this.edited.add(k as keyof NewTaskDraft),
-          );
+          Object.keys(prefill).forEach((k) => {
+            if (k !== "templateId" && k !== "templatePriority") {
+              this.edited.add(k as keyof NewTaskDraft);
+            }
+          });
         }
-        setTimeout(() => this.titleInput()?.nativeElement.focus());
+        setTimeout(() =>
+          (
+            this.titleInput()?.nativeElement ??
+            this.priorityInput()?.nativeElement ??
+            this.sheet()?.nativeElement
+          )?.focus(),
+        );
         if (prefill.origin || prefill.workstream) this.wsStore.ensureLoaded();
         void this.loadConfigAndSupporting(prefill);
       });
@@ -1516,6 +1589,34 @@ export class NewTaskSheetComponent {
           if (gen !== this.generation || !this.svc.isOpen()) return;
           const list = Array.isArray(v) ? v : (v?.templates ?? []);
           this.templates.set(list);
+          const selId = this.selectedTemplateId();
+          if (selId) {
+            const tmpl = list.find((t) => t.id === selId);
+            if (tmpl) {
+              const curVals = this.templateValues();
+              const vals: Record<string, string> = {};
+              for (const f of tmpl.fields ?? []) {
+                vals[f.name] = curVals[f.name] ?? f.default ?? "";
+              }
+              this.templateValues.set(vals);
+              if (!this.edited.has("priority")) {
+                this.draft.update((d) => ({
+                  ...d,
+                  priority: String(tmpl.priority || 5),
+                }));
+              }
+              if (tmpl.repo && !this.edited.has("repo")) {
+                this.pickRepo(tmpl.repo);
+              } else if (
+                tmpl.declaredIn?.repo &&
+                !this.draft().repo &&
+                !this.edited.has("repo")
+              ) {
+                this.pickRepo(tmpl.declaredIn.repo);
+              }
+              void this.refreshComposition();
+            }
+          }
         })
         .catch(() => undefined);
     }
@@ -1581,6 +1682,13 @@ export class NewTaskSheetComponent {
       this.error.set(null);
     }
     const tmpl = this.templates().find((t) => t.id === id);
+    this.draft.update((d) => ({
+      ...d,
+      templateId: id || undefined,
+      ...(!this.edited.has("priority")
+        ? { priority: String(tmpl?.priority || 5) }
+        : {}),
+    }));
     if (!tmpl) {
       this.templateValues.set({});
       return;
@@ -1596,6 +1704,14 @@ export class NewTaskSheetComponent {
       this.pickRepo(tmpl.declaredIn.repo);
     }
     void this.refreshComposition();
+  }
+
+  protected normalizePriority(): void {
+    const raw = this.draft().priority;
+    const n = parseTaskPriority(raw);
+    if (!Number.isNaN(n) && String(n) !== raw) {
+      this.draft.update((d) => ({ ...d, priority: String(n) }));
+    }
   }
 
   protected setTemplateField(name: string, value: string): void {
@@ -1645,10 +1761,15 @@ export class NewTaskSheetComponent {
   }
 
   private reseed(fresh: NewTaskDraft): void {
+    const tmpl = this.selectedTemplate();
     this.draft.update((d) => {
-      const next = { ...fresh };
+      const next: NewTaskDraft = {
+        ...fresh,
+        templateId: this.selectedTemplateId() || undefined,
+        priority: tmpl?.priority ? String(tmpl.priority) : fresh.priority,
+      };
       for (const k of this.edited) {
-        (next as Record<string, unknown>)[k] = d[k];
+        (next as unknown as Record<string, unknown>)[k] = d[k];
       }
       return next;
     });
@@ -1722,7 +1843,8 @@ export class NewTaskSheetComponent {
       (k === "title" && curErr?.field === "title") ||
       ((k === "newBranch" || k === "newBranchName") &&
         curErr?.field === "newBranchName") ||
-      (k === "foundIn" && curErr?.field === "foundIn")
+      (k === "foundIn" && curErr?.field === "foundIn") ||
+      (k === "priority" && curErr?.field === "priority")
     ) {
       this.error.set(null);
     }
@@ -1961,6 +2083,8 @@ export class NewTaskSheetComponent {
         this.titleInput()?.nativeElement.focus();
       } else if (problem.field === "newBranchName") {
         this.branchInput()?.nativeElement.focus();
+      } else if (problem.field === "priority") {
+        this.priorityInput()?.nativeElement.focus();
       }
       return;
     }
@@ -1981,6 +2105,13 @@ export class NewTaskSheetComponent {
       });
       const differs = (a: unknown, b: unknown) =>
         JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+      const effectivePri =
+        String(d.priority ?? "").trim() === ""
+          ? tmpl?.priority || 5
+          : parseTaskPriority(d.priority);
+      const priorityOverridden =
+        !Number.isNaN(effectivePri) &&
+        effectivePri !== (tmpl ? tmpl.priority || 5 : 5);
       const OVERRIDE_KEYS: (keyof NewTaskDraft)[] = [
         "base",
         "newBranch",
@@ -2009,6 +2140,7 @@ export class NewTaskSheetComponent {
         "customFields",
       ];
       const hasExtraTaskOverrides =
+        priorityOverridden ||
         d.attachments.length > 0 ||
         d.dependsOn.length > 0 ||
         d.reads.length > 0 ||
@@ -2195,7 +2327,10 @@ export class NewTaskSheetComponent {
   protected close(): void {
     const d = this.draft();
     if (d.title.trim() || d.description.trim()) {
-      this.svc.keep(d, [...this.edited]);
+      this.svc.keep(
+        { ...d, templateId: this.selectedTemplateId() || undefined },
+        [...this.edited],
+      );
     }
     this.svc.close();
   }

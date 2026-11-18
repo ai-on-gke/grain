@@ -295,8 +295,12 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   schedules and declared triggers are rows of Schedules & Triggers and
   count there. Its own chips (Active, Paused, Event triggers, Suppressed)
   narrow within the tab. Finding one item across kinds is the
-  "Filter this view" box on each tab, and the header New menu creates any
-  kind from any tab (task 6180).
+  "Filter this view" box on each tab; Templates and Suites open their
+  narrowed kind directly (`+ New template`, `+ New suite`), while
+  Schedules & Triggers, Repo Workflows & Declarations and Software
+  Workflow & QA offer the header `New ▾` menu to create any kind (tasks
+  6180, 6916). The rail's `Processes` destination carries a neutral total
+  count badge (`schedules + templates + suites + triggers`).
 
 ### Workstream detail
 
@@ -651,7 +655,16 @@ Rules:
   (`g-grants-picker` with `[policyVerdicts]="true"`, so a grant the
   capability policy denies, may refuse or reserves for CI is badged and
   explained, and a refused method is listed disabled with the policy's
-  reason) and Model (`g-model-picker` plus *Use default*). Where
+  reason) and Model (`g-model-picker` plus *Use default*). Templates also
+  carry Task priority (whole number ≥ 1, `1e3` → `1000`), Interactive
+  (live-chat switch, explained in `Launch task from template` when set) and
+  `New task from this template` (carrying priority into the New task sheet,
+  or opening `Launch task from template` when input fields are declared).
+  Inline-prompt schedules also carry Network access, Reads, Writes and
+  declared Custom fields, and the schedule Configuration pane lists
+  Admission, Hosting and Keep running beside Model. Suite forms use a
+  searchable multi-select `Templates` combobox with an inline `+ New template`
+  (gated on `templates:write` and kept in place when refused). Where
   something else decides a setting (a template behind a schedule, a suite),
   the form says so instead of offering a box the server would ignore.
 - **An edit sends only what changed.** A PATCH from a form leaves out each
