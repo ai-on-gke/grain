@@ -78,12 +78,29 @@ func raisePipelineNotification(ctx context.Context, store *model.Store, n model.
 	return raised, nil
 }
 
+// strictLevelTriggered makes ensurePipelineNotification refuse a family
+// model.LevelTriggeredFamily does not list. Set by this package's tests
+// (levelguard_internal_test.go); a daemon only logs.
+var strictLevelTriggered = false
+
 // ensurePipelineNotification is raisePipelineNotification for a standing
 // condition a reconciler finds again every cycle: it raises only when
 // the subject is not already open at n's severity or above, so the
 // notification's raise count stays a count of something rather than of
 // cycles.
+//
+// Every family raised through it is level-triggered: a clear only lasts
+// until the next cycle. model.LevelTriggeredFamily must say so, or a bulk
+// clear's expectedBack undercounts. With strictLevelTriggered (this
+// package's tests) an unlisted family is an error, so the reconciler's own
+// tests catch the omission.
 func ensurePipelineNotification(ctx context.Context, store *model.Store, n model.Notification, now time.Time) error {
+	if family := model.NotificationFamily(n.Subject); !model.LevelTriggeredFamily(family) {
+		if strictLevelTriggered {
+			return fmt.Errorf("orchestrator: %s is raised by ensurePipelineNotification but is not in model's levelTriggeredFamilies", family)
+		}
+		log.Printf("orchestrator: %s is level-triggered but not listed in model.LevelTriggeredFamily", family)
+	}
 	open, err := store.OpenNotification(ctx, n.Subject)
 	if err != nil {
 		return err

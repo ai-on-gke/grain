@@ -201,6 +201,19 @@ func (s *Store) FireSchedule(ctx context.Context, sched Schedule, now time.Time,
 	return s.fireSchedule(ctx, sched, now, loc, stateRepo, true, "")
 }
 
+// FireScheduleUnderPublishingHold fires sched as FireSchedule does --
+// advancing its cadence and keeping overlap and overlap-group holds in force
+// -- while bypassing SkipWhenPublishingHeld for this occurrence. The
+// orchestrator uses this when a release candidate is currently in
+// qualification so the release train can still judge, release or drop that rc
+// while main's publishing is held (skipping only cut).
+func (s *Store) FireScheduleUnderPublishingHold(ctx context.Context, sched Schedule, now time.Time,
+	loc *time.Location, stateRepo RepoRef) (ScheduleFiring, error) {
+
+	sched.SkipWhen = SkipWhenNever
+	return s.fireSchedule(ctx, sched, now, loc, stateRepo, true, "")
+}
+
 // resolveTemplate is the template id means whatever it means: this
 // build's own for a "system:" id (SystemTemplate), and this
 // deployment's `template` row for every other.
@@ -297,6 +310,13 @@ func (s *Store) fireSchedule(ctx context.Context, sched Schedule, now time.Time,
 		}
 		if err := s.resolveHeldScheduleSkips(ctx, sched.ID, now, firing.TaskID,
 			foldedOccurrences(sched, now, loc)); err != nil {
+			return firing, err
+		}
+		// The schedule is no longer starved. Its blocker closing clears
+		// the notification as well, but a workflow schedule fires over a
+		// review past workflowReviewHold and leaves it open.
+		if _, err := s.ClearNotification(ctx, NotificationSubject(FamilyScheduleStarved, sched.ID),
+			PrincipalString(SchedulePrincipal)); err != nil {
 			return firing, err
 		}
 	}

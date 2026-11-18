@@ -74,11 +74,13 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
   let gets: { route: string; query?: string }[];
   let posts: unknown[];
   let methods: CapabilityMethod[];
+  let sets: { name: string }[];
 
   beforeEach(() => {
     gets = [];
     posts = [];
     methods = [];
+    sets = [];
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
@@ -90,7 +92,7 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
               if (route === "GET /api/capability-methods") {
                 return Promise.resolve({ items: structuredClone(methods) });
               }
-              return Promise.resolve({ sets: [] });
+              return Promise.resolve({ sets: structuredClone(sets) });
             },
             post: (_route: string, _p: unknown, body: unknown) => {
               posts.push(body);
@@ -251,5 +253,75 @@ describe("GrantsPickerComponent with policyVerdicts", () => {
     expect(
       el.querySelector('[data-testid="held-grant-policy-2"]')?.classList,
     ).toContain("is-warn");
+  });
+
+  it("notes a refused grant before it is held, links it, and refuses it from every builder mode", async () => {
+    methods = [
+      {
+        ref: "https://grain.dev/capabilities/api#tasks-admin",
+        capability: "https://grain.dev/capabilities/api",
+        method: "tasks-admin",
+        policy: { task: "denied" },
+      },
+      {
+        ref: "https://grain.dev/capabilities/api#tasks-read",
+        capability: "https://grain.dev/capabilities/api",
+        method: "tasks-read",
+      },
+      {
+        ref: "https://grain.dev/capabilities/gcp#gcp-key",
+        capability: "https://grain.dev/capabilities/gcp",
+        method: "gcp-key",
+        policy: { task: "denied" },
+      },
+    ];
+    sets = [{ name: "tasks-admin" }, { name: "tasks-read" }];
+    const f = TestBed.createComponent(GrantsPickerComponent);
+    f.componentRef.setInput("policyVerdicts", true);
+    const emitted: string[][] = [];
+    f.componentInstance.heldChange.subscribe((v) => emitted.push(v));
+    await settle(f);
+    const el = f.nativeElement as HTMLElement;
+    el.querySelector<HTMLElement>('[data-testid="gp-add-open"]')!.click();
+    await settle(f);
+
+    // API scope: the denied set is not the default, and its note links
+    // to the policy without the held-only "Remove this grant".
+    expect(
+      el.querySelector('[data-testid="gp-api-set"]')?.textContent,
+    ).toContain("api:tasks-read");
+    const inst = f.componentInstance as unknown as {
+      selectedApiSet: { set(v: string): void };
+      rawGrant: { set(v: string): void };
+      attachFromBuilder(): Promise<void>;
+    };
+
+    // Custom grant: typed by hand, a denied method is noted and refused.
+    el.querySelector<HTMLElement>('[data-testid="gp-mode-raw"]')!.click();
+    inst.rawGrant.set("https://grain.dev/capabilities/gcp#gcp-key={}");
+    await settle(f);
+    const note = el.querySelector<HTMLLIElement>(
+      '[data-testid="gp-policy-notes"] li[data-policy-grant^="https://grain.dev/capabilities/gcp#gcp-key"]',
+    );
+    expect(note?.dataset["policyVerdict"]).toBe("denied");
+    expect(note?.querySelector("a")?.getAttribute("href")).toBe(
+      "/settings/capabilities#capability-policy",
+    );
+    expect(note?.textContent).toContain("cannot be granted here");
+    expect(note?.textContent).not.toContain("Remove this grant");
+    await inst.attachFromBuilder();
+    await settle(f);
+    expect(el.querySelector('[data-testid="gp-error"]')?.textContent).toContain(
+      "Denied by the capability policy",
+    );
+
+    // And an API scope set the policy denies, picked anyway.
+    el.querySelector<HTMLElement>('[data-testid="gp-mode-api"]')!.click();
+    await settle(f);
+    inst.selectedApiSet.set("tasks-admin");
+    await inst.attachFromBuilder();
+    await settle(f);
+    expect(posts).toEqual([]);
+    expect(emitted).toEqual([]);
   });
 });

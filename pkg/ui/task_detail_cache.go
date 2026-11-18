@@ -99,6 +99,12 @@ func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id st
 }
 
 func (c *taskDetailCache) responseForWithToken(ctx context.Context, client *Client, id string, page TaskPage, paged bool, token string) ([]byte, string, error) {
+	// A diagnostic lease can expire without a domain commit. Selected task
+	// observations must refresh even when the ordinary detail token is stable.
+	if client.observesGates(id) {
+		token = ""
+	}
+
 	cacheKey := taskDetailCacheKey(id, page, paged)
 	if token != "" {
 		if entry, ok := c.hit(cacheKey, token, paged); ok {

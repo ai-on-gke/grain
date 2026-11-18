@@ -172,7 +172,16 @@ do not pull in an icon font.
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
   `Details (N)` breakdown, paired with status on the topbar live pill and
   contextual queue/settings notices formatted in the configured or local
-  timezone with relative countdowns.
+  timezone with relative countdowns. A page that changes the pause itself
+  (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
+  so the banner follows the click rather than the next poll.
+- **Disconnected banner:** the one standing banner above the whole shell
+  (`services/connection.service.ts`). It is raised when requests fail to
+  connect, when a gateway answers 502/503/504, or when a polled read goes
+  10 s unanswered. It says when the outage began, in the deployment's time
+  zone, and clears itself on the first answer. It sits in flow above the
+  rail and top bar, never over them (`g-root:has(> .conn-banner)` becomes a
+  column), is `role="status"`, and has no close button.
 
 ### Destinations fill the stage
 
@@ -385,6 +394,22 @@ working. A table cell holding a list (scopes, repositories) stays on one line,
 truncates with the full list in its `title`, and drops secondary columns
 (`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
 
+A capability server opens on a page of its own,
+`/settings/capabilities/<encoded id>` (the classic `serverPath`), reached from
+its id in the servers table and from Stored secrets' "Used by" links: the
+server's state, what it gives a task, its connection (edited, renamed after a
+confirm, tested unsaved, placed on a host), its secrets, its server settings
+and what holds a grant on it, each holder linked to its page (a task to the
+classic `/tasks/<id>` until `/next/` is the default). Server settings are drawn
+from the schema its configure tool declares, never hand-written per server:
+deprecated and grain-injected fields are left out, an enum reads through its
+`x-grain-enum-labels`, a write-only field is a password box with a set /
+missing / not set chip whose typed value goes as `configSecrets`, a refusal
+keyed by field shows under that field, and a field that does not apply given
+its siblings (gcp's `pool_max` in keyless token mode) is hidden unless it holds
+a value. Removing a server asks first and lists what holds it, linked, in the
+confirm (`ConfirmRequest.items`).
+
 A setting kept in the secret store rather than in grain/config (the Hub's
 `grc_…` registration token) stays editable while a config-repo lock
 disables the fields around it, says when the daemon has no secret store
@@ -423,19 +448,27 @@ items or topbar chrome:
     unclipped header `<g-pill-select testid="qa-flow-switcher">`.
   - **Center stage spine (`g-qa-v3-studio`):** workflow header with version
     switcher (`qa-version-switcher`), honest rollout status pill with
-    `<g-status-icon>`, 1-click `Set as default…` (`PUT /api/settings` + Undo),
+    `<g-status-icon>`, 1-click `Set as default…` / `Turn off default…`
+    (`PUT /api/settings` + Undo, clearing all cards to `Available` when no
+    default workflow is active),
+    accessible `Guide` reference modal (`qa-guide-dialog`), opaque elevated
+    action/select menus (`qa-action-pop` + smart edge-clamped `g-pill-select`),
     and explicit `Customize as vN` draft mode (zero disabled inputs in read
     mode). All 8 lifecycle stages start collapsed by default so active stages
-    fit above the fold; partial workflows show only active stages plus a single
-    `+ N stages skipped in this workflow — Show all 8` bar
-    (`[data-testid="qa-toggle-skipped-stages"]`).
+    fit above the fold; partial workflows keep skipped stages tucked behind
+    `+ N stages skipped in this workflow — Show all 8`
+    (`[data-testid="qa-toggle-skipped-stages"]`) across read and draft modes,
+    `+ Add substep` appears only on stages that accept custom substeps (scoping
+    the catalog strictly to valid substep types for that stage), and custom
+    substeps offer 1-click inline row and drawer-header deletion with `Undo`.
   - **Right focused drawer (`g-qa-step-drawer`, `clamp(340px, 34%, 440px)`):**
     defaults to the **Workflow guide** (`[data-testid="qa-workflow-guide"]`)
     with `Where is this workflow used?` provenance
     (`[data-testid="qa-flow-detail-card"]`), `Settings → Tasks` link, and live
     stage insights; focuses on a single substep when selected, using zero-JSON
     example test cases (`Caught` / `Allowed` live pills) instead of raw JSON
-    textareas and `[gTip]` explanations across toolbar controls and `?` icons.
+    textareas and both hover `[gTip]` and click-to-toggle inline help callouts
+    (`[data-testid="qa-inline-help"]`) on `?` buttons.
   - **Phone (`< 600px`, `390×844`):** arrives on the single-column workflow
     catalog without opening the mobile inspector unasked; selecting a workflow
     or substep opens the detail view with `← Back`
@@ -469,15 +502,15 @@ it rather than copy it.
 | Conversation | `shared/conversation/` | thread + composer (section 3) |
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
-| Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
+| Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope, and a required reason (`reason`) where the action is audited, such as the Inbox's Clear all |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters; Mermaid fences draw as diagrams (`shared/mermaid.ts`) |
 | Prompt and attributes panes | `shared/detail-panes.css` (`.g-panes`, `.g-pane`, `.g-attrs`) | what an agent is told beside the facts about it: task detail, Processes schedule and template inspectors |
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
-| Info popover | `shared/info-popover.component.ts` (`g-info-popover`) | inline `(i)` help popovers on Settings and schema-driven capability forms: native `<button type="button">` with `aria-expanded` / `aria-describedby`, opens on hover/focus and pins open on click, `Enter`, or `Space` without immediately toggling shut after Tab focus; closes on second activation, `Escape`, outside click, or focus leaving |
-| Capability args form | `settings/capability-args-form.component.ts` (`g-capability-args-form`) | JSON Schema-driven capability server configuration editor: renders `x-grain-enum-labels` via `<g-pill-select>`, booleans via `.g-switch`, write-only secrets via `type="password"` `autocomplete="new-password"`, managed secret rotation, arrays/maps/variants, and JSON fallback |
-| Capability server detail | `settings/capability-server-detail.component.ts` (`g-capability-server-detail`) | per-server `/settings/capabilities/<id>` page (matching encoded or pasted capability URLs): methods table, connection editor with Host placement, schema-driven settings, built-in `host-script` test runner, `figma` OAuth/test, `gchat` usage/test, `config-map` placements, holder links, and confirm-gated Remove/Rename |
+| Info popover | `shared/info-popover.component.ts` | an `(i)` beside a field or name whose explanation is too long for a tooltip: opens on click, Enter or Space, closes on Escape (focus back on the button), an outside click or a second press, and shifts to stay inside the viewport |
+| Schema form | `settings/capability-schema-form.component.ts` | a form drawn from a JSON schema (a capability server's configure schema): never hand-written per server |
+| Built-in server panels | `settings/capability-server-builtins.component.ts` | the extra card a built-in server's page carries below Server settings: host-script's Scripts (usage, limits, a Test run with arguments, exit code, stdout and stderr), gchat's Chat spaces (recent use, Send test message) and config-map's File placements (each map's directory and files) |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
 | Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
 | Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |
@@ -895,3 +928,20 @@ Autonomous Goal Mode lets an operator hand Grain a multi-pass outcome ("Prototyp
 
 - **Tasks (`/next/tasks`)** and **Agents (`/next/agents`)**: render compact status pills (`data-testid="goal-badge-<id>"`) showing `Goal ✓` (`healthy`), `Goal capped` (`warn`), or `Goal · N/M` (`setup`).
 - **Workstreams (`/next/workstreams`)**: streams whose root or member tasks run in Autonomous Goal Mode display an `Autonomous goal` chip (`data-testid="ws-goal-chip-<key>"`).
+
+
+## Task gate observations
+
+Task detail may show a neutral **Built-in gates · Observation only** card when
+its ordinary task read supplies the observation sidecar. This is a diagnostic
+surface: keep the legacy-authority sentence visible, use explicit textual status,
+show stale/error/incomplete reasons, and never style a met observation as task
+readiness or successful completion. Remediation and wait predictions are inert
+text; no shadow action/override buttons or links are permitted. Existing task
+controls stay owned by legacy services. Collapse version/config/provenance and
+bounded comparison history into keyboard-accessible disclosures with at least 24px
+hit targets and the primary focus ring. Body/title use 14/20 (title 600), metadata
+uses 12/16 and identifiers/digests use monospace. Expiry must update locally even
+when later API requests are unchanged or unavailable. Supported/deferred runtime
+surfaces and the separate rollout/review process are in
+[the observation guide](../../docs/gate-observations.md).

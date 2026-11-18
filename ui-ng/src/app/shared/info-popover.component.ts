@@ -16,296 +16,177 @@ import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
-  NgZone,
-  OnDestroy,
   ViewEncapsulation,
-  computed,
   inject,
   input,
   signal,
   viewChild,
 } from "@angular/core";
 
-let nextInfoPopoverId = 0;
+let nextId = 0;
 
-// InfoPopoverComponent renders an (i) icon button whose popover holds a
-// field, method, or server description. It opens on hover, keyboard focus,
-// click, Enter, or Space. Clicking or pressing Enter/Space pins a
-// transiently-open popover instead of closing what focus just opened; a
-// second activation, Escape, blur outside, or clicking outside closes it.
+// InfoPopover is an (i) button whose explanation opens on click -- and
+// so on Enter and Space, the button's own keys -- rather than on hover,
+// which neither a keyboard nor a phone has (the classic InfoPopover). It
+// closes on Escape, handing focus back to the button, on a second press
+// and on a click anywhere else.
 @Component({
   selector: "g-info-popover",
-  encapsulation: ViewEncapsulation.None,
-  styleUrl: "./info-popover.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: {
-    "(document:click)": "onDocClick($event)",
-    "(focusout)": "onFocusOut($event)",
-  },
+  encapsulation: ViewEncapsulation.None,
+  styles: `
+    g-info-popover {
+      position: relative;
+      display: inline-flex;
+      vertical-align: middle;
+    }
+    .g-info-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: none;
+      border-radius: var(--md-sys-shape-corner-full);
+      background: transparent;
+      color: var(--md-sys-color-on-surface-variant);
+      cursor: pointer;
+    }
+    .g-info-btn:hover,
+    .g-info-btn[aria-expanded="true"] {
+      background: var(--md-sys-color-surface-container-high);
+      color: var(--md-sys-color-on-surface);
+    }
+    .g-info-btn:focus-visible {
+      outline: 2px solid var(--md-sys-color-primary);
+      outline-offset: 1px;
+    }
+    .g-info-pop {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      z-index: 30;
+      width: max-content;
+      max-width: min(360px, calc(100vw - 48px));
+      padding: 8px 12px;
+      border-radius: var(--md-sys-shape-corner-sm, 8px);
+      background: var(--md-sys-color-inverse-surface);
+      color: var(--md-sys-color-inverse-on-surface);
+      box-shadow: var(--md-sys-elevation-dialog);
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 400;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      text-align: left;
+    }
+    g-info-popover.is-end .g-info-pop {
+      left: auto;
+      right: 0;
+    }
+  `,
+  host: { "[class.is-end]": "end()" },
   template: `
-    @if (title()) {
-      <span #wrapEl class="g-info-wrap">
-        <button
-          #btnEl
-          type="button"
-          class="g-info-btn"
-          [attr.aria-label]="ariaLabel()"
-          [attr.aria-expanded]="open()"
-          [attr.aria-describedby]="open() ? tipId : null"
-          [attr.data-testid]="testId() || 'info-popover'"
-          [attr.data-info-for]="cleanLabel() || null"
-          (mouseenter)="onMouseEnter()"
-          (mouseleave)="onMouseLeave()"
-          (focus)="onFocus()"
-          (click)="onClick($event)"
-          (keydown)="onKeyDown($event)"
-          (keyup)="onKeyUp($event)"
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="16" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12.01" y2="8" />
-          </svg>
-        </button>
-        @if (open()) {
-          <span
-            #panelEl
-            [id]="tipId"
-            role="tooltip"
-            class="g-info-popover-panel"
-            [style.top.px]="posTop()"
-            [style.left.px]="posLeft()"
-            (mouseenter)="onMouseEnter()"
-            (mouseleave)="onMouseLeave()"
-            >{{ title() }}</span
-          >
-        }
-      </span>
+    <button
+      #btn
+      type="button"
+      class="g-info-btn"
+      [attr.aria-label]="'About ' + label()"
+      [attr.aria-expanded]="open()"
+      [attr.aria-controls]="popId"
+      [attr.data-testid]="testid() || null"
+      (click)="toggle($event)"
+      (keydown.escape)="close($event)"
+    >
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        fill="currentColor"
+      >
+        <path
+          d="M11 17h2v-6h-2v6zm1-15C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM11 9h2V7h-2v2z"
+        />
+      </svg>
+    </button>
+    @if (open()) {
+      <div
+        #pop
+        class="g-info-pop"
+        role="note"
+        [style.transform]="shift() ? 'translateX(' + shift() + 'px)' : null"
+        [id]="popId"
+        [attr.data-testid]="testid() ? testid() + '-pop' : null"
+      >
+        {{ text() }}
+      </div>
     }
   `,
 })
-export class InfoPopoverComponent implements OnDestroy {
+export class InfoPopoverComponent {
+  readonly text = input.required<string>();
+  readonly label = input("this");
+  readonly testid = input<string>("");
+  // Open towards the left, for a button at the end of a line.
+  readonly end = input(false);
+
+  protected readonly open = signal(false);
+  // How far the open popover is moved sideways to stay inside the
+  // viewport, measured once it has rendered.
+  protected readonly shift = signal(0);
+  private readonly pop = viewChild<ElementRef<HTMLElement>>("pop");
+  protected readonly popId = `g-info-${++nextId}`;
+  private readonly btn = viewChild<ElementRef<HTMLButtonElement>>("btn");
+  private readonly host = inject(ElementRef<HTMLElement>);
   private readonly doc = inject(DOCUMENT);
-  private readonly zone = inject(NgZone);
 
-  readonly title = input<string | null | undefined>("");
-  readonly label = input<string | null | undefined>("");
-  readonly testId = input<string>("");
-
-  protected readonly tipId = `g-info-tip-${++nextInfoPopoverId}`;
-
-  private readonly hoverOpen = signal(false);
-  private readonly focusOpen = signal(false);
-  private readonly pinned = signal(false);
-
-  protected readonly open = computed(
-    () => this.pinned() || this.hoverOpen() || this.focusOpen(),
-  );
-
-  protected readonly posTop = signal(0);
-  protected readonly posLeft = signal(12);
-
-  private readonly wrapEl = viewChild<ElementRef<HTMLElement>>("wrapEl");
-  private readonly btnEl = viewChild<ElementRef<HTMLButtonElement>>("btnEl");
-  private readonly panelEl = viewChild<ElementRef<HTMLElement>>("panelEl");
-
-  protected readonly cleanLabel = computed(() =>
-    String(this.label() ?? "")
-      .replace(/\s*\*$/, "")
-      .trim(),
-  );
-
-  protected readonly ariaLabel = computed(() => {
-    const lbl = this.cleanLabel();
-    return lbl ? `About ${lbl}` : "More information";
-  });
-
-  private leaveTimer: ReturnType<typeof setTimeout> | null = null;
-  private repositionTimer: ReturnType<typeof setTimeout> | null = null;
-
-  private readonly onCaptureEscape = (ev: KeyboardEvent): void => {
-    if (ev.key === "Escape" && this.open()) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      this.zone.run(() => this.close());
+  private readonly onDocPointer = (ev: Event): void => {
+    if (!this.host.nativeElement.contains(ev.target as Node)) {
+      this.open.set(false);
     }
   };
-
-  private readonly onReposition = (): void => {
-    if (!this.open()) return;
-    // A hover-only popover closes on scroll; one pinned or held open by
-    // keyboard focus follows its button (focusing it can itself scroll
-    // the page, which must not close what the focus just opened).
-    if (!this.pinned() && !this.focusOpen()) {
-      this.zone.run(() => this.close());
-      return;
-    }
-    this.zone.run(() => this.position());
+  private readonly onDocKey = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape" && this.open()) this.close(ev);
   };
 
-  ngOnDestroy(): void {
-    this.clearTimers();
-    this.detachListeners();
-  }
-
-  protected onMouseEnter(): void {
-    this.clearLeaveTimer();
-    const wasOpen = this.open();
-    this.hoverOpen.set(true);
-    if (!wasOpen) this.onOpened();
-  }
-
-  protected onMouseLeave(): void {
-    this.clearLeaveTimer();
-    this.leaveTimer = setTimeout(() => {
-      this.hoverOpen.set(false);
-      if (!this.open()) this.detachListeners();
-    }, 100);
-  }
-
-  protected onFocus(): void {
-    const wasOpen = this.open();
-    this.focusOpen.set(true);
-    if (!wasOpen) this.onOpened();
-  }
-
-  protected onClick(ev: MouseEvent): void {
-    ev.stopPropagation();
-    ev.preventDefault();
-    this.togglePinned();
-  }
-
-  protected onKeyDown(ev: KeyboardEvent): void {
-    if (ev.key === "Escape" && this.open()) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      this.close();
-    } else if (ev.key === "Enter" || ev.key === " ") {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (!ev.repeat) this.togglePinned();
-    }
-  }
-
-  protected onKeyUp(ev: KeyboardEvent): void {
-    if (ev.key === " ") {
-      ev.preventDefault();
-      ev.stopPropagation();
-    }
-  }
-
-  private togglePinned(): void {
-    this.clearLeaveTimer();
-    if (this.pinned()) {
-      this.close();
-    } else {
-      const wasOpen = this.open();
-      this.pinned.set(true);
-      if (!wasOpen) this.onOpened();
-      else this.position();
-    }
-  }
-
-  protected onDocClick(ev: Event): void {
-    if (!this.open()) return;
-    const t = ev.target as Node | null;
-    if (t && !this.wrapEl()?.nativeElement.contains(t)) {
-      this.close();
-    }
-  }
-
-  protected onFocusOut(ev: FocusEvent): void {
-    if (!this.open()) return;
-    const next = ev.relatedTarget as Node | null;
-    if (next && this.wrapEl()?.nativeElement.contains(next)) return;
-    this.close();
-  }
-
-  private onOpened(): void {
-    this.attachListeners();
-    this.position();
-    this.clearRepositionTimer();
-    this.repositionTimer = setTimeout(() => {
-      this.repositionTimer = null;
-      if (this.open()) this.position();
-    }, 0);
-  }
-
-  private close(): void {
-    this.clearTimers();
-    this.pinned.set(false);
-    this.hoverOpen.set(false);
-    this.focusOpen.set(false);
-    this.detachListeners();
-  }
-
-  private position(): void {
-    const btn = this.btnEl()?.nativeElement;
-    if (!btn) return;
-    const rect = btn.getBoundingClientRect();
-    const vw = this.doc.defaultView?.innerWidth || 1024;
-    const vh = this.doc.defaultView?.innerHeight || 768;
-    const margin = 12;
-    const panel = this.panelEl()?.nativeElement;
-    const pw = panel?.offsetWidth || Math.min(360, vw - margin * 2);
-    const ph = panel?.offsetHeight || 64;
-
-    let left = rect.left + rect.width / 2 - pw / 2;
-    left = Math.max(margin, Math.min(left, vw - pw - margin));
-
-    let top = rect.bottom + 6;
-    if (top + ph > vh - margin && rect.top - ph - 6 >= margin) {
-      top = rect.top - ph - 6;
-    }
-    this.posLeft.set(Math.round(left));
-    this.posTop.set(Math.round(Math.max(margin, top)));
-  }
-
-  private clearLeaveTimer(): void {
-    if (this.leaveTimer) {
-      clearTimeout(this.leaveTimer);
-      this.leaveTimer = null;
-    }
-  }
-
-  private clearRepositionTimer(): void {
-    if (this.repositionTimer) {
-      clearTimeout(this.repositionTimer);
-      this.repositionTimer = null;
-    }
-  }
-
-  private clearTimers(): void {
-    this.clearLeaveTimer();
-    this.clearRepositionTimer();
-  }
-
-  private attachListeners(): void {
-    this.zone.runOutsideAngular(() => {
-      this.doc.addEventListener("keydown", this.onCaptureEscape, true);
-      this.doc.defaultView?.addEventListener("scroll", this.onReposition, true);
-      this.doc.defaultView?.addEventListener("resize", this.onReposition);
+  constructor() {
+    this.doc.addEventListener("pointerdown", this.onDocPointer, true);
+    this.doc.addEventListener("keydown", this.onDocKey, true);
+    inject(DestroyRef).onDestroy(() => {
+      this.doc.removeEventListener("pointerdown", this.onDocPointer, true);
+      this.doc.removeEventListener("keydown", this.onDocKey, true);
     });
   }
 
-  private detachListeners(): void {
-    this.doc.removeEventListener("keydown", this.onCaptureEscape, true);
-    this.doc.defaultView?.removeEventListener(
-      "scroll",
-      this.onReposition,
-      true,
-    );
-    this.doc.defaultView?.removeEventListener("resize", this.onReposition);
+  protected toggle(ev: Event): void {
+    ev.stopPropagation();
+    this.shift.set(0);
+    this.open.set(!this.open());
+    if (this.open()) setTimeout(() => this.fit());
+  }
+
+  private fit(): void {
+    const el = this.pop()?.nativeElement;
+    const vw = this.doc.documentElement.clientWidth;
+    if (!el || !vw) return;
+    const r = el.getBoundingClientRect();
+    const margin = 8;
+    if (r.right > vw - margin) {
+      this.shift.set(Math.max(margin - r.left, vw - margin - r.right));
+    } else if (r.left < margin) {
+      this.shift.set(margin - r.left);
+    }
+  }
+
+  protected close(ev: Event): void {
+    if (!this.open()) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.open.set(false);
+    this.btn()?.nativeElement.focus();
   }
 }

@@ -39,6 +39,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { DialogTrapDirective } from "../shared/dialog-trap.directive";
 import {
   type PillOption,
   PillSelectComponent,
@@ -75,6 +76,7 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
     QaV3StudioComponent,
     PillSelectComponent,
     ConfirmDialogComponent,
+    DialogTrapDirective,
     StatusIconComponent,
     TipDirective,
     RouterLink,
@@ -303,12 +305,24 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
                         Set as default…
                       </button>
                     }
+                    @if (canShowClearDefault(detail)) {
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="qa-clear-default-btn"
+                        gTip="Turn off the default workflow so new tasks run with no automatic workflow."
+                        (click)="confirmClearDefault()"
+                      >
+                        Turn off default…
+                      </button>
+                    }
 
                     @if (canAdmin()) {
                       <button
                         type="button"
                         class="btn-primary"
                         data-testid="qa-new-version-btn"
+                        [disabled]="publishing()"
                         [gTip]="
                           'Start an editable draft for v' +
                           nextVersionNum() +
@@ -405,6 +419,7 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
                       type="button"
                       class="qa-more-btn"
                       data-testid="qa-more-actions-btn"
+                      [disabled]="publishing()"
                       aria-label="More workflow actions"
                       aria-haspopup="menu"
                       [attr.aria-expanded]="moreMenuOpen()"
@@ -430,6 +445,20 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
                               (click)="closeMenus(); dryRun()"
                             >
                               Test on recent PRs
+                            </button>
+                          </li>
+                        }
+                        @if (
+                          !isEditing() && canWriteSettings() && qaEnabled()
+                        ) {
+                          <li role="none">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              data-testid="qa-menu-clear-default-btn"
+                              (click)="closeMenus(); confirmClearDefault()"
+                            >
+                              Turn off default workflow…
                             </button>
                           </li>
                         }
@@ -541,6 +570,116 @@ import { QaWorkflowCatalogComponent } from "./qa-workflow-catalog.component";
       </div>
     </div>
 
+    @if (guideDialogOpen()) {
+      <div
+        class="qa-guide-backdrop"
+        role="presentation"
+        (click)="guideDialogOpen.set(false)"
+      >
+        <div
+          class="qa-guide-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qa-guide-dialog-title"
+          data-testid="qa-guide-dialog"
+          gDialogTrap
+          (gDialogClose)="guideDialogOpen.set(false)"
+          (click)="$event.stopPropagation()"
+          (keydown)="$event.stopPropagation()"
+        >
+          <div class="qa-guide-head">
+            <div>
+              <span class="qa-drawer-eyebrow">Workflow reference</span>
+              <h3 id="qa-guide-dialog-title">
+                How Software Workflows &amp; QA stages work
+              </h3>
+            </div>
+            <button
+              type="button"
+              class="qa-icon-close-btn"
+              data-testid="qa-close-guide-dialog"
+              aria-label="Close workflow guide"
+              (click)="guideDialogOpen.set(false)"
+            >
+              ×
+            </button>
+          </div>
+          <ol class="qa-guide-steps">
+            <li>
+              <strong>Inspect safely:</strong> Expand any stage in the center
+              spine and click a substep to read its prompt or rule logic without
+              modifying live tasks.
+            </li>
+            <li>
+              <strong>Customize in an isolated draft:</strong> Click
+              <strong>Customize</strong> (or <strong>+ Add substep</strong>
+              inside a stage) to add stage-scoped skills, zero-JSON checks, or
+              critic passes.
+            </li>
+            <li>
+              <strong>Validate &amp; roll out:</strong> Run
+              <strong>Test on recent PRs</strong>, click
+              <strong>Publish</strong> to mint an immutable
+              <code>&#64;vN</code> version, then click
+              <strong>Set as default…</strong> or compare in an A/B experiment.
+            </li>
+          </ol>
+          <div class="qa-guide-grid">
+            <div class="qa-guide-stage-card">
+              <strong>1 · Goal &amp; subtask breakdown</strong>
+              Extracts testable acceptance criteria and slices complex tasks.
+              Add: <em>Markdown skill</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>2 · Context &amp; blast radius</strong>
+              Built-in 0..100 blast scorer (T0..T3) plus caller &amp; memory
+              discovery.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>3 · Plan &amp; fresh critique</strong>
+              Fresh-context file-plan &amp; caller audit. Add:
+              <em>Markdown skill</em>, <em>Custom critic substep</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>4 · Coding &amp; readability rules</strong>
+              Core coding contract &amp; language packs (Go, TS/Angular, Python,
+              C++). Add: <em>Markdown skill</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>5 · Pre-PR deterministic gates</strong>
+              Sub-second AST/diff floors &amp; zero-JSON rules. Add:
+              <em>Pattern</em>, <em>Companion</em>, <em>Diff-budget</em>,
+              <em>Schema</em>, or <em>Custom critic</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>6 · PR authoring &amp; self-review</strong>
+              Subject length, required PR sections, and turn-end self-audit.
+              Add: <em>Markdown skill</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>7 · Adversarial verification</strong>
+              Read-only fresh-context diff verifier on T2/T3 changes. Add:
+              <em>Markdown skill</em>, <em>Custom critic substep</em>.
+            </div>
+            <div class="qa-guide-stage-card">
+              <strong>8 · Scorecard &amp; merge triage</strong>
+              Tighten-only T0/T1 auto-merge vs. T2/T3 human-review hold.
+            </div>
+          </div>
+          <div class="dialog-actions">
+            <button
+              type="button"
+              class="btn-primary"
+              data-testid="qa-guide-got-it-btn"
+              (click)="guideDialogOpen.set(false)"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+
     @if (confirmRequest(); as req) {
       <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
     }
@@ -577,9 +716,17 @@ export class QaFlowsPanelComponent {
 
   readonly isEditing = signal(false);
   readonly isFork = signal(false);
+  /**
+   * True from a publish being accepted until the published version has been
+   * reloaded and selected. Customize and the More menu stay disabled for that
+   * window: doSelectVersion closes menus and leaves edit mode when it lands,
+   * so a draft or menu opened in between would be thrown away under the user.
+   */
+  readonly publishing = signal(false);
   readonly showParentDiff = signal(false);
   readonly testMenuOpen = signal(false);
   readonly moreMenuOpen = signal(false);
+  readonly guideDialogOpen = signal(false);
 
   readonly dryRunBusy = signal(false);
   readonly dryRunResult = signal<QADryRunResponse | null>(null);
@@ -1115,8 +1262,9 @@ export class QaFlowsPanelComponent {
   }
 
   protected openGuide(): void {
+    this.closeMenus();
     this.studio()?.openGuide();
-    this.openMobileDrawerIfPhone();
+    this.guideDialogOpen.set(true);
   }
 
   protected openYamlTab(): void {
@@ -1130,7 +1278,7 @@ export class QaFlowsPanelComponent {
 
   protected enterDraftFromStudio(): void {
     if (!this.isEditing() && this.canAdmin()) {
-      this.newVersion();
+      this.newVersion(true);
     }
   }
 
@@ -1347,8 +1495,8 @@ export class QaFlowsPanelComponent {
   }
 
   protected rolloutStatusTone(detail: QAFlowVersionDetail): string {
-    if (this.isVersionActiveDefault(detail)) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
+    if (this.qaEnabled() && this.isVersionActiveDefault(detail)) {
+      if (this.activeRolloutPct() > 0) {
         return "healthy";
       }
       return "warn";
@@ -1357,8 +1505,8 @@ export class QaFlowsPanelComponent {
   }
 
   protected rolloutStatusLabel(detail: QAFlowVersionDetail): string {
-    if (this.isVersionActiveDefault(detail)) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
+    if (this.qaEnabled() && this.isVersionActiveDefault(detail)) {
+      if (this.activeRolloutPct() > 0) {
         return `Active (${this.activeRolloutPct()}%)`;
       }
       return "Default · Paused (0%)";
@@ -1367,9 +1515,12 @@ export class QaFlowsPanelComponent {
   }
 
   protected rolloutStatusTip(detail: QAFlowVersionDetail): string {
+    if (!this.qaEnabled()) {
+      return "No default workflow is active. Use Set as default… to run this workflow on new tasks, or pin it on individual schedules and suites.";
+    }
     if (this.isVersionActiveDefault(detail)) {
-      if (this.qaEnabled() && this.activeRolloutPct() > 0) {
-        return `Active default workflow for ${this.activeRolloutPct()}% of eligible new tasks.`;
+      if (this.activeRolloutPct() > 0) {
+        return `Active default workflow for ${this.activeRolloutPct()}% of eligible new tasks. Click Turn off default… to run with no automatic workflow.`;
       }
       return "Selected as default in Settings → Tasks, but rollout is currently paused at 0%.";
     }
@@ -1386,6 +1537,58 @@ export class QaFlowsPanelComponent {
       this.isVersionActiveDefault(detail) &&
       this.activeRolloutPct() > 0;
     return !alreadyActive;
+  }
+
+  protected canShowClearDefault(detail: QAFlowVersionDetail): boolean {
+    if (!this.canWriteSettings()) return false;
+    return this.qaEnabled() && this.isVersionActiveDefault(detail);
+  }
+
+  confirmClearDefault(): void {
+    const prev = {
+      qaEnabled: this.qaEnabled(),
+      qaFlowId: this.activeFlowId() || "golden-v1-minimal",
+      qaRolloutPct: this.activeRolloutPct(),
+      qaShadowOnControl: this.qaShadowOnControl(),
+    };
+    this.confirmRequest.set({
+      title: "Turn off default workflow",
+      message:
+        "Disable the global default workflow so new tasks run with no automatic workflow unless pinned on a schedule or suite?",
+      accept: "Turn off default",
+      destructive: false,
+      run: async () => {
+        try {
+          await this.api.put("PUT /api/settings", undefined, {
+            qaEnabled: false,
+            qaRolloutPct: 0,
+            qaShadowOnControl: false,
+          });
+          this.qaEnabled.set(false);
+          this.activeRolloutPct.set(0);
+          this.qaShadowOnControl.set(false);
+          this.snackbar.show(
+            "Default workflow turned off (no automatic workflow on new tasks).",
+            {
+              label: "Undo",
+              run: async () => {
+                try {
+                  await this.api.put("PUT /api/settings", undefined, prev);
+                  this.qaEnabled.set(prev.qaEnabled);
+                  this.activeFlowId.set(prev.qaFlowId);
+                  this.activeRolloutPct.set(prev.qaRolloutPct);
+                  this.qaShadowOnControl.set(prev.qaShadowOnControl);
+                } catch {
+                  this.snackbar.show("Failed to undo default workflow change");
+                }
+              },
+            },
+          );
+        } catch {
+          this.snackbar.show("Failed to turn off default workflow");
+        }
+      },
+    });
   }
 
   confirmSetAsDefault(): void {
@@ -1763,12 +1966,12 @@ export class QaFlowsPanelComponent {
     }
   }
 
-  newVersion(): void {
+  newVersion(preserveSelection = false): void {
     ++this.dryRunSeq;
     this.dryRunBusy.set(false);
     this.isEditing.set(true);
     this.isFork.set(false);
-    this.initDraft();
+    this.initDraft(preserveSelection);
   }
 
   onForkFlowMenuClick(): void {
@@ -1798,7 +2001,7 @@ export class QaFlowsPanelComponent {
     this.openMobileDrawerIfPhone();
   }
 
-  initDraft(): void {
+  initDraft(preserveSelection = false): void {
     const detail = this.selectedDetail();
     if (!detail) return;
     const explicitSkill = extractExplicitSkillDecl(
@@ -1901,7 +2104,7 @@ export class QaFlowsPanelComponent {
     this.draftChecks.set(checks);
     this.draftCheckParams.set(params);
     this.draftDeclaration.set(draft);
-    this.studio()?.resetToDetail(detail, draft.skill);
+    this.studio()?.resetToDetail(detail, draft.skill, preserveSelection);
   }
 
   cancelEdit(): void {
@@ -2146,6 +2349,7 @@ export class QaFlowsPanelComponent {
       accept: `Publish v${targetVer}`,
       destructive: false,
       run: async () => {
+        this.publishing.set(true);
         try {
           const pubRes = (await this.api.post<
             QAFlowPublishResponse & { hash?: string }
@@ -2162,6 +2366,8 @@ export class QaFlowsPanelComponent {
           }
         } catch {
           this.snackbar.show("Publish failed");
+        } finally {
+          this.publishing.set(false);
         }
       },
     });

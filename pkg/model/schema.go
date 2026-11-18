@@ -691,7 +691,8 @@ import "strconv"
 // blast/complexity/triage tracking to `task_qa_check_run`.
 // 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
 // `repo_config`, and `task`.
-const SchemaVersion = 151
+// 152 records PR feedback source receipts and their delivery acknowledgments.
+const SchemaVersion = 152
 
 const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
   ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
@@ -4582,6 +4583,7 @@ var Tables = []string{
 	usageSettingTable,
 
 	// Durable task context (task_context.go, schema 136).
+	prFeedbackTable,
 	taskContextTable,
 	taskBriefEditTable,
 	taskBriefEditTaskIndex,
@@ -4663,6 +4665,14 @@ var Tables = []string{
 	// when the step starts and checkpointed as it runs, so a restarted
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
+
+	// Local shadow diagnostics, separate from lifecycle and event outboxes.
+	gateObservationTable,
+	gateObservationHistoryTable,
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_order` ON `gate_observation_shadow_history` (`at`,`task_id`,`generation`)",
+	// The composite index also covers expiry; retire the original prefix.
+	"DROP INDEX IF EXISTS `gate_shadow_history_at`",
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_current_at` ON `gate_observation_shadow` (`evaluated_at`)",
 
 	// Every close and reopen of a task somebody asked for, with who, when
 	// and why (model.TaskEvent).
@@ -4823,7 +4833,9 @@ GROUP BY ` + "`l`.`task_id`" + ``},
 SELECT ` + "`s`.`task_id`" + ` AS ` + "`task_id`" + `
 FROM ` + "`task_state`" + ` AS ` + "`s`" + `
 LEFT JOIN ` + "`task_blocked`" + ` AS ` + "`b`" + ` ON ` + "`b`.`task_id`" + ` = ` + "`s`.`task_id`" + `
-WHERE ` + "`s`.`state`" + ` = 'queued'
+JOIN ` + "`task`" + ` AS ` + "`t`" + ` ON ` + "`t`.`id`" + ` = ` + "`s`.`task_id`" + `
+LEFT JOIN ` + "`task_observation`" + ` AS ` + "`o`" + ` ON ` + "`o`.`task_id`" + ` = ` + "`t`.`id`" + `
+WHERE (` + "`s`.`state`" + ` = 'queued' OR (` + prFeedbackWaitSQL + `))
   AND COALESCE(` + "`b`.`open_blockers`" + `, 0) = 0
   AND NOT EXISTS (SELECT 1 FROM ` + "`task_pause`" + ` AS ` + "`p`" + ` WHERE ` + "`p`.`task_id`" + ` = ` + "`s`.`task_id`" + `)`},
 

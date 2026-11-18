@@ -197,8 +197,8 @@ const teamless: RedirectFunction = ({ params, queryParams, fragment }) =>
     { queryParams, ...(fragment ? { fragment } : {}) },
   );
 
-// capabilityServerRouteMatcher matches /settings/capabilities/<serverId>,
-// where <serverId> is a URL such as https://grain.dev/capabilities/gcp
+// capabilityServerRouteMatcher matches /settings/capabilities/<id>,
+// where <id> is a URL such as https://grain.dev/capabilities/gcp
 // (either percent-encoded into one segment as https%3A%2F%2F... or pasted
 // with unencoded slashes).
 export function capabilityServerRouteMatcher(
@@ -228,7 +228,7 @@ export function capabilityServerRouteMatcher(
     consumed: segments,
     posParams: {
       section: segments[1],
-      serverId: new UrlSegment(raw, {}),
+      item: new UrlSegment(raw, {}),
     },
   };
 }
@@ -462,6 +462,17 @@ export const routes: Routes = [
   {
     path: "settings/:section",
     title: "Settings · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+  },
+  // One capability server's page, /settings/capabilities/<encoded id>
+  // as the classic serverPath gives it: the id is a URL, so it is one
+  // %2F-escaped segment.
+  {
+    path: "settings/:section/:item",
+    title: "Capability server · Settings · grain",
     loadComponent: () =>
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
