@@ -961,11 +961,8 @@ export function duration(from?: string, to?: string): string {
                       disabled:
                         store.isBusy('send', t.id) ||
                         !can('POST /api/tasks/{id}/comments'),
-                      deniedReason: commentDenied(),
-                      hidden:
-                        t.state === 'closed' ||
-                        (this.parked() && !this.allowWordsOnParked()) ||
-                        this.isStopped(),
+                      deniedReason: composerHidden() ? '' : commentDenied(),
+                      hidden: composerHidden(),
                     }"
                     (send)="onConversationSend($event)"
                   />
@@ -1933,6 +1930,19 @@ export class TaskDetailComponent implements OnDestroy {
     return (
       t?.state === "awaiting_reply" &&
       (!!t.turnStopped || t.reason?.reason === "awaiting_reply/stopped")
+    );
+  });
+  // composerHidden is whether the conversation offers no composer: a closed
+  // or stopped task, or one parked on a grant until "reply in words" opens
+  // it. commentDenied's note goes only with a composer to explain, since the
+  // conversation renders it outside the form.
+  protected readonly composerHidden = computed(() => {
+    const t = this.t();
+    return (
+      !t ||
+      t.state === "closed" ||
+      (!!this.parked() && !this.allowWordsOnParked()) ||
+      this.isStopped()
     );
   });
   protected readonly canRollover = computed(() => {

@@ -285,6 +285,59 @@ func RunQualifications(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatal("combined failure retained accepted evidence or effects")
 		}
 	}
+	// A health goal wins over already-collected task evidence, including a
+	// task failure backoff. Returning to task mode restores every family.
+	allowHealth := model.GateHealthAccess{Repository: func(string) bool { return true }}
+	healthCtx := model.WithGateHealthAccess(ctx, allowHealth)
+	must(s.SetTaskGoal(ctx, id, model.GoalDecl{Kind: model.GoalBaseGreen, Spec: model.GoalSpec{Repo: repo.String(), Branch: "main"}}, "automation:test", now.Add(27*time.Second)))
+	beforeHealth, healthWake := legacy(), s.Changed()
+	health, _, err := s.ObserveTaskGatesWithEvidence(healthCtx, id, now.Add(27*time.Second), checkFence, checks, c, children)
+	must(err)
+	if len(health.Bindings) != 2 || health.Bindings[0].Type != "base_health" || health.Bindings[1].Type != "base_health" {
+		t.Fatal("stale qualification/CI evidence polluted health projection")
+	}
+	if legacy() != beforeHealth {
+		t.Fatal("health transition changed legacy rows")
+	}
+	select {
+	case <-healthWake:
+		t.Fatal("health transition signalled legacy Changed")
+	default:
+	}
+	var priorHealth string
+	must(db.QueryRowContext(ctx, "SELECT `view_json` FROM `gate_observation_shadow` WHERE `task_id` = ?", id).Scan(&priorHealth))
+	deniedHealth, _, err := s.ObserveTaskGatesWithEvidence(model.WithGateHealthAccess(ctx, model.GateHealthAccess{}), id, now.Add(28*time.Second), checkFence, checks, c, children)
+	must(err)
+	for _, r := range deniedHealth.Results {
+		if len(r.Result.Evidence) != 0 || len(r.Result.Work) != 0 || len(r.Result.Actions) != 0 {
+			t.Fatal("denied health projection exposed evidence/effects")
+		}
+	}
+	var afterDenied string
+	must(db.QueryRowContext(ctx, "SELECT `view_json` FROM `gate_observation_shadow` WHERE `task_id` = ?", id).Scan(&afterDenied))
+	if afterDenied != priorHealth {
+		t.Fatal("denied health read replaced the accepted cache")
+	}
+	healthFailure := gates.UnavailableQualifications(id, now.Add(28*time.Second), c)
+	must(s.RecordGateQualificationFailure(healthCtx, id, now.Add(28*time.Second), &healthFailure, c, allowHealth))
+	if len(healthFailure.Bindings) != 2 || healthFailure.Bindings[0].Type != "base_health" {
+		t.Fatal("qualification error replaced the health family")
+	}
+	must(s.ClearTaskGoal(ctx, id))
+	c.StoreFence, err = s.QualificationObservationFence(ctx, id)
+	must(err)
+	_, _, checkFence, err = s.GateChecksInput(ctx, id)
+	must(err)
+	restored, _, err := model.New(db).ObserveTaskGatesWithEvidence(healthCtx, id, now.Add(29*time.Second), checkFence, checks, c, children)
+	must(err)
+	if restored.Dirty || len(restored.Bindings) != len(all.Bindings) || restored.Bindings[0].Subject.Kind != "task" {
+		t.Fatal("health backoff hid the restored qualification/outcome projection")
+	}
+	for _, r := range restored.Results {
+		if r.Result.Error != nil {
+			t.Fatal("family transition produced an invalid configuration")
+		}
+	}
 	for i := 0; i < 513; i++ {
 		_, err := s.RecordQACheckRun(ctx, model.QACheckRun{TaskID: id, CommitSHA: f.Head, Stage: "S3", CheckID: "check", Verdict: "pass"}, nil)
 		must(err)

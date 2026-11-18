@@ -2,17 +2,20 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs and extension conventions. The registry now implements nine
+records repairs and extension conventions. The registry now implements thirteen
 v1 types: all `delivery` products (`report`, `change`, `review`,
 `nothing_needed`, `any`) with current/legacy finish semantics; all four
 `acknowledgment` profiles; `integration` for PR merge and all scoped CL submission;
 and explicitly selected `children` success/closed/merged predicates. The shipped `checks` observer and existing canonical `review` and `approval` observers are also retained; the
-QA stage and release qualification observers are retained too; the other four catalogue types remain unsupported. See the [review/approval coverage
+QA stage and release qualification observers are also registered, with source limitations recorded in [the QA/release audit](gate-qa-release-observations.md). See the [review/approval coverage
 guide](gate-review-observations.md) for its source adapter and provenance gaps. Closed schemas are pinned to the
 canonical catalogue and pure local Go evaluators. There are no remote evaluator
 calls or private evaluator state.
 
 See [CI checks in shadow](gate-check-observations.md) for its source and permission boundaries.
+
+The four [health profiles](gate-health-observations.md) observe existing base,
+nightly, publishing and pipeline goals with explicit legacy/current labels.
 
 Legacy services still own every task lifecycle, queue/run/wait, approval, report,
 acknowledgment, merge and submit operation. There is no authority migration or
@@ -53,6 +56,9 @@ PR integration, `cl-submitted` to every scoped CL (or its explicit target), and
 never substitutes for fresh predicate evidence. Limits, close/rest, person-closes,
 message delivery and actual waits stay with their existing controllers.
 
+Selected existing health goals use their health profiles in place of these
+outcome/change/child comparisons; those goals acquire no unrelated obligations.
+
 Optional `GRAIN_GATE_OBSERVATION_CHILDREN` process configuration is a JSON object
 from allowlisted parent IDs to at most three canonical children configurations,
 for example `{"123":[{"tasks":["456"],"predicate":"success"}]}`. It does not
@@ -90,6 +96,10 @@ Review/approval also reads scoped assignment, hold, finding, fix and base-policy
 evidence; it never fabricates complete remote or rendered-context/role receipts.
 
 See [CI checks in shadow](gate-check-observations.md) for its source and permission boundaries.
+
+Health uses its scoped source records and resource permissions as described in
+the [health guide](gate-health-observations.md). Missing current publication proof
+remains explained unknown.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -151,7 +161,8 @@ graphs without touching dispatch links or waits.
 ## Collection, replay and isolation
 
 Reads collect current local evidence and evaluate only a changed source fence or
-an expired 60-second diagnostic lease. Selected task reads bypass the ordinary
+an expired diagnostic lease (at most 60 seconds, shortened by source, threshold
+and window expiry). Selected task reads bypass the ordinary
 body cache so expiry/errors cannot be hidden by 304 responses. Bursts of events
 between reads coalesce into one current collection; many concurrent readers reuse
 the accepted generation. This is display/poll-driven level collection, not a

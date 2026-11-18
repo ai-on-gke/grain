@@ -763,6 +763,8 @@ export interface GateObservations {
       kind: string;
       authority?: string;
       repository?: string;
+      ref?: string;
+      task_id?: string;
       change_kind?: string;
       id?: string;
     };

@@ -527,6 +527,9 @@ func shadowRequirementID(id string) string {
 }
 
 func observationBindings(id string, f gates.Facts, reserve ...int) []gates.Binding {
+	if f.Health != nil {
+		return f.Bindings
+	}
 	limit := 64
 	if len(reserve) > 0 {
 		limit -= reserve[0]
