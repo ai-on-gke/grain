@@ -123,7 +123,7 @@ func evaluateChange(b Binding, f Facts, now time.Time, generation uint64) (r Res
 	}{b, f.SourceVersion, Implementation})
 	r = Result{EvaluationID: "shadow-" + digest[7:], BindingID: "task/" + f.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version,
 		ContextDigest: digest, Status: "unknown", Summary: "Scoped change evidence is unavailable.",
-		Evidence: []Evidence{}, Dependencies: []Dependency{}, Blockers: []struct{}{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{},
+		Evidence: []Evidence{}, Dependencies: []Dependency{}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{},
 		ObservedAt: now, ValidUntil: f.ValidUntil}
 	r.Dependencies = []Dependency{{Key: "change/" + b.ID, Subject: b.Subject, Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Config), ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}
 	defer func() {

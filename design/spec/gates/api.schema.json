@@ -203,7 +203,8 @@
             "nightly_health",
             "publishing_health",
             "pipeline_health",
-            "qa_stage"
+            "qa_stage",
+            "release_qualification"
           ]
         },
         "version": {
@@ -320,7 +321,7 @@
             "$ref": "#/$defs/descriptor"
           },
           "minItems": 12,
-          "maxItems": 12
+          "maxItems": 13
         }
       },
       "required": [

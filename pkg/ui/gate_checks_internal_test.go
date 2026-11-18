@@ -57,3 +57,14 @@ func TestGateObservationRejectsForeignNestedTaskSubjects(t *testing.T) {
 		}
 	}
 }
+
+func TestQualificationSuiteDisplayRequiresCIRead(t *testing.T) {
+	now := time.Now()
+	c := gates.QualificationCollection{Release: &gates.ReleaseFacts{TaskID: "69", Repository: "private/repo", Candidate: "v3.1.0-rc.1", Head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Version: "v3.1.0", PolicyVersion: "policy", ObservedAt: now, ValidUntil: now.Add(time.Minute)}}
+	v := gates.UnavailableQualifications("69", now, c)
+	denied := withAccessRole(context.Background(), &accessRole{Who: "reader", Full: false})
+	allowed := withAccessRole(context.Background(), &accessRole{Who: "operator", Full: true})
+	if observationVisible(denied, &v) || !observationVisible(allowed, &v) {
+		t.Fatal("qualification suite display ignored CI authorization")
+	}
+}

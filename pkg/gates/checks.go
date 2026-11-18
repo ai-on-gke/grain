@@ -120,7 +120,7 @@ func EvaluateChecks(b Binding, f ChecksFacts, now time.Time, generation uint64) 
 	r = Result{BindingID: "task/" + f.TaskID + "/" + b.ID, Type: "checks", Version: 1, ContextDigest: Digest(struct {
 		Binding Binding
 		Version string
-	}{b, version}), Status: "unknown", Summary: "CI evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{}, Blockers: []struct{}{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
+	}{b, version}), Status: "unknown", Summary: "CI evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
 	r.EvaluationID = "shadow-" + r.ContextDigest[7:]
 	if b.Type != "checks" || b.Subject != f.Subject || f.Subject.Kind != "change" || f.Subject.ID == "" || f.Subject.Authority == "" || f.Subject.Repository == "" {
 		r.Summary = "Change subject or scoped source identity is unavailable or mismatched."

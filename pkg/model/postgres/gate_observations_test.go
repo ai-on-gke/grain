@@ -64,6 +64,11 @@ func TestReviewApprovalScopeOverflow(t *testing.T) {
 	gateobservationtest.RunChangeScopeOverflow(t, s, db)
 }
 
+func TestQualificationObservationsPersistWithoutLifecycleEffects(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunQualifications(t, s, db)
+}
+
 func TestObservationFamilyTransitions(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.RunObservationFamilies(t, s, db)

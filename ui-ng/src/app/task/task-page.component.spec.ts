@@ -332,6 +332,54 @@ async function openMore(f: ComponentFixture<unknown>): Promise<void> {
 }
 
 describe("TaskPageComponent", () => {
+  it("pages the actual Details viewport immediately without stealing native Home or editor keys", async () => {
+    const f = await render(new FakeApi(), "details");
+    const page = q(f, ".task-page")!;
+    const body = q(f, ".task-tab-body")!;
+    Object.defineProperties(page, {
+      clientHeight: { value: 500 },
+      scrollHeight: { value: 2000 },
+    });
+    Object.defineProperties(body, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 200, configurable: true },
+    });
+    const pageScroll = vi.fn();
+    const bodyScroll = vi.fn();
+    page.scrollTo = pageScroll;
+    body.scrollTo = bodyScroll;
+    const key = (target: HTMLElement, key: string, ctrlKey = false) => {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        ctrlKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(event);
+      return event;
+    };
+    expect(key(page, "PageDown").defaultPrevented).toBe(true);
+    expect(pageScroll).toHaveBeenLastCalledWith({
+      top: 450,
+      behavior: "instant",
+    });
+    expect(key(body, "Home", true).defaultPrevented).toBe(false);
+    Object.defineProperty(body, "scrollHeight", {
+      value: 1000,
+      configurable: true,
+    });
+    key(body, "PageDown");
+    expect(bodyScroll).toHaveBeenLastCalledWith({
+      top: 180,
+      behavior: "instant",
+    });
+    const input = document.createElement("textarea");
+    body.append(input);
+    expect(key(input, "Home", true).defaultPrevented).toBe(false);
+    expect(key(input, "PageDown").defaultPrevented).toBe(false);
+    expect(bodyScroll).toHaveBeenCalledTimes(1);
+  });
+
   afterEach(() => {
     TestBed.inject(TaskStore).close();
     TestBed.inject(SnackbarService).dismiss();
