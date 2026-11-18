@@ -189,21 +189,33 @@ func TestReconcileWithDispatchesAfterSlowInFlightUnwindAndDefersBackgroundCycle(
 		time.Sleep(20 * time.Millisecond)
 	}
 	putInteractive("t3")
+	wakeAt := time.Now()
 	wake()
 	select {
 	case <-t3Dispatched:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("t3 was not dispatched")
 	}
-	fullDeadline := t1Start.Add(daemon.DispatchedWakeHeadStartForTest + 1500*time.Millisecond)
+	// The second full cycle is the one t1's dispatch scheduled. Compare when
+	// it started, not when it finished (a full cycle under -race on a loaded
+	// runner takes seconds): kept, it starts about head-start after t1's
+	// dispatch, at most ~2s after t3's wake; re-armed by t3's dispatch, it
+	// could start no sooner than a whole head start after that wake.
+	var second orchestrator.CycleTiming
+	deadline = time.Now().Add(25 * time.Second)
 	for {
-		if _, observed := cycleTimes.History(); observed >= 2 {
+		if cycles, observed := cycleTimes.History(); observed >= 2 {
+			second = cycles[1]
 			break
 		}
-		if time.Now().After(fullDeadline) {
-			t.Fatalf("no woken full RunCycle by %v after t1's dispatch: a later dispatch postponed it", time.Since(t1Start))
+		if time.Now().After(deadline) {
+			t.Fatal("no woken full RunCycle at all within 25s of t3's dispatch")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if limit := wakeAt.Add(daemon.DispatchedWakeHeadStartForTest - time.Second); !second.Start.Before(limit) {
+		t.Errorf("woken full RunCycle started %v after t3's wake, want < %v: t3's dispatch postponed the cycle t1's dispatch had scheduled",
+			second.Start.Sub(wakeAt), daemon.DispatchedWakeHeadStartForTest-time.Second)
 	}
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
