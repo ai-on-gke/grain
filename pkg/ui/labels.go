@@ -138,6 +138,9 @@ func OfferedCapabilities() []Capability {
 // replaces them is Actor -- who a task created here is attributed to,
 // which a GitHub issue used to answer with its own opening account.
 type Config struct {
+	// GateObservationTaskIDs selects at most 32 read-only shadow tasks.
+	GateObservationTaskIDs []string
+
 	// OfferedGitCredentials lists the named GitHub credentials under
 	// secrets/github this process started with (non-nil when a credential
 	// ladder is configured, even if empty; nil when unconfigured). Used by
@@ -1035,7 +1038,9 @@ type Config struct {
 	// actually runs for is the grain-ci capability's own question, asked
 	// per request (Client.ciEnabledFor), so a deployment can have this
 	// wired for every repo it knows and enabled for one.
-	CI ci.Runner
+	CI                ci.Runner
+	GateCheckSource   GateCheckSource
+	GateRequiredCheck func(model.RepoRef) string
 	// Stall, when set, is what every task read asks whether a task has
 	// been in its state longer than that state should take, and in what
 	// words -- orchestrator.TaskStallNote, which is where the patience

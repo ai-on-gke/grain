@@ -190,6 +190,7 @@ func ParsePayload(eventName, deliveryID string, raw []byte) (Event, error) {
 
 	if p.Comment != nil {
 		ev.CommentID = p.Comment.ID
+		ev.ReviewID = p.Comment.ReviewID
 		ev.CommentBody = clampText(p.Comment.Body, maxStoredTextField)
 		ev.CommentPath = clampShort(p.Comment.Path)
 		ev.CommentLine = p.Comment.Line
@@ -437,6 +438,7 @@ type rawWebhookPayload struct {
 	} `json:"issue"`
 	Comment *struct {
 		ID           int64  `json:"id"`
+		ReviewID     int64  `json:"pull_request_review_id"`
 		Body         string `json:"body"`
 		Path         string `json:"path"`
 		Line         int    `json:"line"`

@@ -393,6 +393,11 @@ test(
     expect(box.y + box.height).toBeLessThanOrEqual(saveBox.y + 0.5);
 
     await dialog.getByRole("button", { name: "Cancel" }).click();
+    // The draft was filled in, so Cancel asks before dropping it.
+    await page
+      .getByRole("dialog", { name: "Discard unsaved changes?" })
+      .getByRole("button", { name: "Discard" })
+      .click();
     await page.getByTestId("proc-new-menu-btn").click();
     await page.getByTestId("proc-new-schedule").click();
     await expect(page.getByTestId("proc-dialog-error")).toHaveCount(0);

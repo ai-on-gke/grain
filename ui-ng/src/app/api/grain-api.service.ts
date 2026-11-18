@@ -21,6 +21,8 @@ import { Injectable, OnDestroy, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
 import type {
+  ClearNotificationsRequest,
+  ClearNotificationsResponse,
   DiffPreview,
   GrainConfig,
   LocalScriptApproval,
@@ -581,6 +583,33 @@ export class GrainApi implements OnDestroy {
       | Notification[]
       | { notifications?: Notification[]; items?: Notification[] }
     >("GET /api/notifications", undefined, "open=1&fields=list").then((r) =>
+      Array.isArray(r) ? r : (r?.notifications ?? r?.items ?? []),
+    );
+  }
+
+  // clearNotifications is the Inbox's Clear all / Clear these; dryRun
+  // counts for the confirm dialog without clearing.
+  clearNotifications(
+    req: ClearNotificationsRequest,
+  ): Promise<ClearNotificationsResponse> {
+    return this.post<ClearNotificationsResponse>(
+      "POST /api/notifications/clear",
+      undefined,
+      req,
+    );
+  }
+
+  // openNotificationsInFamily answers one family's open notifications with
+  // their bodies whole: the list above cuts each body to its first line.
+  openNotificationsInFamily(family: string): Promise<Notification[]> {
+    return this.get<
+      | Notification[]
+      | { notifications?: Notification[]; items?: Notification[] }
+    >(
+      "GET /api/notifications",
+      undefined,
+      `open=1&family=${encodeURIComponent(family)}`,
+    ).then((r) =>
       Array.isArray(r) ? r : (r?.notifications ?? r?.items ?? []),
     );
   }

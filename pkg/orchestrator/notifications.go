@@ -107,6 +107,12 @@ func notificationConditionMet(ctx context.Context, store *model.Store, c model.N
 			return false, err
 		}
 		return row.Conclusion == "success", nil
+	case model.ClearsOnSuiteRun:
+		run, err := store.GetSuiteRun(ctx, c.SuiteRun)
+		if err != nil {
+			return false, err
+		}
+		return run == nil || run.Status != model.SuiteRunActive, nil
 	}
 	return false, nil
 }

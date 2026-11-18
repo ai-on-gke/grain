@@ -1,0 +1,242 @@
+name: Release audit
+# One task per core release, filed by its release manager as it closes
+# (.grain/templates/release-manager.yml section 5;
+# design/playbook/releases.playbook.md section 17), that looks at the
+# release's end state as a whole and says whether it is right. Every
+# check of v3.8.0 was green while a downstream edition's channel and its
+# latest/main images still named a 3.7.0 build: nothing compared the end
+# state with what the release promised.
+#
+# Read-only: it changes no file, opens no pull request, and never moves,
+# creates or deletes a ref or an image tag, so it cannot race the train,
+# the publish workflows or a repair. What it finds wrong goes to a fix
+# task of its own.
+title: "Release audit for {{version}}"
+base: main
+# A duplicate (another audit of the same version already open) ends in
+# nothing_needed, and closes.
+nothing-needed: close
+# Below the release manager (8): an audit runs once the release is out,
+# and nothing waits on it.
+priority: 7
+fields:
+  - name: version
+    label: Core version to audit (vX.Y.Z)
+# The release manager's read scopes and nothing it uses to steer: no
+# task-admin (tasks:write, merge:write, notifications:write), no
+# schedules or templates. self-debug's tasks:read reads every task and
+# GET /api/notifications. Images are public on Docker Hub, so inspecting
+# them needs no credential. None is a scope only a person may grant
+# (TestTheReleaseAuditOnlyReads, tests/deploy), so a manager's proposal
+# of it is not held for one.
+capabilities:
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#releases:read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#repos:read", with: {repo: ai-on-gke/grain}}
+  - "https://grain.dev/capabilities/api#self-debug"
+body: |
+  You are the **release audit** for grain core **{{version}}**
+  (`design/playbook/releases.playbook.md` §17). The release is meant to
+  be finished: its manager filed you as it closed. Your job is to look at
+  what actually happened and at the end state, as a whole, and say for
+  every check below whether it **passes** or **fails**, with the evidence
+  (the command, the ref, the digest, the run URL) beside it. Green checks
+  are not evidence that the end state is right: v3.8.0 had every check
+  green while a downstream edition's channel and `latest`/`main` images
+  still named a 3.7.0 build.
+
+  **You are read-only.** Change no file, open no pull request, and never
+  push, move, create or delete a git ref, a GitHub Release or an image
+  tag, not even to fix something you found. Other tasks may be repairing
+  this release while you run; a fix is theirs, or one you file.
+
+  ## 0. Before you start
+
+  1. `{{version}}` must look like `vX.Y.Z`. If it does not, end with
+     `ask_question` asking which version to audit.
+  2. Another open audit of the same version
+     (`grain task list --state proposed,queued,running,awaiting_reply,deferred --search 'Release audit for {{version}}'`,
+     other than you): call `nothing_needed` naming it, and stop.
+  3. `git fetch origin --tags --force` in `~/work`. Call `Z > 0` a
+     **patch** and `Z = 0` a **minor** release
+     (`docs/release-candidate-management.md` §9). Write `<sha>` for the
+     commit `{{version}}` names, and `<short>` for its first 7 hex.
+  4. To inspect images, use whichever is installed:
+     `docker buildx imagetools inspect <image>` (digests; labels are in
+     the image config it prints with `--raw`), or install skopeo
+     (`sudo apt-get update && sudo apt-get install -y skopeo`) and run
+     `skopeo inspect --override-os linux --override-arch amd64 docker://<image>`,
+     which prints `Digest` and `Labels`. Every `docker.io/grainai/*` image
+     is public: no login.
+
+  A check you could not run (a registry or API you could not reach) is
+  **unverified**, never a pass. Say what you tried.
+
+  ## 1. Tags → commits
+
+  - `git for-each-ref --sort=creatordate --format='%(refname:short) %(objecttype) %(*objectname) %(objectname) %(creatordate:iso)' 'refs/tags/{{version}}' 'refs/tags/{{version}}-*'`:
+    every `{{version}}-rc.N` and `-rc.N-discarded`, their commits
+    (`git rev-list -n1 <tag>`) and dates.
+  - **The promoted rc.** `git tag -l --format='%(contents)' {{version}}`
+    names it (`Promoted-From:`; a patch has none, see below). Pass when
+    `{{version}}` is on exactly that rc's commit, that rc has no
+    `-discarded` twin, and it is the newest rc that was not discarded.
+    A patch is cut by `scripts/release-patch.sh`, not promoted: pass when
+    the patch-tag guard holds (`bash scripts/patch-tag-guard.sh {{version}}`
+    in a scratch clone).
+  - **Discarded rcs.** Every `-discarded` tag carries a reason
+    (`git tag -l --format='%(contents)' <tag>`). An empty reason fails.
+    The same reason on two or more rcs is a finding even though the
+    release went out: a blocker nobody fixed in time.
+  - **The release branch.** If `refs/heads/release/{{version}}` exists
+    (`git ls-remote origin 'refs/heads/release/{{version}}'`), it contains
+    `<sha>` (`git merge-base --is-ancestor <sha> origin/release/{{version}}`)
+    and carries nothing after it that is not also a later patch's. For a
+    minor, the branch is deleted on Approve and its absence is a pass.
+  - **No stray versions.** No `{{version}}-pending` tag is left
+    (`-pending` is deleted on approval), and no `-retracted` tag exists
+    for `{{version}}` unless a person retracted it.
+
+  ## 2. Published artifacts
+
+  - **Which images.** Read the list from the tree the tag built, not from
+    memory: `git show {{version}}:scripts/release-images.sh` (the `promote`
+    path's `images=(...)` and `daemons` lists) and
+    `git show {{version}}:.github/workflows/publish-release.yml`. Today
+    that is `docker.io/grainai/grain`, `hub` (and its pre-rename
+    `registry`), `sandbox` and `sandbox-k8s`. A list that names more
+    (`sandbox-base`, `sandbox-k8s-base`, ...) is checked the same way.
+  - **Each image at `{{version}}`.** It exists; its digest (list every
+    one, per platform for a manifest list); and it was built from
+    `<sha>`:
+    - daemon images (`grain`, `hub`, `registry`) are re-stamped at
+      promotion: their `org.opencontainers.image.revision` label is
+      `<sha>` and `org.opencontainers.image.version` is `{{version}}`;
+    - the others are retagged: their digest equals `:sha-<short>`'s.
+
+    An image that is missing, or names another commit or version, fails.
+  - **`latest`.** For a minor: the git tag `latest`
+    (`git rev-list -n1 latest`) is `<sha>`, and `:latest` of every image
+    has the same digest as its `:{{version}}`. For a patch: `latest` moves
+    only if no newer release exists (§9 step 6). It passes when it names
+    `<sha>` and `{{version}}` is the newest `vX.Y.Z`, or names the newest
+    release and that is newer than `{{version}}`. Anything else fails, with
+    what `latest` names instead.
+  - **The publish run.** `publish-release.yml` on the tag
+    (`grain ci list --repo ai-on-gke/grain --provider github-actions --workflow publish-release.yml --ref {{version}}`)
+    concluded `success`, with its URL. For a patch, the `promote.yml` run
+    a person dispatched for it. Red or missing fails.
+  - **The GitHub Release** `{{version}}` exists, is not a draft, has a
+    body (the release notes), and its assets include `images.json` and the
+    CLI archives with `checksums.txt`
+    (`curl -fsSL https://api.github.com/repos/ai-on-gke/grain/releases/tags/{{version}}`,
+    then `curl -fsSL` the `images.json` asset's `browser_download_url`).
+    `images.json`'s version is `{{version}}` and its images are the digests
+    above. `docs/releases/{{version}}.md` is on `main`.
+
+  ## 3. Channels
+
+  Moving names (`docs/release-candidate-management.md` §6 and §8): image
+  tags `:latest`, `:main`, `:candidate`/`:rc`, `:sha-<short>`; GitHub
+  Releases `sha-<12 hex>` and `channel-<branch>` (`release.yml`, `/` as
+  `-`), and the train's `vX.Y.Z-rc.N[-discarded]` releases
+  (`release-train-assets.yml`).
+
+  - Every one that names this version, or `<sha>`, resolves to this
+    version's build and nothing else: `:sha-<short>` and GitHub Release
+    `sha-<12 hex of sha>` are `<sha>`'s; `channel-release-{{version}}`, if
+    it exists, is `release/{{version}}`'s head and its `images.json` says
+    `{{version}}`'s build; each rc's release and image are that rc's
+    commit; `-discarded` markers exist for every discarded rc.
+  - `:candidate`/`:rc` name the newest rc cut, and that is this version's
+    promoted rc or a newer version's, never an older one.
+  - `:main` and `channel-main` are `main`'s head or a commit after
+    `<sha>`, never a build older than it.
+  - **Older versions are untouched.** For the previous release (the
+    newest `vX.Y.Z` before this one), its `:vX.Y.Z` digests and its git tag
+    are what they were: compare with what its release notes or its own
+    audit recorded, or at least that its daemon images' revision label is
+    still its own tag's commit.
+
+  ## 4. Pipeline hygiene
+
+  - No open task left for this version: search open states
+    (`proposed,queued,running,awaiting_reply,awaiting_submit,deferred,failed`)
+    for `{{version}}` in titles (`[rc-blocker {{version}}-rc.`, Stage 1
+    repairs naming its rcs, tasks pinned to `release/{{version}}`), and
+    read each. An open one fails unless it is a backport for a later patch.
+  - Its release managers are closed: `Release manager for {{version}}`
+    and every `Release manager for the newest rc` whose conversation
+    pins `{{version}}` (`Release manager pin: {{version}}`). One still open
+    other than the one that filed you fails.
+  - Notifications: `grain api GET /api/notifications`, and list every one
+    still open whose subject or title names `{{version}}` (including
+    `release-manager:{{version}}` and `pipeline.*`). Listing them is the
+    check; one asking a person for something the release no longer needs
+    is a finding.
+
+  ## 5. Upgrade path
+
+  A deployment on `latest`, or pinned to `{{version}}`, must reach the
+  published build. Read `pkg/upgrade` on `main` (`ChannelForRef` in
+  `channel.go`, `LatestRelease` and `releasedVersions` in `targets.go`)
+  and run what it does against the registry by hand:
+
+  - `latest`: the newest promoted release in `docker.io/grainai/grain`'s
+    tag list, as `releasedVersions` filters it (rcs, `-pending`,
+    `-discarded` and retracted releases excluded), is `{{version}}` (or a
+    newer release, for a patch that left `latest` alone), and `:latest`
+    is that build's digest.
+  - `{{version}}`: the pinned tag resolves to the digest from §2.
+
+  If `main` has tests for this (`go test ./pkg/upgrade -run 'Latest|Released'`),
+  run them; they test the code, not the registry, so the registry read
+  above is still the check.
+
+  ## 6. Downstream editions, as far as core sees them
+
+  An edition built on core releases the same version from its own
+  repository and audits its own end state with its own audit. From here,
+  check only what core can see: with `tasks:read`, whether that
+  edition's release task for `{{version}}` closed, and whether its own
+  audit for `{{version}}` was filed. Report what you find, and do not
+  inspect, fix or file anything in the edition's repository: that is
+  its audit's job.
+
+  ## 7. Timeline
+
+  A short narrative, with run and task links: when each rc was cut, its
+  Stage 1 (`nightly.yml` on the rc) and Stage 2
+  (`grain/release-qualification` on its commit) verdicts, why each was
+  discarded, the promotion (or the person's Approve, or the patch's cut),
+  the publish run, `latest` moving. Then: what a person had to do (from
+  the managers' notifications and conversations), and anything that
+  happened out of order (a tag before its stage was green, `latest`
+  before the images, a publish re-run, a manual retag).
+
+  ## 8. Report
+
+  Your report is a table: one row per check above, **pass**, **fail** or
+  **unverified**, and its evidence, then the image digests, then the
+  timeline.
+
+  - **Everything passes:** end with `comment_on_issue`, the report as
+    the comment, and `summary` `Release audit {{version}}: all checks pass`.
+  - **Anything fails or is unverified:** first, for each root cause
+    (not each symptom: one wrong tag that breaks three checks is one
+    cause), search for an open task that already owns it
+    (`grain task list --state proposed,queued,running,awaiting_reply,awaiting_submit,deferred,failed --search '<tag, image or check>'`).
+    If one does, name it in the report. Otherwise file **one focused fix
+    task** with `propose_task`, `repo: "ai-on-gke/grain"`: what is wrong,
+    the evidence, what the end state should be, and that any ref or tag
+    move is a person's call where the playbook says it is (`latest` for a
+    patch, a retag). Then end with `ask_question`: `summary` names the
+    failure (`Release audit {{version}}: :latest is v3.7.0's build`), and
+    the question starts with what a person has to decide or do, then the
+    fix tasks, then the full report.
+
+  ## Limits
+
+  Never push, tag, retag, move or delete a ref or an image, edit a
+  GitHub Release, retry or re-run a workflow, or change another task.
+  This task changes no file and never opens a pull request.

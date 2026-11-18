@@ -1396,7 +1396,7 @@ func (d daemonAddenda) Addenda(ctx context.Context, after int64) ([]mcp.Addendum
 // Delivered implements mcp.AddendaAcknowledger: what the last poll found
 // has gone into an answer, so the daemon can count it as read.
 func (d daemonAddenda) Delivered(ctx context.Context, through int64) {
-	d.delivered.advance(ctx, through)
+	d.delivered.advanceAddenda(ctx, through)
 }
 
 // deliveredCursor is how much of its task's conversation this run has
@@ -1415,7 +1415,8 @@ func (d daemonAddenda) Delivered(ctx context.Context, through int64) {
 // dispatch for a message the run did see, where the other way round is a
 // person's message nobody ever answers.
 type deliveredCursor struct {
-	report func(ctx context.Context, through int64) error
+	report        func(ctx context.Context, through int64) error
+	reportAddenda func(ctx context.Context, through int64) error
 
 	mu      sync.Mutex
 	through int64
@@ -1428,6 +1429,9 @@ func newDeliveredCursor(client *ui.HTTPClient, taskID string, seed int64) *deliv
 	return &deliveredCursor{
 		report: func(ctx context.Context, through int64) error {
 			return client.RecordDelivered(ctx, taskID, through)
+		},
+		reportAddenda: func(ctx context.Context, through int64) error {
+			return client.RecordPRFeedbackDelivered(ctx, taskID, through)
 		},
 		through: seed,
 		byChat:  map[int64]bool{},
@@ -1460,6 +1464,22 @@ func (c *deliveredCursor) advance(ctx context.Context, through int64) {
 	if c.report != nil {
 		_ = c.report(ctx, through)
 	}
+}
+
+// advanceAddenda also acknowledges PR feedback, even if a chat reply already
+// moved the shared cursor past it without carrying those external comments.
+func (c *deliveredCursor) advanceAddenda(ctx context.Context, through int64) {
+	if c == nil {
+		return
+	}
+	if c.reportAddenda == nil {
+		c.advance(ctx, through)
+		return
+	}
+	c.mu.Lock()
+	c.through = max(c.through, through)
+	c.mu.Unlock()
+	_ = c.reportAddenda(ctx, through)
 }
 
 // deliveredByChat records messages a chat call is about to return as its

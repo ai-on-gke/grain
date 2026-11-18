@@ -21,6 +21,29 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 | [cycle.go](../../../pkg/orchestrator/cycle.go), [dispatch](../../../pkg/dispatch), [capability_pass.go](../../../pkg/orchestrator/capability_pass.go), [standingwork.go](../../../pkg/orchestrator/standingwork.go), [wake.go](../../../pkg/orchestrator/wake.go) | Admission/capacity/pause/budget/standing policies, not completion gates | Model/team/base setup, grants/CI capabilities, fit/repair reserve, usage/capacity/interruption/environment/OOM retries, Run now semantics and manual/standing exceptions remain. Run now cannot override hard authorization/guard holds. A gate outage is not an agent failure; event wake first evaluates useful work. |
 | [releasequalification.go](../../../pkg/orchestrator/releasequalification.go), [releasestage1.go](../../../pkg/orchestrator/releasestage1.go), [release_approval.go](../../../pkg/ui/release_approval.go), [candidate-gate.sh](../../../scripts/candidate-gate.sh) | Existing qualification/publication policy and receipts; separate adapter admission | Preserve RC SHA/provenance, suite/person/soak/breaking/signing/version checks. Gate observation of publication is not authority to promote/publish. Workflow-to-executor exclusion, exact artifact/version conditions and reconciliation are not implemented by this design; do not migrate these effects under generic dispatch. |
 
+## Implemented observation-only subset
+
+The [runtime observation guide](../../../docs/gate-observations.md) describes the
+shipped nonrequired v1 monitors: `delivery/report/current_v1`,
+`acknowledgment/explicit_receipt`, current/explicit legacy `checks`, and canonical
+`review`/`approval` predicates. The [checks adapter](../../../docs/gate-check-observations.md)
+projects typed modes, base-owned definitions, complete exact-head collections
+and inert merge context. The [review/approval adapter](../../../docs/gate-review-observations.md)
+imports ordinary/security/path/targeted/takeover legacy comparisons and named,
+Submit and human-hold scopes. Missing provider and rendered policy/role receipt
+pins remain unknown. Ordinary authorized
+task reads and the Angular task detail carry the optional closed observation_view
+and bounded sibling diagnostic history. There is no contract/decision authority,
+`?view=gates` implementation, discovery/mutation/action/waiver API or migration.
+Finite analysis tasks and scoped CI changes are selected by the same disabled-by-default deployment
+allowlist; attachment-bearing/unsupported shapes and missing provenance are unknown.
+The [independent framework review](../../../docs/gate-observation-review.md) records
+repair coverage and stable extension rules, including conservative receipt ordering,
+failure/acceptance races and bounded retention on both engines.
+All current legacy writers listed below retain authority in this implementation.
+Legacy comparisons are imported only as inert monitors; enforced imports and
+handoff requirements remain future specifications.
+
 ## Explicit concrete goal imports
 
 | Existing name (unchanged API) | Materialized gate + controller policy |

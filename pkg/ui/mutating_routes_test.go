@@ -1075,6 +1075,7 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/host/restart":                                               true,
 	"POST /api/host/shutdown":                                              true,
 	"POST /api/notifications":                                              true,
+	"POST /api/notifications/clear":                                        true,
 	"POST /api/notifications/{id}/ack":                                     true,
 	"POST /api/notifications/{id}/clear":                                   true,
 	"POST /api/notifications/{id}/investigate":                             true,
