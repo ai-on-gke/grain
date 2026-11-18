@@ -228,6 +228,9 @@ class FakeApi {
     if (route === "GET /api/ci/runs/{id}") {
       return Promise.resolve(this.ciRuns[0]);
     }
+    if (route === "GET /api/capability-methods") {
+      return Promise.resolve({ items: [] });
+    }
     if (route === "GET /api/tasks/{id}/context") {
       return Promise.resolve({ brief: "Original brief", summarised: 0 });
     }

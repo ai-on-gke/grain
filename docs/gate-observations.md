@@ -2,21 +2,27 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and limits for later ports. It ships four v1 types:
-`delivery` with `{"product":"report","semantics":"current_v1"}`,
-`acknowledgment` with `{"mode":"explicit_receipt"}`, and the canonical
-`review` and `approval` profiles. The [review/approval coverage guide](gate-review-observations.md)
-distinguishes implemented predicates from the scoped legacy source adapter's
-explicit provenance gaps. Other catalogue profiles/types are unsupported.
-Their closed schemas are pinned to the canonical catalogue and evaluated by pure
-local Go functions. There are no remote evaluator calls or private evaluator state.
+records repairs and extension conventions. The registry now implements eleven
+existing v1 types: all `delivery` products (`report`, `change`, `review`,
+`nothing_needed`, `any`) with current/legacy finish semantics; all four
+`acknowledgment` profiles; `integration` for PR merge and all scoped CL submission;
+and explicitly selected `children` success/closed/merged predicates. The shipped `checks` observer and existing canonical `review` and `approval` observers are also retained; the
+remaining `qa_stage` type is unsupported. See the [review/approval coverage
+guide](gate-review-observations.md) for its source adapter and provenance gaps. Closed schemas are pinned to the
+canonical catalogue and pure local Go evaluators. There are no remote evaluator
+calls or private evaluator state.
+
+See [CI checks in shadow](gate-check-observations.md) for its source and permission boundaries.
+
+The four [health profiles](gate-health-observations.md) observe existing base,
+nightly, publishing and pipeline goals with explicit legacy/current labels.
 
 Legacy services still own every task lifecycle, queue/run/wait, approval, report,
 acknowledgment, merge and submit operation. There is no authority migration or
 cutover code. Every binding is a nonrequired monitor; all effect flags are false.
 Diagnostic acceptance means the observation was recorded, not task readiness,
 successful completion, or permission to act. Work/actions arrays are always empty.
-Proposed receipt remediation and waits are inert descriptions with no buttons.
+Proposed remediation and waits are inert descriptions with no buttons.
 
 ## Shipped read surfaces
 
@@ -39,15 +45,29 @@ mutation/reevaluation/action/waiver endpoint or MCP evaluator.
 
 Collection/display is disabled by default. A deployment-local explicit allowlist
 selects at most 32 task IDs. There is no automatic cohort expansion or lifecycle
-hook. Choose a small representative set of current finite analysis/report or PR tasks,
-including a report awaiting receipt and a report acknowledged by a verified person.
-Optionally include a code/standing task to inspect the explained unknown state;
-never interpret that acknowledgment observation as a code completion requirement.
+hook. Choose a small representative set of finite implementation, review,
+report-only child and coordinator tasks. Standing/interactive/console policies
+remain controller behavior and produce explained unknown completion predictions.
+The original report/receipt pair remains visible. Implementation/review/child and
+validated no-work shapes also expose selected product and compatibility monitors.
+Existing goal declarations propose monitor-only mappings: `pr-merged` to exact
+PR integration, `cl-submitted` to every scoped CL (or its explicit target), and
+`tasks-closed` to the original `closed`/`merged` predicate. Stored goal `MetAt`
+never substitutes for fresh predicate evidence. Limits, close/rest, person-closes,
+message delivery and actual waits stay with their existing controllers.
 
-For report/receipt, only noninteractive `analyze` tasks without changes, goals, standing/keep-running
-behavior, console hosting, or report-only child auto-closure are applicable. A
-successful recorded no-work invocation is excluded. Unsupported shapes return
-unknown with a not-applicable explanation for both monitors.
+Selected existing health goals use their health profiles in place of these
+outcome/change/child comparisons; those goals acquire no unrelated obligations.
+
+Optional `GRAIN_GATE_OBSERVATION_CHILDREN` process configuration is a JSON object
+from allowlisted parent IDs to at most three canonical children configurations,
+for example `{"123":[{"tasks":["456"],"predicate":"success"}]}`. It does not
+add requirements or waits; the task allowlist independently controls display.
+At most 64 distinct children (including a legacy goal selection) and four child
+predicates are read per task. Empty sets, duplicate IDs, malformed profiles and
+oversized selections are rejected. A spawned/provenance-only relation is never
+selected automatically. These are supported read-only configuration surfaces,
+not changes to this deployment's environment or grants.
 
 Scoped internal reads capture one task's relevant shape, legacy state/settlement,
 latest run, latest own non-handover agent/Grain-relayed comment, comment-set fence,
@@ -67,18 +87,82 @@ fallback or
 automation closes are unknown, not synthetic receipts. A new report/run, question,
 message, attachment, relevant task shape, or registry/config build changes the
 source fence; old receipt observations cannot silently cover a changed report.
-These local immutable body/comment and close-event records support the original
-two task monitors. Review/approval adds scoped local assignment, hold, finding,
-fix and base-policy evidence as described in the [source adapter guide](gate-review-observations.md).
-No complete remote evidence or rendered-context/role receipt is fabricated.
+These body/comment and close-event records retain the conservative receipt
+boundary from the review: legacy close events have no rendered-report/current-role
+pins and are not a future enforcement receipt. The acknowledgment compatibility
+profiles keep person receipt, provenance-backed report-only child answer, and
+configured no-work acknowledgment distinct; report delivery alone is not receipt.
+Review/approval also reads scoped assignment, hold, finding, fix and base-policy
+evidence; it never fabricates complete remote or rendered-context/role receipts.
+
+See [CI checks in shadow](gate-check-observations.md) for its source and permission boundaries.
+
+Health uses its scoped source records and resource permissions as described in
+the [health guide](gate-health-observations.md). Missing current publication proof
+remains explained unknown.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
 
+### Outcome provenance and limitations
+
+Evidence uses the canonical API envelopes: scoped change observations use
+`integration`, accepted in-place fixes use `review`, selected child outcomes use
+`child_outcome`, and authenticated no-work dispositions use `report`. The delivery
+profile and source-version digest preserve the precise product and provenance;
+an integration evidence envelope alone does not assert a positive merge.
+Resource IDs omit redundant self-aliases. If composite identity/attribution
+metadata exceeds the wire budget, an opaque digest pins the complete tuple and
+an explicitly shortened attribution label remains readable; subject and head
+stay exact. These IDs do not change the outcome predicate.
+
+Existing successful finish, verified PR webhook/detail reads, ordinary CL
+provider reads/polls and submission settlement emit compact typed provenance into
+`gate_outcome_source`. This is a bounded diagnostic receipt cache, not snapshot
+transport or a new collector/broker. Evaluators make ordinary scoped database
+reads and never invoke providers. A bare URL/link, branch disappearance, tool
+success or `no_action` cannot prove a product or integration. Final text counts
+only after legacy finish has actually relayed a durable report. Question/access/
+suspension takes precedence; this run's pushed/open change precedes no-work and
+report; unchanged stale branches follow the existing retirement policy.
+
+Change delivery requires settled finish provenance and complete exact-head
+resource observations. In-place fixes additionally require the owning PR and
+accepted head; the review's own push claim is insufficient. Review delivery can
+include findings and grants no approval. PR identity is resolved from the complete
+link set by the existing current-PR selector. CL integration requires **all**
+scoped CLs, their exact snapshots, and canonical submitted renumbering links.
+Provider responses lacking a submitted snapshot remain unknown even when legacy
+submission closes the task. Forge/CL attribution is retained; externally merged
+work is not credited as an automatic Grain action. Landed/empty equivalence passes
+only with positive exact-head/base proof; older readers without pins remain unknown.
+
+Each resource receipt pins local resource/authorization policy and complete link
+selection. A changed head, workspace/grant policy, missing/denied read, reopen,
+relation/goal declaration, incoming message or report revision invalidates the
+relevant source fence. Live source observations expire after a minute; immutable
+positive integration receipts have a bounded 72-hour retention lease. Task reads
+never renew provider evidence. Historical data cannot prove current readiness.
+Collection gaps, truncated scope, missing identity/snapshot and stale receipts are
+unknown. Source failures carry no raw infrastructure error or evidence bodies.
+
+Related reads stay within the parent's exact repository/workspace scope; missing
+or private children are unknown, with no private evidence. API history is also
+filtered against current related-task scope. Explicit `closed` can pass for a
+failed/canceled child; success cannot. New success has no exact legacy counterpart:
+it needs positive integration or a provenance-backed report/no-work outcome and
+no observed unseen-message/goal gap. Unverifiable legacy closure stays unknown.
+Reopened children need new finish or integration proof for success; clearing
+completion also invalidates prior report/no-work success. Explicit closure
+predicates continue to reflect whether the child is closed. Diagnostic relation
+traversal follows explicit goal edges only, is bounded to 64 nodes, and diagnoses cycles/incomplete
+graphs without touching dispatch links or waits.
+
 ## Collection, replay and isolation
 
 Reads collect current local evidence and evaluate only a changed source fence or
-an expired 60-second diagnostic lease. Selected task reads bypass the ordinary
+an expired diagnostic lease (at most 60 seconds, shortened by source, threshold
+and window expiry). Selected task reads bypass the ordinary
 body cache so expiry/errors cannot be hidden by 304 responses. Bursts of events
 between reads coalesce into one current collection; many concurrent readers reuse
 the accepted generation. This is display/poll-driven level collection, not a
@@ -116,10 +200,29 @@ Disabling collection also hides its projection; no timer can enable enforcement.
 
 ## History and comparisons over 24–48 hours
 
+Tasks with both outcome and review/approval monitors retain both independent
+comparison labels, separated by `;` in a history sample. Diagnostic counts count
+each family separately, so their sum can exceed the number of retained samples.
+CI, outcome and review/approval comparisons remain independent; a provenance gap
+in one family never hides a positive or discrepant milestone in another. Up to
+16 outcome monitors compose with at most eight current/legacy CI pairs. The review
+reader admits up to 31 scopes, but the displayed projection shares a 64-binding
+limit. An overflowing review/approval subset is explicitly incomplete and cannot
+pass current semantics. No scope is converted into an operational requirement.
+
+
 History records complete bounded observation views (task/source/config/context,
 evidence identities/versions, status/reasons and legacy state), evidence changes,
 rejected errors and an hourly sample during reads. Stable minute refreshes update
-current results/evaluation totals without flooding history. Retention is at most
+current results/evaluation totals without flooding history. Outcome source versions
+include collector refreshes. Each serialized observation has a 256 KiB evidence
+budget, at most 64 combined monitors, 64 resources and 64 distinct children; overflow is a
+safe diagnostic failure. History reads return at most 20 newest complete samples within
+64 KiB of stored view JSON, always retaining the newest complete sample (up to the
+256 KiB per-view limit). Older samples remain persisted and included in counts.
+This bounds history decoding within the local diagnostic budget as gate families
+compose; no individual observation is truncated. Source receipts are at most 4096 rows globally, 4 KiB per
+row, retained for at most 72 hours and pruned on source writes. Retention is at most
 72 hours and 1024 samples per task, 32 current caches and 32768 samples globally.
 Pruning runs during diagnostic writes, including failure writes. Indexed time/key
 cutoffs bound per-task/global overflow work without a large retained-key anti-join.
@@ -147,8 +250,14 @@ legacy outcomes. The report/receipt comparison labels are:
   not automatically lifecycle bugs.
 - `not_applicable`, `unknown_incomplete`, `unknown_unsupported_config`,
   `unknown_error`: explicit selection, collection, config or infrastructure limits.
-- `delivery_discrepancy` / `receipt_discrepancy`: a positive predicate without its
-  corresponding local milestone; investigate the evidence versions first.
+- `equivalent_outcome_milestones` / `outcome_discrepancy`: compare positive
+  integration or explicitly selected legacy closed/merged milestones with their
+  corresponding current legacy facts. This is never a close/rest decision.
+- `outcome_evidence_gap`: an outcome monitor cannot establish its scoped proof.
+- `explicit_success_contract_only`: selected success has no exact legacy closure
+  contract, so no parity claim is made.
+- `observed_<product>_milestone`: a delivered product, independent of integration,
+  receipt or lifecycle completion.
 
 Inspect the expanded comparison history on `/next/tasks/<id>`, or use the ordinary
 read API, for example from an already-authorized Grain CLI:
@@ -164,7 +273,7 @@ grain api GET /api/tasks/123 | jq '{
 Counts are per selected task. Inspect each allowlisted task; this slice adds no
 cross-task diagnostic query endpoint. The newest 20 full samples are returned in
 the read API, with aggregate counts over all retained samples. More detailed local
-forensics may inspect the two `gate_observation_shadow*` tables through the
+forensics may inspect the `gate_observation_shadow*` and `gate_outcome_source` tables through the
 operator's existing authorized database tooling; no new database-access grant is
 created by this feature.
 
@@ -201,7 +310,7 @@ Review after a day or two of separately enabled operation:
 2. Inspect delivery and receipt milestones separately, using exact report/close
    versions. Classify provenance/shape gaps before calling a difference a bug.
 3. Inspect unknown/error reasons, retry recovery and aggregate counts; confirm
-   receipt is never inferred for code/standing/no-work/child-auto-close tasks.
+   receipt and compatibility child-answer/no-work policies remain separately labeled.
 4. Confirm legacy queue/run/wait/completion/merge/submit and acknowledgment/reply
    behavior stayed authoritative, and shadow outputs produced no operational work.
 5. Make any enforcement decision separately. Authoritative dispatch, actions,
@@ -224,6 +333,9 @@ diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.
+
+CI-specific runtime profiles, source bounds, version fences, comparison differences
+and validation are documented in [CI checks in shadow](gate-check-observations.md).
 
 Review/approval validation and its material source limitations are recorded in
 [Review and approval observations](gate-review-observations.md). Current results

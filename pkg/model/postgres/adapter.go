@@ -28,6 +28,9 @@ import (
 
 // Primary keys for model tables in Grain.
 var tablePrimaryKeys = map[string][]string{
+	"gate_health_base_source":         {"repo", "ref"},
+	"gate_health_workflow_source":     {"repo", "run_id", "attempt"},
+	"gate_outcome_source":             {"task_id", "resource"},
 	"gate_observation_shadow":         {"task_id"},
 	"gate_observation_shadow_history": {"task_id", "generation"},
 

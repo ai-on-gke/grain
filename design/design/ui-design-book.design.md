@@ -167,6 +167,13 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Into the classic UI:** a control here that can only be answered by a
+  classic page opens that page rather than doing something smaller in
+  place. It marks the jump with a muted `↗` hint after its label, which
+  stays on screen when the label ellipsizes, and its accessible name says
+  where it goes ("…, opens on the classic Boards page"). The Boards menu on
+  Tasks does this for every board that is not a list saved from here
+  (`tasks/board-labels.ts`'s `nextBoardParams`).
 - **Dispatch & quota alerts:** when dispatch is paused or model quotas are
   exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
@@ -175,8 +182,15 @@ do not pull in an icon font.
   timezone with relative countdowns. A page that changes the pause itself
   (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
   so the banner follows the click rather than the next poll.
-- **Disconnected banner:** the one standing banner above the whole shell
-  (`services/connection.service.ts`). It is raised when requests fail to
+- **Install notice:** `/api/config`'s `installNotice` (an unmigrated
+  host-mode install) is the other standing banner above the shell
+  (`.install-banner`, error colours, `role="status"`, no close button). It
+  says what is wrong, the CLIs that cannot run until then and links the
+  migration docs. It sits in flow above the rail like the disconnected banner,
+  and Settings → Upgrade shows the same notice in full with the command to
+  run.
+- **Disconnected banner:** the standing banner for a daemon that is not
+  answering (`services/connection.service.ts`). It is raised when requests fail to
   connect, when a gateway answers 502/503/504, or when a polled read goes
   10 s unanswered. It says when the outage began, in the deployment's time
   zone, and clears itself on the first answer. It sits in flow above the
@@ -971,3 +985,9 @@ uses 12/16 and identifiers/digests use monospace. Expiry must update locally eve
 when later API requests are unchanged or unavailable. Supported/deferred runtime
 surfaces and the separate rollout/review process are in
 [the observation guide](../../docs/gate-observations.md).
+
+CI rows in the observation card additionally identify the change and distinguish
+**Current CI policy** from **Legacy CI import** at the point of display. Show
+run/retry/fix/merge/Submit proposals as inert text, with executor and base/overlap
+preconditions separately explained. Multiple CI sources must have distinct wait
+and evidence tracking keys. A legacy CI verdict is not a readiness badge.
