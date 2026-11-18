@@ -182,3 +182,28 @@ The final independent thorough E2E qualification follows this audit. This change
 adds focused predicate/source/replay/noninterference tests and retains the
 existing family/framework/API suites; it does not claim that source blockers or
 future effect-admission contracts are qualified.
+
+## Validation record
+
+The implementation at `050a8b5e0` passed the full evaluator/source and SQLite
+native suites, focused observation suites on SQLite and required real PostgreSQL,
+and API/controller/legacy writer regressions for review, approval, Submit,
+findings, security/path/takeover, goals, waits and merge predicates. Affected
+Go vet checks passed. All 61 canonical examples, 13 types and 29 API operation
+contracts passed, as did 76 actual persisted/current/API/history observation
+views, including the repaired no-work and standing-task cases, against the
+canonical observation schema.
+
+Race validation passed gates, qualification sources and SQLite, followed by
+bounded PostgreSQL and API/controller groups. The initial combined cold command
+hit the 600-second command limit after the first three groups passed; remaining
+groups were completed separately. One API race run returned the intended
+250 ms diagnostic-unavailable fallback. Three isolated repetitions and the
+broader API/controller race run then passed without code, budget or assertion
+changes. Base-status had no recorded verdict, so this is not attributed to an
+inherited base failure. Final hosted verdicts are recorded on
+[PR #1875](https://github.com/ai-on-gke/grain/pull/1875).
+
+The disposable sandbox needed `postgresql` and `python3-jsonschema`; no deployment
+or application configuration was changed. Independent thorough E2E qualification
+and every future authority/effect contract remain outside this audit's claims.
