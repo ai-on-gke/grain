@@ -52,6 +52,8 @@ func TestReconcileWithDispatchesAfterSlowInFlightUnwindAndDefersBackgroundCycle(
 	t1Entered := make(chan struct{})
 	releaseT1 := make(chan struct{})
 	t2Dispatched := make(chan time.Time, 1)
+	t3Dispatched := make(chan struct{})
+	var t3Once sync.Once
 	var t1Once sync.Once
 	var t2Once sync.Once
 
@@ -67,6 +69,9 @@ func TestReconcileWithDispatchesAfterSlowInFlightUnwindAndDefersBackgroundCycle(
 			}
 			if cfg.TaskID == "t2" {
 				t2Once.Do(func() { t2Dispatched <- time.Now() })
+			}
+			if cfg.TaskID == "t3" {
+				t3Once.Do(func() { close(t3Dispatched) })
 			}
 			return &agent.Result{
 				FinalText:        "done",
@@ -150,6 +155,7 @@ func TestReconcileWithDispatchesAfterSlowInFlightUnwindAndDefersBackgroundCycle(
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for t1 to start")
 	}
+	t1Start := time.Now()
 
 	// Queue t2 and wake while t1 holds the single worker slot for longer than
 	// minWakeInterval (200ms > 50ms). Without InFlight.SubscribeDone, a single
@@ -174,6 +180,30 @@ func TestReconcileWithDispatchesAfterSlowInFlightUnwindAndDefersBackgroundCycle(
 	// 47-reconciler RunCycle within the interactive exchange window.
 	if _, observed := cycleTimes.History(); observed != 1 {
 		t.Errorf("CycleTimes observed %d full RunCycles during rapid woken dispatches, want 1 (initial tick only)", observed)
+	}
+
+	// A later dispatch must not postpone the woken full cycle t1's dispatch
+	// already scheduled (t1Start + dispatchedWakeHeadStart): re-arming it on
+	// every dispatch let a busy deployment fall back to the poll interval.
+	for time.Since(t1Start) < 3*time.Second {
+		time.Sleep(20 * time.Millisecond)
+	}
+	putInteractive("t3")
+	wake()
+	select {
+	case <-t3Dispatched:
+	case <-time.After(5 * time.Second):
+		t.Fatal("t3 was not dispatched")
+	}
+	fullDeadline := t1Start.Add(daemon.DispatchedWakeHeadStartForTest + 1500*time.Millisecond)
+	for {
+		if _, observed := cycleTimes.History(); observed >= 2 {
+			break
+		}
+		if time.Now().After(fullDeadline) {
+			t.Fatalf("no woken full RunCycle by %v after t1's dispatch: a later dispatch postponed it", time.Since(t1Start))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)

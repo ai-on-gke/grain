@@ -182,37 +182,45 @@ export class ProcessesStore {
     return this.pageCount + this.shellCount;
   }
 
+  // start(true) is the rail's Processes count badge: it only needs the three
+  // lists, so it neither reloads (and re-publishes) the deployment config
+  // the shell already holds nor refreshes on every task.state event -- on a
+  // busy deployment that re-rendered whatever page was open on each run's
+  // state change. Its slow poll keeps the count current off the page, and
+  // the page itself (start()) refreshes live.
   start(shellOnly = false): void {
     const wasActive = this.activeCount > 0;
     const wasPage = this.pageCount > 0;
     if (shellOnly) {
       this.shellCount++;
-    } else {
-      this.actionError.set(null);
-      this.pageCount++;
-      this.declStatusAsked.clear();
+      if (!wasActive) {
+        void this.refresh();
+        this.armPollTimer();
+      }
+      return;
     }
+    this.actionError.set(null);
+    this.pageCount++;
+    this.declStatusAsked.clear();
+    if (wasPage) return;
+    this.eventSub ??= this.events.events().subscribe((ev) => {
+      if (ev.type === "task.state") {
+        void this.refresh();
+      }
+    });
+    this.armPollTimer();
     if (!wasActive) {
       this.configTask = this.loadConfigAndRepos().finally(() => {
         this.configTask = null;
       });
       void this.refresh();
-      this.eventSub = this.events.events().subscribe((ev) => {
-        if (ev.type === "task.state") {
-          void this.refresh();
-        }
-      });
-      this.armPollTimer();
       return;
     }
-    if (!shellOnly && !wasPage) {
-      this.armPollTimer();
-      if (!this.qaFlowsLoaded()) {
-        void this.loadConfigAndRepos();
-      }
-      this.api.clearConditionalCache();
-      void this.refresh();
+    if (!this.qaFlowsLoaded()) {
+      void this.loadConfigAndRepos();
     }
+    this.api.clearConditionalCache();
+    void this.refresh();
   }
 
   stop(shellOnly = false): void {
@@ -222,6 +230,8 @@ export class ProcessesStore {
       this.pageCount = Math.max(0, this.pageCount - 1);
       if (this.pageCount === 0) {
         this.declStatusAsked.clear();
+        this.eventSub?.unsubscribe();
+        this.eventSub = null;
         if (this.shellCount > 0) {
           this.armPollTimer();
         }

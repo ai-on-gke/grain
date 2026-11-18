@@ -161,9 +161,10 @@ const minWakeInterval = 50 * time.Millisecond
 // run that RunDispatchCycle has just admitted and spawned (capped at
 // PollInterval). RunDispatchCycle has already served the task wake; holding
 // the background 47-reconciler pass back keeps SQLite write locks and CPU out
-// of the new run's sandbox setup and interactive first turn (and resets across
-// back-to-back interactive chat turns), while ticker.C still bounds how long
-// periodic background reconcilers wait.
+// of the new run's sandbox setup and interactive first turn, while ticker.C
+// still bounds how long periodic background reconcilers wait. It is only
+// applied when no woken cycle is already scheduled: a pending one keeps its
+// deadline, so a stream of dispatches cannot push it back indefinitely.
 const dispatchedWakeHeadStart = 5 * time.Second
 
 // reconcileWith is reconcile with the wake channel as an argument, so a
@@ -315,16 +316,6 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 	}
 	defer woken.Stop()
 	wakePending := false
-	resetWoken := func(wait time.Duration) {
-		if wakePending && !woken.Stop() {
-			select {
-			case <-woken.C:
-			default:
-			}
-		}
-		wakePending = true
-		woken.Reset(wait)
-	}
 	cycle := func() {
 		// Before the cycle, so a settings change made since the last
 		// tick is in effect for the dispatches this one decides on
@@ -345,10 +336,13 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 			cycle()
 		case <-loopWakes:
 			justDispatched := dispatchedWake.Swap(false)
-			if wakePending && !justDispatched {
+			if wakePending {
 				// A cycle is already coming for an earlier wake, and it
 				// will read the store as it stands when it runs -- which
-				// includes whatever this wake was about.
+				// includes whatever this wake was about. It keeps its own
+				// deadline: re-arming it for every later dispatch would let
+				// a busy deployment postpone its woken full cycle again and
+				// again until only the poll interval ran one.
 				continue
 			}
 			wait := max(0, minWakeInterval-time.Since(lastTick))
@@ -361,7 +355,8 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 			} else if deps.Runs != nil && deps.Runs.Len() > 0 {
 				wait = max(wait, 500*time.Millisecond)
 			}
-			resetWoken(wait)
+			wakePending = true
+			woken.Reset(wait)
 		case <-woken.C:
 			wakePending = false
 			// The periodic tick is pushed out a whole interval by a woken
