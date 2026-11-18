@@ -318,8 +318,11 @@ func (s *CapabilityServer) handle(ctx context.Context, line []byte) []byte {
 				"isError": true,
 			}
 			var we *WaitingError
-			if errors.As(err, &we) && we.Waiting != "" {
+			switch {
+			case errors.As(err, &we) && we.Waiting != "":
 				res["structuredContent"] = map[string]any{"waiting": we.Waiting}
+			case IsStartError(err):
+				res["structuredContent"] = map[string]any{"startFailure": true}
 			}
 			return rpcReply(req.ID, res, nil)
 		}

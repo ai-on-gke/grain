@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gke-labs/granule/pkg/dockercli"
 	"github.com/gke-labs/granule/pkg/guestimage"
@@ -59,13 +60,27 @@ type Docker struct {
 	// else "docker"); tests point it at a fake
 	// so this package can be exercised without a real docker daemon.
 	BinaryPath string
+
+	// removeWaitTimeout bounds how long waitRemoved polls for an
+	// in-progress container removal to complete. Zero means
+	// defaultRemoveWaitTimeout.
+	removeWaitTimeout time.Duration
 }
+
+const defaultRemoveWaitTimeout = time.Minute
 
 func (d *Docker) binary() string {
 	if d.BinaryPath == "" {
 		return dockercli.Binary()
 	}
 	return d.BinaryPath
+}
+
+func (d *Docker) removeTimeout() time.Duration {
+	if d.removeWaitTimeout > 0 {
+		return d.removeWaitTimeout
+	}
+	return defaultRemoveWaitTimeout
 }
 
 // run execs "docker <args...>", streaming stdout to the given writer and
@@ -94,9 +109,73 @@ func isNotFound(err error) bool {
 	return strings.Contains(msg, "No such container") || strings.Contains(msg, "No such object")
 }
 
-// remove force-removes a container, treating "already gone" as success.
+// isRemovalInProgress reports whether err came from a docker CLI invocation
+// that lost a race with another caller already removing the same container
+// ("Error response from daemon: removal of container <name> is already in
+// progress").
+func isRemovalInProgress(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "removal of container") && strings.Contains(msg, "is already in progress")
+}
+
+// waitRemoved polls "docker inspect" until the named container no longer
+// exists ("No such object"), bounded by ctx and d.removeTimeout(). It is used
+// when a concurrent caller already initiated removal so that Delete/Create
+// returns only once the container is genuinely gone.
+func (d *Docker) waitRemoved(ctx context.Context, name string) error {
+	timeout := d.removeTimeout()
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	interval := 10 * time.Millisecond
+	for {
+		state, err := d.containerState(waitCtx, name)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if waitCtx.Err() != nil {
+				return fmt.Errorf("timed out after %s waiting for in-progress removal of container %s to finish", timeout, name)
+			}
+			return err
+		}
+		if state == ContainerMissing {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("timed out after %s waiting for in-progress removal of container %s to finish", timeout, name)
+		case <-time.After(interval):
+		}
+		switch {
+		case interval < 25*time.Millisecond:
+			interval = 25 * time.Millisecond
+		case interval < 50*time.Millisecond:
+			interval = 50 * time.Millisecond
+		case interval < 100*time.Millisecond:
+			interval = 100 * time.Millisecond
+		default:
+			interval = 250 * time.Millisecond
+		}
+	}
+}
+
+// remove force-removes a container, treating "already gone" as success and
+// waiting out an already-in-progress removal until the container is gone.
 func (d *Docker) remove(ctx context.Context, name string) error {
-	if err := d.run(ctx, io.Discard, "rm", "-f", name); err != nil && !isNotFound(err) {
+	if err := d.run(ctx, io.Discard, "rm", "-f", name); err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		if isRemovalInProgress(err) {
+			return d.waitRemoved(ctx, name)
+		}
 		return err
 	}
 	return nil
@@ -107,10 +186,16 @@ func (d *Docker) remove(ctx context.Context, name string) error {
 // handling, which is what lets "granule run"'s own
 // SIGTERM->power-button->forced-shutdown sequence, see the top-level
 // README's "Shutdown" section, play out the same way here as under a real
-// kubelet) and removes it, treating "already gone" as success throughout.
+// kubelet) and removes it, treating "already gone" as success throughout and
+// waiting out an already-in-progress removal until the container is gone.
 func (d *Docker) stopAndRemove(ctx context.Context, name string, graceSeconds int) error {
-	if err := d.run(ctx, io.Discard, "stop", "-t", strconv.Itoa(graceSeconds), name); err != nil && !isNotFound(err) {
-		return err
+	if err := d.run(ctx, io.Discard, "stop", "-t", strconv.Itoa(graceSeconds), name); err != nil {
+		if isRemovalInProgress(err) {
+			return d.waitRemoved(ctx, name)
+		}
+		if !isNotFound(err) {
+			return err
+		}
 	}
 	return d.remove(ctx, name)
 }
@@ -429,8 +514,7 @@ func reportPublished(ctx context.Context, d *Docker, name string, stdout io.Writ
 
 // Delete stops and removes a VM's containers. Safe to call when they
 // don't exist at all (e.g. a retried delete, or a VM that never finished
-// Create), and safe to call concurrently with nothing else touching the
-// same VM name.
+// Create), and safe to call concurrently with another Delete of the same VM.
 func Delete(ctx context.Context, d *Docker, name string, terminationGracePeriodSeconds int, stdout io.Writer) error {
 	vmName := vmContainerName(name)
 	netnsName := netnsContainerName(name)

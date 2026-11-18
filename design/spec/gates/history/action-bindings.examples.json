@@ -1,0 +1,1907 @@
+{
+  "registry_entries": [
+    {
+      "schema_version": "1.0",
+      "identity": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "effect": "integrate",
+      "aliases": [
+        "github.pr.merge",
+        "queue.integrate"
+      ],
+      "adapter_pin": "sha256:merge-adapter",
+      "input_schema_digest": "sha256:merge-inputs",
+      "resource_kinds": [
+        "github_pr"
+      ],
+      "authorization": {
+        "required_permissions": [
+          "change:merge"
+        ],
+        "human_only": false,
+        "confirmation_required": false,
+        "reason_required": false
+      },
+      "lock_domains": [
+        "repository/base",
+        "change/head"
+      ],
+      "conditional_strategy": "expected_version",
+      "reconciliation_strategy": "github.read-merged-head-and-receipt/v1",
+      "overridable_gate_ids": [
+        "repo-integration@4/ordinary-review"
+      ]
+    },
+    {
+      "schema_version": "1.0",
+      "identity": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.submit",
+        "action_version": "1"
+      },
+      "effect": "integrate",
+      "aliases": [],
+      "adapter_pin": "sha256:change.submit-adapter",
+      "input_schema_digest": "sha256:change.submit-inputs",
+      "resource_kinds": [
+        "changelist"
+      ],
+      "authorization": {
+        "required_permissions": [
+          "change:submit"
+        ],
+        "human_only": true,
+        "confirmation_required": true,
+        "reason_required": false
+      },
+      "lock_domains": [
+        "changelist/target"
+      ],
+      "conditional_strategy": "expected_version",
+      "reconciliation_strategy": "cl.read-submitted-target/v1",
+      "overridable_gate_ids": []
+    },
+    {
+      "schema_version": "1.0",
+      "identity": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "deployment.promote",
+        "action_version": "1"
+      },
+      "effect": "promote",
+      "aliases": [],
+      "adapter_pin": "sha256:deployment.promote-adapter",
+      "input_schema_digest": "sha256:deployment.promote-inputs",
+      "resource_kinds": [
+        "deployment"
+      ],
+      "authorization": {
+        "required_permissions": [
+          "deployment:promote"
+        ],
+        "human_only": false,
+        "confirmation_required": true,
+        "reason_required": false
+      },
+      "lock_domains": [
+        "deployment/target"
+      ],
+      "conditional_strategy": "expected_version",
+      "reconciliation_strategy": "environment.read-version-and-digest/v1",
+      "overridable_gate_ids": []
+    },
+    {
+      "schema_version": "1.0",
+      "identity": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "artifact.publish",
+        "action_version": "1"
+      },
+      "effect": "publish",
+      "aliases": [],
+      "adapter_pin": "sha256:artifact.publish-adapter",
+      "input_schema_digest": "sha256:artifact.publish-inputs",
+      "resource_kinds": [
+        "artifact"
+      ],
+      "authorization": {
+        "required_permissions": [
+          "artifact:publish"
+        ],
+        "human_only": false,
+        "confirmation_required": true,
+        "reason_required": false
+      },
+      "lock_domains": [
+        "artifact/target"
+      ],
+      "conditional_strategy": "expected_version",
+      "reconciliation_strategy": "registry.read-version-digest/v1",
+      "overridable_gate_ids": []
+    }
+  ],
+  "bindings": [
+    {
+      "schema_version": "1.0",
+      "id": "repo-integration",
+      "revision": 4,
+      "purpose": "action_guard",
+      "owner_policy": {
+        "id": "repo:grain/integration",
+        "revision": 8
+      },
+      "source_level": "repository",
+      "origin_task_id": null,
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "target": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": null
+      },
+      "caller_kinds": [
+        "person",
+        "agent",
+        "automation"
+      ],
+      "required_gate_ids": [
+        "checks",
+        "ordinary-review",
+        "security-review",
+        "path-review",
+        "operator-approval"
+      ],
+      "attachments": [
+        {
+          "id": "checks",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_checks",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:b4f6b10e586221e2f6ea01cabb66c3ee4978873de7058d6972d352950c959af7",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "repository:grain/reviews-checks-approvals"
+          ],
+          "contract_revision": 4
+        },
+        {
+          "id": "ordinary-review",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_review",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:4d51ac5eac4a109f2936c39271cf3aa89c7642ed002079b23527af608c8ac5d1",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "repository:grain/reviews-checks-approvals"
+          ],
+          "contract_revision": 4
+        },
+        {
+          "id": "security-review",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_security_review",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:3c95802e19d29906d03f832a4464b8c8ecdd93f008edbaa158ac8c593fa44fa4",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "repository:grain/reviews-checks-approvals"
+          ],
+          "contract_revision": 4
+        },
+        {
+          "id": "path-review",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_path_review",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:502bfa161eabb4d30daff1a31864cdc18db9a1044445abca62ff83b44a978fb1",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "repository:grain/reviews-checks-approvals"
+          ],
+          "contract_revision": 4
+        },
+        {
+          "id": "operator-approval",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_approval",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:a09c53607ecb5e3081470bd9c8188ed4f08c4050436ff180f7382ef7e4a817e6",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "repository:grain/reviews-checks-approvals"
+          ],
+          "contract_revision": 4
+        }
+      ],
+      "evidence_scope": [
+        {
+          "selector": {
+            "authority": "github.com",
+            "repository_id": "repo:grain-immutable-id",
+            "resource_kind": "github_pr",
+            "resource_id": null
+          },
+          "domains": [
+            "changes",
+            "checks",
+            "reviews",
+            "approvals",
+            "paths"
+          ],
+          "paths": [
+            "**"
+          ],
+          "read_permissions": [
+            "forge:read-scoped"
+          ]
+        }
+      ],
+      "preconditions": [
+        {
+          "predicate_id": "change.open-current-head",
+          "predicate_version": "1",
+          "evidence_scope_index": 0,
+          "arguments": {}
+        },
+        {
+          "predicate_id": "review.paths-complete",
+          "predicate_version": "1",
+          "evidence_scope_index": 0,
+          "arguments": {}
+        }
+      ],
+      "authorization": {
+        "required_permissions": [
+          "change:merge"
+        ],
+        "human_only": false,
+        "confirmation_required": false,
+        "reason_required": false
+      },
+      "invalidation_keys": [
+        "head",
+        "resource",
+        "base",
+        "evidence",
+        "binding",
+        "contract",
+        "policy",
+        "registry",
+        "authorization",
+        "provider_pin",
+        "expiry",
+        "revocation"
+      ]
+    },
+    {
+      "schema_version": "1.0",
+      "id": "changelist-policy",
+      "revision": 4,
+      "purpose": "action_guard",
+      "owner_policy": {
+        "id": "changelist/protected",
+        "revision": 4
+      },
+      "source_level": "repository",
+      "origin_task_id": null,
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.submit",
+        "action_version": "1"
+      },
+      "target": {
+        "authority": "forge.example",
+        "repository_id": "project:release",
+        "resource_kind": "changelist",
+        "resource_id": null
+      },
+      "caller_kinds": [
+        "person",
+        "agent",
+        "automation"
+      ],
+      "required_gate_ids": [
+        "submit-review"
+      ],
+      "attachments": [
+        {
+          "id": "submit-review",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_submit_review",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:0e2e3ae26a222d24149cb7b846640b94124a1f4e977369c5d57c3fdec74d088d",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "changelist:read-scoped"
+          ],
+          "contract_revision": 4
+        }
+      ],
+      "evidence_scope": [
+        {
+          "selector": {
+            "authority": "forge.example",
+            "repository_id": "project:release",
+            "resource_kind": "changelist",
+            "resource_id": null
+          },
+          "domains": [
+            "reviews"
+          ],
+          "paths": [],
+          "read_permissions": [
+            "changelist:read-scoped"
+          ]
+        }
+      ],
+      "preconditions": [
+        {
+          "predicate_id": "changelist.expected-version-and-digest",
+          "predicate_version": "1",
+          "evidence_scope_index": 0,
+          "arguments": {}
+        }
+      ],
+      "authorization": {
+        "required_permissions": [
+          "change:submit"
+        ],
+        "human_only": true,
+        "confirmation_required": true,
+        "reason_required": false
+      },
+      "invalidation_keys": [
+        "head",
+        "resource",
+        "base",
+        "evidence",
+        "binding",
+        "contract",
+        "policy",
+        "registry",
+        "authorization",
+        "provider_pin",
+        "expiry",
+        "revocation"
+      ]
+    },
+    {
+      "schema_version": "1.0",
+      "id": "deployment-policy",
+      "revision": 4,
+      "purpose": "action_guard",
+      "owner_policy": {
+        "id": "deployment/protected",
+        "revision": 4
+      },
+      "source_level": "repository",
+      "origin_task_id": null,
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "deployment.promote",
+        "action_version": "1"
+      },
+      "target": {
+        "authority": "deployment.example",
+        "repository_id": "project:release",
+        "resource_kind": "deployment",
+        "resource_id": null
+      },
+      "caller_kinds": [
+        "person",
+        "agent",
+        "automation"
+      ],
+      "required_gate_ids": [
+        "promotion-ready"
+      ],
+      "attachments": [
+        {
+          "id": "promotion-ready",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_promotion_ready",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:2bfc233b221be4bbdb7e089a32de41c7199415cfee9c9a9d9f2611d9dc750ffd",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "deployment:read-scoped"
+          ],
+          "contract_revision": 4
+        }
+      ],
+      "evidence_scope": [
+        {
+          "selector": {
+            "authority": "deployment.example",
+            "repository_id": "project:release",
+            "resource_kind": "deployment",
+            "resource_id": null
+          },
+          "domains": [
+            "environments"
+          ],
+          "paths": [],
+          "read_permissions": [
+            "deployment:read-scoped"
+          ]
+        }
+      ],
+      "preconditions": [
+        {
+          "predicate_id": "deployment.expected-version-and-digest",
+          "predicate_version": "1",
+          "evidence_scope_index": 0,
+          "arguments": {}
+        }
+      ],
+      "authorization": {
+        "required_permissions": [
+          "deployment:promote"
+        ],
+        "human_only": false,
+        "confirmation_required": true,
+        "reason_required": false
+      },
+      "invalidation_keys": [
+        "head",
+        "resource",
+        "base",
+        "evidence",
+        "binding",
+        "contract",
+        "policy",
+        "registry",
+        "authorization",
+        "provider_pin",
+        "expiry",
+        "revocation"
+      ]
+    },
+    {
+      "schema_version": "1.0",
+      "id": "artifact-policy",
+      "revision": 4,
+      "purpose": "action_guard",
+      "owner_policy": {
+        "id": "artifact/protected",
+        "revision": 4
+      },
+      "source_level": "repository",
+      "origin_task_id": null,
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "artifact.publish",
+        "action_version": "1"
+      },
+      "target": {
+        "authority": "registry.example",
+        "repository_id": "project:release",
+        "resource_kind": "artifact",
+        "resource_id": null
+      },
+      "caller_kinds": [
+        "person",
+        "agent",
+        "automation"
+      ],
+      "required_gate_ids": [
+        "publication-ready"
+      ],
+      "attachments": [
+        {
+          "id": "publication-ready",
+          "required": true,
+          "pin": {
+            "provider": "capability:forge",
+            "release": "sha256:forge-evaluators",
+            "tool": "gate_publication_ready",
+            "gate_version": "1",
+            "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+            "state_version": "1",
+            "input_declaration": "sha256:cb2a6d52b8736b73420a6425b30d700a7616820d015913d05f39fb0e6111a150",
+            "continuation_version": "1"
+          },
+          "args": {
+            "resource_source": "action_context",
+            "head_source": "action_context"
+          },
+          "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+          "read_scope": [
+            "artifact:read-scoped"
+          ],
+          "contract_revision": 4
+        }
+      ],
+      "evidence_scope": [
+        {
+          "selector": {
+            "authority": "registry.example",
+            "repository_id": "project:release",
+            "resource_kind": "artifact",
+            "resource_id": null
+          },
+          "domains": [
+            "artifacts"
+          ],
+          "paths": [],
+          "read_permissions": [
+            "artifact:read-scoped"
+          ]
+        }
+      ],
+      "preconditions": [
+        {
+          "predicate_id": "artifact.expected-version-and-digest",
+          "predicate_version": "1",
+          "evidence_scope_index": 0,
+          "arguments": {}
+        }
+      ],
+      "authorization": {
+        "required_permissions": [
+          "artifact:publish"
+        ],
+        "human_only": false,
+        "confirmation_required": true,
+        "reason_required": false
+      },
+      "invalidation_keys": [
+        "head",
+        "resource",
+        "base",
+        "evidence",
+        "binding",
+        "contract",
+        "policy",
+        "registry",
+        "authorization",
+        "provider_pin",
+        "expiry",
+        "revocation"
+      ]
+    }
+  ],
+  "effective_policy": {
+    "schema_version": "1.0",
+    "id": "effective:pr123/integrate",
+    "revision": 12,
+    "digest": "sha256:policy12",
+    "registry": {
+      "registry_id": "grain-actions",
+      "revision": 3,
+      "action_id": "change.merge",
+      "action_version": "1"
+    },
+    "coverage": "guarded",
+    "source_policies": [
+      {
+        "id": "authority:github/integration",
+        "revision": 2
+      },
+      {
+        "id": "repo:grain/integration",
+        "revision": 8
+      }
+    ],
+    "bindings": [
+      {
+        "id": "repo-integration",
+        "revision": 4
+      }
+    ],
+    "contracts": [
+      {
+        "task_id": "50",
+        "revision": 6,
+        "authority_epoch": 1
+      }
+    ],
+    "required_guards": [
+      {
+        "binding_id": "repo-integration",
+        "binding_revision": 4,
+        "gate_id": "checks"
+      },
+      {
+        "binding_id": "repo-integration",
+        "binding_revision": 4,
+        "gate_id": "ordinary-review"
+      },
+      {
+        "binding_id": "repo-integration",
+        "binding_revision": 4,
+        "gate_id": "security-review"
+      },
+      {
+        "binding_id": "repo-integration",
+        "binding_revision": 4,
+        "gate_id": "path-review"
+      },
+      {
+        "binding_id": "repo-integration",
+        "binding_revision": 4,
+        "gate_id": "operator-approval"
+      }
+    ],
+    "authorization": {
+      "required_permissions": [
+        "change:merge"
+      ],
+      "human_only": false,
+      "confirmation_required": false,
+      "reason_required": false
+    },
+    "boundary_attestation": {
+      "id": "boundary:grain/integrate",
+      "revision": 2
+    },
+    "admission": "enforced"
+  },
+  "attempts": [
+    {
+      "schema_version": "1.0",
+      "request_id": "req-merge-1",
+      "idempotency_key": "merge-pr123-H1-policy12",
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "task_id": "50",
+      "actor": {
+        "kind": "agent",
+        "id": "task:50/run:1"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "expected_policy_digest": "sha256:policy12",
+      "inputs": {
+        "change": "pr:123",
+        "method": "merge"
+      },
+      "reason": null,
+      "confirmed": false
+    },
+    {
+      "schema_version": "1.0",
+      "request_id": "req-taskless-example",
+      "idempotency_key": "taskless-pr123-H1-policy12",
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "task_id": null,
+      "actor": {
+        "kind": "automation",
+        "id": "repo-integration-bot"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "expected_policy_digest": "sha256:policy12",
+      "inputs": {
+        "change": "pr:123",
+        "method": "merge"
+      },
+      "reason": null,
+      "confirmed": false
+    },
+    {
+      "schema_version": "1.0",
+      "request_id": "req-changelist",
+      "idempotency_key": "changelist-exact-version",
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.submit",
+        "action_version": "1"
+      },
+      "task_id": null,
+      "actor": {
+        "kind": "person",
+        "id": "operator:alice"
+      },
+      "resource": {
+        "authority": "forge.example",
+        "repository_id": "project:release",
+        "resource_kind": "changelist",
+        "resource_id": "cl:246",
+        "head": "snapshot:17",
+        "resource_version": "cl:246/snapshot:17",
+        "base_version": null
+      },
+      "expected_policy_digest": "sha256:changelist-policy",
+      "inputs": {
+        "change_id": "cl:246",
+        "snapshot": 17
+      },
+      "reason": null,
+      "confirmed": true
+    },
+    {
+      "schema_version": "1.0",
+      "request_id": "req-deployment",
+      "idempotency_key": "deployment-exact-version",
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "deployment.promote",
+        "action_version": "1"
+      },
+      "task_id": null,
+      "actor": {
+        "kind": "person",
+        "id": "operator:alice"
+      },
+      "resource": {
+        "authority": "deployment.example",
+        "repository_id": "project:release",
+        "resource_kind": "deployment",
+        "resource_id": "environment:production/service:web",
+        "head": "sha256:artifact-A",
+        "resource_version": "environment:production/version:8",
+        "base_version": null
+      },
+      "expected_policy_digest": "sha256:deployment-policy",
+      "inputs": {
+        "environment": "production",
+        "service": "web",
+        "artifact_digest": "sha256:artifact-A"
+      },
+      "reason": null,
+      "confirmed": true
+    },
+    {
+      "schema_version": "1.0",
+      "request_id": "req-artifact",
+      "idempotency_key": "artifact-exact-version",
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "artifact.publish",
+        "action_version": "1"
+      },
+      "task_id": null,
+      "actor": {
+        "kind": "person",
+        "id": "operator:alice"
+      },
+      "resource": {
+        "authority": "registry.example",
+        "repository_id": "project:release",
+        "resource_kind": "artifact",
+        "resource_id": "package:grain/version:1.2.3",
+        "head": "sha256:package-A",
+        "resource_version": "version:1.2.3/absent",
+        "base_version": null
+      },
+      "expected_policy_digest": "sha256:artifact-policy",
+      "inputs": {
+        "package": "grain",
+        "version": "1.2.3",
+        "digest": "sha256:package-A",
+        "tag": null
+      },
+      "reason": null,
+      "confirmed": true
+    }
+  ],
+  "decisions": [
+    {
+      "schema_version": "1.0",
+      "operation_id": "op-merge-H1",
+      "authorization": "allowed",
+      "outcome": "blocked",
+      "context": {
+        "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+        "operation_id": "op-merge-H1",
+        "registry": {
+          "registry_id": "grain-actions",
+          "revision": 3,
+          "action_id": "change.merge",
+          "action_version": "1"
+        },
+        "resource": {
+          "authority": "github.com",
+          "repository_id": "repo:grain-immutable-id",
+          "resource_kind": "github_pr",
+          "resource_id": "pr:123",
+          "head": "H1",
+          "resource_version": "pr:123/H1/open/7",
+          "base_version": "main:B1"
+        },
+        "policy_id": "effective:pr123/integrate",
+        "policy_revision": 12,
+        "policy_digest": "sha256:policy12",
+        "manifest_revision": 9,
+        "authority_epoch": 2,
+        "authorization_revision": 5,
+        "binding_revisions": [
+          {
+            "id": "repo-integration",
+            "revision": 4
+          }
+        ],
+        "contracts": [
+          {
+            "task_id": "50",
+            "revision": 6,
+            "authority_epoch": 1
+          }
+        ],
+        "snapshot_id": "snapshot:20",
+        "evidence_revision": 20
+      },
+      "guards": [
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "checks"
+          },
+          "status": "met",
+          "evaluation_id": "ev-checks-20",
+          "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+          "evidence": [
+            {
+              "id": "checks:H1",
+              "kind": "check",
+              "version": "H1/20"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "ordinary-review"
+          },
+          "status": "unmet",
+          "evaluation_id": "ev-ordinary-review-20",
+          "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+          "evidence": [
+            {
+              "id": "ordinary-review:H1",
+              "kind": "review",
+              "version": "H1/20"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "security-review"
+          },
+          "status": "met",
+          "evaluation_id": "ev-security-review-20",
+          "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+          "evidence": [
+            {
+              "id": "security-review:H1",
+              "kind": "review",
+              "version": "H1/20"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "path-review"
+          },
+          "status": "met",
+          "evaluation_id": "ev-path-review-20",
+          "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+          "evidence": [
+            {
+              "id": "path-review:H1",
+              "kind": "review",
+              "version": "H1/20"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "operator-approval"
+          },
+          "status": "met",
+          "evaluation_id": "ev-operator-approval-20",
+          "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+          "evidence": [
+            {
+              "id": "operator-approval:H1",
+              "kind": "approval",
+              "version": "H1/20"
+            }
+          ],
+          "override_id": null
+        }
+      ],
+      "blockers": [
+        {
+          "code": "guard_unmet",
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "ordinary-review"
+          },
+          "summary": "Ordinary review has not accepted H1.",
+          "remediation": [
+            {
+              "kind": "action",
+              "action_id": "review.request",
+              "permission": "review:request",
+              "evidence": [
+                {
+                  "id": "ordinary-review:H1",
+                  "kind": "review",
+                  "version": "H1/20"
+                }
+              ],
+              "summary": "Request an accepted ordinary review for PR 123 at H1."
+            }
+          ]
+        }
+      ],
+      "retryable": false,
+      "status_reference": {
+        "id": "op-merge-H1",
+        "kind": "operation",
+        "version": "1"
+      },
+      "receipt_reference": null
+    },
+    {
+      "schema_version": "1.0",
+      "operation_id": "op-merge-H1",
+      "authorization": "allowed",
+      "outcome": "succeeded",
+      "context": {
+        "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+        "operation_id": "op-merge-H1",
+        "registry": {
+          "registry_id": "grain-actions",
+          "revision": 3,
+          "action_id": "change.merge",
+          "action_version": "1"
+        },
+        "resource": {
+          "authority": "github.com",
+          "repository_id": "repo:grain-immutable-id",
+          "resource_kind": "github_pr",
+          "resource_id": "pr:123",
+          "head": "H1",
+          "resource_version": "pr:123/H1/open/7",
+          "base_version": "main:B1"
+        },
+        "policy_id": "effective:pr123/integrate",
+        "policy_revision": 12,
+        "policy_digest": "sha256:policy12",
+        "manifest_revision": 9,
+        "authority_epoch": 2,
+        "authorization_revision": 5,
+        "binding_revisions": [
+          {
+            "id": "repo-integration",
+            "revision": 4
+          }
+        ],
+        "contracts": [
+          {
+            "task_id": "50",
+            "revision": 6,
+            "authority_epoch": 1
+          }
+        ],
+        "snapshot_id": "snapshot:21",
+        "evidence_revision": 21
+      },
+      "guards": [
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "checks"
+          },
+          "status": "met",
+          "evaluation_id": "ev-checks-21",
+          "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+          "evidence": [
+            {
+              "id": "checks:H1",
+              "kind": "check",
+              "version": "H1/21"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "ordinary-review"
+          },
+          "status": "met",
+          "evaluation_id": "ev-ordinary-review-21",
+          "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+          "evidence": [
+            {
+              "id": "ordinary-review:H1",
+              "kind": "review",
+              "version": "H1/21"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "security-review"
+          },
+          "status": "met",
+          "evaluation_id": "ev-security-review-21",
+          "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+          "evidence": [
+            {
+              "id": "security-review:H1",
+              "kind": "review",
+              "version": "H1/21"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "path-review"
+          },
+          "status": "met",
+          "evaluation_id": "ev-path-review-21",
+          "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+          "evidence": [
+            {
+              "id": "path-review:H1",
+              "kind": "review",
+              "version": "H1/21"
+            }
+          ],
+          "override_id": null
+        },
+        {
+          "guard": {
+            "binding_id": "repo-integration",
+            "binding_revision": 4,
+            "gate_id": "operator-approval"
+          },
+          "status": "met",
+          "evaluation_id": "ev-operator-approval-21",
+          "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+          "evidence": [
+            {
+              "id": "operator-approval:H1",
+              "kind": "approval",
+              "version": "H1/21"
+            }
+          ],
+          "override_id": null
+        }
+      ],
+      "blockers": [],
+      "retryable": false,
+      "status_reference": {
+        "id": "op-merge-H1",
+        "kind": "operation",
+        "version": "4"
+      },
+      "receipt_reference": {
+        "id": "merge-receipt:H1",
+        "kind": "action_receipt",
+        "version": "1"
+      }
+    }
+  ],
+  "override": {
+    "schema_version": "1.0",
+    "id": "override-example-unused",
+    "operation_id": "op-merge-H1",
+    "registry": {
+      "registry_id": "grain-actions",
+      "revision": 3,
+      "action_id": "change.merge",
+      "action_version": "1"
+    },
+    "resource": {
+      "authority": "github.com",
+      "repository_id": "repo:grain-immutable-id",
+      "resource_kind": "github_pr",
+      "resource_id": "pr:123",
+      "head": "H1",
+      "resource_version": "pr:123/H1/open/7",
+      "base_version": "main:B1"
+    },
+    "guards": [
+      {
+        "binding_id": "repo-integration",
+        "binding_revision": 4,
+        "gate_id": "ordinary-review"
+      }
+    ],
+    "issued_context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+    "execution_context_digest": null,
+    "policy_digest": "sha256:policy12",
+    "authorization_revision": 5,
+    "actor": {
+      "kind": "person",
+      "id": "operator:alice"
+    },
+    "reason": "Emergency recovery: named review prerequisite excepted after manual examination of H1.",
+    "permission": "merge:force",
+    "issued_at": "2026-11-16T20:55:00Z",
+    "expires_at": "2026-11-16T21:10:00Z",
+    "invalidation_keys": [
+      "head",
+      "resource",
+      "base",
+      "evidence",
+      "binding",
+      "contract",
+      "policy",
+      "registry",
+      "authorization",
+      "provider_pin",
+      "expiry",
+      "revocation"
+    ],
+    "revoked_by_event": null
+  },
+  "receipt": {
+    "schema_version": "1.0",
+    "id": "merge-receipt:H1",
+    "operation_id": "op-merge-H1",
+    "request_id": "req-merge-1",
+    "idempotency_key": "merge-pr123-H1-policy12",
+    "registry": {
+      "registry_id": "grain-actions",
+      "revision": 3,
+      "action_id": "change.merge",
+      "action_version": "1"
+    },
+    "actor": {
+      "kind": "agent",
+      "id": "task:50/run:1"
+    },
+    "task_id": "50",
+    "resource": {
+      "authority": "github.com",
+      "repository_id": "repo:grain-immutable-id",
+      "resource_kind": "github_pr",
+      "resource_id": "pr:123",
+      "head": "H1",
+      "resource_version": "pr:123/H1/open/7",
+      "base_version": "main:B1"
+    },
+    "before_version": "pr:123/H1/open/7",
+    "after_version": "pr:123/merged/M1",
+    "policy_digest": "sha256:policy12",
+    "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+    "outcome": "succeeded",
+    "source": "reconciled_executor",
+    "authoritative_evidence": [
+      {
+        "id": "github:pr123/merged",
+        "kind": "change",
+        "version": "H1/M1"
+      }
+    ],
+    "occurred_at": "2026-11-16T21:01:00Z"
+  },
+  "guard_request": {
+    "protocol_version": "3.0",
+    "bundle_id": "bundle-action-21",
+    "evaluation_id": "ev-ordinary-review-21",
+    "mode": "evaluate",
+    "task_id": null,
+    "gate_id": "repo-integration@4/ordinary-review",
+    "contract_revision": 9,
+    "authority_epoch": 2,
+    "policy_revision": 12,
+    "permission_revision": 5,
+    "read_scope_digest": "sha256:ffc8f595133e42d564bf775cca4ee4867f9411cf33629f0b0da242df9f2750c6",
+    "pin": {
+      "provider": "capability:forge",
+      "release": "sha256:forge-evaluators",
+      "tool": "gate_review",
+      "gate_version": "1",
+      "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+      "state_version": "1",
+      "input_declaration": "sha256:4d51ac5eac4a109f2936c39271cf3aa89c7642ed002079b23527af608c8ac5d1",
+      "continuation_version": "1"
+    },
+    "args": {
+      "resource_source": "action_context",
+      "head_source": "action_context"
+    },
+    "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+    "expected_state_revision": 0,
+    "gate_state": null,
+    "deadline": "2026-11-16T21:00:30Z",
+    "now": "2026-11-16T21:00:00Z",
+    "limits": {
+      "elapsed_ms": 30000,
+      "rounds": 8,
+      "inline_bytes": 262144,
+      "page_bytes": 131072,
+      "page_records": 100,
+      "pages": 64,
+      "page_requests_per_round": 8,
+      "page_requests_total": 64,
+      "total_page_bytes": 8388608,
+      "records": 6500,
+      "state_bytes": 16384,
+      "continuation_bytes": 16384,
+      "json_depth": 16,
+      "response_bytes": 262144,
+      "request_bytes": 2097152,
+      "transport_bytes": 25165824,
+      "retries_per_round": 1,
+      "retries_total": 2,
+      "retention_ms": 60000
+    },
+    "snapshot": {
+      "version": "2",
+      "id": "snapshot:21",
+      "evidence_revision": 21,
+      "cursor": "journal:721",
+      "incoming_message_watermark": 0,
+      "processed_message_watermark": 0,
+      "domains": [
+        "action_guard_context",
+        "reviews"
+      ],
+      "unavailable": [],
+      "records": [
+        {
+          "id": "guard-context:21",
+          "version": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+          "kind": "action_guard_context",
+          "data": {
+            "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+            "operation_id": "op-merge-H1",
+            "registry": {
+              "registry_id": "grain-actions",
+              "revision": 3,
+              "action_id": "change.merge",
+              "action_version": "1"
+            },
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "repo:grain-immutable-id",
+              "resource_kind": "github_pr",
+              "resource_id": "pr:123",
+              "head": "H1",
+              "resource_version": "pr:123/H1/open/7",
+              "base_version": "main:B1"
+            },
+            "policy_id": "effective:pr123/integrate",
+            "policy_revision": 12,
+            "policy_digest": "sha256:policy12",
+            "manifest_revision": 9,
+            "authority_epoch": 2,
+            "authorization_revision": 5,
+            "binding_revisions": [
+              {
+                "id": "repo-integration",
+                "revision": 4
+              }
+            ],
+            "contracts": [
+              {
+                "task_id": "50",
+                "revision": 6,
+                "authority_epoch": 1
+              }
+            ],
+            "snapshot_id": "snapshot:21",
+            "evidence_revision": 21
+          }
+        },
+        {
+          "id": "ordinary-review:H1",
+          "version": "H1/21",
+          "kind": "review",
+          "data": {
+            "head": "H1",
+            "disposition": "accepted",
+            "observed_at": "2026-11-16T20:59:59Z"
+          }
+        }
+      ],
+      "references": [],
+      "created_at": "2026-11-16T21:00:00Z",
+      "expires_at": "2026-11-16T21:01:00Z"
+    },
+    "round": 0,
+    "phase": "initial",
+    "previous_response_digest": null,
+    "continuation_state": null,
+    "deliveries": [],
+    "request_digest": "sha256:01e584de7cab83d46590d02ce1be796aa890ff148bdb0fc1db71125f3a6bccf7",
+    "action_context": {
+      "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+      "operation_id": "op-merge-H1",
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "policy_id": "effective:pr123/integrate",
+      "policy_revision": 12,
+      "policy_digest": "sha256:policy12",
+      "manifest_revision": 9,
+      "authority_epoch": 2,
+      "authorization_revision": 5,
+      "binding_revisions": [
+        {
+          "id": "repo-integration",
+          "revision": 4
+        }
+      ],
+      "contracts": [
+        {
+          "task_id": "50",
+          "revision": 6,
+          "authority_epoch": 1
+        }
+      ],
+      "snapshot_id": "snapshot:21",
+      "evidence_revision": 21
+    }
+  },
+  "guard_response": {
+    "protocol_version": "3.0",
+    "bundle_id": "bundle-action-21",
+    "evaluation_id": "ev-ordinary-review-21",
+    "gate_id": "repo-integration@4/ordinary-review",
+    "contract_revision": 9,
+    "authority_epoch": 2,
+    "policy_revision": 12,
+    "permission_revision": 5,
+    "read_scope_digest": "sha256:ffc8f595133e42d564bf775cca4ee4867f9411cf33629f0b0da242df9f2750c6",
+    "expected_state_revision": 0,
+    "round": 0,
+    "request_digest": "sha256:01e584de7cab83d46590d02ce1be796aa890ff148bdb0fc1db71125f3a6bccf7",
+    "snapshot_id": "snapshot:21",
+    "evidence_revision": 21,
+    "kind": "final",
+    "status": "met",
+    "summary": "Ordinary review accepted for H1.",
+    "evidence": [
+      {
+        "id": "ordinary-review:H1",
+        "kind": "review",
+        "version": "H1/21"
+      }
+    ],
+    "gate_state": null,
+    "blockers": [],
+    "work": [],
+    "action_requests": [],
+    "waits": [],
+    "buttons": [],
+    "action_context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65"
+  },
+  "operation_events": [
+    {
+      "schema_version": "1.0",
+      "id": "event:1",
+      "operation_id": "op-merge-H1",
+      "phase": "requested",
+      "task_id": "50",
+      "actor": {
+        "kind": "agent",
+        "id": "task:50/run:1"
+      },
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "attempt_digest": "sha256:merge-attempt",
+      "context_digest": null,
+      "decision_reference": null,
+      "lease_epoch": null,
+      "receipt_reference": null,
+      "time": "2026-11-16T21:00:00Z"
+    },
+    {
+      "schema_version": "1.0",
+      "id": "event:2",
+      "operation_id": "op-merge-H1",
+      "phase": "blocked",
+      "task_id": "50",
+      "actor": {
+        "kind": "agent",
+        "id": "task:50/run:1"
+      },
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "attempt_digest": "sha256:merge-attempt",
+      "context_digest": "sha256:3ba52205882547654aa94fd8f22ee6880a2625f9aa873e5c9243caf50042f89d",
+      "decision_reference": {
+        "id": "decision:blocked",
+        "kind": "action_decision",
+        "version": "1"
+      },
+      "lease_epoch": null,
+      "receipt_reference": null,
+      "time": "2026-11-16T21:00:00Z"
+    },
+    {
+      "schema_version": "1.0",
+      "id": "event:3",
+      "operation_id": "op-merge-H1",
+      "phase": "started",
+      "task_id": "50",
+      "actor": {
+        "kind": "agent",
+        "id": "task:50/run:1"
+      },
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "attempt_digest": "sha256:merge-attempt",
+      "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+      "decision_reference": {
+        "id": "decision:ready",
+        "kind": "action_decision",
+        "version": "1"
+      },
+      "lease_epoch": 9,
+      "receipt_reference": null,
+      "time": "2026-11-16T21:00:45Z"
+    },
+    {
+      "schema_version": "1.0",
+      "id": "event:4",
+      "operation_id": "op-merge-H1",
+      "phase": "succeeded",
+      "task_id": "50",
+      "actor": {
+        "kind": "agent",
+        "id": "task:50/run:1"
+      },
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "attempt_digest": "sha256:merge-attempt",
+      "context_digest": "sha256:28efe8eea722f755ec6f833a21ab98df97154c36f337575748610fff1ab2fc65",
+      "decision_reference": {
+        "id": "decision:success",
+        "kind": "action_decision",
+        "version": "1"
+      },
+      "lease_epoch": 9,
+      "receipt_reference": {
+        "id": "merge-receipt:H1",
+        "kind": "action_receipt",
+        "version": "1"
+      },
+      "time": "2026-11-16T21:01:00Z"
+    }
+  ],
+  "evaluator_declaration": {
+    "protocol_version": "3.0",
+    "snapshot_version": "2",
+    "transport": "grain_rounds",
+    "continuation_version": "1",
+    "evidence_replay_safe": true,
+    "inputs": [
+      {
+        "domain": "action_guard_context",
+        "kinds": [
+          "action_guard_context"
+        ],
+        "required": true,
+        "prefetch": false
+      },
+      {
+        "domain": "reviews",
+        "kinds": [
+          "review"
+        ],
+        "required": true,
+        "prefetch": false
+      }
+    ],
+    "record_schemas": [
+      {
+        "kind": "action_guard_context",
+        "schema_digest": "sha256:f10e7c3179f0fa8b88937ba160a03cbd55b35e95b48bd808faea72d5e79f67f5"
+      },
+      {
+        "kind": "review",
+        "schema_digest": "sha256:b3c2a66fa1e977bbb3e1cdc44408cb00b8d38ea5f1e3569662cc73cce6402d33"
+      }
+    ]
+  },
+  "guard_paged_request": {
+    "protocol_version": "3.0",
+    "bundle_id": "bundle-action-paged",
+    "evaluation_id": "ev-ordinary-review-paged",
+    "mode": "evaluate",
+    "task_id": null,
+    "gate_id": "repo-integration@4/ordinary-review",
+    "contract_revision": 9,
+    "authority_epoch": 2,
+    "policy_revision": 12,
+    "permission_revision": 5,
+    "read_scope_digest": "sha256:ffc8f595133e42d564bf775cca4ee4867f9411cf33629f0b0da242df9f2750c6",
+    "pin": {
+      "provider": "capability:forge",
+      "release": "sha256:forge-evaluators",
+      "tool": "gate_review",
+      "gate_version": "1",
+      "args_schema": "sha256:bc3a373ca49736a678f0f133ee539c2fb0e85607bfdf391a694cc2c727395f84",
+      "state_version": "1",
+      "input_declaration": "sha256:4d51ac5eac4a109f2936c39271cf3aa89c7642ed002079b23527af608c8ac5d1",
+      "continuation_version": "1"
+    },
+    "args": {
+      "resource_source": "action_context",
+      "head_source": "action_context"
+    },
+    "args_digest": "sha256:20bf8019155b24d941aac4bc55a9b2d293671ca53c849b3cc22ec8e4357a156b",
+    "expected_state_revision": 0,
+    "gate_state": null,
+    "deadline": "2026-11-16T21:00:30Z",
+    "now": "2026-11-16T21:00:00Z",
+    "limits": {
+      "elapsed_ms": 30000,
+      "rounds": 8,
+      "inline_bytes": 262144,
+      "page_bytes": 131072,
+      "page_records": 100,
+      "pages": 64,
+      "page_requests_per_round": 8,
+      "page_requests_total": 64,
+      "total_page_bytes": 8388608,
+      "records": 6500,
+      "state_bytes": 16384,
+      "continuation_bytes": 16384,
+      "json_depth": 16,
+      "response_bytes": 262144,
+      "request_bytes": 2097152,
+      "transport_bytes": 25165824,
+      "retries_per_round": 1,
+      "retries_total": 2,
+      "retention_ms": 60000
+    },
+    "snapshot": {
+      "version": "2",
+      "id": "snapshot:22",
+      "evidence_revision": 22,
+      "cursor": "journal:722",
+      "incoming_message_watermark": 0,
+      "processed_message_watermark": 0,
+      "domains": [
+        "action_guard_context",
+        "reviews"
+      ],
+      "unavailable": [],
+      "records": [
+        {
+          "id": "guard-context:22",
+          "version": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730",
+          "kind": "action_guard_context",
+          "data": {
+            "context_digest": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730",
+            "operation_id": "op-merge-H1",
+            "registry": {
+              "registry_id": "grain-actions",
+              "revision": 3,
+              "action_id": "change.merge",
+              "action_version": "1"
+            },
+            "resource": {
+              "authority": "github.com",
+              "repository_id": "repo:grain-immutable-id",
+              "resource_kind": "github_pr",
+              "resource_id": "pr:123",
+              "head": "H1",
+              "resource_version": "pr:123/H1/open/7",
+              "base_version": "main:B1"
+            },
+            "policy_id": "effective:pr123/integrate",
+            "policy_revision": 12,
+            "policy_digest": "sha256:policy12",
+            "manifest_revision": 9,
+            "authority_epoch": 2,
+            "authorization_revision": 5,
+            "binding_revisions": [
+              {
+                "id": "repo-integration",
+                "revision": 4
+              }
+            ],
+            "contracts": [
+              {
+                "task_id": "50",
+                "revision": 6,
+                "authority_epoch": 1
+              }
+            ],
+            "snapshot_id": "snapshot:22",
+            "evidence_revision": 22
+          }
+        }
+      ],
+      "references": [
+        {
+          "id": "reviews:H1",
+          "domain": "reviews",
+          "kind": "snapshot_page",
+          "record_kind": "review",
+          "schema_digest": "sha256:b3c2a66fa1e977bbb3e1cdc44408cb00b8d38ea5f1e3569662cc73cce6402d33",
+          "version": "H1/21",
+          "page_count": 1,
+          "record_count": 1,
+          "expires_at": "2026-11-16T21:01:00Z"
+        }
+      ],
+      "created_at": "2026-11-16T21:00:00Z",
+      "expires_at": "2026-11-16T21:01:00Z"
+    },
+    "round": 0,
+    "phase": "initial",
+    "previous_response_digest": null,
+    "continuation_state": null,
+    "deliveries": [],
+    "request_digest": "sha256:300492f51857b98c2059e05b908924697858dad258921dafc1d296d0dbb8aad8",
+    "action_context": {
+      "context_digest": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730",
+      "operation_id": "op-merge-H1",
+      "registry": {
+        "registry_id": "grain-actions",
+        "revision": 3,
+        "action_id": "change.merge",
+        "action_version": "1"
+      },
+      "resource": {
+        "authority": "github.com",
+        "repository_id": "repo:grain-immutable-id",
+        "resource_kind": "github_pr",
+        "resource_id": "pr:123",
+        "head": "H1",
+        "resource_version": "pr:123/H1/open/7",
+        "base_version": "main:B1"
+      },
+      "policy_id": "effective:pr123/integrate",
+      "policy_revision": 12,
+      "policy_digest": "sha256:policy12",
+      "manifest_revision": 9,
+      "authority_epoch": 2,
+      "authorization_revision": 5,
+      "binding_revisions": [
+        {
+          "id": "repo-integration",
+          "revision": 4
+        }
+      ],
+      "contracts": [
+        {
+          "task_id": "50",
+          "revision": 6,
+          "authority_epoch": 1
+        }
+      ],
+      "snapshot_id": "snapshot:22",
+      "evidence_revision": 22
+    }
+  },
+  "guard_paged_response": {
+    "protocol_version": "3.0",
+    "evaluation_id": "ev-ordinary-review-paged",
+    "gate_id": "repo-integration@4/ordinary-review",
+    "snapshot_id": "snapshot:22",
+    "contract_revision": 9,
+    "authority_epoch": 2,
+    "policy_revision": 12,
+    "evidence_revision": 22,
+    "expected_state_revision": 0,
+    "round": 0,
+    "request_digest": "sha256:300492f51857b98c2059e05b908924697858dad258921dafc1d296d0dbb8aad8",
+    "bundle_id": "bundle-action-paged",
+    "permission_revision": 5,
+    "read_scope_digest": "sha256:ffc8f595133e42d564bf775cca4ee4867f9411cf33629f0b0da242df9f2750c6",
+    "summary": "Read a retained review page.",
+    "kind": "needs_data",
+    "requests": [
+      {
+        "protocol_version": "2.0",
+        "evaluation_id": "ev-ordinary-review-paged",
+        "snapshot_id": "snapshot:22",
+        "read_id": "read-review-1",
+        "reference_id": "reviews:H1",
+        "cursor": null
+      }
+    ],
+    "continuation_state": {
+      "awaiting": "reviews:H1"
+    },
+    "action_context_digest": "sha256:bdacedf86eb29a9ee27e27c24ae6ff264990c8ac6fb5168cfbaba9113e13c730"
+  }
+}

@@ -69,13 +69,33 @@ export function errText(err: unknown): string {
   return String(err ?? "Request failed");
 }
 
-@Injectable()
+export interface ReachableReposState {
+  repos: { repo: string; push: boolean }[];
+  errors: string[];
+  hostMismatches: string[];
+  reason: string;
+  // available is false when no Git connection could list anything;
+  // connections are the ones that were asked, by credential and host.
+  available: boolean;
+  connections: ReachConnection[];
+}
+
+export interface ReachConnection {
+  credential: string;
+  host: string;
+  ok: boolean;
+}
+
+const REACHABLE_REPOS_TTL_MS = 60_000;
+
+@Injectable({ providedIn: "root" })
 export class SettingsStateService {
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
 
   readonly config = signal<GrainConfig | null>(null);
+  readonly initialized = signal(false);
   readonly settings = signal<Record<string, unknown>>({});
   readonly deployment = signal<Record<string, unknown>>({});
   readonly draft = signal<Record<string, unknown>>({});
@@ -90,12 +110,23 @@ export class SettingsStateService {
   readonly planPreview = signal<SettingsPlanRow[] | null>(null);
   readonly refusedChanges = signal<ConfigFileChange[]>([]);
 
+  private reachableCache: { at: number; data: ReachableReposState } | null =
+    null;
+  private reachableInflight: Promise<ReachableReposState> | null = null;
+  readonly reachableEpoch = signal(0);
+  readonly qaRolloutRaw = signal<{ epoch: number; text: string } | null>(null);
+
   recordError(err: unknown): void {
     const changes = extractRefusedChanges(err);
     if (changes.length > 0) {
       this.refusedChanges.set(changes);
     }
     this.error.set(errText(err));
+  }
+
+  clearError(): void {
+    this.refusedChanges.set([]);
+    this.error.set("");
   }
 
   readonly configRepoOnly = computed(() => {
@@ -146,6 +177,37 @@ export class SettingsStateService {
     return fallback;
   }
 
+  // Many numeric settings store 0 for "grain's default" and report that
+  // default beside them as `<key>Default` (sandboxCpus/sandboxCpusDefault,
+  // ciCacheMb/ciCacheMbDefault, ...). Showing the stored 0 reads as "zero
+  // vCPUs"; the box shows blank with the default as its placeholder
+  // instead, and a cleared box saves 0 again (back to the default).
+  defaultedNumber(key: string): string {
+    const v = Number(this.val<unknown>(key, 0));
+    return Number.isFinite(v) && v !== 0 ? String(v) : "";
+  }
+
+  // defaultHint is `<key>Default` as text for a placeholder, or `fallback`
+  // when the server does not report one.
+  defaultHint(key: string, fallback = ""): string {
+    const d = this.settings()[`${key}Default`];
+    return d === undefined || d === null || d === "" ? fallback : String(d);
+  }
+
+  // setNumber records a number box's text: blank is `blank` (0, the
+  // server's "default", unless the setting refuses 0 and wants grain's
+  // default spelled out), anything else its numeric value.
+  //
+  // A setting whose blank is a non-zero default (Max worker agents,
+  // Max merges per repo branch) binds `(input)` with deferBlank, so the
+  // box is not refilled under the cursor while somebody retypes it, and
+  // `(change)` without it, which fills the default in once they leave.
+  setNumber(key: string, raw: string, blank = 0, deferBlank = false): void {
+    const t = String(raw ?? "").trim();
+    if (t === "" && deferBlank) return;
+    this.setField(key, t === "" ? blank : Number(t));
+  }
+
   deployVal<T>(key: string, fallback: T): T {
     const d = this.deployDraft();
     if (key in d) return (d[key] as T) ?? fallback;
@@ -170,8 +232,15 @@ export class SettingsStateService {
     });
   }
 
+  // GET and PUT /api/deployment serialise Team's slice fields
+  // (modelSettings, defaultModels, ...) with omitempty, so an empty list
+  // comes back absent rather than []. Treat undefined/null as [] when
+  // staging an array so reverting to empty clears deployDraft instead of
+  // comparing "not set" with "none".
   setDeployField(key: string, value: unknown): void {
-    const stored = this.deployment()[key];
+    const raw = this.deployment()[key];
+    const stored =
+      Array.isArray(value) && (raw === undefined || raw === null) ? [] : raw;
     this.deployDraft.update((prev) => {
       const next = { ...prev };
       if (formatSettingValue(stored) === formatSettingValue(value)) {
@@ -200,21 +269,133 @@ export class SettingsStateService {
     this.draft.set({});
     this.deployDraft.set({});
     this.fieldErrors.set({});
+    this.qaRolloutRaw.set(null);
     this.discardEpoch.update((n) => n + 1);
     this.planPreview.set(null);
     this.error.set(null);
   }
 
-  async loadCore(): Promise<void> {
-    this.loading.set(true);
+  invalidateReachableRepos(): void {
+    this.reachableCache = null;
+    this.reachableInflight = null;
+    this.reachableEpoch.update((n) => n + 1);
+  }
+
+  async fetchReachableRepos(force = false): Promise<ReachableReposState> {
+    if (
+      !force &&
+      this.reachableCache &&
+      Date.now() - this.reachableCache.at < REACHABLE_REPOS_TTL_MS
+    ) {
+      return this.reachableCache.data;
+    }
+    if (!force && this.reachableInflight) {
+      return this.reachableInflight;
+    }
+    const epoch = this.reachableEpoch();
+    const req = this.api
+      .get<
+        | unknown[]
+        | {
+            repos?: unknown[];
+            errors?: string[];
+            hostMismatches?: string[];
+            reason?: string;
+            available?: boolean;
+            connections?: Partial<ReachConnection>[];
+          }
+      >("GET /api/deployment/reachable-repos")
+      .then((res) => {
+        const rawList = Array.isArray(res) ? res : (res?.repos ?? []);
+        const parsed: { repo: string; push: boolean }[] = [];
+        const seen = new Set<string>();
+        for (const item of rawList) {
+          let slug = "";
+          let push = true;
+          if (typeof item === "string") {
+            slug = item.trim();
+          } else if (item && typeof item === "object" && "repo" in item) {
+            const obj = item as { repo?: unknown; push?: unknown };
+            slug = typeof obj.repo === "string" ? obj.repo.trim() : "";
+            if (typeof obj.push === "boolean") push = obj.push;
+          }
+          if (slug && !seen.has(slug)) {
+            seen.add(slug);
+            parsed.push({ repo: slug, push });
+          }
+        }
+        parsed.sort((a, b) => a.repo.localeCompare(b.repo));
+        const data: ReachableReposState = {
+          repos: parsed,
+          errors: !Array.isArray(res) ? (res?.errors ?? []) : [],
+          hostMismatches: !Array.isArray(res)
+            ? (res?.hostMismatches ?? [])
+            : [],
+          reason: !Array.isArray(res) ? (res?.reason ?? "") : "",
+          // A bare list is an older server's: it listed, so it was available.
+          available: Array.isArray(res) ? true : res?.available !== false,
+          connections: (!Array.isArray(res) ? (res?.connections ?? []) : [])
+            .filter((c) => c && typeof c === "object")
+            .map((c) => ({
+              credential: String(c.credential ?? ""),
+              host: String(c.host ?? ""),
+              ok: Boolean(c.ok),
+            })),
+        };
+        if (this.reachableEpoch() === epoch) {
+          this.reachableCache = { at: Date.now(), data };
+        }
+        return data;
+      })
+      .finally(() => {
+        if (this.reachableInflight === req) {
+          this.reachableInflight = null;
+        }
+      });
+    this.reachableInflight = req;
+    return req;
+  }
+
+  async loadCore(background = false): Promise<void> {
+    if (!background) {
+      this.loading.set(true);
+    }
     this.error.set(null);
     try {
-      const cfg = await this.api.config();
-      if (cfg) {
+      const seedFromConfig = (cfg: GrainConfig | null | undefined) => {
+        if (!cfg) return;
         this.config.set(cfg);
         this.access.setConfig(cfg);
+        const dep = (cfg as Record<string, unknown>)["deployment"];
+        if (
+          dep &&
+          typeof dep === "object" &&
+          !Array.isArray(dep) &&
+          Object.keys(this.deployment()).length === 0
+        ) {
+          this.deployment.set(dep as Record<string, unknown>);
+        }
+      };
+
+      const hasSeededConfig =
+        this.access.configLoaded() && this.access.rawConfig() !== null;
+      let configTask: Promise<void> | null = null;
+      if (hasSeededConfig) {
+        seedFromConfig(this.access.rawConfig());
+        configTask = this.api.config().then(seedFromConfig);
+      } else {
+        const cfg = await this.api.config();
+        seedFromConfig(cfg);
       }
+
       const tasks: Promise<void>[] = [];
+      if (configTask) {
+        tasks.push(
+          configTask.catch((err) => {
+            if (!this.config()) throw err;
+          }),
+        );
+      }
       if (this.access.can("GET /api/settings")) {
         tasks.push(
           this.api
@@ -232,10 +413,15 @@ export class SettingsStateService {
         );
       }
       await Promise.all(tasks);
+      if (this.config() !== null) {
+        this.initialized.set(true);
+      }
     } catch (err) {
       this.error.set(errText(err));
     } finally {
-      this.loading.set(false);
+      if (!background) {
+        this.loading.set(false);
+      }
     }
   }
 
@@ -263,6 +449,27 @@ export class SettingsStateService {
     }
   }
 
+  // saveFields saves just these drafted settings, for a card with a Save
+  // button of its own (Memory's Save memory), leaving every other draft
+  // for the section Save bar. It throws what the server refused.
+  async saveFields(keys: readonly string[]): Promise<void> {
+    const draft = this.draft();
+    const payload: Record<string, unknown> = {};
+    for (const k of keys) if (k in draft) payload[k] = draft[k];
+    if (Object.keys(payload).length === 0) return;
+    const saved = await this.api.post<Record<string, unknown>>(
+      "POST /api/settings",
+      undefined,
+      payload,
+    );
+    if (saved && typeof saved === "object") this.settings.set(saved);
+    this.draft.update((prev) => {
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
+  }
+
   async saveChanges(): Promise<void> {
     if (!this.isDirty() || this.hasFieldErrors()) return;
     this.saving.set(true);
@@ -282,6 +489,7 @@ export class SettingsStateService {
           this.settings.set(saved);
         }
         this.draft.set({});
+        this.qaRolloutRaw.set(null);
       }
       const depPayload = this.deployDraft();
       if (Object.keys(depPayload).length > 0) {

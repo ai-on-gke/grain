@@ -38,7 +38,10 @@ import (
 //     limited role cannot approve it.
 //
 // None of them clamps: a request above a ceiling is refused, saying what
-// it asked for and what the ceiling is.
+// it asked for and what the ceiling is. The one exception is a proposal
+// relayed at the end of a run (orchestrator.clampProposalSandboxShape),
+// whose run is no longer there to read a refusal: it is lowered to the
+// deployment's maximum, and its body says so.
 
 // sandboxShapeLimits is this deployment's stored limits; none (grain's
 // defaults) when there is no settings row to read.

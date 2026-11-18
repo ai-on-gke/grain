@@ -12,18 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   afterNextRender,
   computed,
+  inject,
   input,
   output,
   signal,
   viewChild,
   ViewEncapsulation,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { type Scope, scopeLines } from "./scope";
 
 export interface ConfirmRequest {
@@ -36,18 +40,64 @@ export interface ConfirmRequest {
   scope?: Scope;
   // Gerund phrase for multi-repo/owner confirm tick (defaults to "approving work").
   actionVerb?: string;
+  // What the action affects, each linked to where it is changed: the
+  // tasks, templates and schedules holding a grant on a server about to
+  // be removed. A classic page is an href, a /next/ page a route.
+  items?: ConfirmItem[];
+  itemsLabel?: string;
+  // reason asks for a reason before the accept button turns on; the
+  // dialog writes what was typed into value, which run reads.
+  reason?: ConfirmReason;
   run: () => Promise<unknown>;
+}
+
+export interface ConfirmItem {
+  key: string;
+  label: string;
+  href?: string;
+  route?: string[];
+  detail?: string;
+}
+
+export interface ConfirmReason {
+  label: string;
+  placeholder?: string;
+  value: string;
 }
 
 // ConfirmDialogComponent asks before a call is made. A batch shows its
 // count per repository (and per owner when there is more than one), and
 // one that spans repositories needs an explicit second tick before the
 // accept button turns on.
+// bypassConfirm is the question both /next/ pages ask before letting a
+// repository's base-branch repair PRs merge with no human: the same
+// risk the classic Repo page and Settings -> Repositories put in their
+// confirm (ui/src/components/RepoPage.jsx). Turning it off asks
+// nothing. Without it one click on a switch took the human gate off
+// (2026-11-13 repository walkthrough).
+export function bypassConfirm(
+  repo: string,
+  run: () => Promise<unknown>,
+): ConfirmRequest {
+  return {
+    title: "Let base-branch repairs merge without a human?",
+    message:
+      `Let base-branch repair PRs in ${repo} merge without a human when their CI is green? ` +
+      `While ${repo}'s base branch is red, an agent's repair pull request can then land changes to ` +
+      `.grain/workflows/** or trust-boundary code with no human sign-off before the merge. ` +
+      `Review tasks are still filed afterwards.`,
+    accept: "Turn on",
+    destructive: true,
+    run,
+  };
+}
+
 @Component({
   selector: "g-confirm-dialog",
+  imports: [RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "./work-surface.css",
+  styleUrls: ["./work-surface.css", "./surface-controls.css"],
   template: `
     @let c = request();
     <div class="modal-backdrop">
@@ -59,12 +109,35 @@ export interface ConfirmRequest {
         aria-labelledby="confirm-title"
         aria-describedby="confirm-body"
         data-testid="confirm-dialog"
-        (keydown.escape)="cancel($event)"
         (keydown.tab)="onTab($event)"
         (keydown.shift.tab)="onTab($event)"
       >
         <h2 id="confirm-title" class="modal-title">{{ c.title }}</h2>
         <p id="confirm-body" class="modal-body">{{ c.message }}</p>
+        @if (c.items?.length) {
+          <ul
+            class="scope-list confirm-items"
+            data-testid="confirm-items"
+            [attr.aria-label]="c.itemsLabel || null"
+          >
+            @for (it of c.items; track it.key) {
+              <li>
+                @if (it.href) {
+                  <a [href]="it.href">{{ it.label }}</a>
+                } @else if (it.route) {
+                  <a [routerLink]="it.route" (click)="close(false)">{{
+                    it.label
+                  }}</a>
+                } @else {
+                  {{ it.label }}
+                }
+                @if (it.detail) {
+                  <span class="confirm-item-detail">{{ it.detail }}</span>
+                }
+              </li>
+            }
+          </ul>
+        }
         @if (c.scope; as s) {
           <ul class="scope-list" data-testid="confirm-scope">
             @for (line of lines(); track line) {
@@ -84,6 +157,19 @@ export interface ConfirmRequest {
             </label>
           }
         }
+        @if (c.reason; as r) {
+          <label class="confirm-reason">
+            <span class="confirm-reason-label">{{ r.label }}</span>
+            <textarea
+              #reasonBox
+              rows="2"
+              data-testid="confirm-reason"
+              [attr.placeholder]="r.placeholder || null"
+              [value]="r.value"
+              (input)="onReason($event)"
+            ></textarea>
+          </label>
+        }
         <div class="action-btn-group modal-actions">
           <button
             #cancelBtn
@@ -101,7 +187,7 @@ export interface ConfirmRequest {
               c.destructive ? 'btn-primary is-destructive' : 'btn-primary'
             "
             data-testid="confirm-accept"
-            [disabled]="needsTick() && !ticked()"
+            [disabled]="(needsTick() && !ticked()) || needsReason()"
             (click)="close(true)"
           >
             {{ c.accept }}
@@ -117,6 +203,10 @@ export class ConfirmDialogComponent {
   readonly done = output<boolean>();
 
   protected readonly ticked = signal(false);
+  private readonly reasonText = signal("");
+  protected readonly needsReason = computed(
+    () => !!this.request().reason && !this.reasonText().trim(),
+  );
   protected readonly lines = computed(() => {
     const s = this.request().scope;
     return s ? scopeLines(s) : [];
@@ -144,18 +234,34 @@ export class ConfirmDialogComponent {
     viewChild<ElementRef<HTMLButtonElement>>("acceptBtn");
   private readonly scopeCheck =
     viewChild<ElementRef<HTMLInputElement>>("scopeCheck");
+  private readonly reasonBox =
+    viewChild<ElementRef<HTMLTextAreaElement>>("reasonBox");
   private readonly returnFocus =
     typeof document !== "undefined"
       ? (document.activeElement as HTMLElement | null)
       : null;
 
+  private readonly doc = inject(DOCUMENT);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly onDocKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape") this.cancel(ev);
+  };
+
   constructor() {
+    this.doc.addEventListener("keydown", this.onDocKeydown, true);
+    this.destroyRef.onDestroy(() =>
+      this.doc.removeEventListener("keydown", this.onDocKeydown, true),
+    );
     // Destructive actions focus Cancel so a hurried Enter does not commit.
     // Otherwise focus goes to the second tick when present, or Accept.
+    // A reason box takes focus first: nothing can be accepted before it
+    // is filled, so Enter cannot commit by accident.
     afterNextRender(() =>
-      (this.request().destructive
-        ? this.cancelBtn()
-        : (this.scopeCheck() ?? this.acceptBtn())
+      (
+        this.reasonBox() ??
+        (this.request().destructive
+          ? this.cancelBtn()
+          : (this.scopeCheck() ?? this.acceptBtn()))
       )?.nativeElement.focus(),
     );
   }
@@ -180,6 +286,13 @@ export class ConfirmDialogComponent {
       kev.preventDefault();
       first.focus();
     }
+  }
+
+  protected onReason(ev: Event): void {
+    const v = (ev.target as HTMLTextAreaElement).value;
+    this.reasonText.set(v);
+    const r = this.request().reason;
+    if (r) r.value = v;
   }
 
   protected close(ok: boolean): void {

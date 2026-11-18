@@ -1,0 +1,3 @@
+WARNING: base branches publishing nothing:
+  acme/grain main (not held): Nothing has published from acme/grain main since 2026-11-15 06:56 UTC, 35m ago: 3 releases have been started since and every one of them published nothing, the last of them ending failure. Nothing is held up by that -- the merge queue is gated on this branch's own CI run and never on its release (docs/merge-queue-behind.md) -- so this repository is merging changes and shipping none of them, and will go on doing so until somebody looks at the publisher. Run 9003 is the latest attempt to read, and the branch's next merge starts another -- no retry is owed to the commit that failed.
+

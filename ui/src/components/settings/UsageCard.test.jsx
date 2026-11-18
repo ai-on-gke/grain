@@ -82,6 +82,36 @@ describe("UsageCard", () => {
     });
   });
 
+  it("shows a spent weekly limit even when the interval used nothing", async () => {
+    api.mockImplementation((path) =>
+      path === "/api/usage"
+        ? Promise.resolve({
+            ...report,
+            scopes: [
+              {
+                connection: "c1",
+                model: "opus",
+                used: 0,
+                pausedUntil: "2026-11-08T03:00:00Z",
+                pauseHorizon: "weekly",
+                weeklyUsed: 9000000,
+                weeklyLimit: 9000000,
+                weeklyPausedUntil: "2026-11-08T03:00:00Z",
+                weeklyResetAt: "2026-11-08T03:00:00Z",
+                burnPerHour: 0,
+              },
+            ],
+          })
+        : Promise.reject(new Error(`unexpected ${path}`)),
+    );
+    render(<UsageCard showError={vi.fn()} />);
+    const row = await screen.findByTestId("usage-row");
+    expect(within(row).getByText("Paused (weekly limit)")).toBeTruthy();
+    expect(within(row).getByTestId("usage-weekly").textContent).toBe(
+      "9.0M / 9.0M~ · weekly limit reached",
+    );
+  });
+
   it("shows each connection's budget, the rollup and the advisory", async () => {
     render(<UsageCard showError={vi.fn()} />);
     const row = await screen.findByTestId("usage-row");

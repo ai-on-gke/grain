@@ -15,3 +15,9 @@ every:
 overlap:
   skip: true
   group: release-train
+# Hold ticks while a release triage task holds main's publishing and no rc
+# is in qualification (docs/declarations.md, "Holding while publishing is
+# held"). While an rc is already qualifying, ticks still run in
+# RELEASE_TRAIN_PHASES=judge,release mode to judge, promote or drop it
+# without cutting a new rc (`held=publishing (cut skipped)`).
+skip-when: publishing-held

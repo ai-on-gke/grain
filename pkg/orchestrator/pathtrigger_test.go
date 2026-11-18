@@ -160,6 +160,11 @@ func TestMergeTriggerFilesOneTaskForADesignDocMerge(t *testing.T) {
 	if task.Approval != nil {
 		t.Error("a trigger without auto-approve filed an approved task")
 	}
+	// The repository's declared template it fired, recorded on the task
+	// both for its push set and for reporting.
+	if want := templateID("planner"); task.TemplateID != want || task.SourceTemplateID != want {
+		t.Errorf("template = %q, source template = %q, want both the declared %q", task.TemplateID, task.SourceTemplateID, want)
+	}
 	if !slices.Contains(task.Tags, model.PathTriggerFromTag(from)) || model.PathTriggerFrom(task.Tags) != from {
 		t.Errorf("tags do not record the from sha: %v", task.Tags)
 	}

@@ -105,6 +105,12 @@ async function openMenu(page, grants, method) {
     await search.fill(name);
     return page.locator(`[role^="menuitem"][data-api-grant="api:${name}"]`);
   }
+  // Wait for the method listing: a count taken before it loads reads an
+  // empty menu as "not offered".
+  await page
+    .locator('[role="menu"][data-methods-loaded="true"]')
+    .waitFor({ timeout: 5_000 })
+    .catch(() => {});
   await search.fill(method.ref);
   return page.locator(`[role^="menuitem"][data-method="${method.ref}"]`);
 }
@@ -142,14 +148,29 @@ async function pickMuiSelect(page, section, selector, wantValue) {
   const current = await hidden.inputValue();
   if (current === wantValue) return;
   const combo = hidden.locator("xpath=..").locator('[role="combobox"]');
+  const option = page.locator(`[role="option"][data-value="${wantValue}"]`);
   // A menu left open by an earlier pick (seen once on the Template editor's
   // gcp#gcp-key permission_set) puts its invisible backdrop over the combo,
   // so a click to open it again never lands: pick from the open one instead.
-  if ((await combo.getAttribute("aria-expanded")) !== "true") {
-    await combo.click();
-  }
-  await page.locator(`[role="option"][data-value="${wantValue}"]`).click();
-  await expect(combo).not.toHaveAttribute("aria-expanded", "true");
+  //
+  // On a page that saves as it goes (a console session), a save landing
+  // while the menu is open re-renders the section, and an option click
+  // in that window can be dropped: the menu stays open on the old value
+  // (session config-map#config-map keys[0] on postgres, task 6257). The
+  // pick is done when the menu has closed and the value is the one asked
+  // for -- both asserted -- and is made again from the still-open menu
+  // until it is.
+  await expect(async () => {
+    if ((await combo.getAttribute("aria-expanded")) !== "true") {
+      if ((await hidden.inputValue()) === wantValue) return;
+      await combo.click({ timeout: 2_000 });
+    }
+    await option.click({ timeout: 2_000 });
+    await expect(combo).not.toHaveAttribute("aria-expanded", "true", {
+      timeout: 1_000,
+    });
+    await expect(hidden).toHaveValue(wantValue, { timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
 }
 
 // fillField sets one schema field inside section (either a draft or a held
@@ -439,12 +460,43 @@ async function walkCell(
     }
   };
 
+  // 0. A method GET /api/capability-methods marks as an alias of another
+  // (api#grain/task-admin -> api#task-admin) is offered once, under its
+  // canonical row, which searching by the alias still finds.
+  if (Array.isArray(method.aliasOf) && method.aliasOf.length > 0) {
+    const grants = getGrants();
+    await openMenu(page, grants, method);
+    for (const target of method.aliasOf) {
+      const name = target.slice(API_REF.length);
+      await expect(
+        page.locator(`[role^="menuitem"][data-api-grant="api:${name}"]`),
+      ).toHaveCount(1);
+    }
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-open-popover]")).toHaveCount(0);
+    return variants.map(({ variant }) => ({
+      variant,
+      outcome: "pass",
+      detail: `alias of ${method.aliasOf.join(", ")}`,
+    }));
+  }
+
   // 1. Policy CI-only refusal on non-CI surfaces applies to every variant.
   if (policy === "ci_only") {
     const grants = getGrants();
     const item = await openMenu(page, grants, method);
     let detail = "listed disabled: CI-only";
     if ((await item.count()) === 0) {
+      // repo#read is a task's reads list, offered as "Read a repository"
+      // wherever the surface edits repositories.
+      if (
+        ref === "https://grain.dev/capabilities/repo#read" &&
+        (await page.locator("[data-repo-grant]").count()) > 0
+      ) {
+        await expect(
+          page.locator('[role^="menuitem"][data-repo-grant="read"]'),
+        ).toHaveCount(1);
+      }
       await page.keyboard.press("Escape");
       detail = "not offered: CI-only";
     } else {
@@ -531,7 +583,16 @@ async function walkCell(
         const expectedCheck = await recordedFor(request, ref, args);
         if ((await draft.count()) > 0) {
           await expect(draft).toBeVisible();
-          await fillVariantArgs(page, draft, method, variant, args);
+          // Fill the section, not the draft: once its required arguments
+          // pass, the draft saves itself SAVE_DELAY_MS later and the same
+          // element becomes the held grant (data-grant, no data-grant-draft),
+          // so a draft locator finds nothing for the optional fields still
+          // to be read -- cloud-key's ttl_minutes after account and project
+          // timed out in inputValue that way on a slow runner.
+          const section = currentGrants
+            .locator(`[data-method="${ref}"] [data-grant-kind="method"]`)
+            .first();
+          await fillVariantArgs(page, section, method, variant, args);
         }
 
         // On repo-ci, release#* and github#sandbox-repo move into the CI

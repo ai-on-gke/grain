@@ -1,0 +1,29 @@
+== 02:51:52 head 1: author task
+== 02:51:53 S1=3 P1=4
+== 02:51:54 dump h1-filed
+== 02:51:54 P1 posts its question; its draft is then submitted by a person
+== 02:52:05 dump h1-after-p1
+== 02:52:05 S1: 422 on its draft review
+== 02:52:16 dump h1-after-s1
+== 02:52:16 resolve P1's thread on GitHub
+== 02:52:18 head 2: owner answers S1, author run 2 fast-forwards
+== 02:52:21 author still awaiting_submit after the comment: POST /api/tasks/2/retry
+== 02:52:30 S2=6
+== 02:52:30 dump h2-filed
+== 02:52:30 head 2b: a person pushes to the branch while S2 is still in flight
+== 02:52:39 dump h2b-filed
+== 02:52:39 S2 finishes after head 2b's review was filed
+== 02:52:50 dump h2b-after-s2
+== 02:52:50 head 3: owner answers S2, author run 3 force-pushes one commit rewritten from main
+== 02:52:53 author still awaiting_submit after the comment: POST /api/tasks/2/retry
+== 02:53:11 dump h3
+== 02:53:12 head 4: main gains pkg/gitproxy/extra.go; author run 4 merges main
+== 02:53:15 author still awaiting_submit after the comment: POST /api/tasks/2/retry
+== 02:53:33 dump h4
+== 02:53:33 external fork PR whose description quotes both section headers
+== 02:53:33 fork PR acme/widgets#9001
+== 02:53:36 dump fork-r1
+== 02:53:40 dump fork-r2
+== 02:53:45 dump fork-r3
+== 02:53:46 fork reviews R1=13 R2=14 R3=15
+== 02:53:46 done

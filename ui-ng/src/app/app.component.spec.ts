@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { APP_BASE_HREF } from "@angular/common";
+import { APP_BASE_HREF, Location } from "@angular/common";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { Router, provideRouter } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withNavigationErrorHandler,
+} from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "./api/grain-api.service";
 import { GrainEvents } from "./api/grain-events.service";
@@ -22,6 +26,7 @@ import type { GrainConfig, Task, WhoamiResponse } from "./api/models";
 import { AppComponent } from "./app.component";
 import { CreateTaskService } from "./create/create-task.service";
 import { DirectorContextService } from "./director/director-context.service";
+import { AccessService } from "./services/access.service";
 import {
   SIDEBAR_HIDDEN_KEY,
   SIDEBAR_ORDER_KEY,
@@ -30,9 +35,13 @@ import { HelpService } from "./services/help.service";
 import { SnackbarService } from "./services/snackbar.service";
 import { TaskFeedStore } from "./services/task-feed.service";
 import { ThemeService } from "./services/theme.service";
-import { CHLADNI_ROSETTE_PATH } from "./shared/brand-mark";
+import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { DESTINATIONS, SETTINGS } from "./shell/nav";
+import {
+  resolveReloadHref,
+  staleChunkErrorHandler,
+} from "./shell/route-preload";
 
 class FakeShellApi {
   configBody: GrainConfig = {
@@ -53,10 +62,14 @@ class FakeShellApi {
   };
   logoutRedirect = "/signed-out";
   logoutCalls = 0;
+  usageBody: unknown = { warnings: [], scopes: [] };
 
   config = () => Promise.resolve(this.configBody);
   tasks = () => Promise.resolve(this.tasksList);
-  get = () => Promise.resolve({ sessions: [] });
+  get = (route?: string) =>
+    route === "GET /api/usage"
+      ? Promise.resolve(this.usageBody)
+      : Promise.resolve({ sessions: [] });
   getIfChanged = (route: string) => {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
@@ -155,18 +168,49 @@ describe("AppComponent shell", () => {
   });
 
   it("switches the brand mark to the animated sprite sheet when agents are running", async () => {
-    const api = new FakeShellApi();
-    const { fixture: f } = await render(api);
-    expect(
-      el(f).querySelector('[data-testid="brand-mark-animated"]'),
-    ).toBeNull();
+    const probes: { src: string; onerror: (() => void) | null }[] = [];
+    const origImage = window.Image;
+    class StubImage {
+      onerror: (() => void) | null = null;
+      private _src = "";
+      constructor() {
+        probes.push(this);
+      }
+      get src(): string {
+        return this._src;
+      }
+      set src(v: string) {
+        this._src = v;
+      }
+    }
+    window.Image = StubImage as unknown as typeof Image;
+    try {
+      const api = new FakeShellApi();
+      const { fixture: f } = await render(api);
+      expect(MARK_SHEET_32_URL.startsWith("/next/")).toBe(true);
+      expect(probes.length).toBe(0);
+      expect(
+        el(f).querySelector('[data-testid="brand-mark-animated"]'),
+      ).toBeNull();
 
-    api.tasksList = [{ id: "11", title: "Build UI", state: "running" }];
-    await TestBed.inject(TaskFeedStore).refresh();
-    await f.whenStable();
-    expect(
-      el(f).querySelector('[data-testid="brand-mark-animated"]'),
-    ).not.toBeNull();
+      api.tasksList = [{ id: "11", title: "Build UI", state: "running" }];
+      await TestBed.inject(TaskFeedStore).refresh();
+      await f.whenStable();
+      expect(probes.length).toBe(1);
+      expect(probes[0].src).toBe(MARK_SHEET_32_URL);
+      expect(
+        el(f).querySelector('[data-testid="brand-mark-animated"]'),
+      ).not.toBeNull();
+
+      probes[0].onerror?.();
+      f.detectChanges();
+      expect(
+        el(f).querySelector('[data-testid="brand-mark-animated"]'),
+      ).toBeNull();
+      expect(el(f).querySelector(".brand-mark-svg")).not.toBeNull();
+    } finally {
+      window.Image = origImage;
+    }
   });
 
   it("routes built pages (including Settings) inside the app and omits Classic UI escape links", async () => {
@@ -213,13 +257,14 @@ describe("AppComponent shell", () => {
     expect(titles.map((e) => e.textContent?.trim())).toEqual([
       "New task",
       "Start a workstream",
+      "Prototype a goal",
       "New session",
       "Task from template",
       "Run a suite",
       "New schedule",
       "New board",
     ]);
-    expect(subs.length).toBe(7);
+    expect(subs.length).toBe(8);
     expect(subs[0].textContent?.trim()).toContain("Describe work");
 
     const links = [
@@ -458,6 +503,7 @@ describe("AppComponent shell", () => {
     expect(help.isOpen()).toBe(false);
     expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
     expect(snacks.current()?.message).toContain("Help could not load");
+    expect(snacks.current()?.action?.label).toBe("Reload");
 
     // Safety net: if modalOpen() is true before any [aria-modal="true"] mounts, Escape clears it.
     TestBed.inject(CreateTaskService).open();
@@ -469,6 +515,168 @@ describe("AppComponent shell", () => {
     await f.whenStable();
     expect(TestBed.inject(CreateTaskService).isOpen()).toBe(false);
     expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("shows a Reload snackbar when a lazy route chunk fails to load (stale tab after upgrade) and guards open-redirect paths", async () => {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      imports: [AppComponent],
+      providers: [
+        provideRouter(
+          [
+            { path: "inbox", children: [] },
+            {
+              path: "tasks",
+              loadComponent: () =>
+                Promise.reject(
+                  new TypeError(
+                    "Failed to fetch dynamically imported module: /next/chunk-OLD12345.js",
+                  ),
+                ),
+            },
+          ],
+          withNavigationErrorHandler(staleChunkErrorHandler),
+        ),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: new FakeShellApi() },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const f = TestBed.createComponent(AppComponent);
+    f.autoDetectChanges();
+    await f.whenStable();
+
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl("/inbox");
+    await f.whenStable();
+
+    // Drive via a real rail link click: must not throw an unhandled rejection!
+    el(f)
+      .querySelector<HTMLAnchorElement>('[data-testid="rail-tasks"]')!
+      .click();
+    await f.whenStable();
+    f.detectChanges();
+    expect(router.url).toBe("/inbox");
+
+    const snackEl = el(f).querySelector('[data-testid="snackbar"]');
+    expect(snackEl).not.toBeNull();
+    expect(snackEl?.textContent).toContain("Page could not load");
+    const actionBtn = el(f).querySelector<HTMLButtonElement>(
+      '[data-testid="snackbar-action"]',
+    );
+    expect(actionBtn?.textContent?.trim()).toBe("Reload");
+
+    const navSpy = vi
+      .spyOn(f.componentInstance, "navigateTo")
+      .mockImplementation(() => undefined);
+    try {
+      f.componentInstance.reloadApp("/tasks?tab=closed");
+      expect(navSpy).toHaveBeenCalledWith("/next/tasks?tab=closed");
+      navSpy.mockClear();
+
+      f.componentInstance.reloadApp("//evil.example.com/phish");
+      expect(navSpy).toHaveBeenLastCalledWith();
+
+      f.componentInstance.reloadApp("/\\evil.example.com/phish");
+      expect(navSpy).toHaveBeenLastCalledWith();
+    } finally {
+      navSpy.mockRestore();
+    }
+
+    const loc = router.parseUrl("/inbox") && f.componentInstance["location"];
+    expect(resolveReloadHref(loc, "/tasks")).toBe("/next/tasks");
+    expect(resolveReloadHref(loc, "//evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\\evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\t/evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\n/evil.example.com")).toBeNull();
+    expect(resolveReloadHref(loc, "/\r/evil.example.com")).toBeNull();
+    const rootLoc = { prepareExternalUrl: (u: string) => u } as typeof loc;
+    expect(resolveReloadHref(rootLoc, "/tasks")).toBe("/tasks");
+    expect(resolveReloadHref(rootLoc, "/\t/evil.example.com")).toBeNull();
+  });
+
+  // Open-redirect fuzz (docs/test-plans/2026-11-18.md §7 item 4) through
+  // a real Location at each mount grain is served under: only same-origin
+  // paths under the mount survive.
+  for (const base of ["/next/", "/grain/next/", "/"]) {
+    it(`resolveReloadHref keeps Reload same-origin under ${base}`, () => {
+      TestBed.configureTestingModule({
+        providers: [
+          provideRouter([]),
+          { provide: APP_BASE_HREF, useValue: base },
+        ],
+      });
+      const loc = TestBed.inject(Location);
+      const rows: [string | undefined, string | null][] = [
+        ["/tasks", `${base}tasks`],
+        ["/tasks?tab=closed#top", `${base}tasks?tab=closed#top`],
+        ["/processes/quality", `${base}processes/quality`],
+        ["/%09/evil.example.com", `${base}%09/evil.example.com`],
+        ["/%2F/evil.example.com", `${base}%2F/evil.example.com`],
+        ["/%5C/evil.example.com", `${base}%5C/evil.example.com`],
+        ["/javascript:alert(1)", `${base}javascript:alert(1)`],
+        ["//evil.example.com", null],
+        ["///evil.example.com", null],
+        ["/\\evil.example.com", null],
+        ["\\evil.example.com", null],
+        ["/\\/evil.example.com", null],
+        ["/\t/evil.example.com", null],
+        ["/\t\t//evil.example.com", null],
+        ["/\n/evil.example.com", null],
+        ["/\r\n/evil.example.com", null],
+        ["/\u0000/evil.example.com", null],
+        ["/\u007f/evil.example.com", null],
+        ["/tasks\u001b[31m", null],
+        ["javascript:alert(1)", null],
+        ["JaVaScRiPt:alert(1)", null],
+        ["data:text/html,<script>alert(1)</script>", null],
+        ["https://evil.example.com/next/tasks", null],
+        ["http:evil.example.com", null],
+        [" /tasks", null],
+        ["\t/tasks", null],
+        ["tasks", null],
+        ["", null],
+        [undefined, null],
+      ];
+      for (const [dest, want] of rows) {
+        expect(resolveReloadHref(loc, dest), JSON.stringify(dest)).toBe(want);
+      }
+    });
+  }
+
+  it("skips @defer idle prefetch when navigator.connection.saveData is enabled", async () => {
+    vi.useFakeTimers();
+    const prevConn = Object.getOwnPropertyDescriptor(navigator, "connection");
+    Object.defineProperty(navigator, "connection", {
+      configurable: true,
+      get: () => ({ saveData: true }),
+    });
+    try {
+      localStorage.clear();
+      TestBed.configureTestingModule({
+        imports: [AppComponent],
+        providers: [
+          provideRouter([{ path: "inbox", children: [] }]),
+          { provide: APP_BASE_HREF, useValue: "/next/" },
+          { provide: GrainApi, useValue: new FakeShellApi() },
+          { provide: GrainEvents, useValue: { events: () => NEVER } },
+        ],
+      });
+      const f = TestBed.createComponent(AppComponent);
+      f.detectChanges();
+      await vi.advanceTimersByTimeAsync(5000);
+      const comp = f.componentInstance as unknown as {
+        idlePrefetch: () => boolean;
+      };
+      expect(comp.idlePrefetch()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      if (prevConn) {
+        Object.defineProperty(navigator, "connection", prevConn);
+      } else {
+        delete (navigator as { connection?: unknown }).connection;
+      }
+    }
   });
 
   it("customizes rail destinations (hide/reorder/reset) persisted in localStorage while keeping Inbox first and Settings last", async () => {
@@ -612,6 +820,46 @@ describe("AppComponent shell", () => {
     TestBed.inject(CreateTaskService).close();
   });
 
+  it("disables New task FABs, create menu actions, and shortcut c for a viewer role", async () => {
+    const { fixture: f } = await render();
+    const access = TestBed.inject(AccessService);
+    const createTask = TestBed.inject(CreateTaskService);
+    access.setConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read"],
+      },
+    } as never);
+    f.detectChanges();
+    await f.whenStable();
+
+    expect(
+      el(f).querySelector<HTMLButtonElement>('[data-testid="rail-new-task"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      el(f).querySelector<HTMLButtonElement>('[data-testid="phone-new-task"]')
+        ?.disabled,
+    ).toBe(true);
+
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="rail-create-menu"]')!
+      .click();
+    await f.whenStable();
+    expect(
+      el(f).querySelector<HTMLButtonElement>('[data-testid="create-new-task"]')
+        ?.disabled,
+    ).toBe(true);
+    press("Escape");
+    await f.whenStable();
+
+    press("c");
+    await f.whenStable();
+    expect(createTask.isOpen()).toBe(false);
+  });
+
   it("toggles the coplanar Director drawer from top bar, d, Alt+D, and Escape", async () => {
     const { fixture: f } = await render();
     const ctx = TestBed.inject(DirectorContextService);
@@ -644,5 +892,145 @@ describe("AppComponent shell", () => {
     );
     await f.whenStable();
     expect(ctx.isOpen()).toBe(false);
+  });
+
+  it("renders global dispatch banner, live-pill pause indicator, and Next up pause note on agentPause", async () => {
+    const api = new FakeShellApi();
+    const resetIso = new Date(Date.now() + 90 * 60_000).toISOString();
+    api.configBody = {
+      ...api.configBody,
+      timeZone: "America/Los_Angeles",
+      agentPause: {
+        paused: true,
+        until: resetIso,
+        reason: "HTTP 429 quota exceeded",
+        pauses: [
+          {
+            connection: "antigravity",
+            connectionName: "Antigravity",
+            team: "core",
+            until: resetIso,
+            reason: "HTTP 429 quota exceeded",
+            secondsRemaining: 5400,
+            canLift: true,
+          },
+        ],
+      },
+    };
+    const { fixture: f } = await render(api);
+
+    const banner = el(f).querySelector(
+      '[data-testid="global-dispatch-banner"]',
+    );
+    expect(banner).toBeTruthy();
+    expect(banner?.classList.contains("is-error")).toBe(true);
+    expect(banner?.textContent).toContain("Antigravity development paused");
+    expect(banner?.textContent).toContain("in ");
+
+    const livePill = el(f).querySelector('[data-testid="live-pill"]');
+    expect(livePill?.classList.contains("is-paused-error")).toBe(true);
+    expect(livePill?.textContent).toContain("Quota paused");
+
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="next-up-caret"]')!
+      .click();
+    await f.whenStable();
+    const note = el(f).querySelector('[data-testid="next-up-paused-note"]');
+    expect(note?.textContent).toContain("Antigravity development paused");
+  });
+
+  it("surfaces exhausted usage quotas and toggles Details (N) breakdown", async () => {
+    const api = new FakeShellApi();
+    const resetA = new Date(Date.now() + 60 * 60_000).toISOString();
+    const resetB = new Date(Date.now() + 120 * 60_000).toISOString();
+    api.configBody = {
+      ...api.configBody,
+      timeZone: "America/Los_Angeles",
+    };
+    api.usageBody = {
+      warnings: [
+        "default model opus-5.5 on antigravity is paused until 20:00 UTC; work falls back to nothing — it is the last model on the default list",
+      ],
+      scopes: [
+        {
+          connection: "antigravity",
+          connectionName: "Antigravity",
+          model: "opus-5.5",
+          pausedUntil: resetA,
+        },
+        {
+          connection: "claude",
+          connectionName: "Claude",
+          model: "opus-4.5",
+          pausedUntil: resetB,
+        },
+      ],
+    };
+    const { fixture: f } = await render(api);
+
+    const banner = el(f).querySelector(
+      '[data-testid="global-dispatch-banner"]',
+    );
+    expect(banner).toBeTruthy();
+    expect(banner?.classList.contains("is-error")).toBe(true);
+    expect(banner?.textContent).toContain("no fallback models left");
+
+    const toggle = el(f).querySelector<HTMLButtonElement>(
+      '[data-testid="dispatch-banner-toggle"]',
+    )!;
+    expect(toggle.textContent?.trim()).toMatch(/^Details \(\d+\)$/);
+    expect(
+      el(f).querySelector('[data-testid="dispatch-banner-details"]'),
+    ).toBeNull();
+
+    toggle.click();
+    await f.whenStable();
+    const details = el(f).querySelector(
+      '[data-testid="dispatch-banner-details"]',
+    );
+    expect(details).toBeTruthy();
+    expect(details?.textContent).toContain("Antigravity · opus-5.5");
+    expect(details?.textContent).toContain("Claude · opus-4.5");
+  });
+
+  it("keeps active Tasks narrowing when New board is chosen on /tasks, and drops another page's query", async () => {
+    const { fixture: f } = await render();
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl(
+      "/tasks?tab=asked&q=merge&repo=acme%2Fwidgets&view=timeline",
+    );
+    await f.whenStable();
+
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="rail-create-menu"]')!
+      .click();
+    await f.whenStable();
+    const newBoardOnTasks = [
+      ...el(f).querySelectorAll<HTMLAnchorElement>(
+        '[data-testid="create-menu"] a',
+      ),
+    ].find((a) => a.textContent?.includes("New board"))!;
+    newBoardOnTasks.click();
+    await f.whenStable();
+    expect(router.url).toContain("tab=asked");
+    expect(router.url).toContain("q=merge");
+    expect(router.url).toContain("view=timeline");
+    expect(router.url).toContain("newBoard=1");
+
+    await router.navigateByUrl("/inbox?item=4");
+    await f.whenStable();
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="rail-create-menu"]')!
+      .click();
+    await f.whenStable();
+    const newBoardOnInbox = [
+      ...el(f).querySelectorAll<HTMLAnchorElement>(
+        '[data-testid="create-menu"] a',
+      ),
+    ].find((a) => a.textContent?.includes("New board"))!;
+    newBoardOnInbox.click();
+    await f.whenStable();
+    expect(router.url).toBe("/tasks?newBoard=1");
   });
 });

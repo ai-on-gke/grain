@@ -18,17 +18,21 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
+
+var hostdDirSeq atomic.Uint64
 
 func startHostd(t *testing.T) (hostd.Client, string) {
 	t.Helper()
@@ -40,8 +44,11 @@ func startHostd(t *testing.T) (hostd.Client, string) {
 		t.Skipf("no shell: %v", err)
 	}
 	sh, _ = filepath.EvalSymlinks(sh)
-	dir, err := os.MkdirTemp("", "hostd")
-	if err != nil {
+	dir := filepath.Join(os.TempDir(), fmt.Sprintf("h%x", hostdDirSeq.Add(1)))
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
@@ -167,5 +174,78 @@ func TestHostdHostRemoveAllDoesNotWaitOnDisconnectedRemote(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("RemoveAll on disconnected remote took %s, want immediate return without Client.dial retry", elapsed)
+	}
+}
+
+func TestHostdHostStoppedVsDrainingExits(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		exit     hostd.Exit
+		err      error
+		wantIs   error
+		wantNot  error
+		wantText string
+		noText   string
+	}{
+		{
+			name:     "drain refusal",
+			exit:     hostd.Exit{Code: -1},
+			err:      &hostd.RefusedError{Reason: "the host agent is draining for its own upgrade", Draining: true},
+			wantIs:   ErrHostdDraining,
+			wantNot:  ErrHostdStopped,
+			wantText: "draining for its own upgrade",
+		},
+		{
+			name:     "drain_cap kill",
+			exit:     hostd.Exit{Code: -1, Signal: "KILL", Draining: true},
+			wantIs:   ErrHostdDraining,
+			wantNot:  ErrHostdStopped,
+			wantText: "draining for its own upgrade",
+		},
+		{
+			name:     "clean host stop or restart",
+			exit:     hostd.Exit{Code: -1, Signal: "KILL", Draining: true, Error: "stopped because the host agent stopped or restarted"},
+			wantIs:   ErrHostdStopped,
+			wantNot:  ErrHostdDraining,
+			wantText: "the host agent stopped or restarted while the run was going",
+			noText:   "draining for its own upgrade",
+		},
+		{
+			name:     "unclean host crash or kill",
+			exit:     hostd.Exit{Code: -1, Draining: true, Error: "the host agent stopped while it ran"},
+			wantIs:   ErrHostdStopped,
+			wantNot:  ErrHostdDraining,
+			wantText: "the host agent stopped or restarted while the run was going",
+			noText:   "draining for its own upgrade",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := HostdHost{
+				LocalHost: LocalHost{Logf: func(string, ...any) {}},
+				Entry:     "agy",
+				Start: func(context.Context, hostd.Request, io.Reader, io.Writer, io.Writer) (hostd.Exit, error) {
+					return tc.exit, tc.err
+				},
+			}
+			_, err := h.Run(context.Background(), Command{Args: []string{"--input"}}, nil)
+			if err == nil {
+				t.Fatal("Run = nil, want error")
+			}
+			if !IsHostdStop(err) {
+				t.Errorf("IsHostdStop(%v) = false, want true", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantText) {
+				t.Errorf("err = %q, want substring %q", err.Error(), tc.wantText)
+			}
+			if tc.noText != "" && strings.Contains(err.Error(), tc.noText) {
+				t.Errorf("err = %q, must not say %q", err.Error(), tc.noText)
+			}
+			if !errors.Is(err, tc.wantIs) {
+				t.Errorf("errors.Is(%v, %v) = false, want true", err, tc.wantIs)
+			}
+			if errors.Is(err, tc.wantNot) {
+				t.Errorf("errors.Is(%v, %v) = true, want false", err, tc.wantNot)
+			}
+		})
 	}
 }

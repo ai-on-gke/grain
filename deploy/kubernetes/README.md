@@ -159,7 +159,12 @@ What that asks of a GKE cluster:
     http://169.254.169.254/computeMetadata/v1/instance/service-accounts/
   ```
 
-  A timeout is the fence working; a service-account list is not. Then
+  A timeout is the fence working; a service-account list is not. Run
+  it again with `grain.dev/network=none` added to `--labels`, against
+  `https://example.com` this time: a network:none pod (held by
+  `grain-sandbox-network-none`, which `grain.yaml` also ships) must not
+  reach the internet either, because the flag below is also what lets
+  network:none tasks run on this backend. Then
   uncomment `-k8s-network-policy` in the Deployment's args. The flag
   only seeds a new deployment's stored settings: on one that already
   has them, run `grain settings -k8s-network-policy=true` (or tick it
@@ -267,11 +272,10 @@ the daemon, only `kubectl exec`.
 # before this apply.
 kubectl apply -f deploy/kubernetes/grain.yaml
 
-# grain.yaml already carries grain-sandbox-egress, the open-network
-# fence. networkpolicy.yaml adds grain-sandbox-network-none, for
-# network:none tasks -- optional, and only with the checks in its
-# header done:
-kubectl apply -f deploy/kubernetes/networkpolicy.yaml
+# grain.yaml already carries both sandbox fences: grain-sandbox-egress
+# for open-network pods and grain-sandbox-network-none for network:none
+# ones. networkpolicy.yaml holds the same two objects with every rule
+# explained; applying it as well changes nothing.
 
 # The UI has no authentication of its own. Tunnel to it rather than
 # exposing the Service until something authenticates in front of it.

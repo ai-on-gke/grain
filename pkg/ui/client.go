@@ -52,8 +52,11 @@ import (
 // call now. That is the visible half of the change: this used to be a
 // GitHub client, and a task's identity used to be an issue number.
 type Client struct {
-	Config Config
-	Store  *model.Store
+	gateDefinitionMu     sync.Mutex
+	gateDefinitionPermit chan struct{}
+	gateDefinitions      map[string]gateDefinitionCache
+	Config               Config
+	Store                *model.Store
 	// localScripts is the local-script approvals of this daemon's live
 	// runs (localScriptApprovals): Config.LocalScriptApprovals, or one of
 	// its own.
@@ -62,6 +65,9 @@ type Client struct {
 	allowedPrincipalsMigrateMu sync.Mutex
 	allowedPrincipalsMigrated  bool
 	deploymentOwnerSeeded      string
+	// clearNotification replaces Store.ClearNotificationByID in a bulk
+	// clear, for a test that needs one to fail partway; nil is the store.
+	clearNotification func(ctx context.Context, id int64, by string) (bool, error)
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
@@ -125,6 +131,12 @@ type Client struct {
 
 // NewClient builds a Client over a store.
 func NewClient(cfg Config, store *model.Store) *Client {
+	if cfg.GateObservationTaskIDs == nil {
+		cfg.GateObservationTaskIDs = observationEnvironment()
+	}
+	if cfg.GateObservationChildren == nil {
+		cfg.GateObservationChildren = observationChildrenEnvironment()
+	}
 	return &Client{Config: cfg, Store: store}
 }
 
@@ -657,27 +669,11 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 			return capability, true
 		}
 	}
-	if name, ok := model.GCPKeyName(id); ok && name != "" {
-		return Capability{
-			ID:   id,
-			Name: "GCP key (" + name + ", retired spelling)",
-			Description: "Read as https://grain.dev/capabilities/gcp#gcp-key with {permission_set: " + name + "}: mint a " +
-				"short-lived GCP service-account key for this task and place it in its sandbox",
-		}, true
-	}
 	// An agent API grant (agent_api.go), a repo-limited one included:
 	// the scopes and presets are offered rows of their own, but
 	// api:<scope>@<repo> is spelled per repository and so only here.
 	if row, ok := apiCapability(id); ok {
 		return row, true
-	}
-	if name, ok := localScriptsName(id); ok {
-		return Capability{
-			ID:   id,
-			Name: "Local scripts (" + name + ", retired spelling)",
-			Description: "Read as the host-script grants (https://grain.dev/capabilities/host-script#host-script) serving the " +
-				"scripts of the " + name + " local-scripts declaration on the node host (docs/local-scripts.md); never granted to a scheduled run",
-		}, true
 	}
 	return Capability{}, false
 }
@@ -797,7 +793,20 @@ func (r redBaseLookup) forTask(t model.Task) string {
 // (Store.OrderKeyForNewTask, Client.CreateTask). Either way the list is
 // this one order.
 func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
-	tasks, err := c.Store.ListTasks(ctx)
+	return c.listTasks(ctx, c.Store.ListTasks)
+}
+
+// ListOpenTasks is ListTasks without the closed tasks, read without
+// them rather than read and dropped: what GET /api/tasks' live list
+// holds (taskListLive). Every row says the same as it would in
+// ListTasks -- the states, blockers and holds it is projected with are
+// still read for the whole store.
+func (c *Client) ListOpenTasks(ctx context.Context) ([]Task, error) {
+	return c.listTasks(ctx, c.Store.ListOpenTasks)
+}
+
+func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]model.Task, error)) ([]Task, error) {
+	tasks, err := read(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -919,6 +928,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	qaSummaries, _ := c.Store.TaskQASummaries(ctx, tasks, states, assessTaskComplexityTier)
 	var open, closedTasks []Task
 	for _, t := range tasks {
 		t.GoalKind = goalKinds[t.ID]
@@ -936,6 +946,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		}
 		task := taskFrom(t, states[t.ID], states, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
 			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
+		task.QASummary = qaSummaries[t.ID]
 		if at, ok := runNow[t.ID]; ok {
 			task.RunNowAt = &at
 			task.RunNowStale = runNowStale[t.ID]
@@ -1328,6 +1339,9 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
 		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
+	if qaMap, qErr := c.Store.TaskQASummaries(ctx, []model.Task{*t}, map[string]model.State{t.ID: state}, assessTaskComplexityTier); qErr == nil {
+		task.QASummary = qaMap[t.ID]
+	}
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt
@@ -1574,6 +1588,9 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
 		c.stallNote(state, model.StateTimesFrom(*t, obs, tailRuns), c.now()))
+	if qaMap, qErr := c.Store.TaskQASummaries(ctx, []model.Task{*t}, map[string]model.State{t.ID: state}, assessTaskComplexityTier); qErr == nil {
+		task.QASummary = qaMap[t.ID]
+	}
 	pendingComment, err := c.pendingQuestionComment(ctx, id, obs, comments)
 	if err != nil {
 		return TaskDetail{}, err
@@ -1784,7 +1801,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 		}
 	}
 	detail.SuspendedSession = suspendedSessionFrom(obs)
-	if t.Origin.Reason == model.ReasonSuite {
+	if t.Filing.Reason == model.ReasonSuite {
 		origin, err := c.Store.SuiteRunOfTask(ctx, id)
 		if err != nil {
 			return TaskDetail{}, err
@@ -1799,6 +1816,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if detail.DeploymentWide, err = c.deploymentWideGrants(ctx, *t); err != nil {
 		return TaskDetail{}, err
 	}
+	detail.GateObservations, detail.GateObservationDiagnostics = c.gateObservations(ctx, *t)
 	return detail, nil
 }
 
@@ -2314,11 +2332,11 @@ type CreateTaskRequest struct {
 	// green branch closes it (design/design/durable-tasks.design.md#DT-4). Refused
 	// for a task with no repo.
 	FixesBaseBranch bool `json:"fixesBaseBranch,omitempty"`
-	// Origin is the GitHub pull request or issue this task's work comes
+	// WorkOrigin is the GitHub pull request or issue this task's work comes
 	// from (model.ParseWorkOrigin's forms), for a task filed from a chat
 	// that names one. A proposal whose parent already has a GitHub origin
 	// keeps that one instead (model.ExplicitOrigin); empty inherits.
-	Origin string `json:"origin,omitempty"`
+	WorkOrigin string `json:"origin,omitempty"`
 	// AgentFramework sets model.Task's own field of the same name -- a
 	// per-task override of the deployment's default agent framework
 	// (Settings' own "Agent framework"). "" (the default) means no
@@ -2548,6 +2566,16 @@ type CreateTaskRequest struct {
 	// task filed approved and deferred wakes onto the queue, and one
 	// filed for a human wakes back into proposed.
 	DeferredUntil *time.Time `json:"deferredUntil,omitempty"`
+	// Tags carries explicit QA experiment allocation / benchmark tags
+	// (qa-alloc:<key>, bench-spec:<id>) supplied by an operator filing work.
+	// Refused to agents and proposed tasks; internal tags are rejected.
+	Tags []string `json:"tags,omitempty"`
+	// QAFlowRef is the operator-only QA flow reference bound to this task.
+	// Refused to agents and proposed tasks.
+	QAFlowRef string `json:"qaFlowRef,omitempty"`
+
+	// GoalMode configures autonomous multi-pass Goal Mode posture on the task.
+	GoalMode *model.GoalModeConfig `json:"goalMode,omitempty"`
 
 	// modelFromTemplate is the model fromTemplate filled Model in with,
 	// "" when it filled in none. Never read off the wire: CreateTask
@@ -2574,7 +2602,7 @@ type CreateTaskRequest struct {
 	rawBody *string
 }
 
-func proposalTags(key string, held, holdRequested bool) []string {
+func proposalTags(key string, held, holdRequested bool, extra []string) []string {
 	var tags []string
 	if key != "" {
 		tags = append(tags, key)
@@ -2585,7 +2613,52 @@ func proposalTags(key string, held, holdRequested bool) []string {
 	if holdRequested {
 		tags = append(tags, model.HoldRequestedTag)
 	}
+	for _, t := range extra {
+		if !slices.Contains(tags, t) {
+			tags = append(tags, t)
+		}
+	}
 	return tags
+}
+
+func allowedClientTaskTags(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var out []string
+	for _, entry := range raw {
+		tag := strings.TrimSpace(entry)
+		if tag == "" {
+			continue
+		}
+		var rest string
+		switch {
+		case strings.HasPrefix(tag, "qa-alloc:"):
+			rest = strings.TrimPrefix(tag, "qa-alloc:")
+		case strings.HasPrefix(tag, "bench-spec:"):
+			rest = strings.TrimPrefix(tag, "bench-spec:")
+		default:
+			return nil, validationErrorf("unsupported task tag %q: only qa-alloc:<key> and bench-spec:<id> are accepted", tag)
+		}
+		if len(rest) == 0 || len(rest) > 64 || !isSafeClientTagValue(rest) {
+			return nil, validationErrorf("invalid task tag value in %q", tag)
+		}
+		if !slices.Contains(out, tag) {
+			out = append(out, tag)
+		}
+	}
+	return out, nil
+}
+
+func isSafeClientTagValue(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // defaultCapabilities is the capability ids a task filed on this
@@ -2791,6 +2864,25 @@ func (c *Client) defaultTaskHosting(ctx context.Context, target *model.RepoRef) 
 	return model.NormalizeHosting(h), nil
 }
 
+// refuseNonOperatorQAFlowRef refuses a qaFlowRef write from anyone but a
+// full-access operator: proposed tasks, agents (in-process or external), and
+// restricted access roles cannot bind or rebind a QA flow.
+func (c *Client) refuseNonOperatorQAFlowRef(ctx context.Context, proposedBy string) error {
+	if proposedBy != "" || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+		return validationErrorf("an agent or proposed task cannot set qaFlowRef")
+	}
+	if _, isAgent := agentCallFromContext(ctx); isAgent {
+		return forbiddenErrorf("an agent cannot set qaFlowRef")
+	}
+	if externalTokenFromContext(ctx) != nil {
+		return forbiddenErrorf("an external agent cannot set qaFlowRef")
+	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		return forbiddenErrorf("setting qaFlowRef requires an operator")
+	}
+	return nil
+}
+
 // No GitHub issue is created, and none is needed: Store.NewTaskID
 // allocates identity, so a task exists the moment this returns. That is
 // the whole inversion in one method -- this used to open an issue and let
@@ -2830,6 +2922,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, err
 		} else if existing != nil {
 			return c.Task(ctx, existing.ID)
+		}
+	}
+	if strings.TrimSpace(req.QAFlowRef) != "" {
+		if err := c.refuseNonOperatorQAFlowRef(ctx, req.ProposedBy); err != nil {
+			return Task{}, err
 		}
 	}
 	req, err := c.fromTemplate(ctx, req)
@@ -3070,7 +3167,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 		}
 	}
-	explicitOrigin, err := model.ExplicitOrigin(req.Origin, target, proposedBy)
+	explicitOrigin, err := model.ExplicitOrigin(req.WorkOrigin, target, proposedBy)
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
@@ -3283,6 +3380,39 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		links = append(links, model.Link{Kind: model.LinkGoogleChat, Target: strings.TrimSpace(req.GoogleChatSpace)})
 	}
 	now := c.now()
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI {
+		if req.ChangeTarget != nil || target == nil || !target.Same(ciCall.Repo) {
+			return Task{}, forbiddenErrorf("this CI token files tasks for %s only", ciCall.Repo)
+		}
+		for _, r := range reads {
+			if !r.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s reads %s", ciCall.Repo, req.TemplateID, r)
+			}
+		}
+		for _, w := range writes {
+			if !w.Repo.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s writes %s", ciCall.Repo, req.TemplateID, w.Repo)
+			}
+		}
+		for _, gr := range grants {
+			for _, cand := range append([]string{gr.Capability}, model.CanonicalLegacyGrants(gr.Capability)...) {
+				g, ok, err := model.ParseAPIGrant(cand)
+				if !ok || err != nil {
+					continue
+				}
+				if g.Repo != "" && !model.SameRepoText(g.Repo, ciCall.Repo.String()) {
+					return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s grants %s", ciCall.Repo, req.TemplateID, gr.Capability)
+				}
+				for _, repos := range g.ScopeRepos {
+					for _, r := range repos {
+						if !model.SameRepoText(r, ciCall.Repo.String()) {
+							return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s grants %s", ciCall.Repo, req.TemplateID, gr.Capability)
+						}
+					}
+				}
+			}
+		}
+	}
 	// Decoded before NewTaskID allocates anything: a bad attachment should
 	// fail this call with nothing written at all, not leave a task behind
 	// with none of the files it was supposed to carry.
@@ -3430,6 +3560,81 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	catalogueHold := false
+	var declHoldNote string
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI && proposedBy == nil {
+		declHeld := model.DeclaredCompositionHold(model.Composition{
+			Grants:        grants,
+			Admission:     taskAdmission,
+			NetworkAccess: model.NetworkAccess(req.NetworkAccess),
+		})
+		if len(declHeld) > 0 && c.Store != nil && model.IsRepoDeclaredID(filedFrom) {
+			accepted, widened, err := c.Store.NoteDeclaredTemplateHold(ctx, filedFrom, declHeld, now)
+			if err != nil {
+				return Task{}, err
+			}
+			var remaining []string
+			for _, g := range catalogueNeedsPerson {
+				if !slices.Contains(declHeld, g) {
+					remaining = append(remaining, g)
+				}
+			}
+			catalogueNeedsPerson = remaining
+			if !accepted {
+				declHoldNote = model.DeclarationAcceptanceNote(filedFrom, declHeld, widened)
+				req.Approved = false
+			}
+		}
+		var ciPersonOnly []string
+		for _, gr := range grants {
+			if slices.Contains(declHeld, gr.Capability) {
+				continue
+			}
+			needsHold := false
+			for _, cand := range append([]string{gr.Capability}, model.CanonicalLegacyGrants(gr.Capability)...) {
+				if strings.HasPrefix(model.CapabilityGrantRef(cand), model.GrainCapabilityServerID+"#") && !model.IsGrainCIGrant(cand) {
+					needsHold = true
+					break
+				}
+				g, ok, err := model.ParseAPIGrant(cand)
+				if !ok || err != nil {
+					continue
+				}
+				if g.RequiresPerson {
+					needsHold = true
+					break
+				}
+				for _, sc := range g.Scopes {
+					if model.CIAPIScopeRefusal(sc) != "" || (g.Repo == "" && len(g.ScopeRepos[sc]) == 0) {
+						needsHold = true
+						break
+					}
+				}
+				if needsHold {
+					break
+				}
+			}
+			if needsHold {
+				ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("grants %s beyond %s's CI API bounds, which requires a person's approval", gr.Capability, ciCall.Repo))
+			}
+		}
+		if declaredPush != nil {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("template %s carries a declared push set (%s), which requires a person's approval", filedFrom, declaredPush.Path))
+		}
+		if req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake) {
+			ciPersonOnly = append(ciPersonOnly, "it sets keep_running, which only a person may give")
+		}
+		if priority > model.DefaultTaskPriority {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("it sets priority %d above the default (%d), which only a person may give", priority, model.DefaultTaskPriority))
+		}
+		if len(ciPersonOnly) > 0 {
+			why := strings.Join(ciPersonOnly, "; ")
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
+	}
 	if needsPersonWhy != "" && proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
 		catalogueHold, req.Approved = true, false
 	}
@@ -3655,7 +3860,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// (grain/task-311).
 	// An owned external agent credential files on behalf of its owner
 	// (RequestActor, #XC-14).
-	origin := model.Origin{
+	origin := model.Filing{
 		Attribution: c.requestActor(ctx),
 		Reason:      model.ReasonDirect,
 	}
@@ -3665,16 +3870,26 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: proposedBy.ID},
 		}
 	}
+	clientTags, err := allowedClientTaskTags(req.Tags)
+	if err != nil {
+		return Task{}, err
+	}
+	if proposedBy != nil && len(clientTags) > 0 {
+		return Task{}, validationErrorf("a proposed task cannot set tags")
+	}
 	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
 	if err != nil {
 		return Task{}, err
+	}
+	if req.GoalMode != nil && req.GoalMode.Enabled && strings.TrimSpace(req.ProposedBy) == "" {
+		req.Interactive = false
 	}
 	task := model.Task{
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
-		Origin:               origin,
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.WorkOrigin, target, proposedBy),
+		Filing:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
 		Reviewers:            model.NormalizeReviewers(req.Reviewers),
@@ -3703,6 +3918,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
+		SourceTemplateID:     strings.TrimSpace(req.TemplateID),
+		QAFlowRef:            strings.TrimSpace(req.QAFlowRef),
 		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
 		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
@@ -3712,7 +3929,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Reads:                reads,
 		Writes:               writes,
 		CustomFields:         customFields,
-		Tags:                 proposalTags(req.ProposalKey, heldNote != "", req.HoldForApproval && proposedBy != nil),
+		Tags:                 proposalTags(req.ProposalKey, heldNote != "", req.HoldForApproval && proposedBy != nil, clientTags),
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
 		FiledVia:             filedViaFromContext(ctx),
@@ -3731,6 +3948,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	model.SetFoundIn(&task, foundIn)
 	model.ApplyDerivedFoundIn(&task)
+	if req.GoalMode != nil {
+		if err := model.SetGoalMode(&task, req.GoalMode); err != nil {
+			return Task{}, err
+		}
+	} else if proposedBy != nil {
+		if gm, ok := model.GoalModeOf(*proposedBy); ok && gm.Enabled {
+			_ = model.SetGoalMode(&task, &gm)
+		}
+	}
 	if req.DeclineAutoMerge && !req.AutoMerge {
 		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
 	}
@@ -3756,7 +3982,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	switch {
 	case catalogueHold:
-		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
+		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._" + declHoldNote
+	case declHoldNote != "":
+		task.Body += declHoldNote
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
 		approval := c.requestActor(ctx)
 		task.Approval = &approval
@@ -5187,6 +5415,8 @@ type UpdateTaskRequest struct {
 	// PriorityDispatch is a deprecated one-release alias that maps true to
 	// bypass admission and false back to standard admission.
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
+	// GoalMode updates or disables autonomous Goal Mode posture on the task.
+	GoalMode *model.GoalModeConfig `json:"goalMode,omitempty"`
 }
 
 // UnmarshalJSON accepts both camelCase and snake_case spellings for common
@@ -5801,7 +6031,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// A review's priority set by hand is the person's call, and a
 			// later edit to the reviewed task's must not lower it
 			// (model.CarryPriorityToReviews).
-			if task.Origin.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
+			if task.Filing.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
 				!slices.Contains(task.Tags, model.ReviewPriorityHandSetTag) {
 				task.Tags = append(task.Tags, model.ReviewPriorityHandSetTag)
 			}
@@ -6047,6 +6277,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				newLinks = append(newLinks, model.Link{Kind: model.LinkGoogleChat, Target: space})
 			}
 			task.Links = newLinks
+		}
+		if req.GoalMode != nil {
+			if err := model.SetGoalMode(task, req.GoalMode); err != nil {
+				return err
+			}
 		}
 		if req.Designs != nil || req.Context != nil {
 			var newLinks []model.Link
@@ -7993,6 +8228,9 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	}
 	now := c.now()
 	if task.Approval == nil {
+		if err := ciOnlyGrantApprovalRefusal(*task); err != nil {
+			return err
+		}
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}

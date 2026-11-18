@@ -29,7 +29,7 @@ func TestAParkIsARequestedSuspension(t *testing.T) {
 	store, ctx := open(t)
 	task := model.Task{
 		ID: "parker", Intent: model.IntentImplement, Title: "t",
-		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 		ResumeOnDeadline: true,
 	}
@@ -124,7 +124,7 @@ func TestResumeLaterWakesOnAMessageAndOnCI(t *testing.T) {
 	for _, id := range []string{"on-message", "on-ci"} {
 		task := model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "t",
-			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Filing:   model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 			Approval: &model.Attribution{Actor: human}, Binding: model.BindingDirective,
 		}
 		if err := store.PutTask(ctx, task); err != nil {
@@ -193,6 +193,42 @@ func TestResumeLaterWakesOnAMessageAndOnCI(t *testing.T) {
 		}
 		if want := i == 1; (len(due) == 1 && due[0] == "on-ci") != want {
 			t.Fatalf("after a verdict at %v, due = %v, want on-ci due: %v", finished, due, want)
+		}
+	}
+}
+
+func TestTaskCIModeHonoursCanonicalGrainCIAndIgnoresRetiredBareName(t *testing.T) {
+	store, ctx := open(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := model.Task{
+		ID:     "ci-mode-check",
+		Intent: model.IntentImplement,
+		Title:  "t",
+		Target: &repo,
+		Filing: model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+	}
+
+	// Retired bare "grain-ci" is no longer read as enabling grain CI when CIMode is unset.
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                repo,
+		DefaultCapabilities: []string{model.GrainCICapability},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, mode, err := store.TaskCIMode(ctx, task); err != nil || mode != model.CIModeGitHub {
+		t.Fatalf("TaskCIMode with retired bare %q = %q, %v; want %q", model.GrainCICapability, mode, err, model.CIModeGitHub)
+	}
+
+	// Canonical grain#ci in DefaultCapabilities selects CIModeGrain when CIMode is unset.
+	for _, grant := range []string{model.GrainCIRef, model.GrainCIGrant} {
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{
+			Repo:                repo,
+			DefaultCapabilities: []string{grant},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, mode, err := store.TaskCIMode(ctx, task); err != nil || mode != model.CIModeGrain {
+			t.Fatalf("TaskCIMode with %q = %q, %v; want %q", grant, mode, err, model.CIModeGrain)
 		}
 	}
 }

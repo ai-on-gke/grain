@@ -78,7 +78,7 @@ func attachControllerMCP(t *testing.T, w *world) agent.CapabilityMCPServer {
 	target := model.RepoRef{Owner: "acme", Name: "live"}
 	tk := model.Task{
 		ID: apiGrantTaskID, Intent: model.IntentImplement, Title: apiGrantTaskTitle,
-		Origin:  model.Origin{Attribution: model.Attribution{Actor: human("tester")}, Reason: model.ReasonDirect},
+		Filing:  model.Filing{Attribution: model.Attribution{Actor: human("tester")}, Reason: model.ReasonDirect},
 		Binding: model.BindingDirective,
 		Target:  &target,
 		Grants:  []model.Grant{{Capability: apiGrantScope, Via: model.GrantByLabel}},

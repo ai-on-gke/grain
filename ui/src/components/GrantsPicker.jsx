@@ -203,9 +203,23 @@ export default function GrantsPicker({
   const refs = useMemo(() => all.filter(isCapabilityRef), [all]);
   const offered = config?.capabilities || [];
   const { presets, areas } = groupApiRows(offered);
+  // The api:grain/<name> grant a preset row also stands for: grain's
+  // built-in copy of an unprefixed preset (grain/task-admin under
+  // task-admin). A grain/<name> offered as a row of its own
+  // (grain/operator) is no alias, even beside a deployment set of the
+  // same unprefixed name.
+  const apiBuiltinAlias = (row) => {
+    const short = apiShortName(row.id);
+    if (!row.preset || short.includes("/")) return "";
+    const alias = `api:grain/${short}`;
+    return offered.some((c) => splitApiGrant(c.id)[0] === alias) ? "" : alias;
+  };
   const apiRowOf = (id) => {
     const [target] = splitApiGrant(id);
-    return offered.find((c) => splitApiGrant(c.id)[0] === target);
+    return (
+      offered.find((c) => splitApiGrant(c.id)[0] === target) ||
+      offered.find((c) => apiBuiltinAlias(c) === target)
+    );
   };
 
   const [methods, setMethods] = useState(null);
@@ -274,7 +288,11 @@ export default function GrantsPicker({
           setLoadError("");
           // Only methods: a row without a ref is nothing to grant.
           const listed = asList(m).filter((x) => typeof x?.ref === "string");
-          setMethods(listed);
+          setMethods((prev) =>
+            prev && JSON.stringify(prev) === JSON.stringify(listed)
+              ? prev
+              : listed,
+          );
           return listed;
         })
         .catch((err) => {
@@ -399,16 +417,26 @@ export default function GrantsPicker({
   };
 
   const toggleApi = (row) => {
-    const ref = apiRef(apiShortName(row.id));
+    const short = apiShortName(row.id);
+    const ref = apiRef(short);
+    const aliasLegacy = apiBuiltinAlias(row);
+    const aliasRef = aliasLegacy ? apiRef(apiShortName(aliasLegacy)) : "";
+    const matchesRef = (r) => r === ref || (aliasRef && r === aliasRef);
     const heldRef = refs.includes(ref)
       ? ref
-      : refs.find((g) => parseGrant(g).ref === ref);
+      : aliasRef && refs.includes(aliasRef)
+        ? aliasRef
+        : refs.find((g) => matchesRef(parseGrant(g).ref));
     if (heldRef) {
       removeMethod(heldRef);
       return;
     }
-    if (apiHeld.some((id) => splitApiGrant(id)[0] === row.id)) {
-      onApiChange(apiHeld.filter((id) => splitApiGrant(id)[0] !== row.id));
+    const matchesLegacy = (id) => {
+      const [head] = splitApiGrant(id);
+      return head === row.id || (aliasLegacy && head === aliasLegacy);
+    };
+    if (apiHeld.some(matchesLegacy)) {
+      onApiChange(apiHeld.filter((id) => !matchesLegacy(id)));
       return;
     }
     setError("");
@@ -785,7 +813,13 @@ export default function GrantsPicker({
   const matches = (...texts) =>
     !q || texts.some((t) => (t || "").toLowerCase().includes(q));
   const apiMatches = (row) =>
-    matches(row.id, row.summary, row.description, ...(row.scopes || []));
+    matches(
+      row.id,
+      apiBuiltinAlias(row),
+      row.summary,
+      row.description,
+      ...(row.scopes || []),
+    );
   const menuGroups = [];
   const formOffers = (id) => pickerAllows(formCapabilities, id);
   const displayed = (row) => {
@@ -853,11 +887,20 @@ export default function GrantsPicker({
     });
 
   const apiItem = (row) => {
-    const name = row.displayLabel || apiShortName(row.id);
-    const ref = apiRef(apiShortName(row.id));
+    const short = apiShortName(row.id);
+    const name = row.displayLabel || short;
+    const ref = apiRef(short);
+    const aliasLegacy = apiBuiltinAlias(row);
+    const aliasRef = aliasLegacy ? apiRef(apiShortName(aliasLegacy)) : "";
     const held =
-      refs.some((g) => parseGrant(g).ref === ref) ||
-      apiHeld.some((id) => splitApiGrant(id)[0] === row.id);
+      refs.some((g) => {
+        const r = parseGrant(g).ref;
+        return r === ref || (aliasRef && r === aliasRef);
+      }) ||
+      apiHeld.some((id) => {
+        const [head] = splitApiGrant(id);
+        return head === row.id || (aliasLegacy && head === aliasLegacy);
+      });
     return (
       <MenuItem
         key={row.id}
@@ -916,7 +959,10 @@ export default function GrantsPicker({
                   className="api-preset-scopes"
                   sx={{ display: "block" }}
                 >
-                  grants {row.scopes.join(", ")}
+                  grants{" "}
+                  {row.scopes.length <= 10
+                    ? row.scopes.join(", ")
+                    : `${row.scopes.slice(0, 6).join(", ")}, … (${row.scopes.length} scopes)`}
                 </Box>
               )}
             </Typography>
@@ -1192,6 +1238,7 @@ export default function GrantsPicker({
         <MenuList
           ref={listRef}
           id={`${regionId}-menu`}
+          data-methods-loaded={!stillLoading ? "true" : undefined}
           dense
           aria-label="Grants to add"
           autoFocusItem={false}
@@ -1284,6 +1331,7 @@ function ArgsSection({
   const pending = useRef(false);
   const inFlight = useRef(false);
   const timer = useRef(null);
+  const blurTimer = useRef(null);
   const mounted = useRef(true);
 
   const save = async () => {
@@ -1332,6 +1380,7 @@ function ArgsSection({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      clearTimeout(blurTimer.current);
       if (timer.current) saveRef.current();
     };
   }, []);
@@ -1368,9 +1417,25 @@ function ArgsSection({
       data-grant-draft={grant ? undefined : ""}
       aria-label={ariaLabel}
       className="grant-section"
+      // Focus leaving the section saves at once -- but a select's menu
+      // is a portal outside this element's DOM, so opening one blurs
+      // the section with relatedTarget outside it. React still bubbles
+      // the menu's own focus back through here, so the save waits a
+      // tick and an onFocus from inside (the menu) calls it off. Saving
+      // as the menu opened re-rendered the whole list mid-pick on pages
+      // that save as they go (a console session's), and the option
+      // click could land on a menu that no longer took it.
       onBlur={(e) => {
-        if (timer.current && !e.currentTarget.contains(e.relatedTarget))
-          saveRef.current();
+        if (!timer.current || e.currentTarget.contains(e.relatedTarget)) return;
+        clearTimeout(blurTimer.current);
+        blurTimer.current = setTimeout(() => {
+          blurTimer.current = null;
+          if (timer.current) saveRef.current();
+        }, 0);
+      }}
+      onFocus={() => {
+        clearTimeout(blurTimer.current);
+        blurTimer.current = null;
       }}
       sx={{ ...sectionSx, px: 1.5, pt: 0.75, pb: 1.5 }}
     >

@@ -13,15 +13,21 @@
 // limitations under the License.
 
 import type { Task } from "../api/models";
+import { taskPriority } from "./batch-edit-dialog.component";
 import {
   ago,
+  heldForRunNow,
   bands,
   inTab,
   levelOf,
   nextUp,
+  needsRetryMerge,
   placement,
   planMove,
+  mergeStuck,
   sorted,
+  taskStateLabel,
+  timelineEndMs,
 } from "./task-view";
 
 const t = (id: string, priority: number, extra: Partial<Task> = {}): Task =>
@@ -145,5 +151,184 @@ describe("task view", () => {
     expect(ago("2026-11-11T09:00:00Z", now)).toBe("3h");
     expect(ago("2026-11-08T12:00:00Z", now)).toBe("3d");
     expect(ago(undefined, now)).toBe("");
+  });
+});
+
+describe("timelineEndMs", () => {
+  const now = Date.parse("2026-11-14T12:00:00Z");
+  const task = (state: string, extra: Partial<Task> = {}): Task =>
+    ({
+      id: "1",
+      title: "t",
+      state,
+      createdAt: "2026-11-14T08:00:00Z",
+      ...extra,
+    }) as Task;
+
+  it("runs a still-open task to now", () => {
+    for (const state of [
+      "queued",
+      "proposed",
+      "awaiting_reply",
+      "deferred",
+      "running",
+    ]) {
+      expect(timelineEndMs(task(state), now)).toBe(now);
+    }
+  });
+
+  it("ends a task where its work ended", () => {
+    const ended = "2026-11-14T09:00:00Z";
+    expect(
+      timelineEndMs(task("awaiting_submit", { endedAt: ended }), now),
+    ).toBe(Date.parse(ended));
+    expect(timelineEndMs(task("closed", { closedAt: ended }), now)).toBe(
+      Date.parse(ended),
+    );
+  });
+
+  it("ends a finished task with no end recorded at its filing", () => {
+    expect(timelineEndMs(task("completed"), now)).toBe(
+      Date.parse("2026-11-14T08:00:00Z"),
+    );
+  });
+});
+
+describe("heldForRunNow", () => {
+  const manual = { paused: true, runNowPasses: true };
+  it("marks a queued task only while a pause Run now passes holds it", () => {
+    expect(heldForRunNow(manual, t("1", 5))).toBe(true);
+    expect(heldForRunNow({ paused: true }, t("1", 5))).toBe(false);
+    expect(heldForRunNow(null, t("1", 5))).toBe(false);
+    expect(heldForRunNow(manual, t("1", 5, { state: "running" }))).toBe(false);
+  });
+  it("drops the marker once the task has been asked to run", () => {
+    expect(heldForRunNow(manual, t("1", 5, { runNowAt: "x" }))).toBe(false);
+  });
+  it("leaves blocked, admitted and awaited tasks unmarked", () => {
+    expect(heldForRunNow(manual, t("1", 5, { blocked: true }))).toBe(false);
+    expect(heldForRunNow(manual, t("1", 5, { admission: "bypass" }))).toBe(
+      false,
+    );
+    expect(heldForRunNow({ ...manual, untilTask: "1" }, t("1", 5))).toBe(false);
+  });
+});
+
+describe("taskPriority", () => {
+  it("takes whole numbers from 1 up and refuses the rest", () => {
+    expect(taskPriority("7")).toBe(7);
+    expect(taskPriority(" 12 ")).toBe(12);
+    expect(taskPriority("1e3")).toBe(1000);
+    expect(taskPriority("1.5E3")).toBe(1500);
+    for (const bad of ["0", "-1", "2.5", "1e-3", "0x10", "", "abc", "1e400"])
+      expect(taskPriority(bad)).toBeNaN();
+  });
+});
+
+describe("taskStateLabel", () => {
+  it("names a stuck merge rather than calling it Merging", () => {
+    const failed = t("29", 5, {
+      state: "completed",
+      mergeQueueState: "merge_failed",
+    });
+    expect(taskStateLabel(failed)).toBe("Merge failed");
+    expect(mergeStuck(failed)).toBe(true);
+    expect(
+      taskStateLabel(
+        t("30", 5, { state: "completed", mergeQueueState: "unreadable" }),
+      ),
+    ).toBe("Can't read the pull request");
+    const landing = t("5", 5, {
+      state: "completed",
+      mergeQueueState: "merging",
+    });
+    expect(taskStateLabel(landing)).toBe("Merging");
+    expect(mergeStuck(landing)).toBe(false);
+    // A closed task's stale observation does not relabel it.
+    expect(
+      taskStateLabel(
+        t("31", 5, { state: "closed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe("Closed");
+    expect(taskStateLabel(t("2", 5))).toBe("Waiting");
+  });
+});
+
+describe("needsRetryMerge", () => {
+  it("matches a task whose reason names Retry merge or a completed merge_failed task", () => {
+    expect(
+      needsRetryMerge(
+        t("25", 5, {
+          state: "completed",
+          mergeQueueState: "merge_failed",
+          reason: {
+            reason: "completed/merge_failed",
+            class: "awaiting a person",
+            control: "Retry merge",
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      needsRetryMerge(
+        t("26", 5, { state: "completed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe(true);
+    expect(
+      needsRetryMerge(
+        t("27", 5, {
+          state: "completed",
+          reason: {
+            reason: "completed/merge_failed",
+            control: "Retry merge",
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores active merges, unreadable PRs, paused tasks, closed tasks, and other states", () => {
+    expect(
+      needsRetryMerge(
+        t("5", 5, {
+          state: "completed",
+          mergeQueueState: "waiting_ci",
+          reason: { reason: "completed/on_merge_queue", class: "driven" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("6", 5, { state: "completed", mergeQueueState: "unreadable" }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("7", 5, {
+          state: "completed",
+          mergeQueueState: "merge_failed",
+          paused: {
+            at: "2026-11-18T00:00:00Z",
+            by: "ana",
+            fromState: "completed",
+          },
+          reason: { reason: "completed/operator_paused", control: "Resume" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("8", 5, { state: "closed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe(false);
+    expect(
+      needsRetryMerge(
+        t("9", 5, {
+          state: "queued",
+          mergeQueueState: "merge_failed",
+          reason: { reason: "queued/ready", control: "Run now" },
+        }),
+      ),
+    ).toBe(false);
   });
 });

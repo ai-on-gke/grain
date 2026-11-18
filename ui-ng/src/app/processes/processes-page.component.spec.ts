@@ -12,14 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { Location } from "@angular/common";
+import { provideLocationMocks } from "@angular/common/testing";
 import { TestBed } from "@angular/core/testing";
-import { provideRouter, withComponentInputBinding } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withComponentInputBinding,
+} from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { NEVER } from "rxjs";
+import { processesRouteMatcher } from "../app.routes";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { GrainConfig, Task } from "../api/models";
+import type { CapabilityMethod, GrainConfig, Task } from "../api/models";
 import { SnackbarService } from "../services/snackbar.service";
+import { formatStamp } from "../shared/dispatch-status";
 import { ProcessesPageComponent } from "./processes-page.component";
 import type {
   Composition,
@@ -74,7 +82,7 @@ class FakeProcessesApi {
     {
       id: "sched-1",
       title: "Audit deps",
-      description: "Check outdated dependencies.",
+      description: "Check **outdated** dependencies.\n\n- `go.mod`",
       repo: "acme/widgets",
       base: "",
       autoMerge: true,
@@ -165,7 +173,7 @@ class FakeProcessesApi {
       id: "tmpl-deploy-1",
       name: "Go upgrade",
       title: "chore: bump {{pkg}}",
-      description: "Bump {{pkg}} version in go.mod.",
+      description: "Bump `{{pkg}}` in **go.mod**.",
       fields: [
         {
           name: "pkg",
@@ -255,6 +263,16 @@ class FakeProcessesApi {
       checkedAt: "2026-11-12T00:05:00Z",
       templates: [".grain/templates/release-notes.yml"],
       triggers: [".grain/triggers/docs.yml"],
+      triggerDetails: [
+        {
+          name: "docs",
+          path: ".grain/triggers/docs.yml",
+          on: "pull_request",
+          paths: ["docs/**"],
+          template: "release-notes",
+          gate: true,
+        },
+      ],
       mergeRules: ".grain/merge-rules.yml",
     },
   };
@@ -279,8 +297,14 @@ class FakeProcessesApi {
       {
         title: "Audit deps",
         fields: [
+          { name: "title", values: ["Audit deps"], source: "schedule" },
           { name: "repo", values: ["acme/widgets"], source: "schedule" },
           { name: "autoMerge", values: ["on"], source: "schedule" },
+          {
+            name: "body",
+            values: ["Check outdated dependencies.\nOpen a PR when needed."],
+            source: "schedule",
+          },
         ],
       },
     ],
@@ -291,8 +315,15 @@ class FakeProcessesApi {
     schedule: this.schedules[0],
   };
 
-  calls: { method: string; route: string; params?: unknown; body?: unknown }[] =
-    [];
+  calls: {
+    method: string;
+    route: string;
+    params?: unknown;
+    body?: unknown;
+    query?: string;
+  }[] = [];
+
+  capabilityMethods: CapabilityMethod[] = [];
 
   config = () => Promise.resolve(this.configBody);
   tasks_ = () => Promise.resolve(this.tasks);
@@ -335,8 +366,13 @@ class FakeProcessesApi {
     }
   };
 
-  get = (route: string, params?: Record<string, unknown>) => {
-    this.calls.push({ method: "GET", route, params });
+  get = (route: string, params?: Record<string, unknown>, query?: string) => {
+    this.calls.push({ method: "GET", route, params, query });
+    if (route === "GET /api/capability-methods") {
+      return Promise.resolve({
+        items: structuredClone(this.capabilityMethods),
+      });
+    }
     if (route === "GET /api/deployment/reachable-repos") {
       return Promise.resolve(["acme/widgets"]);
     }
@@ -356,6 +392,74 @@ class FakeProcessesApi {
     if (route === "GET /api/repos/{owner}/{name}/workflows") {
       return Promise.resolve(structuredClone(this.repoWfs));
     }
+    if (route === "GET /api/qa/flows") {
+      return Promise.resolve({
+        flows: [
+          {
+            id: "golden-v1-minimal",
+            label: "Golden V1 Minimal",
+            summary:
+              "Staging-branch isolation + <400ms Go AST/YAML S3 checks + T2/T3 S4 verifier.",
+            injectSkill: true,
+            skillBytes: 1120,
+            stagingIsolation: true,
+            enableS4: true,
+            maxS4RepairRounds: 1,
+            rules: [
+              {
+                id: "go-test-assertion-floor",
+                stage: "S3",
+                label: "Go test assertion & integrity floor",
+                summary:
+                  "Rejects assertion-free tests and weakened existing assertions.",
+                severity: "block",
+                enabled: true,
+                targetPaths: ["*_test.go"],
+              },
+              {
+                id: "s4-inquisitor-verifier",
+                stage: "S4",
+                label: "Fresh-context S4 verifier + 6-filter Inquisitor",
+                summary: "Runs one bounded fresh-context pass on T2/T3 diffs.",
+                severity: "block",
+                enabled: true,
+                targetPaths: ["T2/T3 multi-package diffs"],
+              },
+            ],
+          },
+          {
+            id: "deterministic-s3-only",
+            label: "Deterministic S3 Only",
+            summary: "Zero-token pure-Go S3 checks with S4 disabled.",
+            injectSkill: true,
+            skillBytes: 1120,
+            stagingIsolation: true,
+            enableS4: false,
+            maxS4RepairRounds: 0,
+            rules: [
+              {
+                id: "go-test-assertion-floor",
+                stage: "S3",
+                label: "Go test assertion & integrity floor",
+                summary:
+                  "Rejects assertion-free tests and weakened existing assertions.",
+                severity: "block",
+                enabled: true,
+                targetPaths: ["*_test.go"],
+              },
+            ],
+          },
+        ],
+      });
+    }
+    if (route === "GET /api/settings") {
+      return Promise.resolve({
+        qaEnabled: true,
+        qaFlowId: "golden-v1-minimal",
+        qaRolloutPct: 50,
+        qaShadowOnControl: true,
+      });
+    }
     return Promise.resolve({});
   };
 
@@ -372,6 +476,10 @@ class FakeProcessesApi {
         ...this.schedules[0],
         id: "sched-new",
         title: String(body?.["title"] || "New sched"),
+        qaFlowRef:
+          typeof body?.["qaFlowRef"] === "string"
+            ? body["qaFlowRef"]
+            : undefined,
       };
       this.schedules.push(created);
       return Promise.resolve(created);
@@ -387,6 +495,10 @@ class FakeProcessesApi {
         description: String(body?.["description"] ?? ""),
         autoMerge: false,
         capabilities: [],
+        qaFlowRef:
+          typeof body?.["qaFlowRef"] === "string"
+            ? body["qaFlowRef"]
+            : undefined,
       };
       this.templates.push(created);
       return Promise.resolve(created);
@@ -408,6 +520,10 @@ class FakeProcessesApi {
         requireApproval: Boolean(body?.["requireApproval"]),
         autoMerge: body?.["autoMerge"] !== false,
         autoApproveProposals: false,
+        qaFlowRef:
+          typeof body?.["qaFlowRef"] === "string"
+            ? body["qaFlowRef"]
+            : undefined,
       };
       this.suites.push(created);
       return Promise.resolve(created);
@@ -443,13 +559,27 @@ class FakeProcessesApi {
       if (typeof body?.["enabled"] === "boolean") {
         found.enabled = body["enabled"];
       }
+      if (typeof body?.["qaFlowRef"] === "string") {
+        found.qaFlowRef = body["qaFlowRef"] || undefined;
+      }
       return Promise.resolve(structuredClone(found));
     }
     if (route === "PATCH /api/templates/{id}") {
-      return Promise.resolve(structuredClone(this.templates[1]));
+      const id = String(params?.["id"] ?? "");
+      const found =
+        this.templates.find((t) => t.id === id) ?? this.templates[1];
+      if (typeof body?.["qaFlowRef"] === "string") {
+        found.qaFlowRef = body["qaFlowRef"] || undefined;
+      }
+      return Promise.resolve(structuredClone(found));
     }
     if (route === "PATCH /api/suites/{id}") {
-      return Promise.resolve(structuredClone(this.suites[0]));
+      const id = String(params?.["id"] ?? "");
+      const found = this.suites.find((s) => s.id === id) ?? this.suites[0];
+      if (typeof body?.["qaFlowRef"] === "string") {
+        found.qaFlowRef = body["qaFlowRef"] || undefined;
+      }
+      return Promise.resolve(structuredClone(found));
     }
     return Promise.resolve({});
   };
@@ -502,12 +632,19 @@ describe("ProcessesPageComponent (D-9)", () => {
       providers: [
         provideRouter(
           [
-            { path: "processes", component: ProcessesPageComponent },
-            { path: "processes/:tab", component: ProcessesPageComponent },
+            {
+              matcher: processesRouteMatcher,
+              component: ProcessesPageComponent,
+              canDeactivate: [
+                (page: ProcessesPageComponent | null) =>
+                  page?.canDeactivate ? page.canDeactivate() : true,
+              ],
+            },
             { path: "task/:id", component: ProcessesPageComponent },
           ],
           withComponentInputBinding(),
         ),
+        provideLocationMocks(),
         { provide: GrainApi, useValue: api },
         { provide: GrainEvents, useValue: { events: () => NEVER } },
       ],
@@ -680,12 +817,182 @@ describe("ProcessesPageComponent (D-9)", () => {
     );
   });
 
-  it("preserves TemplateField metadata (label, default, options, required) across PATCH and launches via POST /api/tasks/from-template", async () => {
-    const harness = await RouterTestingHarness.create(
-      "/processes/templates?launch=1",
-    );
+  it("renders schedule and template prompts as markdown in a Prompt pane apart from a Configuration pane", async () => {
+    const harness = await RouterTestingHarness.create("/processes/schedules");
     await flush(harness);
     const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-1"]')!
+      .click();
+    await flush(harness);
+
+    const sPrompt = root.querySelector('[data-testid="sched-prompt-pane"]')!;
+    expect(sPrompt.querySelector(".g-pane-title")!.textContent).toContain(
+      "Prompt",
+    );
+    expect(sPrompt.querySelector("strong")!.textContent).toBe("outdated");
+    expect(sPrompt.querySelector("li code")!.textContent).toBe("go.mod");
+    const sConfig = root.querySelector('[data-testid="sched-config-pane"]')!;
+    expect(sConfig.contains(sPrompt)).toBe(false);
+    const sKeys = [...sConfig.querySelectorAll("dt")].map((d) =>
+      d.textContent!.trim(),
+    );
+    expect(sKeys).toEqual(
+      expect.arrayContaining(["Source", "Cadence", "Repository", "Overlap"]),
+    );
+
+    await harness.navigateByUrl("/processes/templates");
+    await flush(harness);
+    const tRoot = harness.routeNativeElement!;
+    tRoot
+      .querySelector<HTMLElement>('[data-testid="tmpl-row-tmpl-deploy-1"]')!
+      .click();
+    await flush(harness);
+    const tPrompt = tRoot.querySelector('[data-testid="tmpl-prompt-preview"]')!;
+    expect(tPrompt.querySelector("strong")!.textContent).toBe("go.mod");
+    expect(tPrompt.querySelector("code")!.textContent).toBe("{{pkg}}");
+    const tConfig = tRoot.querySelector('[data-testid="tmpl-config-pane"]')!;
+    expect(tConfig.querySelector("dt")!.textContent).toContain("Source");
+  });
+
+  it("says a publishing-held suppression in words without repeating itself, shows the bound template's base, overlap group and each skip's outcome (held included), and no Next for an event trigger", async () => {
+    api.templates.push({
+      id: "tmpl-bound-train",
+      name: "Release train",
+      title: "Run the release train",
+      description: "Cut an rc.",
+      repo: "acme/widgets",
+      base: "release/v3.6",
+      autoMerge: false,
+      capabilities: [],
+    });
+    api.schedules.push({
+      id: "sched-train",
+      title: "Release train",
+      description: "Cut an rc.",
+      repo: "acme/widgets",
+      base: "stale-schedule-base",
+      templateId: "tmpl-bound-train",
+      templateName: "Release train",
+      autoMerge: false,
+      capabilities: [],
+      recurrence: { kind: "every_n_minutes", everyNMinutes: 20 },
+      overlap: "skip",
+      overlapGroup: "release-train",
+      source: "acme/widgets",
+      type: "template",
+      enabled: true,
+      nextRunAt: "2026-11-15T09:20:00Z",
+      createdAt: "2026-11-01T00:00:00Z",
+      suppressed: {
+        reason: "publishingHeld",
+        taskId: "2",
+        detail:
+          "skipped: publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
+      },
+      skips: [
+        {
+          occurrence: "2026-11-15T09:00:00Z",
+          at: "2026-11-15T09:00:00Z",
+          reason: "publishingHeld",
+          summary:
+            "skipped at 2026-11-15 09:00 UTC: publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
+          taskId: "2",
+          outcome: "",
+        },
+        {
+          occurrence: "2026-11-15T08:00:00Z",
+          at: "2026-11-15T08:00:00Z",
+          reason: "publishingHeld",
+          summary:
+            "skipped at 2026-11-15 08:00 UTC: publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
+          taskId: "2",
+          outcome: "fired",
+          firedTaskId: "5",
+          folded: 3,
+        },
+        {
+          occurrence: "2026-11-15T07:00:00Z",
+          at: "2026-11-15T07:00:00Z",
+          reason: "task",
+          summary: "skipped at 2026-11-15 07:00 UTC: #1 is still open",
+          taskId: "1",
+          outcome: "dropped",
+        },
+      ],
+      revision: "rev-train",
+    });
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-train"]')!
+      .click();
+    await flush(harness);
+
+    const text = root.textContent ?? "";
+    expect(text).toContain(
+      "Suppressed — publishing held by task 2 (acme/widgets release/v3.6 has published nothing since 2026-11-15 06:40 UTC)",
+    );
+    expect(text).not.toContain("publishing held: skipped:");
+    expect(text).not.toContain("publishingHeld");
+    expect(
+      root.querySelector('[data-testid="sched-overlap-group"]')?.textContent,
+    ).toContain("release-train");
+    // The Configuration pane's keys, each with its value -- Base shows the
+    // bound template's release/v3.6 rather than the schedule's stale base.
+    const config = () =>
+      Object.fromEntries(
+        Array.from(
+          root.querySelectorAll('[data-testid="sched-config-pane"] dt'),
+        ).map((dt) => [
+          dt.textContent!.trim(),
+          dt.nextElementSibling?.textContent?.trim(),
+        ]),
+      );
+    expect(config()["Repository"]).toBe("acme/widgets");
+    expect(config()["Base"]).toBe("release/v3.6");
+    expect(text).not.toContain("stale-schedule-base");
+    expect(config()["Overlap group"]).toBe("release-train");
+    expect(config()["Next run"]).toBe(formatStamp("2026-11-15T09:20:00Z"));
+
+    const outcomes = Array.from(
+      root.querySelectorAll('[data-testid="sched-skip-outcome"]'),
+    ).map((el) => el.textContent?.replace(/\s+/g, " ").trim());
+    expect(outcomes).toEqual([
+      "→ held",
+      "→ fired #5 · 3 later occurrences folded in",
+      "→ dropped",
+    ]);
+    const fired = root.querySelector<HTMLAnchorElement>(
+      '[data-testid="sched-skip-outcome"] a',
+    )!;
+    expect(fired.getAttribute("href")).toBe("/task/5");
+
+    // An event trigger's nextRunAt is a placeholder, not a time.
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-gitref"]')!
+      .click();
+    await flush(harness);
+    expect(config()["Next run"]).toBe("on ref move");
+    expect(root.textContent).not.toContain("2026-11-13T10:00:00Z");
+  });
+
+  it("preserves TemplateField metadata (label, default, options, required) across PATCH and launches via POST /api/tasks/from-template", async () => {
+    const harness = await RouterTestingHarness.create("/processes/templates");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="tmpl-row-repo:template:acme/widgets:release-notes"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLElement>('[data-testid="proc-launch-template-btn"]')!
+      .click();
+    await flush(harness);
 
     const launchDialog = root.querySelector(
       '[data-testid="launch-template-dialog"]',
@@ -758,6 +1065,40 @@ describe("ProcessesPageComponent (D-9)", () => {
     ]);
   });
 
+  it("lists a suite run that has filed no tasks (tasks: null) beside the others, naming no pass", async () => {
+    // A run that ended before its first pass was filed comes back from the
+    // server with `tasks: null` and `pass: 0`; reading .length off it threw
+    // and the rest of the runs list never rendered.
+    api.suiteRuns = [
+      ...api.suiteRuns,
+      {
+        ...api.suiteRuns[0],
+        id: 9,
+        status: "failed",
+        pass: 0,
+        base: "",
+        error: "pass 1 could not be filed: template gone",
+        tasks: null,
+      },
+    ];
+    const harness = await RouterTestingHarness.create("/processes/suites");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suites-subview-runs"]')!
+      .click();
+    await flush(harness);
+
+    const empty = root.querySelector('[data-testid="suite-run-row-9"]')!;
+    expect(empty).toBeTruthy();
+    expect(root.querySelector('[data-testid="suite-run-row-7"]')).toBeTruthy();
+    expect(empty.textContent).toContain("0 tasks");
+    expect(empty.textContent).not.toMatch(/Pass 0/);
+    expect(
+      root.querySelector('[data-testid="suite-run-row-7"]')!.textContent,
+    ).toContain("Pass 1");
+  });
+
   it("preserves Suite requireApproval/autoMerge on PATCH, launches Suite Runs via ?run=1, and closes all non-closed pass tasks (including running)", async () => {
     const harness = await RouterTestingHarness.create("/processes/suites");
     await flush(harness);
@@ -828,6 +1169,9 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(
       closeCalls.map((c) => (c.params as { id: string }).id).sort(),
     ).toEqual(["401", "402"]);
+    expect(TestBed.inject(SnackbarService).current()?.message).toBe(
+      "Closed 2 active suite tasks.",
+    );
     expect(api.calls.some((c) => c.route === "POST /api/tasks/{id}/stop")).toBe(
       false,
     );
@@ -875,7 +1219,12 @@ describe("ProcessesPageComponent (D-9)", () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter(
-          [{ path: "processes/:tab", component: ProcessesPageComponent }],
+          [
+            {
+              matcher: processesRouteMatcher,
+              component: ProcessesPageComponent,
+            },
+          ],
           withComponentInputBinding(),
         ),
         { provide: GrainApi, useValue: api },
@@ -969,5 +1318,1663 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(
       root.querySelectorAll('[data-testid^="decl-repo-row-"]').length,
     ).toBe(2);
+  });
+
+  it("renders Quality checks flow packages, active rollout badge, and rule inspector", async () => {
+    const harness = await RouterTestingHarness.create("/processes/quality");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    const goldenRow = root.querySelector<HTMLButtonElement>(
+      '[data-testid="qa-flow-row-golden-v1-minimal"]',
+    )!;
+    const detRow = root.querySelector<HTMLButtonElement>(
+      '[data-testid="qa-flow-row-deterministic-s3-only"]',
+    )!;
+    expect(goldenRow).not.toBeNull();
+    expect(detRow).not.toBeNull();
+    expect(goldenRow.textContent).toContain("Active (50%)");
+    expect(detRow.textContent).toContain("Available");
+
+    const inspTitle = root.querySelector('[data-testid="qa-flow-insp-title"]')!;
+    const detailCard = root.querySelector(
+      '[data-testid="qa-flow-detail-card"]',
+    )!;
+    expect(inspTitle.textContent).toContain("Golden V1 Minimal");
+    expect(detailCard.textContent).toContain("T2/T3 diffs (max 1 round)");
+    expect(
+      root
+        .querySelector('[data-testid="qa-configure-rollout-link"]')
+        ?.getAttribute("href"),
+    ).toBe("/settings/tasks");
+    expect(
+      root.querySelector(
+        '[data-testid="qa-rule-card-go-test-assertion-floor"]',
+      ),
+    ).not.toBeNull();
+
+    // Selecting deterministic-s3-only updates the inspector
+    detRow.click();
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="qa-flow-insp-title"]')!.textContent,
+    ).toContain("Deterministic S3 Only");
+    expect(
+      root.querySelector('[data-testid="qa-flow-detail-card"]')!.textContent,
+    ).toContain("disabled");
+  });
+
+  it("toggles inline read-only YAML preview on Repo Workflows & Declarations from declarationsStatus and repoWorkflows without /api/fs/repo calls", async () => {
+    const harness = await RouterTestingHarness.create(
+      "/processes/declarations",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    expect(root.querySelector('[data-testid="decl-inline-yaml"]')).toBeNull();
+
+    const toggleBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="decl-inline-yaml-toggle"]',
+    )!;
+    expect(toggleBtn).not.toBeNull();
+    expect(toggleBtn.textContent).toContain("View YAML");
+
+    toggleBtn.click();
+    await flush(harness);
+
+    expect(toggleBtn.textContent).toContain("Hide YAML");
+    expect(api.calls.some((c) => c.route.includes("/api/fs/repo"))).toBe(false);
+
+    const yamlPre = root.querySelector<HTMLElement>(
+      '[data-testid="decl-inline-yaml"]',
+    )!;
+    expect(yamlPre).not.toBeNull();
+    expect(yamlPre.tagName).toBe("PRE");
+    expect(yamlPre.classList.contains("comp-body-well")).toBe(true);
+    expect(yamlPre.classList.contains("s-mono")).toBe(true);
+    expect(yamlPre.textContent).toContain(
+      "title: Draft release notes for {{version}}",
+    );
+
+    toggleBtn.click();
+    await flush(harness);
+    expect(toggleBtn.textContent).toContain("View YAML");
+    expect(root.querySelector('[data-testid="decl-inline-yaml"]')).toBeNull();
+
+    // Trigger file link in Declarations toggles inline YAML without leaving Processes,
+    // while decl-open-repo-link points to /repos/acme/widgets/advanced.
+    const declRepoLink = root.querySelector<HTMLAnchorElement>(
+      '.decl-inspector .proc-insp-top [data-testid="decl-open-repo-link"]',
+    )!;
+    expect(declRepoLink).not.toBeNull();
+    expect(declRepoLink.getAttribute("href")).toBe(
+      "/repos/acme/widgets/advanced",
+    );
+
+    const declTriggerBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="decl-trigger-link-.grain/triggers/docs.yml"]',
+    )!;
+    expect(declTriggerBtn).not.toBeNull();
+    expect(declTriggerBtn.tagName).toBe("BUTTON");
+    declTriggerBtn.click();
+    await flush(harness);
+    expect(TestBed.inject(Router).url).toBe("/processes/declarations");
+    expect(
+      root.querySelector('[data-testid="decl-inline-yaml"]')?.textContent,
+    ).toContain("on: pull_request");
+    declTriggerBtn.click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="decl-inline-yaml"]')).toBeNull();
+
+    // Deployment-declared workflow inline YAML reads store.repoWorkflows()[repo].
+    const wfToggleBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="decl-workflows-card"] [data-testid="decl-inline-yaml-toggle"]',
+    )!;
+    wfToggleBtn.click();
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="decl-inline-yaml"]')?.textContent,
+    ).toContain("name: CI");
+    wfToggleBtn.click();
+    await flush(harness);
+
+    // Verify schedule and template dialogs use rows="8" for prompt textareas
+    await harness.navigateByUrl("/processes/schedules?new=1");
+    await flush(harness);
+    const schedRoot = harness.routeNativeElement!;
+    expect(
+      schedRoot
+        .querySelector('[data-testid="sched-desc-input"]')
+        ?.getAttribute("rows"),
+    ).toBe("8");
+  });
+
+  it("renders Software Workflow & QA tab label and round-trips qaFlowRef across Schedule, Template, and Suite create/edit drawers", async () => {
+    const baseGet = api.get;
+    api.get = (
+      route: string,
+      params?: Record<string, unknown>,
+      query?: string,
+    ) => {
+      if (route === "GET /api/qa/flow-versions") {
+        api.calls.push({ method: "GET", route, params, query });
+        return Promise.resolve({
+          versions: [
+            {
+              hash: "builtin:engineering-workflow-v4@1#4",
+              key: "engineering-workflow-v4",
+              version: 1,
+              label: "Engineering Workflow V4",
+              builtIn: true,
+            },
+            {
+              hash: "sha256:eng-v4-custom-v1",
+              key: "engineering-workflow-v4",
+              version: 1,
+              label: "Engineering Workflow V4",
+              builtIn: false,
+            },
+            {
+              hash: "custom:engineering-workflow-v4@2#4",
+              key: "engineering-workflow-v4",
+              version: 2,
+              label: "Engineering Workflow V4",
+              builtIn: false,
+            },
+            {
+              hash: "builtin:golden-v3-enforced@1#4",
+              key: "golden-v3-enforced",
+              version: 1,
+              label: "Golden V3 Enforced",
+              builtIn: true,
+            },
+            {
+              hash: "builtin:golden-v2-checks-only@1#2",
+              key: "golden-v2-checks-only",
+              version: 1,
+              label: "golden v2 (S3+S4 checks only — ablation)",
+              builtIn: true,
+            },
+            {
+              hash: "sha256:demo-seed-v1",
+              key: "demo-seed",
+              version: 1,
+              label: "Demo Seed",
+              builtIn: false,
+            },
+            {
+              hash: "sha256:v4-benchmark-v1",
+              key: "v4-benchmark",
+              version: 1,
+              label: "V4 Suite",
+              builtIn: false,
+            },
+          ],
+        });
+      }
+      return baseGet(route, params, query);
+    };
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?new=1",
+    );
+    await flush(harness);
+    let root = harness.routeNativeElement!;
+
+    // 1. Quality tab displays "Software Workflow & QA" and deduplicated primary family count
+    // (3: engineering-workflow-v4 + golden-v3-enforced + golden-v1-minimal from store.qaFlows;
+    // excludes deterministic-s3-only, ablation, -seed, and -benchmark variants).
+    const qualityTab = root.querySelector('[data-testid="proc-tab-quality"]')!;
+    expect(qualityTab.textContent).toContain("Software Workflow & QA");
+    expect(qualityTab.querySelector(".tab-count")?.textContent?.trim()).toBe(
+      "3",
+    );
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/qa/flow-versions" && c.query === "limit=500",
+      ),
+    ).toBe(true);
+
+    // 2. Schedule create & edit round-trip for qaFlowRef with humanized label + key@vN hint
+    const schedTitleIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="sched-title-input"]',
+    )!;
+    schedTitleIn.value = "V4 workflow schedule";
+    schedTitleIn.dispatchEvent(new Event("input"));
+
+    const schedFlowBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select"]',
+    )!;
+    expect(schedFlowBtn.textContent).toContain("Deployment default");
+    schedFlowBtn.click();
+    await flush(harness);
+    const v4Opt = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select-opt-engineering-workflow-v4@1"]',
+    )!;
+    expect(v4Opt.textContent).toContain("Engineering Workflow V4");
+    expect(v4Opt.textContent).toContain("engineering-workflow-v4@v1");
+    // Custom v1 override of a built-in family emits its SHA-256 hash and an explicit override hint
+    // without colliding with engineering-workflow-v4@1, and unreturned DEFAULT_QA_FLOW_REFS are omitted.
+    const v4OverrideOpt = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select-opt-sha256:eng-v4-custom-v1"]',
+    )!;
+    expect(v4OverrideOpt).not.toBeNull();
+    expect(v4OverrideOpt.textContent).toContain(
+      "engineering-workflow-v4@v1 (override)",
+    );
+    expect(
+      root.querySelector(
+        '[data-testid="process-qa-flow-select-opt-golden-v2@1"]',
+      ),
+    ).toBeNull();
+    v4Opt.click();
+    await flush(harness);
+    expect(schedFlowBtn.textContent).toContain("Engineering Workflow V4");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const createSchedCall = api.calls.find(
+      (c) => c.route === "POST /api/schedules",
+    )!;
+    expect((createSchedCall.body as Record<string, unknown>)["qaFlowRef"]).toBe(
+      "engineering-workflow-v4@1",
+    );
+    expect(
+      root.querySelector('[data-testid="process-qa-flow-badge"]')?.textContent,
+    ).toContain("Workflow: engineering-workflow-v4@1");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const editSchedFlowBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select"]',
+    )!;
+    expect(editSchedFlowBtn.textContent).toContain("Engineering Workflow V4");
+    editSchedFlowBtn.click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="process-qa-flow-select-opt-golden-v3-enforced@1"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const patchSchedCall = api.calls.find(
+      (c) =>
+        c.route === "PATCH /api/schedules/{id}" &&
+        (c.params as { id?: string })?.id === "sched-new",
+    )!;
+    expect((patchSchedCall.body as Record<string, unknown>)["qaFlowRef"]).toBe(
+      "golden-v3-enforced@1",
+    );
+
+    // 3. Template create & edit round-trip for qaFlowRef
+    await harness.navigateByUrl("/processes/templates");
+    await flush(harness);
+    root = harness.routeNativeElement!;
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="proc-new-menu-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="proc-new-template"]')!
+      .click();
+    await flush(harness);
+
+    const tmplNameIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-name-input"]',
+    )!;
+    tmplNameIn.value = "V4 service upgrade";
+    tmplNameIn.dispatchEvent(new Event("input"));
+    const tmplTitleIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-title-input"]',
+    )!;
+    tmplTitleIn.value = "feat: upgrade service";
+    tmplTitleIn.dispatchEvent(new Event("input"));
+
+    const tmplFlowBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select"]',
+    )!;
+    tmplFlowBtn.click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="process-qa-flow-select-opt-engineering-workflow-v4@1"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const createTmplCall = api.calls.find(
+      (c) => c.route === "POST /api/templates",
+    )!;
+    expect((createTmplCall.body as Record<string, unknown>)["qaFlowRef"]).toBe(
+      "engineering-workflow-v4@1",
+    );
+    expect(
+      root.querySelector('[data-testid="process-qa-flow-badge"]')?.textContent,
+    ).toContain("Workflow: engineering-workflow-v4@1");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-edit-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+    const patchTmplCall = api.calls.find(
+      (c) =>
+        c.route === "PATCH /api/templates/{id}" &&
+        (c.params as { id?: string })?.id === "tmpl-new",
+    )!;
+    expect((patchTmplCall.body as Record<string, unknown>)["qaFlowRef"]).toBe(
+      "engineering-workflow-v4@1",
+    );
+
+    // 4. Suite create & edit round-trip for qaFlowRef
+    await harness.navigateByUrl("/processes/suites");
+    await flush(harness);
+    root = harness.routeNativeElement!;
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="proc-new-menu-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="proc-new-suite"]')!
+      .click();
+    await flush(harness);
+
+    const suiteNameIn = root.querySelector<HTMLInputElement>(
+      '[data-testid="suite-name-input"]',
+    )!;
+    suiteNameIn.value = "V4 hardening suite";
+    suiteNameIn.dispatchEvent(new Event("input"));
+
+    const suiteFlowBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select"]',
+    )!;
+    suiteFlowBtn.click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="process-qa-flow-select-opt-engineering-workflow-v4@1"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const createSuiteCall = api.calls.find(
+      (c) => c.route === "POST /api/suites",
+    )!;
+    expect((createSuiteCall.body as Record<string, unknown>)["qaFlowRef"]).toBe(
+      "engineering-workflow-v4@1",
+    );
+    expect(
+      root.querySelector('[data-testid="process-qa-flow-badge"]')?.textContent,
+    ).toContain("Workflow: engineering-workflow-v4@1");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-edit-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    const patchSuiteCall = api.calls.find(
+      (c) =>
+        c.route === "PATCH /api/suites/{id}" &&
+        (c.params as { id?: string })?.id === "suite-2",
+    )!;
+    expect((patchSuiteCall.body as Record<string, unknown>)["qaFlowRef"]).toBe(
+      "engineering-workflow-v4@1",
+    );
+  });
+
+  it("renders dialog errors inside the active modal, enforces the 10-minute floor, and reopens ?new=1 after cancel", async () => {
+    const basePost = api.post;
+    api.post = async (
+      route: string,
+      params?: unknown,
+      body?: Record<string, unknown>,
+    ) => {
+      if (route === "POST /api/schedules") {
+        api.calls.push({ method: "POST", route, params, body });
+        await Promise.resolve();
+        throw new Error(
+          "recurrence.every_n_minutes must be at least 10 (got 5)",
+        );
+      }
+      return basePost(route, params, body);
+    };
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?new=1",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    let dlg = root.querySelector('[data-testid="schedule-dialog"]')!;
+    expect(dlg).not.toBeNull();
+    expect(dlg.closest("[inert]")).toBeNull();
+
+    // Switch to Every N minutes and verify min="10"
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-kind-everyNMinutes"]',
+      )!
+      .click();
+    await flush(harness);
+    const minInput = dlg.querySelector<HTMLInputElement>(
+      'input[type="number"]',
+    )!;
+    expect(minInput.getAttribute("min")).toBe("10");
+
+    const titleInput = dlg.querySelector<HTMLInputElement>(
+      '[data-testid="sched-title-input"]',
+    )!;
+    titleInput.value = "Too frequent";
+    titleInput.dispatchEvent(new Event("input"));
+    minInput.value = "5";
+    minInput.dispatchEvent(new Event("input"));
+    await flush(harness);
+
+    dlg
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const dlgErr = dlg.querySelector('[data-testid="proc-dialog-error"]');
+    expect(dlgErr).not.toBeNull();
+    expect(dlgErr!.closest("[inert]")).toBeNull();
+    expect(dlgErr!.textContent).toContain("must be at least 10");
+
+    // Cancel and navigate to ?new=1 again -> must reopen because ?new= was cleared on first open.
+    Array.from(dlg.querySelectorAll("button"))
+      .find((b) => b.textContent?.trim() === "Cancel")!
+      .click();
+    await flush(harness);
+    // The draft was filled in, so Cancel asks before dropping it, once.
+    const discards = Array.from(root.querySelectorAll("button")).filter(
+      (b) => b.textContent?.trim() === "Discard",
+    );
+    expect(discards.length).toBe(1);
+    discards[0].click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="schedule-dialog"]')).toBeNull();
+
+    await harness.navigateByUrl("/processes/schedules?new=1");
+    await flush(harness);
+    dlg = root.querySelector('[data-testid="schedule-dialog"]')!;
+    expect(dlg).not.toBeNull();
+  });
+
+  it("formats off-target git_ref next run as suppressed, confirms workflow Run now, shows default branch on baseless suite runs, and previews required template fields without 400", async () => {
+    api.schedules.unshift(
+      {
+        id: "sched-offtarget",
+        title: "Off-target ref watcher",
+        description: "Watches offlist/upstream",
+        repo: "acme/widgets",
+        autoMerge: false,
+        capabilities: [],
+        recurrence: {
+          kind: "git_ref",
+          gitRef: { repo: "offlist/upstream", ref: "refs/heads/main" },
+        },
+        overlap: "skip",
+        source: "deployment",
+        type: "task",
+        enabled: true,
+        nextRunAt: "2027-11-16T05:09:04Z",
+        suppressed: {
+          reason: "watchedRepoOffTarget",
+          detail:
+            "watches offlist/upstream, which is not on this deployment's target repo list",
+        },
+        createdAt: "2026-11-15T00:00:00Z",
+      },
+      {
+        id: "repo:schedule:acme:widgets:workflow.nightly-ci",
+        title: 'Review last night\'s "nightly-ci" workflow run',
+        description: "",
+        repo: "acme/widgets",
+        autoMerge: false,
+        capabilities: [],
+        recurrence: { kind: "daily", timeOfDay: "04:00" },
+        overlap: "skip",
+        source: "acme/widgets",
+        type: "workflow",
+        system: true,
+        declaredIn: {
+          repo: "acme/widgets",
+          path: ".grain/workflows/nightly-ci.yml",
+        },
+        enabled: true,
+        nextRunAt: "2026-11-16T04:00:00Z",
+        createdAt: "2026-11-15T00:00:00Z",
+      },
+    );
+    api.templates.unshift({
+      id: "tmpl-req-nodefault",
+      name: "req-param-tmpl",
+      title: "chore: bump {{pkg}}",
+      description: "Bump {{pkg}}",
+      repo: "acme/widgets",
+      autoMerge: false,
+      capabilities: [],
+      fields: [
+        { name: "pkg", label: "Package", required: true },
+        { name: "note", label: "Note" },
+      ],
+      createdAt: "2026-11-15T00:00:00Z",
+    });
+    api.suiteRuns.unshift({
+      id: 99,
+      suiteId: "suite-1",
+      suiteName: "Release Hardening",
+      repo: "acme/widgets",
+      base: "",
+      mode: "count",
+      count: 2,
+      status: "failed",
+      pass: 0,
+      error: "pass 1 could not be filed",
+      tasks: null,
+      createdAt: "2026-11-15T00:00:00Z",
+    });
+
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    // Off-target git_ref row & inspector show "suppressed" rather than 2027-11-16
+    const offRow = root.querySelector(
+      '[data-testid="sched-row-sched-offtarget"]',
+    )!;
+    expect(offRow.textContent).toContain("next: suppressed");
+    expect(offRow.textContent).not.toContain("2027-11-16");
+    (offRow as HTMLElement).click();
+    await flush(harness);
+    const insp = root.querySelector('[data-testid="proc-inspector"]')!;
+    const nextRun = Array.from(insp.querySelectorAll("dt")).find(
+      (dt) => dt.textContent?.trim() === "Next run",
+    );
+    expect(nextRun?.nextElementSibling?.textContent?.trim()).toBe("suppressed");
+    expect(insp.textContent).not.toContain("2027-11-16");
+
+    // Workflow schedule asks confirmation with straight-away CI wording before running
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-row-repo:schedule:acme:widgets:workflow.nightly-ci"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-run-now-btn"]')!
+      .click();
+    await flush(harness);
+    const confirmDlg = root.querySelector('[data-testid="confirm-dialog"]')!;
+    expect(confirmDlg).not.toBeNull();
+    expect(confirmDlg.textContent).toContain(
+      "starts a CI run of the workflow it was declared in straight away",
+    );
+    expect(
+      api.calls.some((c) => c.route === "POST /api/schedules/{id}/run"),
+    ).toBe(false);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await flush(harness);
+    expect(
+      api.calls.some((c) => c.route === "POST /api/schedules/{id}/run"),
+    ).toBe(true);
+
+    // Template with required field and no default sends placeholder {{pkg}}
+    await harness.navigateByUrl("/processes/templates");
+    await flush(harness);
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="tmpl-row-tmpl-req-nodefault"]',
+      )!
+      .click();
+    await flush(harness);
+    const tmplCompCall = api.calls.find(
+      (c) =>
+        c.route === "GET /api/templates/{id}/composition" &&
+        (c.params as { id: string }).id === "tmpl-req-nodefault",
+    );
+    expect(tmplCompCall?.query).toContain("field.pkg=%7B%7Bpkg%7D%7D");
+    // An optional field with no default is left out, as a filing leaves it.
+    expect(tmplCompCall?.query).not.toContain("field.note");
+
+    // Baseless failed 0-pass suite run shows "default branch" on suite detail recent runs, run row, and run inspector, without "(pass 0)"
+    await harness.navigateByUrl("/processes/suites");
+    await flush(harness);
+    const suiteInspText = root.querySelector(
+      '[data-testid="proc-inspector"]',
+    )!.textContent!;
+    expect(suiteInspText).toContain("Run #99 · acme/widgets @ default branch");
+    expect(suiteInspText).not.toContain("pass 0");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suites-subview-runs"]')!
+      .click();
+    await flush(harness);
+    const run99Row = root.querySelector<HTMLButtonElement>(
+      '[data-testid="suite-run-row-99"]',
+    )!;
+    expect(run99Row.textContent).toContain("acme/widgets @ default branch");
+    run99Row.click();
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="proc-inspector"]')!.textContent,
+    ).toContain("Target: acme/widgets @ default branch");
+  });
+  it("inspects a repository's declared trigger inline beside schedules, links its template, and renders custom-order drag grips", async () => {
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    await flush(harness);
+    let root = harness.routeNativeElement!;
+
+    // Custom order renders .proc-drag-grip on draggable rows across Schedules, Templates, and Suites.
+    expect(
+      root.querySelectorAll('.proc-row-top > [data-testid="proc-drag-grip"]')
+        .length,
+    ).toBeGreaterThan(0);
+
+    const row = root.querySelector<HTMLButtonElement>(
+      '[data-testid="trigger-row-trigger:acme/widgets:.grain/triggers/docs.yml"]',
+    )!;
+    expect(row).not.toBeNull();
+    expect(row.tagName).toBe("BUTTON");
+    expect(row.getAttribute("href")).toBeNull();
+    expect(row.textContent).toContain("docs.yml");
+    expect(row.textContent).toContain("on change");
+
+    // Clicking the trigger row stays on /processes/schedules and opens the inline trigger inspector.
+    row.click();
+    await flush(harness);
+    await flush(harness);
+    expect(TestBed.inject(Router).url).toBe("/processes/schedules");
+    expect(row.classList.contains("is-selected")).toBe(true);
+    expect(row.getAttribute("aria-current")).toBe("true");
+
+    const insp = root.querySelector<HTMLElement>(
+      '[data-testid="trigger-inspector"]',
+    )!;
+    expect(insp).not.toBeNull();
+    expect(
+      insp.querySelector('[data-testid="trigger-detail-title"]')?.textContent,
+    ).toContain("docs.yml");
+    expect(
+      insp
+        .querySelector<HTMLAnchorElement>(
+          '[data-testid="trigger-open-repo-link"]',
+        )
+        ?.getAttribute("href"),
+    ).toBe("/repos/acme/widgets/advanced");
+    expect(api.calls.some((c) => c.route.includes("/api/fs/repo"))).toBe(false);
+    const trigYamlPre = insp.querySelector(
+      '[data-testid="trigger-yaml-preview"]',
+    )!;
+    expect(trigYamlPre.classList.contains("s-mono")).toBe(true);
+    expect(trigYamlPre.textContent).toContain('paths: ["docs/**"]');
+    const cfgText =
+      insp.querySelector('[data-testid="trigger-config-pane"]')?.textContent ??
+      "";
+    expect(cfgText).toContain("acme/widgets");
+    expect(cfgText).toContain(".grain/triggers/docs.yml");
+    expect(cfgText).toContain("pull_request");
+    expect(cfgText).toContain("docs/**");
+    expect(cfgText).toContain("true");
+
+    // A trigger is never paused, so the Paused chip leaves it out.
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-filter-paused"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid^="trigger-row-"]')).toBeNull();
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-filter-triggers"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid^="trigger-row-"]')).not.toBeNull();
+
+    // Clicking trigger-template-link navigates to /processes/templates/<id> and selects the template.
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="trigger-template-link"]',
+      )!
+      .click();
+    await flush(harness);
+    await flush(harness);
+    root = harness.routeNativeElement!;
+    expect(TestBed.inject(Router).url).toBe(
+      "/processes/templates/repo:template:acme%2Fwidgets:release-notes",
+    );
+    expect(
+      root.querySelector('[data-testid="tmpl-detail-title"]')?.textContent,
+    ).toContain("release-notes");
+    expect(
+      root.querySelectorAll('.proc-row-top > [data-testid="proc-drag-grip"]')
+        .length,
+    ).toBeGreaterThan(0);
+
+    await harness.navigateByUrl("/processes/suites");
+    await flush(harness);
+    root = harness.routeNativeElement!;
+    expect(
+      root.querySelectorAll('.proc-row-top > [data-testid="proc-drag-grip"]')
+        .length,
+    ).toBeGreaterThan(0);
+
+    // Non-custom sort hides .proc-drag-grip.
+    await harness.navigateByUrl("/processes/schedules?sort=name");
+    await flush(harness);
+    root = harness.routeNativeElement!;
+    expect(root.querySelector('[data-testid="proc-drag-grip"]')).toBeNull();
+  });
+
+  describe("schedule and template settings (admission, hosting, keep running, grants, model)", () => {
+    function settingsConfig(): void {
+      api.configBody = {
+        ...api.configBody,
+        agentBackends: [
+          {
+            id: "claude-main",
+            name: "Claude",
+            framework: "claude",
+            models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+          },
+        ],
+        capabilities: [
+          { id: "github#read-issues", name: "Read issues" },
+        ] as GrainConfig["capabilities"],
+      };
+    }
+
+    async function pick(
+      harness: RouterTestingHarness,
+      testid: string,
+      value: string,
+    ): Promise<void> {
+      const root = harness.routeNativeElement!;
+      root.querySelector<HTMLElement>(`[data-testid="${testid}"]`)!.click();
+      await flush(harness);
+      root
+        .querySelector<HTMLElement>(`[data-testid="${testid}-opt-${value}"]`)!
+        .click();
+      await flush(harness);
+    }
+
+    async function pickModel(
+      harness: RouterTestingHarness,
+      testid: string,
+      model: string,
+    ): Promise<void> {
+      const root = harness.routeNativeElement!;
+      root.querySelector<HTMLElement>(`[data-testid="${testid}"]`)!.click();
+      await flush(harness);
+      root
+        .querySelector<HTMLElement>(
+          `[data-testid="${testid}-opt"][data-model="${model}"]`,
+        )!
+        .click();
+      await flush(harness);
+    }
+
+    function lastBody(route: string): Record<string, unknown> {
+      const found = api.calls.filter((c) => c.route === route).pop();
+      expect(found, route).toBeTruthy();
+      return found!.body as Record<string, unknown>;
+    }
+
+    function click(root: HTMLElement, testid: string): void {
+      root.querySelector<HTMLElement>(`[data-testid="${testid}"]`)!.click();
+    }
+
+    it("files a new inline schedule with every setting, and previews them all", async () => {
+      settingsConfig();
+      const harness = await RouterTestingHarness.create(
+        "/processes/schedules?new=1",
+      );
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      const title = root.querySelector<HTMLInputElement>(
+        '[data-testid="sched-title-input"]',
+      )!;
+      title.value = "Nightly audit";
+      title.dispatchEvent(new Event("input"));
+      await flush(harness);
+
+      await pickModel(harness, "sched-model", "claude-sonnet-5-5");
+      click(root, "sched-keep-running");
+      await pick(harness, "sched-admission", "durable");
+      expect(
+        root.querySelector('[data-testid="sched-admission-help"]')!.textContent,
+      ).toContain("no wall-clock deadline");
+      await pick(harness, "sched-hosting", "console");
+      click(root, "sched-grants-cap-github#read-issues");
+      await flush(harness);
+
+      click(root, "sched-preview-composition-btn");
+      await flush(harness);
+      expect(lastBody("POST /api/schedules/composition")).toMatchObject({
+        model: "claude-sonnet-5-5",
+        admission: "durable",
+        hosting: "console",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+
+      click(root, "sched-save-btn");
+      await flush(harness);
+      expect(lastBody("POST /api/schedules")).toMatchObject({
+        title: "Nightly audit",
+        model: "claude-sonnet-5-5",
+        admission: "durable",
+        hosting: "console",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+    });
+
+    it("leaves a default admission and hosting off a new schedule, and asks the template for the rest", async () => {
+      settingsConfig();
+      const harness = await RouterTestingHarness.create(
+        "/processes/schedules?new=1",
+      );
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      const title = root.querySelector<HTMLInputElement>(
+        '[data-testid="sched-title-input"]',
+      )!;
+      title.value = "Plain";
+      title.dispatchEvent(new Event("input"));
+      await flush(harness);
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const body = lastBody("POST /api/schedules");
+      expect(body).not.toHaveProperty("admission");
+      expect(body).not.toHaveProperty("hosting");
+      expect(body).not.toHaveProperty("model");
+      expect(body["keepRunning"]).toBe(false);
+      expect(body["capabilities"]).toEqual([]);
+
+      // A template-backed schedule edits only its model; the template
+      // decides admission, hosting, grants and keep running.
+      await harness.navigateByUrl("/processes/schedules?new=1");
+      await flush(harness);
+      const r2 = harness.routeNativeElement!;
+      click(r2, "sched-target-template");
+      await flush(harness);
+      expect(r2.querySelector('[data-testid="sched-model"]')).not.toBeNull();
+      expect(r2.querySelector('[data-testid="sched-admission"]')).toBeNull();
+      expect(r2.querySelector('[data-testid="sched-grants"]')).toBeNull();
+      expect(
+        r2.querySelector('[data-testid="sched-template-note"]'),
+      ).not.toBeNull();
+    });
+
+    it("PATCHes a schedule's settings only when they changed", async () => {
+      settingsConfig();
+      Object.assign(api.schedules[1], {
+        model: "claude-opus-5-5",
+        admission: "bypass",
+        hosting: "console",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+      const harness = await RouterTestingHarness.create("/processes/schedules");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "sched-row-sched-gitref");
+      await flush(harness);
+      click(root, "sched-edit-btn");
+      await flush(harness);
+
+      // Seeded from the saved row.
+      expect(
+        root.querySelector('[data-testid="sched-admission"]')!.textContent,
+      ).toContain("Bypass queue");
+      expect(
+        root.querySelector('[data-testid="sched-hosting"]')!.textContent,
+      ).toContain("Interactive console");
+      expect(
+        root
+          .querySelector('[data-testid="sched-keep-running"]')!
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+      expect(
+        root.querySelector('[data-testid="sched-model"]')!.textContent,
+      ).toContain("claude-opus-5-5");
+
+      // The preview carries what is in force even though nothing changed.
+      click(root, "sched-preview-composition-btn");
+      await flush(harness);
+      expect(lastBody("POST /api/schedules/composition")).toMatchObject({
+        model: "claude-opus-5-5",
+        admission: "bypass",
+        hosting: "console",
+      });
+
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const unchanged = lastBody("PATCH /api/schedules/{id}");
+      for (const k of [
+        "model",
+        "admission",
+        "hosting",
+        "keepRunning",
+        "capabilities",
+      ]) {
+        expect(unchanged, k).not.toHaveProperty(k);
+      }
+
+      click(root, "sched-edit-btn");
+      await flush(harness);
+      await pick(harness, "sched-admission", "standard");
+      click(root, "sched-model-clear");
+      await flush(harness);
+      click(root, "sched-grants-cap-github#read-issues");
+      await flush(harness);
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const changed = lastBody("PATCH /api/schedules/{id}");
+      expect(changed).toMatchObject({
+        admission: "standard",
+        model: "",
+        capabilities: [],
+      });
+      expect(changed).not.toHaveProperty("hosting");
+      expect(changed).not.toHaveProperty("keepRunning");
+    });
+
+    it("flags a held grant the capability policy denies this schedule's repository", async () => {
+      settingsConfig();
+      api.schedules[1].capabilities = ["github#read-issues"];
+      api.capabilityMethods = [
+        {
+          ref: "github#read-issues",
+          capability: "github",
+          method: "read-issues",
+          policyRefusal:
+            "the capability policy denies github#read-issues to acme/widgets",
+        },
+      ];
+      const harness = await RouterTestingHarness.create("/processes/schedules");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "sched-row-sched-gitref");
+      await flush(harness);
+      click(root, "sched-edit-btn");
+      await flush(harness);
+      await new Promise((r) => setTimeout(r, 300));
+      await flush(harness);
+
+      const listing = api.calls.find(
+        (c) => c.route === "GET /api/capability-methods",
+      );
+      expect(listing?.query).toBe("kind=task&repo=acme%2Fwidgets");
+      expect(
+        root.querySelector(
+          '[data-testid="sched-grants-policy-github#read-issues"]',
+        )!.textContent,
+      ).toContain("denied by policy");
+      expect(
+        root.querySelector('[data-testid="sched-grants-policy-notes"]')!
+          .textContent,
+      ).toContain("denies github#read-issues to acme/widgets");
+    });
+
+    it("round-trips a template's settings through create and a change-only PATCH", async () => {
+      settingsConfig();
+      Object.assign(api.templates[1], {
+        model: "claude-opus-5-5",
+        admission: "bypass",
+        keepRunning: false,
+      });
+      const harness = await RouterTestingHarness.create("/processes/templates");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "tmpl-row-tmpl-deploy-1");
+      await flush(harness);
+      click(root, "tmpl-edit-btn");
+      await flush(harness);
+      expect(
+        root.querySelector('[data-testid="tmpl-admission"]')!.textContent,
+      ).toContain("Bypass queue");
+      await pick(harness, "tmpl-hosting", "console");
+      click(root, "tmpl-save-btn");
+      await flush(harness);
+      const patch = lastBody("PATCH /api/templates/{id}");
+      expect(patch["hosting"]).toBe("console");
+      for (const k of ["model", "admission", "keepRunning", "capabilities"]) {
+        expect(patch, k).not.toHaveProperty(k);
+      }
+
+      await harness.navigateByUrl("/processes/templates?new=template");
+      await flush(harness);
+      const r2 = harness.routeNativeElement!;
+      const setText = (testid: string, v: string) => {
+        const el = r2.querySelector<HTMLInputElement>(
+          `[data-testid="${testid}"]`,
+        )!;
+        el.value = v;
+        el.dispatchEvent(new Event("input"));
+      };
+      setText("tmpl-name-input", "Weekly cleanup");
+      setText("tmpl-title-input", "chore: weekly cleanup");
+      await flush(harness);
+      await pickModel(harness, "tmpl-model", "claude-sonnet-5-5");
+      await pick(harness, "tmpl-admission", "durable");
+      click(r2, "tmpl-keep-running");
+      click(r2, "tmpl-grants-cap-github#read-issues");
+      await flush(harness);
+      click(r2, "tmpl-save-btn");
+      await flush(harness);
+      const created = lastBody("POST /api/templates");
+      expect(created).toMatchObject({
+        name: "Weekly cleanup",
+        model: "claude-sonnet-5-5",
+        admission: "durable",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+      expect(created).not.toHaveProperty("hosting");
+    });
+
+    it("lets a built-in schedule change its model beside its cadence", async () => {
+      settingsConfig();
+      const harness = await RouterTestingHarness.create("/processes/schedules");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "sched-row-sched-sys");
+      await flush(harness);
+      click(root, "sched-edit-btn");
+      await flush(harness);
+      expect(
+        root.querySelector('[data-testid="sched-system-banner"]')!.textContent,
+      ).toContain("model");
+      expect(root.querySelector('[data-testid="sched-admission"]')).toBeNull();
+      await pickModel(harness, "sched-model", "claude-opus-5-5");
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const body = lastBody("PATCH /api/schedules/{id}");
+      expect(body["model"]).toBe("claude-opus-5-5");
+      expect(body).not.toHaveProperty("title");
+      expect(body).not.toHaveProperty("admission");
+    });
+  });
+
+  it("formats a schedule's run times, keeps an undetailed suppression to its own reason, counts in the singular, and refuses a 0-pass suite in the dialog", async () => {
+    api.schedules.unshift({
+      id: "sched-held",
+      title: "Held by an open task",
+      description: "Holds.",
+      repo: "acme/widgets",
+      autoMerge: false,
+      capabilities: [],
+      recurrence: { kind: "every_n_minutes", everyNMinutes: 30 },
+      overlap: "skip",
+      source: "deployment",
+      type: "task",
+      enabled: true,
+      nextRunAt: "2026-11-16T10:23:11.320429227Z",
+      lastRunAt: "2026-11-16T10:14:03.830464856Z",
+      createdAt: "2026-11-01T00:00:00Z",
+      suppressed: { reason: "suiteRun" },
+      revision: "rev-held",
+    });
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-held"]')!
+      .click();
+    await flush(harness);
+
+    // The Configuration pane says when, as the row does -- not the wire's
+    // nanosecond RFC 3339 string.
+    const at = (id: string) =>
+      root.querySelector(`[data-testid="${id}"]`)?.textContent?.trim();
+    expect(at("sched-next-run")).toBe(
+      formatStamp("2026-11-16T10:23:11.320429227Z"),
+    );
+    expect(at("sched-last-run")).toBe(
+      formatStamp("2026-11-16T10:14:03.830464856Z"),
+    );
+    expect(at("sched-last-run")).not.toContain("T10:14:03");
+    // With no Detail from the server the reason stands alone: an
+    // unfinished suite run is not "Previous firing is still open."
+    const banner = at("sched-suppressed-banner") ?? "";
+    expect(banner).toContain("Suppressed — suite run unfinished.");
+    expect(banner).not.toContain("Previous firing");
+
+    await harness.navigateByUrl("/processes/suites");
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="suite-row-suite-1"]')?.textContent,
+    ).toContain("1 template");
+    expect(
+      root.querySelector('[data-testid="suite-row-suite-1"]')?.textContent,
+    ).not.toContain("1 templates");
+
+    // Maximum passes 0 is refused in the dialog, not saved as 3.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const passes = root.querySelector<HTMLInputElement>(
+      '[data-testid="suite-max-passes-input"]',
+    )!;
+    passes.value = "0";
+    passes.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    expect(api.calls.some((c) => c.route === "PATCH /api/suites/{id}")).toBe(
+      false,
+    );
+    expect(
+      root.querySelector('[data-testid="suite-dialog"] [role="alert"]')
+        ?.textContent,
+    ).toContain("Maximum passes must be a whole number from 1 to 100.");
+
+    passes.value = "2.5";
+    passes.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    expect(api.calls.some((c) => c.route === "PATCH /api/suites/{id}")).toBe(
+      false,
+    );
+
+    passes.value = "4";
+    passes.dispatchEvent(new Event("input"));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    expect(
+      api.calls.find((c) => c.route === "PATCH /api/suites/{id}")?.body,
+    ).toMatchObject({ maxPasses: 4 });
+
+    // A fraction left behind in the other mode's field is not sent.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const max = root.querySelector<HTMLInputElement>(
+      '[data-testid="suite-max-passes-input"]',
+    )!;
+    max.value = "2.5";
+    max.dispatchEvent(new Event("input"));
+    await flush(harness);
+    Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="suite-dialog"] button',
+      ),
+    )
+      .find((b) => b.textContent?.trim() === "Fixed pass count")!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    const patches = api.calls.filter(
+      (c) => c.route === "PATCH /api/suites/{id}",
+    );
+    expect(patches).toHaveLength(2);
+    expect(patches[1].body).toMatchObject({ mode: "count", maxPasses: 3 });
+  });
+
+  it("preserves non-first template selection and mobile detail across /processes -> /processes/templates/:itemId navigation", async () => {
+    api.templates.push({
+      id: "tmpl-zebra",
+      name: "zz-zebra-check",
+      title: "chore: verify zebra guard",
+      description: "Verify zebra trigger coverage.",
+      autoMerge: false,
+      capabilities: [],
+      revision: "rev-tz",
+    });
+    api.repoDecl.declarationsStatus!.triggerDetails![0].template = "tmpl-zebra";
+
+    const harness = await RouterTestingHarness.create("/processes");
+    await flush(harness);
+    await flush(harness);
+    let root = harness.routeNativeElement!;
+
+    const triggerRow = root.querySelector<HTMLButtonElement>(
+      '[data-testid="trigger-row-trigger:acme/widgets:.grain/triggers/docs.yml"]',
+    )!;
+    expect(triggerRow).not.toBeNull();
+    triggerRow.click();
+    await flush(harness);
+    await flush(harness);
+
+    const tmplBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="trigger-template-link"]',
+    )!;
+    expect(tmplBtn).not.toBeNull();
+    expect(tmplBtn.textContent).toContain("zz-zebra-check");
+
+    tmplBtn.click();
+    await flush(harness);
+    await flush(harness);
+    root = harness.routeNativeElement!;
+
+    expect(TestBed.inject(Router).url).toBe("/processes/templates/tmpl-zebra");
+    expect(
+      root.querySelector('[data-testid="tmpl-detail-title"]')?.textContent,
+    ).toContain("zz-zebra-check");
+    expect(
+      root
+        .querySelector('[data-testid="tmpl-row-tmpl-zebra"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      root
+        .querySelector(".proc-split")
+        ?.classList.contains("has-mobile-detail"),
+    ).toBe(true);
+  });
+
+  it("guards unsaved Software Workflow & QA drafts ([data-qa-unsaved-draft='true']) on .tab-strip switches and canDeactivate route leaves", async () => {
+    const harness = await RouterTestingHarness.create("/processes/quality");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    const draftMarker = document.createElement("div");
+    draftMarker.setAttribute("data-qa-unsaved-draft", "true");
+    root.appendChild(draftMarker);
+
+    try {
+      // 1. Clicking another tab prompts confirmation; Cancel keeps /processes/quality.
+      const schedTab = root.querySelector<HTMLAnchorElement>(
+        '[data-testid="proc-tab-schedules"]',
+      )!;
+      schedTab.click();
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/quality");
+      let dialog = root.querySelector('[role="dialog"]')!;
+      expect(dialog).not.toBeNull();
+      expect(dialog.textContent).toContain(
+        "Discard unpublished workflow draft?",
+      );
+
+      Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+        .find((b) => b.textContent?.trim() === "Cancel")!
+        .click();
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/quality");
+
+      // 2. Navigating away via Router runs canDeactivate; Cancel aborts navigation.
+      const navAttempt = TestBed.inject(Router).navigateByUrl("/task/1");
+      await Promise.resolve();
+      harness.detectChanges();
+      dialog = root.querySelector('[role="dialog"]')!;
+      expect(dialog).not.toBeNull();
+      Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+        .find((b) => b.textContent?.trim() === "Cancel")!
+        .click();
+      expect(await navAttempt).toBe(false);
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/quality");
+
+      // 3. Accepting "Discard draft" on tab click switches tabs without double-prompting.
+      schedTab.click();
+      await flush(harness);
+      dialog = root.querySelector('[role="dialog"]')!;
+      Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+        .find((b) => b.textContent?.trim() === "Discard draft")!
+        .click();
+      await flush(harness);
+      expect(TestBed.inject(Router).url).toBe("/processes/schedules");
+    } finally {
+      draftMarker.remove();
+    }
+  });
+
+  it("gates GET /api/qa/flow-versions on qa:read and resets parseTriggerYaml listKey across indented mapping keys", async () => {
+    api.configBody = {
+      ...api.configBody,
+      access: {
+        role: "grain/reader",
+        roles: ["grain/reader"],
+        full: false,
+        scopes: ["tasks:read"],
+      },
+    };
+
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    expect(api.calls.some((c) => c.route === "GET /api/qa/flow-versions")).toBe(
+      false,
+    );
+
+    // Fallback parseTriggerYaml: indented mapping key under on: must reset listKey so nested branches do not bleed into on.
+    const page = harness.routeDebugElement!.componentInstance as unknown as {
+      selectedTrigger: { set: (v: unknown) => void };
+      triggerYamlText: { set: (v: string) => void };
+      parsedSelectedTrigger: () => {
+        on: string;
+        paths: string[];
+        gate: string;
+        template: string;
+      };
+    };
+    page.selectedTrigger.set({
+      repo: "other/repo",
+      path: ".grain/triggers/custom.yml",
+    });
+    page.triggerYamlText.set(
+      [
+        "on:",
+        "  pull_request:",
+        "    branches:",
+        "      - main",
+        "paths:",
+        '  - "pkg/**"',
+        "template: docs-check",
+        "gate: true",
+      ].join("\n"),
+    );
+    expect(page.parsedSelectedTrigger()).toEqual({
+      on: "",
+      paths: ["pkg/**"],
+      gate: "true",
+      template: "docs-check",
+    });
+  });
+
+  it("skips GET /api/qa/flow-versions when qa:read is repo-limited and filters benchmark fallback count", async () => {
+    api.configBody = {
+      ...api.configBody,
+      access: {
+        role: "grain/reader",
+        roles: ["grain/reader"],
+        full: false,
+        scopes: ["tasks:read", "settings:read", "schedules:write", "qa:read"],
+        repoLimits: { "qa:read": ["acme/widgets"] },
+      },
+    };
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?new=1",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    expect(api.calls.some((c) => c.route === "GET /api/qa/flow-versions")).toBe(
+      false,
+    );
+    // Fallback quality tab count excludes deterministic-s3-only from store.qaFlows().
+    const qualityTab = root.querySelector('[data-testid="proc-tab-quality"]')!;
+    expect(qualityTab.querySelector(".tab-count")?.textContent?.trim()).toBe(
+      "1",
+    );
+
+    // Fallback DEFAULT_QA_FLOW_REFS advertises standard-workflow@1, never unseeded golden-v3-enforced@1.
+    const schedFlowBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="process-qa-flow-select"]',
+    );
+    expect(schedFlowBtn).not.toBeNull();
+    schedFlowBtn!.click();
+    await flush(harness);
+    expect(
+      root.querySelector(
+        '[data-testid="process-qa-flow-select-opt-standard-workflow@1"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      root.querySelector(
+        '[data-testid="process-qa-flow-select-opt-golden-v3-enforced@1"]',
+      ),
+    ).toBeNull();
+  });
+
+  it("writes the selected schedule, template, suite, and suite run into the URL while keeping ?q=, ?sort=, and ?kind=, and supports Back/Forward and delete", async () => {
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?q=a&sort=name&kind=schedule",
+    );
+    await flush(harness);
+    const router = TestBed.inject(Router);
+    router.setUpLocationChangeListener();
+    const location = TestBed.inject(Location);
+    const root = harness.routeNativeElement!;
+
+    // Auto-select on desktop picks the first row without rewriting the URL.
+    expect(router.url).toBe("/processes/schedules?q=a&sort=name&kind=schedule");
+
+    // Clicking a schedule writes its item path and preserves query params without
+    // fetching its composition twice.
+    api.calls = [];
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-row-sched-gitref"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-gitref?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Sync upstream tag");
+    expect(
+      api.calls.filter(
+        (c) =>
+          c.route === "GET /api/schedules/{id}/composition" &&
+          (c.params as { id?: string } | undefined)?.id === "sched-gitref",
+      ),
+    ).toHaveLength(1);
+
+    // Keyboard Space selects another schedule and pushes a history entry.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-row-sched-1"]')!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-1?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Audit deps");
+
+    // Clicking the already-addressed row again does not push a duplicate history entry.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-row-sched-1"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-1?q=a&sort=name&kind=schedule",
+    );
+
+    // Back lands on the previous schedule; a second Back returns to the bare
+    // tab route and restores desktop auto-select; Forward returns step by step.
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-gitref?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Sync upstream tag");
+
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?q=a&sort=name&kind=schedule");
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Audit deps");
+
+    location.forward();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-gitref?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Sync upstream tag");
+
+    location.forward();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/schedules/sched-1?q=a&sort=name&kind=schedule",
+    );
+    expect(
+      root
+        .querySelector('[data-testid="sched-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Audit deps");
+
+    // Deleting the addressed schedule strips its ID from the URL while keeping query params.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-delete-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?q=a&sort=name&kind=schedule");
+
+    // Templates: repo-declared IDs containing ":" and "/" encode cleanly into the URL.
+    await harness.navigateByUrl("/processes/templates?q=release&sort=name");
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="tmpl-row-repo:template:acme/widgets:release-notes"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe(
+      "/processes/templates/repo:template:acme%2Fwidgets:release-notes?q=release&sort=name",
+    );
+
+    // Suites and Suite runs: switching between suite and run updates the path cleanly.
+    await harness.navigateByUrl("/processes/suites?sort=name");
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-row-suite-1"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/suite-1?sort=name");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suites-subview-runs"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-run-row-7"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/runs/7?sort=name");
+
+    // Back from a suite run returns to the suite definition.
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/suite-1?sort=name");
+    expect(
+      root
+        .querySelector('[data-testid="suite-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Hardening sweep");
+
+    // Forward back to the suite run, then click "Inspect suite definition".
+    location.forward();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/runs/7?sort=name");
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+      .find((b) => b.textContent?.trim() === "Inspect suite definition")!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/suites/suite-1?sort=name");
+    expect(
+      root
+        .querySelector('[data-testid="suite-detail-title"]')
+        ?.textContent?.trim(),
+    ).toBe("Hardening sweep");
+  });
+
+  it("closes mobile detail on Back and ← Back at phone width", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      value: 390,
+      configurable: true,
+      writable: true,
+    });
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?sort=name",
+    );
+    await flush(harness);
+    const router = TestBed.inject(Router);
+    router.setUpLocationChangeListener();
+    const location = TestBed.inject(Location);
+    const root = harness.routeNativeElement!;
+
+    expect(root.querySelector(".proc-split.has-mobile-detail")).toBeNull();
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-row-sched-gitref"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules/sched-gitref?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).not.toBeNull();
+
+    // Browser Back closes the mobile detail sheet and returns to the list URL.
+    location.back();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).toBeNull();
+
+    // Opening again and tapping ← Back also strips the item ID and closes detail.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-row-sched-1"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules/sched-1?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).not.toBeNull();
+    root.querySelector<HTMLButtonElement>(".proc-mobile-back")!.click();
+    await flush(harness);
+    expect(router.url).toBe("/processes/schedules?sort=name");
+    expect(root.querySelector(".proc-split.has-mobile-detail")).toBeNull();
   });
 });

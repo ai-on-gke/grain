@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "product",
+    "semantics"
+  ],
+  "properties": {
+    "product": {
+      "enum": [
+        "report",
+        "change",
+        "nothing_needed",
+        "review",
+        "any"
+      ]
+    },
+    "semantics": {
+      "enum": [
+        "current_v1",
+        "legacy_finish_v1"
+      ]
+    }
+  }
+}

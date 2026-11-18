@@ -679,7 +679,86 @@ import "strconv"
 // 146 adds `grain_config`.`qa` (model.Config.QA): the deployment-wide quality
 // control engine and single-instance PR rollout configuration, stored as JSON
 // and defaulting to empty (engine off).
-const SchemaVersion = 146
+// 147 changes no table: it forgets the commit every repository's
+// declarations were last read at (`repo_declaration_sync`.`commit`), so
+// the next reconcile writes back the grants a schedule file declares that
+// a firing from before 144 overwrote (rereadDeclarations, grain/task-5360).
+// 148 adds `qa_flow_version` to track quality-control execution flow snapshots,
+// and indexes `task(origin_ref)` to quickly find prior runs of an origin.
+// 149 adds `qa_experiment` and `qa_enrollment` for pre-registered quality
+// experiments and extends `task_qa_check_run` with experiment/engine provenance.
+// 150 adds `schema_ver` and source provenance to `qa_flow_version`, and
+// blast/complexity/triage tracking to `task_qa_check_run`.
+// 151 adds operator-only `qa_flow_ref` to `template`, `suite`, `schedule`,
+// `repo_config`, and `task`.
+// 152 records PR feedback source receipts and their delivery acknowledgments.
+const SchemaVersion = 152
+
+const qaExperimentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_experiment`" + ` (
+  ` + "`id`" + `                   TEXT     NOT NULL PRIMARY KEY,
+  ` + "`revision`" + `             INTEGER  NOT NULL DEFAULT 1,
+  ` + "`name`" + `                 TEXT     NOT NULL,
+  ` + "`hypothesis`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`state`" + `                TEXT     NOT NULL DEFAULT 'draft',
+  ` + "`arms_json`" + `            TEXT     NOT NULL,
+  ` + "`scope_json`" + `           TEXT     NOT NULL,
+  ` + "`allocation_json`" + `      TEXT     NOT NULL,
+  ` + "`salt`" + `                 TEXT     NOT NULL DEFAULT '',
+  ` + "`allocation_list_json`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`metrics_json`" + `         TEXT     NOT NULL,
+  ` + "`plan_json`" + `            TEXT     NOT NULL,
+  ` + "`options_json`" + `         TEXT     NOT NULL DEFAULT '{}',
+  ` + "`engine_json`" + `          TEXT     NOT NULL DEFAULT '{}',
+  ` + "`segment`" + `              INTEGER  NOT NULL DEFAULT 1,
+  ` + "`enrollment_held`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`decision_json`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`readout_json`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + `           DATETIME NOT NULL,
+  ` + "`started_at`" + `           DATETIME NULL,
+  ` + "`stopped_at`" + `           DATETIME NULL,
+  ` + "`archived_at`" + `          DATETIME NULL
+)`
+
+const qaExperimentRunningIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ` + "`qa_experiment_one_running`" + ` ON ` + "`qa_experiment`" + ` (` + "`state`" + `) WHERE ` + "`state`" + ` = 'running'`
+
+const qaEnrollmentTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_enrollment`" + ` (
+  ` + "`root_origin`" + `     TEXT     NOT NULL PRIMARY KEY,
+  ` + "`experiment_id`" + `   TEXT     NOT NULL,
+  ` + "`segment`" + `         INTEGER  NOT NULL DEFAULT 1,
+  ` + "`arm_id`" + `          TEXT     NOT NULL,
+  ` + "`flow_hash`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`qa_engine_rev`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`model`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`grain_build`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`allocation_key`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`bucket`" + `          INTEGER  NULL,
+  ` + "`excluded_reason`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`assigned_at`" + `     DATETIME NOT NULL
+)`
+
+const qaEnrollmentExpIndex = `CREATE INDEX IF NOT EXISTS ` + "`qa_enrollment_exp`" + ` ON ` + "`qa_enrollment`" + ` (` + "`experiment_id`" + `, ` + "`assigned_at`" + `)`
+
+const qaFlowVersionTable = `CREATE TABLE IF NOT EXISTS ` + "`qa_flow_version`" + ` (
+  ` + "`hash`" + `          TEXT     NOT NULL PRIMARY KEY,
+  ` + "`key`" + `           TEXT     NOT NULL,
+  ` + "`version`" + `       INTEGER  NOT NULL,
+  ` + "`parent_hash`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`label`" + `         TEXT     NOT NULL,
+  ` + "`summary`" + `       TEXT     NOT NULL,
+  ` + "`spec_json`" + `     TEXT     NOT NULL,
+  ` + "`source_yaml`" + `   TEXT     NOT NULL,
+  ` + "`qa_engine_rev`" + ` INTEGER  NOT NULL,
+  ` + "`created_by`" + `    TEXT     NOT NULL,
+  ` + "`created_at`" + `    DATETIME NOT NULL,
+  ` + "`retired_at`" + `    DATETIME NULL,
+  ` + "`schema_ver`" + `    TEXT     NOT NULL DEFAULT 'grain.dev/qa-flow/v2',
+  ` + "`source_kind`" + `   TEXT     NOT NULL DEFAULT 'ui',
+  ` + "`source_repo`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`source_path`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`source_commit`" + ` TEXT     NOT NULL DEFAULT '',
+  UNIQUE (` + "`key`" + `, ` + "`version`" + `)
+)`
 
 const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignment`" + ` (
   ` + "`root_origin`" + `           TEXT     NOT NULL,
@@ -694,21 +773,32 @@ const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignme
 )`
 
 const taskQACheckRunTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_check_run`" + ` (
-  ` + "`id`" + `          INTEGER  PRIMARY KEY AUTOINCREMENT,
-  ` + "`task_id`" + `     TEXT     NOT NULL,
-  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`commit_sha`" + `  TEXT     NOT NULL DEFAULT '',
-  ` + "`stage`" + `       TEXT     NOT NULL,
-  ` + "`check_id`" + `    TEXT     NOT NULL,
-  ` + "`arm`" + `         TEXT     NOT NULL DEFAULT 'control',
-  ` + "`shadow`" + `      INTEGER  NOT NULL DEFAULT 0,
-  ` + "`verdict`" + `     TEXT     NOT NULL,
-  ` + "`duration_ms`" + ` INTEGER  NOT NULL DEFAULT 0,
-  ` + "`tokens_in`" + `   INTEGER  NOT NULL DEFAULT 0,
-  ` + "`tokens_out`" + `  INTEGER  NOT NULL DEFAULT 0,
-  ` + "`alloc_bytes`" + ` INTEGER  NOT NULL DEFAULT 0,
-  ` + "`detail_json`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`created_at`" + `  DATETIME NOT NULL
+  ` + "`id`" + `            INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `       TEXT     NOT NULL,
+  ` + "`run_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`commit_sha`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`stage`" + `         TEXT     NOT NULL,
+  ` + "`check_id`" + `      TEXT     NOT NULL,
+  ` + "`arm`" + `           TEXT     NOT NULL DEFAULT 'control',
+  ` + "`shadow`" + `        INTEGER  NOT NULL DEFAULT 0,
+  ` + "`verdict`" + `       TEXT     NOT NULL,
+  ` + "`duration_ms`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`tokens_in`" + `     INTEGER  NOT NULL DEFAULT 0,
+  ` + "`tokens_out`" + `    INTEGER  NOT NULL DEFAULT 0,
+  ` + "`alloc_bytes`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`detail_json`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`experiment_id`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`arm_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`flow_hash`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`qa_engine_rev`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`model`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`base_sha`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`blast_tier`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`blast_score`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`complexity_tier`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`triage_decision`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`repaired_in_next_sha`" + ` INTEGER NOT NULL DEFAULT 0,
+  ` + "`created_at`" + `    DATETIME NOT NULL
 )`
 
 const taskQAFindingTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_finding`" + ` (
@@ -1165,6 +1255,7 @@ var Tables = []string{
   ` + "`admission`" + `             TEXT     NOT NULL DEFAULT 'standard',
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT 'unattended',
   ` + "`skills`" + `                TEXT     NOT NULL DEFAULT '',
+  ` + "`qa_flow_ref`" + `           TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -1228,6 +1319,18 @@ var Tables = []string{
 	// the other task_* rows. Needs no SchemaVersion bump, for task_write's
 	// own reason: an older store reads back as no task having a template.
 	`CREATE TABLE IF NOT EXISTS ` + "`task_filed_template`" + ` (
+  ` + "`task_id`" + `     TEXT NOT NULL,
+  ` + "`template_id`" + ` TEXT NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
+	// The template a task's content was filed from, for reporting alone
+	// (Task.SourceTemplateID, grain/task-5273): task_filed_template's
+	// rows, and besides them an agent's proposal naming a template and a
+	// port of a task filed from one. Nothing reads it to decide what a
+	// task may do. Needs no SchemaVersion bump, for task_filed_template's
+	// own reason: an older store reads back as no task recording one.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_source_template`" + ` (
   ` + "`task_id`" + `     TEXT NOT NULL,
   ` + "`template_id`" + ` TEXT NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `)
@@ -2175,6 +2278,7 @@ var Tables = []string{
   ` + "`grain_ci`" + `              INTEGER  NOT NULL DEFAULT 0,
   ` + "`overlap_group`" + `         TEXT     NOT NULL DEFAULT '',
   ` + "`skip_when`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`qa_flow_ref`" + `           TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2297,6 +2401,7 @@ var Tables = []string{
   ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   ` + "`skills`" + `             TEXT NOT NULL DEFAULT '',
   ` + "`sandbox`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`qa_flow_ref`" + `        TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2436,6 +2541,7 @@ var Tables = []string{
 	// makes; never a verdict grain reuses.
 	gitHubCIJobTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_ref`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`ref`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_commit`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`commit_sha`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`grain_schema`" + ` (
   ` + "`id`" + `      INTEGER NOT NULL,
@@ -3550,6 +3656,7 @@ var Tables = []string{
   ` + "`default_hosting`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`skills`" + `                   TEXT NOT NULL DEFAULT '',
   ` + "`declared_skills`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`qa_flow_ref`" + `              TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -4011,6 +4118,7 @@ var Tables = []string{
   ` + "`auto_merge`" + `        INTEGER  NOT NULL,
   ` + "`auto_approve_proposals`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`created_at`" + `        DATETIME NOT NULL,
+  ` + "`qa_flow_ref`" + `        TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -4476,6 +4584,7 @@ var Tables = []string{
 	usageSettingTable,
 
 	// Durable task context (task_context.go, schema 136).
+	prFeedbackTable,
 	taskContextTable,
 	taskBriefEditTable,
 	taskBriefEditTaskIndex,
@@ -4558,6 +4667,19 @@ var Tables = []string{
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
 
+	// Local shadow diagnostics, separate from lifecycle and event outboxes.
+	gateHealthBaseTable,
+	gateHealthWorkflowTable,
+	"CREATE INDEX IF NOT EXISTS `gate_health_workflow_order` ON `gate_health_workflow_source` (`completed_at`,`repo`,`run_id`,`attempt`)",
+	gateOutcomeSourceTable,
+	"CREATE INDEX IF NOT EXISTS `gate_outcome_source_at` ON `gate_outcome_source` (`at`,`task_id`,`resource`)",
+	gateObservationTable,
+	gateObservationHistoryTable,
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_history_order` ON `gate_observation_shadow_history` (`at`,`task_id`,`generation`)",
+	// The composite index also covers expiry; retire the original prefix.
+	"DROP INDEX IF EXISTS `gate_shadow_history_at`",
+	"CREATE INDEX IF NOT EXISTS `gate_shadow_current_at` ON `gate_observation_shadow` (`evaluated_at`)",
+
 	// Every close and reopen of a task somebody asked for, with who, when
 	// and why (model.TaskEvent).
 	taskEventTable,
@@ -4584,9 +4706,18 @@ var Tables = []string{
 	// individual QA findings (model.QAAssignment, model.QACheckRun, model.QAFinding).
 	taskQAAssignmentTable,
 	taskQACheckRunTable,
+	// Exact-head observation reads must not scan unrelated QA heads.
+	"CREATE INDEX IF NOT EXISTS `task_qa_check_run_head` ON `task_qa_check_run` (`task_id`,`commit_sha`,`id`)",
 	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_check_run_task`" + ` ON ` + "`task_qa_check_run`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
 	taskQAFindingTable,
+	"CREATE INDEX IF NOT EXISTS `task_qa_finding_run` ON `task_qa_finding` (`check_run_id`,`id`)",
 	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_finding_task`" + ` ON ` + "`task_qa_finding`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	qaFlowVersionTable,
+	qaExperimentTable,
+	qaExperimentRunningIndex,
+	qaEnrollmentTable,
+	qaEnrollmentExpIndex,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_origin_ref`" + ` ON ` + "`task`" + ` (` + "`origin_ref`" + `)`,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and
@@ -4711,7 +4842,9 @@ GROUP BY ` + "`l`.`task_id`" + ``},
 SELECT ` + "`s`.`task_id`" + ` AS ` + "`task_id`" + `
 FROM ` + "`task_state`" + ` AS ` + "`s`" + `
 LEFT JOIN ` + "`task_blocked`" + ` AS ` + "`b`" + ` ON ` + "`b`.`task_id`" + ` = ` + "`s`.`task_id`" + `
-WHERE ` + "`s`.`state`" + ` = 'queued'
+JOIN ` + "`task`" + ` AS ` + "`t`" + ` ON ` + "`t`.`id`" + ` = ` + "`s`.`task_id`" + `
+LEFT JOIN ` + "`task_observation`" + ` AS ` + "`o`" + ` ON ` + "`o`.`task_id`" + ` = ` + "`t`.`id`" + `
+WHERE (` + "`s`.`state`" + ` = 'queued' OR (` + prFeedbackWaitSQL + `))
   AND COALESCE(` + "`b`.`open_blockers`" + `, 0) = 0
   AND NOT EXISTS (SELECT 1 FROM ` + "`task_pause`" + ` AS ` + "`p`" + ` WHERE ` + "`p`.`task_id`" + ` = ` + "`s`.`task_id`" + `)`},
 

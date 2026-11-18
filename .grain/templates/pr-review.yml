@@ -9,7 +9,11 @@
 # (orchestrator.sandboxesIsolateNetwork), and it would also block the
 # module downloads that a targeted `go test -run` needs.
 name: PR review
-title: "Review {{pr}}"
+# Titled "Code review" to tell it apart from the targeted reviews a
+# sensitive trigger with no template files ("Targeted review (<trigger>):
+# ...") and the trust-boundary hold's "Security review: ..."
+# (docs/declarations.md, "What a review is called").
+title: "Code review: {{task_title}} ({{pr}})"
 body: |
   Review the change in this pull request the way a careful senior
   maintainer of grain would, and post what needs fixing. Read the diff

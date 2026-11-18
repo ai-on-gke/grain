@@ -186,21 +186,25 @@ export function buildAgentModelOptions(
         : "Deployment default",
     },
   ];
-  const seen = new Set<string>([""]);
+  const byId = new Map<string, AgentModel>();
   for (const m of agentModels) {
-    if (!m.id || seen.has(m.id)) continue;
-    seen.add(m.id);
-    const base = m.label || m.family || m.id;
-    const label =
-      m.effort && !base.toLowerCase().includes(m.effort.toLowerCase())
-        ? `${base} · ${m.effort}`
-        : base;
-    opts.push({ value: m.id, label });
+    if (m.id && !byId.has(m.id)) byId.set(m.id, m);
   }
-  for (const m of configModels) {
-    if (!m || seen.has(m)) continue;
-    seen.add(m);
-    opts.push({ value: m, label: m });
+  const seen = new Set<string>([""]);
+  for (const id of configModels) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const meta = byId.get(id);
+    if (meta) {
+      const base = meta.label || meta.family || meta.id;
+      const label =
+        meta.effort && !base.toLowerCase().includes(meta.effort.toLowerCase())
+          ? `${base} · ${meta.effort}`
+          : base;
+      opts.push({ value: id, label });
+    } else {
+      opts.push({ value: id, label: id });
+    }
   }
   if (currentModel && !seen.has(currentModel)) {
     opts.push({ value: currentModel, label: currentModel });

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -97,6 +98,80 @@ func TestGitIsConfiguredThroughConfigure(t *testing.T) {
 	}
 	if _, err := ps.Release(context.Background(), "git-repo", "e1-2-0"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAnUnconfiguredGitHoldsNoPort: the built-in comes up unconfigured
+// on every deployment, so it binds its listener only once it is
+// configured -- an unconfigured one on a port another process holds
+// still starts, and its first configure is what says the port is taken.
+func TestAnUnconfiguredGitHoldsNoPort(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	s, err := newConfigurableGit(GitConfig{Listen: held.Addr().String()})
+	if err != nil {
+		t.Fatalf("an unconfigured git on a held port: %v, want it to start", err)
+	}
+	defer s.Close(context.Background())
+	if s.addr != "" {
+		t.Errorf("an unconfigured git listens on %s, want no listener", s.addr)
+	}
+	_, err = attachConfigured(t, s, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+	if err == nil || !strings.Contains(err.Error(), "address already in use") || !protocol.IsStartError(err) {
+		t.Errorf("configuring it on a held port: %v (IsStartError=%v), want the bind error marked as a start failure", err, protocol.IsStartError(err))
+	}
+	// A validation error on the same server is still a configuration
+	// refusal, not a start failure.
+	_, badErr := attachConfigured(t, s, map[string]any{"repos": []any{"not a repo"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+	if badErr == nil || protocol.IsStartError(badErr) {
+		t.Errorf("configuring it with a bad repo: %v (IsStartError=%v), want a configuration refusal", badErr, protocol.IsStartError(badErr))
+	}
+	// A malformed or non-loopback -listen address is also a configuration
+	// refusal rather than a transient runtime start failure, so Settings
+	// refuses to save it and the registry does not retry it every minute.
+	// So is a loopback address whose port is not a TCP port number:
+	// net.Listen refuses it too, but as a bind error.
+	for _, badAddr := range []string{"0.0.0.0:4254", "not-host-port", "127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:", "127.0.0.1:-1"} {
+		badSrv, err := newConfigurableGit(GitConfig{Listen: badAddr})
+		if err != nil {
+			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
+		}
+		_, listenErr := attachConfigured(t, badSrv, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+		if listenErr == nil || protocol.IsStartError(listenErr) {
+			t.Errorf("configuring with -listen %q: %v (IsStartError=%v), want a configuration refusal", badAddr, listenErr, protocol.IsStartError(listenErr))
+		}
+	}
+}
+
+// TestAProbeKeepsAnInvalidListenPort: a probe rebinds -listen onto an
+// ephemeral port, but only a valid one -- rewriting 127.0.0.1:99999 to
+// 127.0.0.1:0 would let the probe pass and Settings save a flag every
+// real start refuses.
+func TestAProbeKeepsAnInvalidListenPort(t *testing.T) {
+	probe := Env(func(name string) string {
+		if name == protocol.ProbeEnv {
+			return "1"
+		}
+		return ""
+	})
+	if got := listenAddr(probe, "127.0.0.1:4254"); got != "127.0.0.1:0" {
+		t.Errorf("listenAddr(probe, 127.0.0.1:4254) = %q, want 127.0.0.1:0", got)
+	}
+	for _, badAddr := range []string{"127.0.0.1:abc", "127.0.0.1:99999", "127.0.0.1:", "127.0.0.1:-1", "not-host-port"} {
+		if got := listenAddr(probe, badAddr); got != badAddr {
+			t.Errorf("listenAddr(probe, %q) = %q, want it unchanged", badAddr, got)
+		}
+		s, err := newConfigurableGit(GitConfig{Listen: listenAddr(probe, badAddr)})
+		if err != nil {
+			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
+		}
+		_, err = attachConfigured(t, s, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+		if err == nil || protocol.IsStartError(err) {
+			t.Errorf("probing with -listen %q: %v (IsStartError=%v), want a configuration refusal", badAddr, err, protocol.IsStartError(err))
+		}
 	}
 }
 

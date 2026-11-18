@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -62,11 +63,21 @@ var reviewer = model.Principal{Kind: model.PrincipalAutomation, ID: "review"}
 // review that ran and found nothing is not re-run every cycle for the
 // rest of the task's life.
 //
-// It takes a *model.Store and no github.Client because it needs neither:
-// the branch to review is derived (model.BranchName), the template is a
-// row, and the task it files is a row. SyncPullRequests is what talks to
-// GitHub about the same pull requests.
+// It takes a *model.Store and no github.Client because filing needs
+// neither: the branch to review is derived (model.BranchName), the template
+// is a row, and the task it files is a row. SyncPullRequests is what talks to
+// GitHub about the same pull requests; SyncReviewsWithClient is the cycle's
+// way in, for the one thing here that reads GitHub when it can.
 func SyncReviews(ctx context.Context, store *model.Store, now time.Time) error {
+	return SyncReviewsWithClient(ctx, store, nil, now)
+}
+
+// SyncReviewsWithClient is SyncReviews with the cycle's GitHub client, which
+// a finished review's refresh of the reviews queued behind it reads: the
+// commits an earlier review pushed and the questions answered on the pull
+// request itself. Without one that refresh rewrites what the review that
+// finished had just written with less than it knew.
+func SyncReviewsWithClient(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
 	links, err := store.OpenPullRequestLinks(ctx)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)
@@ -95,7 +106,7 @@ func SyncReviews(ctx context.Context, store *model.Store, now time.Time) error {
 			errs = append(errs, err)
 		}
 	}
-	if err := closeFinishedReviews(ctx, store, now); err != nil {
+	if err := closeFinishedReviews(ctx, store, client, now); err != nil {
 		errs = append(errs, err)
 	}
 	if err := closeObsoleteReviews(ctx, store, now); err != nil {
@@ -160,7 +171,7 @@ func SyncReviews(ctx context.Context, store *model.Store, now time.Time) error {
 // *completed* task, which is the merge queue's own working set plus
 // whatever is waiting for this: bounded by the open pull requests, not by
 // the size of the backlog.
-func closeFinishedReviews(ctx context.Context, store *model.Store, now time.Time) error {
+func closeFinishedReviews(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
 	states, err := store.States(ctx)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading task states: %w", err)
@@ -197,7 +208,7 @@ func closeFinishedReviews(ctx context.Context, store *model.Store, now time.Time
 		if task == nil || !isReviewTask(*task) || hasPullRequest(*task) {
 			continue
 		}
-		if err := closeFinishedReview(ctx, store, *task, now); err != nil {
+		if err := closeFinishedReview(ctx, store, client, *task, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -227,7 +238,7 @@ func hasPullRequest(task model.Task) bool {
 // unexplained, which the log line and the returned error record; the
 // other order would post a fresh copy of the note every cycle for as
 // long as the close kept failing.
-func closeFinishedReview(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
+func closeFinishedReview(ctx context.Context, store *model.Store, client github.Client, task model.Task, now time.Time) error {
 	if err := clearReviewFindingsOnCleanReview(ctx, store, task); err != nil {
 		return err
 	}
@@ -236,6 +247,7 @@ func closeFinishedReview(ctx context.Context, store *model.Store, task model.Tas
 	}); err != nil {
 		return err
 	}
+	refreshQueuedReviewsAfterFinish(ctx, store, client, task)
 	return reviewComment(ctx, store, task.ID, reviewFinishedNote(task), now)
 }
 
@@ -246,15 +258,23 @@ func closeFinishedReview(ctx context.Context, store *model.Store, task model.Tas
 func reviewFinishedNote(task model.Task) string {
 	const closing = "Closing it: with no pull request of its own there is nothing here to merge, " +
 		"and nothing that would ever have moved it off \"Merging\" on its own."
+	// A review working on the reviewed branch itself (reviewsInPlace) may
+	// have pushed its fixes there (model.LinkReviewerHead): they are that
+	// branch's now, not a change of the review's own.
+	finished := "This review is finished and pushed no change of its own."
+	if head := linkTarget(task, model.LinkReviewerHead); head != "" {
+		finished = fmt.Sprintf("This review is finished. The fixes it pushed, up to `%s`, are on the "+
+			"branch it reviewed rather than a change of its own.", shortSHA(head))
+	}
 	for _, l := range task.Links {
 		if l.Kind == model.LinkProposedBy {
 			return fmt.Sprintf(
-				"This review is finished and pushed no change of its own. Whatever it found is "+
+				"%s Whatever it found is "+
 					"on task %s and on that task's pull request, which is where somebody reads "+
-					"it and what waits for them to. %s", l.Target, closing)
+					"it and what waits for them to. %s", finished, l.Target, closing)
 		}
 	}
-	return "This review is finished and pushed no change of its own. " + closing
+	return finished + " " + closing
 }
 
 // reviewDue reports whether task is one SyncReviews still owes a review:
@@ -293,7 +313,7 @@ func reviewTaskLink(task model.Task) (string, bool) {
 // change of its own. syncEntry treats it exactly the way it treats a fix
 // task: never a queue entry in its own right, and merged into the branch
 // it was filed against the moment it reads clean.
-func isReviewTask(task model.Task) bool { return task.Origin.Reason == model.ReasonReview }
+func isReviewTask(task model.Task) bool { return task.Filing.Reason == model.ReasonReview }
 
 // reviewsInPlace reports whether task is a review working on the reviewed
 // change's own branch (model.LinkPushesReviewedBranch), and which task
@@ -344,7 +364,7 @@ func reviewsInPlace(task model.Task) (reviewedID string, ok bool) {
 // work nobody will ever see, so it is set here regardless of what the
 // template says about the tasks it files anywhere else.
 //
-// Origin.Reason is ReasonReview, which is what isReviewTask reads and
+// Filing.Reason is ReasonReview, which is what isReviewTask reads and
 // therefore what keeps the review out of its repo's merge queue as an
 // entry in its own right. It is deliberately not ReasonFix: that reason
 // draws on the capacity model.Limits.Mergers keeps back for the merge
@@ -375,11 +395,23 @@ func fileReviewTask(ctx context.Context, store *model.Store, task model.Task,
 			task.ID, task.ReviewTemplateID)
 	}
 
-	reviewTask, err := putStackedReview(ctx, store, task, *tmpl,
-		reviewTaskTitle(*tmpl, task), reviewTaskBody(*tmpl, task, ref, task.BranchName()), now)
+	headSHA := knownTaskHead(task)
+	body := reviewTaskBody(*tmpl, task, ref, task.BranchName()) +
+		earlierReviewsSection(ctx, store, nil, &task, ref, headSHA, "") +
+		parallelReviewsSection(parallelReviewsFor(ctx, store, &task, ref, headSHA, ""))
+	reviewTask, err := newReview(ctx, store, task, *tmpl, reviewTaskTitle(*tmpl, task), body, false, now)
 	if err != nil {
 		return err
 	}
+	if ref != (model.PullRequestRef{}) {
+		reviewTask.Links = append(reviewTask.Links,
+			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
+	}
+	reviewTask.Tags = addReviewHeadTag(reviewTask.Tags, headSHA)
+	if err := store.PutTask(ctx, reviewTask); err != nil {
+		return fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
+	}
+	syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
 	branch := task.BranchName()
 
 	// Through UpdateTask, for the reason finishWithPullRequest gives: the
@@ -502,12 +534,13 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		Intent: model.IntentImplement,
 		// A review gates the change it reviews, so it runs at that
 		// change's priority, and never below model.ReviewPriorityFloor.
-		Priority:  model.ReviewPriority(task),
-		Title:     title,
-		Body:      body,
-		Admission: admission,
-		Hosting:   model.NormalizeHosting(tmpl.Hosting),
-		Origin: model.Origin{
+		Priority:         model.ReviewPriority(task),
+		Title:            title,
+		Body:             body,
+		SourceTemplateID: tmpl.ID,
+		Admission:        admission,
+		Hosting:          model.NormalizeHosting(tmpl.Hosting),
+		Filing: model.Filing{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,
 		},
@@ -566,14 +599,46 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 // in the title of the task or the body an agent is handed is worse than
 // the empty string a field with no default means.
 func reviewTaskTitle(tmpl model.Template, task model.Task) string {
-	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, tmpl.FieldValues(nil))); title != "" {
+	values := tmpl.FieldValues(nil)
+	if _, ok := values["task_title"]; !ok {
+		// {{task_title}}, as a gating trigger's review fills it
+		// (buildPullRequestReview), unless the template declares a field
+		// of that name itself.
+		if values == nil {
+			values = map[string]string{}
+		}
+		values["task_title"] = reviewSubjectTitle(task)
+	}
+	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, values)); title != "" {
 		return title
 	}
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
+	return "Review: " + reviewSubjectTitle(task)
+}
+
+// reviewSubjectTitle is how a review's title names the task under review:
+// its title, or its ID when it has none. Review templates read it as
+// {{task_title}}.
+func reviewSubjectTitle(task model.Task) string {
+	if title := strings.TrimSpace(task.Title); title != "" {
+		return title
 	}
-	return "Review: " + title
+	return task.ID
+}
+
+// targetedReviewTitle names the review sensitive path triggers file
+// without a template of their own (grain's security review brief, filed
+// for the trigger rather than the trust-boundary hold): "Targeted review
+// (<trigger>, ...): <task title>", every trigger it serves listed in
+// name order so one review for several reads the same whichever matched
+// first. The trust-boundary hold's own review keeps securityReviewTitle.
+func targetedReviewTitle(task model.Task, triggers []string) string {
+	names := slices.Clone(triggers)
+	slices.Sort(names)
+	names = slices.Compact(names)
+	if len(names) == 0 {
+		return "Targeted review: " + reviewSubjectTitle(task)
+	}
+	return "Targeted review (" + strings.Join(names, ", ") + "): " + reviewSubjectTitle(task)
 }
 
 // reviewTaskBody is the template's instructions with the subject of the
@@ -611,6 +676,7 @@ func reviewTaskBody(tmpl model.Template, task model.Task, ref model.PullRequestR
 		task.ID, task.Title, branch, ref, branch, branch, task.ID, ref, task.ID)
 	b.WriteString("\n\n" + reviewTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
+	b.WriteString("\n\n" + changeUnderReviewSection(task, true))
 	return b.String()
 }
 

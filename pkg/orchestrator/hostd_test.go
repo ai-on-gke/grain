@@ -172,3 +172,101 @@ func TestRecoverHostdMismatchAndSilence(t *testing.T) {
 		t.Fatalf("live runs = %v, want none", got)
 	}
 }
+
+// wakingHostd is a grain hostd that does not answer hello the first
+// silentFor times it is asked -- restarting onto a new build, or a hostd
+// that dials in and has not yet -- and answers as listedHostd after.
+type wakingHostd struct {
+	listedHostd
+	silentFor int
+	hellos    int
+}
+
+func (w *wakingHostd) Hello(ctx context.Context) (hostd.Hello, error) {
+	w.mu.Lock()
+	w.hellos++
+	silent := w.hellos <= w.silentFor
+	w.mu.Unlock()
+	if silent {
+		return hostd.Hello{}, errors.New("dial unix hostd.sock: connect: no such file or directory")
+	}
+	return w.listedHostd.Hello(ctx)
+}
+
+// A hostd that is mid-restart at startup decides nothing, but names the
+// runs it leaves to RecoverOrphanedRuns; once it answers again, the
+// processes of those runs that were finished are cancelled, so none
+// holds a host CLI slot until its own deadline or runs beside its run's
+// next attempt -- whose process, like one of a run still live, is left
+// alone.
+func TestRecoverHostdCancelsAbandonedRunsWhenHostdIsBack(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	for _, id := range []string{"away", "kept"} {
+		task := filedTask(t, ctx, store, id, repo)
+		startRun(t, ctx, store, dispatch.Dispatch{TaskID: task.ID, RunID: id + "-1", Attempt: 1}, baseTime)
+		if err := store.SetHostdCursor(ctx, id+"-1", 128, baseTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hd := &wakingHostd{silentFor: 3, listedHostd: listedHostd{peer: hostd.ThisHello("next")}}
+	now := baseTime.Add(time.Minute)
+	_, err := orchestrator.RecoverHostd(ctx, store, client, hd, "this", now, func(runhost.Adoption, int64) bool {
+		t.Error("adopted from a hostd that did not answer")
+		return true
+	})
+	var away *orchestrator.HostdAwayError
+	if !errors.As(err, &away) {
+		t.Fatalf("err = %v, want a HostdAwayError", err)
+	}
+	slices.Sort(away.Runs)
+	if strings.Join(away.Runs, ",") != "away-1,kept-1" {
+		t.Fatalf("runs left = %v", away.Runs)
+	}
+	// "kept-1" stands for a run something else took back; "away-1" is
+	// finished as interrupted and its task queued again.
+	if err := orchestrator.RecoverOrphanedRunsExcept(ctx, store, client, now, map[string]bool{"kept-1": true}); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := store.State(ctx, "away"); err != nil || st != model.StateQueued {
+		t.Fatalf("task away is %q (%v), want queued again", st, err)
+	}
+	startRun(t, ctx, store, dispatch.Dispatch{TaskID: "away", RunID: "away-2", Attempt: 2}, now)
+
+	hd.procs = []hostd.Process{
+		{ID: "p-away-1", Run: "away-1", Task: "away", Detached: true, PID: 41},
+		{ID: "p-kept-1", Run: "kept-1", Task: "kept", Detached: true, PID: 42},
+		{ID: "p-away-2", Run: "away-2", Task: "away", Detached: true, PID: 43},
+	}
+	reconnects := 0
+	cancelled, err := orchestrator.CancelWhenBack(ctx, store, hd, away.Runs, func(context.Context) error {
+		reconnects++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cancelled, ",") != "p-away-1" || strings.Join(hd.cancelled, ",") != "p-away-1" {
+		t.Fatalf("cancelled %v (hostd told %v), want only the abandoned run's process", cancelled, hd.cancelled)
+	}
+	if hd.hellos != 4 || reconnects != 3 {
+		t.Fatalf("hello asked %d time(s) over %d wait(s), want once at startup and until it answered", hd.hellos, reconnects)
+	}
+}
+
+// CancelWhenBack gives up when its context does, cancelling nothing.
+func TestCancelWhenBackGivesUpWithItsContext(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	hd := &wakingHostd{silentFor: 1 << 30, listedHostd: listedHostd{peer: hostd.ThisHello("next")}}
+	wctx, cancel := context.WithCancel(ctx)
+	cancelled, err := orchestrator.CancelWhenBack(wctx, store, hd, []string{"r-1"}, func(context.Context) error {
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || len(cancelled) != 0 || len(hd.cancelled) != 0 {
+		t.Fatalf("cancelled %v, err %v", cancelled, err)
+	}
+}

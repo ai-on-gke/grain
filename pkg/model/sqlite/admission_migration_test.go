@@ -34,7 +34,7 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 			ID:          "t-session",
 			Intent:      model.IntentImplement,
 			Title:       "Director",
-			Origin:      model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonConsoleSession},
+			Filing:      model.Filing{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonConsoleSession},
 			Interactive: true,
 			Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 			Approval:    &model.Attribution{Actor: human},
