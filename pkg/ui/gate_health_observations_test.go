@@ -87,7 +87,7 @@ func TestHealthGateAPIPermissionsAndProjection(t *testing.T) {
 	if allowed.GateObservations.Results[1].Result.Status != "met" {
 		t.Fatal("scoped health reader denied")
 	}
-	if allowed.GateObservationDiagnostics == nil || allowed.GateObservationDiagnostics.Evaluations != 0 || !allowed.GateObservationDiagnostics.StartedAt.IsZero() {
+	if allowed.GateObservationDiagnostics != nil {
 		t.Fatal("scoped reader received unproven aggregate history metadata")
 	}
 

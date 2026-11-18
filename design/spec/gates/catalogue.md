@@ -24,8 +24,8 @@ Common subject selectors: `task` (explicit task ID, `self` resolved at filing), 
 ## Runtime coverage after the initial framework review
 
 The catalogue above remains the full v1 contract, not an implementation claim.
-Task #61's delivered slice, Task #64's independent repairs and Task #68's health
-port implement the following nonrequired observation monitors:
+Task #61's delivered slice, Task #64's independent repairs, Task #67's review/approval
+extension and Task #68's health port implement these nonrequired observation monitors:
 
 | Type/profile | Runtime evidence and scope |
 | --- | --- |
@@ -36,12 +36,17 @@ port implement the following nonrequired observation monitors:
 | `publishing_health` v1, `legacy_no_finding_v1` / `positive_current_v1` | Optional publishing portion of existing base-green goals. Legacy calls the actual configured BaseBranchPublishingOf thresholds and preserves absent-row/no-finding behavior. Current receipt predicate is implemented; existing release collectors lack complete target/commit/artifact publication receipts, so runtime positive publication remains explained unknown. |
 | `pipeline_health` v1, `legacy_quiet_v1` / `scoped_v1` | Existing pipeline-healthy goals only. Explicit deployment read ceiling for legacy broad scan; current SQL-scoped notifications/tasks/queue plus configured managed refs and complete current base proofs. Missing expected repository/ref sets, visibility gaps and truncated scans stay unknown. Paused/self exclusions are preserved. |
 
+| `review` v1, all four categories, current and explicit imported legacy semantics | Pure exact-head/assignment/policy/authorization, complete findings/fixes and exact human disposition predicates. Scoped primary-PR legacy records provide labeled comparisons; missing current provider/role proof remains unknown. |
+| `approval` v1, `semantics=exact_head_v1` | Pure named/partial human receipt and revocation predicates. Individual Submit/named/hold scopes are observed; legacy links lack rendered-head/current-policy/role receipts and remain unknown in current mode. |
 
-All other profiles and the other six types remain unsupported by this registry.
+Other delivery/acknowledgment profiles and the other four types remain unsupported.
 See [health evidence, source gaps and validation](../../../docs/gate-health-observations.md).
 The legacy publishing reader uses the running code's configured threshold (currently
 three failures or a default three hours, with its existing environment override);
 it does not substitute the historical 24-hour description for concrete behavior.
+The [review/approval guide](../../../docs/gate-review-observations.md) records
+runtime scope, bounded readers, tests and the explicit positive-proof/CL/multiple-change
+limitations; registration does not claim provider-backed positive qualification.
 These observations never add obligations, dispatch work, process messages or
 admit actions. See the [compatibility boundary](compatibility.md#implemented-observation-only-subset),
 [operator guide](../../../docs/gate-observations.md) and

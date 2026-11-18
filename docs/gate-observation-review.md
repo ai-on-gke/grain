@@ -1,5 +1,9 @@
 # Initial observation framework review
 
+This records Task #64 at its reviewed head. Task #67 extends the fixed-pair
+projection using these conventions; see [Review and approval observations](gate-review-observations.md)
+for the current registration, source adapter, limits and validation.
+
 Task #64 reviews the implementation delivered by Task #61, PR #1739
 (merge `6bd221161`), against the canonical contracts delivered by Task #59,
 PR #1719 (merge `2e45dca71`). Both merges are ancestors of this review branch.

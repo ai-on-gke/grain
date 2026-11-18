@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -58,7 +59,15 @@ func observationEnvironment() []string {
 func (c *Client) observesGates(id string) bool {
 	return slices.Contains(c.Config.GateObservationTaskIDs, id) && len(c.Config.GateObservationTaskIDs) <= 32
 }
-func (c *Client) gateObservations(ctx context.Context, id string) (*gates.ObservationView, *model.GateObservationDiagnostics) {
+func (c *Client) gateObservations(ctx context.Context, task model.Task) (*gates.ObservationView, *model.GateObservationDiagnostics) {
+	id := task.ID
+	// History can retain linked evidence after the current change link is
+	// removed. Authorize the whole optional sidecar, not just today's bindings,
+	// before reading or replaying any shared diagnostic cache.
+	readable := taskReadableForContext(ctx)
+	if !readable(taskRepo(&task)) {
+		return nil, nil
+	}
 	if !c.observesGates(id) {
 		return nil, nil
 	}
@@ -94,12 +103,60 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 		DeploymentWide:        allows("deployment:read", "") && allows("tasks:read", "") && allows("ci:read", "") && allows("repos:read", "")}
 	access.ScopeLimited = !(access.DeploymentWide && access.PublicationRepository(""))
 	// A failed diagnostic never becomes a failed ordinary task read.
-	readCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	readCtx, cancel := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 250*time.Millisecond)
 	defer cancel()
 	now := c.now()
-	v, d, err := c.Store.ObserveTaskGates(readCtx, id, now, access)
+	var v *gates.ObservationView
+	var d *model.GateObservationDiagnostics
+	var err error
+	if taskReadScopedForContext(ctx) {
+		v, err = c.Store.ObserveTaskGatePredictions(readCtx, id, now, access)
+	} else {
+		v, d, err = c.Store.ObserveTaskGates(readCtx, id, now, access)
+	}
+	allowed := func(view *gates.ObservationView) bool {
+		subject := func(s gates.Subject) bool {
+			if s.Kind == "task" {
+				return s.TaskID == id
+			}
+			return readable(s.Repository)
+		}
+		health := func(typ string) bool {
+			return typ == "base_health" || typ == "nightly_health" || typ == "publishing_health" || typ == "pipeline_health"
+		}
+		for _, b := range view.Bindings {
+			if health(b.Type) {
+				continue
+			} // health resource ceilings are checked by the scoped model reader
+			if !subject(b.Subject) {
+				return false
+			}
+		}
+		for _, r := range view.Results {
+			if health(r.Result.Type) {
+				continue
+			}
+			for _, e := range r.Result.Evidence {
+				if !subject(e.Subject) {
+					return false
+				}
+			}
+			for _, dep := range r.Result.Dependencies {
+				if !subject(dep.Subject) {
+					return false
+				}
+			}
+		}
+		return true
+	}
 	if err == nil {
+		if !allowed(v) {
+			return nil, nil
+		}
 		return v, d
+	}
+	if errors.Is(err, model.ErrGateObservationScopeDenied) {
+		return nil, nil
 	}
 	// No raw database errors, comment bodies, principals or credentials escape.
 	unavailable := gates.UnavailableObservation(id, now)
@@ -107,9 +164,12 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 	// A fresh short budget can retain a failure even when the collection's
 	// own 250ms budget expired. Never delay an already canceled request.
 	if ctx.Err() == nil {
-		failureCtx, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+		failureCtx, stop := context.WithTimeout(model.WithExternalRefReadable(ctx, readable), 50*time.Millisecond)
 		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v, access)
 		stop()
+	}
+	if !allowed(v) {
+		return nil, nil
 	}
 	return v, nil
 }

@@ -20,7 +20,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 //go:embed delivery.schema.json
@@ -41,7 +44,13 @@ var publishingHealthSchema []byte
 //go:embed pipeline_health.schema.json
 var pipelineHealthSchema []byte
 
-const Implementation = "builtin-health-observer-v3"
+//go:embed review.schema.json
+var reviewSchema []byte
+
+//go:embed approval.schema.json
+var approvalSchema []byte
+
+const Implementation = "builtin-task-observer-v4"
 
 type Descriptor struct {
 	Type           string
@@ -53,11 +62,10 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return append(healthDescriptors(), []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}}...)
+	return append(healthDescriptors(), []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"review", 1, Digest(json.RawMessage(reviewSchema)), append([]byte(nil), reviewSchema...), Implementation}, {"approval", 1, Digest(json.RawMessage(approvalSchema)), append([]byte(nil), approvalSchema...), Implementation}}...)
 }
 
-// Validate admits only this observation slice's supported profiles, even
-// though the future catalogue specifies additional configurations.
+// Validate admits closed canonical profiles supported by these pure observers.
 func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	if len(raw) > 64*1024 {
 		return nil, fmt.Errorf("config exceeds 64 KiB")
@@ -69,6 +77,10 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	switch typ {
 	case "delivery":
 		allowedKeys = map[string]bool{"product": true, "semantics": true}
+	case "review":
+		allowedKeys = map[string]bool{"category": true, "requirement_id": true, "semantics": true}
+	case "approval":
+		allowedKeys = map[string]bool{"requirement_ids": true, "semantics": true}
 	case "acknowledgment":
 		allowedKeys = map[string]bool{"mode": true}
 	case "base_health":
@@ -126,7 +138,35 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		dec.DisallowUnknownFields()
 		return dec.Decode(v)
 	}
+	validID := func(s string) bool { return strings.TrimSpace(s) != "" && utf8.RuneCountInString(s) <= 256 }
 	switch typ {
+	case "review":
+		c := ReviewConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if !slices.Contains([]string{"ordinary", "security", "path", "takeover"}, c.Category) || !validID(c.RequirementID) || !slices.Contains([]string{"current_head_v1", "legacy_completion_v1"}, c.Semantics) {
+			return nil, fmt.Errorf("unsupported review profile")
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
+	case "approval":
+		c := ApprovalConfig{}
+		if err := decode(&c); err != nil {
+			return nil, err
+		}
+		if c.Semantics != "exact_head_v1" || len(c.RequirementIDs) == 0 || len(c.RequirementIDs) > 64 {
+			return nil, fmt.Errorf("unsupported approval profile")
+		}
+		seen := map[string]bool{}
+		for _, id := range c.RequirementIDs {
+			if !validID(id) || seen[id] {
+				return nil, fmt.Errorf("invalid or duplicate requirement ID")
+			}
+			seen[id] = true
+		}
+		b, _ := json.Marshal(c)
+		return b, nil
 	case "delivery":
 		c := DeliveryConfig{}
 		if err := decode(&c); err != nil {
@@ -157,6 +197,7 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 type Facts struct {
 	Bindings           []Binding
 	Health             map[string]HealthFacts
+	Change             *ChangeFacts
 	IncompleteReason   string
 	TaskID             string
 	Applicable         bool
@@ -186,6 +227,9 @@ func Bindings(taskID string) []Binding {
 func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 	if isHealthType(b.Type) {
 		return evaluateHealth(b, f, now, generation)
+	}
+	if b.Type == "review" || b.Type == "approval" {
+		return evaluateChange(b, f, now, generation)
 	}
 	contextDigest := Digest(struct {
 		Binding       Binding
@@ -253,13 +297,19 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 // UnavailableObservation constructs a safe rejected diagnostic, without reusing
 // evidence, waits or accepted metadata from a prior successful collection.
 // SourceRevision is an unavailable build sentinel, not a captured fact version.
-func UnavailableObservation(taskID string, now time.Time, bindings ...[]Binding) ObservationView {
-	selected := Bindings(taskID)
-	if len(bindings) > 0 {
-		selected = bindings[0]
+func UnavailableObservation(taskID string, now time.Time, selected ...[]Binding) ObservationView {
+	bindings := Bindings(taskID)
+	if len(selected) > 0 {
+		bindings = selected[0]
 	}
-	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: selected, Results: []EvaluationState{}, Dirty: true}
-	for _, b := range v.Bindings {
+	return UnavailableObservationForBindings(taskID, now, bindings)
+}
+
+// UnavailableObservationForBindings retains only a validated diagnostic scope,
+// never accepted evidence or operational predictions.
+func UnavailableObservationForBindings(taskID string, now time.Time, bindings []Binding) ObservationView {
+	v := ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: Implementation, ComparedAt: now, LegacyState: "unavailable", Bindings: bindings, Results: []EvaluationState{}, Dirty: true}
+	for _, b := range bindings {
 		f := Facts{TaskID: taskID, ObservedAt: now, ValidUntil: now, SourceVersion: Implementation}
 		if isHealthType(b.Type) {
 			f.Health = map[string]HealthFacts{b.ID: {Version: Implementation, ObservedAt: now, ValidUntil: now}}

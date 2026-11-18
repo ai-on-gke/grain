@@ -24,10 +24,15 @@ This adapts Task #51's current-behavior mapping at `f764e02e0` (`docs/mcp-gates-
 ## Implemented observation-only subset
 
 The [runtime observation guide](../../../docs/gate-observations.md) describes the
-report/receipt slice and the [health port](../../../docs/gate-health-observations.md):
-`delivery/report/current_v1`, `acknowledgment/explicit_receipt` and the four health
-types, all v1 nonrequired monitors. Selected existing health goals receive labeled
-legacy/current comparison profiles; unrelated tasks receive no health obligations. Ordinary authorized
+shipped slices: `delivery/report/current_v1`,
+`acknowledgment/explicit_receipt`, and canonical `review`/`approval` predicates,
+all v1 nonrequired monitors. The [health port](../../../docs/gate-health-observations.md)
+adds labeled base/nightly/publishing/pipeline comparisons for selected existing
+health goals only; those tasks do not acquire unrelated completion obligations. The [review/approval adapter](../../../docs/gate-review-observations.md)
+imports ordinary/security/path/targeted/takeover legacy comparisons and named,
+Submit and human-hold approval scopes. Its missing current provider and rendered
+policy/role receipt pins remain unknown; closed tasks and missing assignments
+never pass current mode. Ordinary authorized
 task reads and the Angular task detail carry the optional closed observation_view
 and bounded sibling diagnostic history. There is no contract/decision authority,
 `?view=gates` implementation, discovery/mutation/action/waiver API or migration.

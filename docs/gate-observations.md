@@ -2,14 +2,15 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and extension rules. The runtime supports the two
-report/receipt monitors and four health types: `base_health`, `nightly_health`,
-`publishing_health` and `pipeline_health`. Health observations compare explicit
-legacy profiles with the canonical stronger current profiles on selected existing
-health goals; they do not materialize a task contract or add completion obligations.
-Other catalogue types/profiles remain unsupported. Closed schemas are pinned to
-the canonical catalogue and evaluated by pure local Go functions. There are no
-remote evaluator calls or private evaluator state. See [health coverage and limits](gate-health-observations.md).
+records repairs, coverage and extension rules. Eight v1 types are registered:
+report/receipt, review/approval, and base/nightly/publishing/pipeline health.
+See the [review/approval guide](gate-review-observations.md) and
+[health guide](gate-health-observations.md) for source coverage and explicit gaps.
+Selected existing health goals use labeled legacy/current health profiles; other
+selected tasks retain the report/receipt and applicable PR review/approval projection.
+These monitors do not materialize a task contract or add completion obligations.
+Closed schemas are pinned to the canonical catalogue and evaluated by pure local
+Go functions. There are no remote evaluator calls or private evaluator state.
 
 Legacy services still own every task lifecycle, queue/run/wait, approval, report,
 acknowledgment, merge and submit operation. There is no authority migration or
@@ -24,7 +25,11 @@ The existing permission-filtered `GET /api/tasks/{id}` adds optional
 `gate_observations` (the closed canonical observation_view) and sibling
 `gate_observation_diagnostics`. Ordinary whole, paged, comments-since and task
 summary reads reuse the same projection; pagination never supplies gate evidence.
-The ordinary `api_get_task` read carries the additive fields. Angular task detail
+The ordinary `api_get_task` read carries the additive fields. Scoped callers
+receive only the authorized current projection; retained diagnostic history
+requires unrestricted task-read access because samples can predate repository
+moves. Authorization is checked before collection/cache replay, and cached
+resource subjects are reauthorized before display. Angular task detail
 at `/next/tasks/<id>` shows status/explanation, source/config/build provenance,
 evaluation/evidence versions, completeness/freshness, errors, inert predictions,
 retained comparison counts and newest 20 samples. The classic UI remains compatible.
@@ -35,7 +40,7 @@ mutation/reevaluation/action/waiver endpoint or MCP evaluator.
 
 Collection/display is disabled by default. A deployment-local explicit allowlist
 selects at most 32 task IDs. There is no automatic cohort expansion or lifecycle
-hook. Choose a small representative set of current finite analysis/report tasks,
+hook. Choose a small representative set of current finite analysis/report or PR tasks,
 including a report awaiting receipt and a report acknowledged by a verified person.
 Existing base/nightly repair and pipeline steward tasks with the corresponding
 health goals can also be selected explicitly; health profiles replace the
@@ -43,7 +48,7 @@ report/receipt pair on those tasks only.
 Optionally include a code/standing task to inspect the explained unknown state;
 never interpret that acknowledgment observation as a code completion requirement.
 
-For the report/receipt pair, only noninteractive `analyze` tasks without changes, goals, standing/keep-running
+For report/receipt, only noninteractive `analyze` tasks without changes, goals, standing/keep-running
 behavior, console hosting, or report-only child auto-closure are applicable. A
 successful recorded no-work invocation is excluded. Unsupported shapes return
 unknown with a not-applicable explanation for both monitors.
@@ -67,8 +72,10 @@ automation closes are unknown, not synthetic receipts. A new report/run, questio
 message, attachment, relevant task shape, or registry/config build changes the
 source fence; old receipt observations cannot silently cover a changed report.
 These local immutable body/comment and close-event records are the supported
-report/receipt evidence. Health uses its own scoped source records and permissions
-as described in the health guide; no enforcement authorization is claimed.
+report/receipt evidence. Review/approval and health use their own scoped source
+records and permissions as described in their guides; no enforcement authorization
+is claimed. Missing provider, rendered-policy, role or positive publication proof
+remains explained unknown.
 The comment-set fence does not process unseen messages or prove closure readiness.
 Registry/context digests use canonical JSON for this slice's ASCII-keyed wire
 values; internal task/evidence source versions are local opaque SHA-256 identities.
@@ -132,7 +139,9 @@ unsampled minute refreshes after that point cannot be recovered. Aggregate retai
 comparison counts remain exact. Current/history data is local to the
 database and deliberately excluded from state-repository exports.
 
-The comparison labels are:
+For PR tasks the comparison labels are `review_approval_provenance_gap` and
+`review_approval_incomplete`; individual results explain current versus imported
+legacy outcomes. The report/receipt comparison labels are:
 
 - `equivalent_milestones`: report delivery and receipt agree with corresponding
   local legacy facts; pending receipt is not a delivery discrepancy.
@@ -221,3 +230,9 @@ diagnostic storage outage/recovery and diagnostic redaction.
 The browser/component checks cover provenance/history, errors, expiry with unchanged
 responses, inert controls, escaping and responsive rendering. Full future enforcement
 acceptance scenarios are not claimed by these read-only checks.
+
+Review/approval validation and its material source limitations are recorded in
+[Review and approval observations](gate-review-observations.md). Current results
+remain unknown when exact provider/authorization evidence is absent; legacy
+Submit/accept-findings services remain authoritative. No production configuration
+or grant change accompanies the extension.

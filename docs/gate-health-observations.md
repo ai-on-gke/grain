@@ -3,7 +3,7 @@
 Task #68 builds on merged canonical-spec PR #1719 (Task #59), initial-framework
 PR #1739 (Task #61) and framework-review PR #1803 (Task #64). All three merge
 commits were verified ancestors of the implementation checkout. The implementation
-pin is `builtin-health-observer-v3`; public contracts remain `grain.gates/v1`.
+pin is `builtin-task-observer-v4`; public contracts remain `grain.gates/v1`.
 
 **OBSERVATION-ONLY.** Every binding is a nonrequired monitor with action=null,
 authority=legacy and lifecycle/action/dispatch/automatic-cutover flags false.
@@ -37,12 +37,14 @@ Legacy steward quiet additionally requires explicit deployment-wide
 includes an opaque JSON-safe digest of the current effective read ceiling; it is
 a diagnostic authorization fence, not an enforcement admission revision.
 A narrow reader never receives a broader cached result/history. Partially denied
-pairs are evaluated transiently without persisted cache/history reuse; authorized
-current scoped pipeline predictions can coexist with denied legacy broad reads.
-Historical samples are filtered against the current ceiling, including after goal
-scope edits. For a restricted ceiling, counts cover only the returned visible samples and
-aggregate counts/start times are withheld, even when older hidden samples have
-rotated outside the returned page.
+health pairs are evaluated transiently without persisted cache/history reuse;
+authorized current scoped pipeline predictions can coexist with denied legacy
+broad reads. Retained history requires unrestricted task-read access, preserving
+the upstream repository-move protections. Where task reads are unrestricted but
+health resource visibility is narrower, health samples are filtered against the
+current ceiling and aggregate metadata is withheld. No scoped task caller reads
+retained history. Current repository task visibility is rechecked in the collection
+transaction before cache/backoff replay and again for diagnostic failure writes.
 
 ## Profiles and sources
 
@@ -82,7 +84,7 @@ still leaves the stronger profile unknown.
 ## Persistence and bounds
 
 The existing serialized diagnostic writer, replay/backoff handling and history
-retention are shared by all six types. Error reconstruction regenerates the
+retention are shared by all eight types. Error reconstruction regenerates the
 current binding shape and discards accepted evidence/work/actions/waits. Safe
 binding/permission selection precedes persisted backoff; expensive fact collection
 runs only after retry is due. Window, threshold and source expiry shorten the
@@ -146,3 +148,8 @@ edits; actual accepted/denied/pending/stale/error views validate against canonic
 schemas. Angular tests cover visible legacy/current differences, exact provenance,
 expiry and absence of operational controls. Existing framework retention,
 contention, concurrent failure and API regression suites remain required.
+The merged review/approval extension is covered on both database engines: PR to
+health-goal and back transitions during error backoff select the current family,
+scoped collection and failure writes reauthorize the task, and current-only reads
+remain independent of retained history. The shared registry implementation pin is
+v4; all eight registered types retain their v1 profiles and wire contracts.
