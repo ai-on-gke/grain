@@ -43,15 +43,20 @@ export const DEEP_LINK_HEAD_QUERY = `comments_limit=${TASK_DETAIL_MAX_PAGE}&atte
 // PendingReply is a message in a task's outbox, with the check it must
 // pass against the task as read just before it is posted (refuse: given
 // whether a message queued ahead of it was posted, so it follows that one
-// up), whether one that check turns down stays in the thread rather than
-// going back to the composer (keepRefused: the composer is closed), and
-// what to do once it is posted (sent).
+// up) and what to do once it is posted (sent).
 export interface PendingReply extends PendingMessage {
-  // Keys of the messages queued ahead of this one when it was sent.
+  // Keys of the messages queued ahead of this one when it was written or
+  // sent.
   after: readonly number[];
   refuse?: (d: TaskDetail | undefined, followsSent: boolean) => string;
-  keepRefused?: () => boolean;
   sent?: () => void;
+}
+
+// TaskView is the task page on screen: which task it shows and whether its
+// composer is closed (attachView).
+export interface TaskView {
+  id: () => string | null;
+  composerHidden: () => boolean;
 }
 
 // Verdict is verify's answer on one queued message: it may go, the page
@@ -132,6 +137,7 @@ export class TaskStore {
   private readonly draining = new Set<string>();
   // Keys of outbox messages the server has taken (PendingReply.after).
   private readonly sentKeys = new Set<number>();
+  private view: TaskView | null = null;
 
   // Paged history preserved across live refreshes for the current task.
   private pagedComments: Comment[] = [];
@@ -606,7 +612,9 @@ export class TaskStore {
   // taken back to edit.
   send(
     expectedId: string | null = this.id(),
-    hooks: Pick<PendingReply, "refuse" | "keepRefused" | "sent"> = {},
+    hooks: Pick<PendingReply, "refuse" | "sent"> & {
+      after?: readonly number[];
+    } = {},
   ): boolean {
     const body = this.draft().trim();
     const attachments = this.stagedAttachments();
@@ -621,8 +629,13 @@ export class TaskStore {
       key: ++this.pendingSeq,
       body,
       attachments,
-      after: this.outboxFor(expectedId).map((p) => p.key),
       ...hooks,
+      after: [
+        ...new Set([
+          ...(hooks.after ?? []),
+          ...this.outboxFor(expectedId).map((p) => p.key),
+        ]),
+      ],
     };
     this.outbox.update((m) => ({
       ...m,
@@ -633,6 +646,34 @@ export class TaskStore {
     this.actionError.set(null);
     void this.drainOutbox(expectedId);
     return true;
+  }
+
+  // followsSent reports whether any of the outbox messages keys names has
+  // been taken by the server.
+  followsSent(keys: readonly number[]): boolean {
+    return keys.some((k) => this.sentKeys.has(k));
+  }
+
+  // attachView registers the task page on screen, so a message refused
+  // while no page shows its task, or while that page's composer is closed,
+  // stays in the thread rather than going back to a composer nobody sees.
+  // The returned function takes it off again.
+  attachView(view: TaskView): () => void {
+    this.view = view;
+    return () => {
+      if (this.view === view) this.view = null;
+    };
+  }
+
+  private composerClosedFor(id: string): boolean {
+    const v = this.view;
+    return !v || v.id() !== id || v.composerHidden();
+  }
+
+  // discardSend drops a message that was not sent, for good.
+  discardSend(id: string, key: number): void {
+    this.dropPending(id, key);
+    void this.drainOutbox(id);
   }
 
   retrySend(id: string, key: number): void {
@@ -688,8 +729,12 @@ export class TaskStore {
           return;
         }
         if (v.kind === "refused") {
-          if (next.keepRefused?.()) {
-            this.patchPending(id, next.key, { failed: v.why });
+          if (this.composerClosedFor(id)) {
+            // Nothing behind it can go either: every message left reads
+            // as not sent, with the reason, until retried or discarded.
+            for (const p of this.outboxFor(id)) {
+              this.patchPending(id, p.key, { failed: v.why });
+            }
           } else {
             this.takeBack(id, this.outboxFor(id));
             this.actionError.set(v.why);

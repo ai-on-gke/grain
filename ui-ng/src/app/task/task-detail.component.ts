@@ -946,11 +946,9 @@ export function duration(from?: string, to?: string): string {
                     [loadingOlder]="store.isBusy('older-comments', t.id)"
                     (loadEarlier)="store.loadOlderComments()"
                     [draft]="store.draft()"
-                    (draftChange)="store.draft.set($event)"
+                    (draftChange)="onDraft($event)"
                     [stagedAttachments]="store.stagedAttachments()"
-                    (stagedAttachmentsChange)="
-                      store.stagedAttachments.set($event)
-                    "
+                    (stagedAttachmentsChange)="onStaged($event)"
                     [config]="{
                       placeholder:
                         t.state === 'awaiting_reply'
@@ -965,6 +963,7 @@ export function duration(from?: string, to?: string): string {
                     [pending]="store.outboxFor(t.id)"
                     (retryPending)="store.retrySend(t.id, $event)"
                     (editPending)="store.editSend(t.id, $event)"
+                    (discardPending)="store.discardSend(t.id, $event)"
                   />
                 }
                 @case ("runs") {
@@ -1803,10 +1802,14 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly newDepId = signal("");
   protected readonly offeredCapabilities = signal<CapabilityOption[]>([]);
 
+  // replyTarget is what the composer's message was written for, locked
+  // when typing starts: the task, the question it answers, and the outbox
+  // messages queued ahead of it then (after), which may answer it first.
   protected readonly replyTarget = signal<{
     taskId: string;
     questionCommentId?: number;
     reply: boolean;
+    after?: readonly number[];
   } | null>(null);
 
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
@@ -1956,7 +1959,14 @@ export class TaskDetailComponent implements OnDestroy {
     if (!t || t.id !== tgt.taskId) {
       return `Switched away from #${tgt.taskId}; this message will not be sent.`;
     }
-    if (tgt.reply && !(t.pendingSecret && this.allowWordsOnParked())) {
+    // One of ours queued ahead of it may be what woke the task.
+    const woken =
+      this.store.followsSent(tgt.after ?? []) && t.state !== "awaiting_reply";
+    if (
+      tgt.reply &&
+      !(t.pendingSecret && this.allowWordsOnParked()) &&
+      !woken
+    ) {
       return replyRefusal(t, tgt.taskId, tgt.questionCommentId);
     }
     if (
@@ -2104,8 +2114,17 @@ export class TaskDetailComponent implements OnDestroy {
     const onHash = (): void =>
       this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
     win?.addEventListener("hashchange", onHash);
+    const detachView = this.store.attachView({
+      id: () => this.id(),
+      composerHidden: () => this.composerHidden(),
+    });
+    // Words to a parked task close with the gate, not with a send.
+    effect(() => {
+      if (!this.parked()) untracked(() => this.allowWordsOnParked.set(false));
+    });
     inject(DestroyRef).onDestroy(() => {
       this.destroyed = true;
+      detachView();
       paneSub.unsubscribe();
       fragSub.unsubscribe();
       win?.removeEventListener("hashchange", onHash);
@@ -2924,9 +2943,25 @@ export class TaskDetailComponent implements OnDestroy {
     });
   }
 
+  // onDraft and onStaged keep the composer's content and lock the reply
+  // target while there is any, so a question or state that a poll brings
+  // in mid-typing is caught before the message goes (replyBlocked).
   protected onDraft(value: string): void {
-    this.lockReplyTarget();
     this.store.draft.set(value);
+    this.syncReplyTarget();
+  }
+
+  protected onStaged(list: AttachmentUpload[]): void {
+    this.store.stagedAttachments.set(list);
+    this.syncReplyTarget();
+  }
+
+  private syncReplyTarget(): void {
+    if (this.store.draft().trim() || this.store.stagedAttachments().length) {
+      this.lockReplyTarget();
+    } else {
+      this.replyTarget.set(null);
+    }
   }
 
   private lockReplyTarget(): void {
@@ -2937,6 +2972,7 @@ export class TaskDetailComponent implements OnDestroy {
           taskId: t.id,
           questionCommentId: t.questionCommentId,
           reply: t.state === "awaiting_reply",
+          after: this.store.outboxFor(t.id).map((p) => p.key),
         });
       }
     }
@@ -3006,7 +3042,6 @@ export class TaskDetailComponent implements OnDestroy {
     if (blocked) {
       this.store.actionError.set(blocked);
       this.replyTarget.set(null);
-      this.allowWordsOnParked.set(false);
       return;
     }
     const tgt = this.replyTarget() ?? {
@@ -3034,17 +3069,15 @@ export class TaskDetailComponent implements OnDestroy {
         }
         return "";
       },
-      // With the composer closed a refused message has nowhere to go back
-      // to, so it stays in the thread as not sent, readable.
-      keepRefused: () => this.composerHidden(),
+      after: tgt.after,
       sent: () => {
         if (!this.destroyed) this.acted.emit();
       },
     });
-    if (queued) {
-      this.replyTarget.set(null);
-      this.allowWordsOnParked.set(false);
-    }
+    // "Reply in words" stays open while the message is out, so a refused
+    // or failed one can still come back to the composer; it closes when the
+    // task leaves the gate.
+    if (queued) this.replyTarget.set(null);
   }
 
   protected onEnter(ev: Event): void {

@@ -269,6 +269,16 @@ export interface ComposerConfig {
                   >
                     Edit
                   </button>
+                } @else {
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="pending-discard"
+                    gTip="Remove this message; it will not be sent"
+                    (click)="discardPending.emit(p.key)"
+                  >
+                    Discard
+                  </button>
                 }
               </div>
             }
@@ -427,10 +437,14 @@ export class ConversationComponent implements OnDestroy {
   }>();
   readonly loadEarlier = output<void>();
   // pending is the composer's outbox, shown after the thread; a not-sent
-  // message offers Retry (retryPending) and Edit (editPending), by key.
+  // message offers Retry (retryPending) and Edit (editPending), or Discard
+  // (discardPending) while the composer is hidden, by key.
   readonly pending = input<readonly PendingMessage[]>([]);
   readonly retryPending = output<number>();
   readonly editPending = output<number>();
+  // discardPending drops a not-sent message, offered in place of Edit
+  // while there is no composer to take it back into.
+  readonly discardPending = output<number>();
 
   readonly draft = model("");
   readonly stagedAttachments = model<AttachmentUpload[]>([]);

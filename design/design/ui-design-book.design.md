@@ -340,11 +340,17 @@ inspector and Task Detail. Sessions shares its message styles.
   question changed, the task closed or was stopped) goes back into the
   composer, with whatever was queued behind it, and the reason shows in the
   action banner; the next Send aims at the task as it is now, never at the
-  question it was refused for. While the composer is closed (closed,
-  stopped, parked) a refused message stays in the thread as `Not sent`,
-  without Edit, so its text can still be read. A reply that follows one of
-  ours the server took is checked as a comment while the task is no longer
-  waiting (that reply woke it), and as a reply again once it asks.
+  question it was refused for. The reply target locks when typing starts,
+  so a question or state a poll brings in mid-typing holds the message back
+  with the reason rather than answering what was not read. While the
+  composer is closed (closed, stopped, parked), or no page shows the task,
+  a refused message and everything queued behind it stay in the thread as
+  `Not sent` with Retry and Discard in place of Edit, so the text can still
+  be read and cleared. "Reply in words" on a parked task stays open while
+  a reply is out and closes when the task leaves the gate. A reply that
+  follows one of ours the server took (queued, or typed, while it was out)
+  is checked as a comment while the task is no longer waiting (that reply
+  woke it), and as a reply again once it asks.
 - **Comment links (`#comment=<id>`)** open Conversation on any tab. A cold
   load reads 500 comments and pages back 500 at a time to the comment
   before rendering, so the thread draws once (a 3,000-comment task is at most
