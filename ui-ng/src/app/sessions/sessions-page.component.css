@@ -248,6 +248,16 @@ g-sessions-page {
   gap: 10px;
 }
 
+.session-network-warn {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}
+
 .session-setting-field {
   display: flex;
   flex-direction: column;

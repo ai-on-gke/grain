@@ -456,6 +456,25 @@ const FOCUS_HEADING = "focusHeading";
                     <span>Reads all (read access to all repos)</span>
                   </label>
                 </div>
+                <!-- The server names the network runs actually get when it
+                     is not the one picked (a sandbox backend that cannot
+                     withhold a network gives "none" sessions egress), as
+                     the classic pane warns. -->
+                @if (
+                  row.session.effectiveNetworkAccess &&
+                  row.session.effectiveNetworkAccess !==
+                    (row.session.networkAccess || "open")
+                ) {
+                  <p
+                    class="session-network-warn"
+                    role="status"
+                    data-testid="session-network-not-isolated"
+                  >
+                    This deployment's sandboxes cannot withhold a run's network,
+                    so this session's runs are given egress (outbound internet)
+                    whatever is chosen here.
+                  </p>
+                }
 
                 <div>
                   <span
@@ -485,11 +504,12 @@ const FOCUS_HEADING = "focusHeading";
                 }
                 @if (!freshOpen()) {
                   <button
+                    #freshOpenBtn
                     type="button"
                     class="btn-text"
                     data-testid="fresh-chat-open"
                     gTip="Close this conversation and start a new one on the same session"
-                    (click)="freshOpen.set(true)"
+                    (click)="openFresh()"
                   >
                     Start a fresh chat
                   </button>
@@ -499,6 +519,7 @@ const FOCUS_HEADING = "focusHeading";
                     grants. The messages stay on the closed task.</span
                   >
                   <button
+                    #freshFirst
                     type="button"
                     class="btn-tonal"
                     data-testid="fresh-chat-handover"
@@ -519,7 +540,8 @@ const FOCUS_HEADING = "focusHeading";
                   <button
                     type="button"
                     class="btn-text"
-                    (click)="freshOpen.set(false)"
+                    data-testid="fresh-chat-cancel"
+                    (click)="closeFresh()"
                   >
                     Cancel
                   </button>
@@ -902,6 +924,10 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private readonly deleteBtn =
     viewChild<ElementRef<HTMLButtonElement>>("deleteBtn");
   private readonly chatTitle = viewChild<ElementRef<HTMLElement>>("chatTitle");
+  private readonly freshOpenBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("freshOpenBtn");
+  private readonly freshFirst =
+    viewChild<ElementRef<HTMLButtonElement>>("freshFirst");
   private readonly headline = viewChild<ElementRef<HTMLElement>>("headline");
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
@@ -1219,9 +1245,23 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     this.composer()?.nativeElement.focus();
   }
 
+  // The fresh-chat choices replace the button that offers them, and the
+  // button comes back when they close: each swap hands focus across so it
+  // is not dropped on <body> (2026-11-18 walkthrough, B4).
+  protected openFresh(): void {
+    this.freshOpen.set(true);
+    this.focusWhenRendered(() => this.freshFirst()?.nativeElement);
+  }
+
+  protected closeFresh(): void {
+    this.freshOpen.set(false);
+    this.focusWhenRendered(() => this.freshOpenBtn()?.nativeElement);
+  }
+
   protected async restart(carry: boolean): Promise<void> {
     if (await this.store.restart(carry)) {
       this.freshOpen.set(false);
+      this.focusWhenRendered(() => this.composer()?.nativeElement);
       this.snackbar.show(
         carry
           ? "Started a fresh chat with the handover note"
@@ -1314,7 +1354,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       this.cancelDelete();
     } else if (this.freshOpen()) {
       ev.preventDefault();
-      this.freshOpen.set(false);
+      this.closeFresh();
     } else if (this.settingsOpen()) {
       ev.preventDefault();
       this.settingsOpen.set(false);
