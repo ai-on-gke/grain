@@ -29,7 +29,13 @@ var deliverySchema []byte
 //go:embed acknowledgment.schema.json
 var acknowledgmentSchema []byte
 
-const Implementation = "builtin-report-observer-v2"
+//go:embed qa_stage.schema.json
+var qaStageSchema []byte
+
+//go:embed release_qualification.schema.json
+var releaseQualificationSchema []byte
+
+const Implementation = "builtin-qualification-observer-v3"
 
 type Descriptor struct {
 	Type           string
@@ -41,11 +47,10 @@ type Descriptor struct {
 
 // Discover returns immutable copies. This registry is fixed at build time.
 func Discover() []Descriptor {
-	return []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}}
+	return []Descriptor{{"acknowledgment", 1, Digest(json.RawMessage(acknowledgmentSchema)), append([]byte(nil), acknowledgmentSchema...), Implementation}, {"delivery", 1, Digest(json.RawMessage(deliverySchema)), append([]byte(nil), deliverySchema...), Implementation}, {"qa_stage", 1, Digest(json.RawMessage(qaStageSchema)), append([]byte(nil), qaStageSchema...), Implementation}, {"release_qualification", 1, Digest(json.RawMessage(releaseQualificationSchema)), append([]byte(nil), releaseQualificationSchema...), Implementation}}
 }
 
-// Validate admits only this observation slice's two supported profiles, even
-// though the future catalogue specifies additional configurations.
+// Validate admits only implemented, closed typed observation profiles.
 func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	if len(raw) > 64*1024 {
 		return nil, fmt.Errorf("config exceeds 64 KiB")
@@ -57,6 +62,10 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 	switch typ {
 	case "delivery":
 		allowedKeys = map[string]bool{"product": true, "semantics": true}
+	case "qa_stage":
+		allowedKeys = map[string]bool{"stage": true, "flow_revision": true, "assignment": true}
+	case "release_qualification":
+		allowedKeys = map[string]bool{"predicate": true, "expected_commit": true, "release_version": true, "policy_revision": true}
 	case "acknowledgment":
 		allowedKeys = map[string]bool{"mode": true}
 	default:
@@ -101,6 +110,8 @@ func Validate(typ string, version uint32, raw []byte) (json.RawMessage, error) {
 		return dec.Decode(v)
 	}
 	switch typ {
+	case "qa_stage", "release_qualification":
+		return validateQualification(typ, raw)
 	case "delivery":
 		c := DeliveryConfig{}
 		if err := decode(&c); err != nil {
@@ -160,7 +171,7 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 		Binding       Binding
 		Source, Build string
 	}{b, f.SourceVersion, Implementation})
-	r := Result{EvaluationID: "shadow-" + contextDigest[7:], BindingID: "task/" + f.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version, ContextDigest: contextDigest, Status: "unknown", Summary: "Evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{{Key: "task/" + f.TaskID + "/report-receipt", Subject: b.Subject, Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Subject), Complete: f.Complete, ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}, Blockers: []struct{}{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
+	r := Result{EvaluationID: "shadow-" + contextDigest[7:], BindingID: "task/" + f.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version, ContextDigest: contextDigest, Status: "unknown", Summary: "Evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{{Key: "task/" + f.TaskID + "/report-receipt", Subject: b.Subject, Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Subject), Complete: f.Complete, ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
 	if _, err := Validate(b.Type, b.Version, b.Config); err != nil {
 		r.Summary = "Unsupported or malformed gate configuration."
 		return r

@@ -133,3 +133,39 @@ describe("observation-only task display", () => {
     expect(fixture.nativeElement.querySelector("section")).toBeNull();
   });
 });
+
+describe("QA and release shadow blockers", () => {
+  it("renders every blocker and repeated stage provenance without controls", async () => {
+    await TestBed.configureTestingModule({
+      imports: [TaskObservationsComponent],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(TaskObservationsComponent);
+    const data = view();
+    const result = data.results[0].result;
+    result.type = "qa_stage";
+    result.status = "unmet";
+    result.summary =
+      "Shadow QA s3: observed blockers; legacy QA remains authoritative.";
+    result.blockers = [
+      { code: "unsatisfied", summary: "integrity check failed", target: {} },
+      { code: "person_required", summary: "human triage floor", target: {} },
+    ];
+    result.evidence = [
+      { kind: "qa", id: "1", version: "v1", head: "exact-head" },
+      { kind: "qa", id: "2", version: "v2", head: "exact-head" },
+    ];
+    result.human_text =
+      "Shadow prediction only: use existing bounded QA repair or eligible human triage.";
+    fixture.componentRef.setInput("observations", data);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelectorAll("li").length).toBe(2);
+    expect(el.textContent).toContain("integrity check failed");
+    expect(el.textContent).toContain("human triage floor");
+    expect(el.textContent).toContain("qa #1");
+    expect(el.textContent).toContain("qa #2");
+    expect(el.textContent).toContain("exact-head");
+    expect(el.textContent).toContain("Shadow prediction only");
+    expect(el.querySelectorAll("button,a,input").length).toBe(0);
+  });
+});

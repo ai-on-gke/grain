@@ -55,6 +55,9 @@ type Migration struct {
 	Up func(ctx context.Context, tx *sql.Tx) error
 }
 
+// QA observation head/finding indexes are additive current-schema indexes:
+// Init installs them idempotently on both engines after existing migrations.
+// They add no columns, version rung, data migration or legacy authority.
 // Migrations are the in-place migrations past V2BaselineSchemaVersion, in
 // version order.
 var Migrations = []Migration{

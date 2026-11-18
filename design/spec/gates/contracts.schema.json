@@ -1863,6 +1863,111 @@
               }
             }
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "version",
+            "purpose",
+            "required",
+            "action",
+            "subject",
+            "config",
+            "freshness_seconds",
+            "origin"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._/-]{0,255}$"
+            },
+            "type": {
+              "const": "release_qualification"
+            },
+            "version": {
+              "const": 1
+            },
+            "purpose": {
+              "const": "monitor"
+            },
+            "required": {
+              "const": false
+            },
+            "action": {
+              "type": "null"
+            },
+            "subject": {
+              "$ref": "#/$defs/subject"
+            },
+            "config": {
+              "$ref": "#/$defs/release_qualification_config"
+            },
+            "freshness_seconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600
+            },
+            "origin": {
+              "$ref": "#/$defs/origin"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "purpose": {
+                    "const": "monitor"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "required": {
+                    "const": false
+                  },
+                  "action": {
+                    "type": "null"
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "required": {
+                    "const": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "purpose": {
+                    "const": "guard"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "change.merge",
+                      "change.submit"
+                    ]
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "action": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -3161,7 +3266,8 @@
             "nightly_health",
             "publishing_health",
             "pipeline_health",
-            "qa_stage"
+            "qa_stage",
+            "release_qualification"
           ]
         },
         "version": {
@@ -3771,6 +3877,44 @@
         },
         "lifecycle": {
           "$ref": "#/$defs/lifecycle"
+        }
+      }
+    },
+    "release_qualification_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "predicate",
+        "expected_commit",
+        "release_version",
+        "policy_revision"
+      ],
+      "properties": {
+        "predicate": {
+          "enum": [
+            "suite",
+            "provenance",
+            "soak",
+            "person",
+            "breaking_change",
+            "signing_version",
+            "publication_readiness"
+          ]
+        },
+        "expected_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "release_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "policy_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
         }
       }
     }

@@ -125,6 +125,16 @@ import type {
               {{ entry.result.status }}
             </h4>
             <p>{{ entry.result.summary }}</p>
+            @if (entry.result.blockers?.length) {
+              <ul aria-label="Observed blockers (shadow only)">
+                @for (blocker of entry.result.blockers; track $index) {
+                  <li>
+                    <span class="version">{{ blocker.code }}</span
+                    >: {{ blocker.summary }}
+                  </li>
+                }
+              </ul>
+            }
             @if (entry.result.error; as error) {
               <p>Observation error: {{ error.code }} · {{ error.message }}</p>
             }
@@ -163,12 +173,21 @@ import type {
               @for (dep of entry.result.dependencies; track dep.key) {
                 <p>
                   Scope: {{ dep.key }} · complete: {{ dep.complete }} ·
+                  @if (dep.head) {
+                    head <span class="version">{{ dep.head }}</span> ·
+                  }
                   <span class="version">{{ dep.version }}</span>
                 </p>
               }
-              @for (evidence of entry.result.evidence; track evidence.kind) {
+              @for (
+                evidence of entry.result.evidence;
+                track evidence.kind + evidence.id + evidence.version
+              ) {
                 <p>
                   {{ evidence.kind }} #{{ evidence.id }} ·
+                  @if (evidence.head) {
+                    head <span class="version">{{ evidence.head }}</span> ·
+                  }
                   <span class="version">{{ evidence.version }}</span>
                 </p>
               }

@@ -28,3 +28,8 @@ func TestGateObservationReviewRegressions(t *testing.T) {
 	s, db, _ := openStore(t)
 	gateobservationtest.RunReviewRegressions(t, s, db)
 }
+
+func TestQualificationObservationsPersistWithoutLifecycleEffects(t *testing.T) {
+	s, db, _ := openStore(t)
+	gateobservationtest.RunQualifications(t, s, db)
+}

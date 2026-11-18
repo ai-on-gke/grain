@@ -4700,8 +4700,11 @@ var Tables = []string{
 	// individual QA findings (model.QAAssignment, model.QACheckRun, model.QAFinding).
 	taskQAAssignmentTable,
 	taskQACheckRunTable,
+	// Exact-head observation reads must not scan unrelated QA heads.
+	"CREATE INDEX IF NOT EXISTS `task_qa_check_run_head` ON `task_qa_check_run` (`task_id`,`commit_sha`,`id`)",
 	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_check_run_task`" + ` ON ` + "`task_qa_check_run`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
 	taskQAFindingTable,
+	"CREATE INDEX IF NOT EXISTS `task_qa_finding_run` ON `task_qa_finding` (`check_run_id`,`id`)",
 	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_finding_task`" + ` ON ` + "`task_qa_finding`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
 	qaFlowVersionTable,
 	qaExperimentTable,

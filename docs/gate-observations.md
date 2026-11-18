@@ -2,10 +2,13 @@
 
 This is an observation-only implementation of Task #59's `grain.gates/v1`
 contracts. The independent [framework review and extension guidance](gate-observation-review.md)
-records repairs, coverage and limits for later ports. It ships exactly two v1
-types: `delivery` with
+records repairs, coverage and limits for later ports. It ships four v1 types: `qa_stage`, `release_qualification`, `delivery` with
 `{"product":"report","semantics":"current_v1"}`, and `acknowledgment` with
-`{"mode":"explicit_receipt"}`. Other catalogue profiles/types are unsupported.
+`{"mode":"explicit_receipt"}`. Other catalogue profiles/types are unsupported. The
+[QA/release audit](gate-qa-release-observations.md) documents the typed adapters,
+actual source coverage and explicit unknowns for unavailable policy/signature/asset
+evidence. Qualification observations use the same authorization, allowlist and
+bounded diagnostic history; no rollout or release effects are activated.
 Their closed schemas are pinned to the canonical catalogue and evaluated by pure
 local Go functions. There are no remote evaluator calls or private evaluator state.
 
@@ -38,7 +41,7 @@ including a report awaiting receipt and a report acknowledged by a verified pers
 Optionally include a code/standing task to inspect the explained unknown state;
 never interpret that acknowledgment observation as a code completion requirement.
 
-Only noninteractive `analyze` tasks without changes, goals, standing/keep-running
+For the original report/receipt pair, only noninteractive `analyze` tasks without changes, goals, standing/keep-running
 behavior, console hosting, or report-only child auto-closure are applicable. A
 successful recorded no-work invocation is excluded. Unsupported shapes return
 unknown with a not-applicable explanation for both monitors.

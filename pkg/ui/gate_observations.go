@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gateobserve"
 	"github.com/ai-on-gke/grain/pkg/gates"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -65,18 +66,26 @@ func (c *Client) gateObservations(ctx context.Context, id string) (*gates.Observ
 	readCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
 	now := c.now()
-	v, d, err := c.Store.ObserveTaskGates(readCtx, id, now)
+	if v, d, err := c.Store.GateObservationBackoff(readCtx, id, now); err == nil && v != nil {
+		return v, d
+	}
+	qualifications, err := gateobserve.CollectQualificationObservations(readCtx, c.Store, c.Config.GitHubPullRequests, id, now)
+	var v *gates.ObservationView
+	var d *model.GateObservationDiagnostics
+	if err == nil {
+		v, d, err = c.Store.ObserveTaskGatesWithQualifications(readCtx, id, now, qualifications)
+	}
 	if err == nil {
 		return v, d
 	}
 	// No raw database errors, comment bodies, principals or credentials escape.
-	unavailable := gates.UnavailableObservation(id, now)
+	unavailable := gates.UnavailableQualifications(id, now, qualifications)
 	v = &unavailable
 	// A fresh short budget can retain a failure even when the collection's
 	// own 250ms budget expired. Never delay an already canceled request.
 	if ctx.Err() == nil {
 		failureCtx, stop := context.WithTimeout(ctx, 50*time.Millisecond)
-		_ = c.Store.RecordGateObservationFailure(failureCtx, id, now, v)
+		_ = c.Store.RecordGateQualificationFailure(failureCtx, id, now, v, qualifications)
 		stop()
 	}
 	return v, nil

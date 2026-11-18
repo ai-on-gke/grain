@@ -722,8 +722,19 @@ export interface GateObservationResult {
     observed_at: string;
     valid_until: string;
     context_digest: string;
-    evidence: { kind: string; id: string; version: string }[];
-    dependencies: { key: string; version: string; complete: boolean }[];
+    evidence: {
+      kind: string;
+      id: string;
+      version: string;
+      head?: string | null;
+    }[];
+    blockers?: { code: string; summary: string; target: unknown }[];
+    dependencies: {
+      key: string;
+      version: string;
+      complete: boolean;
+      head?: string | null;
+    }[];
     waits: { event: string; owner: string; deadline: string }[];
     error: { code: string; message: string } | null;
   };
