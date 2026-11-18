@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -39,6 +40,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/qa/resolve"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
@@ -1221,7 +1223,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		RepairTemplateID:                   cfg.RepairTemplateID,
 		QAEnabled:                          cfg.QA.Enabled,
 		QAFlowID:                           cfg.QA.FlowIDOrDefault(),
-		QAFlowIDs:                          model.QAFlowIDs(),
+		QAFlowIDs:                          c.qaFlowIDs(ctx),
 		QARolloutPct:                       cfg.QA.RolloutPct,
 		QAShadowOnControl:                  cfg.QA.ShadowOnControlEnabled(),
 		QAEpoch:                            cfg.QA.EpochOrDefault(),
@@ -1489,7 +1491,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoMergeByDefault:                 def.AutoMergeByDefault,
 			QAEnabled:                          def.QA.Enabled,
 			QAFlowID:                           def.QA.FlowIDOrDefault(),
-			QAFlowIDs:                          model.QAFlowIDs(),
+			QAFlowIDs:                          c.qaFlowIDs(ctx),
 			QARolloutPct:                       def.QA.RolloutPct,
 			QAShadowOnControl:                  def.QA.ShadowOnControlEnabled(),
 			QAEpoch:                            def.QA.EpochOrDefault(),
@@ -2464,7 +2466,20 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			}
 			nextQA.Epoch = *req.QAEpoch
 		}
-		advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
+		advanced, err := model.AdvanceQAConfigWithValidator(before.QA, nextQA, func(flow string) bool {
+			sameBeforeFlow := strings.TrimSpace(flow) == strings.TrimSpace(before.QA.FlowID)
+			if !nextQA.Enabled && sameBeforeFlow {
+				return true
+			}
+			if before.QA.Enabled && nextQA.Enabled &&
+				req.QAFlowID == nil &&
+				sameBeforeFlow &&
+				nextQA.RolloutPct <= before.QA.RolloutPct &&
+				nextQA.Epoch <= before.QA.EpochOrDefault() {
+				return true
+			}
+			return c.validQAFlowID(ctx, flow)
+		})
 		if err != nil {
 			return model.Config{}, validationErrorf("qa: %v", err)
 		}
@@ -2717,6 +2732,62 @@ func autoUpgradeTimeOrDefault(at string) string {
 		return at
 	}
 	return model.DefaultAutoUpgradeTime
+}
+
+func (c *Client) qaFlowIDs(ctx context.Context) []string {
+	ids := model.QAFlowIDs()
+	if c.Store == nil {
+		return ids
+	}
+	versions, err := c.Store.ListQAFlowVersions(ctx, "", 500)
+	if err != nil {
+		return ids
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	headRetired := make(map[string]bool)
+	for _, fv := range versions {
+		key := strings.TrimSpace(fv.Key)
+		if key == "" || seen[key] {
+			continue
+		}
+		if fv.RetiredAt != nil {
+			headRetired[key] = true
+			continue
+		}
+		seen[key] = true
+		if headRetired[key] && !model.ValidQAFlowID(key) {
+			ids = append(ids, fmt.Sprintf("%s@%d", key, fv.Version))
+		} else {
+			ids = append(ids, key)
+		}
+	}
+	return ids
+}
+
+func (c *Client) validQAFlowID(ctx context.Context, flow string) bool {
+	trimmed := strings.TrimSpace(flow)
+	if trimmed == "" {
+		return false
+	}
+	if c.Store == nil {
+		return model.ValidQAFlowID(trimmed)
+	}
+	spec, hash, err := resolve.LookupFlowSpec(ctx, c.Store, trimmed)
+	if err != nil || spec == nil {
+		return false
+	}
+	if strings.HasPrefix(hash, "builtin:") {
+		return true
+	}
+	if hash != "" {
+		if fv, gErr := c.Store.GetQAFlowVersion(ctx, hash); gErr == nil {
+			return fv.RetiredAt == nil
+		}
+	}
+	return model.ValidQAFlowID(trimmed)
 }
 
 func (c *Client) PlanSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {

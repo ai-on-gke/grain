@@ -35,7 +35,6 @@ import {
   viewChild,
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
-import type { RouteKey } from "../api/generated-routes";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
@@ -56,8 +55,14 @@ import {
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import { ModelPickerComponent } from "../shared/model-picker.component";
+import { type ModelBackendLike, modelGroups } from "../shared/model-catalog";
 import { CompositionViewComponent } from "./composition-view.component";
 import {
+  ADMISSION_OPTIONS,
+  HOSTING_OPTIONS,
+  sameList,
   type Composition,
   type CreateScheduleRequest,
   type CreateSuiteRequest,
@@ -65,6 +70,7 @@ import {
   type DeclarationAcceptanceView,
   type DeclaredTrigger,
   type DerivedRuns,
+  type PathTriggerView,
   type ProcessSort,
   type ProcessTab,
   type Recurrence,
@@ -99,7 +105,7 @@ import { MarkdownDirective } from "../shared/code-highlight";
 
 const DEFAULT_QA_FLOW_REFS = [
   "engineering-workflow-v4@1",
-  "golden-v3-enforced@1",
+  "golden-v1-minimal@1",
   "golden-v3@1",
   "golden-v2@1",
 ] as const;
@@ -196,6 +202,224 @@ function triggerName(path: string): string {
   return path.replace(/^\.grain\/triggers\//, "");
 }
 
+function templateFileStem(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/\.ya?ml$/i, "");
+}
+
+function synthesizeTriggerYaml(
+  repo: string,
+  filePath: string,
+  detail: PathTriggerView | undefined,
+  templates: readonly Template[],
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (!detail) {
+    lines.push("# Synced path trigger declaration.");
+    return lines.join("\n");
+  }
+  if (detail.on) lines.push(`on: ${detail.on}`);
+  if (detail.branches?.length) {
+    lines.push(
+      `branches: [${detail.branches.map((b) => JSON.stringify(b)).join(", ")}]`,
+    );
+  }
+  if (detail.paths?.length) {
+    lines.push(
+      `paths: [${detail.paths.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.ignore?.length) {
+    lines.push(
+      `ignore: [${detail.ignore.map((p) => JSON.stringify(p)).join(", ")}]`,
+    );
+  }
+  if (detail.template) {
+    const declTmpl = templates.find(
+      (t) => t.id === detail.template && t.declaredIn?.repo === repo,
+    );
+    const tmplRef = declTmpl?.declaredIn?.path
+      ? templateFileStem(declTmpl.declaredIn.path)
+      : detail.template;
+    lines.push(`template: ${tmplRef}`);
+  }
+  if (detail.per) lines.push(`per: ${detail.per}`);
+  lines.push(`gate: ${detail.gate ? "true" : "false"}`);
+  if (detail.human) lines.push(`human: ${detail.human}`);
+  if (detail.auto_approve) lines.push("auto-approve: true");
+  if (detail.sensitive) lines.push("sensitive: true");
+  if (detail.approvers?.length) {
+    lines.push(
+      `approvers: [${detail.approvers.map((a) => JSON.stringify(a)).join(", ")}]`,
+    );
+  }
+  if (detail.fixes) lines.push("fixes: true");
+  return lines.join("\n");
+}
+
+function synthesizeDeclaredTemplateYaml(
+  repo: string,
+  filePath: string,
+  t: Template,
+): string {
+  const lines = [`# ${repo}:${filePath}`];
+  if (t.name) lines.push(`name: ${t.name}`);
+  if (t.title) lines.push(`title: ${t.title}`);
+  if (t.fields?.length) {
+    lines.push("fields:");
+    for (const f of t.fields) {
+      lines.push(`  - name: ${f.name}`);
+      if (f.label) lines.push(`    label: ${JSON.stringify(f.label)}`);
+      if (f.required) lines.push("    required: true");
+      if (f.default) lines.push(`    default: ${JSON.stringify(f.default)}`);
+    }
+  }
+  if (t.description) {
+    lines.push("prompt: |");
+    for (const pl of t.description.split(/\r?\n/)) {
+      lines.push(`  ${pl}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+const UPPER_QA_TOKENS = new Set(["qa", "pr", "ci", "llm", "ui", "api", "id"]);
+
+function humanizeQaFlowKey(key: string): string {
+  return key
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (/^v\d+[a-z0-9]*$/i.test(word) || /^s\d+$/i.test(word)) {
+        return word.toUpperCase();
+      }
+      if (UPPER_QA_TOKENS.has(lower)) {
+        return lower.toUpperCase();
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+function formatQaFlowLabel(key: string, rawLabel?: string): string {
+  const trimmed = (rawLabel ?? "").trim();
+  if (!trimmed || trimmed === key) {
+    return humanizeQaFlowKey(key);
+  }
+  const parenIdx = trimmed.indexOf(" (");
+  const head = (parenIdx >= 0 ? trimmed.slice(0, parenIdx) : trimmed).trim();
+  if (
+    head === key ||
+    head === head.toLowerCase() ||
+    head.toLowerCase().replace(/[\s_]+/g, "-") === key.toLowerCase()
+  ) {
+    return humanizeQaFlowKey(head);
+  }
+  return trimmed;
+}
+
+function formatQaFlowHint(ref: string): string {
+  const atIdx = ref.indexOf("@");
+  if (atIdx < 0) return ref;
+  const key = ref.slice(0, atIdx);
+  const ver = ref.slice(atIdx + 1).replace(/^v/i, "") || "1";
+  return `${key}@v${ver}`;
+}
+
+function isBenchmarkQaFlow(key: string, rawLabel?: string): boolean {
+  const k = key.toLowerCase();
+  const l = (rawLabel ?? "").toLowerCase();
+  return (
+    k === "deterministic-s3-only" ||
+    k.endsWith("-skill-only") ||
+    k.endsWith("-checks-only") ||
+    k.endsWith("-seed") ||
+    k.endsWith("-benchmark") ||
+    k.includes("-ablation") ||
+    k.startsWith("bench-") ||
+    l.includes("ablation") ||
+    l.includes("benchmark")
+  );
+}
+
+interface ParsedTriggerYaml {
+  on: string;
+  paths: string[];
+  gate: string;
+  template: string;
+}
+
+function unquoteYamlScalar(raw: string): string {
+  const s = raw.replace(/\s+#.*$/, "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function parseInlineYamlList(raw: string): string[] {
+  const inner = raw.trim().slice(1, -1).trim();
+  if (!inner) return [];
+  return inner
+    .split(",")
+    .map((part) => unquoteYamlScalar(part))
+    .filter(Boolean);
+}
+
+function parseTriggerYaml(raw: string): ParsedTriggerYaml {
+  const out: ParsedTriggerYaml = { on: "", paths: [], gate: "", template: "" };
+  const lines = raw.split(/\r?\n/);
+  let listKey: "paths" | "on" | null = null;
+  for (const line of lines) {
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    const listMatch = /^\s*-\s+(.*)$/.exec(line);
+    if (listMatch && listKey) {
+      const val = unquoteYamlScalar(listMatch[1]);
+      if (val) {
+        if (listKey === "paths") out.paths.push(val);
+        else if (listKey === "on") {
+          out.on = out.on ? `${out.on}, ${val}` : val;
+        }
+      }
+      continue;
+    }
+    listKey = null;
+    if (!/^\s/.test(line)) {
+      const kv = /^["']?([a-zA-Z0-9_-]+)["']?\s*:\s*(.*)$/.exec(line);
+      if (!kv) continue;
+      const key = kv[1].toLowerCase();
+      const rest = kv[2].trim();
+      if (key === "paths") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "paths";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.paths = parseInlineYamlList(rest);
+        } else {
+          const val = unquoteYamlScalar(rest);
+          if (val) out.paths = [val];
+        }
+      } else if (key === "on") {
+        if (!rest || rest.startsWith("#")) {
+          listKey = "on";
+        } else if (rest.startsWith("[") && rest.endsWith("]")) {
+          out.on = parseInlineYamlList(rest).join(", ");
+        } else {
+          out.on = unquoteYamlScalar(rest);
+        }
+      } else if (key === "gate") {
+        out.gate = unquoteYamlScalar(rest);
+      } else if (key === "template") {
+        out.template = unquoteYamlScalar(rest);
+      }
+    }
+  }
+  return out;
+}
+
 const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
 
 @Component({
@@ -209,6 +433,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    GrantsPickerComponent,
+    ModelPickerComponent,
     MarkdownDirective,
     QaFlowsPanelComponent,
   ],
@@ -359,6 +585,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
               [attr.aria-current]="activeTab() === t.id ? 'page' : null"
               [attr.data-testid]="'proc-tab-' + t.id"
               [gTip]="t.tip"
+              (click)="onTabClick($event, t.id)"
             >
               {{ t.label }}
               <span
@@ -468,24 +695,49 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           (drop)="onDrop($event, 'schedules', r.key)"
                           (dragend)="onDragEnd()"
                         >
-                          <a
+                          <button
+                            type="button"
                             class="proc-row"
-                            draggable="false"
-                            [routerLink]="repoAdvancedRoute(tr.repo)"
+                            [class.is-selected]="selectedTriggerKey() === r.key"
+                            [attr.aria-current]="
+                              selectedTriggerKey() === r.key ? 'true' : null
+                            "
                             [attr.data-testid]="'trigger-row-' + r.key"
                             [attr.aria-keyshortcuts]="
                               activeSort() === 'custom'
                                 ? 'Alt+ArrowUp Alt+ArrowDown'
                                 : null
                             "
-                            [gTip]="
-                              'Open the Advanced tab of ' +
-                              tr.repo +
-                              ', where its triggers are'
-                            "
+                            (click)="selectTrigger(tr, true)"
                             (keydown)="onRowKey($event, 'schedules', r.key)"
+                            (keydown.space)="
+                              selectTrigger(tr, true); $event.preventDefault()
+                            "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span class="status-pill reply">
                                 <g-status-icon tone="reply" kind="reply" />
                                 Declared
@@ -501,7 +753,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               <span class="tabular">· {{ tr.path }}</span>
                               <span>· next: on change</span>
                             </div>
-                          </a>
+                          </button>
                         </li>
                       }
                       @if (r.schedule; as s) {
@@ -545,6 +797,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span [class]="'status-pill ' + badge.tone">
                                 <g-status-icon
                                   [tone]="badge.tone"
@@ -656,6 +931,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           "
                         >
                           <div class="proc-row-top">
+                            @if (activeSort() === "custom") {
+                              <span
+                                class="proc-drag-grip"
+                                aria-hidden="true"
+                                data-testid="proc-drag-grip"
+                                [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                              >
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 16 16"
+                                  fill="currentColor"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="5.5" cy="3.5" r="1.25" />
+                                  <circle cx="10.5" cy="3.5" r="1.25" />
+                                  <circle cx="5.5" cy="8" r="1.25" />
+                                  <circle cx="10.5" cy="8" r="1.25" />
+                                  <circle cx="5.5" cy="12.5" r="1.25" />
+                                  <circle cx="10.5" cy="12.5" r="1.25" />
+                                </svg>
+                              </span>
+                            }
                             <span [class]="'status-pill ' + badge.tone">
                               <g-status-icon
                                 [tone]="badge.tone"
@@ -802,6 +1100,29 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             "
                           >
                             <div class="proc-row-top">
+                              @if (activeSort() === "custom") {
+                                <span
+                                  class="proc-drag-grip"
+                                  aria-hidden="true"
+                                  data-testid="proc-drag-grip"
+                                  [gTip]="'Drag or press Alt+Up/Down to reorder'"
+                                >
+                                  <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 16 16"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <circle cx="5.5" cy="3.5" r="1.25" />
+                                    <circle cx="10.5" cy="3.5" r="1.25" />
+                                    <circle cx="5.5" cy="8" r="1.25" />
+                                    <circle cx="10.5" cy="8" r="1.25" />
+                                    <circle cx="5.5" cy="12.5" r="1.25" />
+                                    <circle cx="10.5" cy="12.5" r="1.25" />
+                                  </svg>
+                                </span>
+                              }
                               <span class="status-pill proposal">
                                 <g-status-icon
                                   tone="proposal"
@@ -1027,7 +1348,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1322,12 +1643,127 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     }
                   </div>
                 } @else {
-                  <div class="empty-state">
-                    <p>
-                      Select a schedule or event trigger to inspect its cadence
-                      and composition.
-                    </p>
-                  </div>
+                  @if (selectedTrigger(); as tr) {
+                    @let parsed = parsedSelectedTrigger();
+                    <div
+                      class="trigger-inspector"
+                      data-testid="trigger-inspector"
+                    >
+                      <div class="proc-insp-head">
+                        <div class="proc-insp-top">
+                          <div class="headline-cluster">
+                            <button
+                              type="button"
+                              class="btn-text proc-mobile-back"
+                              (click)="closeMobileDetail()"
+                            >
+                              ← Back
+                            </button>
+                            <span class="status-pill reply">
+                              <g-status-icon tone="reply" kind="reply" />
+                              Declared
+                            </span>
+                            <h2
+                              class="proc-insp-title"
+                              data-testid="trigger-detail-title"
+                            >
+                              {{ triggerName(tr.path) }}
+                            </h2>
+                          </div>
+
+                          <div class="headline-actions">
+                            <a
+                              class="btn-tonal"
+                              [routerLink]="repoAdvancedRoute(tr.repo)"
+                              data-testid="trigger-open-repo-link"
+                              >Open repository settings</a
+                            >
+                          </div>
+                        </div>
+
+                        <p
+                          class="banner banner-info"
+                          style="margin: 6px 0 0"
+                          data-testid="trigger-declared-banner"
+                        >
+                          Declared in <code>{{ tr.repo }}</code> at
+                          <code>{{ tr.path }}</code
+                          >.
+                        </p>
+                      </div>
+
+                      <div class="g-panes">
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-config-h"
+                          data-testid="trigger-config-pane"
+                        >
+                          <h3 id="trigger-config-h" class="g-pane-title">
+                            Configuration
+                          </h3>
+                          <dl class="g-attrs">
+                            <dt>Repository</dt>
+                            <dd class="tabular">{{ tr.repo }}</dd>
+                            <dt>File path</dt>
+                            <dd class="tabular">
+                              <code>{{ tr.path }}</code>
+                            </dd>
+                            <dt>On</dt>
+                            <dd class="tabular">{{ parsed.on || "—" }}</dd>
+                            <dt>Paths</dt>
+                            <dd class="tabular">
+                              {{
+                                parsed.paths.length
+                                  ? parsed.paths.join(", ")
+                                  : "—"
+                              }}
+                            </dd>
+                            <dt>Gate</dt>
+                            <dd class="tabular">{{ parsed.gate || "—" }}</dd>
+                            <dt>Template</dt>
+                            <dd>
+                              @if (matchedTriggerTemplate(); as mt) {
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
+                                  data-testid="trigger-template-link"
+                                  (click)="openTriggerTemplate(mt.id)"
+                                >
+                                  {{ mt.name || mt.title || parsed.template }}
+                                </button>
+                              } @else {
+                                <span class="tabular">{{
+                                  parsed.template || "—"
+                                }}</span>
+                              }
+                            </dd>
+                          </dl>
+                        </section>
+
+                        <section
+                          class="g-pane"
+                          aria-labelledby="trigger-yaml-h"
+                          data-testid="trigger-yaml-pane"
+                        >
+                          <h3 id="trigger-yaml-h" class="g-pane-title">
+                            Declared trigger YAML
+                          </h3>
+                          <pre
+                            class="comp-body-well s-mono"
+                            data-testid="trigger-yaml-preview"
+                            [textContent]="triggerYamlDisplay()"
+                          ></pre>
+                        </section>
+                      </div>
+                    </div>
+                  } @else {
+                    <div class="empty-state">
+                      <p>
+                        Select a schedule or event trigger to inspect its
+                        cadence and composition.
+                      </p>
+                    </div>
+                  }
                 }
               }
 
@@ -1340,7 +1776,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1540,7 +1976,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1560,7 +1996,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-tonal"
-                          (click)="selectSuite(sr.suiteId, false)"
+                          (click)="selectSuite(sr.suiteId, true)"
                         >
                           Inspect suite definition
                         </button>
@@ -1664,7 +2100,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
@@ -1801,44 +2237,57 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                   @let def = store.repoDefaults()[repo];
                   @let status = def?.declarationsStatus;
                   @let wfResp = store.repoWorkflows()[repo];
-                  <div class="proc-insp-head" data-testid="decl-inspector">
+                  <div
+                    class="proc-insp-head decl-inspector"
+                    data-testid="decl-inspector"
+                  >
                     <div class="proc-insp-top">
                       <div class="headline-cluster">
                         <button
                           type="button"
                           class="btn-text proc-mobile-back"
-                          (click)="mobileDetailOpen.set(false)"
+                          (click)="closeMobileDetail()"
                         >
                           ← Back
                         </button>
                         <h2 class="proc-insp-title tabular">{{ repo }}</h2>
                       </div>
 
-                      @if (def) {
-                        <div class="switch-row">
-                          <button
-                            type="button"
-                            role="switch"
-                            class="g-switch"
-                            attr.aria-label="Read {{ repo }}'s own declarations"
-                            data-testid="decl-toggle-switch"
-                            [disabled]="
-                              !access.can(
-                                'PUT /api/repos/{owner}/{name}/declarations',
+                      <div class="headline-actions">
+                        @if (def) {
+                          <div class="switch-row">
+                            <button
+                              type="button"
+                              role="switch"
+                              class="g-switch"
+                              attr.aria-label="Read {{
                                 repo
-                              )
-                            "
-                            [attr.aria-checked]="def.declarations"
-                            (click)="
-                              toggleRepoDeclarations(repo, !def.declarations)
-                            "
-                          ></button>
-                          <span
-                            >Read its own
-                            <code>.grain/</code> declarations</span
-                          >
-                        </div>
-                      }
+                              }}'s own declarations"
+                              data-testid="decl-toggle-switch"
+                              [disabled]="
+                                !access.can(
+                                  'PUT /api/repos/{owner}/{name}/declarations',
+                                  repo
+                                )
+                              "
+                              [attr.aria-checked]="def.declarations"
+                              (click)="
+                                toggleRepoDeclarations(repo, !def.declarations)
+                              "
+                            ></button>
+                            <span
+                              >Read its own
+                              <code>.grain/</code> declarations</span
+                            >
+                          </div>
+                        }
+                        <a
+                          class="btn-tonal"
+                          [routerLink]="repoAdvancedRoute(repo)"
+                          data-testid="decl-open-repo-link"
+                          >Open repository settings</a
+                        >
+                      </div>
                     </div>
 
                     <div class="proc-meta-row">
@@ -1936,14 +2385,16 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           <div class="proc-insp-top">
                             <div class="headline-cluster">
                               @if (item.kind === "trigger") {
-                                <a
-                                  class="tabular"
-                                  [routerLink]="repoAdvancedRoute(repo)"
+                                <button
+                                  type="button"
+                                  class="btn-text tabular"
                                   [attr.data-testid]="
                                     'decl-trigger-link-' + item.path
                                   "
-                                  ><code>{{ item.path }}</code></a
+                                  (click)="toggleInlineYaml(repo, item.path)"
                                 >
+                                  <code>{{ item.path }}</code>
+                                </button>
                               } @else {
                                 <code class="tabular">{{ item.path }}</code>
                               }
@@ -1956,19 +2407,21 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                               class="btn-text"
                               data-testid="decl-inline-yaml-toggle"
                               [attr.data-file-path]="item.path"
-                              [attr.aria-expanded]="isInlineYamlOpen(item.path)"
+                              [attr.aria-expanded]="
+                                isInlineYamlOpen(repo, item.path)
+                              "
                               (click)="toggleInlineYaml(repo, item.path)"
                             >
                               {{
-                                isInlineYamlOpen(item.path)
+                                isInlineYamlOpen(repo, item.path)
                                   ? "Hide YAML"
                                   : "View YAML"
                               }}
                             </button>
                           </div>
-                          @if (isInlineYamlOpen(item.path)) {
+                          @if (isInlineYamlOpen(repo, item.path)) {
                             <pre
-                              class="comp-body-well"
+                              class="comp-body-well s-mono"
                               data-testid="decl-inline-yaml"
                               [textContent]="inlineYamlDisplay()"
                             ></pre>
@@ -2033,14 +2486,14 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                                   data-testid="decl-inline-yaml-toggle"
                                   [attr.data-file-path]="wf.path"
                                   [attr.aria-expanded]="
-                                    isInlineYamlOpen(wf.path)
+                                    isInlineYamlOpen(repo, wf.path)
                                   "
                                   (click)="
                                     toggleInlineYaml(repo, wf.path, wf.text)
                                   "
                                 >
                                   {{
-                                    isInlineYamlOpen(wf.path)
+                                    isInlineYamlOpen(repo, wf.path)
                                       ? "Hide YAML"
                                       : "View YAML"
                                   }}
@@ -2064,9 +2517,9 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                                 </button>
                               </div>
                             </div>
-                            @if (isInlineYamlOpen(wf.path)) {
+                            @if (isInlineYamlOpen(repo, wf.path)) {
                               <pre
-                                class="comp-body-well"
+                                class="comp-body-well s-mono"
                                 data-testid="decl-inline-yaml"
                                 [textContent]="inlineYamlDisplay()"
                               ></pre>
@@ -2096,7 +2549,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="closeScheduleDialog()"
+        (click)="dismissScheduleDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2105,7 +2558,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="sched-dialog-title"
         data-testid="schedule-dialog"
         gDialogTrap
-        (gDialogClose)="closeScheduleDialog()"
+        (gDialogClose)="dismissScheduleDialog()"
       >
         <h2 id="sched-dialog-title">
           {{ editingSchedule() ? "Edit schedule" : "New schedule or trigger" }}
@@ -2118,7 +2571,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
             data-testid="sched-system-banner"
           >
             Built-in Grain schedule — target and prompt are managed by Grain;
-            cadence and overlap policy can be customized.
+            model, cadence and overlap policy can be customized.
           </p>
         } @else {
           <div class="field">
@@ -2293,6 +2746,110 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                 (input)="sDraftBase.set($any($event.target).value)"
               />
             </label>
+          </div>
+
+          @if (schedTargetKind() === "prompt") {
+            <div class="switch-row" style="margin-top: 14px">
+              <button
+                type="button"
+                role="switch"
+                class="g-switch"
+                aria-label="Keep running"
+                data-testid="sched-keep-running"
+                [attr.aria-checked]="sDraftKeepRunning()"
+                (click)="sDraftKeepRunning.set(!sDraftKeepRunning())"
+              ></button>
+              <span
+                >Keep running
+                <span class="muted"
+                  >— restart every task this schedule files when its run exits,
+                  instead of completing or parking it</span
+                ></span
+              >
+            </div>
+            <div class="proc-field-grid">
+              <div class="field">
+                <span>Admission</span>
+                <g-pill-select
+                  [options]="admissionOptions"
+                  [value]="sDraftAdmission()"
+                  ariaLabel="Admission"
+                  align="left"
+                  testid="sched-admission"
+                  (valueChange)="sDraftAdmission.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-admission-help"
+                >
+                  {{ admissionHelp(sDraftAdmission()) }} Applies to every task
+                  this schedule files.
+                </p>
+              </div>
+              <div class="field">
+                <span>Hosting</span>
+                <g-pill-select
+                  [options]="hostingOptions"
+                  [value]="sDraftHosting()"
+                  ariaLabel="Hosting"
+                  align="left"
+                  testid="sched-hosting"
+                  (valueChange)="sDraftHosting.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-hosting-help"
+                >
+                  {{ hostingHelp(sDraftHosting()) }} Applies to every task this
+                  schedule files.
+                </p>
+              </div>
+            </div>
+            <div class="field">
+              <span>Grants</span>
+              <g-grants-picker
+                testid="sched-grants"
+                [offered]="offeredCapabilities()"
+                [held]="sDraftCaps()"
+                [repo]="sDraftRepo().trim() || undefined"
+                [policyVerdicts]="true"
+                (heldChange)="sDraftCaps.set($event)"
+              />
+            </div>
+          } @else if (schedTargetKind() === "template") {
+            <p class="muted proc-field-help" data-testid="sched-template-note">
+              Admission, hosting, grants and keep running come from the selected
+              template, and stay in sync with it.
+            </p>
+          }
+        }
+
+        @if (schedTargetKind() !== "suite") {
+          <div class="field">
+            <span>Model</span>
+            <div class="proc-model-row">
+              <g-model-picker
+                [groups]="modelGroups()"
+                [value]="sDraftModel()"
+                [placeholder]="schedModelPlaceholder()"
+                ariaLabel="Model"
+                testid="sched-model"
+                (valueChange)="sDraftModel.set($event)"
+              />
+              @if (sDraftModel()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="sched-model-clear"
+                  (click)="sDraftModel.set('')"
+                >
+                  Use default
+                </button>
+              }
+            </div>
+            <p class="muted proc-field-help">
+              The model every task this schedule files asks for.
+            </p>
           </div>
         }
 
@@ -2528,7 +3085,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="closeScheduleDialog()"
+            (click)="dismissScheduleDialog()"
           >
             Cancel
           </button>
@@ -2701,7 +3258,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="tmplDialogOpen.set(false)"
+        (click)="dismissTemplateDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2710,7 +3267,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="tmpl-dialog-title"
         data-testid="template-dialog"
         gDialogTrap
-        (gDialogClose)="tmplDialogOpen.set(false)"
+        (gDialogClose)="dismissTemplateDialog()"
       >
         <h2 id="tmpl-dialog-title">
           {{ editingTemplate() ? "Edit template" : "New task template" }}
@@ -2848,6 +3405,93 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Keep running"
+            data-testid="tmpl-keep-running"
+            [attr.aria-checked]="tDraftKeepRunning()"
+            (click)="tDraftKeepRunning.set(!tDraftKeepRunning())"
+          ></button>
+          <span
+            >Keep running
+            <span class="muted"
+              >— restart every task this template files when its run exits,
+              instead of completing or parking it</span
+            ></span
+          >
+        </div>
+        <div class="proc-field-grid">
+          <div class="field">
+            <span>Admission</span>
+            <g-pill-select
+              [options]="admissionOptions"
+              [value]="tDraftAdmission()"
+              ariaLabel="Admission"
+              align="left"
+              testid="tmpl-admission"
+              (valueChange)="tDraftAdmission.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-admission-help">
+              {{ admissionHelp(tDraftAdmission()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+          <div class="field">
+            <span>Hosting</span>
+            <g-pill-select
+              [options]="hostingOptions"
+              [value]="tDraftHosting()"
+              ariaLabel="Hosting"
+              align="left"
+              testid="tmpl-hosting"
+              (valueChange)="tDraftHosting.set($event)"
+            />
+            <p class="muted proc-field-help" data-testid="tmpl-hosting-help">
+              {{ hostingHelp(tDraftHosting()) }} Applies to every task this
+              template files.
+            </p>
+          </div>
+        </div>
+        <div class="field">
+          <span>Grants</span>
+          <g-grants-picker
+            testid="tmpl-grants"
+            [offered]="offeredCapabilities()"
+            [held]="tDraftCaps()"
+            [repo]="tDraftRepo().trim() || undefined"
+            [policyVerdicts]="true"
+            (heldChange)="tDraftCaps.set($event)"
+          />
+        </div>
+        <div class="field">
+          <span>Model</span>
+          <div class="proc-model-row">
+            <g-model-picker
+              [groups]="modelGroups()"
+              [value]="tDraftModel()"
+              [placeholder]="'Deployment default model'"
+              ariaLabel="Model"
+              testid="tmpl-model"
+              (valueChange)="tDraftModel.set($event)"
+            />
+            @if (tDraftModel()) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="tmpl-model-clear"
+                (click)="tDraftModel.set('')"
+              >
+                Use default
+              </button>
+            }
+          </div>
+          <p class="muted proc-field-help">
+            The model every task this template files asks for.
+          </p>
+        </div>
         <!-- Beside the actions, so a refused save is in view where the
              Save was pressed, on a phone as on a desktop. -->
         @if (dialogError(); as derr) {
@@ -2863,7 +3507,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           <button
             type="button"
             class="btn-text"
-            (click)="tmplDialogOpen.set(false)"
+            (click)="dismissTemplateDialog()"
           >
             Cancel
           </button>
@@ -2885,7 +3529,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
       <div
         class="scrim"
         aria-hidden="true"
-        (click)="suiteDialogOpen.set(false)"
+        (click)="dismissSuiteDialog()"
       ></div>
       <div
         class="g-dialog is-drawer"
@@ -2894,7 +3538,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
         aria-labelledby="suite-dialog-title"
         data-testid="suite-dialog"
         gDialogTrap
-        (gDialogClose)="suiteDialogOpen.set(false)"
+        (gDialogClose)="dismissSuiteDialog()"
       >
         <h2 id="suite-dialog-title">
           {{ editingSuite() ? "Edit suite" : "New suite" }}
@@ -3049,11 +3693,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </p>
         }
         <div class="dialog-actions">
-          <button
-            type="button"
-            class="btn-text"
-            (click)="suiteDialogOpen.set(false)"
-          >
+          <button type="button" class="btn-text" (click)="dismissSuiteDialog()">
             Cancel
           </button>
           <button
@@ -3288,6 +3928,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  private readonly hostEl = inject<ElementRef<HTMLElement>>(ElementRef);
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.openPicker()) {
@@ -3321,11 +3962,87 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly suitesView = signal<SuitesPaneView>("suites");
 
   protected readonly selectedScheduleId = signal<string | null>(null);
+  protected readonly selectedTrigger = signal<DeclaredTrigger | null>(null);
+  protected readonly liveSelectedTrigger = computed<DeclaredTrigger | null>(
+    () => {
+      const sel = this.selectedTrigger();
+      if (!sel) return null;
+      return (
+        this.store
+          .triggers()
+          .find((t) => t.repo === sel.repo && t.path === sel.path) ?? sel
+      );
+    },
+  );
+  protected readonly selectedTriggerKey = computed(() => {
+    const tr = this.selectedTrigger();
+    return tr ? `trigger:${tr.repo}:${tr.path}` : null;
+  });
+  protected readonly triggerYamlText = signal("");
+  protected readonly triggerYamlLoading = signal(false);
+  protected readonly triggerYamlDisplay = computed(() => {
+    const tr = this.liveSelectedTrigger();
+    if (!tr) return "No YAML content available.";
+    if (tr.detail) {
+      return synthesizeTriggerYaml(
+        tr.repo,
+        tr.path,
+        tr.detail,
+        this.store.templates(),
+      );
+    }
+    if (this.triggerYamlLoading() || this.store.repoLoading() === tr.repo) {
+      return "Loading YAML…";
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return raw;
+    return synthesizeTriggerYaml(
+      tr.repo,
+      tr.path,
+      undefined,
+      this.store.templates(),
+    );
+  });
+  protected readonly parsedSelectedTrigger = computed<ParsedTriggerYaml>(() => {
+    const tr = this.liveSelectedTrigger();
+    if (tr?.detail) {
+      return {
+        on: tr.detail.on || "",
+        paths: tr.detail.paths ?? [],
+        gate: tr.detail.gate ? "true" : "false",
+        template: tr.detail.template || "",
+      };
+    }
+    const raw = this.triggerYamlText();
+    if (raw) return parseTriggerYaml(raw);
+    return { on: "", paths: [], gate: "", template: "" };
+  });
+  protected readonly matchedTriggerTemplate = computed<Template | null>(() => {
+    const tr = this.liveSelectedTrigger();
+    const ref = this.parsedSelectedTrigger().template.trim();
+    if (!tr || !ref) return null;
+    const list = this.store.templates();
+    return (
+      list.find((t) => t.id === ref) ??
+      list.find((t) => t.id === `repo:${tr.repo}:${ref}`) ??
+      list.find(
+        (t) =>
+          t.declaredIn?.repo === tr.repo &&
+          templateFileStem(t.declaredIn.path) === ref,
+      ) ??
+      list.find(
+        (t) =>
+          (!t.declaredIn || t.declaredIn.repo === tr.repo) && t.name === ref,
+      ) ??
+      null
+    );
+  });
   protected readonly selectedTemplateId = signal<string | null>(null);
   protected readonly selectedSuiteId = signal<string | null>(null);
   protected readonly selectedSuiteRunId = signal<number | null>(null);
   protected readonly selectedDeclRepo = signal<string | null>(null);
-  protected readonly inlineYamlPath = signal<string | null>(null);
+  protected readonly inlineYamlKey = signal<string | null>(null);
+  private inlineYamlSeq = 0;
   protected readonly inlineYamlText = signal<string>("");
   protected readonly inlineYamlLoading = signal(false);
   protected readonly inlineYamlDisplay = computed(() =>
@@ -3372,6 +4089,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftGitRefRepo = signal("");
   protected readonly sDraftGitRef = signal("refs/heads/main");
   protected readonly sDraftOverlap = signal("skip");
+  // What every firing of an inline-prompt schedule carries beside its
+  // prompt (model.Schedule): a template-backed schedule takes these from
+  // its template, so only the model is the schedule's own there.
+  protected readonly sDraftModel = signal("");
+  protected readonly sDraftKeepRunning = signal(false);
+  protected readonly sDraftAdmission = signal("standard");
+  protected readonly sDraftHosting = signal("unattended");
+  protected readonly sDraftCaps = signal<string[]>([]);
   protected readonly sDraftQaFlowRef = signal("");
   protected readonly draftSchedComposition = signal<Composition | null>(null);
 
@@ -3393,6 +4118,40 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftParamsCsv = signal("");
   protected readonly tDraftFields = signal<TemplateField[]>([]);
   protected readonly tDraftAutoMerge = signal(false);
+  protected readonly tDraftModel = signal("");
+  protected readonly tDraftKeepRunning = signal(false);
+  protected readonly tDraftAdmission = signal("standard");
+  protected readonly tDraftHosting = signal("unattended");
+  protected readonly tDraftCaps = signal<string[]>([]);
+
+  // The vocabularies the schedule and template forms share: the
+  // deployment's model catalog (one group per connection), the
+  // capabilities it offers, and the admission and hosting settings.
+  protected readonly modelGroups = computed(() =>
+    modelGroups(
+      (this.access.rawConfig()?.agentBackends ?? []) as ModelBackendLike[],
+    ),
+  );
+  protected readonly offeredCapabilities = computed(
+    () => this.access.rawConfig()?.capabilities ?? [],
+  );
+  protected readonly admissionOptions: PillOption[] = ADMISSION_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly hostingOptions: PillOption[] = HOSTING_OPTIONS.map(
+    (o) => ({ value: o.value, label: o.label }),
+  );
+  protected readonly schedModelPlaceholder = computed(() =>
+    this.schedTargetKind() === "template" && !this.editingSchedule()?.system
+      ? "The template's model"
+      : "Deployment default model",
+  );
+  protected admissionHelp(v: string): string {
+    return ADMISSION_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
+  protected hostingHelp(v: string): string {
+    return HOSTING_OPTIONS.find((o) => o.value === v)?.help ?? "";
+  }
   protected readonly tDraftQaFlowRef = signal("");
 
   // Create/Edit suite dialog state
@@ -3410,21 +4169,46 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly stDraftQaFlowRef = signal("");
   protected readonly draftSuiteComposition = signal<Composition | null>(null);
 
-  protected readonly loadedQaFlowRefs = signal<string[]>([]);
+  private requestedQaFlowVersions = false;
+  protected readonly qaFlowVersionsLoaded = signal(false);
+  protected readonly loadedQaFlowVersions = signal<
+    {
+      ref: string;
+      key: string;
+      version: number;
+      label: string;
+      hint?: string;
+      benchmark: boolean;
+    }[]
+  >([]);
   protected readonly qaFlowOptions = computed<PillOption[]>(() => {
     const opts: PillOption[] = [{ value: "", label: "Deployment default" }];
     const seen = new Set<string>([""]);
-    const addRef = (raw: string | undefined): void => {
+    const addOption = (
+      raw: string | undefined,
+      explicitLabel?: string,
+      explicitHint?: string,
+    ): void => {
       const ref = (raw ?? "").trim();
       if (!ref || seen.has(ref)) return;
       seen.add(ref);
-      opts.push({ value: ref, label: ref });
+      const atIdx = ref.indexOf("@");
+      const key = atIdx >= 0 ? ref.slice(0, atIdx) : ref;
+      opts.push({
+        value: ref,
+        label: formatQaFlowLabel(key, explicitLabel),
+        hint: explicitHint ?? formatQaFlowHint(ref),
+      });
     };
-    for (const ref of this.loadedQaFlowRefs()) addRef(ref);
-    for (const ref of DEFAULT_QA_FLOW_REFS) addRef(ref);
-    addRef(this.sDraftQaFlowRef());
-    addRef(this.tDraftQaFlowRef());
-    addRef(this.stDraftQaFlowRef());
+    for (const v of this.loadedQaFlowVersions()) {
+      addOption(v.ref, v.label, v.hint);
+    }
+    if (!this.qaFlowVersionsLoaded()) {
+      for (const ref of DEFAULT_QA_FLOW_REFS) addOption(ref);
+    }
+    addOption(this.sDraftQaFlowRef());
+    addOption(this.tDraftQaFlowRef());
+    addOption(this.stDraftQaFlowRef());
     return opts;
   });
 
@@ -3719,11 +4503,38 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return t ? t.name || t.title || t.id : "Select template";
   });
 
+  private writingQ = 0;
   private handledDeepLinkKey = "";
   private handledItemLinkKey = "";
+  private handledItemTab: ProcessTab | null = null;
+  private missingItemError: string | null = null;
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+
+    const nav =
+      this.router.getCurrentNavigation() ??
+      this.router.lastSuccessfulNavigation;
+    const navState = nav?.extras.state;
+    const handoffTmplId =
+      typeof navState?.["selectTemplateId"] === "string"
+        ? navState["selectTemplateId"].trim()
+        : "";
+    if (handoffTmplId) {
+      this.tmplFilter.set("all");
+      this.selectedTemplateId.set(handoffTmplId);
+      this.mobileDetailOpen.set(true);
+    }
+    let handledHandoffTmpl = !handoffTmplId;
+    effect(() => {
+      const loaded = this.store.loaded();
+      untracked(() => {
+        if (!handledHandoffTmpl && loaded) {
+          handledHandoffTmpl = true;
+          this.selectTemplate(handoffTmplId, true);
+        }
+      });
+    });
 
     // ?q= (a shared link, a reload, Back and Forward) fills the "Filter
     // this view" box, and what is typed there goes back into ?q=, the way
@@ -3731,11 +4542,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     // in flight, the ?q= it passes through is an echo of what was typed,
     // possibly already overtaken by the next keystroke, so it must not
     // refill the box.
-    let writingQ = 0;
     effect(() => {
       const q = this.q() ?? "";
       untracked(() => {
-        if (writingQ === 0 && q !== this.filter.query()) {
+        if (this.writingQ === 0 && q !== this.filter.query()) {
           this.filter.query.set(q);
         }
       });
@@ -3744,14 +4554,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const typed = this.filter.query();
       untracked(() => {
         if (typed === (this.q() ?? "")) return;
-        writingQ++;
+        this.writingQ++;
         void this.router
           .navigate([], {
             queryParams: { q: typed || null },
             queryParamsHandling: "merge",
             replaceUrl: true,
           })
-          .finally(() => writingQ--);
+          .finally(() => this.writingQ--);
       });
     });
 
@@ -3761,15 +4571,34 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const tab = this.activeTab();
       const item = this.itemId();
       const run = this.runId();
-      const key = `${loaded}:${tab}:${item ?? ""}:${run ?? ""}`;
+      const key = this.itemLinkKey(tab, item, run);
       untracked(() => {
         if (!loaded) return;
         if (!item && !run) {
+          const prevTab = this.handledItemTab;
           this.handledItemLinkKey = "";
+          this.handledItemTab = null;
+          if (prevTab) {
+            this.mobileDetailOpen.set(false);
+            this.clearMissingItemError();
+            if (prevTab === "schedules") {
+              this.selectedScheduleId.set(null);
+              this.selectedTrigger.set(null);
+              this.scheduleComposition.set(null);
+            } else if (prevTab === "templates") {
+              this.selectedTemplateId.set(null);
+              this.templateComposition.set(null);
+            } else if (prevTab === "suites") {
+              this.selectedSuiteRunId.set(null);
+              this.selectedSuiteId.set(null);
+              this.suiteComposition.set(null);
+            }
+          }
           return;
         }
         if (key === this.handledItemLinkKey) return;
         this.handledItemLinkKey = key;
+        this.handledItemTab = tab;
         if (run) {
           this.suitesView.set("runs");
           const parsed = Number(run);
@@ -3778,50 +4607,62 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
             parsed > 0 &&
             this.store.suiteRuns().some((r) => r.id === parsed)
           ) {
-            this.selectSuiteRun(parsed, true);
+            this.selectSuiteRun(parsed, true, false);
           } else {
-            this.store.actionError.set(`No suite run "${run}".`);
+            this.setMissingItemError(`No suite run "${run}".`);
           }
           return;
         }
         if (!item) return;
         if (tab === "schedules") {
           if (this.store.schedules().some((s) => s.id === item)) {
-            this.selectSchedule(item, true);
+            this.selectSchedule(item, true, false);
           } else {
-            this.store.actionError.set(`No schedule "${item}".`);
+            this.setMissingItemError(`No schedule "${item}".`);
           }
         } else if (tab === "templates") {
           if (this.store.templates().some((t) => t.id === item)) {
-            this.selectTemplate(item, true);
+            this.selectTemplate(item, true, false);
           } else {
-            this.store.actionError.set(`No template "${item}".`);
+            this.setMissingItemError(`No template "${item}".`);
           }
         } else if (tab === "suites") {
           this.suitesView.set("suites");
           if (this.store.suites().some((s) => s.id === item)) {
-            this.selectSuite(item, true);
+            this.selectSuite(item, true, false);
           } else {
-            this.store.actionError.set(`No suite "${item}".`);
+            this.setMissingItemError(`No suite "${item}".`);
           }
         }
       });
     });
 
-    // Auto-select top item per tab on desktop when data loads.
+    // Auto-select top item per tab on desktop when data loads or returns to a
+    // bare tab route.
     effect(() => {
       const tab = this.activeTab();
       const loaded = this.store.loaded();
+      const item = this.itemId();
+      const run = this.runId();
       const scheds = this.sortedSchedules();
+      const trigs = this.filteredTriggers();
       const tmpls = this.sortedTemplates();
       const suites = this.sortedSuites();
       const repos = this.filteredDeclRepos();
       untracked(() => {
-        if (!loaded || this.itemId() || this.runId()) return;
+        if (!loaded || item || run) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
-        if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
-          this.selectSchedule(scheds[0].id, false);
+        if (
+          tab === "schedules" &&
+          !this.selectedScheduleId() &&
+          !this.selectedTrigger()
+        ) {
+          if (scheds[0]) {
+            this.selectSchedule(scheds[0].id, false);
+          } else if (trigs[0]) {
+            this.selectTrigger(trigs[0], false);
+          }
         } else if (
           tab === "templates" &&
           !this.selectedTemplateId() &&
@@ -3919,6 +4760,37 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         });
       });
     });
+
+    // Load active QA flow versions once the store is loaded and the caller
+    // holds global qa:read (GET /api/qa/flow-versions).
+    effect(() => {
+      const loaded = this.store.loaded();
+      const canReadFlows =
+        this.access.can("GET /api/qa/flow-versions") &&
+        this.access.canGlobalScope("qa:read");
+      untracked(() => {
+        if (!loaded || !canReadFlows || this.requestedQaFlowVersions) return;
+        this.requestedQaFlowVersions = true;
+        void this.loadQaFlowOptions();
+      });
+    });
+
+    // Keep the active section tab visible inside horizontal .tab-strip scroll
+    // containers on phone viewports (e.g. /processes/quality at 390x844).
+    effect(() => {
+      this.activeTab();
+      afterNextRender(
+        () => {
+          const active = this.hostEl.nativeElement.querySelector<HTMLElement>(
+            '.tab-strip .tab-link[aria-current="page"]',
+          );
+          if (active && typeof active.scrollIntoView === "function") {
+            active.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
+        },
+        { injector: this.injector },
+      );
+    });
   }
 
   ngOnInit(): void {
@@ -3926,30 +4798,66 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
     });
     this.store.start();
-    void this.loadQaFlowOptions();
   }
 
   private async loadQaFlowOptions(): Promise<void> {
     try {
-      const res = (await this.api.get(
-        "GET /api/qa/flow-versions" as RouteKey,
-        undefined,
-        "limit=50",
-      )) as {
+      const res = (await this.api.get<{
         versions?: {
+          hash?: string;
           key?: string;
           version?: number;
+          label?: string;
+          builtIn?: boolean;
+          retiredAt?: string | null;
+          retired?: boolean;
+        }[];
+      }>("GET /api/qa/flow-versions", undefined, "limit=500")) as {
+        versions?: {
+          hash?: string;
+          key?: string;
+          version?: number;
+          label?: string;
+          builtIn?: boolean;
           retiredAt?: string | null;
           retired?: boolean;
         }[];
       } | null;
-      const refs: string[] = [];
-      for (const v of res?.versions ?? []) {
-        if (v.retiredAt || v.retired || !v.key) continue;
-        refs.push(`${v.key}@${v.version ?? 1}`);
+      const versions = res?.versions ?? [];
+      const builtInKeys = new Set<string>();
+      for (const v of versions) {
+        if (v.builtIn === true && v.key) {
+          builtInKeys.add(v.key);
+        }
       }
-      if (refs.length > 0) {
-        this.loadedQaFlowRefs.set(refs);
+      const items: {
+        ref: string;
+        key: string;
+        version: number;
+        label: string;
+        hint?: string;
+        benchmark: boolean;
+      }[] = [];
+      for (const v of versions) {
+        if (v.retiredAt || v.retired || !v.key) continue;
+        const ver = v.version ?? 1;
+        const hash = (v.hash ?? "").trim();
+        const isBuiltInV1Override =
+          !v.builtIn && ver === 1 && builtInKeys.has(v.key) && hash !== "";
+        const ref = isBuiltInV1Override ? hash : `${v.key}@${ver}`;
+        const hint = isBuiltInV1Override ? `${v.key}@v1 (override)` : undefined;
+        items.push({
+          ref,
+          key: v.key,
+          version: ver,
+          label: formatQaFlowLabel(v.key, v.label),
+          hint,
+          benchmark: isBenchmarkQaFlow(v.key, v.label),
+        });
+      }
+      this.loadedQaFlowVersions.set(items);
+      if (items.length > 0) {
+        this.qaFlowVersionsLoaded.set(true);
       }
     } catch {
       // Built-in fallback options remain available.
@@ -4092,8 +5000,24 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           this.store.awaitingAcceptancesCount() ||
           this.store.knownRepos().length
         );
-      case "quality":
-        return this.store.qaFlows().length;
+      case "quality": {
+        if (this.qaFlowVersionsLoaded()) {
+          const primaryKeys = new Set(
+            this.loadedQaFlowVersions()
+              .filter((v) => !v.benchmark)
+              .map((v) => v.key),
+          );
+          for (const f of this.store.qaFlows()) {
+            if (f.id && !isBenchmarkQaFlow(f.id, f.label)) {
+              primaryKeys.add(f.id);
+            }
+          }
+          if (primaryKeys.size > 0) return primaryKeys.size;
+        }
+        return this.store
+          .qaFlows()
+          .filter((f) => f.id && !isBenchmarkQaFlow(f.id, f.label)).length;
+      }
     }
   }
 
@@ -4122,9 +5046,102 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.store.suites().find((x) => x.id === id)?.name ?? "";
   }
 
-  protected selectSchedule(id: string, fromClick: boolean): void {
+  private itemLinkKey(
+    tab: ProcessTab,
+    itemId?: string,
+    runId?: string,
+  ): string {
+    return `${this.store.loaded()}:${tab}:${itemId ?? ""}:${runId ?? ""}`;
+  }
+
+  private preserveQueryExtras() {
+    return this.writingQ > 0
+      ? {
+          queryParams: { q: this.filter.query() || null },
+          queryParamsHandling: "merge" as const,
+        }
+      : { queryParamsHandling: "preserve" as const };
+  }
+
+  private setMissingItemError(msg: string): void {
+    this.missingItemError = msg;
+    this.store.actionError.set(msg);
+  }
+
+  private clearMissingItemError(): void {
+    if (
+      this.missingItemError &&
+      this.store.actionError() === this.missingItemError
+    ) {
+      this.store.actionError.set(null);
+    }
+    this.missingItemError = null;
+  }
+
+  // Push a history entry for an explicit row or item selection so reload,
+  // copy/paste, and Back/Forward land on that item while keeping ?q=, ?sort=,
+  // and ?kind=. Auto-selection on arrival passes fromClick: false and leaves
+  // the URL alone so Back out of Processes or across ?sort= stays predictable.
+  private syncItemUrl(
+    tab: "schedules" | "templates" | "suites",
+    itemId?: string,
+    runId?: number,
+  ): void {
+    if (runId !== undefined) {
+      const runStr = String(runId);
+      const targetKey = this.itemLinkKey("suites", undefined, runStr);
+      if (this.runId() === runStr && this.handledItemLinkKey === targetKey) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = "suites";
+      void this.router.navigate(
+        ["/processes", "suites", "runs", runStr],
+        this.preserveQueryExtras(),
+      );
+      return;
+    }
+    if (itemId !== undefined) {
+      const targetKey = this.itemLinkKey(tab, itemId);
+      if (
+        this.tab() === tab &&
+        this.itemId() === itemId &&
+        !this.runId() &&
+        this.handledItemLinkKey === targetKey
+      ) {
+        return;
+      }
+      this.handledItemLinkKey = targetKey;
+      this.handledItemTab = tab;
+      void this.router.navigate(
+        ["/processes", tab, itemId],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected closeMobileDetail(): void {
+    this.mobileDetailOpen.set(false);
+    if (this.itemId() || this.runId()) {
+      void this.router.navigate(
+        ["/processes", this.activeTab()],
+        this.preserveQueryExtras(),
+      );
+    }
+  }
+
+  protected selectSchedule(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
+    this.selectedTrigger.set(null);
     this.selectedScheduleId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("schedules", id);
     this.scheduleComposition.set(null);
     if (this.access.can("GET /api/schedules/{id}/composition")) {
       void this.store
@@ -4136,9 +5153,50 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectTemplate(id: string, fromClick: boolean): void {
+  protected selectTrigger(tr: DeclaredTrigger, fromClick: boolean): void {
+    this.selectedScheduleId.set(null);
+    this.scheduleComposition.set(null);
+    this.triggerYamlText.set("");
+    this.triggerYamlLoading.set(false);
+    this.selectedTrigger.set(tr);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+      if (this.itemId()) {
+        this.handledItemLinkKey = "";
+        this.handledItemTab = null;
+        void this.router.navigate(
+          ["/processes", "schedules"],
+          this.preserveQueryExtras(),
+        );
+      }
+    }
+    if (!tr.detail && !this.store.repoDefaults()[tr.repo]?.declarationsStatus) {
+      void this.store.loadRepoInspect(tr.repo);
+    }
+  }
+
+  protected openTriggerTemplate(id: string): void {
+    this.tmplFilter.set("all");
+    this.selectTemplate(id, true, false);
+    this.handledItemLinkKey = this.itemLinkKey("templates", id);
+    this.handledItemTab = "templates";
+    void this.router.navigate(["/processes", "templates", id], {
+      state: { selectTemplateId: id },
+    });
+  }
+
+  protected selectTemplate(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedTemplateId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("templates", id);
     this.templateComposition.set(null);
     const tmpl = this.store.templates().find((t) => t.id === id);
     if (tmpl && this.access.can("GET /api/templates/{id}/composition")) {
@@ -4168,10 +5226,19 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuite(id: string, fromClick: boolean): void {
+  protected selectSuite(
+    id: string,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(null);
     this.selectedSuiteId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("suites");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", id);
     this.suiteComposition.set(null);
     if (this.access.can("GET /api/suites/{id}/composition")) {
       void this.store
@@ -4183,9 +5250,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected selectSuiteRun(id: number, fromClick: boolean): void {
+  protected selectSuiteRun(
+    id: number,
+    fromClick: boolean,
+    syncUrl = fromClick,
+  ): void {
     this.selectedSuiteRunId.set(id);
-    if (fromClick) this.mobileDetailOpen.set(true);
+    if (fromClick) {
+      this.suitesView.set("runs");
+      this.mobileDetailOpen.set(true);
+      this.clearMissingItemError();
+    }
+    if (syncUrl) this.syncItemUrl("suites", undefined, id);
     if (this.access.can("GET /api/suite-runs/{id}")) {
       void this.store.fetchSuiteRunDetail(id).catch(() => undefined);
     }
@@ -4193,7 +5269,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected selectDeclRepo(repo: string, fromClick: boolean): void {
     this.selectedDeclRepo.set(repo);
-    this.inlineYamlPath.set(null);
+    this.inlineYamlSeq++;
+    this.inlineYamlKey.set(null);
     this.inlineYamlText.set("");
     this.inlineYamlLoading.set(false);
     if (fromClick) this.mobileDetailOpen.set(true);
@@ -4232,48 +5309,107 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return out;
   }
 
-  protected isInlineYamlOpen(path: string): boolean {
-    return this.inlineYamlPath() === path;
+  protected isInlineYamlOpen(repo: string, path: string): boolean {
+    return this.inlineYamlKey() === `${repo}:${path}`;
   }
 
   protected async toggleInlineYaml(
     repo: string,
     filePath: string,
-    fallbackText?: string,
+    rawText?: string,
   ): Promise<void> {
-    if (this.inlineYamlPath() === filePath) {
-      this.inlineYamlPath.set(null);
+    const key = `${repo}:${filePath}`;
+    const seq = ++this.inlineYamlSeq;
+    if (this.inlineYamlKey() === key) {
+      this.inlineYamlKey.set(null);
       this.inlineYamlText.set("");
       this.inlineYamlLoading.set(false);
       return;
     }
-    this.inlineYamlPath.set(filePath);
-    this.inlineYamlText.set("");
-    this.inlineYamlLoading.set(true);
-    const repoPath = filePath.startsWith(`${repo}/`)
-      ? filePath
-      : `${repo}/${filePath.replace(/^\/+/, "")}`;
-    try {
-      if (typeof this.api.getText === "function") {
-        const text = await this.api.getText(
-          "GET /api/fs/repo/{path...}" as RouteKey,
-          { path: repoPath },
-        );
-        if (this.inlineYamlPath() === filePath) {
-          this.inlineYamlText.set(text || fallbackText || "");
-        }
-      } else if (fallbackText !== undefined) {
-        this.inlineYamlText.set(fallbackText);
-      }
-    } catch (err) {
-      if (this.inlineYamlPath() === filePath) {
-        this.inlineYamlText.set(fallbackText ?? errorText(err));
-      }
-    } finally {
-      if (this.inlineYamlPath() === filePath) {
-        this.inlineYamlLoading.set(false);
+    this.inlineYamlKey.set(key);
+    if (rawText !== undefined && rawText.length > 0) {
+      this.inlineYamlText.set(rawText);
+      this.inlineYamlLoading.set(false);
+      return;
+    }
+    const hasDecl = Boolean(
+      this.store.repoDefaults()[repo]?.declarationsStatus,
+    );
+    const hasWfs = Boolean(this.store.repoWorkflows()[repo]);
+    if (!hasDecl || !hasWfs) {
+      this.inlineYamlText.set("");
+      this.inlineYamlLoading.set(true);
+      await this.store.loadRepoInspect(repo);
+      if (this.inlineYamlSeq !== seq || this.inlineYamlKey() !== key) {
+        return;
       }
     }
+    this.inlineYamlText.set(this.resolveDeclaredFileYaml(repo, filePath));
+    this.inlineYamlLoading.set(false);
+  }
+
+  private resolveDeclaredFileYaml(repo: string, filePath: string): string {
+    const wfs = this.store.repoWorkflows();
+    const wf = wfs[repo]?.workflows.find((w) => w.path === filePath);
+    if (wf?.text) return wf.text;
+
+    const status = this.store.repoDefaults()[repo]?.declarationsStatus;
+    const trig = status?.triggerDetails?.find((d) => d.path === filePath);
+    if (trig || (status?.triggers ?? []).includes(filePath)) {
+      return synthesizeTriggerYaml(
+        repo,
+        filePath,
+        trig,
+        this.store.templates(),
+      );
+    }
+
+    const tmpl = this.store
+      .templates()
+      .find(
+        (t) => t.declaredIn?.repo === repo && t.declaredIn.path === filePath,
+      );
+    if (tmpl) {
+      return synthesizeDeclaredTemplateYaml(repo, filePath, tmpl);
+    }
+
+    const suite = this.store
+      .suites()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (suite) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `name: ${suite.name}`,
+        `mode: ${suite.mode}`,
+      ];
+      if (suite.maxPasses) lines.push(`maxPasses: ${suite.maxPasses}`);
+      if (suite.items.length) {
+        lines.push("items:");
+        for (const it of suite.items) {
+          lines.push(`  - template: ${it.templateName || it.templateId}`);
+        }
+      }
+      return lines.join("\n");
+    }
+
+    const sched = this.store
+      .schedules()
+      .find(
+        (s) => s.declaredIn?.repo === repo && s.declaredIn.path === filePath,
+      );
+    if (sched) {
+      const lines = [
+        `# ${repo}:${filePath}`,
+        `title: ${sched.title}`,
+        `cadence: ${formatCadence(sched.recurrence, sched.timeZone)}`,
+      ];
+      if (sched.overlap) lines.push(`overlap: ${sched.overlap}`);
+      return lines.join("\n");
+    }
+
+    return `# ${repo}:${filePath}\n# Synced repository declaration.`;
   }
 
   protected scheduledTasksFor(s: Schedule) {
@@ -4374,6 +5510,125 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.schedDialogOpen.set(false);
   }
 
+  // The dialogs' unsaved-edit guard, as the classic panes have it
+  // (useUnsavedEdits): each dialog's draft is snapshotted when it opens,
+  // and Cancel, Escape, the scrim, Back and the rail ask before a draft
+  // that differs is dropped -- once, however many of them fire for one
+  // gesture. Save closes through close*Dialog / .set(false) and does not ask.
+  private schedBaseline = "";
+  private tmplBaseline = "";
+  private suiteBaseline = "";
+
+  private schedDraftSnapshot(): string {
+    return JSON.stringify([
+      this.schedTargetKind(),
+      this.sDraftTitle(),
+      this.sDraftDesc(),
+      this.sDraftKeepRunning(),
+      this.sDraftAdmission(),
+      this.sDraftHosting(),
+      this.sDraftCaps(),
+      this.buildScheduleCreatePayload(),
+    ]);
+  }
+
+  private tmplDraftSnapshot(): string {
+    return JSON.stringify([
+      this.tDraftName(),
+      this.tDraftTitle(),
+      this.tDraftDesc(),
+      this.tDraftRepo(),
+      this.tDraftFields(),
+      this.tDraftParamsCsv(),
+      this.tDraftAutoMerge(),
+      this.tDraftModel(),
+      this.tDraftKeepRunning(),
+      this.tDraftAdmission(),
+      this.tDraftHosting(),
+      this.tDraftCaps(),
+      this.tDraftQaFlowRef(),
+    ]);
+  }
+
+  private suiteDraftSnapshot(): string {
+    return JSON.stringify([
+      this.stDraftMode(),
+      this.stDraftCount(),
+      this.stDraftMaxPasses(),
+      this.buildSuiteCreatePayload(),
+      this.stDraftQaFlowRef(),
+    ]);
+  }
+
+  // unsavedDialogs names the open dialogs whose draft differs from what
+  // they opened with, topmost last.
+  private unsavedDialogs(): string[] {
+    const out: string[] = [];
+    if (
+      this.schedDialogOpen() &&
+      this.schedDraftSnapshot() !== this.schedBaseline
+    ) {
+      out.push("schedule");
+    }
+    if (
+      this.suiteDialogOpen() &&
+      this.suiteDraftSnapshot() !== this.suiteBaseline
+    ) {
+      out.push("suite");
+    }
+    if (
+      this.tmplDialogOpen() &&
+      this.tmplDraftSnapshot() !== this.tmplBaseline
+    ) {
+      out.push("template");
+    }
+    return out;
+  }
+
+  private askDiscard(what: string): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved changes to this ${what}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected async dismissScheduleDialog(): Promise<void> {
+    if (
+      this.schedDraftSnapshot() !== this.schedBaseline &&
+      !(await this.askDiscard("schedule"))
+    ) {
+      return;
+    }
+    this.closeScheduleDialog();
+  }
+
+  protected async dismissTemplateDialog(): Promise<void> {
+    if (
+      this.tmplDraftSnapshot() !== this.tmplBaseline &&
+      !(await this.askDiscard("template"))
+    ) {
+      return;
+    }
+    this.tmplDialogOpen.set(false);
+  }
+
+  protected async dismissSuiteDialog(): Promise<void> {
+    if (
+      this.suiteDraftSnapshot() !== this.suiteBaseline &&
+      !(await this.askDiscard("suite"))
+    ) {
+      return;
+    }
+    this.suiteDialogOpen.set(false);
+  }
+
   protected closeLaunchDialog(): void {
     this.openPicker.set(null);
     this.dialogError.set(null);
@@ -4450,6 +5705,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteSchedule(s.id);
         if (this.selectedScheduleId() === s.id) {
           this.selectedScheduleId.set(null);
+          this.scheduleComposition.set(null);
+        }
+        if (this.activeTab() === "schedules" && this.itemId() === s.id) {
+          void this.router.navigate(["/processes", "schedules"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Schedule deleted.");
       },
@@ -4514,6 +5776,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         existing.recurrence?.gitRef?.ref ?? "refs/heads/main",
       );
       this.sDraftOverlap.set(existing.overlap || "skip");
+      this.sDraftModel.set(existing.model || "");
+      this.sDraftKeepRunning.set(!!existing.keepRunning);
+      this.sDraftAdmission.set(existing.admission || "standard");
+      this.sDraftHosting.set(existing.hosting || "unattended");
+      this.sDraftCaps.set([...(existing.capabilities ?? [])]);
       this.sDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.schedTargetKind.set("prompt");
@@ -4536,9 +5803,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftGitRefRepo.set("");
       this.sDraftGitRef.set("refs/heads/main");
       this.sDraftOverlap.set("skip");
+      this.sDraftModel.set("");
+      this.sDraftKeepRunning.set(false);
+      this.sDraftAdmission.set("standard");
+      this.sDraftHosting.set("unattended");
+      this.sDraftCaps.set([]);
       this.sDraftQaFlowRef.set("");
     }
     this.schedDialogOpen.set(true);
+    this.schedBaseline = this.schedDraftSnapshot();
   }
 
   protected canSaveSchedule(): boolean {
@@ -4632,6 +5905,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       timeZone: this.sDraftTz().trim() || undefined,
       overlap: this.sDraftOverlap(),
     };
+    // A suite decides the model of everything it runs; the API refuses
+    // one beside a suiteId. "" is the default, the same as saying nothing.
+    if (tk !== "suite" && this.sDraftModel()) {
+      baseReq.model = this.sDraftModel();
+    }
     if (tk === "template") {
       baseReq.templateId = this.sDraftTemplateId();
     } else if (tk === "suite") {
@@ -4639,7 +5917,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     } else {
       baseReq.title = this.sDraftTitle().trim();
       baseReq.description = this.sDraftDesc().trim();
-      baseReq.capabilities = [];
+      baseReq.keepRunning = this.sDraftKeepRunning();
+      // Only when it differs from the default: raising admission is
+      // gated for a limited role, so a form that says nothing must not ask.
+      if (this.sDraftAdmission() !== "standard") {
+        baseReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== "unattended") {
+        baseReq.hosting = this.sDraftHosting();
+      }
+      baseReq.capabilities = [...this.sDraftCaps()];
       baseReq.reads = [];
       baseReq.writes = [];
     }
@@ -4650,12 +5937,49 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return baseReq;
   }
 
+  /**
+   * buildSchedulePreviewPayload is the create body as the draft
+   * composition endpoint must see it. That endpoint has no saved row to
+   * fall back on, so the model, admission and hosting in force are always
+   * sent -- for a template-backed schedule, the saved schedule's own
+   * (a declared schedule may raise its template's admission), and its own
+   * capabilities, which its firings grant beside the template's
+   * (ScheduleOverlay.jsx previewRequest).
+   */
+  private buildSchedulePreviewPayload(): CreateScheduleRequest {
+    const req = this.buildScheduleCreatePayload();
+    const tk = this.schedTargetKind();
+    if (tk === "suite") return req;
+    const editing = this.editingSchedule();
+    const sameTemplate =
+      tk === "template" &&
+      !!editing?.templateId &&
+      editing.templateId === this.sDraftTemplateId();
+    req.model = this.sDraftModel();
+    if (tk === "prompt") {
+      req.admission = this.sDraftAdmission();
+      req.hosting = this.sDraftHosting();
+    } else {
+      req.admission = sameTemplate ? editing?.admission || "" : "";
+      req.hosting = sameTemplate ? editing?.hosting || "" : "";
+      if (sameTemplate && (editing?.capabilities ?? []).length > 0) {
+        req.capabilities = [...(editing?.capabilities ?? [])];
+      }
+    }
+    return req;
+  }
+
   private buildScheduleUpdatePayload(editing: Schedule): UpdateScheduleRequest {
     if (editing.system) {
+      // One of grain's own schedules: its model is the deployment's to
+      // choose, like its cadence (ui.UpdateScheduleRequest.Model).
       return {
         recurrence: this.buildRecurrenceDraft(),
         timeZone: this.sDraftTz().trim() || undefined,
         overlap: this.sDraftOverlap(),
+        ...(this.sDraftModel() !== (editing.model || "")
+          ? { model: this.sDraftModel() }
+          : {}),
         revision: editing.revision,
       };
     }
@@ -4672,6 +5996,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     if (qaFlowRef || editing.qaFlowRef) {
       patchReq.qaFlowRef = qaFlowRef;
     }
+    // Each setting below only when it changed, as the classic form sends
+    // them: absent leaves the saved value alone (ui.UpdateScheduleRequest),
+    // and resending an unchanged admission would ask a limited role's
+    // grant gate for a raise nobody made.
+    if (tk !== "suite" && this.sDraftModel() !== (editing.model || "")) {
+      patchReq.model = this.sDraftModel();
+    }
     if (tk === "template") {
       patchReq.templateId = this.sDraftTemplateId();
     } else if (tk === "suite") {
@@ -4682,6 +6013,18 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       if (editing.templateId) {
         patchReq.templateId = "";
       }
+      if (this.sDraftKeepRunning() !== !!editing.keepRunning) {
+        patchReq.keepRunning = this.sDraftKeepRunning();
+      }
+      if (this.sDraftAdmission() !== (editing.admission || "standard")) {
+        patchReq.admission = this.sDraftAdmission();
+      }
+      if (this.sDraftHosting() !== (editing.hosting || "unattended")) {
+        patchReq.hosting = this.sDraftHosting();
+      }
+      if (!sameList(this.sDraftCaps(), editing.capabilities)) {
+        patchReq.capabilities = [...this.sDraftCaps()];
+      }
     }
     return patchReq;
   }
@@ -4690,7 +6033,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.dialogError.set(null);
     try {
       const comp = await this.store.previewDraftSchedule(
-        this.buildScheduleCreatePayload(),
+        this.buildSchedulePreviewPayload(),
       );
       this.draftSchedComposition.set(comp);
     } catch (err) {
@@ -4715,7 +6058,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         const created = await this.store.createSchedule(
           this.buildScheduleCreatePayload(),
         );
-        this.selectSchedule(created.id, false);
+        this.selectSchedule(created.id, true);
         this.snackbar.show("Schedule created.");
       }
       this.closeScheduleDialog();
@@ -4797,6 +6140,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set(clonedFields);
       this.tDraftParamsCsv.set(clonedFields.map((f) => f.name).join(", "));
       this.tDraftAutoMerge.set(existing.autoMerge);
+      this.tDraftModel.set(existing.model || "");
+      this.tDraftKeepRunning.set(!!existing.keepRunning);
+      this.tDraftAdmission.set(existing.admission || "standard");
+      this.tDraftHosting.set(existing.hosting || "unattended");
+      this.tDraftCaps.set([...(existing.capabilities ?? [])]);
       this.tDraftQaFlowRef.set(existing.qaFlowRef || "");
     } else {
       this.tDraftName.set("");
@@ -4806,9 +6154,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftFields.set([]);
       this.tDraftParamsCsv.set("");
       this.tDraftAutoMerge.set(false);
+      this.tDraftModel.set("");
+      this.tDraftKeepRunning.set(false);
+      this.tDraftAdmission.set("standard");
+      this.tDraftHosting.set("unattended");
+      this.tDraftCaps.set([]);
       this.tDraftQaFlowRef.set("");
     }
     this.tmplDialogOpen.set(true);
+    this.tmplBaseline = this.tmplDraftSnapshot();
   }
 
   protected onTemplateParamsCsvInput(csv: string): void {
@@ -4860,6 +6214,42 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.access.can(route, targetRepo);
   }
 
+  /**
+   * buildTemplateUpdatePayload is the PATCH for an edited template: its
+   * text, binding and fields as before, and each setting below only when
+   * it changed (TemplateOverlay.jsx): absent leaves the saved value alone.
+   */
+  private buildTemplateUpdatePayload(
+    editing: Template,
+    fields: TemplateField[],
+  ): UpdateTemplateRequest {
+    const req: UpdateTemplateRequest = {
+      name: this.tDraftName().trim(),
+      title: this.tDraftTitle().trim(),
+      description: this.tDraftDesc(),
+      repo: this.tDraftRepo().trim(),
+      fields,
+      autoMerge: this.tDraftAutoMerge(),
+      revision: editing.revision,
+    };
+    if (this.tDraftModel() !== (editing.model || "")) {
+      req.model = this.tDraftModel();
+    }
+    if (this.tDraftKeepRunning() !== !!editing.keepRunning) {
+      req.keepRunning = this.tDraftKeepRunning();
+    }
+    if (this.tDraftAdmission() !== (editing.admission || "standard")) {
+      req.admission = this.tDraftAdmission();
+    }
+    if (this.tDraftHosting() !== (editing.hosting || "unattended")) {
+      req.hosting = this.tDraftHosting();
+    }
+    if (!sameList(this.tDraftCaps(), editing.capabilities)) {
+      req.capabilities = [...this.tDraftCaps()];
+    }
+    return req;
+  }
+
   protected async saveTemplateDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveTemplate()) return;
     this.dialogError.set(null);
@@ -4869,15 +6259,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const editing = this.editingTemplate();
       const qaFlowRef = this.tDraftQaFlowRef().trim();
       if (editing) {
-        const patchReq: UpdateTemplateRequest = {
-          name: this.tDraftName().trim(),
-          title: this.tDraftTitle().trim(),
-          description: this.tDraftDesc(),
-          repo: this.tDraftRepo().trim(),
-          fields,
-          autoMerge: this.tDraftAutoMerge(),
-          revision: editing.revision,
-        };
+        const patchReq = this.buildTemplateUpdatePayload(editing, fields);
         if (qaFlowRef || editing.qaFlowRef) {
           patchReq.qaFlowRef = qaFlowRef;
         }
@@ -4896,7 +6278,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           repo: this.tDraftRepo().trim(),
           fields: fields.length ? fields : undefined,
           autoMerge: this.tDraftAutoMerge(),
-          capabilities: [],
+          keepRunning: this.tDraftKeepRunning(),
+          ...(this.tDraftModel() ? { model: this.tDraftModel() } : {}),
+          ...(this.tDraftAdmission() !== "standard"
+            ? { admission: this.tDraftAdmission() }
+            : {}),
+          ...(this.tDraftHosting() !== "unattended"
+            ? { hosting: this.tDraftHosting() }
+            : {}),
+          capabilities: [...this.tDraftCaps()],
           reads: [],
           writes: [],
           customFields: {},
@@ -4905,7 +6295,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           createReq.qaFlowRef = qaFlowRef;
         }
         const created = await this.store.createTemplate(createReq);
-        this.selectTemplate(created.id, false);
+        this.selectTemplate(created.id, true);
         this.snackbar.show("Template created.");
       }
       this.tmplDialogOpen.set(false);
@@ -4926,6 +6316,13 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         await this.store.deleteTemplate(t.id);
         if (this.selectedTemplateId() === t.id) {
           this.selectedTemplateId.set(null);
+          this.templateComposition.set(null);
+        }
+        if (this.activeTab() === "templates" && this.itemId() === t.id) {
+          void this.router.navigate(["/processes", "templates"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
         }
         this.snackbar.show("Template deleted.");
       },
@@ -4961,6 +6358,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.stDraftQaFlowRef.set("");
     }
     this.suiteDialogOpen.set(true);
+    this.suiteBaseline = this.suiteDraftSnapshot();
   }
 
   protected toggleSuiteTemplateId(id: string): void {
@@ -5062,7 +6460,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         this.snackbar.show("Suite updated.");
       } else {
         const created = await this.store.createSuite(payload);
-        this.selectSuite(created.id, false);
+        this.selectSuite(created.id, true);
         this.snackbar.show("Suite created.");
       }
       this.suiteDialogOpen.set(false);
@@ -5081,7 +6479,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         await this.store.deleteSuite(st.id);
-        if (this.selectedSuiteId() === st.id) this.selectedSuiteId.set(null);
+        if (this.selectedSuiteId() === st.id) {
+          this.selectedSuiteId.set(null);
+          this.suiteComposition.set(null);
+        }
+        if (this.activeTab() === "suites" && this.itemId() === st.id) {
+          void this.router.navigate(["/processes", "suites"], {
+            ...this.preserveQueryExtras(),
+            replaceUrl: true,
+          });
+        }
         this.snackbar.show("Suite deleted.");
       },
     });
@@ -5229,9 +6636,83 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private discardDraftResolve: ((ok: boolean) => void) | null = null;
+  private bypassUnsavedDraftGuard = false;
+
+  private hasUnsavedQaDraft(): boolean {
+    return Boolean(this.doc.querySelector('[data-qa-unsaved-draft="true"]'));
+  }
+
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedDialogs().length > 0) ev.preventDefault();
+  }
+
+  canDeactivate(): boolean | Promise<boolean> {
+    if (this.bypassUnsavedDraftGuard) return true;
+    const dialogs = this.unsavedDialogs();
+    if (dialogs.length > 0) {
+      return this.askDiscard(dialogs[dialogs.length - 1]).then((ok) => {
+        if (ok) {
+          this.closeScheduleDialog();
+          this.tmplDialogOpen.set(false);
+          this.suiteDialogOpen.set(false);
+        }
+        return ok;
+      });
+    }
+    if (!this.hasUnsavedQaDraft()) return true;
+    return this.promptDiscardQaDraft();
+  }
+
+  private promptDiscardQaDraft(): Promise<boolean> {
+    if (this.discardDraftResolve) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      this.discardDraftResolve = resolve;
+      this.confirming.set({
+        title: "Discard unpublished workflow draft?",
+        message:
+          "You have an unpublished workflow draft in Software Workflow & QA. Discard your unsaved changes?",
+        accept: "Discard draft",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected onTabClick(ev: MouseEvent, tabId: ProcessTab): void {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    if (tabId === this.activeTab() || !this.hasUnsavedQaDraft()) {
+      return;
+    }
+    ev.preventDefault();
+    void this.promptDiscardQaDraft().then((ok) => {
+      if (!ok) return;
+      this.bypassUnsavedDraftGuard = true;
+      void this.router
+        .navigate(["/processes", tabId], { queryParamsHandling: "merge" })
+        .finally(() => {
+          this.bypassUnsavedDraftGuard = false;
+        });
+    });
+  }
+
   protected async onConfirmDone(accepted: boolean): Promise<void> {
     const req = this.confirming();
+    const resolveDraft = this.discardDraftResolve;
+    this.discardDraftResolve = null;
     this.confirming.set(null);
+    if (resolveDraft) {
+      resolveDraft(accepted);
+    }
     if (!accepted || !req) return;
     try {
       await req.run();

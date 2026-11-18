@@ -45,6 +45,13 @@ type StaleSchedule struct {
 	// LastRunAt is its last firing that ran anything; nil if it never
 	// has, in which case staleness is counted from CreatedAt.
 	LastRunAt *time.Time `json:"lastRunAt,omitempty"`
+	// Held is true when the schedule is deliberately held by a declared
+	// condition (such as skip-when: publishing-held) rather than silently
+	// failing to run or starved behind a never-started firing.
+	Held bool `json:"held,omitempty"`
+	// HeldByTaskID is the task holding the schedule when Held is true
+	// (for example baseBranchPublishing[].triageTaskID).
+	HeldByTaskID string `json:"heldByTaskID,omitempty"`
 	// Reason says why it is not running, where grain can tell.
 	Reason string `json:"reason,omitempty"`
 }
@@ -121,11 +128,30 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time, defaultBranch
 					WorkflowGrainCIOffReason(mode), stem)
 			}
 		}
-		if stale.Reason == "" && strings.TrimSpace(sched.OverlapGroup) != "" {
-			// Held by another schedule in its overlap group: still not
-			// running, but the holder is the thing to look at.
-			if sup, err := s.SuppressedFiring(ctx, sched, now, sched.Location()); err == nil && sup != nil && sup.HeldByScheduleID != "" {
-				stale.Reason = "held: " + sup.Detail
+		if stale.Reason == "" {
+			sup, err := s.SuppressedFiring(ctx, sched, now, sched.Location())
+			if err == nil && sup != nil {
+				switch {
+				case sup.Reason == SuppressedByPublishingHeld:
+					stale.Held = true
+					stale.HeldByTaskID = sup.TaskID
+					stale.Reason = "held: " + strings.TrimPrefix(sup.Detail, "skipped: ")
+				case sup.HeldByScheduleID != "" && strings.TrimSpace(sched.OverlapGroup) != "":
+					// Held by another schedule in its overlap group: still not
+					// running, but the holder is the thing to look at.
+					stale.Reason = "held: " + sup.Detail
+				}
+			}
+			// If NextRunAt has not come due yet (for example right after an rc
+			// finished qualification under a hold), SuppressedFiring returns nil
+			// even though publishing is still held; check the hold directly so
+			// the schedule is reported as deliberately held rather than silent.
+			if stale.Reason == "" && sched.SkipWhen == SkipWhenPublishingHeld {
+				if sup, err := s.publishingSuppression(ctx, sched, now); err == nil && sup != nil && sup.Reason == SuppressedByPublishingHeld {
+					stale.Held = true
+					stale.HeldByTaskID = sup.TaskID
+					stale.Reason = "held: " + strings.TrimPrefix(sup.Detail, "skipped: ")
+				}
 			}
 		}
 		out = append(out, stale)
