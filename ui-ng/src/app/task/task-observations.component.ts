@@ -115,14 +115,19 @@ import type {
         @if (view.dirty) {
           <p>Unknown: collection is dirty or unavailable.</p>
         }
-        @for (entry of view.results; track entry.evaluation_id) {
+        @for (
+          entry of view.results;
+          track entry.evaluation_id;
+          let i = $index
+        ) {
           <article>
             <h4>
               <span class="version"
                 >{{ entry.result.type }} v{{ entry.result.version }}</span
               >
               ·
-              {{ entry.result.status }}
+              {{ entry.result.status }} · shadow
+              {{ profile(view.bindings[i]?.config) }}
             </h4>
             @if (entry.result.type === "checks") {
               <p class="muted">
@@ -187,11 +192,14 @@ import type {
               }
               @for (
                 evidence of entry.result.evidence;
-                track evidence.kind + ":" + evidence.id
+                track evidence.kind + "/" + evidence.id
               ) {
                 <p>
                   {{ evidence.kind }} #{{ evidence.id }} ·
                   <span class="version">{{ evidence.version }}</span>
+                  @if (evidence.head) {
+                    <span class="version"> · head {{ evidence.head }}</span>
+                  }
                 </p>
               }
             </details>
@@ -260,6 +268,16 @@ export class TaskObservationsComponent {
   }
   readonly observations = input<GateObservations>();
   readonly diagnostics = input<GateObservationDiagnostics>();
+  profile(config: unknown): string {
+    if (!config || typeof config !== "object") return "unknown selection";
+    const fields = config as Record<string, unknown>;
+    for (const key of ["product", "mode", "predicate", "kind", "category"]) {
+      if (typeof fields[key] === "string") return fields[key];
+    }
+    if (Array.isArray(fields["requirement_ids"])) return "named approval";
+    return "unknown selection";
+  }
+
   checksLabel(id?: string): string {
     const binding = this.observations()?.bindings.find((b) =>
       id?.endsWith("/" + b.id),

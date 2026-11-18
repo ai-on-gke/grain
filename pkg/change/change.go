@@ -119,8 +119,10 @@ type Person struct{ Name string }
 
 // Result is a Submit's outcome.
 type Result struct {
-	Target  string
-	Message string
+	// Snapshot is the exact submitted snapshot when the provider returns it.
+	Snapshot int
+	Target   string
+	Message  string
 }
 
 // SyncResult is a Sync's outcome.

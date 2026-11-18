@@ -19,6 +19,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,11 +236,108 @@ func RunChecks(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatal("truncated review collection passed")
 		}
 	}
-	if diagnostics.Counts["checks_met;review_approval_incomplete"] != 1 {
-		t.Fatal("combined diagnostic lost incomplete review context")
+	if diagnostics.Counts["checks_met"] < 1 || diagnostics.Counts["review_approval_incomplete"] != 1 || diagnostics.Counts["outcome_evidence_gap"] < 1 || diagnostics.History[0].Comparison != "outcome_evidence_gap;checks_met;review_approval_incomplete" {
+		t.Fatalf("combined diagnostic lost incomplete review context: counts=%v latest=%s", diagnostics.Counts, diagnostics.History[0].Comparison)
 	}
 	for i := int64(1); i <= 512; i++ {
 		must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 1000 + i, Commit: "bounded", Conclusion: "success"}))
+	}
+	combinedTask := task
+	combinedTask.ID = "shadow-checks-outcomes"
+	combinedTask.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#8"}}
+	must(s.PutTask(ctx, combinedTask))
+	child := model.Task{ID: "shadow-checks-child", Intent: model.IntentAnalyze, Title: "Explicit child", Target: &repo}
+	must(s.PutTask(ctx, child))
+	must(s.ObserveClose(ctx, child.ID, now, model.GrainPrincipal, "closed", func(o *model.Observation) { o.ClosedAt = &now }))
+	fresh, err := s.GetTask(ctx, combinedTask.ID)
+	must(err)
+	s.RecordGateOutcomeSource(ctx, fresh.ID, model.GateOutcomeSource{Resource: "acme/widgets#8", Head: "combined-head", State: "merged", Policy: model.GateOutcomePolicy(*fresh), Attribution: "external-test", At: now})
+	cf := gates.ChecksFacts{TaskID: fresh.ID, Subject: model.CheckSubjects(*fresh)[0], Head: "combined-head", Mode: "github", PolicyVersion: gates.Digest("combined-policy"), PolicyComplete: true, ObservedAt: now, ValidUntil: now.Add(time.Minute), Sources: []gates.CheckSource{{Kind: "github", Head: "combined-head", Version: gates.Digest("combined-set"), Complete: true, All: true, Attempts: []gates.CheckAttempt{{Identity: "app/go", Names: []string{"go"}, Head: "combined-head", Version: gates.Digest("combined-run"), Order: 1, State: "completed", Conclusion: "success"}}}}}
+	known, err = s.RecordedGateChecks(ctx, repo, cf.Head)
+	must(err)
+	cf.RecordedChecksVersion = known.Version
+	_, _, combinedFence, err := s.GateChecksInput(ctx, fresh.ID)
+	must(err)
+	combinedBefore := legacyChecksSnapshot(t, ctx, db)
+	combinedWake, combinedCommits := s.Changed(), s.CommitCount()
+	cv, cd, err := s.ObserveTaskGatesWithChecks(ctx, fresh.ID, now, combinedFence, []gates.ChecksFacts{cf}, gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "closed"})
+	must(err)
+	if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+		raw, err := json.Marshal(cv)
+		must(err)
+		must(os.WriteFile(path+".combined", raw, 0600))
+	}
+	types := map[string]bool{}
+	foundIntegration, foundChild := false, false
+	for i, b := range cv.Bindings {
+		types[b.Type] = true
+		r := cv.Results[i].Result
+		if b.Type == "integration" {
+			foundIntegration = true
+			if r.Status != "met" {
+				t.Fatal("CI obscured positive integration")
+			}
+		}
+		if b.Type == "children" {
+			foundChild = true
+			if r.Status != "met" {
+				t.Fatal("CI lost explicit child selection")
+			}
+		}
+		if (b.Type == "approval" || b.Type == "review" && !b.Origin.Imported) && r.Status != "unknown" {
+			t.Fatal("CI fabricated current review or approval proof")
+		}
+		if b.Required || b.Action != nil || len(r.Work) != 0 || len(r.Actions) != 0 {
+			t.Fatal("combined monitors acquired authority")
+		}
+	}
+	if len(types) != 7 || !foundIntegration || !foundChild || cv.Results[2].Result.Status != "met" {
+		t.Fatal("combined projection lost a gate family")
+	}
+	if cd.Counts["checks_met"] != 1 || cd.Counts["outcome_discrepancy"] != 1 || cd.Counts["review_approval_provenance_gap"] != 1 {
+		t.Fatal("combined comparison hid an independent family")
+	}
+	if legacyChecksSnapshot(t, ctx, db) != combinedBefore || s.CommitCount() != combinedCommits {
+		t.Fatal("combined observation mutated legacy state")
+	}
+	select {
+	case <-combinedWake:
+		t.Fatal("combined observation woke legacy listeners")
+	default:
+	}
+	if err := s.RecordGateObservationFailure(ctx, fresh.ID, now.Add(time.Millisecond), cv); err != nil {
+		t.Fatal(err)
+	}
+	if len(cv.Bindings) != len(cv.Results) || len(cv.Bindings) < 7 {
+		t.Fatal("combined failure projection was truncated")
+	}
+	for _, entry := range cv.Results {
+		if entry.Result.Status != "error" || len(entry.Result.Evidence) != 0 || len(entry.Result.Actions) != 0 || len(entry.Result.Work) != 0 {
+			t.Fatal("combined rejection retained proof or actions")
+		}
+	}
+	// Large historical diagnostics must not consume the local collection budget.
+	// Retention/counts remain complete and the newest full view is never trimmed.
+	historyView := *cv
+	largeGuidance := strings.Repeat("h", 8192)
+	for i := 0; i < 6; i++ {
+		historyView.Results[i].Result.HumanText = &largeGuidance
+	}
+	historyRaw, err := json.Marshal(historyView)
+	must(err)
+	for generation := 100; generation < 106; generation++ {
+		_, err := db.ExecContext(ctx, "INSERT INTO `gate_observation_shadow_history` (`task_id`,`generation`,`at`,`view_json`,`comparison`) VALUES (?,?,?,?,?)", fresh.ID, generation, now, string(historyRaw), "history-byte-budget")
+		must(err)
+	}
+	_, limited, err := s.ObserveTaskGates(ctx, fresh.ID, now.Add(2*time.Millisecond))
+	must(err)
+	if limited.Counts["history-byte-budget"] != 6 || len(limited.History) != 1 || limited.History[0].Generation != 105 {
+		t.Fatal("history load bound lost counts or newest sample")
+	}
+	loaded, err := json.Marshal(limited.History[0].View)
+	must(err)
+	if string(loaded) != string(historyRaw) {
+		t.Fatal("historical evidence was truncated instead of returning a complete sample")
 	}
 	bounded, e := s.RecordedGateChecks(ctx, repo, "bounded")
 	must(e)

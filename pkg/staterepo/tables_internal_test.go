@@ -231,6 +231,7 @@ var notSettings = []string{
 	// GET /api/events (model.IntegrationEvent): runtime event history
 	// written by Store transactions, never settings a PR applies.
 	"integration_event",
+	"gate_outcome_source",
 	"gate_observation_shadow",
 	"gate_observation_shadow_history",
 	// config_audit is the record of who changed the configuration

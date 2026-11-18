@@ -23,7 +23,9 @@ import {
   nextUp,
   placement,
   planMove,
+  mergeStuck,
   sorted,
+  taskStateLabel,
   timelineEndMs,
 } from "./task-view";
 
@@ -219,5 +221,34 @@ describe("taskPriority", () => {
     expect(taskPriority("1.5E3")).toBe(1500);
     for (const bad of ["0", "-1", "2.5", "1e-3", "0x10", "", "abc", "1e400"])
       expect(taskPriority(bad)).toBeNaN();
+  });
+});
+
+describe("taskStateLabel", () => {
+  it("names a stuck merge rather than calling it Merging", () => {
+    const failed = t("29", 5, {
+      state: "completed",
+      mergeQueueState: "merge_failed",
+    });
+    expect(taskStateLabel(failed)).toBe("Merge failed");
+    expect(mergeStuck(failed)).toBe(true);
+    expect(
+      taskStateLabel(
+        t("30", 5, { state: "completed", mergeQueueState: "unreadable" }),
+      ),
+    ).toBe("Can't read the pull request");
+    const landing = t("5", 5, {
+      state: "completed",
+      mergeQueueState: "merging",
+    });
+    expect(taskStateLabel(landing)).toBe("Merging");
+    expect(mergeStuck(landing)).toBe(false);
+    // A closed task's stale observation does not relabel it.
+    expect(
+      taskStateLabel(
+        t("31", 5, { state: "closed", mergeQueueState: "merge_failed" }),
+      ),
+    ).toBe("Closed");
+    expect(taskStateLabel(t("2", 5))).toBe("Waiting");
   });
 });
