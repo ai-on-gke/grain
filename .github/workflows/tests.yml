@@ -1113,6 +1113,142 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The classic suite is frozen (ui/e2e/README.md): ui/e2e/QUARANTINE
+  # (tests that flaked) and ui/e2e/NONGATING (specs whose Go and ui-ng
+  # halves have landed) are left out of `ui e2e` above by
+  # playwright.config.js's grepInvert, and run here instead so that a
+  # regression in them stays visible. It never blocks: the suite step is
+  # continue-on-error, and its failures still reach the pull request as
+  # the github reporter's annotations and this job's summary. The step,
+  # not the job, carries continue-on-error so that this check reads
+  # green to anything that merges on every check passing.
+  ui-e2e-quarantined:
+    name: ui e2e (quarantined)
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: ${{ github.workflow }}-ui-e2e-quarantined-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    env:
+      PLAYWRIGHT_BROWSERS: chromium
+      PLAYWRIGHT_PROJECT: chromium
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Both lists empty is nothing to run, and not worth a frontend build
+      # and a browser download to find that out.
+      - name: Check the freeze lists for entries
+        id: lists
+        run: |
+          if sed 's/#.*//' ui/e2e/QUARANTINE ui/e2e/NONGATING | grep -q '[^[:space:]]'; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ui/e2e/QUARANTINE and ui/e2e/NONGATING are empty: nothing to run."
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache Go modules and build cache
+        if: steps.lists.outputs.any == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        if: steps.lists.outputs.any == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        if: steps.lists.outputs.any == 'true'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        if: steps.lists.outputs.any == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+            ui-ng/node_modules
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Prepare Playwright browser cache directory
+        if: steps.lists.outputs.any == 'true'
+        run: |
+          sudo mkdir -p /var/cache/playwright
+          sudo chown -R "$USER:$USER" /var/cache/playwright
+
+      - name: Cache Playwright browsers
+        if: steps.lists.outputs.any == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /var/cache/playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+
+      - name: Disable unused third-party apt sources
+        if: steps.lists.outputs.any == 'true'
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+
+      - name: Fill the npm cache from the registry
+        if: steps.lists.outputs.any == 'true'
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
+
+      - name: Build frontend
+        if: steps.lists.outputs.any == 'true'
+        run: make frontend
+
+      - name: Download the browsers the suite drives
+        if: steps.lists.outputs.any == 'true'
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if make playwright-browsers; then exit 0; fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "playwright-browsers: attempt $attempt of 5 failed; retrying in $((attempt * 20))s" >&2
+              sleep $((attempt * 20))
+            fi
+          done
+          exit 1
+
+      - name: Test the quarantined and non-gating e2e
+        id: frozen
+        if: steps.lists.outputs.any == 'true'
+        continue-on-error: true
+        run: make test-e2e-quarantined
+
+      - name: Report frozen e2e failures
+        if: steps.lists.outputs.any == 'true' && steps.frozen.outcome == 'failure'
+        run: |
+          msg="Tests in ui/e2e/QUARANTINE or ui/e2e/NONGATING failed. They do not gate this pull request; the annotations above name them."
+          echo "::warning title=ui e2e (quarantined)::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Playwright test results
+        if: steps.lists.outputs.any == 'true' && steps.frozen.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-quarantined-test-results
+          path: ui/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   lint:
     name: lint
     needs: [changes]

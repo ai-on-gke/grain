@@ -233,6 +233,10 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
+- A page with a split calls `sp.attach()` once drawn (and `sp.detach()`
+  on destroy): only a measured split clamps a remembered share, so the
+  detail pane keeps its 320px floor whatever share a wider window stored
+  (`ui-ng/e2e/next-prompt-panes.spec.js`).
 - The detail pane is always there on desktop; it is not a modal. The
   exception is Agents, whose cards are a dashboard in their own right:
   its inspector opens only on the agent `?task=` names. With none (on
@@ -521,6 +525,12 @@ Rules:
   reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
   above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
   code blocks into one paragraph. A one-line `summary` stays the row title.
+  An alert's body is read whole from its family (`?open=1&family=`: the
+  polled list carries its first line only) and kept per raise -- id and
+  `lastRaisedAt` -- since raising it again rewrites the body under the same
+  id; until that raise is read, or when the read fails, the dock shows the
+  list's first line, never an earlier raise's body
+  (`ui-ng/e2e/next-inbox-alert-body.spec.js`).
 - **A decision's actions never leave the screen.** In the Inbox inspector
   only the message in the resolution dock gives way (it shrinks and
   scrolls); the dock's actions keep their height and the inspector body
@@ -574,17 +584,25 @@ Rules:
   Something an operator should fix while the deployment keeps working (a
   base branch publishing nothing, `baseBranchPublishing`) is a
   `warning-container` banner with a warning status icon on its first line
-  and `role="status"`. It sits beside the page's error banners (Dispatch
-  blocked, `role="alert"`), above the content. Use the server's `detail`
-  sentence rather than rewording it, and link the task that holds the
-  finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+  and `role="status"` on its short title (rather than on the whole banner,
+  whose `detail` age ticks over on polls). It sits beside the page's error
+  banners (Dispatch blocked, `role="alert"`), above the content. Use the
+  server's `detail` sentence rather than rewording it, and link the task
+  that holds the finding where there is one
+  (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
 - **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
   ```` ```mermaid ```` fences in the active theme with a Diagram / Source
   toggle, and pairs Before / After fences (named in the info string or by
   matching headings) into one block with Side by side / Before / After /
   Stacked / Source (Before alone on a phone). `mermaid` is imported only
   when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
-  before it reaches the DOM. A diagram never shrinks below 75% of its
+  before it reaches the DOM. Mermaid runs in strict mode, and a
+  diagram's own `%%{init}%%` may change neither security settings nor its
+  theme, palette, fonts or CSS (`secure` in `mermaidConfigForMode`; Mermaid
+  strips those keys at every depth, front-matter `config:` and `__proto__`
+  included), so its palette follows the theme switch. A diagram's own
+  `style`/`classDef` statements are its syntax, not configuration, and
+  keep the colours they name. A diagram never shrinks below 75% of its
   natural size; on a phone a wide one scrolls inside its canvas, which
   takes keyboard focus. A source that does not parse says why and shows
   the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`). Render
@@ -761,12 +779,15 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
-  Save-Data), so navigation does not stall behind a slow origin. A
+  Save-Data alongside idle `@defer` prefetches), so navigation does not stall behind a slow origin. A
   navigation still pending after 120 ms shows the shell's top progress bar
-  (`shell/nav-progress.component.ts`), which takes no pointer events. Routes
+  (`shell/nav-progress.component.ts`), which takes no pointer events. If a lazy
+  route or `@defer` chunk cannot load (such as a 404 on an open tab after a
+  daemon upgrade), the shell surfaces a snackbar with a **Reload** action onto
+  the requested destination rather than leaving the click silent. Routes
   have no resolvers or guards that wait on polled reads; a page loads its own
-  data and shows its loading state. `e2e/next-task-page-stall.spec.js`
-  covers this.
+  data and shows its loading state. `e2e/next-task-page-stall.spec.js` and
+  `e2e/next-stale-chunk-upgrade.spec.ts` cover this.
 
 ## 10. How to test a UI change
 
