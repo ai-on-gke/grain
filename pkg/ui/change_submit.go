@@ -172,7 +172,7 @@ func (c *Client) submitChange(ctx context.Context, task model.Task) error {
 	}
 	res, err := p.Submit(ctx, task, target, change.Person{Name: by.ID})
 	if err == nil {
-		return change.RecordSubmitted(ctx, c.Store, task, target, res.Target, res.Message, false, c.now())
+		return change.RecordSubmitted(ctx, c.Store, task, target, res.Target, res.Message, false, c.now(), change.Observation{Target: target, Snapshot: res.Snapshot, Status: change.StatusSubmitted})
 	}
 	change.NoteError(ctx, p, err, c.Store, c.now())
 	if change.IsCredentialsExpired(err) {

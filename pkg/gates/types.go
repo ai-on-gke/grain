@@ -45,6 +45,14 @@ type DeliveryConfig struct {
 type AcknowledgmentConfig struct {
 	Mode string `json:"mode"`
 }
+type IntegrationConfig struct {
+	Kind      string `json:"kind"`
+	Semantics string `json:"semantics"`
+}
+type ChildrenConfig struct {
+	Tasks     []string `json:"tasks"`
+	Predicate string   `json:"predicate"`
+}
 type Binding struct {
 	ID               string          `json:"id"`
 	Type             string          `json:"type"`

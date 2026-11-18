@@ -282,7 +282,7 @@ func Run(t *testing.T, s *model.Store, db *sql.DB) {
 	if v.Dirty {
 		t.Fatal("retry did not recover")
 	}
-	task.Intent = model.IntentImplement
+	task.Interactive = true // Implementation tasks are now supported; interactive policy remains unsupported.
 	must(s.PutTask(ctx, task))
 	observe("unknown", "unknown")
 	// Diagnostic expiry causes refresh, with no task transition or event.

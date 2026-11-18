@@ -102,13 +102,20 @@ func NoteError(ctx context.Context, p Provider, err error, n Notifier, now time.
 func Observe(ctx context.Context, task model.Task, kind model.LinkKind, target string, n Notifier, now time.Time) (Observation, error) {
 	p, ok := Lookup(kind)
 	if !ok {
+		recordOutcomeObservation(ctx, n, task, Observation{Target: target}, "", true, now)
 		return Observation{}, fmt.Errorf("no provider for %s links", kind)
 	}
 	if h := HealthOf(targetKind(p)); h.Blocked != "" {
+		recordOutcomeObservation(ctx, n, task, Observation{Target: target}, "", true, now)
 		return Observation{}, &CredentialsExpiredError{Kind: targetKind(p), Detail: "blocked since " + h.Since.UTC().Format(time.RFC3339)}
 	}
 	obs, err := p.Observe(ctx, task, target)
 	NoteError(ctx, p, err, n, now)
+	if err == nil {
+		recordOutcomeObservation(ctx, n, task, obs, "", true, now)
+	} else {
+		recordOutcomeObservation(ctx, n, task, Observation{Target: target}, "", true, now)
+	}
 	return obs, err
 }
 
