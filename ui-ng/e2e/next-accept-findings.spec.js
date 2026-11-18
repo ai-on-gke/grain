@@ -125,3 +125,102 @@ for (const viewport of [
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 }
+
+// The Targeted review gate (template-less sensitive triggers, PR #1760)
+// offers Accept findings like the others, and the acceptance is pinned to
+// the commit CI last ran -- never to the diff preview's `head`, which is
+// the branch the preview compared (a name the server reads as a head that
+// has moved, refusing every acceptance made once the preview had loaded;
+// task 7054's walkthrough on a live daemon).
+const CI_COMMIT = "c0ffee1234567890abcdef1234567890abcdef12";
+const TARGETED = {
+  autoMerge: false,
+  state: "awaiting_submit",
+  mergeGates: [
+    { id: "ci", label: "CI", state: "running", detail: "waiting for checks" },
+    {
+      id: "targeted-review",
+      label: "Targeted review",
+      state: "findings",
+      detail: "A1: Charge should reject a negative amount -- intended?",
+      reviewTask: "4",
+      overridable: true,
+      acceptable: true,
+    },
+  ],
+};
+
+for (const viewport of [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+]) {
+  test(`Targeted review findings are accepted at CI's commit at ${viewport.width}px`, async ({
+    page,
+  }) => {
+    let last = null;
+    await page.route(/\/api\/tasks\/5(\?.*)?$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      try {
+        const response = await route.fetch();
+        const body = await response.json();
+        last = {
+          ...body,
+          ...TARGETED,
+          ci: { ...(body.ci || {}), commit: CI_COMMIT },
+        };
+      } catch {
+        if (!last) return route.fallback().catch(() => {});
+      }
+      await route.fulfill({ status: 200, json: last }).catch(() => {});
+    });
+    let previewServed = false;
+    await page.route(/\/api\/tasks\/5\/diff-preview(\?.*)?$/, async (route) => {
+      previewServed = true;
+      await route.fulfill({
+        status: 200,
+        json: {
+          repo: "acme/widgets",
+          base: "main",
+          head: "grain/4f86c696/task-5-tweak-payments",
+          files: [],
+          totalFiles: 0,
+          totalHunks: 0,
+        },
+      });
+    });
+    let posted = null;
+    await page.route("**/api/tasks/5/accept-findings", async (route) => {
+      posted = route.request().postDataJSON();
+      await route.fulfill({ status: 200, json: { task: "5", gates: [] } });
+    });
+    await page.setViewportSize(viewport);
+    await page.goto("/next/task/5?tab=changes");
+
+    const row = page.getByTestId("merge-gates-list");
+    const button = row.getByTestId("accept-findings-targeted-review");
+    await expect(button).toBeVisible();
+    const b = await button.boundingBox();
+    expect(b.x).toBeGreaterThanOrEqual(0);
+    expect(b.x + b.width).toBeLessThanOrEqual(viewport.width);
+    await expect.poll(() => previewServed).toBe(true);
+
+    await button.click();
+    const dialog = page.getByTestId("accept-findings-dialog");
+    await expect(dialog).toContainText("Targeted review");
+    await expect(dialog).toContainText(`At commit ${CI_COMMIT.slice(0, 12)}`);
+    await expect(dialog).not.toContainText("grain/4f86c6");
+    await dialog
+      .getByTestId("accept-findings-reason")
+      .fill("validated upstream; follow-up filed");
+    await dialog.getByTestId("accept-findings-confirm").click();
+    await expect
+      .poll(() => posted)
+      .toEqual({
+        gate: "targeted-review",
+        reviewTask: "4",
+        reason: "validated upstream; follow-up filed",
+        head: CI_COMMIT,
+      });
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+}

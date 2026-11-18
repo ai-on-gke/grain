@@ -809,9 +809,17 @@ export class TaskChangesTabComponent {
     );
   }
 
+  // The commit a decision is pinned to: CI's last commit, as the classic
+  // pane pins it. Never the diff preview's `head`, which is the branch the
+  // comparison was drawn against (a name, not a commit): the server reads
+  // a pinned name as a head that has moved, and refuses (task 7054).
+  private pinnedHead(): string | undefined {
+    return this.task().ci?.commit || undefined;
+  }
+
   protected emitAcceptFindings(g: MergeGate): void {
     const t = this.task();
-    const head = this.preview()?.head || t.ci?.commit;
+    const head = this.pinnedHead();
     this.acceptFindings.emit({
       task: t,
       gate: g,
@@ -850,7 +858,7 @@ export class TaskChangesTabComponent {
     this.forceMerge.emit({
       task: t,
       unsatisfiedGates: this.unsatisfiedGates(),
-      head: this.preview()?.head || t.ci?.commit,
+      head: this.pinnedHead(),
       run: (reason, overrideGates, head) =>
         this.store
           .act(
