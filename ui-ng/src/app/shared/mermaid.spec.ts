@@ -246,32 +246,71 @@ describe("sanitizeMermaidSvg", () => {
 
 describe("image shapes and pre-render fetches", () => {
   it("refuses every YAML/JSON image shape and remote actor icon before mermaid.render", async () => {
-    const blocked = [
-      'flowchart LR\n  A@{ img: "https://evil.example/p.png" }',
-      'flowchart LR\n  A@{ "img": "https://evil.example/p.png", "label": "x" }',
-      "flowchart LR\n  A@{ 'img': 'https://evil.example/p.png' }",
-      'flowchart LR\n  A@{ label: "a}b", img: "https://evil.example/p.png" }',
-      'flowchart LR\n  A@{ "\\u0069mg": "https://evil.example/p.png" }',
-      'flowchart LR\n  A@{ "\\x69mg": "https://evil.example/p.png" }',
-      'flowchart LR\n  A@{\n    shape: rect\n    "img": "https://evil.example/p.png"\n  }',
-      'sequenceDiagram\n  participant A\n  properties A: {"icon": "https://evil.example/p.png"}\n  A->>A: hi',
-      "sequenceDiagram\n  participant A\n  properties A: {&quot;icon&quot;: &quot;https://evil.example/p.png&quot;}\n  A->>A: hi",
-    ];
-    for (const src of blocked) {
-      expect(hasImageShape(src), src).toBe(true);
-      await expect(
-        renderMermaidSvg(src, "light", document),
-        src,
-      ).rejects.toThrow(/images/);
-    }
+    let loaderCalls = 0;
+    setMermaidLoaderForTest(async () => {
+      loaderCalls++;
+      return {
+        initialize: () => undefined,
+        render: async () => ({ svg: "<svg></svg>" }),
+      };
+    });
+    try {
+      const blocked = [
+        // Basic and 6265/6371 quoted, escaped, explicit-key and brace-in-string bypasses.
+        'flowchart LR\n  A@{ img: "https://evil.example/p.png" }',
+        'flowchart LR\n  A@{ "img": "https://evil.example/p.png", "label": "x" }',
+        "flowchart LR\n  A@{ 'img': 'https://evil.example/p.png' }",
+        "flowchart LR\n  A@{ 'im''g': 'x', 'img': 'https://evil.example/p.png' }",
+        'flowchart LR\n  A@{ label: "a}b", img: "https://evil.example/p.png" }',
+        'flowchart LR\n  A@{ "\\u0069mg": "https://evil.example/p.png" }',
+        'flowchart LR\n  A@{ "\\x69mg": "https://evil.example/p.png" }',
+        'flowchart LR\n  A@{ "\\U00000069mg": "https://evil.example/p.png" }',
+        'flowchart LR\n  A@{\n    "im\\\n    g": "https://evil.example/p.png"\n  }',
+        'flowchart LR\n  A@{ ? img\n  : "https://evil.example/p.png" }',
+        'flowchart LR\n  A@{\n    shape: rect\n    "img": "https://evil.example/p.png"\n  }',
+        // 6964 YAML anchor, tag, alias, nested and malformed-YAML bypasses.
+        'flowchart TD\n  A@{ &a img: "https://evil.example/p.png", label: "x" }',
+        'flowchart TD\n  A@{ !!str img: "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{\n    label: x\n    &k img: "https://evil.example/p.png"\n  }',
+        'flowchart TD\n  A@{ &a "img": "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{ !<tag:yaml.org,2002:str> img: "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{ &a !!str img: "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{ !!str &a img: "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{ x: &k "img", *k : "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{\n    meta:\n      img: "https://evil.example/p.png"\n  }',
+        "flowchart TD\n  A@{ : : malformed }",
+        'flowchart TD\n  A@{ img: "https://evil.example/p.png"',
+        // Mermaid preprocessor / Jison shapeData lexer desync vectors.
+        'flowchart TD\n  A@%%{init: {}}%%{ img: "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{ i%%{init: {}}%%mg: "https://evil.example/p.png" }',
+        'flowchart TD\n  A@{ label: x #a;, img: "https://evil.example/p.png" }',
+        "flowchart TD\n  A@{\n  label: |\n    '\n  }\n  B@{\n    img: \"https://evil.example/p.png\"\n    # '\n  }",
+        // Sequence diagram remote actor icons.
+        'sequenceDiagram\n  participant A\n  properties A: {"icon": "https://evil.example/p.png"}\n  A->>A: hi',
+        "sequenceDiagram\n  participant A\n  properties A: {&quot;icon&quot;: &quot;https://evil.example/p.png&quot;}\n  A->>A: hi",
+      ];
+      for (const src of blocked) {
+        expect(hasImageShape(src), src).toBe(true);
+        await expect(
+          renderMermaidSvg(src, "light", document),
+          src,
+        ).rejects.toThrow(/images/);
+      }
+      expect(loaderCalls).toBe(0);
 
-    const safe = [
-      "flowchart LR\n  A@{ shape: rect }",
-      'flowchart LR\n  A@{ shape: rect, label: "img: local caption" }',
-      'sequenceDiagram\n  participant A\n  properties A: {"icon": "@clock"}\n  A->>A: hi',
-    ];
-    for (const src of safe) {
-      expect(hasImageShape(src), src).toBe(false);
+      const safe = [
+        "flowchart LR\n  A@{ shape: rect }",
+        'flowchart LR\n  A@{ shape: rect, label: "img: local caption" }',
+        "flowchart LR\n  A@{ &a shape: rect, alias: *a }",
+        "flowchart LR\n  A@{ &a self: *a, shape: rect }",
+        '---\ntitle: "docs @{not: : yaml}"\n---\nflowchart LR\n  A --> B',
+        'sequenceDiagram\n  participant A\n  properties A: {"icon": "@clock"}\n  A->>A: hi',
+      ];
+      for (const src of safe) {
+        expect(hasImageShape(src), src).toBe(false);
+      }
+    } finally {
+      setMermaidLoaderForTest(null);
     }
   });
 

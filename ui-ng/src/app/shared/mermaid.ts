@@ -31,6 +31,7 @@
 // just above each fence (### Before / ### After) -- become one comparison
 // block that shows them side by side, one at a time, or stacked.
 
+import { JSON_SCHEMA, load as loadYaml } from "js-yaml";
 import type { Token, Tokens } from "marked";
 import { safeHref } from "../sessions/session-view";
 
@@ -695,137 +696,165 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-function decodeYamlDoubleQuoted(raw: string): string {
-  return raw.replace(
-    /\\(?:(\r?\n[ \t]*)|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|(.))/g,
-    (_, nl?: string, x?: string, u?: string, U?: string, ch?: string) => {
-      if (nl !== undefined) return "";
-      const hex = x ?? u ?? U;
-      if (hex !== undefined) {
-        const cp = parseInt(hex, 16);
-        return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
-      }
-      return ch ?? "";
-    },
-  );
+const MERMAID_DIRECTIVE_RE =
+  /%{2}\{\s*(?:(\w+)\s*:|(\w+))\s*(?:(\w+)|((?:(?!\}%{2}).|\r?\n)*))?\s*(?:\}%{2})?/gi;
+
+const UNTERMINATED_SHAPE_BLOCK = "\0unterminated";
+
+// Strip leading YAML front-matter (`---\n...\n---\n`) the same way Mermaid's
+// `matchFrontMatter` does before handing diagram text to the lexer.
+function stripMermaidFrontMatter(text: string): string {
+  let cursor = 0;
+  while (cursor < text.length && /[ \t]/.test(text[cursor])) cursor++;
+  const indent = text.slice(0, cursor);
+  if (!text.startsWith("---", cursor)) return text;
+
+  const openingEnds: number[] = [];
+  for (let i = cursor + 3; i < text.length && /\s/.test(text[i]); i++) {
+    if (text[i] === "\n") openingEnds.push(i);
+  }
+  if (openingEnds.length === 0) return text;
+
+  const closingFence = `${indent}---`;
+  const closingEnd = (i: number): number => {
+    if (text[i] !== "\n" || !text.startsWith(closingFence, i + 1)) return -1;
+    let last = -1;
+    for (
+      let k = i + 1 + closingFence.length;
+      k < text.length && /\s/.test(text[k]);
+      k++
+    ) {
+      if (text[k] === "\n") last = k;
+    }
+    return last;
+  };
+
+  let lastClosingFence = -1;
+  for (let i = openingEnds[0] + 1; i < text.length; i++) {
+    if (closingEnd(i) !== -1) lastClosingFence = i;
+  }
+  if (lastClosingFence === -1) return text;
+
+  let openingEnd = openingEnds[0];
+  for (const candidate of openingEnds) {
+    if (candidate < lastClosingFence) openingEnd = candidate;
+  }
+  for (let i = openingEnd + 1; i <= lastClosingFence; i++) {
+    const matchEnd = closingEnd(i);
+    if (matchEnd !== -1) return text.slice(matchEnd + 1);
+  }
+  return text;
 }
 
+// Mirror Mermaid 12.2.0's `preprocessDiagram` + `encodeEntities` pipeline so
+// directives (`%%{init:...}%%`), `%%` comment lines, CR line endings and
+// `#word;` entity placeholders cannot split or comment-hide a shape token.
+function preprocessMermaidSource(src: string): string {
+  const normalized = src
+    .replace(/\r\n?/g, "\n")
+    .replace(
+      /<(\w+)([^>]*)>/g,
+      (_, tag: string, attrs: string) =>
+        "<" + tag + attrs.replace(/="([^"]*)"/g, "='$1'") + ">",
+    );
+  const withoutFrontMatter = stripMermaidFrontMatter(normalized);
+  const withoutDirectives = withoutFrontMatter.replace(
+    MERMAID_DIRECTIVE_RE,
+    "",
+  );
+  const cleaned = withoutDirectives
+    .replace(/^\s*%%(?!\{)[^\n]+\n?/gm, "")
+    .trimStart();
+  const encoded = cleaned
+    .replace(/style.*:\S*#.*;/g, (s) => s.slice(0, -1))
+    .replace(/classDef.*:\S*#.*;/g, (s) => s.slice(0, -1))
+    .replace(/#\w+;/g, (s) => {
+      const inner = s.slice(1, -1);
+      return /^\+?\d+$/.test(inner)
+        ? `\ufb02°°${inner}¶ß`
+        : `\ufb02°${inner}¶ß`;
+    });
+  return `${encoded}\n`;
+}
+
+// Extract `@{...}` shape blocks using Mermaid's Jison `shapeData` /
+// `shapeDataStr` rules: `"` toggles string mode (collapsing `\n\s*` to `<br/>`
+// without backslash escapes) and the first unquoted `}` closes the block.
 function extractShapeBlocks(src: string): string[] {
   const blocks: string[] = [];
   for (let i = 0; i < src.length - 1; i++) {
     if (src[i] !== "@" || src[i + 1] !== "{") continue;
     let j = i + 2;
-    let depth = 1;
-    while (j < src.length && depth > 0) {
+    let buf = "";
+    let inStr = false;
+    let closed = false;
+    while (j < src.length) {
       const ch = src[j];
-      if (ch === '"') {
-        j++;
-        while (j < src.length) {
-          if (src[j] === "\\") {
-            j += 2;
-            continue;
-          }
-          if (src[j] === '"') {
-            j++;
-            break;
-          }
+      if (!inStr) {
+        if (ch === '"') {
+          inStr = true;
+          buf += '"';
           j++;
+          continue;
         }
-        continue;
-      }
-      if (ch === "'") {
-        j++;
-        while (j < src.length) {
-          if (src[j] === "'" && src[j + 1] === "'") {
-            j += 2;
-            continue;
-          }
-          if (src[j] === "'") {
-            j++;
-            break;
-          }
+        if (ch === "}") {
+          closed = true;
           j++;
+          break;
         }
-        continue;
+        buf += ch;
+        j++;
+      } else {
+        if (ch === '"') {
+          inStr = false;
+          buf += '"';
+          j++;
+          continue;
+        }
+        if (ch === "\n") {
+          j++;
+          while (j < src.length && /\s/.test(src[j])) j++;
+          buf += "<br/>";
+          continue;
+        }
+        buf += ch;
+        j++;
       }
-      if (ch === "{") depth++;
-      else if (ch === "}") depth--;
-      j++;
     }
-    blocks.push(src.slice(i + 2, depth === 0 ? j - 1 : j));
+    blocks.push(closed && !inStr ? buf : UNTERMINATED_SHAPE_BLOCK);
     i = j - 1;
   }
   return blocks;
 }
 
-function blockHasImgKey(block: string): boolean {
-  let k = 0;
-  const n = block.length;
-  while (k < n) {
-    while (k < n && /[\s,{}[\]]/.test(block[k])) k++;
-    if (k >= n) break;
-    if (block[k] === "#") {
-      while (k < n && block[k] !== "\n") k++;
-      continue;
-    }
-    let explicitKey = false;
-    if (block[k] === "?" && /\s/.test(block[k + 1] ?? "")) {
-      explicitKey = true;
-      k++;
-      while (k < n && /\s/.test(block[k])) k++;
-      if (k >= n) break;
-    }
-    if (block[k] === ":") {
-      k++;
-      continue;
-    }
-    let key = "";
-    if (block[k] === '"') {
-      const start = ++k;
-      while (k < n) {
-        if (block[k] === "\\") {
-          k += 2;
-          continue;
-        }
-        if (block[k] === '"') break;
-        k++;
-      }
-      key = decodeYamlDoubleQuoted(block.slice(start, k)).trim().toLowerCase();
-      if (k < n && block[k] === '"') k++;
-    } else if (block[k] === "'") {
-      const start = ++k;
-      while (k < n) {
-        if (block[k] === "'" && block[k + 1] === "'") {
-          k += 2;
-          continue;
-        }
-        if (block[k] === "'") break;
-        k++;
-      }
-      key = block.slice(start, k).replace(/''/g, "'").trim().toLowerCase();
-      if (k < n && block[k] === "'") k++;
-    } else {
-      const start = k;
-      while (k < n && !/[:,{}[\]\r\n]/.test(block[k])) {
-        if (block[k] === "#" && k > start && /\s/.test(block[k - 1])) break;
-        k++;
-      }
-      key = block.slice(start, k).trim().toLowerCase();
-    }
-    while (
-      k < n &&
-      (explicitKey
-        ? /\s/.test(block[k])
-        : block[k] === " " || block[k] === "\t")
-    ) {
-      k++;
-    }
-    if (k < n && block[k] === ":") {
-      if (key === "img") return true;
-      k++;
-    }
+function docHasImgKey(value: unknown, seen: Set<unknown>): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((item) => docHasImgKey(item, seen));
+  }
+  const obj = value as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(obj)) {
+    if (key.trim().toLowerCase() === "img") return true;
+    if (docHasImgKey(obj[key], seen)) return true;
   }
   return false;
+}
+
+// Run a `@{...}` block through the same `js-yaml` `JSON_SCHEMA` load that
+// Mermaid's `FlowDB.addVertex` uses (`{\n...\n}` for single-line blocks, raw
+// text + `\n` when it contains a newline). Refuse if `img` appears at any
+// object level or if `load` throws.
+function blockHasImgKey(block: string): boolean {
+  if (block === UNTERMINATED_SHAPE_BLOCK) return true;
+  const yamlData = block.includes("\n") ? `${block}\n` : `{\n${block}\n}`;
+  try {
+    const doc = loadYaml(yamlData, { schema: JSON_SCHEMA });
+    return docHasImgKey(doc, new Set());
+  } catch {
+    return true;
+  }
 }
 
 function decodeBasicEntities(s: string): string {
@@ -863,20 +892,22 @@ function hasSequenceRemoteIcon(src: string): boolean {
 }
 
 // hasImageShape reports a diagram written with Mermaid's YAML/JSON image
-// shape (`A@{ img: "https://...", ... }`, including quoted keys, YAML escapes
-// and braces inside earlier strings) or a sequenceDiagram actor `icon`
-// property, whose URL Mermaid loads in the live document before
-// sanitizeMermaidSvg runs.
+// shape (`A@{ img: "https://...", ... }`, parsed with js-yaml's JSON_SCHEMA to
+// match FlowDB.addVertex across anchors, tags, aliases, escapes and block
+// mappings) or a sequenceDiagram actor `icon` property, whose URL Mermaid
+// loads in the live document before sanitizeMermaidSvg runs.
 export function hasImageShape(src: string): boolean {
-  return (
-    extractShapeBlocks(src).some(blockHasImgKey) || hasSequenceRemoteIcon(src)
-  );
+  const prepared = preprocessMermaidSource(src);
+  if (
+    prepared.includes("@{") &&
+    extractShapeBlocks(prepared).some(blockHasImgKey)
+  ) {
+    return true;
+  }
+  return hasSequenceRemoteIcon(src) || hasSequenceRemoteIcon(prepared);
 }
 
-// hasExternalStyleUrl reports a `classDef`, `style`, `linkStyle` or C4 style
-// directive carrying `@import` or a non-`#` `url(...)` / `image-set(...)`,
-// which Mermaid would attach to `document.body` while measuring the diagram.
-export function hasExternalStyleUrl(src: string): boolean {
+function sourceHasExternalStyleUrl(src: string): boolean {
   const stmtRe = /(?:^|[;\n])[ \t]*(?:classDef|style|linkStyle)\b([^\n;]*)/gi;
   let m: RegExpExecArray | null;
   while ((m = stmtRe.exec(src)) !== null) {
@@ -887,6 +918,16 @@ export function hasExternalStyleUrl(src: string): boolean {
     if (hasUnsafeCssFetch(m[1])) return true;
   }
   return false;
+}
+
+// hasExternalStyleUrl reports a `classDef`, `style`, `linkStyle` or C4 style
+// directive carrying `@import` or a non-`#` `url(...)` / `image-set(...)`,
+// which Mermaid would attach to `document.body` while measuring the diagram.
+export function hasExternalStyleUrl(src: string): boolean {
+  return (
+    sourceHasExternalStyleUrl(src) ||
+    sourceHasExternalStyleUrl(preprocessMermaidSource(src))
+  );
 }
 
 // renderMermaidSvg renders one source to sanitized SVG. Renders run one

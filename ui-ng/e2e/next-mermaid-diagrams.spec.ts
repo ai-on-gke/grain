@@ -385,3 +385,90 @@ test("hostile Mermaid image shapes, actor icons and style URLs never fetch remot
     }).catch(() => {});
   }
 });
+
+test("YAML-anchored and tagged Mermaid @{...} image keys never fetch remote URLs", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  test.setTimeout(90_000);
+  const leaked: string[] = [];
+  await page.route("**/*evil.example*", (route) => {
+    leaked.push(route.request().url());
+    return route.abort();
+  });
+
+  const body = [
+    "```mermaid Anchored key",
+    "flowchart TD",
+    '  A@{ &a img: "https://evil.example/anchor.png", label: "x" }',
+    "```",
+    "",
+    "```mermaid Tagged key",
+    "flowchart TD",
+    '  A@{ !!str img: "https://evil.example/tag.png" }',
+    "```",
+    "",
+    "```mermaid Verbatim tagged key",
+    "flowchart TD",
+    '  A@{ !<tag:yaml.org,2002:str> img: "https://evil.example/verbatim-tag.png" }',
+    "```",
+    "",
+    "```mermaid Anchored quoted and combined key",
+    "flowchart TD",
+    '  A@{ &a "img": "https://evil.example/anchor-quoted.png" } --> B@{ &b !!str img: "https://evil.example/combined.png" }',
+    "```",
+    "",
+    "```mermaid Block anchored key",
+    "flowchart TD",
+    "  A@{",
+    "    label: x",
+    '    &k img: "https://evil.example/block-anchor.png"',
+    "  }",
+    "```",
+    "",
+    "```mermaid Safe anchored shape",
+    "flowchart LR",
+    "  A@{ &s shape: rect, label: 'ok' } --> B[Done]",
+    "```",
+  ].join("\n");
+
+  const task = await api(demoServer, accessCode, "POST", "/api/tasks", {
+    title: `Mermaid YAML anchor/tag guard ${Date.now()}`,
+  });
+  try {
+    await api(
+      demoServer,
+      accessCode,
+      "POST",
+      `/api/tasks/${task.id}/comments`,
+      { body },
+    );
+    await page.goto(`task/${task.id}`);
+
+    for (const name of [
+      "Anchored key",
+      "Tagged key",
+      "Verbatim tagged key",
+      "Anchored quoted and combined key",
+      "Block anchored key",
+    ]) {
+      const region = page.getByRole("region", { name, exact: true });
+      await expect(region.getByRole("status")).toContainText(
+        "Diagram could not be rendered",
+        { timeout: 20_000 },
+      );
+    }
+
+    const safe = page.getByRole("region", { name: "Safe anchored shape" });
+    await expect(safe.locator("svg")).toBeVisible({ timeout: 20_000 });
+    await expect(safe.locator("svg")).toContainText("Done");
+
+    expect(leaked).toEqual([]);
+  } finally {
+    await fetch(`${demoServer}/api/tasks/${task.id}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessCode}` },
+    }).catch(() => {});
+  }
+});
