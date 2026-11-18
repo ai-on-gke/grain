@@ -1350,6 +1350,15 @@ const (
 	// nothing. Written by orchestrator's finish, read by
 	// settleSecurityHold; blocks nothing.
 	LinkReviewerHead LinkKind = "reviewer-head"
+	// LinkReviewerPush records, on a review carrying
+	// LinkPushesReviewedBranch, one fast-forward of the reviewed branch
+	// its own run pushed through the git proxy (-> "<old sha>..<new
+	// sha>"; Store.RecordReviewedBranchPush), one link per push. It is
+	// what tells the review's commits from one a person pushed to the
+	// same branch from outside grain while it ran: only a head one of
+	// these reaches is the review's LinkReviewerHead, and only the commits
+	// they carry are listed as the review's. Blocks nothing.
+	LinkReviewerPush LinkKind = "reviewer-push"
 	// LinkTrustBoundaryCleared records the commit grain last read this
 	// task's pull request file list at in full, and classified
 	// (-> "<trustboundary.Version>@<head sha>"): one that touched no
