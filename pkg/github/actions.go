@@ -532,27 +532,31 @@ func JobLogFromRunZip(data []byte, jobName string) (string, error) {
 			steps = append(steps, step{n, f})
 		}
 	}
-	read := func(f *zip.File) (string, error) {
+	read := func(f *zip.File, limit int64) (string, error) {
 		rc, err := f.Open()
 		if err != nil {
 			return "", fmt.Errorf("reading %s from the run's logs: %w", f.Name, err)
 		}
 		defer rc.Close()
-		b, err := io.ReadAll(io.LimitReader(rc, maxZippedJobLog))
+		b, err := io.ReadAll(io.LimitReader(rc, limit))
 		if err != nil {
 			return "", fmt.Errorf("reading %s from the run's logs: %w", f.Name, err)
 		}
 		return strings.ToValidUTF8(string(b), ""), nil
 	}
 	if whole != nil {
-		if text, err := read(whole); err != nil || text != "" {
+		if text, err := read(whole, maxZippedJobLog); err != nil || text != "" {
 			return text, err
 		}
 	}
 	slices.SortStableFunc(steps, func(a, b step) int { return a.n - b.n })
 	var out strings.Builder
 	for _, s := range steps {
-		text, err := read(s.file)
+		left := int64(maxZippedJobLog - out.Len())
+		if left <= 0 {
+			break
+		}
+		text, err := read(s.file, left)
 		if err != nil {
 			return "", err
 		}
@@ -567,7 +571,8 @@ func JobLogFromRunZip(data []byte, jobName string) (string, error) {
 	return out.String(), nil
 }
 
-// maxZippedJobLog bounds one file read out of a run's logs zip.
+// maxZippedJobLog bounds a job's log read out of a run's logs zip: its
+// one file, or all its step files together.
 const maxZippedJobLog = 64 << 20
 
 // zipSafeName is a job name as GitHub writes it into a run's logs zip,
