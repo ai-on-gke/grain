@@ -607,6 +607,9 @@ func newGChat(cfg GChatServerConfig) (*Server, *gchatServer, error) {
 // app's resolved identity and whether it can post, each space's
 // transport -- in the method's description, which Settings' Test shows.
 func (g *gchatServer) configure(ctx context.Context, config map[string]any) (*protocol.Method, error) {
+	if err := validateListenAddr(g.cfg.Listen); err != nil {
+		return nil, fmt.Errorf("gchat: %w", err)
+	}
 	c, err := parseGChatConfig(config, g.cfg.WebhookHosts)
 	if err != nil {
 		return nil, fmt.Errorf("gchat: %v", err)
@@ -1146,6 +1149,18 @@ func (g *gchatServer) usageTool(context.Context, map[string]any) ([]byte, error)
 	return json.Marshal(out)
 }
 
+func parseGChatFlags(args []string, logger *log.Logger) (string, error) {
+	fs := newFlags(GChatName, logOutput(logger))
+	listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGChatPort), "the data-plane listener's loopback address")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() > 0 {
+		return "", fmt.Errorf("grain capability gchat takes no arguments, only -listen")
+	}
+	return *listen, nil
+}
+
 func init() {
 	register(Builder{
 		Name:        GChatName,
@@ -1154,15 +1169,11 @@ func init() {
 		Summary:     "post to allowlisted Google Chat spaces as a bot, one way, through a webhook or a Chat app (mint_post)",
 		Args:        []string{"-listen", "127.0.0.1:" + strconv.Itoa(DefaultGChatPort)},
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
-			fs := newFlags(GChatName, logOutput(logger))
-			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGChatPort), "the data-plane listener's loopback address")
-			if err := fs.Parse(args); err != nil {
+			listen, err := parseGChatFlags(args, logger)
+			if err != nil {
 				return nil, err
 			}
-			if fs.NArg() > 0 {
-				return nil, fmt.Errorf("grain capability gchat takes no arguments, only -listen")
-			}
-			return NewGChat(GChatServerConfig{Listen: listenAddr(env, *listen), Token: env(protocol.DataPlaneTokenEnv), Log: logger})
+			return NewGChat(GChatServerConfig{Listen: listenAddr(env, listen), Token: env(protocol.DataPlaneTokenEnv), Log: logger})
 		},
 	})
 }

@@ -294,6 +294,12 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 // so a daemon restart clears any alert whose server has since been removed,
 // disabled or returned to an unalerted needs-config.
 func openCapabilityServerAlertIDs(ctx context.Context, store *model.Store) map[string]bool {
+	return openCapabilityServerAlertIDsOnHostd(ctx, store, "")
+}
+
+// openCapabilityServerAlertIDsOnHostd is openCapabilityServerAlertIDs scoped
+// to hostdName (or the deployment registry when hostdName is empty).
+func openCapabilityServerAlertIDsOnHostd(ctx context.Context, store *model.Store, hostdName string) map[string]bool {
 	if store == nil {
 		return nil
 	}
@@ -308,7 +314,16 @@ func openCapabilityServerAlertIDs(ctx context.Context, store *model.Store) map[s
 	out := map[string]bool{}
 	for _, n := range open {
 		id, ok := strings.CutPrefix(n.Subject, prefix)
-		if !ok || id == "" || strings.Contains(id, "@") {
+		if !ok || id == "" {
+			continue
+		}
+		if hostdName != "" {
+			id, ok = strings.CutSuffix(id, "@"+hostdName)
+			if !ok || id == "" {
+				continue
+			}
+		}
+		if strings.Contains(id, "@") {
 			continue
 		}
 		out[id] = true

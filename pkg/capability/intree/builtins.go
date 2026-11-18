@@ -403,40 +403,55 @@ func CheckBuiltinConfig(name string, config map[string]any) error {
 }
 
 // CheckBuiltinArgs checks the command-line flags of a built-in server (such as
-// -listen on git, figma, gchat, gcp and host-script) so Settings refuses a bad
-// flag even before Server settings are filled in.
+// -listen on git, figma, gchat, gcp and host-script) using the server's own
+// flag set so Settings refuses a bad flag even before Server settings are
+// filled in, and cannot be bypassed by preceding value-taking flags.
 func CheckBuiltinArgs(name string, args []string) error {
+	if len(args) >= 2 && args[0] == "capability" && args[1] == name {
+		args = args[2:]
+	}
+	var listen string
+	var err error
 	switch name {
-	case "git", FigmaName, "gchat", "gcp", "host-script":
+	case "git":
+		var f gitFlags
+		f, err = parseGitFlags(args, nil)
+		listen = f.listen
+	case FigmaName:
+		listen, err = parseFigmaFlags(args, nil)
+	case "gchat":
+		listen, err = parseGChatFlags(args, nil)
+	case "gcp":
+		var f gcpFlags
+		f, err = parseGCPFlags(args, nil)
+		listen = f.listen
+	case "host-script":
+		listen, _, err = parseHostScriptFlags(args, nil)
 	default:
 		return nil
 	}
-	start := 0
-	if len(args) >= 2 && args[0] == "capability" && args[1] == name {
-		start = 2
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	for i := start; i < len(args); i++ {
-		a := args[i]
-		if a == "--" {
-			break
-		}
-		if a == "-listen" || a == "--listen" {
-			if i+1 >= len(args) {
-				return fmt.Errorf("%s: flag needs an argument: %s", name, a)
-			}
-			if err := validateListenAddr(args[i+1]); err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			i++
-			continue
-		}
-		for _, prefix := range []string{"-listen=", "--listen="} {
-			if v, ok := strings.CutPrefix(a, prefix); ok {
-				if err := validateListenAddr(v); err != nil {
-					return fmt.Errorf("%s: %w", name, err)
-				}
-			}
-		}
+	if err := validateListenAddr(listen); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// CheckBuiltinServerArgs validates the command-line flags when cfg invokes one
+// of grain's in-tree capability servers, whether through its canonical
+// built-in entry or an operator's own `grain capability <name>` / `grain-<name>`
+// entry.
+func CheckBuiltinServerArgs(cfg protocol.ServerConfig) error {
+	if !cfg.Stdio() {
+		return nil
+	}
+	if inName := InTreeName(cfg); inName != "" {
+		return CheckBuiltinArgs(inName, cfg.Args)
+	}
+	if cfg.Builtin != "" && (filepath.Base(cfg.Command) == BuiltinCommand || cfg.Command == HostEntry(cfg.Builtin)) {
+		return CheckBuiltinArgs(cfg.Builtin, cfg.Args)
 	}
 	return nil
 }

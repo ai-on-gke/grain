@@ -1285,7 +1285,7 @@ func NewHostScript(cfg HostScriptConfig) (*Server, error) {
 		h.listening = true
 		return nil
 	}
-	if m != nil {
+	if m != nil && validateListenAddr(cfg.Listen) == nil {
 		if err := ensureListen(); err != nil {
 			return nil, err
 		}
@@ -1297,6 +1297,9 @@ func NewHostScript(cfg HostScriptConfig) (*Server, error) {
 		return nil, err
 	}
 	err = s.configurable(hostScriptConfigSchema, func(_ context.Context, config map[string]any) ([]*protocol.Method, error) {
+		if err := validateListenAddr(cfg.Listen); err != nil {
+			return nil, fmt.Errorf("host-script: %w", err)
+		}
 		scripts, err := parseHostScripts(config, cfg.Environ())
 		if err != nil {
 			return nil, err
@@ -1327,6 +1330,16 @@ func defaultHostScriptDataDir() string {
 	return filepath.Join(os.TempDir(), "grain-host-script")
 }
 
+func parseHostScriptFlags(args []string, logger *log.Logger) (listen, dataDir string, err error) {
+	fs := newFlags("host-script", logOutput(logger))
+	l := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultHostScriptPort), "the data-plane listener's loopback address")
+	d := fs.String("data-dir", "", "where each grant's script file, scratch directory and audit.jsonl live (default: the user's cache directory)")
+	if err := fs.Parse(args); err != nil {
+		return "", "", err
+	}
+	return *l, *d, nil
+}
+
 func init() {
 	register(Builder{
 		Name:        "host-script",
@@ -1334,16 +1347,14 @@ func init() {
 		Host:        true,
 		Summary:     "operator-defined bash scripts, which a sandbox runs here as `grain host-script <name>` (mint_host-script)",
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
-			fs := newFlags("host-script", logOutput(logger))
-			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultHostScriptPort), "the data-plane listener's loopback address")
-			dataDir := fs.String("data-dir", "", "where each grant's script file, scratch directory and audit.jsonl live (default: the user's cache directory)")
-			if err := fs.Parse(args); err != nil {
+			listen, dataDir, err := parseHostScriptFlags(args, logger)
+			if err != nil {
 				return nil, err
 			}
-			if *dataDir == "" {
-				*dataDir = defaultHostScriptDataDir()
+			if dataDir == "" {
+				dataDir = defaultHostScriptDataDir()
 			}
-			return NewHostScript(HostScriptConfig{Listen: listenAddr(env, *listen), DataDir: *dataDir, Log: logger})
+			return NewHostScript(HostScriptConfig{Listen: listenAddr(env, listen), DataDir: dataDir, Log: logger})
 		},
 	})
 }

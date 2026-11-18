@@ -169,4 +169,23 @@ func TestStaleCapabilityServerAlertClearsAfterRestartWhenUnconfiguredOrRemoved(t
 	if n, err := store.OpenNotification(ctx, wsSubj); err != nil || n == nil {
 		t.Errorf("hostd-scoped %s notification = %+v (err %v), want preserved", wsSubj, n, err)
 	}
+
+	// Once ws-a's own registry syncs with no placed git entry, its @ws-a alert
+	// clears via openCapabilityServerAlertIDsOnHostd without touching ws-b's.
+	_, wsClear := capabilityServerAlertsOnHostd(ctx, store, "ws-a")
+	wsBDrop, _ := capabilityServerAlertsOnHostd(ctx, store, "ws-b")
+	wsBDrop(servers.Status{ID: gitID, State: servers.Failed, Error: "ws-b down"})
+	wsReg := servers.New(servers.Options{
+		OnClear: wsClear,
+		Alerted: openCapabilityServerAlertIDsOnHostd(ctx, store, "ws-a"),
+	})
+	t.Cleanup(wsReg.Close)
+	wsReg.Sync(ctx, map[string]protocol.ServerConfig{})
+	if n, err := store.OpenNotification(ctx, wsSubj); err != nil || n != nil {
+		t.Errorf("after ws-a Sync, %s notification = %+v (err %v), want cleared", wsSubj, n, err)
+	}
+	wsBSubj := model.NotificationSubject(model.FamilyCapabilityServerDown, gitID+"@ws-b")
+	if n, err := store.OpenNotification(ctx, wsBSubj); err != nil || n == nil {
+		t.Errorf("ws-b %s notification = %+v (err %v), want preserved", wsBSubj, n, err)
+	}
 }

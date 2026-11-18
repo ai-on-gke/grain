@@ -672,7 +672,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		var waiting string
 		var we *protocol.WaitingError
 		if isConfigure && errors.As(err, &we) {
-			waiting = we.Waiting
+			waiting = Scrub(we.Waiting, resolved.values())
 		}
 		startFailed := (isConfigure && protocol.IsStartError(err)) || (exited && !cfg.OnHost())
 		startErr := ""

@@ -164,16 +164,51 @@ func TestAProbeKeepsAnInvalidListenPort(t *testing.T) {
 		if got := listenAddr(probe, badAddr); got != badAddr {
 			t.Errorf("listenAddr(probe, %q) = %q, want it unchanged", badAddr, got)
 		}
-		if err := CheckBuiltinArgs("git", []string{"capability", "git", "-listen", badAddr}); err == nil {
-			t.Errorf("CheckBuiltinArgs(git, -listen %q) = nil, want error", badAddr)
+		for _, name := range []string{"git", FigmaName, "gchat", "gcp", "host-script"} {
+			if err := CheckBuiltinArgs(name, []string{"capability", name, "-listen", badAddr}); err == nil {
+				t.Errorf("CheckBuiltinArgs(%s, -listen %q) = nil, want error", name, badAddr)
+			}
 		}
-		s, err := newConfigurableGit(GitConfig{Listen: listenAddr(probe, badAddr), Repos: []string{"o/r"}, Token: "t", Upstream: "http://127.0.0.1:1"})
+		// A preceding value-taking flag whose value is "--" must not stop
+		// flag parsing before -listen.
+		for _, tc := range []struct {
+			name string
+			args []string
+		}{
+			{"git", []string{"capability", "git", "-upstream", "--", "-listen", badAddr}},
+			{"gcp", []string{"capability", "gcp", "-project", "--", "-listen", badAddr}},
+			{"host-script", []string{"capability", "host-script", "-data-dir", "--", "-listen", badAddr}},
+		} {
+			if err := CheckBuiltinArgs(tc.name, tc.args); err == nil {
+				t.Errorf("CheckBuiltinArgs(%s, %v) = nil, want error", tc.name, tc.args)
+			}
+		}
+
+		gitSrv, err := newConfigurableGit(GitConfig{Listen: listenAddr(probe, badAddr), Repos: []string{"o/r"}, Token: "t", Upstream: "http://127.0.0.1:1"})
 		if err != nil {
 			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
 		}
-		_, err = attachConfigured(t, s, nil, nil)
-		if err == nil || protocol.IsStartError(err) || !strings.Contains(err.Error(), badAddr) {
-			t.Errorf("probing with -listen %q: %v (IsStartError=%v), want a configuration refusal naming %q", badAddr, err, protocol.IsStartError(err), badAddr)
+		figmaSrv, err := NewFigma(FigmaServerConfig{Listen: listenAddr(probe, badAddr)})
+		if err != nil {
+			t.Fatalf("NewFigma(%q): %v", badAddr, err)
+		}
+		gchatSrv, err := NewGChat(GChatServerConfig{Listen: listenAddr(probe, badAddr)})
+		if err != nil {
+			t.Fatalf("NewGChat(%q): %v", badAddr, err)
+		}
+		gcpSrv, err := newConfigurableGCP(GCPConfig{Listen: listenAddr(probe, badAddr)})
+		if err != nil {
+			t.Fatalf("newConfigurableGCP(%q): %v", badAddr, err)
+		}
+		hsSrv, err := NewHostScript(HostScriptConfig{Listen: listenAddr(probe, badAddr), DataDir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("NewHostScript(%q): %v", badAddr, err)
+		}
+		for _, srv := range []*Server{gitSrv, figmaSrv, gchatSrv, gcpSrv, hsSrv} {
+			_, err = attachConfigured(t, srv, nil, nil)
+			if err == nil || protocol.IsStartError(err) || !strings.Contains(err.Error(), badAddr) {
+				t.Errorf("probing %s with -listen %q: %v (IsStartError=%v), want a configuration refusal naming %q", srv.Name, badAddr, err, protocol.IsStartError(err), badAddr)
+			}
 		}
 	}
 	if err := CheckBuiltinArgs("git", []string{"capability", "git", "-listen", "127.0.0.1:4254"}); err != nil {
