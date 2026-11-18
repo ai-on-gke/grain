@@ -574,8 +574,9 @@ and needs no access code day to day. `grain logout` revokes it.
 `--issue-token=false` keeps a context that signs in through the proxy
 on every call instead. A deployment with `externalAgentApi` off cannot
 issue one, says so, and keeps that proxy-every-time context.
-`$GRAIN_ID_TOKEN` counts as a sign-in of this kind, never as an access
-code, whenever the daemon says it signed in a person.
+`$GRAIN_ID_TOKEN` counts as a sign-in of this kind — refused as an
+unaccepted sign-in when the daemon does not sign it in as a person, and
+never stored or labelled as an access code.
 
 IAP itself lets no request through on a `gma_` token alone ("IAP:
 sign-in required"). So a context minted through IAP remembers IAP's
