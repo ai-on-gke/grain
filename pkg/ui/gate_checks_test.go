@@ -643,8 +643,12 @@ func TestGateChecksLatestWorkflowNeedsCurrentAttemptJobs(t *testing.T) {
 			f.checks = []github.CheckRun{{ID: 1, CheckSuiteID: 11, Name: "go", App: "github-actions", HeadSHA: "H1", Status: "completed", Conclusion: &success, StartedAt: &oldJob}}
 			oldRun := github.WorkflowRun{ID: 101, CheckSuiteID: 11, Path: "unit.yml", Event: "push", HeadBranch: "feature", HeadSHA: "H1", Status: "completed", Conclusion: "success", RunAttempt: 1, StartedAt: &oldStarted}
 			f.workflows = []github.WorkflowRun{oldRun}
-			put := func(id, run int64, attempt int, conclusion string) {
-				if e := c.Store.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: "acme/widgets", CheckRunID: id, Commit: "H1", App: "github-actions", JobName: "go", RunID: run, RunAttempt: attempt, Conclusion: conclusion}); e != nil {
+			put := func(id, run int64, attempt int, conclusion string, names ...string) {
+				name := "go"
+				if len(names) > 0 {
+					name = names[0]
+				}
+				if e := c.Store.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: "acme/widgets", CheckRunID: id, Commit: "H1", App: "github-actions", JobName: name, RunID: run, RunAttempt: attempt, Conclusion: conclusion}); e != nil {
 					t.Fatal(e)
 				}
 			}
@@ -690,12 +694,40 @@ func TestGateChecksLatestWorkflowNeedsCurrentAttemptJobs(t *testing.T) {
 			now = now.Add(2 * time.Second)
 			read("met") // Ordinary source timestamps can prove the current attempt.
 			if rerun {
+				failure := "failure"
+				f.checks = append(f.checks, github.CheckRun{ID: 3, CheckSuiteID: current.CheckSuiteID, Name: "extra", App: "github-actions", HeadSHA: "H1", Status: "completed", Conclusion: &failure})
+				now = now.Add(time.Second)
+				read("unknown") // Another passing current job cannot hide an unclassified leaf.
+				f.checks[2].StartedAt = current.StartedAt
+				now = now.Add(time.Second)
+				read("unknown") // Equal timestamp resolution does not prove old or current.
+				f.checks[2].StartedAt = &oldJob
+				now = now.Add(time.Second)
+				read("unknown") // Historical membership alone does not prove its exact attempt.
+				put(3, current.ID, 1, "failure", "extra")
+				now = now.Add(time.Second)
+				read("unmet") // An unreplaced exact-head failure still blocks a failed-job rerun.
+				recovered := "success"
+				f.checks[2].Conclusion = &recovered
+				put(3, current.ID, 1, recovered, "extra")
+				now = now.Add(time.Second)
+				read("met")
 				f.checks[1].StartedAt = nil
 				now = now.Add(time.Second)
 				read("unknown") // Membership is ambiguous without either time or stored attempt proof.
 				put(2, current.ID, current.RunAttempt, "success")
 				now = now.Add(time.Second)
 				read("met") // Historical attempt 1 records must not poison valid attempt 2 proof.
+				f.checks[1].StartedAt = &oldJob
+				now = now.Add(time.Second)
+				read("unknown") // Current attempt metadata cannot contradict an older start.
+				f.checks[1].StartedAt = &newJob
+				f.checks[0].StartedAt = &newJob
+				now = now.Add(time.Second)
+				read("unknown") // Historical metadata cannot hide a check starting in the new attempt.
+				f.checks[0].StartedAt = &oldJob
+				now = now.Add(time.Second)
+				read("met")
 			}
 			cancelled := "cancelled"
 			f.checks[1].Conclusion, f.workflows[len(f.workflows)-1].Conclusion = &cancelled, cancelled

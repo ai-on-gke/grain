@@ -592,6 +592,8 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 	type generationOrder struct{ leaf, leafRun, run int64 }
 	generationOrders := map[string]*generationOrder{}
 	currentJobs := map[suiteLineage]bool{}
+	currentIdentities := map[string]bool{}
+	historicalUnknown := map[string]github.WorkflowRun{}
 	for _, a := range collection.Checks {
 		conclusion := ""
 		if a.Conclusion != nil {
@@ -623,22 +625,46 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 				order.leafRun = lineage.run
 			}
 			attempt.Order, attempt.Attempt, attempt.LeafOrder = lineage.run, lineage.attempt, a.ID
+			parent := latestWorkflows[lineage.key]
+			if lineage.run != parent.ID {
+				continue
+			}
 			// A suite can survive reruns. Its latest parent attempt is not
 			// evidence that every historical leaf belongs to that attempt.
 			if record, found := recordedByID[a.ID]; found && record.RunAttempt > 0 {
+				start := suiteStarted[a.CheckSuiteID]
+				if start != nil && a.StartedAt != nil &&
+					((int64(record.RunAttempt) == lineage.attempt && a.StartedAt.Before(*start)) ||
+						(int64(record.RunAttempt) < lineage.attempt && a.StartedAt.After(*start))) {
+					s.Complete = false
+					f.Gap = "Recorded job attempt and source start times disagree."
+					continue
+				}
 				attempt.Attempt = int64(record.RunAttempt)
 			} else if lineage.attempt > 1 {
 				start := suiteStarted[a.CheckSuiteID]
+				if start != nil && a.StartedAt != nil && a.StartedAt.Before(*start) {
+					historicalUnknown[attempt.Identity] = parent
+					continue
+				}
 				if start == nil || a.StartedAt == nil || !a.StartedAt.After(*start) {
+					positive := parent.Status == "completed" && (parent.Conclusion == "success" || parent.Conclusion == "neutral" || parent.Conclusion == "skipped")
+					if !s.All || positive {
+						s.Complete = false
+					}
 					f.Gap = "Job membership in the latest workflow attempt is unproved."
 					continue
 				}
 			}
-			parent := latestWorkflows[lineage.key]
-			if attempt.Order != parent.ID || attempt.Attempt != int64(parent.RunAttempt) {
-				continue // Retained history is not part of the current check set.
+			if attempt.Order != parent.ID || attempt.Attempt > int64(parent.RunAttempt) {
+				continue
 			}
-			currentJobs[suiteLineage{lineage.key, attempt.Order, attempt.Attempt}] = true
+			// A failed-job rerun retains unreplaced jobs of this same run.
+			// Exact historical attempts remain candidates per job identity.
+			if attempt.Attempt == int64(parent.RunAttempt) {
+				currentJobs[suiteLineage{lineage.key, attempt.Order, attempt.Attempt}] = true
+				currentIdentities[attempt.Identity] = true
+			}
 		} else {
 			coverage.unresolved = true
 			if a.App == "github-actions" {
@@ -654,6 +680,13 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 		s.Attempts = append(s.Attempts, attempt)
 	}
 
+	for identity, parent := range historicalUnknown {
+		positive := parent.Status == "completed" && (parent.Conclusion == "success" || parent.Conclusion == "neutral" || parent.Conclusion == "skipped")
+		if !currentIdentities[identity] && (!s.All || positive) {
+			s.Complete = false
+			f.Gap = "Unreplaced historical job lacks exact attempt proof."
+		}
+	}
 	for key, run := range latestWorkflows {
 		positive := run.Status == "completed" && (run.Conclusion == "success" || run.Conclusion == "neutral" || run.Conclusion == "skipped")
 		if positive && !currentJobs[suiteLineage{key, run.ID, int64(run.RunAttempt)}] {
@@ -694,7 +727,10 @@ func collectGitHubChecks(ctx context.Context, reader shadowForgeReader, repo mod
 	}
 	sortShadowAttempts(s.Attempts)
 	sortShadowAttempts(legacy.Attempts)
-	s.Version = gates.Digest(s)
+	s.Version = gates.Digest(struct {
+		Source   gates.CheckSource
+		Recorded string
+	}{s, recorded.Version})
 	legacy.Version = gates.Digest(legacy)
 	return s, legacy
 }
