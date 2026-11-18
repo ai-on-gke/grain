@@ -57,6 +57,7 @@ const CI_OFF_DETAIL =
 class FakeRepoApi {
   calls: RepoCall[] = [];
   ciMode = "grain";
+  upstreamRepo = "";
   refusePut: string | null = null;
   refuseMessage = 'ciMode: must be "grain", "github", or "none"';
   issueImport: Record<string, unknown> = {
@@ -173,6 +174,7 @@ class FakeRepoApi {
         ciMode: this.ciMode,
         mergeOnGreen: true,
         requireBranchUpToDate: false,
+        upstreamRepo: this.upstreamRepo,
         issueImport: this.issueImport,
       });
     }
@@ -241,6 +243,19 @@ class FakeRepoApi {
     }
     if (key === "PUT /api/repos/{owner}/{name}/ci-mode") {
       this.ciMode = String((body as { ciMode?: string })?.ciMode);
+    }
+    if (key === "PUT /api/repos/{owner}/{name}/settings") {
+      const b = (body ?? {}) as { upstreamRepo?: string };
+      if (b.upstreamRepo !== undefined) {
+        const trimmed = b.upstreamRepo.trim();
+        const self = `${params?.["owner"] ?? ""}/${params?.["name"] ?? ""}`;
+        this.upstreamRepo =
+          trimmed.toLowerCase() === self.toLowerCase() ? "" : trimmed;
+      }
+      return Promise.resolve({
+        ciMode: this.ciMode,
+        upstreamRepo: this.upstreamRepo,
+      });
     }
     return Promise.resolve({ ok: true });
   };
@@ -1331,6 +1346,136 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       limited.el.querySelector('[data-testid="declarations-locked-reason"]')
         ?.textContent,
     ).toContain("cannot switch declarations on or off");
+  });
+
+  it("loads, saves, clears, and validates the upstream pull-request repository on the Agents tab", async () => {
+    const api = new FakeRepoApi();
+    api.upstreamRepo = "acme-upstream/platform";
+    const { el, harness } = await mountRepo("/repos/acme/platform/agents", api);
+
+    const input = () =>
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-repo-upstream-repo"]',
+      )!;
+    const summary = () =>
+      el.querySelector('[data-testid="repo-upstream-repo-summary"]')
+        ?.textContent ?? "";
+    const saveBtn = () =>
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="save-repo-agents-btn"]',
+      )!;
+    const errEl = () =>
+      el.querySelector('[data-testid="repo-upstream-repo-error"]');
+
+    expect(input().placeholder).toBe("upstream-owner/repo");
+    expect(input().value).toBe("acme-upstream/platform");
+    expect(summary()).toContain(
+      "Pull requests for tasks targeting acme/platform open against",
+    );
+    expect(summary()).toContain("acme-upstream/platform");
+
+    // Save a new upstream owner/name
+    input().value = "other-org/platform";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+
+    saveBtn().click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+
+    const saveCall = api.calls.find(
+      (c) =>
+        c.key === "PUT /api/repos/{owner}/{name}/settings" &&
+        (c.body as { upstreamRepo?: string })?.upstreamRepo ===
+          "other-org/platform",
+    );
+    expect(saveCall).toBeDefined();
+    expect(api.upstreamRepo).toBe("other-org/platform");
+    expect(summary()).toContain("other-org/platform");
+    expect(errEl()).toBeNull();
+
+    // Validation refusal on malformed value keeps stored summary and shows error inline
+    api.refusePut = "PUT /api/repos/{owner}/{name}/settings";
+    api.refuseMessage =
+      'upstreamRepo: invalid repository reference "not-a-repo"';
+    input().value = "not-a-repo";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+
+    saveBtn().click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+
+    expect(errEl()?.textContent).toContain("upstreamRepo:");
+    expect(input().getAttribute("aria-invalid")).toBe("true");
+    expect(summary()).toContain("other-org/platform");
+
+    // Editing clears the validation refusal
+    input().value = "";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(errEl()).toBeNull();
+    expect(input().getAttribute("aria-invalid")).toBeNull();
+
+    // Clearing to "" resets upstreamRepo and opens PRs against this repo itself
+    api.refusePut = null;
+    saveBtn().click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "PUT /api/repos/{owner}/{name}/settings" &&
+          (c.body as { upstreamRepo?: string })?.upstreamRepo === "",
+      ),
+    ).toBe(true);
+    expect(api.upstreamRepo).toBe("");
+    expect(input().value).toBe("");
+    expect(summary()).toContain(
+      "Pull requests for tasks targeting acme/platform open against",
+    );
+    expect(summary()).toContain("acme/platform");
+  });
+
+  it("disables upstream repository input and save button when configRepoOnly or missing PUT settings authorization", async () => {
+    const configLocked = new FakeRepoApi();
+    (configLocked.configBody as Record<string, unknown>)["configRepoOnly"] =
+      true;
+    const lockedMount = await mountRepo(
+      "/repos/acme/platform/agents",
+      configLocked,
+    );
+    expect(
+      lockedMount.el.querySelector<HTMLInputElement>(
+        '[data-testid="input-repo-upstream-repo"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(
+      lockedMount.el.querySelector<HTMLButtonElement>(
+        '[data-testid="save-repo-agents-btn"]',
+      )!.disabled,
+    ).toBe(true);
+    TestBed.resetTestingModule();
+
+    const viewer = new FakeRepoApi();
+    viewer.configBody.access = {
+      role: "grain/viewer",
+      roles: ["grain/viewer"],
+      full: false,
+      scopes: ["repos:read", "capabilities:read"],
+    };
+    const viewerMount = await mountRepo("/repos/acme/platform/agents", viewer);
+    expect(
+      viewerMount.el.querySelector<HTMLInputElement>(
+        '[data-testid="input-repo-upstream-repo"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(
+      viewerMount.el.querySelector<HTMLButtonElement>(
+        '[data-testid="save-repo-agents-btn"]',
+      )!.disabled,
+    ).toBe(true);
   });
 });
 

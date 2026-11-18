@@ -204,6 +204,27 @@ interface AgentFields {
   setup: string;
   prompt: string;
   caps: string;
+  upstreamRepo: string;
+}
+
+export interface RepoSettings {
+  ciMode?: string;
+  mergeOnGreen?: boolean;
+  requireBranchUpToDate?: boolean;
+  baseRepairBypassesHumanGates?: boolean;
+  watchDefaultBranch?: boolean;
+  setupCommand?: string;
+  promptExtension?: string;
+  upstreamRepo?: string;
+  issueImport?: {
+    enabled?: boolean;
+    label?: string;
+    repo?: string;
+    approved?: boolean;
+    intervalSeconds?: number;
+    effectiveIntervalSeconds?: number;
+  };
+  [key: string]: unknown;
 }
 
 interface BranchRow {
@@ -1021,6 +1042,58 @@ interface PendingReleaseRow {
                       "
                       (input)="repoCaps.set($any($event.target).value)"
                     />
+                  </div>
+                  <div class="s-field" data-testid="repo-upstream-repo">
+                    <label class="s-label" for="rp-upstream-repo"
+                      >Upstream pull-request repository</label
+                    >
+                    <input
+                      id="rp-upstream-repo"
+                      class="s-input tabular"
+                      type="text"
+                      autocomplete="off"
+                      data-testid="input-repo-upstream-repo"
+                      placeholder="upstream-owner/repo"
+                      [value]="upstreamRepo()"
+                      [disabled]="!canWriteSettings()"
+                      [attr.aria-invalid]="upstreamRepoError() ? 'true' : null"
+                      [attr.aria-describedby]="
+                        upstreamRepoError()
+                          ? 'rp-upstream-repo-err rp-upstream-repo-hint'
+                          : 'rp-upstream-repo-hint'
+                      "
+                      (input)="
+                        upstreamRepo.set($any($event.target).value);
+                        upstreamRepoError.set(null)
+                      "
+                    />
+                    @if (upstreamRepoError(); as upErr) {
+                      <span
+                        id="rp-upstream-repo-err"
+                        class="s-field-error"
+                        role="alert"
+                        data-testid="repo-upstream-repo-error"
+                        >{{ upErr }}</span
+                      >
+                    }
+                    <span id="rp-upstream-repo-hint" class="s-hint">
+                      When set (owner/name), tasks targeting this fork push
+                      branches to {{ repoSlug() }} while grain fetches base refs
+                      from and opens cross-repository pull requests against the
+                      upstream repository. Leave empty to open pull requests on
+                      this repository itself.
+                    </span>
+                    <span
+                      class="s-caption"
+                      data-testid="repo-upstream-repo-summary"
+                    >
+                      Pull requests for tasks targeting {{ repoSlug() }} open
+                      against
+                      <code class="s-mono">{{
+                        storedUpstreamRepo() || repoSlug()
+                      }}</code
+                      >.
+                    </span>
                   </div>
                   <div class="s-inline">
                     <button
@@ -2008,6 +2081,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     setup: "",
     prompt: "",
     caps: "",
+    upstreamRepo: "",
   });
   private readonly workflowBaseline = signal<string>("[]");
 
@@ -2027,7 +2101,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (
       ab.setup !== this.setupCommand() ||
       ab.prompt !== this.promptExtension() ||
-      ab.caps !== this.repoCaps()
+      ab.caps !== this.repoCaps() ||
+      ab.upstreamRepo !== this.upstreamRepo()
     ) {
       out.push("agent settings");
     }
@@ -2043,6 +2118,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
   protected readonly repoCaps = signal("");
+  protected readonly upstreamRepo = signal("");
+  protected readonly storedUpstreamRepo = signal("");
+  protected readonly upstreamRepoError = signal<string | null>(null);
 
   protected readonly branches = signal<BranchRow[]>([]);
   protected readonly newBranchName = signal("");
@@ -2210,7 +2288,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     return (
       this.can("PUT /api/repos/{owner}/{name}/setup-command") ||
       this.can("PUT /api/repos/{owner}/{name}/prompt-extension") ||
-      this.can("PUT /api/repos/{owner}/{name}/capabilities")
+      this.can("PUT /api/repos/{owner}/{name}/capabilities") ||
+      this.can("PUT /api/repos/{owner}/{name}/settings")
     );
   }
 
@@ -2286,6 +2365,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.setupCommand.set(ab.setup);
     this.promptExtension.set(ab.prompt);
     this.repoCaps.set(ab.caps);
+    this.upstreamRepo.set(ab.upstreamRepo);
+    this.upstreamRepoError.set(null);
     const wf = JSON.parse(this.workflowBaseline()) as [string, string][];
     this.workflows.set(wf.map(([path, text]) => ({ path, text })));
     const cur = this.workflows().find(
@@ -2374,42 +2455,33 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (this.can("GET /api/repos/{owner}/{name}/settings")) {
       jobs.push(
         this.api
-          .get<Record<string, unknown>>(
-            "GET /api/repos/{owner}/{name}/settings",
-            p,
-          )
+          .get<RepoSettings>("GET /api/repos/{owner}/{name}/settings", p)
           .then((st) => {
-            if (st?.["ciMode"]) this.ciMode.set(String(st["ciMode"]));
-            if (st?.["mergeOnGreen"] !== undefined) {
-              this.mergeOnGreen.set(Boolean(st["mergeOnGreen"]));
+            if (st?.ciMode) this.ciMode.set(String(st.ciMode));
+            if (st?.mergeOnGreen !== undefined) {
+              this.mergeOnGreen.set(Boolean(st.mergeOnGreen));
             }
-            if (st?.["requireBranchUpToDate"] !== undefined) {
-              this.requireUpToDate.set(Boolean(st["requireBranchUpToDate"]));
+            if (st?.requireBranchUpToDate !== undefined) {
+              this.requireUpToDate.set(Boolean(st.requireBranchUpToDate));
             }
-            if (st?.["baseRepairBypassesHumanGates"] !== undefined) {
+            if (st?.baseRepairBypassesHumanGates !== undefined) {
               this.bypassHumanGates.set(
-                Boolean(st["baseRepairBypassesHumanGates"]),
+                Boolean(st.baseRepairBypassesHumanGates),
               );
             }
-            if (st?.["watchDefaultBranch"] !== undefined) {
-              this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
+            if (st?.watchDefaultBranch !== undefined) {
+              this.watchDefaultBranch.set(Boolean(st.watchDefaultBranch));
             }
-            if (st?.["setupCommand"] !== undefined) {
-              this.setupCommand.set(String(st["setupCommand"] ?? ""));
+            if (st?.setupCommand !== undefined) {
+              this.setupCommand.set(String(st.setupCommand ?? ""));
             }
-            if (st?.["promptExtension"] !== undefined) {
-              this.promptExtension.set(String(st["promptExtension"] ?? ""));
+            if (st?.promptExtension !== undefined) {
+              this.promptExtension.set(String(st.promptExtension ?? ""));
             }
-            const imp = st?.["issueImport"] as
-              | {
-                  enabled?: boolean;
-                  label?: string;
-                  repo?: string;
-                  approved?: boolean;
-                  intervalSeconds?: number;
-                  effectiveIntervalSeconds?: number;
-                }
-              | undefined;
+            const up = String(st?.upstreamRepo ?? "");
+            this.upstreamRepo.set(up);
+            this.storedUpstreamRepo.set(up);
+            const imp = st?.issueImport;
             if (imp && typeof imp === "object") {
               this.importEnabled.set(Boolean(imp.enabled));
               this.importLabel.set(String(imp.label ?? ""));
@@ -2427,6 +2499,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               ...b,
               setup: this.setupCommand(),
               prompt: this.promptExtension(),
+              upstreamRepo: up,
             }));
           })
           .catch(() => undefined),
@@ -3242,11 +3315,38 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected async saveAgentTabSettings(): Promise<void> {
     const p = this.params();
+    this.upstreamRepoError.set(null);
     try {
+      if (this.can("PUT /api/repos/{owner}/{name}/settings")) {
+        const nextUpstream = this.upstreamRepo().trim();
+        if (nextUpstream !== this.storedUpstreamRepo()) {
+          const updated = await this.api.put<RepoSettings>(
+            "PUT /api/repos/{owner}/{name}/settings",
+            p,
+            { upstreamRepo: nextUpstream },
+          );
+          const savedUpstream =
+            updated?.upstreamRepo !== undefined
+              ? String(updated.upstreamRepo ?? "")
+              : nextUpstream;
+          this.upstreamRepo.set(savedUpstream);
+          this.storedUpstreamRepo.set(savedUpstream);
+          this.agentBaseline.update((b) => ({
+            ...b,
+            upstreamRepo: savedUpstream,
+          }));
+        } else {
+          this.upstreamRepo.set(nextUpstream);
+        }
+      }
       if (this.can("PUT /api/repos/{owner}/{name}/setup-command")) {
         await this.api.put("PUT /api/repos/{owner}/{name}/setup-command", p, {
           setupCommand: this.setupCommand(),
         });
+        this.agentBaseline.update((b) => ({
+          ...b,
+          setup: this.setupCommand(),
+        }));
       }
       if (this.can("PUT /api/repos/{owner}/{name}/prompt-extension")) {
         await this.api.put(
@@ -3254,6 +3354,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           p,
           { promptExtension: this.promptExtension() },
         );
+        this.agentBaseline.update((b) => ({
+          ...b,
+          prompt: this.promptExtension(),
+        }));
       }
       if (this.can("PUT /api/repos/{owner}/{name}/capabilities")) {
         const defaultCapabilities = this.repoCaps()
@@ -3263,15 +3367,19 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         await this.api.put("PUT /api/repos/{owner}/{name}/capabilities", p, {
           defaultCapabilities,
         });
+        this.agentBaseline.update((b) => ({
+          ...b,
+          caps: this.repoCaps(),
+        }));
       }
-      this.agentBaseline.set({
-        setup: this.setupCommand(),
-        prompt: this.promptExtension(),
-        caps: this.repoCaps(),
-      });
       this.snackbar.show("Saved repository agent settings");
     } catch (err) {
-      this.error.set(errText(err));
+      const text = errText(err);
+      if (/upstreamRepo/.test(text)) {
+        this.upstreamRepoError.set(text);
+      } else {
+        this.error.set(text);
+      }
     }
   }
 
