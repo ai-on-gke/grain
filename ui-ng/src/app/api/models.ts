@@ -90,6 +90,16 @@ export interface DispatchCondition {
   check?: boolean | string;
 }
 
+// InstallNotice is pkg/ui/install_notice.go's InstallNotice.
+export interface InstallNotice {
+  kind: string;
+  message: string;
+  command?: string;
+  signals?: string[];
+  affectedClis?: string[];
+  docsUrl?: string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
@@ -99,6 +109,11 @@ export interface GrainConfig {
   configRepo?: string;
   gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
+  // installNotice is something about how this deployment is installed
+  // that only its operator can fix -- today a host-mode install no
+  // installer has migrated (pkg/ui/install_notice.go). The shell shows
+  // it as a standing banner until the install is migrated.
+  installNotice?: InstallNotice | null;
   capabilities?: CapabilityOption[];
   // ciCapabilities is what can be granted to a repository's CI jobs
   // (the repo page's CI capabilities card).
@@ -279,8 +294,9 @@ export interface Task {
   updatedAt?: string;
   proposedBy?: string;
   questionSummary?: string;
-  // The summary a run gave the note it answered in (comment_on_issue's
-  // summary), for an awaiting_reply task that asked nothing.
+  // The one line a run gave the closing note an awaiting_reply task
+  // rests on (comment_on_issue's summary); set only when the task asked
+  // nothing (pkg/ui Task.NoteSummary).
   noteSummary?: string;
   questionCommentId?: number;
   // Who wrote the newest person's comment no run has been shown yet.
@@ -562,6 +578,10 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; absent where every
+  // kind is admitted (ui.CapabilityMethod.Policy).
+  policy?: Record<string, string>;
   aliasOf?: string[];
 }
 
@@ -704,7 +724,78 @@ export interface Attempt {
   agentFramework?: string;
 }
 
+export interface GateObservationResult {
+  evaluation_id: string;
+  revision: number;
+  disposition: string;
+  invalidation_reason: string | null;
+  retry_at: string | null;
+  result: {
+    type: string;
+    binding_id?: string;
+    version: number;
+    status: string;
+    summary: string;
+    human_text: string | null;
+    agent_text?: string | null;
+    observed_at: string;
+    valid_until: string;
+    context_digest: string;
+    evidence: {
+      kind: string;
+      id: string;
+      version: string;
+      head?: string | null;
+    }[];
+    dependencies: { key: string; version: string; complete: boolean }[];
+    waits: { event: string; key?: string; owner: string; deadline: string }[];
+    error: { code: string; message: string } | null;
+  };
+}
+export interface GateObservations {
+  mode: "observation_only";
+  authority: "legacy";
+  source_revision: string;
+  compared_at: string;
+  legacy_state: string;
+  dirty: boolean;
+  bindings: {
+    id: string;
+    type: string;
+    version: number;
+    config: unknown;
+    origin: {
+      kind?: string;
+      id?: string;
+      revision?: string;
+      imported?: boolean;
+    };
+    subject?: {
+      kind: string;
+      authority?: string;
+      repository?: string;
+      ref?: string;
+      task_id?: string;
+      change_kind?: string;
+      id?: string;
+    };
+  }[];
+  results: GateObservationResult[];
+}
+export interface GateObservationDiagnostics {
+  started_at: string;
+  evaluations: number;
+  counts: Record<string, number>;
+  history: {
+    generation: number;
+    at: string;
+    comparison: string;
+    view: GateObservations;
+  }[];
+}
 export interface TaskDetail extends Task {
+  gate_observations?: GateObservations;
+  gate_observation_diagnostics?: GateObservationDiagnostics;
   comments?: Comment[];
   attempts?: Attempt[];
   olderComments?: number;
@@ -768,6 +859,29 @@ export interface ConsoleSessionList {
   created?: string;
   capabilities?: CapabilityOption[];
   networkAccessOptions?: string[];
+}
+
+// ClearNotificationsRequest is POST /api/notifications/clear's body
+// (pkg/ui/notifications_clear.go): every filter given narrows the open
+// notifications, none is every open alert.
+export interface ClearNotificationsRequest {
+  subject?: string;
+  severity?: string;
+  olderThan?: string;
+  ids?: number[];
+  reason?: string;
+  dryRun?: boolean;
+}
+
+export interface ClearNotificationsResponse {
+  matched: number;
+  cleared: number;
+  ids: number[];
+  // expectedBack is how many are level-triggered and will be raised
+  // again while their condition holds.
+  expectedBack: number;
+  expectedBackFamilies?: string[];
+  dryRun?: boolean;
 }
 
 export interface Notification {

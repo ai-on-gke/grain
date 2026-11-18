@@ -105,7 +105,11 @@ import type { TaskDocumentItem, TaskDocumentSource } from "./task-docs";
                   }
                   <span class="muted tabular">{{ doc.lineCount }} lines</span>
                 </div>
-                <h2 class="docs-reader-title" data-testid="docs-reader-title">
+                <h2
+                  [attr.aria-level]="pane() ? 3 : null"
+                  class="docs-reader-title"
+                  data-testid="docs-reader-title"
+                >
                   {{ doc.title }}
                 </h2>
               </div>
@@ -144,6 +148,10 @@ import type { TaskDocumentItem, TaskDocumentSource } from "./task-docs";
 export class TaskDocsTabComponent {
   readonly documents = input.required<readonly TaskDocumentItem[]>();
   readonly loading = input(false);
+  // pane is set when the task detail sits in a split pane: its title is
+  // an h2 there, so the reader title steps down to level 3 beside the
+  // other section headings.
+  readonly pane = input(false);
   readonly selectedId = model<string | null>(null);
   readonly openFullscreen = output<string>();
 

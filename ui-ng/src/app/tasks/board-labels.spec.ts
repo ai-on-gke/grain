@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { Board } from "../api/models";
-import { boardLabels } from "./board-labels";
+import { boardLabels, classicBoardHint, nextBoardParams } from "./board-labels";
 
 const b = (id: string, name: string, folder?: string): Board => ({
   id,
@@ -46,5 +46,58 @@ describe("boardLabels", () => {
     const got = boardLabels([b("7", "Triage", "Ops"), b("9", "Triage", "Ops")]);
     expect(got.get("7")).toBe("Triage (7), in Ops");
     expect(got.get("9")).toBe("Triage (9), in Ops");
+  });
+});
+
+describe("nextBoardParams", () => {
+  const board = (kind: string, query?: string): Board => ({
+    id: "1",
+    name: "B",
+    kind,
+    ...(query === undefined ? {} : { query }),
+  });
+
+  it("applies a list board saved from /next/tasks here", () => {
+    expect(
+      nextBoardParams(
+        board(
+          "list",
+          "tab=asked&group=repo&q=retry&repo=acme%2Fw&view=timeline",
+        ),
+      ),
+    ).toEqual({
+      tab: "asked",
+      group: "repo",
+      q: "retry",
+      repo: "acme/w",
+      view: "timeline",
+    });
+    expect(nextBoardParams(board("list"))).toEqual({
+      tab: null,
+      group: null,
+      q: null,
+      repo: null,
+      view: null,
+    });
+  });
+
+  it("sends every other kind to its classic page", () => {
+    for (const kind of ["kanban", "gantt", "report", "panels", "tree"]) {
+      expect(nextBoardParams(board(kind))).toBeNull();
+    }
+  });
+
+  it("sends a list narrowed in the classic grammar to its classic page", () => {
+    expect(nextBoardParams(board("list", "f=state:any:queued"))).toBeNull();
+    expect(nextBoardParams(board("list", "q=retry&sort=created"))).toBeNull();
+  });
+
+  it("names a classic board by the kind the Boards index shows", () => {
+    expect(classicBoardHint(board("gantt"))).toBe("timeline");
+    expect(classicBoardHint(board("panels"))).toBe("dashboard");
+    expect(classicBoardHint(board("kanban"))).toBe("kanban");
+    expect(classicBoardHint(board("list", "f=state:any:queued"))).toBe(
+      "filtered list",
+    );
   });
 });

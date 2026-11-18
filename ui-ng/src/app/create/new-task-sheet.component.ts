@@ -850,6 +850,7 @@ const POSTURE_OPTIONS: readonly PillOption[] = [
               [offered]="offeredCapabilities()"
               [held]="effectiveCapabilities()"
               [repo]="repoForAccess()"
+              [policyVerdicts]="true"
               [disabled]="busy()"
               (heldChange)="set('capabilities', $event)"
             />

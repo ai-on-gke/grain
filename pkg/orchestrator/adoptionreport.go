@@ -70,11 +70,13 @@ type AdoptedCIJobNote struct {
 type AdoptedRunNote struct {
 	Run, Task string
 	// Framework is the agent framework the run was on (claude, codex,
-	// antigravity), when its row names one; empty for a run that ended
-	// in setup, before its CLI was chosen. withRows fills it in.
+	// antigravity), when its row names one. A run that ended in setup
+	// usually names one too, since RunDispatch records its framework
+	// before building its sandbox. withRows fills it in.
 	Framework string
 	// Setup is a lost run that ended while it was still setting up: its
-	// sandbox building, no agent CLI started, so no framework yet.
+	// sandbox building, no agent CLI started (model.RunEnd.Started), so
+	// nothing its framework's run location could have carried.
 	Setup bool
 	// Reason is why a lost run was lost; for an adopted one, the gap no
 	// daemon was reading its spool for.
@@ -179,7 +181,7 @@ func (r *AdoptionReport) withRows(at time.Time, interrupted []model.RunEnd, fram
 		}
 		seen[e.Run] = true
 		note := AdoptedRunNote{Run: e.Run, Task: e.Task, Framework: e.Framework, Reason: StoppedWithTheDaemon, Session: sessions[e.Task]}
-		if e.Framework == "" {
+		if !e.Started {
 			note.Setup = true
 			note.Reason = "it was still setting up (no agent CLI started yet) when the daemon stopped"
 		}
@@ -249,8 +251,9 @@ func (r *AdoptionReport) RunIDs() []string {
 }
 
 // LostByFramework is how many runs were lost on each framework, with
-// "setup" for runs that had none yet and "unknown" for a run whose row
-// names none, as "claude 7, codex 1".
+// "setup" for runs that had not started their CLI yet, whatever framework
+// they were assigned, and "unknown" for a run whose row names none, as
+// "claude 7, codex 1".
 func (r *AdoptionReport) LostByFramework() string {
 	counts := map[string]int{}
 	for _, l := range r.Lost {
@@ -270,10 +273,10 @@ func (r *AdoptionReport) LostByFramework() string {
 
 func frameworkLabel(l AdoptedRunNote) string {
 	switch {
-	case l.Framework != "":
-		return l.Framework
 	case l.Setup:
 		return "setup"
+	case l.Framework != "":
+		return l.Framework
 	}
 	return "unknown"
 }
@@ -316,7 +319,11 @@ func (r *AdoptionReport) describe() string {
 		fmt.Fprintf(&b, "- lost CI job: %s in run %s (%s@%s): %s\n",
 			l.Job, l.Run, l.Repo, l.Ref, l.Reason)
 	}
-	expected, unexpected := r.splitLost()
+	expected, setup, unexpected := r.splitLost()
+	if setup > 0 {
+		fmt.Fprintf(&b, "\n%d lost run(s) were still setting up, with no agent CLI started for any run location to "+
+			"carry, so they are expected rather than a regression -- check only that each one's task was re-queued.\n", setup)
+	}
 	if len(expected) > 0 {
 		b.WriteString("\nThis install's own run locations lose these frameworks' runs on a restart, so their lost " +
 			"runs are expected here rather than a regression -- check only that each lost run's task was re-queued:\n\n")
@@ -326,7 +333,7 @@ func (r *AdoptionReport) describe() string {
 	}
 	if unexpected > 0 {
 		which := "Any lost run"
-		if len(expected) > 0 {
+		if len(expected) > 0 || setup > 0 {
 			which = "Any other lost run"
 		}
 		b.WriteString("\n" + which + " is a regression: a CLI whose run location carries it across a " +
@@ -341,10 +348,16 @@ func (r *AdoptionReport) describe() string {
 }
 
 // splitLost is the frameworks, sorted, of the lost runs Expected
-// accounts for, and how many lost runs it does not.
-func (r *AdoptionReport) splitLost() (expected []string, unexpected int) {
+// accounts for, how many lost runs were still in setup (no CLI started,
+// so nothing a run location could carry, whatever their framework), and
+// how many lost runs neither accounts for.
+func (r *AdoptionReport) splitLost() (expected []string, setup, unexpected int) {
 	seen := map[string]bool{}
 	for _, l := range r.Lost {
+		if l.Setup {
+			setup++
+			continue
+		}
 		if why := r.Expected[l.Framework]; l.Framework == "" || why == "" {
 			unexpected++
 			continue
@@ -355,7 +368,7 @@ func (r *AdoptionReport) splitLost() (expected []string, unexpected int) {
 		}
 	}
 	sort.Strings(expected)
-	return expected, unexpected
+	return expected, setup, unexpected
 }
 
 // adoptionFor is the adoption report this process made (adoption,

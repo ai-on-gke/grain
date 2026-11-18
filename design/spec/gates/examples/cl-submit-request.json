@@ -4,7 +4,7 @@
   "action": "change.submit",
   "target": {
     "kind": "change",
-    "authority": "review.example.com",
+    "authority": "forge.example",
     "repository": "ai-on-gke/grain",
     "change_kind": "cl",
     "id": "12345"
@@ -14,5 +14,7 @@
   "expected_contract_revision": 1,
   "expected_policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "expected_context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "reason": null
+  "reason": null,
+  "expected_authority_epoch": 1,
+  "expected_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 }

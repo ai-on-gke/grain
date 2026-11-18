@@ -535,3 +535,50 @@ func TestPathTriggerReviewCarriesTestingGuidanceAndRepoScopedCIRead(t *testing.T
 		}
 	}
 }
+
+// Firing a template-less sensitive trigger and recording findings marks the
+// Targeted review merge gate acceptable, and accepting those findings on
+// targeted-review clears the gate.
+func TestTargetedReviewFindingsMarkTargetedGateAcceptable(t *testing.T) {
+	t.Parallel()
+	tr := gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")
+	tr.Template, tr.Sensitive = model.SecurityReviewTemplateID, true
+	ctx, store, _, client, task := finishGated(t, []model.PathTrigger{tr}, "config/secrets/prod.yml")
+
+	reviewID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	review := reloaded(t, ctx, store, reviewID)
+	result := toolResult(reviewFinding("plaintext credential in fixture", "config/secrets/prod.yml", 1))
+	if err := orchestrator.ProcessResult(ctx, store, client, review, result, reviewID+"-1", baseTime.Add(20*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult for targeted review: %v", err)
+	}
+	completeReview(t, ctx, store, reviewID)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
+
+	got := reloaded(t, ctx, store, task.ID)
+	gates := map[string]model.MergeGate{}
+	for _, g := range model.ComputeMergeGates(got, nil, nil) {
+		gates[g.ID] = g
+	}
+	g, ok := gates[model.GateTargetedReview]
+	if !ok || g.State != model.GateStateFindings || !g.Acceptable || g.ReviewTask != reviewID {
+		t.Fatalf("targeted-review gate = %+v (present %v), want acceptable findings from %s", g, ok, reviewID)
+	}
+	if _, hasCode := gates[model.GateReview]; hasCode {
+		t.Errorf("unexpected code-review gate %+v when only a targeted trigger fired", gates[model.GateReview])
+	}
+	if model.AcceptReviewFindings(&got, model.ReviewFindingsAcceptance{
+		Gate: model.GateReview, ReviewTask: reviewID, Reason: "wrong gate", By: "alice", At: baseTime,
+	}) {
+		t.Fatal("targeted findings were accepted on the code-review gate")
+	}
+	if !model.AcceptReviewFindings(&got, model.ReviewFindingsAcceptance{
+		Gate: model.GateTargetedReview, ReviewTask: reviewID, Reason: "fixture only", By: "alice", At: baseTime,
+	}) {
+		t.Fatal("targeted findings were not accepted on targeted-review")
+	}
+	for _, after := range model.ComputeMergeGates(got, nil, nil) {
+		if after.ID == model.GateTargetedReview && after.State != model.GateStatePassed {
+			t.Errorf("targeted-review gate after acceptance = %+v, want passed", after)
+		}
+	}
+}

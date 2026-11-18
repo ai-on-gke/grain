@@ -106,6 +106,10 @@ export interface InboxEntry {
   summary: string;
   pillLabel: string;
   pillTone: Tone;
+  // iconKind, when set, is the status icon's kind in place of kind: a
+  // report files under kind "reply" for its dock but asked nothing, so
+  // it sets "info" to draw the circled-i shape instead of the reply shape.
+  iconKind?: string;
   at: string | null;
   // rationale is the "why this needs a person" line the inspector shows.
   rationale: string;
@@ -714,8 +718,10 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       const e = taskEntry(t, "reply", "info");
       e.pillLabel = "Info";
       e.pillTone = "neutral";
+      e.iconKind = "info";
       e.summary =
         plainMarkdownSummary(t.noteSummary || "") ||
+        t.noteSummary ||
         "Answered on the task itself.";
       e.rationale =
         "The run finished with an answer or report and asked nothing. Acknowledge it once read; reply only if you want another run.";

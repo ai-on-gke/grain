@@ -28,6 +28,12 @@ import (
 
 // Primary keys for model tables in Grain.
 var tablePrimaryKeys = map[string][]string{
+	"gate_health_base_source":         {"repo", "ref"},
+	"gate_health_workflow_source":     {"repo", "run_id", "attempt"},
+	"gate_outcome_source":             {"task_id", "resource"},
+	"gate_observation_shadow":         {"task_id"},
+	"gate_observation_shadow_history": {"task_id", "generation"},
+
 	"grain_schema":                   {"id"},
 	"grain_instance":                 {"singleton"},
 	"task":                           {"id"},
@@ -105,6 +111,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_usage":                 {"run_id"},
 	"usage_capacity":                 {"connection_id", "model"},
 	"usage_setting":                  {"id"},
+	"task_pr_feedback":               {"task_id", "event_key"},
 	"task_context":                   {"task_id"},
 	"task_brief_edit":                {"id"},
 	"tuning_recommendation":          {"id"},

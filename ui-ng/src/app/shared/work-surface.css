@@ -142,9 +142,46 @@ g-confirm-dialog .scope-list {
   font-size: 14px;
 }
 
+/* A long holder list scrolls inside the dialog rather than pushing its
+   buttons off a phone screen. */
+g-confirm-dialog .confirm-items {
+  max-height: 40vh;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+g-confirm-dialog .confirm-item-detail {
+  display: block;
+  font-size: 12.5px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
 g-confirm-dialog .scope-check {
   margin-bottom: 12px;
   font-weight: 500;
+}
+
+g-confirm-dialog .confirm-reason {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+g-confirm-dialog .confirm-reason textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
 }
 
 /* ---------- Tasks list | detail ( persistent 30/70 Inbox replica ) ---------- */

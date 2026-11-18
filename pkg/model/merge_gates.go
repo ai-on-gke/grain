@@ -194,7 +194,7 @@ func ClearReviewFindingsForGate(t *Task, gate string) {
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
 		if l.Kind == LinkReviewFindings {
 			r, ok := ParseReviewFindingsRecord(l.Target)
-			return !ok || r.Gate == gate || (gate == GateReview && strings.HasPrefix(r.Gate, "trigger:"))
+			return !ok || findingsGateCovers(*t, gate, r.Gate)
 		}
 		if gate == GateSecurityReview && l.Kind == LinkHumanReviewHold {
 			r, ok := ParseHumanReviewReason(l.Target)
@@ -504,7 +504,7 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	for _, rf := range ReviewFindings(t) {
 		switch {
 		case rf.Gate == GateSecurityReview || rf.Gate == GateQA:
-		case strings.HasPrefix(rf.Gate, "trigger:") && targetedTriggers[strings.TrimPrefix(rf.Gate, "trigger:")]:
+		case rf.Gate == GateTargetedReview || (strings.HasPrefix(rf.Gate, "trigger:") && targetedTriggers[strings.TrimPrefix(rf.Gate, "trigger:")]):
 			targetedFindings = append(targetedFindings, rf)
 		default:
 			codeFindings = append(codeFindings, rf)

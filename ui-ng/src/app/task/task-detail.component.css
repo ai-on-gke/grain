@@ -18,7 +18,6 @@ g-task-detail {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  container: task-page / inline-size;
 }
 
 .task-page > :not(.task-layout) {
@@ -35,7 +34,9 @@ g-task-detail {
 }
 
 /* These hosts already fill a bounded stage/pane. Query its actual size
-   rather than the window, so a docked Director also narrows the layout. */
+   rather than the window, so a docked Director also narrows the layout.
+   Keep it the only container here: a nested one on .task-page made Chromium
+   intermittently drop every box under it after switching tasks. */
 g-task-page > g-task-detail,
 .tasks-detail-pane {
   container: task-detail / size;
@@ -198,6 +199,16 @@ g-task-page > g-task-detail,
   font-size: 14px;
 }
 
+/* A closing note asked nothing: a hairline card, not the question's
+   filled container. */
+.note-card {
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface);
+  font-size: 14px;
+}
+
 .msg.is-question {
   border-color: var(--md-sys-color-primary);
   border-width: 2px;
@@ -310,7 +321,7 @@ g-task-page > g-task-detail,
   background: var(--md-sys-color-surface-container);
 }
 
-@container task-page (max-width: 1060px) {
+@container task-detail (max-width: 1060px) {
   .task-layout {
     grid-template-columns: minmax(0, 1fr);
   }

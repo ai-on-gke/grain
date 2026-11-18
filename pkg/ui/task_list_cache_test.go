@@ -27,6 +27,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/dispatchcondition"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -348,5 +350,105 @@ func TestTaskListSearchMatchesExternalRef(t *testing.T) {
 	}
 	if len(page.Tasks) != 1 || page.Tasks[0].ID != "2" {
 		t.Errorf("closed search for ca-9012 = %+v, want only task 2", page.Tasks)
+	}
+}
+
+type dispatchBlockReasonClassifier struct {
+	why func() string
+}
+
+func (c dispatchBlockReasonClassifier) TaskReason(_ model.Task, state model.State, _ *model.Observation, _ []string, _ []model.BlockerHold, _ *model.GrantWait, _ model.ReplyFacts) ui.Reason {
+	if state == model.StateQueued {
+		if msg := c.why(); msg != "" {
+			return ui.Reason{Reason: "queued/dispatch_blocked", Resource: msg}
+		}
+		return ui.Reason{Reason: "queued/ready"}
+	}
+	return ui.Reason{Reason: string(state)}
+}
+
+func (dispatchBlockReasonClassifier) MergeReason(string) ui.Reason { return ui.Reason{} }
+
+// TestTaskListCacheFilteredInvalidatesAndDoesNotThrashOnDispatchCondition:
+// taskListCache.list (used by filtered GET /api/tasks queries such as
+// ?state=queued and ?state=closed&cursor=) must fold dispatchConditionVersion
+// into its cache token just like taskListCache.response does. Without it:
+//  1. A dispatch condition set or cleared without a DB write leaves filtered
+//     reads serving stale Reason values.
+//  2. Once any dispatch condition has fired (Version() > 0), alternating live
+//     GET /api/tasks and filtered GET /api/tasks?state=closed&cursor= writes
+//     incompatible cache tokens and wipes the cache on every request.
+func TestTaskListCacheFilteredInvalidatesAndDoesNotThrashOnDispatchCondition(t *testing.T) {
+	t.Parallel()
+	client, _, _ := testClient(t)
+	set := &dispatchcondition.Set{Logf: func(string, ...any) {}}
+	client.Config.DispatchConditions = set
+	client.Config.Reasons = dispatchBlockReasonClassifier{why: set.Why}
+	srv := ui.NewServerWithClient(client)
+
+	do(t, srv, http.MethodPost, "/api/tasks", `{"title":"queued work","approved":true}`)
+	do(t, srv, http.MethodPost, "/api/tasks", `{"title":"closed work","approved":true}`)
+	do(t, srv, http.MethodPost, "/api/tasks/2/close", ``)
+
+	queuedReason := func() string {
+		t.Helper()
+		rec := do(t, srv, http.MethodGet, "/api/tasks?state=queued&limit=50", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/tasks?state=queued = %d: %s", rec.Code, rec.Body)
+		}
+		rows := decode[[]ui.Task](t, rec)
+		if len(rows) != 1 || rows[0].Reason == nil {
+			t.Fatalf("GET /api/tasks?state=queued = %+v, want 1 row with Reason", rows)
+		}
+		return rows[0].Reason.Reason
+	}
+
+	// Prime the whole-list cache (openOnly=false, e.g. ?fields=summary or closed tab)
+	// while no dispatch condition is active, then verify initial filtered reason.
+	if rec := do(t, srv, http.MethodGet, "/api/tasks?fields=summary&limit=50", ""); rec.Code != http.StatusOK {
+		t.Fatalf("priming ?fields=summary = %d: %s", rec.Code, rec.Body)
+	}
+	if got := queuedReason(); got != "queued/ready" {
+		t.Fatalf("initial filtered queued reason = %q, want queued/ready", got)
+	}
+
+	// Activate a dispatch condition without touching the DB: filtered reads
+	// must invalidate and report queued/dispatch_blocked (not stale cached rows).
+	set.Block("git-proxy", fmt.Errorf("bind failed"), "restart daemon")
+	if got := queuedReason(); got != "queued/dispatch_blocked" {
+		t.Fatalf("filtered queued reason after Block = %q, want queued/dispatch_blocked", got)
+	}
+
+	// With dispatchConditionVersion > 0, populate both closed-tab (whole list)
+	// and live GET /api/tasks, then alternate them repeatedly: zero rebuilds.
+	liveRec := listWith(t, srv, "")
+	if liveRec.Code != http.StatusOK {
+		t.Fatalf("live GET /api/tasks = %d", liveRec.Code)
+	}
+	liveETag := liveRec.Header().Get("ETag")
+	closedRec := do(t, srv, http.MethodGet, "/api/tasks?state=closed&cursor=&limit=50", "")
+	if closedRec.Code != http.StatusOK {
+		t.Fatalf("closed tab = %d", closedRec.Code)
+	}
+	if rec := listWith(t, srv, liveETag); rec.Code != http.StatusNotModified {
+		t.Fatalf("live 304 after closed tab = %d, want 304", rec.Code)
+	}
+	builds := ui.TaskListBuilds(srv)
+	for i := 0; i < 4; i++ {
+		if rec := do(t, srv, http.MethodGet, "/api/tasks?state=closed&cursor=&limit=50", ""); rec.Code != http.StatusOK {
+			t.Fatalf("iter %d closed tab = %d", i, rec.Code)
+		}
+		if rec := listWith(t, srv, liveETag); rec.Code != http.StatusNotModified {
+			t.Fatalf("iter %d live 304 = %d, want 304", i, rec.Code)
+		}
+	}
+	if got := ui.TaskListBuilds(srv); got != builds {
+		t.Fatalf("alternating live and closed-tab polls under active dispatch condition caused %d rebuilds, want 0", got-builds)
+	}
+
+	// Clear the dispatch condition (no DB write): filtered read must update back.
+	set.Clear("git-proxy")
+	if got := queuedReason(); got != "queued/ready" {
+		t.Fatalf("filtered queued reason after Clear = %q, want queued/ready", got)
 	}
 }

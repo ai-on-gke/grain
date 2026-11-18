@@ -64,6 +64,37 @@ describe("inbox classifier", () => {
     ).toBe(false);
   });
 
+  it("reads a task resting on a summarized closing note as a report, not a question", () => {
+    const note = classifyTask(
+      task({
+        id: "5",
+        state: "awaiting_reply",
+        noteSummary: "Report: widgets README needs no change",
+      }),
+    );
+    expect(note?.groupId).toBe("info");
+    expect(note?.summary).toBe("Report: widgets README needs no change");
+    expect(note?.pillLabel).toBe("Info");
+    expect(note?.pillTone).toBe("neutral");
+    expect(note?.iconKind).toBe("info");
+    expect(note?.actions.map((a) => a.id)).toEqual(["acknowledge"]);
+
+    // A question still wins over a note summary, as the server's own
+    // NoteSummary rule says it never sends both.
+    const asked = classifyTask(
+      task({
+        id: "6",
+        state: "awaiting_reply",
+        questionSummary: "Keep v1?",
+        noteSummary: "Report",
+      }),
+    );
+    expect(asked?.groupId).toBe("reply");
+    expect(asked?.pillLabel).toBe("Question");
+    expect(asked?.summary).toBe("Keep v1?");
+    expect(asked?.iconKind).toBeUndefined();
+  });
+
   it("files each task under one group with the actions its group offers", () => {
     const reply = classifyTask(
       task({ id: "4", state: "awaiting_reply", questionSummary: "Fix both?" }),

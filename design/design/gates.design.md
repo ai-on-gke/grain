@@ -6,7 +6,7 @@
 
 **The core rule:** Grain owns task lifecycle and protected actions. Configured, versioned Go evaluators explain whether an obligation or action prerequisite is met. A gate result never grants permission or performs a mutation.
 
-The [gate specification](../spec/gates/gates.spec.md), [catalogue](../spec/gates/catalogue.md), [schemas and examples](../spec/gates/examples/README.md), and [action bindings](../spec/gates/action-bindings.spec.md) are authoritative for the initial design. They supersede the remote evaluator, shared capability broker and snapshot paging recommendations in Tasks #39/#47/#56 and the first Task #57 draft. Those protocols are deferred history, not implementation dependencies. Existing capability mint/release/configure, resource providers and triggers retain their own contracts.
+The [gate specification](../spec/gates/gates.spec.md), [internal registry/evaluator API](../spec/gates/internal-api.spec.md), [HTTP/tool contracts](../spec/gates/http-api.spec.md), [catalogue](../spec/gates/catalogue.md), [schemas and examples](../spec/gates/examples/README.md), and [action bindings](../spec/gates/action-bindings.spec.md) are authoritative for the initial design. The [API audit/readiness matrix](../spec/gates/api-readiness.md) separates specified contracts from remaining implementation and enforcement prerequisites. They supersede the remote evaluator, shared capability broker and snapshot paging recommendations in Tasks #39/#47/#56 and the first Task #57 draft. Those protocols are deferred history, not implementation dependencies. Existing capability mint/release/configure, resource providers and triggers retain their own contracts.
 
 ## Architecture
 
@@ -53,12 +53,20 @@ The [compatibility inventory](../spec/gates/compatibility.md) uses Task #51's ma
 
 The first catalogue specifies delivery/ack, checks, ordinary/security/path/takeover reviews, human approval, PR/CL integration, required children, base/nightly/publishing/pipeline health and QA stage evidence. It names exact legacy imports and stronger new defaults. Existing concrete goals (`pr-merged`, `cl-submitted`, `tasks-closed`, `base-green`, `nightly-green`, `pipeline-healthy`, `person-closes`) keep their API names and meanings until explicit migration. Autonomous agent goal mode remains a separate run policy.
 
+The first implementation/display increment may implement only two selected gates
+as read-only observations, leaving legacy lifecycle, scheduling, approvals and
+actions authoritative. The [observation-only API/display contract](../spec/gates/http-api.spec.md#initial-observation-only-apidisplay-subset)
+does not require all future mutation/enforcement endpoints. Observe comparisons
+for a day or two, then make a separate operator cutover decision; no elapsed-time
+or successful-result trigger may enable authority automatically. This is a staged
+implementation boundary, not live configuration authorization by this PR.
+
 Implementation sequencing, without filing tasks:
 
-1. Add typed configuration/storage/admission, registry and versioned read projections; capture current-behavior fixtures and expose read-only shadow comparisons.
+1. Implement the selected observation-only gates and read-only Angular/API/agent display with existing legacy state authoritative; capture current-behavior fixtures and comparisons. Full mutation/configuration/admission APIs and lifecycle/action enforcement are not prerequisites for that increment.
 2. Centralize lifecycle with Go/SQLite/Postgres projection parity, durable event/timer recovery, questions/message/child fences and explicit task authority handoff.
 3. Converge existing protected merge/submit entry points, current-head guard evaluation, conditional effects, intent/receipt recovery and credential boundary admission. Resource guard enforcement can cover legacy-completion tasks independently.
-4. Add Angular gate views and registered actions, permission-filtered API/agent views; opt in templates/tasks/resources with explicit migration and rollback tests.
+4. Extend the initial read-only Angular/API/agent views with authorized registered actions when their services are implemented and qualified; opt in templates/tasks/resources with explicit migration and rollback tests.
 
 Remaining enablement work is concrete: central lifecycle storage/writer fencing; complete versioned collections and exact-head review provenance; inherited policy/coverage persistence; uniform action-service checks and durable uncertain-effect handling; deployment-specific credential exclusion; CL exact-snapshot execution proof; legacy import qualification and UI/SQL parity. No remote provider, resource/trigger rollout or Task 1 dependency is required. Recommended v1 choices are fixed compiled schemas, no evaluator-private state, additive inherited requirements, explicit compatibility profiles and read-only shadow rollout first. The specification makes these choices; live admission still requires implementation and verification.
 
