@@ -130,17 +130,19 @@ agent's is, minus in-sandbox path advice) and a metadata block.
 
 ```
 grain-card v1
-task: 4321   attempt: 3   lease: L-9f2c   mode: sidecar
+task: 4321   attempt: 3   lease: L-9f2c   mode: sidecar   session: none
 repo: acme/widgets   branch: grain/ab12/task-4321-fix-parser
 grants: repo#write, api:ci-read@acme/widgets
 idle-timeout: 30m   total-timeout: 2h
 ```
 
-Grain edits the card at the start of each attempt (attempt, lease, the
-conversation since the last attempt) and never posts a second one, so the
-prompt is always the first comment. A prompt too long for one comment is cut
-there and served whole as the MCP resource `grain://task/prompt`
-(`resources/read`, paged as in ITA-6).
+Grain edits the card at the start of each attempt (attempt, lease, `session:
+none` in `sidecar` mode, and the conversation since the last attempt), edits
+`session: none` to `session: open` once the lease's first `grain/session.open`
+succeeds (ITA-16, ITA-18), and never posts a second card, so the prompt is
+always the first comment. A prompt too long for one comment is cut there and
+served whole as the MCP resource `grain://task/prompt` (`resources/read`, paged
+as in ITA-6).
 
 ### Tracker as owner: what would have to change
 
@@ -204,24 +206,31 @@ should be nearly all the explanation an agent needs:
 ### Batches {#ITA-5}
 
 A batch is a JSON array of requests, as JSON-RPC 2.0 defines it, of at most 32
-elements. Grain runs the elements **one after another, in array order**, and
-each element waits for the previous element's **final result** before starting
-(never merely for its `accepted`, ITA-10, so `[build, test]` in one batch never
-races). If an element is still running 10 seconds after it starts (or after the
-batch begins waiting on the in-flight cap), it and every remaining request
-element queued behind it become `accepted`
-(`"result":{"_meta":{"grain/status":"accepted"}}`, ITA-10). The batch reply
-comment posts once every element is done or `accepted`, holding the responses
-(final results and `accepted` placeholders) in array order; each `accepted`
-element's final result posts later as its own individual reply (`to=<batch
-comment id> ids=<id>`) once the preceding elements finish and it runs to
-completion. Elements of a batch that reach the lease's 4-in-flight cap (ITA-10)
-queue for a free slot rather than failing with `-32004`, and queued `accepted`
-elements waiting their turn in the batch consume no extra slot beyond the
+elements. By default (including hand-written batches), grain runs the elements
+**one after another, in array order**, and each element waits for the previous
+element's **final result** before starting (never merely for its `accepted`,
+ITA-10, so `[build, test]` in one batch never races). When a batch opts into
+parallel execution — every request element carries `params._meta:
+{"grain/parallel": true}`, as set by the sidecar on coalesced concurrent calls
+(ITA-19; mixing parallel and non-parallel request elements in one batch gets
+`-32600`) — its elements instead share the lease's 4-in-flight slots (ITA-10)
+and start concurrently without waiting on earlier elements, queueing excess
+elements in array order as slots open rather than failing with `-32004`.
+
+In both modes, any request element still running or waiting to start 10 seconds
+after the batch begins (or begins waiting on the in-flight cap) becomes
+`accepted` (`"result":{"_meta":{"grain/status":"accepted"}}`, ITA-10). The
+batch reply comment posts once every element is done or `accepted`, holding the
+responses (final results and `accepted` placeholders) in array order; each
+`accepted` element's final result posts later as its own individual reply
+(`to=<batch comment id> ids=<id>`) once it runs to completion. Queued elements
+waiting their turn in a sequential batch consume no extra slot beyond the
 batch's running element. Notifications in a batch get no response, per the
-spec. Elements after a turn-ending call are answered `-32002` and not run (in
-the batch reply when it finishes synchronously, or as individual replies when
-an `accepted` element ends the lease).
+spec. In a sequential batch, elements after a turn-ending call are answered
+`-32002` and not run (in the batch reply when it finishes synchronously, or as
+individual replies when an `accepted` element ends the lease); if an element of
+a parallel batch ends the lease, running and queued sibling elements are
+cancelled and answered `-32002`.
 
 ### Size limits and paging {#ITA-6}
 
@@ -232,24 +241,27 @@ more]`, and the result's `_meta` carries `"grain/cursor": "<opaque>"`.
 `grain/page {cursor}` returns the next chunk of that same result, with a
 further cursor until the last. In a batch the budget is shared between elements
 in proportion to size, and each cut element has its own cursor. A cursor lasts
-as long as the lease. Grain's own run transcript keeps every result whole.
+until lease end or a grain restart (which clears the in-memory reply cache,
+after which `grain/page` returns `-32005`, ITA-18). Grain's own run transcript
+keeps every result whole.
 
 ### Errors, malformed, duplicate and edited comments {#ITA-7}
 
 | Code   | Meaning                                                         |
 | ------ | --------------------------------------------------------------- |
 | -32700 | Parse error: the JSON after `/grain` does not parse              |
-| -32600 | Invalid request: no `jsonrpc`, a request with no `id`, batch too large, or an edited comment |
+| -32600 | Invalid request: no `jsonrpc`, a request with no `id`, batch too large, mixed `grain/parallel` batch, or an edited comment |
 | -32601 | Method not found                                                |
 | -32602 | Invalid params: unknown tool, bad arguments                     |
 | -32603 | Internal error: sandbox gone, bridge fault                      |
 | -32001 | Not the assignee (ITA-13)                                       |
 | -32002 | No active lease, or the lease has ended                         |
-| -32003 | Refused over this transport (ITA-15)                            |
+| -32003 | Refused over this transport, or session key missing (ITA-15, ITA-16) |
 | -32004 | Busy or rate limited; `data.retry_after` says when to retry      |
 | -32005 | Cursor unknown or expired                                       |
-| -32006 | Interrupted by a grain restart; `data.may_have_run`              |
+| -32006 | Interrupted by a grain restart, or cached reply lost across one; `data.may_have_run` |
 | -32007 | Duplicate `id` in this lease                                    |
+| -32008 | Session conflict on `grain/session.open` or `grain/session.rekey` (ITA-16) |
 
 A tool that ran and failed is not a protocol error: it is a result with
 `isError: true`, as in MCP. Parse and invalid-request errors carry `id: null`,
@@ -257,9 +269,11 @@ and the header's `to=` ties them to their comment. A comment that says `/grain`
 anywhere but its first line is not a call.
 
 - **Duplicates.** Each tracker comment ID runs at most once, recorded in the
-  store before it runs (ITA-24), so redelivered webhooks and overlapping polls
-  are harmless. A new comment reusing an `id` already seen in the lease gets
-  `-32007` and does not run.
+  store alongside each accepted request `id` (with its call comment ID and,
+  once posted, reply comment ID, never the response body) before any call runs
+  (ITA-18, ITA-24), so redelivered webhooks and overlapping polls are harmless
+  across restarts. A new comment reusing an `id` already in the lease's
+  persisted seen-`id` set gets `-32007` and does not run.
 - **Edits.** A comment runs as first seen. Edited after that, it is not run
   again, and grain posts one `-32600` reply with `data.reason: "edited"`. A
   comment edited before grain first saw it runs as seen.
@@ -270,11 +284,12 @@ anywhere but its first line is not a call.
 Within an issue, call comments start in tracker order (created time, then
 comment ID), and a call comment starts only once every earlier call comment on
 the issue has posted its reply, with each element either finished or accepted
-as async (ITA-5, ITA-10). Within a batch comment, ordering is stricter: each
-element waits for the previous element's final result before starting, even
-after the batch reply has posted `accepted` placeholders and let later call
-comments proceed (ITA-5). Issues are independent of each other. Replies (and
-individual async follow-ups from an earlier batch) may land out of order
+as async (ITA-5, ITA-10). Within a batch comment, ordering is stricter by
+default: each element waits for the previous element's final result before
+starting, even after the batch reply has posted `accepted` placeholders and let
+later call comments proceed, unless the batch opts into parallel execution with
+`"grain/parallel": true` (ITA-5). Issues are independent of each other. Replies
+(and individual async follow-ups from an earlier batch) may land out of order
 relative to later calls; `to=` and `id` correlate them, never position.
 
 ## 4. Tool surface
@@ -303,8 +318,10 @@ makes its own. `notifications/cancelled` with the request's id cancels it
 flight at once; a new call comment past the cap gets `-32004`, while elements
 within a batch queue for a free slot rather than failing (ITA-5). Later call
 comments proceed while an async call runs, since ITA-8 waits only for the
-earlier comment's reply (`accepted` included); remaining elements of the same
-batch still wait for each previous element's final result (ITA-5).
+earlier comment's reply (`accepted` included); remaining elements of a
+sequential batch still wait for each previous element's final result, whereas a
+parallel batch (`"grain/parallel": true`) shares free in-flight slots
+concurrently (ITA-5).
 
 ## 5. Leases, identity and permissions
 
@@ -397,11 +414,18 @@ Round trip of one call, from the agent posting it to reading the reply:
 | Loop mode, agent checking every 5 s    | 5–15 s  | 30 s  |
 
 That adds to each tool's own run time. A typical run makes about 60 tool calls:
-unbatched, about 120 comments and 3–5 minutes of transport. With the sidecar's
-coalescing (ITA-19) it is about 20–25 call comments, 50 in all, and 1.5
-minutes. Batching pays off in exploration (independent reads, greps, `git
-log`), not in chains of dependent edits and builds, and it keeps a busy
-deployment inside the tracker's rate limit.
+unbatched, about 125 comments (counting async follow-ups) and 2.5–3 minutes of
+transport on webhooks, 3.5–5 minutes on a 3 s poll. With the sidecar's
+coalescing (`coalesce_window: 150ms`, ITA-19), only concurrent calls emitted in
+the same agent turn fold into a parallel batch (`"grain/parallel": true`,
+ITA-5), while sequential turns (edits, builds, `grain ci wait`) still take one
+call comment each: if roughly a third of the 60 calls fan out in parallel
+exploration bursts, a run posts about 40–45 call comments (~85–95 comments in
+all) and spends about 1.5–2.5 minutes in transport on webhooks (2.5–3.5 minutes
+on a 3 s poll), plus up to the 10 s `accepted` cutoff whenever a fast call
+shares a coalesced batch with a >10 s sibling. Coalescing pays off in parallel
+exploration (concurrent reads, greps, `git log`), not in chains of dependent
+edits and builds, and trims tracker rate-limit spend on busy deployments.
 
 ## 7. Secrets and confidentiality
 
@@ -423,18 +447,23 @@ also encrypts.
 
 ### Sidecar mode: results crypto-shredded {#ITA-16}
 
-**Key delivery.** At lease start the sidecar makes an ephemeral X25519 key pair
-in memory and posts `/grain {"method":"grain/session.open",
-"params":{"pub":"<base64>"}}`. The tracker authenticates the author as the
-assignee: that is the bootstrap from tracker identity. Grain makes its own
-ephemeral pair and replies with its public key and a key ID. Both sides derive
-`K = HKDF-SHA256(X25519(...), salt = lease ID, info = "grain-tracker v1")`.
-Only public keys are ever posted, never `K` or a wrapping of it. An identity
-may also register a long-term signing key in grain (Settings, signed in as that
+**Key delivery.** At lease start (card showing `session: none`, ITA-3) the
+sidecar makes an ephemeral X25519 key pair in memory and posts `/grain
+{"method":"grain/session.open", "params":{"pub":"<base64>"}}` (with no
+`replaces`). The tracker authenticates the author as the assignee: that is the
+bootstrap from tracker identity. Grain makes its own ephemeral pair, records
+the key ID on `task_tracker_lease` in the store, edits the card to `session:
+open`, and replies with its public key and key ID. Both sides derive `K =
+HKDF-SHA256(X25519(...), salt = lease ID, info = "grain-tracker v1")`. Only
+public keys are ever posted, never `K` or a wrapping of it. An identity may
+also register a long-term signing key in grain (Settings, signed in as that
 principal); the sidecar then signs its ephemeral key, so not even a tracker
 admin rewriting the comment can sit between them. On a sidecar connection grain
-posts no plaintext result: until the handshake, every call but `/grain
-describe` and `grain/session.open` gets `-32003`.
+posts no plaintext result: before the initial handshake, and after a grain
+restart clears `K` from memory until a new `grain/session.open` re-keys the
+lease, every call except `/grain describe` and `grain/session.open` gets
+`-32003` (with `data.reason: "rekey_required"` once a key ID exists on the
+lease).
 
 **Results** are sealed with AES-256-GCM under `K`, a random 96-bit nonce, and
 the reply's header line as associated data, so a ciphertext cannot be moved to
@@ -450,21 +479,30 @@ secrets and logs come from. The cost is that calls can hold repository code (an
 readers. Encrypted calls are Q4.
 
 **Rotation.** Every lease, and so every attempt, starts with a fresh handshake.
-A lease older than an hour re-keys (`grain/session.rekey`); grain drops the old
-key after the sidecar's next call, which it sends only once it has read the
-replies sealed under it. A second `grain/session.open` on an active lease (from
-a restarted sidecar, ITA-18, signed with the identity's registered signing key
-when one is configured) also re-keys the lease: grain derives a new `K` under a
-new key ID and zeroes the previous `K` immediately, while keeping the lease's
-seen-`id` set (ITA-7), paging cursors (ITA-6), stored reply cache for
-`grain/replay` (ITA-18), and in-flight async calls (ITA-10), whose later
-replies are sealed under the new `K`.
+A lease older than an hour re-keys (`grain/session.rekey`, carrying
+`"replaces": "<current key_id>"` and returning `-32008` on mismatch), updating
+`task_tracker_lease.key_id`; grain drops the old key after the sidecar's next
+call, which it sends only once it has read the replies sealed under it. Any
+subsequent `grain/session.open` on a lease that already has a `key_id` (from a
+restarted sidecar or after a grain restart, ITA-18, signed with the identity's
+registered signing key when one is configured) MUST carry `"replaces":
+"<current key_id>"`. If `replaces` is omitted or does not match
+`task_tracker_lease.key_id`, grain refuses the call with `-32008` and leaves
+any active `K`, `key_id` and in-flight state untouched, so a second sidecar on
+the same identity cannot take the key. When `replaces` matches, grain derives a
+new `K` under a new `key_id`, updates `task_tracker_lease.key_id`, and zeroes
+any previous `K` immediately, while keeping the lease's persisted seen-`id` set
+(ITA-7) and any current-incarnation paging cursors (ITA-6), in-memory reply
+cache for `grain/replay` (ITA-18), and in-flight async calls (ITA-10, ITA-24),
+whose later replies are sealed under the new `K`.
 
-**Destruction.** At lease end grain zeroes its private key and `K`, which are
-only ever in memory, and the sidecar does the same when it closes the session.
-Every copy of every result (the comment, mail, exports, indexes) is then
-unreadable, with nothing deleted. That holds only if both ends keep the key in
-memory: a sidecar that leaks it before closing leaks that session.
+**Destruction.** At lease end grain zeroes its private key, `K`, paging cursors
+and the `grain/replay` reply cache, all of which live only ever in memory (so
+redacted plaintext results never sit in the database or its backups), and the
+sidecar does the same when it closes the session. Every copy of every result
+(the comment, mail, exports, indexes) is then unreadable, with nothing deleted.
+That holds only if both ends keep the key in memory: a sidecar that leaks it
+before closing leaks that session.
 
 **What an auditor can still read.** On the issue: every call in plaintext, each
 reply's header (which call, ids, time, key ID) and the ciphertext's length. In
@@ -509,31 +547,57 @@ coalesce_window: 150ms             # ITA-19
 signing_key: file:~/.config/grain-sidecar/sign.key   # optional, ITA-16
 ```
 
-Lifecycle: watch the scope for issues assigned to `identity`; read the card; do
-the handshake (ITA-16); fetch `tools/list`; start the agent with an MCP server
-serving exactly that list; relay. While a lease is open, the sidecar persists
-non-secret recovery metadata in `workdir` (lease ID, last processed reply
-comment ID and pending outbound request `id`s; never `K` or its private key,
-ITA-16). On a turn-ending reply, the issue being assigned away, or a `-32002`,
-it stops the agent, zeroes the key and removes the session's files.
+Lifecycle: watch the scope for issues assigned to `identity`; read the card;
+acquire an exclusive per-lease lockfile in `workdir`
+(`<workdir>/leases/<lease-id>.lock`, held until session close so two local
+processes never attach to the same lease); open or resume the session only if
+the card shows `session: none` for that lease or `workdir` already holds that
+lease's recovery record (otherwise another sidecar owns the lease and this
+instance ignores it); do the handshake (ITA-16); fetch `tools/list`; start the
+agent with an MCP server serving exactly that list; relay. On a fresh claim
+(`session: none`), the sidecar writes the lease's recovery record (`lease_id`
+and initial `session.open` request `id`) before posting `grain/session.open`
+with no `replaces`, then records the returned `key_id` (updated on
+`grain/session.rekey`); if `-32008` comes back because another sidecar won an
+initial-open race, it removes that tentative record and starts no agent. While
+open, `workdir` persists only non-secret recovery metadata (`lease_id`, current
+`key_id`, last processed reply comment ID and pending outbound request `id`s;
+never `K` or its private key, ITA-16). On a turn-ending reply, the issue being
+assigned away, `-32002`, or `-32008`, it stops the agent if started, zeroes the
+key, removes the session's files and releases the lockfile.
 
-A sidecar that restarts mid-lease has lost its key, so it generates a new
-ephemeral X25519 key pair (giving its requests a new `s<pub8>-<n>` prefix that
-cannot collide with pre-restart IDs, ITA-19) and posts `grain/session.open`
-again to re-key the lease (ITA-16). To recover replies sealed under the lost
-key or async results that landed while it was down **without re-running any
-call**, the sidecar calls `grain/replay` with either `{"ids": ["<id>", ...]}`
-(up to 32 request IDs from this lease) or `{"after": "<comment id>"}` (up to 32
-replies posted on this lease after `<comment id>`, or from lease start when
-`""`, returning `{"responses": [...], "last_comment_id": "<id>", "has_more":
-<bool>}`). Grain retains each completed request's redacted response in the
-lease's reply cache until lease end and answers `grain/replay` by re-sealing
-those stored responses under the new `K` (issuing fresh ITA-6 cursors where a
-replayed response is cut to fit the comment limit), never re-executing a tool
-or MCP method. For `{"ids": [...]}`, requests still in flight return
-`"result":{"_meta":{"grain/status":"accepted"}}` and post their final replies
-under the new `K` when they finish, and IDs grain never received are listed in
-`"unknown": [...]` so the sidecar knows they never ran.
+A sidecar that restarts mid-lease has lost its key, so under the lease lock it
+generates a new ephemeral X25519 key pair (giving its requests a new
+`s<pub8>-<n>` prefix that cannot collide with pre-restart IDs, ITA-19), reads
+`key_id` from `workdir` (or from grain's plaintext reply to its recorded
+initial `session.open` request `id` if it crashed before saving `key_id`), and
+posts `grain/session.open` with `"replaces": "<key_id>"` to re-key the lease
+(ITA-16). A live sidecar that receives `-32003` (`data.reason:
+"rekey_required"`) after a grain daemon restart does the same — re-keying with
+`"replaces": "<key_id>"` and replaying unanswered calls without restarting the
+agent CLI.
+
+To recover replies sealed under a lost key or async results that landed while
+down **without re-running any call**, the sidecar calls `grain/replay` with
+either `{"ids": ["<id>", ...]}` (up to 32 request IDs from this lease) or
+`{"after": "<comment id>"}` (up to 32 replies posted on this lease after
+`<comment id>`, or from lease start when `""`, returning `{"responses": [...],
+"last_comment_id": "<id>", "has_more": <bool>}`). The lease's reply cache lives
+**in memory only** (cleared at lease end or on a grain restart, ITA-16):
+`grain/replay` re-seals cached redacted responses under the current `K`
+(issuing fresh ITA-6 cursors where cut), never re-executing a tool or MCP
+method. Requests still in flight (including run-host calls reattached across a
+grain restart, ITA-24) return `"result":{"_meta":{"grain/status":"accepted"}}`
+and post their final replies under the current `K` when they finish. Request
+IDs present in the lease's persisted seen-`id` set (ITA-7) from a previous
+daemon incarnation whose cached responses were lost on a grain restart return
+JSON-RPC error `-32006` with `data: {"may_have_run": true}` in `"responses"`
+(both for `{"ids": [...]}` and, via the persisted `(request_id,
+reply_comment_id)` metadata, for `{"after": "<comment id>"}`), never
+`"unknown"`, so the agent does not repeat a non-idempotent call blindly. Only
+IDs absent from the persisted seen-`id` set are listed in `"unknown": [...]`,
+telling the sidecar grain never started them and they may be resent under new
+`s<pub8>-<n>` IDs.
 
 ### Request/response mapping {#ITA-19}
 
@@ -544,13 +608,20 @@ that sidecar session's ephemeral X25519 public key and `<n>` is a monotonic
 per-session counter, mapped back to the agent's MCP request `id` on the reply.
 Because a restarted sidecar generates a fresh key pair on `grain/session.open`,
 its IDs never collide with earlier sessions' IDs in the lease's seen-`id` set
-(ITA-7). Requests sent within `coalesce_window` of
-each other go out as one batch (ITA-5), which is what makes parallel tool calls
-cheap. The sidecar reads comments after the last it saw, matches `ids=`,
-decrypts and answers. An `accepted` reply becomes MCP progress notifications
-when the agent sent a `progressToken`. A cut reply is paged automatically, up
-to the sidecar's own limit (1 MB). `initialize` and `ping` are answered
-locally; `resources/*` go to grain.
+(ITA-7). Concurrent `tools/call` and `resources/*` requests arriving within
+`coalesce_window` go out as one parallel batch carrying `params._meta:
+{"grain/parallel": true}` (ITA-5); turn-ending calls (ITA-11),
+`notifications/cancelled` and `grain/*` transport calls flush any pending batch
+and go out in their own comments. Coalescing folds a single turn's parallel
+fan-out (such as concurrent reads and greps) into one round trip and two
+comments instead of `2N` without serializing fast calls behind slow siblings,
+though at most 4 elements run at once (ITA-10) and any fast element batched
+with a >10 s sibling waits until the 10 s `accepted` cutoff for the batch reply
+to post (ITA-5). The sidecar reads comments after the last it saw, matches
+`ids=`, decrypts and answers. An `accepted` reply becomes MCP progress
+notifications when the agent sent a `progressToken`. A cut reply is paged
+automatically, up to the sidecar's own limit (1 MB). `initialize` and `ping`
+are answered locally; `resources/*` go to grain.
 
 ### No sidecar: the loop prompt {#ITA-20}
 
@@ -569,8 +640,8 @@ replies. You have no other access to the code, and need none.
    one JSON-RPC 2.0 request, for example
    /grain {"jsonrpc":"2.0","id":"1","method":"tools/call","params":
      {"name":"read_file","arguments":{"file_path":"work/README.md"}}}
-   Use a new id every time. To make several independent calls at once,
-   post a JSON array of requests in a single comment.
+   Use a new id every time. To send several calls in one round trip,
+   post a JSON array of requests in a single comment (they run in order).
 3. Wait for a comment starting "grain-reply v1" whose ids= names your
    id. Check every 5 seconds. If its result says "grain/status":
    "accepted", keep waiting for the second reply with the same id.
@@ -642,12 +713,32 @@ it. That is a later doc.
   the store and post in order on recovery, and the connection leases nothing
   new. After an hour, open leases end as an infrastructure failure, not
   charged, and their tasks are retried.
-- **Comment posted while grain restarts.** The high-water mark and the set of
-  run comments are in the store, written before each call runs. On start the
-  bridge re-reads every leased issue after its mark, so nothing is lost and
-  nothing runs twice. For a call in flight at the restart, the bridge
-  reattaches to its result if the run host survived, and otherwise answers
-  `-32006` with `may_have_run: true`. Lease clocks are credited the downtime.
+- **Comment posted while grain restarts.** The high-water mark, the set of run
+  comments and each lease's seen-`id` set (with call and reply comment IDs,
+  never result bodies, ITA-7) are in the store, written before each call runs,
+  while `K`, the private key, paging cursors (ITA-6) and the `grain/replay`
+  reply cache (ITA-18) live only in memory. On start the bridge re-reads every
+  leased issue after its mark, so nothing is lost and nothing runs twice. On a
+  `sidecar` lease, grain has no `K` in memory after restart and answers every
+  call other than `/grain describe` and `grain/session.open` with `-32003`
+  (`data.reason: "rekey_required"`) until the sidecar re-keys with
+  `"replaces": "<key_id>"` (ITA-16, ITA-18). For a call in flight at the
+  restart, the bridge reattaches to its result if the run host survived
+  (holding the reply in memory until `K` is re-established on a sealed lease),
+  and otherwise answers `-32006` with `may_have_run: true`; `grain/replay`
+  likewise answers `-32006` (`may_have_run: true`) for pre-restart seen IDs
+  whose cached responses vanished with memory, keeping `"unknown"` for IDs
+  never seen. Lease clocks are credited the downtime.
+- **Second sidecar on the same identity.** Two sidecar processes configured
+  with one `identity` (for example, workstation and laptop, or two local
+  processes): an exclusive per-lease lockfile in `workdir` blocks a second
+  local process, and a remote sidecar skips any issue whose card already shows
+  `session: open` when its own `workdir` holds no recovery record for that
+  lease (ITA-3, ITA-18). If two sidecars race while the card still shows
+  `session: none`, both post an initial `grain/session.open` without
+  `replaces`; tracker ordering (ITA-8) runs one first, sets `session: open` and
+  records `key_id`, and the second gets `-32008` without rotating or zeroing
+  `K`, removes its tentative `workdir` entry, and starts no agent (ITA-16).
 - **Sandbox dies:** in-flight calls get `-32603`; the lease ends as an
   infrastructure failure, retried as today. **Agent silent:** ITA-11's
   timeouts. **Assignment race:** the lease exists only once grain reads back
