@@ -57,6 +57,7 @@ import {
   type QAFlowVersionItem,
   type QAFlowVersionsResponse,
   buildClientWorkflowStagesView,
+  canonicalWorkflowFamilyKey,
   compareFlowVersionsDesc,
   computeActivePromptBytes,
   extractExplicitSkillDecl,
@@ -1319,7 +1320,20 @@ export class QaFlowsPanelComponent {
         return matching[0].hash;
       }
     }
-    return this.resolveVersionParam(normRaw) || null;
+    const direct = this.resolveVersionParam(normRaw);
+    if (direct && direct !== normRaw) {
+      return direct;
+    }
+    const canon = canonicalWorkflowFamilyKey(normRaw);
+    if (canon && canon !== normRaw) {
+      const canonMatch = this.versions()
+        .filter((v) => v.key === canon && !v.retiredAt)
+        .sort(compareFlowVersionsDesc);
+      if (canonMatch.length > 0) {
+        return canonMatch[0].hash;
+      }
+    }
+    return direct || null;
   }
 
   private computeSettingsFlowId(detail: QAFlowVersionItem): string {
@@ -1366,6 +1380,15 @@ export class QaFlowsPanelComponent {
       .sort(compareFlowVersionsDesc);
     const preferred = matching.find((item) => !item.retiredAt) ?? matching[0];
     if (preferred) return preferred.hash;
+    const canon = canonicalWorkflowFamilyKey(raw);
+    if (canon && canon !== raw) {
+      const canonMatching = this.versions()
+        .filter((item) => item.key === canon)
+        .sort(compareFlowVersionsDesc);
+      const canonPreferred =
+        canonMatching.find((item) => !item.retiredAt) ?? canonMatching[0];
+      if (canonPreferred) return canonPreferred.hash;
+    }
     return raw;
   }
 
@@ -1494,6 +1517,22 @@ export class QaFlowsPanelComponent {
     return false;
   }
 
+  private isLegacyFlowAliasActive(detail: QAFlowVersionDetail): boolean {
+    const raw = this.activeFlowId().trim();
+    if (
+      !raw ||
+      raw.startsWith("sha256:") ||
+      !this.isVersionActiveDefault(detail)
+    ) {
+      return false;
+    }
+    const baseKey = raw
+      .replace(/^builtin:/, "")
+      .split("@")[0]
+      .split("#")[0];
+    return baseKey !== "" && baseKey !== detail.key;
+  }
+
   protected rolloutStatusTone(detail: QAFlowVersionDetail): string {
     if (this.qaEnabled() && this.isVersionActiveDefault(detail)) {
       if (this.activeRolloutPct() > 0) {
@@ -1507,6 +1546,9 @@ export class QaFlowsPanelComponent {
   protected rolloutStatusLabel(detail: QAFlowVersionDetail): string {
     if (this.qaEnabled() && this.isVersionActiveDefault(detail)) {
       if (this.activeRolloutPct() > 0) {
+        if (this.isLegacyFlowAliasActive(detail)) {
+          return `Active (${this.activeRolloutPct()}% · legacy)`;
+        }
         return `Active (${this.activeRolloutPct()}%)`;
       }
       return "Default · Paused (0%)";
@@ -1520,6 +1562,9 @@ export class QaFlowsPanelComponent {
     }
     if (this.isVersionActiveDefault(detail)) {
       if (this.activeRolloutPct() > 0) {
+        if (this.isLegacyFlowAliasActive(detail)) {
+          return `Deployment is running legacy flow '${this.activeFlowId()}' (${this.activeRolloutPct()}%). Click Set as default… to upgrade to ${detail.key}.`;
+        }
         return `Active default workflow for ${this.activeRolloutPct()}% of eligible new tasks. Click Turn off default… to run with no automatic workflow.`;
       }
       return "Selected as default in Settings → Tasks, but rollout is currently paused at 0%.";
@@ -1532,6 +1577,9 @@ export class QaFlowsPanelComponent {
 
   protected canShowSetDefault(detail: QAFlowVersionDetail): boolean {
     if (!this.canWriteSettings() || detail.retiredAt) return false;
+    if (this.qaEnabled() && this.isLegacyFlowAliasActive(detail)) {
+      return true;
+    }
     const alreadyActive =
       this.qaEnabled() &&
       this.isVersionActiveDefault(detail) &&
@@ -1547,7 +1595,7 @@ export class QaFlowsPanelComponent {
   confirmClearDefault(): void {
     const prev = {
       qaEnabled: this.qaEnabled(),
-      qaFlowId: this.activeFlowId() || "golden-v1-minimal",
+      qaFlowId: this.activeFlowId() || "standard-workflow",
       qaRolloutPct: this.activeRolloutPct(),
       qaShadowOnControl: this.qaShadowOnControl(),
     };
@@ -1596,7 +1644,7 @@ export class QaFlowsPanelComponent {
     if (!detail) return;
     const prev = {
       qaEnabled: this.qaEnabled(),
-      qaFlowId: this.activeFlowId() || "golden-v1-minimal",
+      qaFlowId: this.activeFlowId() || "standard-workflow",
       qaRolloutPct: this.activeRolloutPct(),
       qaShadowOnControl: this.qaShadowOnControl(),
     };
@@ -1824,7 +1872,11 @@ export class QaFlowsPanelComponent {
 
     if (
       (loaded.length === 0 ||
-        loaded.some((v) => v.key === "golden-v1-minimal" && v.builtIn)) &&
+        loaded.some(
+          (v) =>
+            (v.key === "standard-workflow" || v.key === "golden-v1-minimal") &&
+            v.builtIn,
+        )) &&
       this.access.can("GET /api/qa/flows") &&
       this.isGlobalScope("settings:read")
     ) {

@@ -81,6 +81,19 @@ interface CapabilityServerRow {
   } | null;
 }
 
+const DEFAULT_QA_FLOW_OPTIONS: readonly PillOption[] = [
+  {
+    value: "standard-workflow",
+    label: "Standard workflow · standard-workflow",
+  },
+  { value: "fast-baseline", label: "Fast baseline · fast-baseline" },
+  { value: "gates-only", label: "Gates only · gates-only" },
+];
+
+const DEFAULT_QA_FLOW_LABELS: ReadonlyMap<string, string> = new Map(
+  DEFAULT_QA_FLOW_OPTIONS.map((opt) => [opt.value, opt.label]),
+);
+
 // capServerState is the chip a server row shows: disabled when an
 // operator turned it off, otherwise the server's own status.state
 // ("attached" reads as enabled; needs-config / needs-hostd say what is
@@ -1881,40 +1894,32 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     return this.canWriteSettings() && this.qaEnabled();
   }
 
-  protected qaFlowValue(): string {
-    const current = this.state.val<unknown>("qaFlowId", "golden-v1-minimal");
+  protected readonly qaFlowValue = computed<string>(() => {
+    const current = this.state.val<unknown>("qaFlowId", "standard-workflow");
     return typeof current === "string" && current.trim() !== ""
-      ? current
-      : "golden-v1-minimal";
-  }
+      ? current.trim()
+      : "standard-workflow";
+  });
 
-  protected qaFlowOptions(): readonly PillOption[] {
+  protected readonly qaFlowOptions = computed<readonly PillOption[]>(() => {
     const serverFlows = this.state.val<unknown>("qaFlowIds", []);
-    const defaults: readonly PillOption[] = [
-      {
-        value: "golden-v1-minimal",
-        label: "golden-v1-minimal (Recommended)",
-      },
-      {
-        value: "deterministic-s3-only",
-        label: "deterministic-s3-only (Zero-LLM Ablation)",
-      },
-      {
-        value: "repo-custom",
-        label: "repo-custom (.grain/qa-flow.yml)",
-      },
-    ];
-    if (!Array.isArray(serverFlows) || serverFlows.length === 0) {
-      return defaults;
+    const current = this.qaFlowValue();
+    const baseOptions =
+      Array.isArray(serverFlows) && serverFlows.length > 0
+        ? serverFlows
+            .filter(
+              (item): item is string => typeof item === "string" && item !== "",
+            )
+            .map((value) => ({
+              value,
+              label: DEFAULT_QA_FLOW_LABELS.get(value) ?? value,
+            }))
+        : [...DEFAULT_QA_FLOW_OPTIONS];
+    if (current && !baseOptions.some((opt) => opt.value === current)) {
+      return [...baseOptions, { value: current, label: `${current} (legacy)` }];
     }
-    const labelByValue = new Map(defaults.map((opt) => [opt.value, opt.label]));
-    return serverFlows
-      .filter((item): item is string => typeof item === "string" && item !== "")
-      .map((value) => ({
-        value,
-        label: labelByValue.get(value) ?? value,
-      }));
-  }
+    return baseOptions;
+  });
 
   protected qaRolloutPercent(): number {
     const raw = this.state.val<unknown>("qaRolloutPct", 0);
@@ -1947,7 +1952,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       if (!this.state.settings()["qaEnabled"]) {
         // Clear unsaved dependent edits when flipping back off on a deployment where QA was off.
         const s = this.state.settings();
-        this.state.setField("qaFlowId", s["qaFlowId"] ?? "golden-v1-minimal");
+        this.state.setField("qaFlowId", s["qaFlowId"] ?? "standard-workflow");
         this.state.setField("qaRolloutPct", s["qaRolloutPct"] ?? 0);
         this.state.setField(
           "qaShadowOnControl",

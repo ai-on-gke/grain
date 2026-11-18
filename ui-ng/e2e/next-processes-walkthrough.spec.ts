@@ -301,8 +301,7 @@ test("templates with required parameters preview without 400, workflow Run now c
 
   // Create template with required parameter and no default -> zero 400s on composition preview.
   await page.goto("processes/templates");
-  await page.getByRole("button", { name: "New ▾" }).click();
-  await page.getByRole("menuitem", { name: "Template" }).click();
+  await page.getByRole("button", { name: "+ New template" }).click();
   const tmplDlg = page.getByRole("dialog", { name: "New task template" });
   await tmplDlg.getByLabel("Template name").fill("e2e-req-param");
   await tmplDlg.getByLabel(/Filed task title/).fill("chore: update {{module}}");

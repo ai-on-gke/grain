@@ -28,10 +28,10 @@ type Subject struct {
 	Kind       string `json:"kind"`
 	TaskID     string `json:"task_id,omitempty"`
 	Repository string `json:"repository,omitempty"`
-	Ref        string `json:"ref,omitempty"`
 	Authority  string `json:"authority,omitempty"`
 	ChangeKind string `json:"change_kind,omitempty"`
 	ID         string `json:"id,omitempty"`
+	Ref        string `json:"ref,omitempty"`
 }
 type Origin struct {
 	Kind     string `json:"kind"`
@@ -101,6 +101,11 @@ type EvaluationError struct {
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
 }
+type Blocker struct {
+	Code    string  `json:"code"`
+	Summary string  `json:"summary"`
+	Target  Subject `json:"target"`
+}
 type Result struct {
 	EvaluationID  string           `json:"evaluation_id"`
 	BindingID     string           `json:"binding_id"`
@@ -113,7 +118,7 @@ type Result struct {
 	AgentText     *string          `json:"agent_text"`
 	Evidence      []Evidence       `json:"evidence"`
 	Dependencies  []Dependency     `json:"dependencies"`
-	Blockers      []struct{}       `json:"blockers"`
+	Blockers      []Blocker        `json:"blockers"`
 	Work          []struct{}       `json:"work"`
 	Waits         []Wait           `json:"waits"`
 	Actions       []struct{}       `json:"actions"`

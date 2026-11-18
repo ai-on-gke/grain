@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/gates"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -554,5 +555,67 @@ func TestScopedGateObservationsDoNotReadFormerRepositoryHistory(t *testing.T) {
 	denied := model.WithExternalRefReadable(ctx, func(string) bool { return false })
 	if _, err := c.Store.ObserveTaskGatePredictions(denied, "scope-mover", baseTime); err != model.ErrGateObservationScopeDenied {
 		t.Fatalf("collection did not enforce repository scope: %v", err)
+	}
+}
+
+type qualificationReadSpy struct{ heads int }
+
+func (s *qualificationReadSpy) GetPullRequest(_, _ string, _ int) (github.PullRequestDetail, error) {
+	return github.PullRequestDetail{}, nil
+}
+func (s *qualificationReadSpy) GetBranchHead(_, _, _ string) (*github.BranchHead, error) {
+	s.heads++
+	return &github.BranchHead{SHA: strings.Repeat("a", 40)}, nil
+}
+
+func TestQualificationObservationsAuthorizeBeforeSourceAndCoalesceBackoff(t *testing.T) {
+	srv, c := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, c, "qualification-caller", "acme/widgets", "api:tasks:read@acme/widgets")
+	seedAPITask(t, c, "qualification-visible", "acme/widgets", "")
+	seedAPITask(t, c, "qualification-hidden", "acme/private", "")
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg == nil {
+		cfg = &model.Config{}
+	}
+	cfg.QA = model.QAConfig{Enabled: true, FlowID: model.QAFlowGoldenV3, RolloutPct: 100, Epoch: 1, RegimeID: 1}
+	if err = c.Store.PutConfig(ctx, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"qualification-visible", "qualification-hidden"} {
+		if err = c.Store.UpdateTask(ctx, id, func(t *model.Task) error { t.QAFlowRef = model.QAFlowGoldenV3; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spy := &qualificationReadSpy{}
+	c.Config.GitHubPullRequests = spy
+	now := baseTime
+	c.Now = func() time.Time { return now }
+	code, body := asAgent(t, srv, "qualification-caller", http.MethodGet, "/api/tasks/qualification-visible", "", "")
+	if code != 200 || strings.Contains(body, "gate_observations") || spy.heads != 0 {
+		t.Fatalf("disabled source collection %d %s", code, body)
+	}
+	c.Config.GateObservationTaskIDs = []string{"qualification-visible", "qualification-hidden"}
+	collection := gates.QualificationCollection{QA: &gates.StageFacts{TaskID: "qualification-visible", FlowRevision: "unavailable"}}
+	failure := gates.UnavailableQualifications("qualification-visible", now, collection)
+	if err = c.Store.RecordGateQualificationFailure(ctx, "qualification-visible", now, &failure, collection); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(100 * time.Millisecond)
+	code, body = asAgent(t, srv, "qualification-caller", http.MethodGet, "/api/tasks/qualification-visible", "", "")
+	if code != 200 || !strings.Contains(body, "qa_stage") || spy.heads != 0 {
+		t.Fatalf("backoff repeated forge collection %d calls=%d %s", code, spy.heads, body)
+	}
+	code, body = asAgent(t, srv, "qualification-caller", http.MethodGet, "/api/tasks/qualification-hidden", "", "")
+	if code == 200 || strings.Contains(body, "gate_observations") || spy.heads != 0 {
+		t.Fatal("hidden source or sidecar was read")
+	}
+	now = now.Add(2 * time.Second)
+	code, body = asAgent(t, srv, "qualification-caller", http.MethodGet, "/api/tasks/qualification-visible", "", "")
+	if code != 200 || !strings.Contains(body, "qa_stage") || spy.heads == 0 {
+		t.Fatalf("expired backoff did not recollect %d %s", code, body)
 	}
 }

@@ -168,6 +168,23 @@ export function taskStateLabel(t: {
     : stateLabel(t.state);
 }
 
+// needsRetryMerge is whether t waits on a person's Retry merge: its
+// liveness reason names Retry merge as its control, or it is a completed
+// task whose merge failed (before or without a classified reason). A
+// closed or paused task is not waiting on Retry merge.
+export function needsRetryMerge(t: {
+  state: string;
+  paused?: unknown;
+  mergeQueueState?: string;
+  reason?: { control?: string };
+}): boolean {
+  if (t.state === "closed" || t.paused) return false;
+  return (
+    t.reason?.control === "Retry merge" ||
+    (t.state === "completed" && t.mergeQueueState === "merge_failed")
+  );
+}
+
 // ---------- Run order (D-28) ----------
 
 export interface Band {

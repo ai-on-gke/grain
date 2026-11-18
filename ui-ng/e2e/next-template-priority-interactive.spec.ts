@@ -38,8 +38,7 @@ test("a /next/ template takes a Task priority and Interactive, and keeps them th
   let id = "";
   try {
     await page.goto("processes/templates");
-    await page.getByTestId("proc-new-menu-btn").click();
-    await page.getByTestId("proc-new-template").click();
+    await page.getByTestId("proc-new-template-btn").click();
     const dlg = page.getByTestId("template-dialog");
     await expect(dlg).toBeVisible();
     await dlg.getByTestId("tmpl-name-input").fill(name);

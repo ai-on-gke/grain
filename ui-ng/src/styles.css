@@ -60,6 +60,7 @@
   --md-sys-color-inverse-surface: #282c35;
   --md-sys-color-inverse-on-surface: #f2f4f8;
   --md-sys-color-inverse-primary: #a8c7fa;
+  --inverse-color-scheme: dark;
   --md-sys-elevation-fab:
     0 6px 18px rgba(11, 87, 208, 0.24), 0 2px 6px rgba(15, 23, 42, 0.1);
   --md-sys-elevation-dialog:
@@ -144,6 +145,7 @@
   --md-sys-color-inverse-surface: #e4e6eb;
   --md-sys-color-inverse-on-surface: #1e2128;
   --md-sys-color-inverse-primary: #0b57d0;
+  --inverse-color-scheme: light;
   --md-sys-elevation-fab:
     0 8px 20px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.32);
   --md-sys-elevation-dialog:

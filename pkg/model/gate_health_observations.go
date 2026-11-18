@@ -143,6 +143,22 @@ func captureGateFacts(ctx context.Context, q querier, id string, now time.Time, 
 		if err == nil {
 			err = captureOutcomeFacts(ctx, q, &f, now, selected, t, o)
 		}
+		if err == nil {
+			reserve, _ := ctx.Value(qualificationBindingReserveKey{}).(int)
+			reviewCtx := context.WithValue(ctx, qualificationBindingReserveKey{}, reserve+len(f.Bindings)-2)
+			observed := o
+			if observed == nil {
+				observed = &Observation{TaskID: id}
+			}
+			change, version, readErr := captureChangeGateFacts(reviewCtx, q, *t, observed)
+			if readErr != nil {
+				return f, state, readErr
+			}
+			f.Change = change
+			if change != nil {
+				f.SourceVersion = gates.Digest([]any{f.SourceVersion, version})
+			}
+		}
 		return f, state, err
 	}
 	t, err := getTask(ctx, q, id)

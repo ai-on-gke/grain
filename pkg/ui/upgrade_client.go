@@ -92,6 +92,9 @@ type ScheduledUpgradeStatus struct {
 	ByID        string
 	BusyRuns    int
 	BusyCIRuns  int
+	// CountError is set when the two counts could not be read and are
+	// not counts (upgradeScheduledResponse.CountError).
+	CountError string
 }
 
 // UpgradeStatus reads GET /api/upgrade -- where this deployment stands
@@ -233,6 +236,7 @@ func upgradeStatusFrom(resp upgradeStatusResponse) UpgradeStatus {
 			ByID:        resp.Scheduled.ByID,
 			BusyRuns:    resp.Scheduled.BusyRuns,
 			BusyCIRuns:  resp.Scheduled.BusyCIRuns,
+			CountError:  resp.Scheduled.CountError,
 		}
 	}
 	return status

@@ -43,6 +43,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -396,7 +397,7 @@ var ErrNoStoreValue = errors.New("the secrets store does not hold this value")
 // and each copy kept, is logged here; a missing copy does nothing.
 // ref names the store value in the logs ("secret/key").
 func RetireMigratedCopy(copyPath, ref string, stored func() ([]byte, bool, error), same func(copy, stored []byte) bool) (bool, error) {
-	data, err := os.ReadFile(copyPath)
+	data, err := readMigratedCopy(copyPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -433,6 +434,45 @@ func RetireMigratedCopy(copyPath, ref string, stored func() ([]byte, bool, error
 			"which is what a rollback restores", copyPath, ref)
 	}
 	return true, nil
+}
+
+// maxMigratedCopySize bounds how much of a rollback copy is read: every
+// credential, CA bundle and key it can stand for is far smaller.
+const maxMigratedCopySize = 1 << 20
+
+// readMigratedCopy reads a rollback copy only when it is a regular file
+// of at most maxMigratedCopySize bytes. A copy is something this daemon
+// wrote, so anything else in its place -- a symlink (to a file outside
+// the data directory, or to a device), a FIFO, a socket -- is never
+// followed, waited on or read, and so is never "verified" and deleted.
+func readMigratedCopy(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file (%s), so it is neither read nor deleted", info.Mode().Type())
+	}
+	f, err := openReadNoFollow(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, errors.New("not a regular file (it changed while being opened), so it is neither read nor deleted")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxMigratedCopySize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxMigratedCopySize {
+		return nil, fmt.Errorf("larger than %d bytes, so it is not a rollback copy grain wrote", maxMigratedCopySize)
+	}
+	return data, nil
 }
 
 // DeleteMigratedCopies retires every <name>.token.migrated,

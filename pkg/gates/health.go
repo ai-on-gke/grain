@@ -194,7 +194,7 @@ func evaluateHealth(b Binding, facts Facts, now time.Time, generation uint64) Re
 	}{b, h.Version, Implementation})
 	r := Result{EvaluationID: "shadow-" + digest[7:], BindingID: "task/" + facts.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version, ContextDigest: digest, Status: "unknown", Summary: "Shadow prediction: scoped health evidence is missing.",
 		Evidence: []Evidence{}, Dependencies: []Dependency{{Key: b.Type + "/" + Digest(b.Subject)[7:], Subject: b.Subject, Version: h.Version, CollectionGeneration: h.Version, ScopeDigest: Digest(b.Subject), Complete: h.Complete, ObservedAt: h.ObservedAt, ValidUntil: h.ValidUntil, AuthorizationRevision: h.AuthorizationRevision, DirtyGeneration: generation, CoveredGeneration: generation}},
-		Blockers: []struct{}{}, Work: []struct{}{}, Actions: []struct{}{}, Waits: []Wait{}, ObservedAt: now, ValidUntil: facts.ValidUntil}
+		Blockers: []Blocker{}, Work: []struct{}{}, Actions: []struct{}{}, Waits: []Wait{}, ObservedAt: now, ValidUntil: facts.ValidUntil}
 	if !h.ValidUntil.IsZero() && h.ValidUntil.Before(r.ValidUntil) {
 		r.ValidUntil = h.ValidUntil
 	}

@@ -1522,4 +1522,78 @@ describe("QaFlowsPanelComponent", () => {
     ).toBeTruthy();
     expect(st?.visibleStages().map((s) => s.id)).toEqual(visibleBefore);
   });
+
+  it("orders the 3 canonical workflows first and surfaces legacy stored qaFlowId aliases with an upgrade CTA", async () => {
+    const stdItem = {
+      hash: "builtin:standard-workflow@1#5",
+      key: "standard-workflow",
+      version: 1,
+      label: "Standard workflow",
+      summary: "8-stage DAG workflow",
+      qaEngineRev: 5,
+      builtIn: true,
+    };
+    const fastItem = {
+      hash: "builtin:fast-baseline@1#5",
+      key: "fast-baseline",
+      version: 1,
+      label: "Fast baseline",
+      summary: "Compact baseline",
+      qaEngineRev: 5,
+      builtIn: true,
+    };
+    const gatesItem = {
+      hash: "builtin:gates-only@1#5",
+      key: "gates-only",
+      version: 1,
+      label: "Deterministic gates only",
+      summary: "Pure-Go AST gates",
+      qaEngineRev: 5,
+      builtIn: true,
+    };
+    const itemsByHash = new Map(
+      [stdItem, fastItem, gatesItem].map((item) => [item.hash, item]),
+    );
+    const cannedRoutes: Readonly<Record<string, unknown>> = {
+      "GET /api/settings": {
+        qaEnabled: true,
+        qaFlowId: "engineering-workflow-v4",
+        qaRolloutPct: 100,
+        qaShadowOnControl: true,
+      },
+      "GET /api/qa/flow-versions": { versions: [gatesItem, fastItem, stdItem] },
+    };
+    api.get.mockImplementation(
+      async (route: string, params?: Record<string, string>) => {
+        if (route === "GET /api/qa/flow-versions/{hash}") {
+          return itemsByHash.get(params?.["hash"] ?? "") ?? stdItem;
+        }
+        return cannedRoutes[route] ?? {};
+      },
+    );
+
+    const fixture = TestBed.createComponent(QaFlowsPanelComponent);
+    const comp = fixture.componentInstance;
+    const root = fixture.nativeElement as HTMLElement;
+    fixture.detectChanges();
+    await new Promise((r) => setTimeout(r, 10));
+    fixture.detectChanges();
+
+    const catalogRows = Array.from(
+      root.querySelectorAll('[data-testid^="qa-flow-row-"]'),
+    ).map((el) => el.getAttribute("data-testid"));
+    expect(catalogRows).toEqual([
+      "qa-flow-row-standard-workflow",
+      "qa-flow-row-fast-baseline",
+      "qa-flow-row-gates-only",
+    ]);
+    expect(comp.isVersionActiveDefault(stdItem)).toBe(true);
+    expect(comp.isVersionActiveDefault(fastItem)).toBe(false);
+    expect(comp.canShowSetDefault(stdItem)).toBe(true);
+    const pill = root.querySelector('[data-testid="qa-rollout-status-pill"]');
+    expect(pill?.textContent?.trim()).toBe("Active (100% · legacy)");
+    expect(
+      root.querySelector('[data-testid="qa-set-default-btn"]'),
+    ).toBeTruthy();
+  });
 });

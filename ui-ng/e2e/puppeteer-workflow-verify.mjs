@@ -288,11 +288,28 @@ async function run() {
     // =========================================================================
     if (runS1) {
       await page.goto(
-        `${demo.baseUrl}/next/processes/quality?flow=engineering-workflow-v4@1`,
+        `${demo.baseUrl}/next/processes/quality?flow=standard-workflow@1`,
         { waitUntil: "domcontentloaded" },
       );
       await page.waitForSelector('[data-testid="qa-studio-toolbar"]');
       await new Promise((r) => setTimeout(r, 200));
+
+      // 1A0. Catalog must show strictly the 3 purpose-named workflows
+      const catalogKeys = await page.evaluate(() =>
+        Array.from(
+          document.querySelectorAll('[data-testid^="qa-flow-row-"]'),
+        ).map((el) => el.getAttribute("data-testid")),
+      );
+      record(
+        "s1.catalog.three_purpose_workflows",
+        JSON.stringify(catalogKeys) ===
+          JSON.stringify([
+            "qa-flow-row-standard-workflow",
+            "qa-flow-row-fast-baseline",
+            "qa-flow-row-gates-only",
+          ]),
+        { catalogKeys },
+      );
 
       // 1A. More actions ("...") overflow dropdown must be opaque, bordered, elevated, and unclipped
       await page.click('[data-testid="qa-more-actions-btn"]');
@@ -506,11 +523,11 @@ async function run() {
     // STAGE 2: Partial-workflow draft entry & Stage-accurate substep creation
     // =========================================================================
     if (runS2) {
-      // Reload clean read-only state on a PARTIAL workflow (golden-v1-minimal: 4 active stages)
+      // Reload clean read-only state on a PARTIAL workflow (fast-baseline: 4 active stages)
       const p2 = await browser.newPage();
       await p2.setViewport({ width: 1440, height: 900 });
       await p2.goto(
-        `${demo.baseUrl}/next/processes/quality?flow=golden-v1-minimal`,
+        `${demo.baseUrl}/next/processes/quality?flow=fast-baseline`,
         { waitUntil: "domcontentloaded" },
       );
       await p2.waitForSelector('[data-testid="qa-studio-toolbar"]');
@@ -564,7 +581,7 @@ async function run() {
       const pFull = await browser.newPage();
       await pFull.setViewport({ width: 1440, height: 900 });
       await pFull.goto(
-        `${demo.baseUrl}/next/processes/quality?flow=engineering-workflow-v4@1`,
+        `${demo.baseUrl}/next/processes/quality?flow=standard-workflow@1`,
         { waitUntil: "domcontentloaded" },
       );
       await pFull.waitForSelector('[data-testid="qa-studio-toolbar"]');
@@ -843,6 +860,52 @@ async function run() {
           "s3.publish_and_reload_persists_exact_stages",
           confirmBtn && countMismatches.length === 0,
           { confirmBtn, countMismatches },
+        );
+
+        // 3E. Enable standard-workflow at 100%, file an eligible task, and verify qa-chip-<id> + task-qa-chip render!
+        const authHdrs = {
+          Authorization: `Bearer ${demo.token}`,
+          "Content-Type": "application/json",
+        };
+        await fetch(`${demo.baseUrl}/api/settings`, {
+          method: "PUT",
+          headers: authHdrs,
+          body: JSON.stringify({
+            qaEnabled: true,
+            qaFlowId: "standard-workflow",
+            qaRolloutPct: 100,
+            qaShadowOnControl: true,
+          }),
+        });
+        const createdTask = await (
+          await fetch(`${demo.baseUrl}/api/tasks`, {
+            method: "POST",
+            headers: authHdrs,
+            body: JSON.stringify({
+              title:
+                "Implement multi-service billing workflow and UI dashboard",
+              description:
+                "Milestone 1: Add schema in pkg/model/qa.go.\nMilestone 2: Wire HTTP API in pkg/ui/qa_api.go and UI in ui-ng/src/app/tasks/tasks-page.component.ts.",
+              repo: "acme/widgets",
+              base: "main",
+              approved: false,
+            }),
+          })
+        ).json();
+        const tid = String(createdTask.id);
+        await pFull.goto(`${demo.baseUrl}/next/task/${tid}`, {
+          waitUntil: "domcontentloaded",
+        });
+        await pFull.waitForSelector('[data-testid="task-qa-chip"]');
+        const chipText = await pFull.$eval(
+          '[data-testid="task-qa-chip"]',
+          (el) => el.textContent?.trim() || "",
+        );
+        await snap(pFull, "s3-task-detail-qa-chip");
+        record(
+          "s3.task_detail_renders_workflow_classifier_chip",
+          chipText.startsWith("Standard"),
+          { tid, chipText },
         );
       }
 

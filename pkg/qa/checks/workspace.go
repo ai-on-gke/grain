@@ -334,7 +334,7 @@ func OpenMirrorWorkspace(ctx context.Context, cacheRoot, remoteURL, bearerToken,
 	if strings.HasPrefix(headBranch, "-") || strings.HasPrefix(baseBranch, "-") {
 		return nil, fmt.Errorf("qa/checks: invalid branch name starting with '-'")
 	}
-	mirrorKey := sanitizePathKey(remoteURL)
+	mirrorKey := sanitizePathKey(mirrorStableURL(remoteURL))
 	bareDir := filepath.Join(cacheRoot, mirrorKey+".git")
 
 	mirrorMu.Lock()
@@ -345,7 +345,7 @@ func OpenMirrorWorkspace(ctx context.Context, cacheRoot, remoteURL, bearerToken,
 	}
 	if _, err := os.Stat(filepath.Join(bareDir, "HEAD")); err != nil {
 		if initOut, initErr := runBareGit(ctx, "", "", "init", "--bare", "--", bareDir); initErr != nil {
-			return nil, fmt.Errorf("qa/checks: git init --bare: %v (%s)", initErr, initOut)
+			return nil, fmt.Errorf("qa/checks: git init --bare: %v (%s)", initErr, redactMirrorOutput(initOut, bearerToken))
 		}
 	}
 
@@ -357,7 +357,7 @@ func OpenMirrorWorkspace(ctx context.Context, cacheRoot, remoteURL, bearerToken,
 	}
 	fetchArgs := append([]string{"fetch", "--quiet", "--depth=64", "--end-of-options", remoteURL}, refspecs...)
 	if fetchOut, fetchErr := runBareGit(ctx, bareDir, bearerToken, fetchArgs...); fetchErr != nil {
-		return nil, fmt.Errorf("qa/checks: git fetch mirror: %v (%s)", fetchErr, fetchOut)
+		return nil, fmt.Errorf("qa/checks: git fetch mirror: %v (%s)", fetchErr, redactMirrorOutput(fetchOut, bearerToken))
 	}
 
 	headOut, err := runBareGit(ctx, bareDir, "", "rev-parse", "--verify", "refs/remotes/origin/"+headBranch)
@@ -607,4 +607,27 @@ func sanitizePathKey(raw string) string {
 		out = out[len(out)-120:]
 	}
 	return out
+}
+
+func mirrorStableURL(remoteURL string) string {
+	trimmed := strings.TrimSpace(remoteURL)
+	for _, scheme := range []string{"http://", "https://"} {
+		if strings.HasPrefix(trimmed, scheme) {
+			rest := strings.TrimPrefix(trimmed, scheme)
+			hostPort, repoPath, ok := strings.Cut(rest, "/")
+			if ok && repoPath != "" && (strings.HasPrefix(hostPort, "127.0.0.1:") || strings.HasPrefix(hostPort, "localhost:") || strings.HasPrefix(hostPort, "[::1]:")) {
+				return "gitproxy/" + repoPath
+			}
+		}
+	}
+	return trimmed
+}
+
+func redactMirrorOutput(out, bearerToken string) string {
+	if bearerToken == "" || out == "" {
+		return out
+	}
+	redacted := strings.ReplaceAll(out, bearerToken, "[redacted]")
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + bearerToken))
+	return strings.ReplaceAll(redacted, basic, "[redacted]")
 }

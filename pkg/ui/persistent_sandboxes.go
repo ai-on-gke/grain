@@ -285,49 +285,80 @@ func isGrainCookie(name string) bool {
 // request to a staging environment, so an untrusted staging build never
 // receives tokens, session cookies, or replayable assertions valid against
 // grain itself.
+//
+// A header is matched with its underscores read as dashes too: CGI, WSGI,
+// Rack and the servers behind them file X_Goog_IAP_JWT_Assertion and
+// X-Goog-IAP-JWT-Assertion under the same HTTP_X_GOOG_IAP_JWT_ASSERTION,
+// so a caller could otherwise hand the app an identity header in the name
+// of the edge the real one was stripped from.
 func stripStagingCredentials(r *http.Request) {
-	r.Header.Del("Authorization")
-	r.Header.Del("Proxy-Authorization")
-	r.Header.Del("X-Grain-Tunnel-Token")
-	r.Header.Del("X-Grain-Hub-Token")
-	r.Header.Del("X-Grain-Registry-Token")
-	r.Header.Del("X-Grain-Subject-Token")
-	r.Header.Del("X-Grain-On-Behalf-Of")
-	r.Header.Del(AccessCodeHeader)
-	r.Header.Del(AccessNameHeader)
-	r.Header.Del(ActingTaskHeader)
-	r.Header.Del(ActingRunHeader)
-	r.Header.Del(ActingReasonHeader)
-	r.Header.Del(ChannelHeader)
-	for _, h := range proxyIdentityHeaders {
-		r.Header.Del(h)
+	names := []string{
+		"Authorization",
+		"Proxy-Authorization",
+		"X-Grain-Tunnel-Token",
+		"X-Grain-Hub-Token",
+		"X-Grain-Registry-Token",
+		"X-Grain-Subject-Token",
+		"X-Grain-On-Behalf-Of",
+		AccessCodeHeader,
+		AccessNameHeader,
+		ActingTaskHeader,
+		ActingRunHeader,
+		ActingReasonHeader,
+		ChannelHeader,
 	}
-	for _, h := range PlaintextIdentityHeaders {
-		r.Header.Del(h)
-	}
+	names = append(names, proxyIdentityHeaders...)
+	names = append(names, PlaintextIdentityHeaders...)
 	for _, v := range registeredVerifiersSnapshot() {
-		for _, h := range v.Headers() {
-			r.Header.Del(h)
-		}
+		names = append(names, v.Headers()...)
+	}
+	strip := make(map[string]bool, len(names))
+	for _, h := range names {
+		strip[stagingHeaderKey(h)] = true
 	}
 	for k := range r.Header {
-		lower := strings.ToLower(k)
-		if strings.HasPrefix(lower, "x-goog-iap-") || strings.HasPrefix(lower, "x-goog-authenticated-user-") {
+		key := stagingHeaderKey(k)
+		if strip[key] || strings.HasPrefix(key, "x-goog-iap-") || strings.HasPrefix(key, "x-goog-authenticated-user-") {
 			delete(r.Header, k)
 		}
 	}
 	stripGrainCookies(r)
 }
 
+// stagingHeaderKey is the form stripStagingCredentials compares header
+// names in: lower case, with underscores read as dashes.
+func stagingHeaderKey(name string) string {
+	return strings.ToLower(strings.ReplaceAll(name, "_", "-"))
+}
+
 // stripGrainCookies drops grain's own cookies (isGrainCookie) from a
-// request bound for a staging environment, keeping the environment's own.
+// request bound for a staging environment, keeping the environment's own
+// exactly as the browser sent them. It filters the Cookie lines' pairs by
+// name rather than parsing and re-serialising them: net/http's parser
+// discards values it holds invalid (JSON, a backslash, UTF-8) and quotes
+// ones with spaces, which would lose or change the app's own cookies.
 func stripGrainCookies(r *http.Request) {
-	cookies := r.Cookies()
-	r.Header.Del("Cookie")
-	for _, c := range cookies {
-		if !isGrainCookie(c.Name) {
-			r.AddCookie(c)
+	lines := r.Header.Values("Cookie")
+	if len(lines) == 0 {
+		return
+	}
+	var kept []string
+	for _, line := range lines {
+		for _, pair := range strings.Split(line, ";") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			name, _, _ := strings.Cut(pair, "=")
+			if isGrainCookie(name) {
+				continue
+			}
+			kept = append(kept, pair)
 		}
+	}
+	r.Header.Del("Cookie")
+	if len(kept) > 0 {
+		r.Header.Set("Cookie", strings.Join(kept, "; "))
 	}
 }
 

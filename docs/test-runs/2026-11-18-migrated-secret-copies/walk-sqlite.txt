@@ -1,0 +1,240 @@
+
+== 0. seed with v3.4.0 (sqlite)
+600    858 ./package-cache-ca.pem
+600    227 ./release-approval-key.pem
+600    834 ./sandbox-access-ca.pem
+600     37 ./secrets/github/bot.token
+600    474 ./secrets/github/deploy-ssh.ssh.json
+600     36 ./secrets/secrets-repo-token
+600     65 ./secrets/secrets.key
+600     35 ./secrets/state-repo-token
+sandbox-access-ca.pem c79a04c88eae
+package-cache-ca.pem 8e792fa64a19
+release-approval-key.pem 82ce74c02632
+
+== 1a. first start on v3.13.0 (the move: makes the .migrated copies)
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-rw------- debian     37 secrets/github/bot.token.migrated
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-rw------- debian     36 secrets/secrets-repo-token.migrated
+-rw------- debian     35 secrets/state-repo-token.migrated
+-- log:
+grain: moved secrets/secrets-repo-token into secret secrets-repo-token (kept as secrets/secrets-repo-token.migrated for a rollback)
+gitproxy: moved git credential "bot" from secrets/github/bot.token into the secrets store (secret github-credential-bot, key token); the file is kept as secrets/github/bot.token.migrated for a rollback and can be deleted once this release is settled
+gitproxy: moved git credential "deploy-ssh" from secrets/github/deploy-ssh.ssh.json into the secrets store (secret github-credential-deploy-ssh, key ssh.json); the file is kept as secrets/github/deploy-ssh.ssh.json.migrated for a rollback and can be deleted on
+grain: moved secrets/state-repo-token into secret state-repo-token (kept as secrets/state-repo-token.migrated for a rollback)
+grain: moved secrets/relay/token into secret relay/token (kept as secrets/relay/token.migrated for a rollback); the relay has been removed, so it can be deleted from Settings -> Secrets
+grain: moved the CA bundle package-cache-ca.pem into secret package-cache-ca (kept as package-cache-ca.pem.migrated for a rollback; delete it once this release is settled)
+push v313: task 2 pushed grain/be5aa192/task-2-push-v313
+approval key (v3.13.0, moves on first use): 4fa422d1cee3
+-- after the approval-key use:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-rw------- debian    227 release-approval-key.pem.migrated
+-rw------- debian     37 secrets/github/bot.token.migrated
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-rw------- debian     36 secrets/secrets-repo-token.migrated
+-rw------- debian     35 secrets/state-repo-token.migrated
+
+== 1b. second v3.13.0 start (copies stay: v3.13.0 never deletes them)
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-rw------- debian    227 release-approval-key.pem.migrated
+-rw------- debian     37 secrets/github/bot.token.migrated
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-rw------- debian     36 secrets/secrets-repo-token.migrated
+-rw------- debian     35 secrets/state-repo-token.migrated
+-- log:
+
+== 2a. rotate bot's token through PUT /api/github-tokens/bot (the /next/settings route) on v3.13.0
+{"enabled":true,"dir":"$WORK/data/secrets/github","tokens":[{"name":"bot","app":false,"default":true,"connections":[""],"capability":"https://grain.dev/capabilities/repo#credential={\"credential\":\"bot\"}","present":true,"offered":true,"needsRestart":false},{"name":"deploy-ssh","app":false,"default":false,"capability":"https://grain.dev/capabilities/repo#credential={\"credential\":\"deploy-ssh\"}","present":true,"offered":true,"needsRestart":false}],"defaultName":"bot","restartRequired":false}
+-- after the rotation:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-rw------- debian    227 release-approval-key.pem.migrated
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-rw------- debian     36 secrets/secrets-repo-token.migrated
+-rw------- debian     35 secrets/state-repo-token.migrated
+superseded copy, the offline way: rotate state-repo-token with grain secrets set (daemon stopped)
+orphaned copy: delete github-credential-deploy-ssh from the store (daemon stopped)
+github-credential-bot: token
+package-cache-ca: bundle.pem
+relay: token
+release-approval-key: key.pem
+secrets-repo-token: token
+state-repo-token: token
+
+== 1c. first HEAD start: copies the store holds go, logged once
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-- log:
+grain: WARNING: keeping the plaintext rollback copy secrets/github/deploy-ssh.ssh.json.migrated: the secrets store holds no github-credential-deploy-ssh/ssh.json, so this file is the only copy of it. Rename it back to secrets/github/deploy-ssh.ssh.json to have
+grain: deleted the plaintext rollback copy package-cache-ca.pem.migrated: the secrets store holds the same value as package-cache-ca/bundle.pem
+grain: deleted the plaintext relay token copy secrets/relay/token.migrated: the relay has been removed, so nothing reads it or restores it
+grain: deleted the plaintext rollback copy secrets/state-repo-token.migrated: the secrets store holds a newer value as state-repo-token/token, which is what a rollback restores
+grain: deleted the plaintext rollback copy secrets/secrets-repo-token.migrated: the secrets store holds the same value as secrets-repo-token/token
+grain: deleted the plaintext rollback copy release-approval-key.pem.migrated: the secrets store holds the same value as release-approval-key/key.pem
+push head1: task 3 pushed grain/be5aa192/task-3-push-head1
+approval key (HEAD): 4fa422d1cee3 (v3.13.0 had 4fa422d1cee3)
+store digests vs values: bot=d72c791de2cb state=bdb9655418d0 secrets-repo=baa73c536f46
+github-credential-bot/token d72c791de2cb6656e059fb8cbd0df9c0
+state-repo-token/token bdb9655418d0dcd0b495e57a013d9c3a5b4f5
+secrets-repo-token/token baa73c536f46addc162d4532addda1500c4
+CA/key digests in the store vs the v3.4.0 files:
+sandbox-access-ca/bundle.pem: error: secrets: no secret name
+package-cache-ca/bundle.pem 8c3e4efb3f76c9b3e2164c7e87ec09dd
+release-approval-key/key.pem c6589dfec41e40ef2ba51c9a4baad01
+sandbox-access-ca.pem (v3.4.0 file, trimmed) eeda730c410c
+package-cache-ca.pem (v3.4.0 file, trimmed) 8c3e4efb3f76
+release-approval-key.pem (v3.4.0 file, trimmed) c6589dfec41e
+
+== 1d. second HEAD start: no deletion logged, only the orphan's warning
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-- log:
+grain: WARNING: keeping the plaintext rollback copy secrets/github/deploy-ssh.ssh.json.migrated: the secrets store holds no github-credential-deploy-ssh/ssh.json, so this file is the only copy of it. Rename it back to secrets/github/deploy-ssh.ssh.json to have
+
+== 2b. third HEAD start: the warning repeats
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-- log:
+grain: WARNING: keeping the plaintext rollback copy secrets/github/deploy-ssh.ssh.json.migrated: the secrets store holds no github-credential-deploy-ssh/ssh.json, so this file is the only copy of it. Rename it back to secrets/github/deploy-ssh.ssh.json to have
+
+== 2c. follow the warning's re-import instruction: rename the copy back
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-- log:
+gitproxy: moved git credential "deploy-ssh" from secrets/github/deploy-ssh.ssh.json into the secrets store (secret github-credential-deploy-ssh, key ssh.json); the file is kept as secrets/github/deploy-ssh.ssh.json.migrated until the next start finds the store
+github-credential-deploy-ssh: ssh.json
+-- and the next start deletes the new copy:
+-- find $WORK/data -name '*.migrated' after start:
+(no .migrated files)
+-- log:
+grain: deleted the plaintext rollback copy secrets/github/deploy-ssh.ssh.json.migrated: the secrets store holds the same value as github-credential-deploy-ssh/ssh.json
+push head2: task 4 pushed grain/be5aa192/task-4-push-head2
+
+== 4. downgrade to v3.13.0 per docs/host-setup.md
+step 2: HEAD once with GRAIN_GITHUB_CREDENTIALS=files
+-- find $WORK/data -name '*.migrated' after start:
+(no .migrated files)
+-- log:
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote git credential secrets/github/bot.token back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote git credential secrets/github/deploy-ssh.ssh.json back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote the CA bundle package-cache-ca.pem back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote secrets/state-repo-token back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote secrets/secrets-repo-token back out of the secrets store
+600    858 ./package-cache-ca.pem
+600    227 ./release-approval-key.pem
+600    834 ./sandbox-access-ca.pem
+600     36 ./secrets/github/bot.token
+600    474 ./secrets/github/deploy-ssh.ssh.json
+600     36 ./secrets/secrets-repo-token
+600     65 ./secrets/secrets.key
+600     37 ./secrets/state-repo-token
+CA bundles and approval key written back byte-identical to the v3.4.0 originals
+step 3: restore the pre-upgrade backup taken on v3.13.0
+step 4: start v3.13.0 (GRAIN_ACCEPT_STORE_BEHIND=1 for its first start)
+daemon exited
+daemon did not come up:
+2026/11/18 06:10:01 grain daemon: agent CLI agy: host (none) -- host the default
+2026/11/18 06:10:01 grain: moved $WORK/data/secrets/secrets-repo-token into secret secrets-repo-token (kept as $WORK/data/secrets/secrets-repo-token.migrated for a rollback)
+2026/11/18 06:10:01 grain: pushed this deployment's encrypted secrets to http://127.0.0.1:4274/acme/grain-secrets.git (grain-local.secrets.enc)
+2026/11/18 06:10:01 grain: the state repository holds a dump this build cannot read (state repository was written by a newer build of grain: repository is at schema 152, this build knows 151). Nothing here says this host's schema was changed under it, so grain
+2026/11/18 06:10:02 grain daemon: loading the config repository: state repository was written by a newer build of grain: repository is at schema 152, this build knows 151
+state-repo/schema-version: 152 (the pre-upgrade copy has 151)
+step 3, again: also put back <data-dir>/state-repo from the pre-upgrade copy (docs do not say to)
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-rw------- debian     36 secrets/github/bot.token.migrated
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-rw------- debian     36 secrets/secrets-repo-token.migrated
+-rw------- debian     37 secrets/state-repo-token.migrated
+-- log:
+grain daemon: ERROR: the store this daemon opens, SQLite at store, is behind the writes a previous daemon on $WORK/data made (store-highwater.json, last moved 2026-11-18T06:09:59Z by SQLite at store): its last task is #2, but task ids up to #
+gitproxy: moved git credential "bot" from secrets/github/bot.token into the secrets store (secret github-credential-bot, key token); the file is kept as secrets/github/bot.token.migrated for a rollback and can be deleted once this release is settled
+gitproxy: moved git credential "deploy-ssh" from secrets/github/deploy-ssh.ssh.json into the secrets store (secret github-credential-deploy-ssh, key ssh.json); the file is kept as secrets/github/deploy-ssh.ssh.json.migrated for a rollback and can be deleted on
+grain: moved secrets/state-repo-token into secret state-repo-token (kept as secrets/state-repo-token.migrated for a rollback)
+grain: moved the CA bundle package-cache-ca.pem into secret package-cache-ca (kept as package-cache-ca.pem.migrated for a rollback; delete it once this release is settled)
+push downgraded: task 5 pushed grain/be5aa192/task-5-push-downgraded
+approval key (v3.13.0 after the downgrade): 4fa422d1cee3 (before: 4fa422d1cee3)
+
+== 3. GRAIN_GITHUB_CREDENTIALS=files on the data dir v3.13.0 left (copies present)
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian     35 secrets/relay/token.migrated
+-- log:
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote git credential secrets/github/bot.token back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote git credential secrets/github/deploy-ssh.ssh.json back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote the CA bundle package-cache-ca.pem back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote secrets/state-repo-token back out of the secrets store
+grain: GRAIN_GITHUB_CREDENTIALS=files: wrote secrets/secrets-repo-token back out of the secrets store
+600    858 ./package-cache-ca.pem
+600    227 ./release-approval-key.pem
+600    834 ./sandbox-access-ca.pem
+600     37 ./secrets/github/bot.token
+600    474 ./secrets/github/deploy-ssh.ssh.json
+600     36 ./secrets/secrets-repo-token
+600     65 ./secrets/secrets.key
+600     36 ./secrets/state-repo-token
+push files: task 3 pushed grain/be5aa192/task-3-push-files
+grain/be5aa192/task-3-push-head1
+-- back to the store: two starts
+-- find $WORK/data -name '*.migrated' after start:
+-rw------- debian    858 package-cache-ca.pem.migrated
+-rw------- debian     37 secrets/github/bot.token.migrated
+-rw------- debian    474 secrets/github/deploy-ssh.ssh.json.migrated
+-rw------- debian     36 secrets/state-repo-token.migrated
+-- log:
+grain: moved secrets/secrets-repo-token into secret secrets-repo-token (kept as secrets/secrets-repo-token.migrated for a rollback)
+gitproxy: moved git credential "bot" from secrets/github/bot.token into the secrets store (secret github-credential-bot, key token); the file is kept as secrets/github/bot.token.migrated until the next start finds the store holding it
+gitproxy: moved git credential "deploy-ssh" from secrets/github/deploy-ssh.ssh.json into the secrets store (secret github-credential-deploy-ssh, key ssh.json); the file is kept as secrets/github/deploy-ssh.ssh.json.migrated until the next start finds the store
+grain: deleted the plaintext relay token copy secrets/relay/token.migrated: the relay has been removed, so nothing reads it or restores it
+grain: deleted the plaintext rollback copy secrets/secrets-repo-token.migrated: the secrets store holds the same value as secrets-repo-token/token
+grain: moved secrets/state-repo-token into secret state-repo-token (kept as secrets/state-repo-token.migrated for a rollback)
+grain: moved the CA bundle package-cache-ca.pem into secret package-cache-ca (kept as package-cache-ca.pem.migrated until the next start finds the store holding it)
+-- find $WORK/data -name '*.migrated' after start:
+(no .migrated files)
+-- log:
+grain: deleted the plaintext rollback copy secrets/github/bot.token.migrated: the secrets store holds the same value as github-credential-bot/token
+grain: deleted the plaintext rollback copy secrets/github/deploy-ssh.ssh.json.migrated: the secrets store holds the same value as github-credential-deploy-ssh/ssh.json
+grain: deleted the plaintext rollback copy package-cache-ca.pem.migrated: the secrets store holds the same value as package-cache-ca/bundle.pem
+grain: deleted the plaintext rollback copy secrets/state-repo-token.migrated: the secrets store holds the same value as state-repo-token/token
+
+== 5. hostile copies (store holds every value): /home/debian/bin/grain-unfixed, then /home/debian/bin/grain
+### /home/debian/bin/grain-unfixed
+-- planted:
+prw-r--r-- debian      0 package-cache-ca.pem.migrated
+lrwxrwxrwx debian     51 secrets/github/bot.token.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-rw-r--r-- debian     35 secrets/state-repo-token.migrated
+daemon API not up after 30s; last log lines:
+grain daemon: agent CLI codex: host (none) -- host the default
+grain daemon: agent CLI agy: host (none) -- host the default
+grain: deleted the plaintext rollback copy $WORK/data/secrets/github/bot.token.migrated: the secrets store holds a newer value as github-credential-bot/token, which is what a rollbac
+-- find after start:
+prw-r--r-- debian      0 package-cache-ca.pem.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-rw-r--r-- debian     35 secrets/state-repo-token.migrated
+-- log:
+grain: deleted the plaintext rollback copy secrets/github/bot.token.migrated: the secrets store holds a newer value as github-credential-bot/token, which is what a rollback restores
+symlink target intact
+### /home/debian/bin/grain
+-- planted:
+prw-r--r-- debian      0 package-cache-ca.pem.migrated
+lrwxrwxrwx debian     51 secrets/github/bot.token.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-rw-r--r-- debian     35 secrets/state-repo-token.migrated
+daemon up
+-- find after start:
+prw-r--r-- debian      0 package-cache-ca.pem.migrated
+lrwxrwxrwx debian     51 secrets/github/bot.token.migrated
+-rw------- debian     35 secrets/relay/token.migrated
+-- log:
+grain: keeping the rollback copy secrets/github/bot.token.migrated: reading it: not a regular file (L---------), so it is neither read nor deleted
+grain: some plaintext rollback copies of git credentials are still under secrets/github: secrets/github/bot.token.migrated: not a regular file (L---------), so it is neither read nor deleted
+grain: keeping the rollback copy package-cache-ca.pem.migrated: reading it: not a regular file (p---------), so it is neither read nor deleted
+grain: deleting the plaintext relay token copy secrets/relay/token.migrated: remove secrets/relay/token.migrated: permission denied
+grain: deleted the plaintext rollback copy secrets/state-repo-token.migrated: the secrets store holds the same value as state-repo-token/token
+symlink target intact

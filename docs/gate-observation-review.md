@@ -103,6 +103,13 @@ independent correctness oracle.
    API authorization/cache/pagination checks, canonical response validation and
    Angular inertness/expiry tests.
 
+## Task #69 extension
+
+The [QA/release observation port](gate-qa-release-observations.md) extends the
+fixed projection, cache/failure validation and payload bounds for typed QA/release
+monitors. The fixed-pair limitation below describes the reviewed initial slice,
+not the current qualification port. Its legacy authority constraints remain.
+
 ## Material limits for later ports
 
 - At this review revision, the controller, failure builder and milestone comparison

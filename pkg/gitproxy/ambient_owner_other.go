@@ -32,3 +32,7 @@ func singleLink(os.FileInfo) bool { return false }
 func openNoFollow(string) (*os.File, error) {
 	return nil, errors.New("staging placeholders are only opened on unix")
 }
+
+// openReadNoFollow cannot refuse a symlink at open off unix; the caller's
+// Lstat and same-file check stand in for it.
+func openReadNoFollow(path string) (*os.File, error) { return os.Open(path) }

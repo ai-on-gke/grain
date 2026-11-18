@@ -169,3 +169,87 @@ func TestStagingProxyNeverForwardsSignedIdentityAssertionsOrGrainCookies(t *test
 		}
 	}
 }
+
+// A caller can spell a credential header the way its edge never does --
+// lower case, underscores for dashes, sent twice -- and split or pad its
+// Cookie header, and the staging app behind a CGI-style server still reads
+// X_Goog_IAP_JWT_Assertion as HTTP_X_GOOG_IAP_JWT_ASSERTION. None of those
+// spellings may reach the sandbox, while the app's own cookies arrive as
+// the browser sent them.
+func TestStagingProxyStripsEverySpellingOfCredentials(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Cleanup(ui.RegisterIdentityVerifier(customSessionVerifier{}))
+
+	var captured http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	store, _ := sqlitetest.Open(t)
+	ctx := context.Background()
+	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddAllowedPrincipal(ctx, "user:alice@example.com", "seed", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ui.Config{
+		Actor:               ui.DefaultActor("alice@example.com"),
+		PersistentSandboxes: stubStagingSandboxes{upstream: strings.TrimPrefix(upstream.URL, "http://")},
+		RequireVerifier:     "iap",
+	}
+	sharedIdentityProxy().configure(&cfg)
+	srv := httptest.NewServer(ui.NewServer(cfg, store))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/staging/preview/check", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, vals := range sessionHeader(t, "alice@example.com") {
+		for _, v := range vals {
+			req.Header.Add(k, v)
+		}
+	}
+	// Set directly, so the client sends the names exactly as written.
+	req.Header["X_Goog_IAP_JWT_Assertion"] = []string{"underscore-iap-jwt"}
+	req.Header["x_goog_authenticated_user_email"] = []string{"accounts.example.com:mallory@example.com"}
+	req.Header["X_Grain_Access_Code"] = []string{"underscore-access-code"}
+	req.Header["X_Custom_SSO_Sig"] = []string{"mallory@example.com"}
+	req.Header["X_Forwarded_User"] = []string{"mallory"}
+	req.Header["Proxy_Authorization"] = []string{"Bearer underscore-edge-token"}
+	req.Header["x-grain-hub-assertion"] = []string{"lower-hub-jwt", "lower-hub-jwt-2"}
+	req.Header["Cookie"] = []string{
+		`app_json={"a":1}; grain_session=split-1`,
+		`  __Host-edge_sso = split-2 ;app_ws=  padded;; GCP_IAP_UID="split-3"`,
+		`__secure-GRAIN_access=split-4; app_utf=héllo; app_bs=a\b`,
+	}
+	req.Header.Set("X_App_Header", "keep-me")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /staging/preview/check status = %d, want 200", resp.StatusCode)
+	}
+	for k, vals := range captured {
+		key := strings.ToLower(strings.ReplaceAll(k, "_", "-"))
+		switch {
+		case strings.HasPrefix(key, "x-goog-"), strings.HasPrefix(key, "x-grain-"),
+			key == "x-custom-sso-sig", key == "x-forwarded-user", key == "proxy-authorization":
+			t.Errorf("staging sandbox received %s=%q; every spelling of a credential must be stripped", k, vals)
+		}
+	}
+	if got := captured.Get("X_App_Header"); got != "keep-me" {
+		t.Errorf("X_App_Header = %q, want keep-me", got)
+	}
+	want := `app_json={"a":1}; app_ws=  padded; app_utf=héllo; app_bs=a\b`
+	if got := captured.Values("Cookie"); len(got) != 1 || got[0] != want {
+		t.Errorf("staging sandbox Cookie = %q, want [%q]", got, want)
+	}
+}

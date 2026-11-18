@@ -20,7 +20,9 @@ import {
   ElementRef,
   NgZone,
   type OnDestroy,
+  Injector,
   ViewEncapsulation,
+  afterNextRender,
   afterRenderEffect,
   computed,
   effect,
@@ -69,7 +71,7 @@ import {
   filesFromTransfer,
   readFilesAsUploads,
 } from "../shared/attachments";
-import { ciChip } from "../shared/chips";
+import { ciChip, qaWorkflowChip } from "../shared/chips";
 import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
@@ -88,6 +90,7 @@ import {
   ago,
   levelOf,
   mergeStuck,
+  needsRetryMerge,
   priorityOf,
   stateLabel,
   taskStateLabel,
@@ -196,6 +199,7 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       (scroll)="rememberTabScroll()"
+      (keydown)="onDetailsScrollKey($event)"
       [class.is-details-view]="current() === 'details'"
       [attr.tabindex]="current() === 'details' ? 0 : null"
       aria-labelledby="task-title"
@@ -255,6 +259,19 @@ export function duration(from?: string, to?: string): string {
                 data-testid="task-ci"
                 [gTip]="c.tip"
                 >{{ c.text }}</span
+              >
+            }
+            @if (qaChip(); as qc) {
+              <a
+                [routerLink]="['/processes', 'quality']"
+                [queryParams]="
+                  qc.flowId === 'control' ? null : { flow: qc.flowId }
+                "
+                [class]="'ci-chip ' + qc.tone"
+                data-testid="task-qa-chip"
+                [gTip]="qc.tip"
+                style="text-decoration: none;"
+                >{{ qc.text }}</a
               >
             }
             @if (partOfStream(); as ps) {
@@ -398,6 +415,20 @@ export function duration(from?: string, to?: string): string {
               </button>
             }
             @if (
+              needsRetryMerge(t) && can("POST /api/tasks/{id}/retry-merge")
+            ) {
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="act-retry-merge"
+                gTip="Put this pull request back on the merge queue for another round"
+                [disabled]="store.isBusy('retry-merge', t.id)"
+                (click)="retryMerge()"
+              >
+                Retry merge
+              </button>
+            }
+            @if (
               t.paused &&
               t.state !== "closed" &&
               can("POST /api/tasks/{id}/resume")
@@ -426,16 +457,12 @@ export function duration(from?: string, to?: string): string {
                 Pause
               </button>
             }
-            @if (
-              t.state !== "running" &&
-              t.state !== "closed" &&
-              can("POST /api/tasks/{id}/run-now")
-            ) {
+            @if (t.state !== "completed" && canRunNow()) {
               <button
                 type="button"
                 class="btn-tonal"
                 data-testid="act-run-now"
-                gTip="Dispatch ahead of the queue on the next cycle"
+                [gTip]="runNowTip()"
                 [disabled]="store.isBusy('run-now', t.id)"
                 (click)="runNow()"
               >
@@ -659,6 +686,20 @@ export function duration(from?: string, to?: string): string {
                           (click)="pause(true)"
                         >
                           Pause immediately
+                        </button>
+                      </li>
+                    }
+                    @if (t.state === "completed" && canRunNow()) {
+                      <li>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="act-run-now"
+                          [gTip]="runNowTip()"
+                          [disabled]="store.isBusy('run-now', t.id)"
+                          (click)="runNow()"
+                        >
+                          Run now
                         </button>
                       </li>
                     }
@@ -1707,6 +1748,36 @@ export class TaskDetailComponent implements OnDestroy {
     { page: number; body: number }
   >();
 
+  protected onDetailsScrollKey(event: KeyboardEvent): void {
+    const page = this.taskPage()?.nativeElement;
+    const body = this.tabBody()?.nativeElement;
+    if (
+      this.current() !== "details" ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey ||
+      (event.key !== "PageDown" && event.key !== "PageUp") ||
+      (event.target !== page && event.target !== body)
+    )
+      return;
+    // Native page-key animation can swallow a following Control+Home on a
+    // touch viewport. Page the focused surface immediately; retain native
+    // Home/End (including touch-fling cancellation) and editor key behavior.
+    const owner =
+      body && body.scrollHeight > body.clientHeight + 1 ? body : page;
+    if (!owner) return;
+    event.preventDefault();
+    const step = owner.clientHeight * 0.9;
+    owner.scrollTo({
+      top: Math.max(
+        0,
+        owner.scrollTop + (event.key === "PageDown" ? step : -step),
+      ),
+      behavior: "instant",
+    });
+  }
+
   protected rememberTabScroll(): void {
     // Read while the user scrolls: by the time a tab has rendered, the old
     // layout's offsets may already have been clamped by the browser.
@@ -1760,6 +1831,8 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected readonly label = stateLabel;
   protected readonly stateOval = taskStateLabel;
+  protected readonly needsRetryMerge = needsRetryMerge;
+  protected readonly qaChip = computed(() => qaWorkflowChip(this.t()));
 
   // depTitle is a dependency chip's hover text: the task it waits for,
   // its title where the open-task feed knows it, its state, and whether
@@ -1848,6 +1921,8 @@ export class TaskDetailComponent implements OnDestroy {
   private commentSeq = 0;
   private lastFragmentKey = "";
   private lastFragmentAt = 0;
+  // fragmentFor is the fragment last followed and the task it was for.
+  private fragmentFor: { id: string; raw: string } | null = null;
 
   protected readonly t = computed(() => this.store.detail());
   protected readonly docs = computed<TaskDocumentItem[]>(() => {
@@ -1934,11 +2009,29 @@ export class TaskDetailComponent implements OnDestroy {
     );
   });
 
+  protected readonly canRunNow = computed(() => {
+    const t = this.t();
+    if (!t || t.state === "running" || t.state === "closed") return false;
+    const needsApproval =
+      t.state === "proposed" || (t.state === "deferred" && !t.approved);
+    return (
+      this.can("POST /api/tasks/{id}/run-now") &&
+      (!needsApproval || this.can("POST /api/tasks/{id}/approve"))
+    );
+  });
+
+  protected readonly runNowTip = computed(() =>
+    this.t()?.pullRequest
+      ? "Put an agent back on this branch ahead of the queue; nothing merges it while the run is in flight"
+      : "Dispatch ahead of the queue on the next cycle",
+  );
+
   protected readonly hasOverflowActions = computed(() => {
     const t = this.t();
     if (!t) return false;
     return (
       (t.state !== "closed" && this.can("POST /api/tasks/{id}/compact")) ||
+      (t.state === "completed" && this.canRunNow()) ||
       this.canRollover() ||
       this.canRecreateSandbox() ||
       (t.state === "running" &&
@@ -2094,12 +2187,21 @@ export class TaskDetailComponent implements OnDestroy {
     });
     // #comment=<id> arrives with the route (a link followed into the app),
     // or as a hash change on a page already open.
+    // The router reports a new fragment before a pane's [id] input moves
+    // to the task the same navigation selected (?task=21#comment=14 from
+    // task 20), so wait for that render: the id effect then sees the new
+    // task first, and this call is the dedupe's duplicate of its own.
+    const injector = inject(Injector);
     const fragSub = route.fragment.subscribe((frag) => {
-      if (frag) this.queueCommentFragment(frag);
+      if (!frag) return;
+      afterNextRender(() => this.queueCommentFragment(frag), { injector });
     });
     const win = this.doc.defaultView;
     const onHash = (): void =>
-      this.zone.run(() => this.queueCommentFragment(win?.location.hash ?? ""));
+      this.zone.run(() => {
+        const hash = win?.location.hash ?? "";
+        afterNextRender(() => this.queueCommentFragment(hash), { injector });
+      });
     win?.addEventListener("hashchange", onHash);
     inject(DestroyRef).onDestroy(() => {
       paneSub.unsubscribe();
@@ -2172,9 +2274,17 @@ export class TaskDetailComponent implements OnDestroy {
         this.forceConversationTab.set(false);
         const raw =
           route.snapshot.fragment || this.doc.defaultView?.location.hash || "";
-        const parsed = this.fragmentIsForTask(id)
-          ? parseCommentFragment(raw)
-          : ({ kind: "none" } as const);
+        // A fragment belongs to the task it arrived with. A pane (Tasks,
+        // Workstreams) that moves to another task keeps the address's
+        // #comment=, which names a comment of the task it came from.
+        const frag = raw.replace(/^#/, "");
+        const prev = this.fragmentFor;
+        const stale = !!frag && !!prev && prev.id !== id && prev.raw === frag;
+        this.fragmentFor = stale ? prev : frag ? { id, raw: frag } : null;
+        const parsed =
+          !stale && this.fragmentIsForTask(id)
+            ? parseCommentFragment(raw)
+            : ({ kind: "none" } as const);
         this.confirmClose.set(false);
         this.confirming.set(null);
         this.editOpen.set(false);
@@ -2192,7 +2302,7 @@ export class TaskDetailComponent implements OnDestroy {
         this.docDiffLoading.set(false);
         this.loadedDocDiffKey = "";
         this.store.open(id, parsed.kind === "comment" ? parsed.id : null);
-        if (raw) this.queueCommentFragment(raw, id);
+        if (raw && !stale) this.queueCommentFragment(raw, id);
       });
     });
     // Reveal a linked comment once the conversation holds it, paging older
@@ -2220,7 +2330,7 @@ export class TaskDetailComponent implements OnDestroy {
         }
         if (this.store.isBusy("older-comments", t.id)) return;
         const taskId = t.id;
-        void this.store.loadOlderCommentsThrough(pending.id).then((found) => {
+        void this.store.loadOlderCommentsThrough(pending.id).then((res) => {
           if (
             this.id() !== taskId ||
             this.pendingCommentLink()?.seq !== pending.seq
@@ -2228,9 +2338,11 @@ export class TaskDetailComponent implements OnDestroy {
             return;
           }
           this.pendingCommentLink.set(null);
-          if (found) {
+          if (res === "found") {
             this.commentTarget.set(pending);
-          } else {
+          } else if (res === "missing") {
+            // Only "missing" says so: a failed read is already in the
+            // page's error banner and says nothing about the comment.
             this.snackbar.show(
               `Comment ${pending.id} is not in this task's conversation.`,
             );
@@ -2322,6 +2434,7 @@ export class TaskDetailComponent implements OnDestroy {
     if (key === this.lastFragmentKey && now - this.lastFragmentAt < 100) return;
     this.lastFragmentKey = key;
     this.lastFragmentAt = now;
+    this.fragmentFor = { id, raw: raw.replace(/^#/, "") };
     if (parsed.kind === "invalid") {
       this.snackbar.show(`This link's ${parsed.raw} does not name a comment.`);
       return;
@@ -2509,6 +2622,7 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async runNow(): Promise<void> {
+    this.closeMoreMenu();
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
@@ -2707,6 +2821,21 @@ export class TaskDetailComponent implements OnDestroy {
       )
     ) {
       this.done(`Submitted #${id}`);
+    }
+  }
+
+  protected async retryMerge(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    if (
+      await this.store.act(
+        "retry-merge",
+        this.post("POST /api/tasks/{id}/retry-merge"),
+        id,
+      )
+    ) {
+      this.done(`Retrying merge for #${id}`);
     }
   }
 
