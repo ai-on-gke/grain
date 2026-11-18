@@ -448,7 +448,7 @@ test("Sandboxes Kubernetes card shows defaults, validates the node selector and 
     const bad = await saveBar(page);
     expect(bad.status()).toBe(400);
     await expect(page.getByTestId("settings-error-banner")).toContainText(
-      "k8sWorkspace",
+      "Kubernetes workspace directory:",
     );
   } finally {
     await restore(request, {

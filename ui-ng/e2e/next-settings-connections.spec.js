@@ -162,8 +162,9 @@ test("Engine: the poll placeholder is grain's default and blank boxes reset to d
     // (0 reads as blank, i.e. the default; a negative count is refused.)
     await merges.fill("-1");
     await page.getByTestId("settings-save-btn").click();
+    // The server's refusal is shown under the field's label, not its key.
     await expect(
-      page.getByText("maxMergesPerRepo must be at least 1"),
+      page.getByText("Max merges per repo branch: must be at least 1"),
     ).toBeVisible();
   } finally {
     await page.request.post("/api/settings", {
