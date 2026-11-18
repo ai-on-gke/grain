@@ -364,6 +364,12 @@ func RunHealth(t *testing.T, s *model.Store, db *sql.DB) {
 			t.Fatalf("truncated legacy scan: %s", v.Results[0].Result.Summary)
 		}
 	})
+	t.Run("uppercase-gating-workflow-never-trusts-fork-main-jobs", func(t *testing.T) {
+		seed("health-verified-case", model.GoalDecl{Kind: model.GoalNightlyGreen, Spec: model.GoalSpec{Repo: repo.String(), Workflow: "TESTS.YML"}})
+		must(s.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: repo.String(), CheckRunID: 12000, RunID: 12000, RunAttempt: 1, Workflow: "TESTS.YML", Ref: "main", Commit: "fork-head", JobName: "main", Conclusion: "success", CompletedAt: &now, RecordedAt: now, UpdatedAt: now}))
+		v, _ := read(s, "health-verified-case", now, access)
+		statuses(v, "pending", "unknown")
+	})
 	t.Run("bounded-legacy-goal-shapes", func(t *testing.T) {
 		seed("health-duplicate-scope", model.GoalDecl{Kind: model.GoalPipelineHealthy, Spec: model.GoalSpec{Repos: []string{repo.String(), repo.String()}}})
 		v, _ := read(s, "health-duplicate-scope", now, access)

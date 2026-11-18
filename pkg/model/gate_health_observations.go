@@ -105,7 +105,7 @@ func healthBindings(t Task, g TaskGoal, repos []string) []gates.Binding {
 		}
 	case GoalNightlyGreen:
 		semantics := "legacy_500_v1"
-		name := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(path.Base(g.Spec.Workflow), ".yml"), ".yaml"))
+		name := strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(path.Base(g.Spec.Workflow)), ".yml"), ".yaml")
 		if g.DeclaredBy == "automation:github-base-repair" || slices.Contains([]string{"tests", "test", "ci"}, name) {
 			semantics = "legacy_verified_push_v1"
 		}
