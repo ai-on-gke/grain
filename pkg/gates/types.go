@@ -126,6 +126,29 @@ type Result struct {
 	ValidUntil    time.Time        `json:"valid_until"`
 	Error         *EvaluationError `json:"error"`
 }
+
+// boundResultSummary keeps complete scoped diagnosis in inert guidance while
+// honoring the shared v1 wire limits for both review and CI results.
+func boundResultSummary(r *Result) {
+	if len(r.Summary) <= 240 {
+		return
+	}
+	summary := []rune(r.Summary)
+	if len(summary) <= 240 {
+		return
+	}
+	detail := r.Summary
+	r.Summary = string(summary[:239]) + "…"
+	if r.HumanText != nil {
+		detail = *r.HumanText + "\n\n" + detail
+	}
+	text := []rune(detail)
+	if len(text) > 8192 {
+		detail = string(text[:8191]) + "…"
+	}
+	r.HumanText = &detail
+}
+
 type EvaluationState struct {
 	EvaluationID       string     `json:"evaluation_id"`
 	Revision           uint64     `json:"revision"`

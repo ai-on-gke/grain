@@ -346,6 +346,9 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 			if err != nil {
 				return err
 			}
+			// Keep the transactional local fence independently of external reads.
+			// The report dependency persists it without changing the wire schema.
+			f.LocalSourceVersion = f.SourceVersion
 			if f.Health != nil && !f.Complete {
 				transient = true
 				view = gates.ObservationView{APIVersion: "grain.gates/v1", Mode: "observation_only", Authority: "legacy", SourceRevision: f.SourceVersion, ComparedAt: now, LegacyState: state, Bindings: observationBindings(id, f), Results: []gates.EvaluationState{}}
@@ -463,7 +466,12 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 				// across a restart. A changed local fence still invalidates the
 				// result rather than returning a possibly stale cached success.
 				if now.Before(evaluated) {
-					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && (f.Health == nil || source == f.SourceVersion) {
+					sameLocalSource := source == f.SourceVersion
+					if f.Health == nil {
+						sameLocalSource = len(cachedView.Results) > 0 && len(cachedView.Results[0].Result.Dependencies) > 0 &&
+							cachedView.Results[0].Result.Dependencies[0].Version == f.LocalSourceVersion
+					}
+					if !invalidated && !unsupportedCache && !rejectedCache && !bindingsChanged && sameLocalSource {
 						view = cachedView
 						if history {
 							diag, err = readGateDiagnostics(ctx, tx, id)
@@ -481,7 +489,22 @@ func (s *Store) observeTaskGates(ctx context.Context, id string, now time.Time, 
 						if err != nil {
 							return err
 						}
+						f.LocalSourceVersion = f.SourceVersion
 						bindings = observationBindings(id, f)
+					} else if len(f.Checks) > 0 || qualifications.QA != nil || qualifications.Release != nil {
+						// Local facts must refresh, but an older collection cannot
+						// replace newer external evidence with an old positive head.
+						const reason = "Local observation context changed after this older collection started; recollect external evidence."
+						for i := range f.Checks {
+							f.Checks[i].PolicyComplete = false
+							f.Checks[i].Gap = reason
+						}
+						qualifications = qualifications.Invalidate(reason)
+						versions := []string{f.SourceVersion, qualifications.SourceVersionAt(now)}
+						for _, c := range f.Checks {
+							versions = append(versions, gates.ChecksVersion(c))
+						}
+						f.SourceVersion = gates.Digest(versions)
 					}
 				}
 			}

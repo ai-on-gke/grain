@@ -523,6 +523,110 @@ func RunOutcomes(t *testing.T, s *model.Store, db *sql.DB) {
 		}
 	})
 
+	t.Run("late-read-revalidates-local-finish-after-newer-acceptance", func(t *testing.T) {
+		task := seed("outcome-late-local-finish")
+		task.NothingNeededAction = model.NothingNeededAck
+		must(s.PutTask(ctx, task))
+		settle(task, model.NothingNeededOutcome, "nothing_needed", "")
+		now = now.Add(time.Second)
+		must(s.ObserveClose(ctx, task.ID, now, human, "acknowledged", func(o *model.Observation) { o.ClosedAt = &now }))
+		writeAt := now.Add(2 * time.Second)
+		now = now.Add(10 * time.Second)
+		accepted := observe(task)
+		if status(accepted, "legacy_nothing_needed_ack") != "met" {
+			t.Fatal("setup lacks acknowledged finish")
+		}
+		// An earlier-started writer commits after the newer observation.
+		// The older reader now sees the changed local facts under its lock.
+		now = writeAt
+		must(s.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.ClosedAt = nil; o.CompletedAt = nil }))
+		replayed := observe(task)
+		if status(replayed, "legacy_nothing_needed_ack") == "met" || status(replayed, "delivery-nothing_needed") == "met" {
+			t.Fatal("late request replayed stale local finish/receipt after reopen")
+		}
+		if replayed.SourceRevision == accepted.SourceRevision || replayed.ComparedAt.Before(accepted.ComparedAt) {
+			t.Fatal("local source change was dropped or accepted time rewound")
+		}
+	})
+
+	t.Run("late-CI-read-revalidates-selected-child-without-rewinding-external-head", func(t *testing.T) {
+		parent := seed("outcome-late-ci-parent")
+		parent.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/outcomes#71"}}
+		must(s.PutTask(ctx, parent))
+		child := seed("outcome-late-ci-child")
+		must(s.ObserveClose(ctx, child.ID, now, human, "done", func(o *model.Observation) { o.ClosedAt = &now }))
+		selected := gates.ChildrenConfig{Tasks: []string{child.ID}, Predicate: "closed"}
+		_, _, fence, err := s.GateChecksInput(ctx, parent.ID)
+		must(err)
+		subject := model.CheckSubjects(parent)[0]
+		facts := func(at time.Time, head string) gates.ChecksFacts {
+			return gates.ChecksFacts{TaskID: parent.ID, Subject: subject, Head: head, PolicyVersion: gates.Digest("grain-policy"), PolicyComplete: true, Mode: "grain", ObservedAt: at, ValidUntil: at.Add(time.Minute),
+				Sources: []gates.CheckSource{{Kind: "grain", Head: head, Version: gates.Digest(head), Complete: true, All: true, Verdict: "success", LegacyAggregate: true,
+					Attempts: []gates.CheckAttempt{{Identity: "grain/go", Names: []string{"go"}, Head: head, Version: gates.Digest(head + "-job"), Order: 1, State: "completed", Conclusion: "success"}}}}}
+		}
+		read := func(at time.Time, head string) *gates.ObservationView {
+			t.Helper()
+			before, wake := legacy(), s.Changed()
+			v, _, err := model.New(db).ObserveTaskGatesWithChecks(ctx, parent.ID, at, fence, []gates.ChecksFacts{facts(at, head)}, selected)
+			must(err)
+			if legacy() != before {
+				t.Fatal("late source revalidation mutated legacy rows")
+			}
+			select {
+			case <-wake:
+				t.Fatal("late source revalidation woke legacy work")
+			default:
+			}
+			for _, entry := range v.Results {
+				if len(entry.Result.Work) > 0 || len(entry.Result.Actions) > 0 {
+					t.Fatal("late source revalidation proposed effects")
+				}
+			}
+			if path := os.Getenv("GRAIN_TEST_OUTCOME_FIXTURE"); path != "" {
+				raw, err := json.Marshal(v)
+				must(err)
+				file, err := os.OpenFile(path+".jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+				must(err)
+				_, err = file.Write(append(raw, '\n'))
+				must(err)
+				must(file.Close())
+			}
+			return v
+		}
+		childStatus := func(v *gates.ObservationView) string {
+			for _, entry := range v.Results {
+				if entry.Result.Type == "children" {
+					return entry.Result.Status
+				}
+			}
+			t.Fatal("selected child omitted")
+			return ""
+		}
+		acceptedAt := now.Add(10 * time.Second)
+		accepted := read(acceptedAt, "H2")
+		if childStatus(accepted) != "met" || status(accepted, gates.ChecksBinding(facts(acceptedAt, "H2"), false).ID) != "met" {
+			t.Fatal("setup lacks positive child/CI observations")
+		}
+		writeAt := now.Add(2 * time.Second)
+		must(s.ObserveField(ctx, child.ID, writeAt, func(o *model.Observation) { o.ClosedAt = nil }))
+		late := read(writeAt, "H1")
+		if childStatus(late) != "pending" {
+			t.Fatal("late request replayed a closed child after its scoped source changed")
+		}
+		for _, entry := range late.Results {
+			if entry.Result.Type == "checks" && entry.Result.Status != "unknown" {
+				t.Fatal("older remote CI evidence rewound a newer accepted head")
+			}
+		}
+		if late.ComparedAt.Before(accepted.ComparedAt) || late.SourceRevision == accepted.SourceRevision {
+			t.Fatal("late local source change lost its monotonic acceptance/version")
+		}
+		fresh := read(acceptedAt.Add(time.Second), "H2")
+		if childStatus(fresh) != "pending" || status(fresh, gates.ChecksBinding(facts(acceptedAt, "H2"), false).ID) != "met" {
+			t.Fatal("fresh external evidence did not recover independently of child outcome")
+		}
+	})
+
 	t.Run("no-action-is-not-success-and-goal-contracts-are-inert", func(t *testing.T) {
 		task := seed("outcome-no-action")
 		settle(task, "no_action", "report", "a tool ran")

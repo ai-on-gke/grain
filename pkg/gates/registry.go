@@ -300,6 +300,7 @@ type Facts struct {
 	NoWorkReceipt      *Evidence
 	ReceiptUnversioned bool
 	SourceVersion      string
+	LocalSourceVersion string
 	ObservedAt         time.Time
 	ValidUntil         time.Time
 }
@@ -338,11 +339,15 @@ func Evaluate(b Binding, f Facts, now time.Time, generation uint64) Result {
 	if b.Type == "review" || b.Type == "approval" {
 		return evaluateChange(b, f, now, generation)
 	}
+	localVersion := f.LocalSourceVersion
+	if localVersion == "" {
+		localVersion = f.SourceVersion
+	}
 	contextDigest := Digest(struct {
 		Binding       Binding
 		Source, Build string
 	}{b, f.SourceVersion, Implementation})
-	r := Result{EvaluationID: "shadow-" + contextDigest[7:], BindingID: "task/" + f.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version, ContextDigest: contextDigest, Status: "unknown", Summary: "Evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{{Key: "task/" + f.TaskID + "/report-receipt", Subject: b.Subject, Version: f.SourceVersion, CollectionGeneration: f.SourceVersion, ScopeDigest: Digest(b.Subject), Complete: f.Complete, ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
+	r := Result{EvaluationID: "shadow-" + contextDigest[7:], BindingID: "task/" + f.TaskID + "/" + b.ID, Type: b.Type, Version: b.Version, ContextDigest: contextDigest, Status: "unknown", Summary: "Evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{{Key: "task/" + f.TaskID + "/report-receipt", Subject: b.Subject, Version: localVersion, CollectionGeneration: localVersion, ScopeDigest: Digest(b.Subject), Complete: f.Complete, ObservedAt: f.ObservedAt, ValidUntil: f.ValidUntil, DirtyGeneration: generation, CoveredGeneration: generation}}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
 	if _, err := Validate(b.Type, b.Version, b.Config); err != nil {
 		r.Summary = "Unsupported or malformed gate configuration."
 		return r

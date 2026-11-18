@@ -21,12 +21,28 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func checkFixture(now time.Time) ChecksFacts {
 	a := CheckAttempt{Identity: "trusted/go", Names: []string{"go"}, Head: "H1", Version: Digest("run1"), Order: 1, State: "completed", Conclusion: "success"}
 	return ChecksFacts{TaskID: "66", Subject: Subject{Kind: "change", Authority: "github.com", Repository: "acme/widgets", ChangeKind: "pr", ID: "7"}, Head: "H1", PolicyVersion: Digest("policy1"), PolicyComplete: true, Mode: "github", ObservedAt: now, ValidUntil: now.Add(time.Minute), Sources: []CheckSource{{Kind: "github", Head: "H1", Version: Digest("collection1"), Complete: true, All: true, Attempts: []CheckAttempt{a}}}}
 }
+func TestChecksSummaryKeepsCompleteLateCollectionDiagnosis(t *testing.T) {
+	now := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	f := checkFixture(now)
+	f.PolicyComplete = false
+	f.Gap = "Local observation context changed after this older collection started; recollect external evidence."
+	f.Sources[0].LegacyAggregate = true
+	r := EvaluateChecks(ChecksBinding(f, true), f, now, 1)
+	if r.Status != "unknown" || utf8.RuneCountInString(r.Summary) > 240 {
+		t.Fatalf("late collection diagnosis violates canonical status/summary bounds: %s (%d characters)", r.Status, utf8.RuneCountInString(r.Summary))
+	}
+	if r.HumanText == nil || !strings.Contains(*r.HumanText, f.Gap) || utf8.RuneCountInString(*r.HumanText) > 8192 {
+		t.Fatal("complete late-source diagnosis was lost from bounded inert guidance")
+	}
+}
+
 func TestChecksPredicatesAndSourceSemantics(t *testing.T) {
 	now := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
 	tests := []struct {

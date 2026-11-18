@@ -122,7 +122,12 @@ distinct (report receipt, findings acceptance, Submit, override, integration).
 Record and complete-set revisions cover exact task/link/run/finish/close,
 head/snapshot, CI attempt/membership/definition, review assignment/policy,
 authorization, goal declaration, health row/plan and qualification/assignment
-collections. Local acceptance rechecks optimistic external source fences.
+collections. Local acceptance rechecks optimistic external source fences. The task-local
+dependency also retains its own fence independently of combined remote input.
+A late older request cannot replay a cache after a local finish/receipt/child
+changes; it reevaluates current local facts at a monotonic acceptance time and
+keeps older external CI/qualification evidence unknown until recollection.
+Unchanged local context still replays newer accepted external evidence.
 Freshness is source-specific: minute remote leases, source/window expiry and
 retry deadlines; future observations now stay unknown consistently across
 outcomes/checks/review as well as health/qualification. Event hooks are ordinary
@@ -185,7 +190,7 @@ future effect-admission contracts are qualified.
 
 ## Validation record
 
-The implementation at `050a8b5e0` passed the full evaluator/source and SQLite
+The initial implementation at `050a8b5e0` passed the full evaluator/source and SQLite
 native suites, focused observation suites on SQLite and required real PostgreSQL,
 and API/controller/legacy writer regressions for review, approval, Submit,
 findings, security/path/takeover, goals, waits and merge predicates. Affected
@@ -207,3 +212,16 @@ inherited base failure. Final hosted verdicts are recorded on
 The disposable sandbox needed `postgresql` and `python3-jsonschema`; no deployment
 or application configuration was changed. Independent thorough E2E qualification
 and every future authority/effect contract remain outside this audit's claims.
+
+Final replay inspection reproduced two additional defects before repair: an older
+request reused a newer cached no-work receipt after reopening, and a late CI read
+reused a closed selected child after that child reopened. The repair persists the
+independent local fence in the existing task dependency, refreshes changed local
+facts without rewinding acceptance, and invalidates older external evidence until
+fresh recollection. No public field, database schema or authority changes were
+needed. Both stores pass native and focused race regressions for these cases,
+coexistence, qualification, family transitions and failure ordering. Current API
+and controller regressions and affected Go vet pass; 81 actual wire views and all
+canonical examples/contracts pass. CI/review now share canonical summary bounding:
+a reproduced 295-character legacy CI diagnosis retains its complete explanation
+in bounded inert guidance while honoring the 240-character summary contract.

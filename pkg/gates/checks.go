@@ -122,6 +122,7 @@ func EvaluateChecks(b Binding, f ChecksFacts, now time.Time, generation uint64) 
 		Version string
 	}{b, version}), Status: "unknown", Summary: "CI evidence is incomplete.", Evidence: []Evidence{}, Dependencies: []Dependency{}, Blockers: []Blocker{}, Work: []struct{}{}, Waits: []Wait{}, Actions: []struct{}{}, ObservedAt: now, ValidUntil: f.ValidUntil}
 	r.EvaluationID = "shadow-" + r.ContextDigest[7:]
+	defer func() { boundResultSummary(&r) }()
 	if b.Type != "checks" || b.Subject != f.Subject || f.Subject.Kind != "change" || f.Subject.ID == "" || f.Subject.Authority == "" || f.Subject.Repository == "" {
 		r.Summary = "Change subject or scoped source identity is unavailable or mismatched."
 		return r
