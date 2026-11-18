@@ -671,6 +671,28 @@ func (u *Upgrader) pinImage(ctx context.Context, p *progress, step, ref string) 
 	return "", fmt.Errorf("%s has no digest from %s on this host, so there is nothing to pin the upgrade to (it printed %q)", ref, repo, strings.TrimSpace(out))
 }
 
+// imageID returns the image ID ref resolves to in this host's docker image
+// store, or "" when ref is absent (or cannot be inspected). stageImage
+// records this before pulling tag and compares it again on cancel so that
+// cleanup keeps a pre-existing tag only when it still names the same image
+// (docs/test-runs/2026-11-13-upgrade-cancel.md F7) -- not when `docker pull`
+// moved a mutable branch or channel tag (:main, :latest, :stable) onto a
+// newly fetched, unverified image. It asks only when docker both pulls and
+// removes images: a custom PullCmd or RemoveCmd keeps an image store docker
+// may not see, and there it answers "".
+func (u *Upgrader) imageID(ctx context.Context, ref string) string {
+	if len(u.cfg.Image.PullCmd) > 0 || len(u.cfg.Image.RemoveCmd) > 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, imageInspectTimeout)
+	defer cancel()
+	out, err := newCommand(ctx, "", "docker", "image", "inspect", "--format", "{{.Id}}", ref).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // imageInspectTimeout bounds pinImage's question. It reads the image
 // store's metadata and starts no container, so it is nowhere near
 // imageRunTimeout's tail.

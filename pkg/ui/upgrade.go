@@ -249,6 +249,12 @@ type upgradeScheduledResponse struct {
 	ByID        string    `json:"byId,omitempty"`
 	BusyRuns    int       `json:"busyRuns"`
 	BusyCIRuns  int       `json:"busyCiRuns"`
+	// CountError says that BusyRuns or BusyCIRuns could not be read, and
+	// so are not a count: the reconciler holds the queue and does not
+	// start the upgrade until it can count again, and without this the
+	// response read "waiting on 0 active run(s)" over a schedule that
+	// was going nowhere.
+	CountError string `json:"countError,omitempty"`
 }
 
 // upgradeRunningResponse is upgradeStatusResponse's "running" object:
@@ -644,15 +650,22 @@ func (s *Server) scheduledUpgrade(r *http.Request) *upgradeScheduledResponse {
 		ByKind:      string(scheduled.By.Kind),
 		ByID:        scheduled.By.ID,
 	}
+	var countErrs []string
 	if runs, err := s.tasks.Store.BusyRunCount(ctx); err != nil {
 		log.Printf("ui: counting the runs a scheduled upgrade is waiting for: %v", err)
+		countErrs = append(countErrs, "the runs in flight could not be counted")
 	} else {
 		resp.BusyRuns = runs
 	}
 	if ciRuns, err := s.tasks.Store.LiveCIRunCount(ctx); err != nil {
 		log.Printf("ui: counting the CI runs a scheduled upgrade is waiting for: %v", err)
+		countErrs = append(countErrs, "the CI runs in flight could not be counted")
 	} else {
 		resp.BusyCIRuns = ciRuns
+	}
+	if len(countErrs) > 0 {
+		resp.CountError = strings.Join(countErrs, " and ") +
+			", so the queue stays held and the upgrade waits until they can be; the daemon log has the error"
 	}
 	return resp
 }
